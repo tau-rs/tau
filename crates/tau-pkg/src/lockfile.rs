@@ -69,10 +69,10 @@ pub const MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION: u32 = 6;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `LockFile` is `#[non_exhaustive]`; constructed via [`LockFile::default`].
+/// ```
 /// use tau_pkg::lockfile::LockFile;
 ///
+/// // `LockFile` is `#[non_exhaustive]`; constructed via `Default`.
 /// let lf = LockFile::default();
 /// assert_eq!(lf.schema_version, 6);
 /// assert!(lf.packages.is_empty());
@@ -408,12 +408,16 @@ impl LockFile {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
     /// use std::path::Path;
     /// use tau_pkg::lockfile::LockFile;
     ///
+    /// // `load` returns `Ok(LockFile::default())` for paths that do not
+    /// // exist on disk (lazy creation — the first install in a scope
+    /// // writes the lockfile via [`LockFile::save`]).
     /// let lf = LockFile::load(Path::new("/nonexistent/tau-lock.toml")).unwrap();
-    /// assert!(lf.packages.is_empty()); // lazy creation
+    /// assert!(lf.packages.is_empty());
+    /// assert_eq!(lf.schema_version, 6);
     /// ```
     pub fn load(path: &Path) -> Result<Self, RegistryError> {
         match fs::metadata(path) {
@@ -431,8 +435,25 @@ impl LockFile {
         let text = fs::read_to_string(path).map_err(|e| RegistryError::Io {
             message: format!("reading lockfile {}: {e}", path.display()),
         })?;
+        Self::from_toml_str(&text)
+    }
 
-        let mut parsed: LockFile = toml::from_str(&text).map_err(|e| RegistryError::Parse {
+    /// Parse a lockfile from its TOML string representation.
+    ///
+    /// Pure-function counterpart to [`Self::load`] — no filesystem I/O.
+    /// Performs the same TOML decode, schema-version check, and additive
+    /// migration logic, so any caller wanting to validate a lockfile in
+    /// memory (tests, fuzz harnesses, dry-run tooling) can use this
+    /// directly without writing to a tempfile.
+    ///
+    /// # Errors
+    ///
+    /// - [`RegistryError::Parse`] — input is not valid TOML or doesn't
+    ///   match the expected schema shape.
+    /// - [`RegistryError::SchemaTooNew`] — the file's `schema_version`
+    ///   is higher than this binary supports.
+    pub fn from_toml_str(text: &str) -> Result<Self, RegistryError> {
+        let mut parsed: LockFile = toml::from_str(text).map_err(|e| RegistryError::Parse {
             reason: e.to_string(),
         })?;
 
