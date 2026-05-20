@@ -23,3 +23,7 @@ target/term
 
 # QEMU core dumps (from Podman x86_64 emulation attempts)
 qemu_*.core
+
+# cargo-mutants output (mutation testing — see docs/how-to/run-mutation-testing.md)
+mutants.out/
+mutants.out.old/
