@@ -1,0 +1,131 @@
+name: Mutation testing (scheduled)
+
+# cargo-mutants run on a weekly schedule, one matrix entry per crate.
+#
+# Mutation testing complements proptest + cassette + e2e suites by
+# mutating production code (operator flips, returns, conditionals) and
+# verifying that at least one test catches each mutation. The output is
+# an objective "test catch rate" per crate.
+#
+# Why scheduled (not per-PR): a full workspace run is hours. Per-crate
+# runs are minutes each but the matrix totals add up. Weekly cadence
+# catches drift (catch rate dropping after a large refactor) without
+# burning CI budget on every commit.
+#
+# Each matrix entry uploads `mutants.out/missed.txt` as an artifact,
+# which lists every mutation that NO test caught — the canonical test
+# gap report. Triage workflow is in `docs/how-to/run-mutation-testing.md`.
+
+on:
+  schedule:
+    # 06:00 UTC every Sunday. Off-peak so it doesn't compete with
+    # weekday PR CI for runners.
+    - cron: "0 6 * * 0"
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: "Crate to test (default: all). Use a crate name like 'tau-pkg' to scope."
+        type: string
+        required: false
+        default: "all"
+      timeout_seconds:
+        description: "Per-mutant timeout in seconds (default 300, matches mutants.toml)"
+        type: string
+        required: false
+        default: "300"
+
+permissions:
+  contents: read
+  # For future use: uploading artifacts and (optionally) auto-filing
+  # issues when missed-mutant count regresses week-over-week.
+  issues: write
+
+concurrency:
+  # Singleton across both schedule + manual dispatch — a manual run
+  # shouldn't kill the scheduled run mid-flight, but two manuals can
+  # coexist (different crate scopes).
+  group: mutants-scheduled-${{ inputs.crate || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  mutants:
+    name: mutants (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    # 4 hours per crate — cargo-mutants is slow; full tau-runtime mutation
+    # run is ~2-3h. Safer to budget generously than to time-out half-way.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        # Crates ordered by expected value: parsers / kernel-level code
+        # first, plumbing crates later. Add new entries as the workspace
+        # grows.
+        crate:
+          - tau-domain
+          - tau-pkg
+          - tau-ports
+          - tau-runtime
+          - tau-plugin-protocol
+          - tau-cli
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Skip if manual dispatch targets a different crate
+        id: precheck
+        env:
+          INPUT_CRATE: ${{ inputs.crate || 'all' }}
+          MATRIX_CRATE: ${{ matrix.crate }}
+        run: |
+          set -euo pipefail
+          if [ "$INPUT_CRATE" != "all" ] && [ "$INPUT_CRATE" != "$MATRIX_CRATE" ]; then
+            echo "manual dispatch scoped to '$INPUT_CRATE' — skipping $MATRIX_CRATE"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.precheck.outputs.skip != 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.precheck.outputs.skip != 'true'
+        with:
+          shared-key: linux-stable
+          # Don't save the cache here — the test-stable job in ci.yml
+          # is authoritative for `linux-stable`. Read-only cache use.
+          save-if: "false"
+
+      - uses: taiki-e/install-action@nextest
+        if: steps.precheck.outputs.skip != 'true'
+
+      - name: Install cargo-mutants
+        if: steps.precheck.outputs.skip != 'true'
+        run: cargo install cargo-mutants --locked
+
+      - name: Run mutation testing
+        if: steps.precheck.outputs.skip != 'true'
+        env:
+          CRATE: ${{ matrix.crate }}
+          TIMEOUT: ${{ inputs.timeout_seconds || '300' }}
+        run: |
+          set -euo pipefail
+          # `--in-place` reuses the workspace tree (faster than copying);
+          # safe because the runner is throwaway. `--timeout` overrides
+          # mutants.toml on a per-run basis from the workflow_dispatch
+          # input. `--no-shuffle` makes the missed-list diff-friendly
+          # week over week.
+          cargo mutants \
+            --in-place \
+            -p "$CRATE" \
+            --timeout "$TIMEOUT" \
+            --no-shuffle
+
+      - name: Upload mutation report
+        if: steps.precheck.outputs.skip != 'true' && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-${{ matrix.crate }}-${{ github.run_id }}
+          path: mutants.out/
+          if-no-files-found: ignore
+          retention-days: 90
