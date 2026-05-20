@@ -1,0 +1,9 @@
+---
+source: crates/tau-cli/tests/cmd_verify_anthropic_strict.rs
+expression: stdout
+---
+verify empty-body-skill@1.0.0... (unverified — no checksum recorded)
+verify empty-body-skill@1.0.0... ✗ AnthropicConformance (skill: empty-body-skill)
+  issue: SKILL.md body is empty or whitespace-only
+
+2 packages verified, 1 drifted.

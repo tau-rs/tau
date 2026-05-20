@@ -1,0 +1,9 @@
+---
+source: crates/tau-cli/tests/cmd_verify_anthropic_strict.rs
+expression: stdout
+---
+verify broken-skill@1.0.0... (unverified — no checksum recorded)
+verify broken-skill@1.0.0... ✗ AnthropicConformance (skill: broken-skill)
+  issue: malformed frontmatter — missing closing `---` frontmatter delimiter
+
+2 packages verified, 1 drifted.

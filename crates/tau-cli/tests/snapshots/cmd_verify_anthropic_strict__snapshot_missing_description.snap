@@ -1,0 +1,9 @@
+---
+source: crates/tau-cli/tests/cmd_verify_anthropic_strict.rs
+expression: stdout
+---
+verify bad-skill@1.0.0... (unverified — no checksum recorded)
+verify bad-skill@1.0.0... ✗ AnthropicConformance (skill: bad-skill)
+  issue: description field is missing or empty
+
+2 packages verified, 1 drifted.
