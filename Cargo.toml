@@ -91,7 +91,7 @@ anyhow          = "1"
 async-trait     = "0.1"
 futures         = "0.3"
 insta           = { version = "1", features = ["json"] }
-dashmap         = "5"
+dashmap         = "6"
 tokio-util      = { version = "0.7", features = ["rt"] }
 chrono          = { version = "0.4", features = ["serde"] }
 tokio           = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-util", "io-std", "process", "sync", "time"] }
