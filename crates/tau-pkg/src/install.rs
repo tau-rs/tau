@@ -600,6 +600,16 @@ fn build_rust_cargo_plugin(
         .arg("--bin")
         .arg(&plugin_manifest.bin)
         .current_dir(package_dir);
+    // Strip CARGO_TARGET_DIR from the spawned cargo's environment.
+    // If the caller (a tau-pkg integration test running under
+    // nextest, or an agent session) has CARGO_TARGET_DIR set, the
+    // inner cargo inherits it and builds the plugin to
+    // `<outer-target-dir>/release/` instead of the per-package
+    // `<package_dir>/target/release/` that the binary-path lookup
+    // below expects. CLAUDE.md documents this leak pattern; the
+    // lefthook pre-commit `test-native` command uses the same fix
+    // via `bash -c 'unset CARGO_TARGET_DIR && ...'`.
+    cmd.env_remove("CARGO_TARGET_DIR");
     for arg in &options.extra_args {
         cmd.arg(arg);
     }
