@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde_json         = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
 thiserror          = { workspace = true }
