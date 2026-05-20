@@ -34,6 +34,7 @@ exclude = [
     # cargo-fuzz harnesses — separate Cargo projects; require nightly
     # Rust + libfuzzer-sys, neither of which should leak into the
     # workspace toolchain. See the README in each fuzz directory.
+    "crates/tau-pkg/fuzz",
     "crates/tau-plugin-protocol/fuzz",
 ]
 

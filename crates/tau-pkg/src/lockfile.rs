@@ -435,8 +435,25 @@ impl LockFile {
         let text = fs::read_to_string(path).map_err(|e| RegistryError::Io {
             message: format!("reading lockfile {}: {e}", path.display()),
         })?;
+        Self::from_toml_str(&text)
+    }
 
-        let mut parsed: LockFile = toml::from_str(&text).map_err(|e| RegistryError::Parse {
+    /// Parse a lockfile from its TOML string representation.
+    ///
+    /// Pure-function counterpart to [`Self::load`] — no filesystem I/O.
+    /// Performs the same TOML decode, schema-version check, and additive
+    /// migration logic, so any caller wanting to validate a lockfile in
+    /// memory (tests, fuzz harnesses, dry-run tooling) can use this
+    /// directly without writing to a tempfile.
+    ///
+    /// # Errors
+    ///
+    /// - [`RegistryError::Parse`] — input is not valid TOML or doesn't
+    ///   match the expected schema shape.
+    /// - [`RegistryError::SchemaTooNew`] — the file's `schema_version`
+    ///   is higher than this binary supports.
+    pub fn from_toml_str(text: &str) -> Result<Self, RegistryError> {
+        let mut parsed: LockFile = toml::from_str(text).map_err(|e| RegistryError::Parse {
             reason: e.to_string(),
         })?;
 
