@@ -514,6 +514,7 @@ pub fn validate_skill_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use tau_ports::RunBudget;
 
     fn new_state() -> RunState {
@@ -589,18 +590,18 @@ mod tests {
 
     #[test]
     fn required_capability_maps_correctly() {
-        match required_capability("task.list") {
-            Capability::TaskList { mode } => assert_eq!(mode, "read"),
-            _ => panic!("expected TaskList read"),
-        }
-        match required_capability("task.create") {
-            Capability::TaskList { mode } => assert_eq!(mode, "write"),
-            _ => panic!("expected TaskList write"),
-        }
-        match required_capability("task.discard") {
-            Capability::TaskList { mode } => assert_eq!(mode, "manage"),
-            _ => panic!("expected TaskList manage"),
-        }
+        assert_matches!(
+            required_capability("task.list"),
+            Capability::TaskList { mode } => assert_eq!(mode, "read")
+        );
+        assert_matches!(
+            required_capability("task.create"),
+            Capability::TaskList { mode } => assert_eq!(mode, "write")
+        );
+        assert_matches!(
+            required_capability("task.discard"),
+            Capability::TaskList { mode } => assert_eq!(mode, "manage")
+        );
     }
 
     // ── Task 8: run.* ────────────────────────────────────────────────────────

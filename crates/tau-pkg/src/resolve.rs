@@ -312,11 +312,15 @@ mod tests {
         let groups = group_by_name(&entries);
         let group = groups.get(&pkg_name("fs-read")).unwrap();
         let err = check_source_equality(&pkg_name("fs-read"), group).unwrap_err();
-        let ResolveError::ConflictingSources {
-            sources, agents, ..
-        } = err
-        else {
-            panic!("expected ConflictingSources");
+        // `ResolveError` is not Clone, so destructure via `match` rather
+        // than the let-else + .clone() trick used elsewhere. The `other =>`
+        // arm prints the unexpected variant on regression — the original
+        // `panic!("expected ConflictingSources")` lost that information.
+        let (sources, agents) = match err {
+            ResolveError::ConflictingSources {
+                sources, agents, ..
+            } => (sources, agents),
+            other => panic!("expected ConflictingSources, got: {other:?}"),
         };
         assert_eq!(sources.len(), 2);
         assert_eq!(agents, vec![agent_id("a"), agent_id("b")]);

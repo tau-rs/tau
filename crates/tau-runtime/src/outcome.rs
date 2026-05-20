@@ -21,13 +21,17 @@ use crate::options::TokenUsage;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `RunOutcome` is `#[non_exhaustive]`; constructed by `Runtime::run`.
+/// ```
 /// use tau_runtime::RunOutcome;
 ///
+/// // `RunOutcome` is `#[non_exhaustive]` and is constructed by
+/// // `Runtime::run`; from outside the crate the type appears only
+/// // as a function-parameter shape. The doctest below verifies the
+/// // pattern-matching surface compiles, including the `_ => {}`
+/// // catch-all that `#[non_exhaustive]` requires.
 /// fn handle(outcome: RunOutcome) {
 ///     match outcome {
-///         RunOutcome::Completed { final_message, total_turns, .. } => {
+///         RunOutcome::Completed { final_message: _, total_turns, .. } => {
 ///             println!("done in {total_turns} turns");
 ///         }
 ///         RunOutcome::Failed { status, .. } => {
@@ -36,6 +40,9 @@ use crate::options::TokenUsage;
 ///         _ => {}
 ///     }
 /// }
+/// # // The fn is never called — compilation alone proves the API
+/// # // shape. Silence the unused warning rustdoc would otherwise emit.
+/// # let _ = handle;
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -91,9 +98,9 @@ mod tests {
             status,
             total_turns,
             ..
-        } = outcome
+        } = outcome.clone()
         else {
-            panic!("expected Failed");
+            panic!("expected Failed, got {outcome:?}");
         };
         assert_eq!(status, AgentStatus::Stopped);
         assert_eq!(total_turns, 3);
@@ -116,9 +123,9 @@ mod tests {
             total_turns,
             token_usage,
             ..
-        } = outcome
+        } = outcome.clone()
         else {
-            panic!("expected Failed");
+            panic!("expected Failed, got {outcome:?}");
         };
         assert_eq!(total_turns, 16);
         assert_eq!(token_usage.input_tokens, 10);
@@ -142,9 +149,9 @@ mod tests {
             total_turns,
             all_messages,
             ..
-        } = outcome
+        } = outcome.clone()
         else {
-            panic!("expected Completed");
+            panic!("expected Completed, got {outcome:?}");
         };
         assert_eq!(total_turns, 2);
         assert_eq!(all_messages.len(), 1);

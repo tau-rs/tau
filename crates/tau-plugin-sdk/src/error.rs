@@ -9,7 +9,7 @@ use thiserror::Error;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_plugin_sdk::SdkError;
 /// let err = SdkError::HandshakeMissing;
 /// assert!(format!("{err}").contains("handshake"));
