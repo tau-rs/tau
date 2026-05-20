@@ -98,12 +98,13 @@ impl PackageId {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `PackageKind` is `#[non_exhaustive]` and cannot be built via struct
-/// // expression from outside `tau-domain`. Construction is performed
-/// // inside the crate (e.g. by manifest validation in tau-pkg).
+/// ```
+/// // `PackageKind` is `#[non_exhaustive]` at the enum level (new variants
+/// // are non-breaking), but the `Custom` variant itself is plain and can
+/// // be constructed externally via struct-expression syntax.
 /// use tau_domain::PackageKind;
 /// let k = PackageKind::Custom { kind: "tool".into() };
+/// assert!(matches!(k, PackageKind::Custom { ref kind } if kind == "tool"));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
