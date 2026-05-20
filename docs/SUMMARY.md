@@ -96,6 +96,7 @@
 - [ADR-0032 — CapabilityOverride relocation](decisions/0032-capability-override-relocation.md)
 - [ADR-0033 — Tau serve mode v1](decisions/0033-tau-serve-mode.md)
 - [ADR-0034 — Target triple registry](decisions/0034-target-triple-registry.md)
+- [ADR-0035 — Bundle format](decisions/0035-bundle-format.md)
 
 # Project artifacts
 
