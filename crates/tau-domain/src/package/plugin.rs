@@ -18,12 +18,13 @@ use crate::error::{PluginKindError, PortKindError};
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `PortKind` is `#[non_exhaustive]`; doctest cannot construct via
-/// // struct-literal across crate boundaries (E0639).
-/// use tau_domain::PortKind;
+/// ```
 /// use std::str::FromStr;
+/// use tau_domain::PortKind;
 ///
+/// // PortKind is `#[non_exhaustive]` (cannot exhaustive-match outside
+/// // the crate) but the unit variants are themselves public and
+/// // FromStr / Display works the same as for any other type.
 /// let kind = PortKind::from_str("llm_backend").unwrap();
 /// assert_eq!(kind.to_string(), "llm_backend");
 /// ```

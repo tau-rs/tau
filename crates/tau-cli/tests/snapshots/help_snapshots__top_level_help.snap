@@ -1,5 +1,6 @@
 ---
 source: crates/tau-cli/tests/help_snapshots.rs
+assertion_line: 28
 expression: s
 ---
 tau runtime CLI
@@ -21,6 +22,7 @@ Commands:
   sandbox    Sandbox configuration and diagnostics
   workflow   Workflow subcommand group (list, run, log, resume)
   skill      Inspect installed skill packages (list, show)
+  target     Inspect the deployment-target registry (list, show)
   serve      Start serve mode: accept JSON-RPC requests over stdio
   check      Run pre-flight validation against the project (config, lockfile, packages, sandbox, plugins, skills). Aggregates existing validators into one CI/IDE-friendly verb
   help       Print this message or the help of the given subcommand(s)

@@ -371,9 +371,14 @@ Phase 2 sub-projects build on the priority-12 foundation:
   6 categories; `tau check <category>` runs one. Pure orchestration in
   tau-cli — no new tau-pkg/tau-runtime code. Suitable for CI gates,
   pre-commit hooks, and IDE Problems-panel integration via SARIF.
-- **B. Tau target triple registry** (~2 weeks). Formal naming
-  convention + documented capability matrix per supported target. New
-  triples land via ADR amendments.
+- **B. Tau target triple registry** ✅ Shipped 2026-05-19 — see
+  [ADR-0034](docs/decisions/0034-target-triple-registry.md), the
+  [reference page](docs/reference/target-triples.md), and the
+  [design spec](docs/superpowers/specs/2026-05-19-target-triple-registry-design.md).
+  Bazel-inspired 3-axis structural identifier (`Platform` × `AdapterFamily`
+  × `SandboxTier`) in `tau-ports::target`. 5 Available triples + 1 Reserved
+  (windows-native-strict); `remote-*` and `wasi-*` namespaces reserved.
+  CLI surface: `tau target list`/`show` and `tau check --target <triple>`.
 - **C. `tau build --target <triple>` + bundle format** (~6 weeks). The
   deployment artifact: a content-hashed bundle pinning resolved
   package versions + tree hashes (priority 7's `tree_hash`) + computed

@@ -54,9 +54,12 @@ use crate::scope::Scope;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_pkg::BuildOptions;
 ///
+/// // `BuildOptions` is `#[non_exhaustive]`; struct-literal construction
+/// // is blocked across crate boundaries. Default + field mutation is
+/// // the canonical pattern.
 /// let mut opts = BuildOptions::default();
 /// opts.skip_build = true;
 /// assert!(opts.skip_build);

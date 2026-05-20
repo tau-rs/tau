@@ -162,11 +162,11 @@ extensions, pre-commit hooks. Estimated scope: ~3 weeks.
 
 ### Sub-project B — Tau target triple registry
 
-Formal naming convention + registry of supported targets, each
-with a documented capability matrix (which `CapabilityShape`
-variants the target enforces). New triples land via ADR amendments
-to a "target registry" ADR. Estimated scope: ~2 weeks (mostly
-documentation + naming).
+Shipped 2026-05-19 — see [ADR-0034](../decisions/0034-target-triple-registry.md)
+and [the target-triple reference](../reference/target-triples.md). Three-axis
+structural identifier (`Platform` × `AdapterFamily` × `SandboxTier`); v1 ships
+5 Available + 1 Reserved triple; CLI surface: `tau target list`/`show` and
+`tau check --target`.
 
 ### Sub-project C — `tau build --target <triple>` subcommand
 
@@ -240,7 +240,7 @@ in its own right. Estimated scope: ~12+ weeks.
 | Multi-agent orchestration | 📅 Tier 3 priority 9 (deferred) |
 | Workflow / pipeline runner | 📅 Tier 3 priority 10 (deferred) |
 | `tau check` | 📅 Phase 2 sub-project A |
-| Target triple registry | 📅 Phase 2 sub-project B |
+| Target triple registry | ✅ shipped 2026-05-19 |
 | `tau build --target` + bundle format | 📅 Phase 2 sub-project C |
 | Capability forward-compatibility | 📅 Phase 2 sub-project D |
 | Cross-machine bundle verification | 📅 Phase 2 sub-project E |

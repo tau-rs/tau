@@ -14,3 +14,7 @@ pub use resolver::{
     SandboxAdapter,
 };
 pub use validation::{validate_plan_against_adapter, SandboxValidationError};
+
+pub mod target_match;
+
+pub use target_match::{adapter_satisfies, kind_to_family, registration_for_triple};

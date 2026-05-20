@@ -30,9 +30,20 @@ name: CI summary
 
 on:
   pull_request:
+  merge_group:
+    # Merge-queue runs. The queue creates a candidate-merge branch
+    # and triggers CI on it; ci-summary must poll that CI run too
+    # or branch protection's required check never resolves and the
+    # queue stalls indefinitely.
+    types: [checks_requested]
 
 concurrency:
-  group: ci-summary-${{ github.event.pull_request.number }}
+  # For pull_request events: scope to PR number. For merge_group events:
+  # scope to the candidate-merge SHA (one queue entry = one SHA). Falling
+  # back to github.ref keeps the expression valid on both event shapes.
+  # These values are GitHub-controlled (integers + SHAs + ref name), not
+  # user input — safe to interpolate in concurrency.group.
+  group: ci-summary-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -48,10 +59,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          # For pull_request: PR head SHA. For merge_group: the candidate-
+          # merge SHA the queue created. `github.sha` is the right pointer
+          # on both events (and on push events too — defensive).
+          # All three values are GitHub-controlled (40-char hex SHAs), not
+          # user input.
+          SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          # CI fires on both `pull_request` and `merge_group`; the
+          # /actions/runs?event= filter needs the matching value or
+          # the poll returns zero runs and the workflow times out.
+          # `github.event_name` is a GitHub-controlled enum string,
+          # not user input.
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          echo "Waiting for CI workflow run on $SHA in $REPO."
+          echo "Waiting for CI workflow run on $SHA (event=$EVENT_NAME) in $REPO."
 
           paths_ignore_grace=120
 
@@ -60,7 +82,7 @@ jobs:
             elapsed=$((SECONDS - start))
 
             run_json=$(gh api \
-              "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request&per_page=10" \
+              "repos/$REPO/actions/runs?head_sha=$SHA&event=$EVENT_NAME&per_page=10" \
               --jq '.workflow_runs[] | select(.name=="CI") | {id, status, conclusion}' \
               | head -1)
 

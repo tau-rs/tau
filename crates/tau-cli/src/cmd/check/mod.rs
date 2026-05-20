@@ -16,6 +16,8 @@ pub use result::{
 };
 
 use anyhow::Result;
+use std::str::FromStr;
+use tau_ports::target::TargetTriple;
 
 /// Entry point for `tau check`. Parses CheckArgs, builds CheckCtx,
 /// selects category list, runs the orchestrator, dispatches output
@@ -27,7 +29,25 @@ pub async fn run(args: crate::cli::CheckArgs) -> Result<()> {
         None => std::env::current_dir()?,
     };
 
-    let ctx = runner::CheckCtx::load(project_root, args.fast).await?;
+    let target: Option<TargetTriple> = if let Some(s) = args.target.as_deref() {
+        match TargetTriple::from_str(s) {
+            Ok(t) => {
+                if tau_ports::target::lookup(&t).is_none() {
+                    eprintln!("error: unknown triple `{t}` (parses but not registered)");
+                    std::process::exit(64);
+                }
+                Some(t)
+            }
+            Err(e) => {
+                eprintln!("error: could not parse triple `{s}`: {e}");
+                std::process::exit(64);
+            }
+        }
+    } else {
+        None
+    };
+
+    let ctx = runner::CheckCtx::load(project_root, args.fast, target).await?;
 
     // --auto-resolve: attempt to install missing required tools for all agents
     // before running checks. Errors are non-fatal — the packages category will

@@ -21,6 +21,7 @@ pub mod sandbox;
 pub mod serve;
 pub mod session;
 pub mod skill;
+pub mod target;
 pub mod uninstall;
 pub mod update;
 pub mod verify;

@@ -26,8 +26,13 @@ use tau_ports::SandboxTier;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformSet {
-    /// Linux only (e.g., `tau-sandbox-native` requires landlock).
+    /// Linux only (e.g., `tau-sandbox-native` Linux landlock/seccomp path).
     LinuxOnly,
+    /// Linux and macOS/Darwin. Used for the `Native` adapter, which
+    /// routes to `NativeSandbox` on Linux and `DarwinSandbox` on macOS —
+    /// both are v1-available. Windows is excluded because the Windows
+    /// AppContainer path is Reserved in v1.
+    LinuxAndDarwin,
     /// Linux, macOS, and Windows (e.g., container adapter requires
     /// docker/podman binary; the binary may or may not be present, but
     /// the adapter could in principle work on any of these).
@@ -45,6 +50,7 @@ impl PlatformSet {
             PlatformSet::Multi => {
                 matches!(platform, "linux" | "macos" | "windows")
             }
+            PlatformSet::LinuxAndDarwin => matches!(platform, "linux" | "macos"),
             PlatformSet::LinuxOnly => platform == "linux",
         }
     }
@@ -175,7 +181,7 @@ fn fs_and_exec_and_net() -> CapabilityShapeSet {
 pub static REGISTRY: &[AdapterRegistration] = &[
     AdapterRegistration {
         kind: RegistryKind::Native,
-        platforms: PlatformSet::LinuxOnly,
+        platforms: PlatformSet::LinuxAndDarwin,
         tiers_supported: &[SandboxTier::Light, SandboxTier::Strict],
         shapes_supported_fn: fs_and_exec_and_net,
         priority: 100,
@@ -238,13 +244,15 @@ mod tests {
     }
 
     #[test]
-    fn native_is_linux_only() {
+    fn native_is_linux_and_darwin() {
+        // Native adapter covers Linux (NativeSandbox) and macOS/Darwin
+        // (DarwinSandbox). Windows is excluded — AppContainer is Reserved in v1.
         let native = REGISTRY
             .iter()
             .find(|r| r.kind == RegistryKind::Native)
             .unwrap();
         assert!(native.platforms.includes("linux"));
-        assert!(!native.platforms.includes("macos"));
+        assert!(native.platforms.includes("macos"));
         assert!(!native.platforms.includes("windows"));
     }
 

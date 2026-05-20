@@ -38,6 +38,7 @@
 - [Sandbox platform support](reference/sandbox-platform-support.md)
 - [Serve mode protocol](reference/serve-mode-protocol.md)
 - [Skill manifest schema](reference/skill-manifest-schema.md)
+- [Target triple registry](reference/target-triples.md)
 
 # Explanation
 
@@ -94,6 +95,7 @@
 - [ADR-0031 — tau-observe consolidation](decisions/0031-tau-observe-consolidation.md)
 - [ADR-0032 — CapabilityOverride relocation](decisions/0032-capability-override-relocation.md)
 - [ADR-0033 — Tau serve mode v1](decisions/0033-tau-serve-mode.md)
+- [ADR-0034 — Target triple registry](decisions/0034-target-triple-registry.md)
 
 # Project artifacts
 

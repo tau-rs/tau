@@ -9,6 +9,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Instant;
 use tau_pkg::{project::ProjectConfig, Scope};
+use tau_ports::target::TargetTriple;
 
 /// Shared context for all checks. Built once at runner start.
 pub struct CheckCtx {
@@ -21,11 +22,19 @@ pub struct CheckCtx {
     pub project: Option<ProjectConfig>,
     /// `--fast` flag passthrough.
     pub fast: bool,
+    /// `--target <triple>` passthrough. When set, the sandbox category
+    /// validates against the target's documented profile instead of the
+    /// locally resolved adapter.
+    pub target: Option<TargetTriple>,
 }
 
 impl CheckCtx {
     /// Build context from a project root path.
-    pub async fn load(project_root: PathBuf, fast: bool) -> Result<Self> {
+    pub async fn load(
+        project_root: PathBuf,
+        fast: bool,
+        target: Option<TargetTriple>,
+    ) -> Result<Self> {
         let scope =
             Scope::resolve(&project_root).map_err(|e| anyhow::anyhow!("resolve scope: {e}"))?;
         // Project load may legitimately fail (malformed tau.toml). Record
@@ -36,6 +45,7 @@ impl CheckCtx {
             scope,
             project,
             fast,
+            target,
         })
     }
 }

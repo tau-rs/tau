@@ -29,6 +29,9 @@ Options:
       --sarif [<PATH>]
           Emit SARIF 2.1.0 document. With path → write file; without → stdout. Mutually exclusive with --json
 
+      --target <TRIPLE>
+          Validate against a specific target triple instead of the locally resolved adapter. See `tau target list` for valid values
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

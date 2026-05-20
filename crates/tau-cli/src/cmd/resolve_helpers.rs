@@ -263,6 +263,48 @@ pub(crate) fn check_plugin_sandbox(
     }
 }
 
+/// Validate one plugin against a target capability profile.
+///
+/// Reads the plugin manifest, then checks that every declared capability
+/// shape is contained in `profile.required_shapes`. No adapter is
+/// instantiated — this is purely a static cross-check against the
+/// target's documented matrix.
+pub(crate) fn check_plugin_sandbox_against_profile(
+    plugin_id: &str,
+    manifest_path: &Path,
+    profile: &tau_ports::target::TargetCapabilityProfile,
+) -> SandboxPluginOutcome {
+    let package_caps = match tau_pkg::read_manifest(manifest_path) {
+        Ok(manifest) => manifest.capabilities().to_vec(),
+        Err(e) => return SandboxPluginOutcome::ManifestUnreadable(e.to_string()),
+    };
+
+    let plan = match build_plan(&package_caps, &[], None, None) {
+        Ok(p) => p,
+        Err(e) => return SandboxPluginOutcome::BuildPlanFailed(e.to_string()),
+    };
+
+    let mut errors: Vec<SandboxValidationError> = Vec::new();
+    for cap in &plan.capabilities {
+        let required = cap.required_shape();
+        if !profile.required_shapes.contains(&required) {
+            errors.push(SandboxValidationError::new(
+                plugin_id,
+                cap.clone(),
+                format!(
+                    "target `{}` does not enforce shape {:?}",
+                    profile.triple, required
+                ),
+            ));
+        }
+    }
+    if errors.is_empty() {
+        SandboxPluginOutcome::Ok
+    } else {
+        SandboxPluginOutcome::ValidateFailed(errors)
+    }
+}
+
 #[cfg(test)]
 mod check_sandbox_tests {
     use super::*;
@@ -364,5 +406,70 @@ paths = ["/tmp/**"]
             matches!(outcome, SandboxPluginOutcome::Ok),
             "expected Ok in fast mode, got {outcome:?}"
         );
+    }
+
+    #[test]
+    fn check_against_profile_passes_when_shapes_are_subset() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_path = write_manifest(
+            tmp.path(),
+            r#"
+name = "subset-plugin"
+version = "0.1.0"
+description = "A plugin needing fs.read only"
+authors = []
+source = "https://example.com/sub.git"
+kind = "tool"
+dependencies = []
+
+[[capabilities]]
+kind = "fs.read"
+paths = ["/tmp/**"]
+"#,
+        );
+        let entry = tau_ports::target::lookup(&"linux-native-strict".parse().unwrap()).unwrap();
+        let profile = entry.profile();
+        let outcome =
+            check_plugin_sandbox_against_profile("subset-plugin", &manifest_path, &profile);
+        assert!(
+            matches!(outcome, SandboxPluginOutcome::Ok),
+            "expected Ok, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn check_against_profile_fails_when_shape_outside_target() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_path = write_manifest(
+            tmp.path(),
+            r#"
+name = "agent-spawner"
+version = "0.1.0"
+description = "Plugin needs agent.spawn"
+authors = []
+source = "https://example.com/as.git"
+kind = "tool"
+dependencies = []
+
+[[capabilities]]
+kind = "agent.spawn"
+"#,
+        );
+        let entry = tau_ports::target::lookup(&"linux-native-strict".parse().unwrap()).unwrap();
+        let profile = entry.profile();
+        let outcome =
+            check_plugin_sandbox_against_profile("agent-spawner", &manifest_path, &profile);
+        match outcome {
+            SandboxPluginOutcome::ValidateFailed(errors) => {
+                assert_eq!(errors.len(), 1);
+                assert!(
+                    errors[0].reason.contains("AgentSpawn")
+                        || errors[0].reason.contains("agent.spawn"),
+                    "unexpected reason: {}",
+                    errors[0].reason
+                );
+            }
+            other => panic!("expected ValidateFailed, got {other:?}"),
+        }
     }
 }
