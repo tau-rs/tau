@@ -21,13 +21,17 @@ use crate::options::TokenUsage;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `RunOutcome` is `#[non_exhaustive]`; constructed by `Runtime::run`.
+/// ```
 /// use tau_runtime::RunOutcome;
 ///
+/// // `RunOutcome` is `#[non_exhaustive]` and is constructed by
+/// // `Runtime::run`; from outside the crate the type appears only
+/// // as a function-parameter shape. The doctest below verifies the
+/// // pattern-matching surface compiles, including the `_ => {}`
+/// // catch-all that `#[non_exhaustive]` requires.
 /// fn handle(outcome: RunOutcome) {
 ///     match outcome {
-///         RunOutcome::Completed { final_message, total_turns, .. } => {
+///         RunOutcome::Completed { final_message: _, total_turns, .. } => {
 ///             println!("done in {total_turns} turns");
 ///         }
 ///         RunOutcome::Failed { status, .. } => {
@@ -36,6 +40,9 @@ use crate::options::TokenUsage;
 ///         _ => {}
 ///     }
 /// }
+/// # // The fn is never called — compilation alone proves the API
+/// # // shape. Silence the unused warning rustdoc would otherwise emit.
+/// # let _ = handle;
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
