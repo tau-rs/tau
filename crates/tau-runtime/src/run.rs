@@ -741,12 +741,12 @@ mod tests {
             total_turns,
             token_usage,
             all_messages,
-        } = out
+        } = out.clone()
         else {
-            panic!("expected Failed");
+            panic!("expected Failed, got {out:?}");
         };
-        let AgentStatus::Failed { kind, detail, .. } = status else {
-            panic!("expected AgentStatus::Failed")
+        let AgentStatus::Failed { kind, detail, .. } = status.clone() else {
+            panic!("expected AgentStatus::Failed, got {status:?}")
         };
         assert_eq!(kind, FailureKind::PolicyDenied);
         let detail = detail.expect("detail must be set");

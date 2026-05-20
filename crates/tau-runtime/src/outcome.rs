@@ -91,9 +91,9 @@ mod tests {
             status,
             total_turns,
             ..
-        } = outcome
+        } = outcome.clone()
         else {
-            panic!("expected Failed");
+            panic!("expected Failed, got {outcome:?}");
         };
         assert_eq!(status, AgentStatus::Stopped);
         assert_eq!(total_turns, 3);
@@ -116,9 +116,9 @@ mod tests {
             total_turns,
             token_usage,
             ..
-        } = outcome
+        } = outcome.clone()
         else {
-            panic!("expected Failed");
+            panic!("expected Failed, got {outcome:?}");
         };
         assert_eq!(total_turns, 16);
         assert_eq!(token_usage.input_tokens, 10);
@@ -142,9 +142,9 @@ mod tests {
             total_turns,
             all_messages,
             ..
-        } = outcome
+        } = outcome.clone()
         else {
-            panic!("expected Completed");
+            panic!("expected Completed, got {outcome:?}");
         };
         assert_eq!(total_turns, 2);
         assert_eq!(all_messages.len(), 1);
