@@ -1,0 +1,39 @@
+[package]
+name = "tau-pkg-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Standalone Cargo project — NOT part of the workspace. cargo-fuzz expects
+# this layout so the `[lib]` injection from `cargo fuzz init` doesn't pollute
+# the parent workspace. Run with:
+#
+#     rustup toolchain install nightly
+#     cargo install cargo-fuzz
+#     cd crates/tau-pkg/fuzz && cargo +nightly fuzz run lockfile_from_toml_str
+#
+# See README.md in this directory.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tau-pkg = { path = ".." }
+
+[[bin]]
+name = "lockfile_from_toml_str"
+path = "fuzz_targets/lockfile_from_toml_str.rs"
+test = false
+doc = false
+bench = false
+
+# Cargo-fuzz–specific profile tuning. The default release profile already
+# turns on optimizations and debug-assertions; this is just to make the
+# layout explicit and add `panic = "abort"` (libFuzzer expects abort).
+[profile.release]
+debug = 1
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

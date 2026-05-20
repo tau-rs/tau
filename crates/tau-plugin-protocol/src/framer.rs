@@ -20,7 +20,7 @@ const PREFIX_LEN: usize = 4;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_plugin_protocol::FramerOptions;
 /// let opts = FramerOptions::default();
 /// assert_eq!(opts.max_message_size, 64 * 1024 * 1024);

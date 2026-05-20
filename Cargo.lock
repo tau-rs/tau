@@ -3118,6 +3118,7 @@ dependencies = [
 name = "tau-domain"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "base64",
  "proptest",
  "semver",
@@ -3283,6 +3284,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tau-domain",
+ "tau-observe",
  "tau-pkg",
  "tau-plugin-protocol",
  "tau-plugin-sdk",

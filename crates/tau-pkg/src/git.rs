@@ -183,7 +183,7 @@ mod tests {
                 eprintln!("warning: `git` not on PATH, skipping git smoke test");
             }
             Err(other) => panic!("expected CommandFailed, got: {other:?}"),
-            Ok(_) => panic!("expected error on non-repo dir"),
+            Ok(commit) => panic!("expected error on non-repo dir, got Ok({commit:?})"),
         }
     }
 

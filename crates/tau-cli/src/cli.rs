@@ -411,6 +411,21 @@ pub struct RunArgs {
     /// turn_completed / run_completed).
     #[arg(long, default_value_t = false)]
     pub stream: bool,
+    /// Maximum cumulative input + output tokens across all agents
+    /// spawned in the run. When the budget is exceeded, the run
+    /// aborts with `RunStatus::Aborted`. Unset = no limit.
+    #[arg(long, value_name = "TOKENS")]
+    pub max_total_tokens: Option<u64>,
+    /// Maximum wall-clock duration of the run, in seconds. When the
+    /// budget is exceeded, the run aborts with `RunStatus::Aborted`.
+    /// Unset = no limit.
+    #[arg(long, value_name = "SECS")]
+    pub max_total_duration_secs: Option<u64>,
+    /// Maximum number of agents that may be spawned across the run
+    /// (root + descendants). When exceeded, the run aborts with
+    /// `RunStatus::Aborted`. Unset = no limit.
+    #[arg(long, value_name = "N")]
+    pub max_total_agents: Option<u32>,
 }
 
 /// Arguments for `tau chat`.

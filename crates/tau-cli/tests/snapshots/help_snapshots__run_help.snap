@@ -26,6 +26,15 @@ Options:
       --stream
           Stream events as they arrive. Text deltas appear inline on stdout; tool annotations on stderr. With --json, emits one JSON object per event line (text_delta / tool_call_started / tool_call_completed / turn_completed / run_completed)
 
+      --max-total-tokens <TOKENS>
+          Maximum cumulative input + output tokens across all agents spawned in the run. When the budget is exceeded, the run aborts with `RunStatus::Aborted`. Unset = no limit
+
+      --max-total-duration-secs <SECS>
+          Maximum wall-clock duration of the run, in seconds. When the budget is exceeded, the run aborts with `RunStatus::Aborted`. Unset = no limit
+
+      --max-total-agents <N>
+          Maximum number of agents that may be spawned across the run (root + descendants). When exceeded, the run aborts with `RunStatus::Aborted`. Unset = no limit
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

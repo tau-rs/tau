@@ -250,7 +250,12 @@ pub struct PluginHostOptions {
     /// response before declaring the plugin unresponsive (surfaces as
     /// [`RuntimeError::PluginHandshakeFailed`] with reason
     /// [`crate::error::HandshakeFailureReason::Timeout`]). Default
-    /// `5s`.
+    /// `30s` — sized for the realistic worst-case process spawn +
+    /// `dyld` resolution + tokio-runtime init under CI saturation
+    /// (observed up to ~3s p99 on shared macOS runners). Genuinely
+    /// broken plugins (crash on start, garbage on the wire) fail in
+    /// <100ms regardless, so this only forgives slow-but-alive
+    /// startups; it does not mask real failures.
     pub handshake_timeout: Duration,
 
     /// How long the host waits for the plugin to exit cleanly after a
@@ -303,7 +308,7 @@ pub struct PluginHostOptions {
 impl Default for PluginHostOptions {
     fn default() -> Self {
         Self {
-            handshake_timeout: Duration::from_secs(5),
+            handshake_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(2),
             // 64 MiB matches `tau-plugin-protocol::framer`'s default
             // `max_frame_size` so the same ceiling applies on both
@@ -569,9 +574,9 @@ mod tests {
     use crate::error::HandshakeFailureReason;
 
     #[test]
-    fn plugin_host_options_default_has_5_second_handshake_timeout() {
+    fn plugin_host_options_default_has_30_second_handshake_timeout() {
         let opts = PluginHostOptions::default();
-        assert_eq!(opts.handshake_timeout, Duration::from_secs(5));
+        assert_eq!(opts.handshake_timeout, Duration::from_secs(30));
     }
 
     #[test]

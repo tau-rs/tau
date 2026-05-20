@@ -17,20 +17,21 @@ use std::collections::BTreeMap;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // E0639: variant-level `#[non_exhaustive]` blocks struct-literal
-/// // construction from outside the crate. Internal callers (and the
-/// // unit test in this module) construct `Failed { .. }` directly.
+/// ```
 /// use tau_domain::{AgentStatus, FailureKind};
-/// let s = AgentStatus::Failed {
-///     kind: FailureKind::BackendError,
-///     detail: Some("connection refused: api.openai.com".into()),
-/// };
+///
+/// // The `Failed` variant is variant-level `#[non_exhaustive]`, so
+/// // external callers use [`AgentStatus::failed`] instead of
+/// // struct-literal construction.
+/// let s = AgentStatus::failed(
+///     FailureKind::BackendError,
+///     Some("connection refused: api.openai.com".into()),
+/// );
 /// match s {
 ///     AgentStatus::Failed { kind: FailureKind::BackendError, .. } => {
 ///         // retry with backoff
 ///     }
-///     _ => {}
+///     _ => panic!(),
 /// }
 /// ```
 #[non_exhaustive]
@@ -132,19 +133,20 @@ mod tests {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `PackageId` is `#[non_exhaustive]`; constructing one externally
-/// // requires manifest validation. Example shows shape only.
+/// ```
 /// use tau_domain::{AgentDefinition, AgentId, PackageId, PackageName, Version};
 /// use std::str::FromStr;
 ///
+/// // `PackageId` is `#[non_exhaustive]` — use `::new` instead of
+/// // struct-literal construction across crate boundaries.
+/// let pkg = PackageId::new(
+///     PackageName::from_str("research-pkg").unwrap(),
+///     Version::parse("0.1.0").unwrap(),
+/// );
 /// let def = AgentDefinition::new(
 ///     AgentId::from_str("researcher").unwrap(),
 ///     "Researcher".into(),
-///     PackageId {
-///         name: PackageName::from_str("research-pkg").unwrap(),
-///         version: Version::parse("0.1.0").unwrap(),
-///     },
+///     pkg,
 ///     PackageName::from_str("claude-anthropic").unwrap(),
 /// );
 /// assert_eq!(def.id.as_str(), "researcher");

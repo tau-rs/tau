@@ -1,0 +1,6 @@
+# cargo-fuzz build artifacts and crash corpus. The `corpus/` directory is
+# committed (seed inputs) but `corpus/<target>/crashes` and `artifacts/`
+# are runtime output that should not be checked in.
+target/
+artifacts/
+coverage/
