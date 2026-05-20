@@ -10,6 +10,7 @@ authors.workspace      = true
 
 [dependencies]
 tau-domain            = { workspace = true, features = ["serde"] }
+tau-observe           = { workspace = true }
 # TODO(future): tau-ports/test-fixtures is enabled in production deps to
 # make MockSandbox reachable for the env-var-gated path
 # (TAU_TESTING_ALLOW_MOCK_SANDBOX=1) used by CLI integration tests via
