@@ -221,19 +221,20 @@ fn parse_scp(s: &str) -> Result<GitLocation, PackageSourceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
 
     #[test]
     fn parses_https_url() {
         let s = PackageSource::from_str("https://github.com/owner/repo.git").unwrap();
-        match s {
+        assert_matches!(
+            s,
             PackageSource::Git {
                 location: GitLocation::Url(u),
                 rev: None,
             } => {
                 assert_eq!(u.scheme(), "https");
             }
-            _ => panic!("expected https Url with no rev"),
-        }
+        );
     }
 
     #[test]
@@ -246,7 +247,8 @@ mod tests {
     #[test]
     fn parses_scp_form() {
         let s = PackageSource::from_str("git@github.com:owner/repo.git").unwrap();
-        match s {
+        assert_matches!(
+            s,
             PackageSource::Git {
                 location: GitLocation::Scp { user, host, path },
                 ..
@@ -255,14 +257,14 @@ mod tests {
                 assert_eq!(host, "github.com");
                 assert_eq!(path, "owner/repo.git");
             }
-            _ => panic!("expected Scp variant"),
-        }
+        );
     }
 
     #[test]
     fn parses_scp_without_user() {
         let s = PackageSource::from_str("github.com:owner/repo.git").unwrap();
-        match s {
+        assert_matches!(
+            s,
             PackageSource::Git {
                 location:
                     GitLocation::Scp {
@@ -275,8 +277,7 @@ mod tests {
                 assert_eq!(host, "github.com");
                 assert_eq!(path, "owner/repo.git");
             }
-            _ => panic!("expected Scp without user"),
-        }
+        );
     }
 
     #[test]

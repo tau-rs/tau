@@ -190,6 +190,7 @@ impl PluginManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
 
     #[test]
     fn port_kind_round_trip_via_display_from_str() {
@@ -208,11 +209,12 @@ mod tests {
     #[test]
     fn port_kind_unknown_input_errors() {
         let err = PortKind::from_str("nope").unwrap_err();
-        match err {
-            crate::error::PortKindError::Unknown { input } => assert_eq!(input, "nope"),
-            #[allow(unreachable_patterns)]
-            _ => panic!("expected Unknown"),
-        }
+        assert_matches!(
+            err,
+            crate::error::PortKindError::Unknown { input } => {
+                assert_eq!(input, "nope");
+            }
+        );
     }
 
     #[test]
@@ -225,11 +227,12 @@ mod tests {
     #[test]
     fn plugin_kind_unknown_input_errors() {
         let err = PluginKind::from_str("python-pip").unwrap_err();
-        match err {
-            crate::error::PluginKindError::Unknown { input } => assert_eq!(input, "python-pip"),
-            #[allow(unreachable_patterns)]
-            _ => panic!("expected Unknown"),
-        }
+        assert_matches!(
+            err,
+            crate::error::PluginKindError::Unknown { input } => {
+                assert_eq!(input, "python-pip");
+            }
+        );
     }
 
     #[cfg(feature = "serde")]
