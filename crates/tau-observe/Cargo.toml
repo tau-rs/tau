@@ -15,3 +15,7 @@ thiserror          = { workspace = true }
 
 [features]
 default = []
+# Enables the `tau_observe::capture` test-only subscriber. Consumers
+# typically add this under `[dev-dependencies]` of crates whose tests
+# assert on emitted spans/events.
+test-fixtures = []

@@ -18,6 +18,11 @@ use tau_domain::{
     Address, AgentDefinition, AgentInstanceId, Capability, Message, MessagePayload,
     PackageManifest, Value,
 };
+use tau_observe::vocabulary::{
+    EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_RUNTIME_LOOP_TERMINATED,
+    EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED,
+    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED,
+};
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
     TokenUsage, ToolError, ToolResult, ToolSpec,
@@ -168,7 +173,7 @@ pub(crate) fn run_streaming_inner(
         let mut total_turns: u32 = 0;
         let mut aggregated_tokens = crate::options::TokenUsage::default();
 
-        info!(name = "runtime.run_started");
+        info!(name = EV_RUNTIME_RUN_STARTED);
 
         // max_turns guard: immediately report out-of-resources if 0.
         if options.max_turns == 0 {
@@ -180,14 +185,14 @@ pub(crate) fn run_streaming_inner(
         // OR max_turns is reached.
         while total_turns < options.max_turns {
             total_turns += 1;
-            debug!(name = "runtime.turn_started", turn = total_turns);
+            debug!(name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
 
             let mut request = CompletionRequest::new(agent_def.llm_backend.as_str().into());
             request.system = agent_def.system_prompt.clone();
             request.messages = crate::run::agent_messages_to_provider_messages(&messages);
             request.tools = tool_specs.clone();
             debug!(
-                name = "llm.request_built",
+                name = EV_LLM_REQUEST_BUILT,
                 messages = request.messages.len(),
                 tools = request.tools.len(),
             );
@@ -250,7 +255,7 @@ pub(crate) fn run_streaming_inner(
             }
 
             debug!(
-                name = "llm.response_received",
+                name = EV_LLM_RESPONSE_RECEIVED,
                 text_len = accumulated_text.len(),
                 tool_uses = pending_tool_uses.len(),
                 stop_reason = ?turn_stop_reason,
@@ -280,7 +285,7 @@ pub(crate) fn run_streaming_inner(
 
             // No tool uses → end of run.
             if pending_tool_uses.is_empty() {
-                debug!(name = "runtime.loop_terminated", reason = "end_turn");
+                debug!(name = EV_RUNTIME_LOOP_TERMINATED, reason = "end_turn");
                 yield RunEvent::TurnCompleted {
                     stop_reason: turn_stop_reason.unwrap_or(StopReason::EndTurn),
                     usage: turn_usage,
@@ -335,7 +340,7 @@ pub(crate) fn run_streaming_inner(
                         if let Some(cap) = missing {
                             let kind = crate::run::capability_kind_str(cap);
                             warn!(
-                                name = "capability.deny",
+                                name = EV_CAPABILITY_DENY,
                                 tool_name = %tool_use.name,
                                 missing_kind = %kind,
                             );
@@ -965,7 +970,7 @@ pub(crate) fn run_streaming_inner(
                 if let Some(cap) = missing {
                     let kind = crate::run::capability_kind_str(cap);
                     warn!(
-                        name = "capability.deny",
+                        name = EV_CAPABILITY_DENY,
                         tool_name = %tool_use.name,
                         missing_kind = %kind,
                     );
@@ -1003,7 +1008,7 @@ pub(crate) fn run_streaming_inner(
                     .with_deny_entries(deny_entries.clone());
                 if let Err(err) = tool.init(ctx.clone()).await {
                     warn!(
-                        name = "tool.session_open_failed",
+                        name = EV_TOOL_SESSION_OPEN_FAILED,
                         tool_name = %tool_use.name,
                     );
                     yield make_tool_fatal_error(err);
@@ -1063,7 +1068,7 @@ pub(crate) fn run_streaming_inner(
                     Ok(r) => r,
                     Err(err) => {
                         warn!(
-                            name = "tool.invoke_failed",
+                            name = EV_TOOL_INVOKE_FAILED,
                             tool_name = %tool_use.name,
                         );
                         let _ = tool.teardown(()).await; // best-effort
@@ -1075,7 +1080,7 @@ pub(crate) fn run_streaming_inner(
                 // ----- Close the session ------------------------------------
                 if let Err(err) = tool.teardown(()).await {
                     warn!(
-                        name = "tool.session_close_failed",
+                        name = EV_TOOL_SESSION_CLOSE_FAILED,
                         tool_name = %tool_use.name,
                     );
                     yield make_tool_fatal_error(err);
