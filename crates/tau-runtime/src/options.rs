@@ -36,14 +36,16 @@ pub struct TokenUsage {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `RunOptions` is `#[non_exhaustive]`; default + field mutation
-/// // is the only construction pattern.
+/// ```
 /// use tau_runtime::RunOptions;
 ///
+/// // `RunOptions` is `#[non_exhaustive]`; default + field mutation
+/// // is the only construction pattern.
 /// let mut opts = RunOptions::default();
 /// opts.max_turns = 8;
 /// opts.trace_label = Some("session-abc".into());
+/// assert_eq!(opts.max_turns, 8);
+/// assert_eq!(opts.trace_label.as_deref(), Some("session-abc"));
 /// ```
 #[non_exhaustive]
 #[derive(Clone)]

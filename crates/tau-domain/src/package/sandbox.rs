@@ -18,11 +18,15 @@ use crate::package::capability::CapabilityShape;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // PluginSandboxRequirements is `#[non_exhaustive]`; construct via
-/// // serde from a TOML manifest, not via struct literal.
+/// ```
 /// use tau_domain::PluginSandboxRequirements;
-/// let _ = PluginSandboxRequirements::default();
+///
+/// // `PluginSandboxRequirements` is `#[non_exhaustive]`. Struct-literal
+/// // construction is blocked across crate boundaries; `Default` is the
+/// // canonical entry point for the empty-requirements case.
+/// let req = PluginSandboxRequirements::default();
+/// assert!(req.required_tier.is_none(), "default has no tier floor");
+/// assert!(req.required_shapes.is_empty(), "default has no extra shapes");
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
