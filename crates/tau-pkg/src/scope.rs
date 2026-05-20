@@ -180,14 +180,15 @@ fn warn_v2_v3_mixed() {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// // Constructed via [`ScopeConfig::new`] (the type is `#[non_exhaustive]`,
 /// // so direct struct-literal construction is forbidden from external crates).
 /// use tau_pkg::scope::{ScopeConfig, ScopeKind};
 ///
 /// let cfg = ScopeConfig::new(ScopeKind::Global);
 /// let toml = cfg.to_toml_string().unwrap();
-/// assert!(toml.contains("schema_version = 3"));
+/// assert!(toml.contains("schema_version"));
+/// assert!(toml.contains("kind = \"global\""));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

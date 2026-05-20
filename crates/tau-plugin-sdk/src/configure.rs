@@ -21,7 +21,7 @@ use thiserror::Error;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_plugin_sdk::ConfigError;
 /// let err = ConfigError::MissingField("api_key");
 /// assert!(format!("{err}").contains("missing"));

@@ -188,16 +188,15 @@ pub async fn run(
         // v1.1: spawn_root_agent takes `Arc<Runtime>` so the in-stream
         // agent.<kind>.spawn intercept can recursively invoke run_with_history
         // on the same kernel. Single-agent runs below stay on the non-arc path.
+        let budget = tau_ports::RunBudget {
+            max_total_tokens: args.max_total_tokens,
+            max_total_duration_secs: args.max_total_duration_secs,
+            max_total_agents: args.max_total_agents,
+        };
         let runtime_arc = std::sync::Arc::new(runtime);
         let snapshot = runtime_arc
             .clone()
-            .spawn_root_agent(
-                agent_def,
-                manifest,
-                initial,
-                tau_ports::RunBudget::default(), // TODO: thread from CLI flags
-                scope_root,
-            )
+            .spawn_root_agent(agent_def, manifest, initial, budget, scope_root)
             .await
             .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
 
