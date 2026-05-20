@@ -1,0 +1,30 @@
+[package]
+name = "tau-domain-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Standalone Cargo project — NOT part of the workspace. Mirrors the
+# layout used by crates/tau-pkg/fuzz and crates/tau-plugin-protocol/fuzz;
+# see README.md in this directory.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tau-domain = { path = "..", features = ["serde"] }
+
+[[bin]]
+name = "parse_skill_md"
+path = "fuzz_targets/parse_skill_md.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
