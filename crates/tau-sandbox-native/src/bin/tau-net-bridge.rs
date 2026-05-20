@@ -68,6 +68,9 @@ fn main() {
 
 // Args and parse_args are pure logic — no Linux-specific types — so they
 // compile on all platforms, enabling the unit tests to run on macOS too.
+// Debug is required so `parse_args(...).unwrap_err()` can format the Ok
+// arm in test panics.
+#[derive(Debug)]
 struct Args {
     proxy_sock_path: std::path::PathBuf,
     listen_port: u16,
@@ -217,7 +220,11 @@ mod tests {
             "--".into(),
             "/usr/bin/plugin".into(),
         ];
-        assert!(parse_args(&argv).is_err());
+        let err = parse_args(&argv).unwrap_err();
+        assert_eq!(
+            err, "missing --proxy-sock=",
+            "expected the missing-proxy-sock error; got: {err:?}"
+        );
     }
 
     #[test]
@@ -227,7 +234,11 @@ mod tests {
             "--proxy-sock=/tmp/x.sock".into(),
             "--listen=127.0.0.1:8443".into(),
         ];
-        assert!(parse_args(&argv).is_err());
+        let err = parse_args(&argv).unwrap_err();
+        assert_eq!(
+            err, "missing -- <plugin> <args>",
+            "expected the missing-separator error; got: {err:?}"
+        );
     }
 
     #[test]
@@ -239,6 +250,27 @@ mod tests {
             "--".into(),
             "/usr/bin/plugin".into(),
         ];
-        assert!(parse_args(&argv).is_err());
+        let err = parse_args(&argv).unwrap_err();
+        assert_eq!(
+            err, "invalid --listen= addr",
+            "expected the invalid-listen-addr error; got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_args_unexpected_arg() {
+        let argv: Vec<String> = vec![
+            "tau-net-bridge".into(),
+            "--proxy-sock=/tmp/x.sock".into(),
+            "--gobbledygook".into(),
+            "--listen=127.0.0.1:8443".into(),
+            "--".into(),
+            "/usr/bin/plugin".into(),
+        ];
+        let err = parse_args(&argv).unwrap_err();
+        assert_eq!(
+            err, "unexpected arg",
+            "expected the unexpected-arg error; got: {err:?}"
+        );
     }
 }
