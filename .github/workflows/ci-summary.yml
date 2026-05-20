@@ -18,9 +18,14 @@ name: CI summary
 # no reliance on workflow_run propagation.
 #
 # Behavior:
-# - Wait up to ~25 min for the CI workflow run on this SHA to complete.
+# - Wait up to ~85 min for the CI workflow run on this SHA to complete.
+#   Sized to outlast cold-cache merge_group runs (~38 min observed
+#   under runner saturation) with comfortable headroom. Underbudgeting
+#   here causes the queue to stall: ci-summary times out before CI
+#   finishes -> required check never resolves -> queue evicts the entry
+#   even though every other job passed.
 # - If no CI run appears within 2 min, assume ci.yml's paths-ignore
-#   skipped the workflow entirely (docs-only PR) → success.
+#   skipped the workflow entirely (docs-only PR) -> success.
 # - On `cancelled`, keep waiting — a successor run is expected
 #   (concurrency:cancel-in-progress on ci.yml). Don't report success
 #   prematurely; that's how PR #92 landed broken.
@@ -53,7 +58,7 @@ jobs:
   ci-summary:
     name: ci-summary
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Poll CI workflow run on this SHA until terminal
         env:

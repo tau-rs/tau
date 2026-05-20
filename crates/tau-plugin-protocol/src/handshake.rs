@@ -27,10 +27,12 @@ use tau_domain::PortKind;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `TraceContext` is `#[non_exhaustive]`; cannot be constructed via
-/// // struct-literal across crate boundaries (E0639). Use
-/// // `TraceContext::new(...)` instead.
+/// ```
+/// use tau_plugin_protocol::TraceContext;
+/// // `TraceContext` is `#[non_exhaustive]`; struct-literal construction
+/// // is blocked across crate boundaries. Use `::new(...)` instead.
+/// let tc = TraceContext::new("run-1".into(), "agent-a".into(), "span-root".into());
+/// assert_eq!(tc.run_id, "run-1");
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,10 +62,17 @@ impl TraceContext {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `HandshakeRequest` is `#[non_exhaustive]`; use
-/// // `HandshakeRequest::new(...)` instead of struct-literal syntax
-/// // across crate boundaries (E0639).
+/// ```
+/// use tau_plugin_protocol::{HandshakeRequest, TraceContext, PROTOCOL_VERSION};
+/// use tau_domain::PortKind;
+/// let tc = TraceContext::new("run-1".into(), "agent-a".into(), "span-root".into());
+/// let req = HandshakeRequest::new(
+///     PROTOCOL_VERSION.into(),
+///     PortKind::LlmBackend,
+///     tc,
+///     serde_json::Value::Null,
+/// );
+/// assert_eq!(req.port, PortKind::LlmBackend);
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,9 +112,11 @@ impl HandshakeRequest {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `MethodSchema` is `#[non_exhaustive]`; use `MethodSchema::new(...)`
-/// // instead of struct-literal syntax across crate boundaries (E0639).
+/// ```
+/// use tau_plugin_protocol::MethodSchema;
+/// use serde_json::json;
+/// let schema = MethodSchema::new(json!({"type": "array"}), json!({"type": "object"}));
+/// assert_eq!(schema.params, json!({"type": "array"}));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,10 +139,19 @@ impl MethodSchema {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `HandshakeResponse` is `#[non_exhaustive]`; use
-/// // `HandshakeResponse::new(...)` instead of struct-literal syntax
-/// // across crate boundaries (E0639).
+/// ```
+/// use tau_plugin_protocol::{HandshakeResponse, PROTOCOL_VERSION};
+/// use tau_domain::PortKind;
+/// use std::collections::BTreeMap;
+/// let resp = HandshakeResponse::new(
+///     PROTOCOL_VERSION.into(),
+///     PortKind::Tool,
+///     "fs-read".into(),
+///     "0.1.0".into(),
+///     vec!["tool.call".into()],
+///     BTreeMap::new(),
+/// );
+/// assert_eq!(resp.provides, PortKind::Tool);
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

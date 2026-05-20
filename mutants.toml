@@ -1,0 +1,64 @@
+# cargo-mutants configuration for the tau workspace.
+#
+# Mutation testing complements the existing proptest + cassette + e2e
+# suites by mutating production code (flip `<`/`>`, drop `?`, replace
+# `true`/`false`, etc.) and verifying that at least one test catches
+# each mutation. The output is an objective "test catch rate" per crate.
+#
+# This config is checked in so any contributor can run mutation testing
+# locally with the same scope/baseline. It is NOT wired into the default
+# CI matrix — full mutation runs take hours.
+#
+# Usage:
+#     cargo install cargo-mutants --locked
+#     cargo mutants --in-place                 # default scope (whole workspace)
+#     cargo mutants --in-place -p tau-domain   # one crate
+#     cargo mutants --in-place --list          # print mutants without running
+#
+# See `docs/how-to/run-mutation-testing.md` for the full triage workflow.
+
+# Use nextest as the runner — matches CI behaviour and is faster per
+# test than `cargo test` for parallel-safe suites.
+test_tool = "nextest"
+
+# Per-mutant timeout. Defaults to 5× the baseline-test elapsed time,
+# but mutation-induced hangs on the workspace's longest-running tests
+# (tau-plugin-compat layer4 e2e, ~3-5 min) can stretch this; cap at
+# 300s so a stuck mutant doesn't burn 25 minutes before being killed.
+timeout = 300
+
+# Mutants of the *intended* "no panic" path inside fuzz harnesses,
+# benches, and test fixtures aren't real defects — exclude those.
+exclude_globs = [
+    "crates/*/tests/**",
+    "crates/*/benches/**",
+    "crates/*/fuzz/**",
+    "crates/*/*/tests/**",
+    "crates/*/*/benches/**",
+    "crates/*/*/fuzz/**",
+    "xtask/**",
+    "crates/tau-plugin-test-support/**",
+    "crates/tau-plugin-conformance/**",
+    "crates/tau-plugin-compat/fixtures/**",
+]
+
+# Trace/log statements rarely have observable behaviour that tests
+# check. Don't mutate them — they generate uncatchable mutants.
+examine_re = [
+    # Allow everything by default; the relevant filter is exclude_re below.
+]
+
+exclude_re = [
+    # tracing-style log macros. A test that asserts "no log output"
+    # would catch mutation of these, but tau doesn't have those tests.
+    "tracing::(?:debug|info|warn|error|trace)!",
+    "log::(?:debug|info|warn|error|trace)!",
+    "eprintln!",
+    "println!",
+]
+
+# Run an additional baseline test before mutating, to confirm the
+# tree's tests pass cleanly. If baseline fails, mutation results are
+# meaningless (every mutant looks "caught" because the baseline is
+# also red).
+baseline = "run"
