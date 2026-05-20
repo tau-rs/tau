@@ -69,10 +69,10 @@ pub const MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION: u32 = 6;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `LockFile` is `#[non_exhaustive]`; constructed via [`LockFile::default`].
+/// ```
 /// use tau_pkg::lockfile::LockFile;
 ///
+/// // `LockFile` is `#[non_exhaustive]`; constructed via `Default`.
 /// let lf = LockFile::default();
 /// assert_eq!(lf.schema_version, 6);
 /// assert!(lf.packages.is_empty());
@@ -408,12 +408,16 @@ impl LockFile {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
     /// use std::path::Path;
     /// use tau_pkg::lockfile::LockFile;
     ///
+    /// // `load` returns `Ok(LockFile::default())` for paths that do not
+    /// // exist on disk (lazy creation — the first install in a scope
+    /// // writes the lockfile via [`LockFile::save`]).
     /// let lf = LockFile::load(Path::new("/nonexistent/tau-lock.toml")).unwrap();
-    /// assert!(lf.packages.is_empty()); // lazy creation
+    /// assert!(lf.packages.is_empty());
+    /// assert_eq!(lf.schema_version, 6);
     /// ```
     pub fn load(path: &Path) -> Result<Self, RegistryError> {
         match fs::metadata(path) {
