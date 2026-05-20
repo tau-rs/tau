@@ -23,8 +23,12 @@ serde         = ["dep:serde", "dep:base64", "dep:serde_yaml", "uuid/serde", "sem
 test-fixtures = []
 
 [dev-dependencies]
-proptest    = { workspace = true }
-serde_json  = { version = "1", features = ["float_roundtrip"] }
-tempfile    = { workspace = true }
-toml        = { workspace = true }
-walkdir     = { workspace = true }
+proptest        = { workspace = true }
+serde_json      = { version = "1", features = ["float_roundtrip"] }
+tempfile        = { workspace = true }
+toml            = { workspace = true }
+walkdir         = { workspace = true }
+# Used in tests for variant-aware panic messages (T1 of the
+# test-suite-upgrades plan; see src/package/{source,plugin}.rs
+# and tests/package_source_grammar.rs).
+assert_matches  = { workspace = true }

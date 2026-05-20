@@ -39,7 +39,7 @@ fn status_reports_project_required_tier() {
 fn status_always_exits_zero() {
     // Even if no scope config exists or resolution fails, status must
     // exit 0; errors are rendered in the output.
-    let dir = tempfile::TempDir::new().unwrap();
+    let dir = tau_ports::fixtures::scratch_dir("sandbox-status-no-scope");
     AssertCmd::cargo_bin("tau")
         .unwrap()
         .args(["sandbox", "status"])
