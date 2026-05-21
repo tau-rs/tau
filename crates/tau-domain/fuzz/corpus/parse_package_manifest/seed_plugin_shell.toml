@@ -1,0 +1,15 @@
+name = "shell"
+version = "0.1.0"
+description = "Run allow-listed subprocesses with wall-clock timeout and 1 MiB output cap."
+
+[plugin]
+provides = "tool"
+kind     = "rust-cargo"
+bin      = "shell-plugin"
+
+[[capabilities]]
+kind = "process.spawn"
+commands = []
+
+[sandbox]
+required_tier = "strict"

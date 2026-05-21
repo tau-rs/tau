@@ -14,10 +14,18 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 tau-domain = { path = "..", features = ["serde"] }
+toml = "1.1"
 
 [[bin]]
 name = "parse_skill_md"
 path = "fuzz_targets/parse_skill_md.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_package_manifest"
+path = "fuzz_targets/parse_package_manifest.rs"
 test = false
 doc = false
 bench = false

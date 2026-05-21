@@ -23,6 +23,7 @@ cargo +nightly fuzz run parse_skill_md -- -max_total_time=60
 | Target | Parser | Seed corpus |
 |--------|--------|-------------|
 | `parse_skill_md` | `tau_domain::package::skill::parse_skill_md` | 4 seeds: valid, empty, missing closer, no frontmatter |
+| `parse_package_manifest` | `toml::from_str::<UncheckedManifest>` + `.validate()` | 4 seeds: critic skill, shell plugin, echo-tool plugin, empty |
 
 ## Why fuzz `parse_skill_md`
 

@@ -1,0 +1,8 @@
+name = "echo-tool"
+version = "0.1.0"
+description = "Toy Tool plugin: echoes call args back as text content."
+
+[plugin]
+provides = "tool"
+kind     = "rust-cargo"
+bin      = "echo-tool"

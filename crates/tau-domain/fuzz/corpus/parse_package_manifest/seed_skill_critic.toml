@@ -1,0 +1,13 @@
+name = "critic"
+version = "0.1.0"
+description = "Reviews drafts for unsourced claims."
+authors = []
+source = "https://example.com/critic.git"
+kind = "skill"
+dependencies = []
+
+[[capabilities]]
+kind = "fs.read"
+paths = ["${SKILL_DIR}/references/**"]
+
+[skill]
