@@ -18,6 +18,7 @@
 //!
 //! See `docs/decisions/0004-tau-pkg.md` for the design rationale.
 
+pub mod bundle;
 pub mod capability_override;
 pub mod error;
 pub(crate) mod git;
@@ -37,6 +38,11 @@ pub mod tree_hash;
 pub mod update;
 pub mod verify;
 
+pub use bundle::{
+    compute_self_hash, to_canonical_toml, verify_self_hash, BackendRef, BundleAgent,
+    BundleEffectiveCapabilities, BundleIntegrityError, BundleIoError, BundleManifest, BundleMeta,
+    BundlePackage, BundleParseError, ProjectInfo,
+};
 pub use error::{
     GitError, InstallError, ManifestReadError, RegistryError, ScopeError, UninstallError,
 };

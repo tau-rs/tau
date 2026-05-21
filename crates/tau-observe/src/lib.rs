@@ -9,4 +9,5 @@
 pub mod capture;
 pub mod filter;
 pub mod install;
+pub mod preview;
 pub mod vocabulary;
