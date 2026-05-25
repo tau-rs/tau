@@ -59,3 +59,5 @@
 ## Status log
 
 (Updated by Tasks 2–6 as each row is activated.)
+
+- 2026-05-25 — rows 1, 2, 3 → activated (PR-A).
