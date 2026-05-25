@@ -10,11 +10,15 @@
 
 mod common;
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend};
-use tau_ports::StopReason;
+use tau_domain::Value;
+use tau_ports::fixtures::{make_completion_response, make_token_usage, make_tool_use, MockLlmBackend, MockTool};
+use tau_ports::{
+    CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, StopReason,
+};
 use tau_runtime::{RunOptions, Runtime};
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
@@ -126,6 +130,7 @@ async fn run_emits_structural_tracing_vocabulary() {
     let expected = [
         "span:runtime.agent_run",
         "event:runtime.run_started",
+        "span:runtime.turn",
         "event:runtime.turn_started",
         "span:llm.complete",
         "event:llm.response_received",
@@ -147,5 +152,137 @@ async fn run_emits_structural_tracing_vocabulary() {
         captured_vec.len() >= 8,
         "expected >= 8 captured entries on a happy-path run; got {}: {captured_vec:?}",
         captured_vec.len()
+    );
+
+    // ADR-0006 §3.9: `runtime.turn` span fires exactly once per
+    // executed turn. The happy-path run here executes a single turn.
+    let turn_spans = captured_vec
+        .iter()
+        .filter(|c| c.as_str() == "span:runtime.turn")
+        .count();
+    assert_eq!(
+        turn_spans, 1,
+        "expected exactly 1 runtime.turn span on a single-turn run; got {turn_spans}: {captured_vec:?}"
+    );
+}
+
+/// LLM mock with a per-call response queue. Borrowed from
+/// `run_with_tool_calls.rs` because `MockLlmBackend::with_response`
+/// only stores a single canned response (each call returns the same
+/// thing), which doesn't fit a multi-turn scenario where turn 1 emits
+/// a `tool_use` and turn 2 emits a final text.
+struct ScriptedLlm {
+    name: String,
+    responses: Mutex<VecDeque<CompletionResponse>>,
+}
+
+impl ScriptedLlm {
+    fn new(name: &str, responses: Vec<CompletionResponse>) -> Self {
+        Self {
+            name: name.to_string(),
+            responses: Mutex::new(responses.into()),
+        }
+    }
+}
+
+impl LlmBackend for ScriptedLlm {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        self.responses
+            .lock()
+            .expect("ScriptedLlm responses mutex poisoned")
+            .pop_front()
+            .ok_or_else(|| LlmError::Internal {
+                message: "ScriptedLlm: no more scripted responses".into(),
+            })
+    }
+
+    async fn stream(&self, _req: CompletionRequest) -> Result<CompletionStream, LlmError> {
+        let resp = self
+            .responses
+            .lock()
+            .expect("ScriptedLlm responses mutex poisoned")
+            .pop_front()
+            .ok_or_else(|| LlmError::Internal {
+                message: "ScriptedLlm: no more scripted responses".into(),
+            })?;
+        Ok(tau_ports::batch_to_stream(resp))
+    }
+}
+
+#[tokio::test]
+async fn runtime_turn_span_fires_once_per_turn() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // Turn 1: a tool_use that forces a second turn.
+    let turn1 = make_completion_response(
+        String::new(),
+        vec![make_tool_use(
+            "u1".into(),
+            "echo".into(),
+            Value::String("hi".into()),
+        )],
+        StopReason::ToolUse,
+        Some(make_token_usage(7, 3)),
+    );
+    // Turn 2: plain text, ends the loop.
+    let turn2 = make_completion_response(
+        "done".into(),
+        Vec::new(),
+        StopReason::EndTurn,
+        Some(make_token_usage(11, 5)),
+    );
+
+    let llm = ScriptedLlm::new("gpt-4", vec![turn1, turn2]);
+    // Default `MockTool` returns Ok(empty) — sufficient for the
+    // dispatch step to succeed and the loop to advance to turn 2.
+    let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(echo_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("hi");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    // Exactly one `runtime.turn` span per executed turn.
+    let turn_spans = captured_vec
+        .iter()
+        .filter(|c| c.as_str() == "span:runtime.turn")
+        .count();
+    assert_eq!(
+        turn_spans, 2,
+        "expected exactly 2 runtime.turn spans across a 2-turn run; got {turn_spans}: {captured_vec:?}"
+    );
+
+    // And one `runtime.turn_started` event per turn — sanity check
+    // against off-by-one in the span placement.
+    let turn_starts = captured_vec
+        .iter()
+        .filter(|c| c.as_str() == "event:runtime.turn_started")
+        .count();
+    assert_eq!(
+        turn_starts, 2,
+        "expected exactly 2 runtime.turn_started events; got {turn_starts}: {captured_vec:?}"
     );
 }

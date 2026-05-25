@@ -21,7 +21,7 @@ use tau_domain::{
 use tau_observe::vocabulary::{
     EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_RUNTIME_LOOP_TERMINATED,
     EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED,
-    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED,
+    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED, SPAN_RUNTIME_TURN,
 };
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
@@ -185,6 +185,17 @@ pub(crate) fn run_streaming_inner(
         // OR max_turns is reached.
         while total_turns < options.max_turns {
             total_turns += 1;
+            // Per ADR-0006 §3.9: wrap the turn body in a `runtime.turn`
+            // span so child spans/events (llm.complete, dispatch.tool,
+            // tool.* sessions, capability.check) attribute correctly to
+            // a specific turn. `turn_index` is 1-indexed to match the
+            // existing `runtime.turn_started` event's `turn` field.
+            let turn_span = info_span!(
+                SPAN_RUNTIME_TURN,
+                turn_index = u64::from(total_turns),
+                messages_len = messages.len(),
+            );
+            let _turn_guard = turn_span.enter();
             debug!(name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
 
             let mut request = CompletionRequest::new(agent_def.llm_backend.as_str().into());
