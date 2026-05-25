@@ -789,6 +789,70 @@ paths = [{paths_toml}]
 }
 
 // ---------------------------------------------------------------------------
+// Task 8: message.added event at every history push
+// ---------------------------------------------------------------------------
+
+/// Drive a 2-turn run (one tool call + a terminating text response) and
+/// assert that `message.added` fires exactly once per `messages.push`
+/// site in `stream.rs`. The expected push sites for this scenario are:
+///
+///   1. The initial user message pushed before the turn loop opens.
+///   2. The assistant tool-call message (`agent_addr → tool_addr`,
+///      `MessagePayload::ToolCall`) pushed after the cap check.
+///   3. The tool-result message (`tool_addr → agent_addr`,
+///      `MessagePayload::ToolResult`) pushed after `Tool::invoke`.
+///   4. The final assistant text message ("done") pushed on turn 2 when
+///      the accumulated text is non-empty.
+///
+/// `history` is empty, so the `messages.extend(history)` loop emits
+/// zero events. Total expected = 4.
+#[tokio::test]
+async fn message_added_count_matches_pushed_messages() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // Turn 1: one tool_use (forces a 2nd turn).
+    // Turn 2: plain text, terminates the loop.
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_text("done");
+    let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(echo_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("call echo");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    let count = captured_vec
+        .iter()
+        .filter(|c| c.as_str() == "event:message.added")
+        .count();
+    assert_eq!(
+        count, 4,
+        "expected 4 message.added events (initial user + assistant tool-call \
+         + tool-result + final assistant text), got {count}; captured = {captured_vec:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 7: tool.session_open/invoke/session_close spans + tool.args_received
 //         + tool.result_received events
 // ---------------------------------------------------------------------------

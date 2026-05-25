@@ -20,11 +20,11 @@ use tau_domain::{
 };
 use tau_observe::vocabulary::{
     EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON,
-    EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED,
-    EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED,
-    EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED,
-    EV_TOOL_SESSION_OPEN_FAILED, SPAN_DISPATCH_TOOL, SPAN_RUNTIME_TURN, SPAN_TOOL_INVOKE,
-    SPAN_TOOL_SESSION_CLOSE, SPAN_TOOL_SESSION_OPEN,
+    EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_MESSAGE_ADDED, EV_RUNTIME_COMPLETED,
+    EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED,
+    EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED,
+    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED, SPAN_DISPATCH_TOOL,
+    SPAN_RUNTIME_TURN, SPAN_TOOL_INVOKE, SPAN_TOOL_SESSION_CLOSE, SPAN_TOOL_SESSION_OPEN,
 };
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
@@ -171,7 +171,21 @@ pub(crate) fn run_streaming_inner(
     async_stream::stream! {
         let agent_instance_id = AgentInstanceId::new();
         let mut messages: Vec<Message> = Vec::with_capacity(history.len() + 1);
+        // ADR-0006 §3.9: emit one `message.added` per message pushed onto
+        // the run history. No explicit `parent:` here — these fire before
+        // any `runtime.turn` span opens, so they attach to the outer
+        // `runtime.agent_run` span (or the caller's current span).
+        for m in &history {
+            debug!(
+                name = EV_MESSAGE_ADDED,
+                role = ?m.sender,
+            );
+        }
         messages.extend(history);
+        debug!(
+            name = EV_MESSAGE_ADDED,
+            role = ?initial_message.sender,
+        );
         messages.push(initial_message);
         let mut total_turns: u32 = 0;
         let mut aggregated_tokens = crate::options::TokenUsage::default();
@@ -335,13 +349,19 @@ pub(crate) fn run_streaming_inner(
             // Append assistant text to history if present.
             if !accumulated_text.is_empty() {
                 let agent_addr = Address::Agent(agent_instance_id);
-                messages.push(Message::new(
+                let assistant_msg = Message::new(
                     agent_addr,
                     Address::User,
                     MessagePayload::Text {
                         content: accumulated_text.clone(),
                     },
-                ));
+                );
+                debug!(
+                    parent: &turn_span,
+                    name = EV_MESSAGE_ADDED,
+                    role = ?assistant_msg.sender,
+                );
+                messages.push(assistant_msg);
             }
 
             // Accumulate token usage.
@@ -470,13 +490,19 @@ pub(crate) fn run_streaming_inner(
                         // Append the tool-call message (parallels normal path).
                         let agent_addr = Address::Agent(agent_instance_id);
                         let tool_addr = Address::Tool(tool_use.name.clone());
-                        messages.push(Message::new(
+                        let tool_call_msg = Message::new(
                             agent_addr.clone(),
                             tool_addr.clone(),
                             MessagePayload::ToolCall {
                                 args: tool_use.input.clone(),
                             },
-                        ));
+                        );
+                        debug!(
+                            parent: &turn_span,
+                            name = EV_MESSAGE_ADDED,
+                            role = ?tool_call_msg.sender,
+                        );
+                        messages.push(tool_call_msg);
 
                         // Build the ToolResult.
                         let is_agent_spawn = tool_use.name.starts_with("agent.")
@@ -514,7 +540,7 @@ pub(crate) fn run_streaming_inner(
                                     );
                                     // Append error tool-result message so LLM
                                     // history is coherent.
-                                    messages.push(Message::new(
+                                    let err_msg = Message::new(
                                         tool_addr.clone(),
                                         agent_addr.clone(),
                                         MessagePayload::ToolError {
@@ -525,7 +551,13 @@ pub(crate) fn run_streaming_inner(
                                                 .into(),
                                             details: None,
                                         },
-                                    ));
+                                    );
+                                    debug!(
+                                        parent: &turn_span,
+                                        name = EV_MESSAGE_ADDED,
+                                        role = ?err_msg.sender,
+                                    );
+                                    messages.push(err_msg);
                                     continue;
                                 }
                             };
@@ -547,7 +579,7 @@ pub(crate) fn run_streaming_inner(
                                         tool_use,
                                         &err_msg,
                                     );
-                                    messages.push(Message::new(
+                                    let err_event_msg = Message::new(
                                         tool_addr.clone(),
                                         agent_addr.clone(),
                                         MessagePayload::ToolError {
@@ -558,7 +590,13 @@ pub(crate) fn run_streaming_inner(
                                             ),
                                             details: None,
                                         },
-                                    ));
+                                    );
+                                    debug!(
+                                        parent: &turn_span,
+                                        name = EV_MESSAGE_ADDED,
+                                        role = ?err_event_msg.sender,
+                                    );
+                                    messages.push(err_event_msg);
                                     continue;
                                 }
                             };
@@ -757,11 +795,17 @@ pub(crate) fn run_streaming_inner(
                                     ),
                                 }
                             };
-                            messages.push(Message::new(
+                            let skill_result_msg = Message::new(
                                 tool_addr.clone(),
                                 agent_addr.clone(),
                                 skill_result_payload,
-                            ));
+                            );
+                            debug!(
+                                parent: &turn_span,
+                                name = EV_MESSAGE_ADDED,
+                                role = ?skill_result_msg.sender,
+                            );
+                            messages.push(skill_result_msg);
 
                             yield RunEvent::ToolCallCompleted {
                                 id: tool_use.id.clone(),
@@ -1044,11 +1088,17 @@ pub(crate) fn run_streaming_inner(
                                 body: crate::run::content_to_value(&tool_result.content),
                             }
                         };
-                        messages.push(Message::new(
+                        let orch_result_msg = Message::new(
                             tool_addr,
                             agent_addr,
                             result_payload,
-                        ));
+                        );
+                        debug!(
+                            parent: &turn_span,
+                            name = EV_MESSAGE_ADDED,
+                            role = ?orch_result_msg.sender,
+                        );
+                        messages.push(orch_result_msg);
 
                         yield RunEvent::ToolCallCompleted {
                             id: tool_use.id.clone(),
@@ -1126,13 +1176,19 @@ pub(crate) fn run_streaming_inner(
                 // ----- Append the tool-call message -------------------------
                 let agent_addr = Address::Agent(agent_instance_id);
                 let tool_addr = Address::Tool(tool_use.name.clone());
-                messages.push(Message::new(
+                let tool_call_msg = Message::new(
                     agent_addr.clone(),
                     tool_addr.clone(),
                     MessagePayload::ToolCall {
                         args: tool_use.input.clone(),
                     },
-                ));
+                );
+                debug!(
+                    parent: &turn_span,
+                    name = EV_MESSAGE_ADDED,
+                    role = ?tool_call_msg.sender,
+                );
+                messages.push(tool_call_msg);
 
                 // ----- Open a session ---------------------------------------
                 let ctx = SessionContext::new(agent_instance_id, uuid::Uuid::new_v4(), None)
@@ -1191,7 +1247,7 @@ pub(crate) fn run_streaming_inner(
                             name = "tool.args_validation_failed",
                             tool_name = %tool_use.name,
                         );
-                        messages.push(Message::new(
+                        let validation_err_msg = Message::new(
                             tool_addr.clone(),
                             agent_addr.clone(),
                             MessagePayload::ToolError {
@@ -1199,7 +1255,13 @@ pub(crate) fn run_streaming_inner(
                                 message: reason.clone(),
                                 details: None,
                             },
-                        ));
+                        );
+                        debug!(
+                            parent: &turn_span,
+                            name = EV_MESSAGE_ADDED,
+                            role = ?validation_err_msg.sender,
+                        );
+                        messages.push(validation_err_msg);
                         yield RunEvent::ToolCallCompleted {
                             id: tool_use.id.clone(),
                             name: tool_use.name.clone(),
@@ -1298,11 +1360,17 @@ pub(crate) fn run_streaming_inner(
                         body: crate::run::content_to_value(&tool_result.content),
                     }
                 };
-                messages.push(Message::new(
+                let tool_result_msg = Message::new(
                     tool_addr,
                     agent_addr,
                     result_payload,
-                ));
+                );
+                debug!(
+                    parent: &turn_span,
+                    name = EV_MESSAGE_ADDED,
+                    role = ?tool_result_msg.sender,
+                );
+                messages.push(tool_result_msg);
 
                 yield RunEvent::ToolCallCompleted {
                     id: tool_use.id.clone(),
