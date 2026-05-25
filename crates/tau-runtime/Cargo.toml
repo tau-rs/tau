@@ -90,6 +90,7 @@ integration-tests = []
 [dev-dependencies]
 tokio              = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 tau-domain         = { workspace = true, features = ["test-fixtures"] }
+tau-observe        = { workspace = true, features = ["test-fixtures"] }
 tau-ports          = { workspace = true, features = ["test-fixtures", "serde"] }
 tau-plugin-protocol = { workspace = true, features = ["test-support"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
