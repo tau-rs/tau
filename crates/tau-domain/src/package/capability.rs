@@ -17,14 +17,18 @@ use crate::value::Value;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Variant-level `#[non_exhaustive]` blocks struct-expression
-/// // construction from outside the crate, so this example is illustrative
-/// // only. In practice, `Capability` is built by deserializing a manifest.
-/// use tau_domain::{Capability, FsCapability};
-/// let cap = Capability::Filesystem(FsCapability::Read {
-///     paths: vec!["${PROJECT}/**".into()],
-/// });
+/// ```
+/// use tau_domain::{Capability, CapabilityShape};
+/// use std::collections::BTreeMap;
+///
+/// // `Capability::Custom` is the constructable escape-hatch variant.
+/// // Typed variants (`Filesystem`, `Network`, …) are obtained by
+/// // deserializing a package manifest (via tau-pkg).
+/// let cap = Capability::Custom {
+///     name: "my.capability".into(),
+///     params: BTreeMap::new(),
+/// };
+/// assert!(matches!(cap.required_shape(), CapabilityShape::Custom { .. }));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -65,11 +69,19 @@ pub enum Capability {
 
 /// Filesystem capability verbs.
 ///
+/// Variants are `#[non_exhaustive]` — construction from outside the crate
+/// requires manifest deserialization (via tau-pkg). The corresponding
+/// [`CapabilityShape`] identifies the sandbox primitive each verb maps to.
+///
 /// # Example
 ///
-/// ```ignore
-/// use tau_domain::FsCapability;
-/// let cap = FsCapability::Read { paths: vec!["/tmp/**".into()] };
+/// ```
+/// use tau_domain::CapabilityShape;
+///
+/// // `CapabilityShape::FilesystemRead` is what an fs.read capability
+/// // requires from a sandbox adapter.
+/// let shape = CapabilityShape::FilesystemRead;
+/// assert!(matches!(shape, CapabilityShape::FilesystemRead));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -99,14 +111,19 @@ pub enum FsCapability {
 
 /// Network capability verbs.
 ///
+/// Variants are `#[non_exhaustive]` — construction from outside the crate
+/// requires manifest deserialization (via tau-pkg). The corresponding
+/// [`CapabilityShape`] identifies the sandbox primitive this verb maps to.
+///
 /// # Example
 ///
-/// ```ignore
-/// use tau_domain::NetCapability;
-/// let cap = NetCapability::Http {
-///     hosts: vec!["api.example.com".into()],
-///     methods: vec!["GET".into()],
-/// };
+/// ```
+/// use tau_domain::CapabilityShape;
+///
+/// // `CapabilityShape::NetworkHttp` is what a net.http capability
+/// // requires from a sandbox adapter.
+/// let shape = CapabilityShape::NetworkHttp;
+/// assert!(matches!(shape, CapabilityShape::NetworkHttp));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -124,11 +141,19 @@ pub enum NetCapability {
 
 /// Process capability verbs.
 ///
+/// Variants are `#[non_exhaustive]` — construction from outside the crate
+/// requires manifest deserialization (via tau-pkg). The corresponding
+/// [`CapabilityShape`] identifies the sandbox primitive this verb maps to.
+///
 /// # Example
 ///
-/// ```ignore
-/// use tau_domain::ProcessCapability;
-/// let cap = ProcessCapability::Spawn { commands: vec!["git".into()] };
+/// ```
+/// use tau_domain::CapabilityShape;
+///
+/// // `CapabilityShape::ProcessExec` is what a process.spawn capability
+/// // requires from a sandbox adapter.
+/// let shape = CapabilityShape::ProcessExec;
+/// assert!(matches!(shape, CapabilityShape::ProcessExec));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -144,11 +169,19 @@ pub enum ProcessCapability {
 
 /// Agent capability verbs.
 ///
+/// Variants are `#[non_exhaustive]` — construction from outside the crate
+/// requires manifest deserialization (via tau-pkg). The corresponding
+/// [`CapabilityShape`] identifies the enforcement primitive this verb maps to.
+///
 /// # Example
 ///
-/// ```ignore
-/// use tau_domain::AgentCapability;
-/// let cap = AgentCapability::Spawn { allowed_kinds: vec!["worker".into()] };
+/// ```
+/// use tau_domain::CapabilityShape;
+///
+/// // `CapabilityShape::AgentSpawn` is what an agent.spawn capability
+/// // requires from the runtime (not OS-sandbox-enforced at v0.1).
+/// let shape = CapabilityShape::AgentSpawn;
+/// assert!(matches!(shape, CapabilityShape::AgentSpawn));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -170,13 +203,19 @@ pub enum AgentCapability {
 /// authorizes a parent agent to invoke installed skills as child
 /// agents via the `skill.<name>.spawn` virtual tool.
 ///
+/// Variants are `#[non_exhaustive]` — construction from outside the crate
+/// requires manifest deserialization (via tau-pkg). The corresponding
+/// [`CapabilityShape`] identifies the enforcement primitive this verb maps to.
+///
 /// # Example
 ///
-/// ```ignore
-/// use tau_domain::SkillCapability;
-/// let cap = SkillCapability::Spawn {
-///     allowed_skills: vec!["critic".into(), "fact-checker".into()],
-/// };
+/// ```
+/// use tau_domain::CapabilityShape;
+///
+/// // `CapabilityShape::SkillSpawn` is what a skill.spawn capability
+/// // requires from the runtime (gated at virtual-tool dispatch layer).
+/// let shape = CapabilityShape::SkillSpawn;
+/// assert!(matches!(shape, CapabilityShape::SkillSpawn));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
