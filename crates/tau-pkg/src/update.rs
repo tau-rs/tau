@@ -25,9 +25,16 @@ use crate::source_list::{list_versions_at_source, SourceListError};
 /// `#[non_exhaustive]`: new variants may be added in future versions without
 /// a semver break.
 ///
-/// ```ignore
-/// // UpdateError is #[non_exhaustive]; match arms need a catch-all.
+/// ```
 /// use tau_pkg::update::UpdateError;
+///
+/// // `UpdateError` is `#[non_exhaustive]`; match arms need a catch-all.
+/// fn describe(e: &UpdateError) -> &'static str {
+///     match e {
+///         UpdateError::PackageNotInstalled { .. } => "not installed",
+///         _ => "other",
+///     }
+/// }
 /// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -91,9 +98,15 @@ pub enum UpdateError {
 ///
 /// `#[non_exhaustive]`: new fields may be added without a semver break.
 ///
-/// ```ignore
-/// // UpdateResult is #[non_exhaustive]; construct via update_package.
+/// ```
 /// use tau_pkg::update::UpdateResult;
+///
+/// // `UpdateResult` is `#[non_exhaustive]`; values are produced by
+/// // `update_package`. The fields are read-only from the caller's
+/// // perspective.
+/// fn log_update(r: &UpdateResult) {
+///     println!("updated {} -> {}", r.from_version, r.to_version);
+/// }
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
