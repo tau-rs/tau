@@ -787,3 +787,163 @@ paths = [{paths_toml}]
         "missing span:capability.check on deny path; captured = {captured_vec:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 7: tool.session_open/invoke/session_close spans + tool.args_received
+//         + tool.result_received events
+// ---------------------------------------------------------------------------
+
+/// Drive one full happy-path tool invocation. Assert that all three
+/// tool-session spans open at least once around the dispatch call site
+/// (these spans wrap the per-tool init/invoke/teardown for every
+/// `DynTool`, in-process MockTool included).
+///
+/// The `tool.args_received` and `tool.result_received` events live
+/// inside `IpcTool::invoke` (they expose rmp-encoded byte counts that
+/// only have meaning for the IPC path). They're exercised separately
+/// by the feature-gated IPC test below.
+#[tokio::test]
+async fn tool_session_spans_fire_for_full_lifecycle() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // Turn 1: one tool_use (forces a 2nd turn).
+    // Turn 2: plain text, terminates the loop.
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_text("done");
+    let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(echo_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("call echo");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    for expected in [
+        "span:tool.session_open",
+        "span:tool.invoke",
+        "span:tool.session_close",
+    ] {
+        assert!(
+            captured_vec.iter().any(|c| c == expected),
+            "missing {expected:?}; captured = {captured_vec:?}"
+        );
+    }
+}
+
+/// IPC-path test: registers a real `IpcTool` (driven by a `FakeStdioPeer`
+/// via two duplex streams), runs one turn, and asserts the
+/// `tool.args_received` and `tool.result_received` events fire from
+/// inside `IpcTool::invoke`.
+///
+/// Gated by `feature = "test-support"` (same as `plugin_host_ipc_llm.rs`)
+/// because the `IpcTool` constructor + `PluginProcess::new_for_test`
+/// live behind that flag.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn tool_ipc_args_and_result_events_fire_for_invoke() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tau_plugin_protocol::test_support::FakeStdioPeer;
+    use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+    use tau_ports::fixtures::{make_tool_result, make_tool_spec};
+    use tau_ports::ToolContent;
+    use tau_runtime::plugin_host::__internals::{DynAsyncWriter, IpcTool, PluginProcess};
+
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // ----- Build a paired (PluginProcess, FakeStdioPeer) -------------
+    // Mirrors the helper in tests/plugin_host_ipc_llm.rs.
+    let (peer_read_half, sut_write_half) = tokio::io::duplex(64 * 1024);
+    let (sut_read_half, peer_write_half) = tokio::io::duplex(64 * 1024);
+    let mut peer = FakeStdioPeer {
+        reader: FramedReader::new(peer_read_half, FramerOptions::default()),
+        writer: FramedWriter::new(peer_write_half),
+    };
+    let sut_reader = FramedReader::new(sut_read_half, FramerOptions::default());
+    let sut_writer: FramedWriter<DynAsyncWriter> =
+        FramedWriter::new(Box::new(sut_write_half) as DynAsyncWriter);
+    let process = PluginProcess::new_for_test(
+        "echo".to_string(),
+        sut_reader,
+        sut_writer,
+        Duration::from_secs(5),
+    );
+
+    let spec = make_tool_spec("echo".into(), "echo".into(), Value::Object(Default::default()));
+    let ipc_tool: Arc<dyn tau_runtime::builder::DynTool> =
+        Arc::new(IpcTool::new("echo".to_string(), spec, Vec::new(), process));
+
+    // Turn 1: one tool_use (forces a 2nd turn).
+    // Turn 2: plain text, terminates the loop.
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_text("done");
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_dyn_tool(ipc_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("call echo");
+
+    // Drive runtime and peer concurrently — IpcTool blocks on the
+    // peer's tool.call response.
+    let run_fut = runtime.run(agent_def, manifest, initial, RunOptions::default());
+    let peer_fut = async {
+        let (msgid, _params) = peer.expect_request("tool.call").await;
+        let result = make_tool_result(
+            vec![ToolContent::Text { text: "echoed".into() }],
+            false,
+        );
+        peer.send_response(msgid, &result)
+            .await
+            .expect("peer send_response");
+    };
+    let (run_outcome, ()) = tokio::join!(run_fut, peer_fut);
+    run_outcome.expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    for expected in [
+        "span:tool.session_open",
+        "span:tool.invoke",
+        "span:tool.session_close",
+        "event:tool.args_received",
+        "event:tool.result_received",
+    ] {
+        assert!(
+            captured_vec.iter().any(|c| c == expected),
+            "missing {expected:?}; captured = {captured_vec:?}"
+        );
+    }
+}

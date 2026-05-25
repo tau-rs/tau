@@ -23,7 +23,8 @@ use tau_observe::vocabulary::{
     EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED,
     EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED,
     EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED,
-    EV_TOOL_SESSION_OPEN_FAILED, SPAN_DISPATCH_TOOL, SPAN_RUNTIME_TURN,
+    EV_TOOL_SESSION_OPEN_FAILED, SPAN_DISPATCH_TOOL, SPAN_RUNTIME_TURN, SPAN_TOOL_INVOKE,
+    SPAN_TOOL_SESSION_CLOSE, SPAN_TOOL_SESSION_OPEN,
 };
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
@@ -1137,15 +1138,30 @@ pub(crate) fn run_streaming_inner(
                 let ctx = SessionContext::new(agent_instance_id, uuid::Uuid::new_v4(), None)
                     .with_granted_capabilities(granted_for_session.clone())
                     .with_deny_entries(deny_entries.clone());
-                if let Err(err) = tool.init(ctx.clone()).instrument(turn_span.clone()).await {
+                // ADR-0006 §3.9: `tool.session_open` span wraps the
+                // `init` call AND the FAILED-event emit on the Err
+                // branch so the failed event nests inside the span.
+                // Parent is `dispatch.tool` (current at this point).
+                let session_open_span = info_span!(
+                    parent: &dispatch_span,
+                    SPAN_TOOL_SESSION_OPEN,
+                    tool_name = %tool_use.name,
+                    session_id = %ctx.session_id,
+                );
+                if let Err(err) = tool
+                    .init(ctx.clone())
+                    .instrument(session_open_span.clone())
+                    .await
+                {
                     warn!(
-                        parent: &turn_span,
+                        parent: &session_open_span,
                         name = EV_TOOL_SESSION_OPEN_FAILED,
                         tool_name = %tool_use.name,
                     );
                     yield make_tool_fatal_error(err);
                     return;
                 }
+                drop(session_open_span);
 
                 // ----- Schema validation ------------------------------------
                 let validator = tool_validators.get(tool_use.name.as_str()).expect(
@@ -1163,7 +1179,13 @@ pub(crate) fn run_streaming_inner(
                         // ToolError message into the conversation so the
                         // LLM gets to self-correct, then yield
                         // ToolCallCompleted with Err and continue.
-                        let _ = tool.teardown(()).instrument(turn_span.clone()).await; // best-effort
+                        let close_span = info_span!(
+                            parent: &dispatch_span,
+                            SPAN_TOOL_SESSION_CLOSE,
+                            tool_name = %tool_use.name,
+                            session_id = %ctx.session_id,
+                        );
+                        let _ = tool.teardown(()).instrument(close_span).await; // best-effort
                         warn!(
                             parent: &turn_span,
                             name = "tool.args_validation_failed",
@@ -1188,7 +1210,13 @@ pub(crate) fn run_streaming_inner(
                     Err(other) => {
                         // Defensive: validate_tool_args only emits BadArgs
                         // in v0.1 — reach here only if the contract changes.
-                        let _ = tool.teardown(()).instrument(turn_span.clone()).await;
+                        let close_span = info_span!(
+                            parent: &dispatch_span,
+                            SPAN_TOOL_SESSION_CLOSE,
+                            tool_name = %tool_use.name,
+                            session_id = %ctx.session_id,
+                        );
+                        let _ = tool.teardown(()).instrument(close_span).await;
                         yield make_tool_fatal_error(other);
                         return;
                     }
@@ -1196,34 +1224,67 @@ pub(crate) fn run_streaming_inner(
                 }
 
                 // ----- Invoke -----------------------------------------------
+                // ADR-0006 §3.9: `tool.invoke` span wraps the `invoke`
+                // call AND the FAILED-event emit on Err so the failed
+                // event nests inside the span. The `tool.args_received`
+                // and `tool.result_received` events emitted inside
+                // `IpcTool::invoke` also nest naturally under this span
+                // (current-span propagation through `.instrument`).
+                let invoke_span = info_span!(
+                    parent: &dispatch_span,
+                    SPAN_TOOL_INVOKE,
+                    tool_name = %tool_use.name,
+                    session_id = %ctx.session_id,
+                );
                 let invoke_outcome = tool
                     .invoke(&ctx, &mut (), tool_use.input.clone())
-                    .instrument(turn_span.clone())
+                    .instrument(invoke_span.clone())
                     .await;
                 let tool_result: ToolResult = match invoke_outcome {
                     Ok(r) => r,
                     Err(err) => {
                         warn!(
-                            parent: &turn_span,
+                            parent: &invoke_span,
                             name = EV_TOOL_INVOKE_FAILED,
                             tool_name = %tool_use.name,
                         );
-                        let _ = tool.teardown(()).instrument(turn_span.clone()).await; // best-effort
+                        drop(invoke_span);
+                        // best-effort teardown; nest under its own span
+                        // so any failure inside teardown is observable.
+                        let close_span = info_span!(
+                            parent: &dispatch_span,
+                            SPAN_TOOL_SESSION_CLOSE,
+                            tool_name = %tool_use.name,
+                            session_id = %ctx.session_id,
+                        );
+                        let _ = tool.teardown(()).instrument(close_span).await;
                         yield make_tool_fatal_error(err);
                         return;
                     }
                 };
+                drop(invoke_span);
 
                 // ----- Close the session ------------------------------------
-                if let Err(err) = tool.teardown(()).instrument(turn_span.clone()).await {
+                let close_span = info_span!(
+                    parent: &dispatch_span,
+                    SPAN_TOOL_SESSION_CLOSE,
+                    tool_name = %tool_use.name,
+                    session_id = %ctx.session_id,
+                );
+                if let Err(err) = tool
+                    .teardown(())
+                    .instrument(close_span.clone())
+                    .await
+                {
                     warn!(
-                        parent: &turn_span,
+                        parent: &close_span,
                         name = EV_TOOL_SESSION_CLOSE_FAILED,
                         tool_name = %tool_use.name,
                     );
                     yield make_tool_fatal_error(err);
                     return;
                 }
+                drop(close_span);
 
                 // ----- Append the tool-result message ----------------------
                 let result_payload = if tool_result.is_error {
