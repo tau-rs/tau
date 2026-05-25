@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tau_domain::{Capability, Value};
-use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend, MockTool};
+use tau_ports::fixtures::{
+    make_completion_response, make_token_usage, make_tool_use, MockLlmBackend, MockTool,
+};
 use tau_ports::{
     SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
@@ -439,4 +441,174 @@ paths = [{paths_toml}]
     );
     // Sanity: tool's invoke was never reached (cap check rejected).
     assert_eq!(invoke_count.load(Ordering::SeqCst), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Task 4: LLM-event vocabulary tests
+// ---------------------------------------------------------------------------
+
+/// Happy-path 1-turn run: the kernel must emit each of the four
+/// pre-tool-dispatch LLM lifecycle events: request built, response
+/// received, token usage (because the fixture carries `Some(usage)`),
+/// and stop reason.
+#[tokio::test]
+async fn llm_request_and_response_events_fire() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let resp = make_completion_response(
+        "hello".into(),
+        Vec::new(),
+        StopReason::EndTurn,
+        Some(make_token_usage(7, 3)),
+    );
+    let llm = MockLlmBackend::new("gpt-4").with_response(resp);
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("hi");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    for expected in [
+        "event:llm.request_built",
+        "event:llm.response_received",
+        "event:llm.token_usage",
+        "event:llm.stop_reason",
+    ] {
+        assert!(
+            captured_vec.iter().any(|c| c == expected),
+            "missing {expected:?}; captured = {captured_vec:?}"
+        );
+    }
+}
+
+/// A single LLM response carrying TWO `ToolUse` blocks must produce
+/// exactly two `llm.tool_use_emitted` events (one per block).
+///
+/// Uses an inline `ScriptedLlm` (per `run_with_tool_calls.rs` pattern)
+/// because neither `tau_ports::fixtures::MockLlmBackend` (single canned
+/// response) nor `common::MockLlmBackend` (one tool-use per scripted
+/// turn) composes for this case: we need a multi-tool-use response
+/// followed by a terminating text response.
+#[tokio::test]
+async fn llm_tool_use_emitted_fires_per_tool_block() {
+    use std::collections::VecDeque;
+    use tau_ports::{
+        CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError,
+    };
+
+    struct ScriptedLlm {
+        name: String,
+        responses: std::sync::Mutex<VecDeque<CompletionResponse>>,
+    }
+
+    impl LlmBackend for ScriptedLlm {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        async fn complete(
+            &self,
+            _req: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            self.responses
+                .lock()
+                .expect("responses mutex poisoned")
+                .pop_front()
+                .ok_or_else(|| LlmError::Internal {
+                    message: "ScriptedLlm: exhausted".into(),
+                })
+        }
+        async fn stream(
+            &self,
+            _req: CompletionRequest,
+        ) -> Result<CompletionStream, LlmError> {
+            let resp = self
+                .responses
+                .lock()
+                .expect("responses mutex poisoned")
+                .pop_front()
+                .ok_or_else(|| LlmError::Internal {
+                    message: "ScriptedLlm: exhausted".into(),
+                })?;
+            Ok(tau_ports::batch_to_stream(resp))
+        }
+    }
+
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // Turn 1: two tool-use blocks in one response (forces a 2nd turn).
+    let multi_tool_resp = make_completion_response(
+        String::new(),
+        vec![
+            make_tool_use("tu_a".into(), "echo".into(), Value::String("a".into())),
+            make_tool_use("tu_b".into(), "echo".into(), Value::String("b".into())),
+        ],
+        StopReason::ToolUse,
+        Some(make_token_usage(10, 10)),
+    );
+    // Turn 2: plain text, terminates the loop.
+    let end_resp = make_completion_response(
+        "done".into(),
+        Vec::new(),
+        StopReason::EndTurn,
+        Some(make_token_usage(1, 1)),
+    );
+    let llm = ScriptedLlm {
+        name: "gpt-4".into(),
+        responses: std::sync::Mutex::new(
+            vec![multi_tool_resp, end_resp].into(),
+        ),
+    };
+
+    let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(echo_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("call two tools");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    let tool_use_count = captured_vec
+        .iter()
+        .filter(|c| c.as_str() == "event:llm.tool_use_emitted")
+        .count();
+    assert_eq!(
+        tool_use_count, 2,
+        "expected 2 llm.tool_use_emitted events, got {tool_use_count}; captured = {captured_vec:?}"
+    );
 }

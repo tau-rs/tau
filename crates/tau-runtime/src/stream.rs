@@ -19,10 +19,11 @@ use tau_domain::{
     PackageManifest, Value,
 };
 use tau_observe::vocabulary::{
-    EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_RUNTIME_COMPLETED,
-    EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED,
-    EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED,
-    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED, SPAN_RUNTIME_TURN,
+    EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON,
+    EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED,
+    EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED,
+    EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED,
+    EV_TOOL_SESSION_OPEN_FAILED, SPAN_RUNTIME_TURN,
 };
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
@@ -291,6 +292,44 @@ pub(crate) fn run_streaming_inner(
                 tool_uses = pending_tool_uses.len(),
                 stop_reason = ?turn_stop_reason,
             );
+
+            // ADR-0006 §3.9: emit `llm.token_usage` when the backend
+            // reports per-turn usage. Skip when `None` to avoid emitting
+            // misleading zeros.
+            if let Some(usage) = turn_usage {
+                let input = u64::from(usage.input_tokens);
+                let output = u64::from(usage.output_tokens);
+                info!(
+                    parent: &turn_span,
+                    name = EV_LLM_TOKEN_USAGE,
+                    input_tokens = input,
+                    output_tokens = output,
+                    total_tokens = input.saturating_add(output),
+                );
+            }
+
+            // ADR-0006 §3.9: emit `llm.stop_reason` when the backend
+            // reports one (StopReason has Debug, not Display).
+            if let Some(reason) = turn_stop_reason {
+                debug!(
+                    parent: &turn_span,
+                    name = EV_LLM_STOP_REASON,
+                    stop_reason = ?reason,
+                );
+            }
+
+            // ADR-0006 §3.9: emit one `llm.tool_use_emitted` per ToolUse
+            // block returned by the LLM. Fires before dispatch so the
+            // event records the model's intent regardless of whether
+            // dispatch later succeeds.
+            for tu in &pending_tool_uses {
+                debug!(
+                    parent: &turn_span,
+                    name = EV_LLM_TOOL_USE_EMITTED,
+                    tool_name = %tu.name,
+                    tool_use_id = %tu.id,
+                );
+            }
 
             // Append assistant text to history if present.
             if !accumulated_text.is_empty() {
