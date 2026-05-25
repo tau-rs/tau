@@ -286,7 +286,14 @@ impl Runtime {
         // the same situation, but invoke_tool has no RunOutcome envelope).
         let granted: Vec<tau_domain::Capability> = package_manifest.capabilities().to_vec();
         let required: &[tau_domain::Capability] = tool.capabilities();
-        if let Some(missing) = crate::capability::check_capabilities(&granted, required) {
+        // ADR-0006 §3.9: `check_capabilities_for_tool` emits the
+        // `capability.check` span + 5 capability events. `invoke_tool`
+        // is itself `#[instrument]`'d (the macro enters its span for
+        // the body), so the wrapper's span nests naturally without an
+        // explicit `in_scope`.
+        if let Some(missing) =
+            crate::capability::check_capabilities_for_tool(tool_name, &granted, required)
+        {
             let denial = crate::error::CapabilityDenial {
                 agent_id: agent_def.id.to_string(),
                 package_id: agent_def.package.name.to_string(),

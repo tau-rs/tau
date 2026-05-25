@@ -19,12 +19,11 @@ use tau_domain::{
     PackageManifest, Value,
 };
 use tau_observe::vocabulary::{
-    EV_CAPABILITY_DENY, EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT,
-    EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON, EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED,
-    EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED,
-    EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED,
-    EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED,
-    SPAN_DISPATCH_TOOL, SPAN_RUNTIME_TURN,
+    EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON,
+    EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED,
+    EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED,
+    EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED,
+    EV_TOOL_SESSION_OPEN_FAILED, SPAN_DISPATCH_TOOL, SPAN_RUNTIME_TURN,
 };
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
@@ -427,22 +426,28 @@ pub(crate) fn run_streaming_inner(
                             plugin_id = "kernel:virtual",
                         );
                         // Capability check against agent's grant.
+                        // ADR-0006 §3.9: `check_capabilities_for_tool` owns
+                        // the `capability.check` span plus the 5 capability
+                        // events (required_loaded, granted_loaded,
+                        // satisfies_check, allow, deny). Wrap in
+                        // `dispatch_span.in_scope` so the span nests under
+                        // `dispatch.tool` — `dispatch_span` is never
+                        // `.enter()`'d (it straddles awaits), so without
+                        // this the span would attach to whatever was
+                        // entered higher up.
                         let required_cap = crate::orchestration::required_capability(
                             &tool_use.name,
                         );
                         let required_slice = std::slice::from_ref(&required_cap);
-                        let missing = crate::capability::check_capabilities(
-                            &granted_capabilities,
-                            required_slice,
-                        );
+                        let missing = dispatch_span.in_scope(|| {
+                            crate::capability::check_capabilities_for_tool(
+                                &tool_use.name,
+                                &granted_capabilities,
+                                required_slice,
+                            )
+                        });
                         if let Some(cap) = missing {
                             let kind = crate::run::capability_kind_str(cap);
-                            warn!(
-                                parent: &turn_span,
-                                name = EV_CAPABILITY_DENY,
-                                tool_name = %tool_use.name,
-                                missing_kind = %kind,
-                            );
                             let denial = crate::error::CapabilityDenial {
                                 agent_id: agent_def.id.to_string(),
                                 package_id: agent_def.package.name.to_string(),
@@ -1084,17 +1089,21 @@ pub(crate) fn run_streaming_inner(
                 );
 
                 // ----- Capability check -------------------------------------
+                // ADR-0006 §3.9: `check_capabilities_for_tool` owns the
+                // `capability.check` span + 5 capability events. Wrap
+                // in `dispatch_span.in_scope` so the span nests under
+                // `dispatch.tool`; `dispatch_span` straddles awaits and
+                // is never `.enter()`'d.
                 let required: &[Capability] = tool.capabilities();
-                let missing =
-                    crate::capability::check_capabilities(&granted_capabilities, required);
+                let missing = dispatch_span.in_scope(|| {
+                    crate::capability::check_capabilities_for_tool(
+                        &tool_use.name,
+                        &granted_capabilities,
+                        required,
+                    )
+                });
                 if let Some(cap) = missing {
                     let kind = crate::run::capability_kind_str(cap);
-                    warn!(
-                        parent: &turn_span,
-                        name = EV_CAPABILITY_DENY,
-                        tool_name = %tool_use.name,
-                        missing_kind = %kind,
-                    );
                     let denial = crate::error::CapabilityDenial {
                         agent_id: agent_def.id.to_string(),
                         package_id: agent_def.package.name.to_string(),

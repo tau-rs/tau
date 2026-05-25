@@ -614,3 +614,176 @@ async fn dispatch_tool_resolved_fires_for_each_tool_call() {
         "expected 1 dispatch.tool_resolved event, got {resolved_events}; captured = {captured_vec:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 6: capability.check span + 4 capability events (allow path)
+//         + capability.deny (kept under capability.check via Option A:
+//         the new `check_capabilities_for_tool` wrapper owns all 5 events,
+//         the inline deny emissions in stream.rs were removed).
+// ---------------------------------------------------------------------------
+
+/// Happy-path 2-turn run with a tool dispatch: the kernel must open
+/// the `capability.check` span and emit the four "no-deny" capability
+/// events (required_loaded, granted_loaded, satisfies_check, allow).
+#[tokio::test]
+async fn capability_check_events_fire_on_allow() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // Turn 1: one tool_use (forces a 2nd turn).
+    // Turn 2: plain text, terminates the loop.
+    // The echo tool declares no required capabilities, so the
+    // satisfies-check trivially passes and we land on the allow branch.
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_text("done");
+    let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(echo_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("call echo");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    for expected in [
+        "span:capability.check",
+        "event:capability.required_loaded",
+        "event:capability.granted_loaded",
+        "event:capability.satisfies_check",
+        "event:capability.allow",
+    ] {
+        assert!(
+            captured_vec.iter().any(|c| c == expected),
+            "missing {expected:?}; captured = {captured_vec:?}"
+        );
+    }
+}
+
+/// Capability-denied path: the agent attempts a tool whose required
+/// capability is NOT granted; the wrapper's deny branch must fire
+/// `capability.deny` under the `capability.check` span.
+///
+/// Same restricted-tool pattern as `runtime_failed_event_fires_on_status_failed`
+/// (Task 3) — copied locally so this test owns its own setup.
+#[tokio::test]
+async fn capability_deny_fires_when_check_fails() {
+    struct RestrictedTool {
+        schema: ToolSpec,
+        required_caps: Vec<Capability>,
+    }
+
+    impl Tool for RestrictedTool {
+        type Session = ();
+
+        fn name(&self) -> &str {
+            &self.schema.name
+        }
+
+        fn schema(&self) -> ToolSpec {
+            self.schema.clone()
+        }
+
+        fn capabilities(&self) -> &[Capability] {
+            &self.required_caps
+        }
+
+        async fn init(&self, _ctx: SessionContext) -> Result<(), ToolError> {
+            Ok(())
+        }
+
+        async fn invoke(
+            &self,
+            _: &mut (),
+            _args: Value,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(tau_ports::fixtures::make_tool_result(Vec::new(), false))
+        }
+
+        async fn teardown(&self, _: ()) -> Result<(), ToolError> {
+            Ok(())
+        }
+    }
+
+    fn fs_read_cap(paths: &[&str]) -> Capability {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            cap: Capability,
+        }
+        let paths_toml = paths
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let toml_body = format!(
+            r#"[cap]
+kind = "fs.read"
+paths = [{paths_toml}]
+"#
+        );
+        toml::from_str::<Wrapper>(&toml_body)
+            .expect("test fs.read capability TOML must parse")
+            .cap
+    }
+
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("restricted-reader", Value::Null);
+
+    let restricted = RestrictedTool {
+        schema: common::empty_tool_spec("restricted-reader"),
+        required_caps: vec![fs_read_cap(&["/etc/passwd"])],
+    };
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(restricted)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("read /etc/passwd");
+
+    let _outcome = runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("capability denial flows through Ok(RunOutcome::Failed)");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    assert!(
+        captured_vec.iter().any(|c| c == "event:capability.deny"),
+        "missing event:capability.deny; captured = {captured_vec:?}"
+    );
+    // Sanity: the deny path also opens the `capability.check` span
+    // (Option A — wrapper owns the span end-to-end).
+    assert!(
+        captured_vec.iter().any(|c| c == "span:capability.check"),
+        "missing span:capability.check on deny path; captured = {captured_vec:?}"
+    );
+}
