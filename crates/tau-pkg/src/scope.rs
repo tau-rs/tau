@@ -259,13 +259,13 @@ impl ScopeConfig {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `Scope` is `#[non_exhaustive]`; constructed via `resolve`, `global`, or `new_project`.
-/// use std::path::Path;
-/// use tau_pkg::scope::Scope;
+/// ```
+/// use tau_pkg::scope::{Scope, ScopeKind};
 ///
-/// let scope = Scope::resolve(Path::new(".")).unwrap();
-/// println!("{:?}", scope.kind());
+/// # let tmp = tempfile::tempdir().unwrap();
+/// // Create a project scope from a temp directory.
+/// let scope = Scope::new_project(tmp.path()).unwrap();
+/// assert_eq!(scope.kind(), ScopeKind::Project);
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,12 +293,16 @@ impl Scope {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use std::path::Path;
-    /// use tau_pkg::scope::Scope;
+    /// ```
+    /// use tau_pkg::scope::{Scope, ScopeKind};
     ///
-    /// let scope = Scope::resolve(Path::new(".")).unwrap();
-    /// println!("{:?}", scope.kind());
+    /// # let tmp = tempfile::tempdir().unwrap();
+    /// # let project = tmp.path();
+    /// # std::fs::create_dir_all(project.join(".tau")).unwrap();
+    /// // Resolve the scope from a directory that contains `.tau/` —
+    /// // returns a Project scope.
+    /// let scope = Scope::resolve(project).unwrap();
+    /// assert_eq!(scope.kind(), ScopeKind::Project);
     /// ```
     pub fn resolve(cwd: &Path) -> Result<Self, ScopeError> {
         if let Some((path, state_path)) = walk_up_for_dot_tau(cwd) {
@@ -323,11 +327,15 @@ impl Scope {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use tau_pkg::scope::Scope;
+    /// ```
+    /// use tau_pkg::scope::{Scope, ScopeKind};
     ///
+    /// # let tmp = tempfile::tempdir().unwrap();
+    /// # std::env::set_var("TAU_HOME", tmp.path());
+    /// // Resolve the global scope (reads $TAU_HOME, $XDG_DATA_HOME, or $HOME).
     /// let scope = Scope::global().unwrap();
-    /// println!("{:?}", scope.path());
+    /// assert_eq!(scope.kind(), ScopeKind::Global);
+    /// # std::env::remove_var("TAU_HOME");
     /// ```
     pub fn global() -> Result<Self, ScopeError> {
         let global_path = resolve_global_path()?;
@@ -397,12 +405,14 @@ impl Scope {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use std::path::Path;
-    /// use tau_pkg::scope::Scope;
+    /// ```
+    /// use tau_pkg::scope::{Scope, ScopeKind};
     ///
-    /// let scope = Scope::new_project(Path::new("/my/project")).unwrap();
-    /// println!("{:?}", scope.state_path());
+    /// # let tmp = tempfile::tempdir().unwrap();
+    /// let scope = Scope::new_project(tmp.path()).unwrap();
+    /// assert_eq!(scope.kind(), ScopeKind::Project);
+    /// // `.tau/` was created inside the project root.
+    /// assert!(scope.state_path().ends_with(".tau"));
     /// ```
     pub fn new_project(project_root: &Path) -> Result<Self, ScopeError> {
         // Verify that project_root exists and is a directory.
