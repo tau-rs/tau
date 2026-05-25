@@ -334,7 +334,7 @@ pub(crate) fn run_streaming_inner(
                 info!(
                     parent: &turn_span,
                     name = EV_RUNTIME_COMPLETED,
-                    total_turns,
+                    turn_index = total_turns,
                     all_messages = messages.len(),
                 );
                 yield RunEvent::RunCompleted {
@@ -395,13 +395,7 @@ pub(crate) fn run_streaming_inner(
                                 total_turns,
                                 aggregated_tokens,
                             );
-                            warn!(
-                                parent: &turn_span,
-                                name = EV_RUNTIME_FAILED,
-                                turn_index = total_turns,
-                                failure_kind = ?tau_domain::FailureKind::PolicyDenied,
-                                detail = %tool_use.name,
-                            );
+                            emit_policy_denied_failure(&turn_span, total_turns, &tool_use.name);
                             yield RunEvent::RunCompleted { outcome };
                             return;
                         }
@@ -1045,13 +1039,7 @@ pub(crate) fn run_streaming_inner(
                         total_turns,
                         aggregated_tokens,
                     );
-                    warn!(
-                        parent: &turn_span,
-                        name = EV_RUNTIME_FAILED,
-                        turn_index = total_turns,
-                        failure_kind = ?tau_domain::FailureKind::PolicyDenied,
-                        detail = %tool_use.name,
-                    );
+                    emit_policy_denied_failure(&turn_span, total_turns, &tool_use.name);
                     yield RunEvent::RunCompleted { outcome };
                     return;
                 }
@@ -1210,6 +1198,23 @@ pub(crate) fn run_streaming_inner(
 // ---------------------------------------------------------------------------
 // Outcome helpers
 // ---------------------------------------------------------------------------
+
+/// Emit `runtime.failed` with `failure_kind = PolicyDenied` under the given
+/// turn span. Dedupes two byte-identical warn! sites (orchestration
+/// virtual-tool deny + regular tool-dispatch deny).
+fn emit_policy_denied_failure(
+    turn_span: &tracing::Span,
+    turn_index: u32,
+    tool_name: &str,
+) {
+    warn!(
+        parent: turn_span,
+        name = EV_RUNTIME_FAILED,
+        turn_index = turn_index,
+        failure_kind = ?tau_domain::FailureKind::PolicyDenied,
+        detail = %tool_name,
+    );
+}
 
 // FatalError helpers: emit RunEvent::FatalError so the batch-path
 // drainer (run_with_history) can convert them back to Err(RuntimeError),
