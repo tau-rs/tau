@@ -19,11 +19,12 @@ use tau_domain::{
     PackageManifest, Value,
 };
 use tau_observe::vocabulary::{
-    EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON,
-    EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED,
-    EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED,
-    EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED,
-    EV_TOOL_SESSION_OPEN_FAILED, SPAN_RUNTIME_TURN,
+    EV_CAPABILITY_DENY, EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT,
+    EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON, EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED,
+    EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED,
+    EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED,
+    EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED,
+    SPAN_DISPATCH_TOOL, SPAN_RUNTIME_TURN,
 };
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
@@ -389,8 +390,19 @@ pub(crate) fn run_streaming_inner(
 
             // ----- Per-tool dispatch ----------------------------------------
             for tool_use in &pending_tool_uses {
-                debug!(
+                // ADR-0006 §3.9: each tool dispatch is wrapped in a
+                // `dispatch.tool` span as a child of the turn span.
+                // Same straddles-await discipline as `turn_span`: do not
+                // call `.enter()`; events use `parent: &dispatch_span`
+                // and `.await`s use `.instrument(dispatch_span.clone())`.
+                let dispatch_span = info_span!(
                     parent: &turn_span,
+                    SPAN_DISPATCH_TOOL,
+                    tool_name = %tool_use.name,
+                    tool_use_id = %tool_use.id,
+                );
+                debug!(
+                    parent: &dispatch_span,
                     name = "llm.streaming_tool_use_dispatching",
                     id = %tool_use.id,
                     tool_name = %tool_use.name,
@@ -404,6 +416,16 @@ pub(crate) fn run_streaming_inner(
                 // an is_error=true ToolResult noting deferred-to-follow-up.
                 if let Some(state_arc) = options.orchestration_state.as_ref() {
                     if crate::orchestration::is_virtual(&tool_use.name) {
+                        // ADR-0006 §3.9: dispatch.tool_resolved fires after
+                        // resolution succeeds. Virtual tools resolve to the
+                        // in-kernel orchestration dispatcher rather than a
+                        // registered plugin; use a sentinel plugin_id.
+                        debug!(
+                            parent: &dispatch_span,
+                            name = EV_DISPATCH_TOOL_RESOLVED,
+                            tool_name = %tool_use.name,
+                            plugin_id = "kernel:virtual",
+                        );
                         // Capability check against agent's grant.
                         let required_cap = crate::orchestration::required_capability(
                             &tool_use.name,
@@ -1039,7 +1061,7 @@ pub(crate) fn run_streaming_inner(
                         // (unexpected LLM behavior). The batch drainer
                         // will convert this to RuntimeError::ToolNotRegistered.
                         warn!(
-                            parent: &turn_span,
+                            parent: &dispatch_span,
                             name = "runtime.streaming_tool_not_found",
                             tool_name = %tool_use.name,
                         );
@@ -1052,6 +1074,14 @@ pub(crate) fn run_streaming_inner(
                         return;
                     }
                 };
+                // ADR-0006 §3.9: emit dispatch.tool_resolved once the
+                // registry lookup returns a concrete plugin.
+                debug!(
+                    parent: &dispatch_span,
+                    name = EV_DISPATCH_TOOL_RESOLVED,
+                    tool_name = %tool_use.name,
+                    plugin_id = %tool.name(),
+                );
 
                 // ----- Capability check -------------------------------------
                 let required: &[Capability] = tool.capabilities();

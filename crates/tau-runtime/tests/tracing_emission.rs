@@ -553,3 +553,64 @@ async fn llm_tool_use_emitted_fires_per_tool_block() {
         "expected 2 llm.tool_use_emitted events, got {tool_use_count}; captured = {captured_vec:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 5: dispatch.tool span + dispatch.tool_resolved event
+// ---------------------------------------------------------------------------
+
+/// A single LLM response carrying one `ToolUse` block must produce
+/// exactly one `dispatch.tool` span and one `dispatch.tool_resolved`
+/// event (fired after the registry lookup resolves to a concrete plugin).
+#[tokio::test]
+async fn dispatch_tool_resolved_fires_for_each_tool_call() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // Turn 1: one tool_use (forces a 2nd turn).
+    // Turn 2: plain text, terminates the loop.
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_text("done");
+    let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(echo_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("call echo");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    let dispatch_spans = captured_vec
+        .iter()
+        .filter(|c| c.as_str() == "span:dispatch.tool")
+        .count();
+    assert_eq!(
+        dispatch_spans, 1,
+        "expected 1 dispatch.tool span, got {dispatch_spans}; captured = {captured_vec:?}"
+    );
+
+    let resolved_events = captured_vec
+        .iter()
+        .filter(|c| c.as_str() == "event:dispatch.tool_resolved")
+        .count();
+    assert_eq!(
+        resolved_events, 1,
+        "expected 1 dispatch.tool_resolved event, got {resolved_events}; captured = {captured_vec:?}"
+    );
+}

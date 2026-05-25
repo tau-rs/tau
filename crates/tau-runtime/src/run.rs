@@ -33,8 +33,9 @@ use tau_domain::{
     AgentDefinition, AgentStatus, Capability, FailureKind, Message, MessagePayload,
     PackageManifest, Value,
 };
+use tau_observe::vocabulary::{EV_DISPATCH_TOOL_RESOLVED, SPAN_DISPATCH_TOOL};
 use tau_ports::{ContentBlock, LlmProviderMessage, ToolContent, ToolUse};
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::builder::Runtime;
 use crate::capability_override::EffectiveCapability;
@@ -256,6 +257,11 @@ impl Runtime {
     ///   the direct-dispatch caller has no `RunOutcome` envelope).
     /// - [`RuntimeError::Tool`] — the tool's `init`, `invoke`, or
     ///   `teardown` returned a [`tau_ports::ToolError`].
+    #[instrument(
+        name = SPAN_DISPATCH_TOOL,
+        skip_all,
+        fields(tool_name = %tool_name),
+    )]
     pub async fn invoke_tool(
         &self,
         agent_def: &AgentDefinition,
@@ -267,6 +273,11 @@ impl Runtime {
         use tau_ports::SessionContext;
 
         let tool = self.resolve_tool(tool_name)?.clone();
+        debug!(
+            name = EV_DISPATCH_TOOL_RESOLVED,
+            tool_name = %tool_name,
+            plugin_id = %tool.name(),
+        );
 
         // Capability check: mirror the run loop's structural check.
         // If the agent's package grants are insufficient, surface as
