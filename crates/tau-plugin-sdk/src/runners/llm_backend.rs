@@ -119,7 +119,27 @@ where
 /// `config` field as `P::Config`, calls [`Configure::from_config`],
 /// then proceeds into the regular dispatch loop.
 ///
-/// ```ignore
+/// ```no_run
+/// # use tau_plugin_sdk::{Configure, ConfigError};
+/// # use tau_ports::{LlmBackend, CompletionRequest, CompletionResponse, CompletionStream, LlmError};
+/// # use serde::Deserialize;
+/// # #[derive(Deserialize)] struct MyConfig { api_key: String }
+/// # struct MyPlugin { _api_key: String }
+/// # impl Configure for MyPlugin {
+/// #     type Config = MyConfig;
+/// #     fn from_config(c: MyConfig) -> Result<Self, ConfigError> {
+/// #         Ok(MyPlugin { _api_key: c.api_key })
+/// #     }
+/// # }
+/// # impl LlmBackend for MyPlugin {
+/// #     fn name(&self) -> &str { "my-plugin" }
+/// #     async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn stream(&self, _: CompletionRequest) -> Result<CompletionStream, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// # }
 /// // In plugin main.rs:
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {

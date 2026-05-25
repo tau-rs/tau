@@ -122,7 +122,29 @@ where
 /// `config` field as `P::Config`, calls [`Configure::from_config`],
 /// then proceeds into the regular dispatch loop.
 ///
-/// ```ignore
+/// ```no_run
+/// # use tau_plugin_sdk::{Configure, ConfigError};
+/// # use tau_ports::{Tool, SessionContext, ToolResult, ToolSpec, ToolError};
+/// # use tau_domain::Value;
+/// # use serde::Deserialize;
+/// # #[derive(Deserialize)] struct MyConfig { base_url: String }
+/// # struct MyTool { _base_url: String }
+/// # impl Configure for MyTool {
+/// #     type Config = MyConfig;
+/// #     fn from_config(c: MyConfig) -> Result<Self, ConfigError> {
+/// #         Ok(MyTool { _base_url: c.base_url })
+/// #     }
+/// # }
+/// # impl Tool for MyTool {
+/// #     type Session = ();
+/// #     fn name(&self) -> &str { "my-tool" }
+/// #     fn schema(&self) -> ToolSpec { unimplemented!() }
+/// #     async fn init(&self, _: SessionContext) -> Result<Self::Session, ToolError> { Ok(()) }
+/// #     async fn invoke(&self, _: &mut Self::Session, _: Value) -> Result<ToolResult, ToolError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn teardown(&self, _: Self::Session) -> Result<(), ToolError> { Ok(()) }
+/// # }
 /// // In plugin main.rs:
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
