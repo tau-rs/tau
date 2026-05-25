@@ -13,9 +13,13 @@ mod common;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use tau_domain::Value;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use tau_domain::{Capability, Value};
 use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend, MockTool};
-use tau_ports::StopReason;
+use tau_ports::{
+    SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec,
+};
 use tau_runtime::{RunOptions, Runtime};
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
@@ -131,7 +135,7 @@ async fn run_emits_structural_tracing_vocabulary() {
         "event:runtime.turn_started",
         "span:llm.complete",
         "event:llm.response_received",
-        "event:runtime.run_completed",
+        "event:runtime.completed",
     ];
     for e in &expected {
         assert!(
@@ -220,4 +224,219 @@ async fn runtime_turn_span_fires_once_per_turn() {
         turn_starts, 2,
         "expected exactly 2 runtime.turn_started events; got {turn_starts}: {captured_vec:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task 3: terminal-event vocabulary tests
+// ---------------------------------------------------------------------------
+
+/// Normal termination: a 1-turn run ending with `EndTurn` must emit
+/// `runtime.completed`.
+#[tokio::test]
+async fn runtime_completed_event_fires_on_normal_terminate() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let resp = make_completion_response(
+        "done".into(),
+        Vec::new(),
+        StopReason::EndTurn,
+        Some(make_token_usage(1, 1)),
+    );
+    let llm = tau_ports::fixtures::MockLlmBackend::new("gpt-4").with_response(resp);
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("hi");
+
+    runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("run succeeded");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    assert!(
+        captured_vec.iter().any(|c| c == "event:runtime.completed"),
+        "missing event:runtime.completed; captured = {captured_vec:?}"
+    );
+}
+
+/// Loop exhausted: a run with `max_turns = 2` against an LLM that
+/// always returns a tool_use must emit `runtime.max_turns_reached`.
+#[tokio::test]
+async fn runtime_max_turns_event_fires_when_loop_exhausted() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // Two tool-call turns; on turn 3 the loop guard fires before
+    // we'd need a third LLM call, so the script only needs 2 entries
+    // — but add a third defensively in case the implementation
+    // bumps the LLM one more time.
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_tool_call("echo", Value::String("hi".into()));
+    let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(echo_tool)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("loop");
+
+    let mut opts = RunOptions::default();
+    opts.max_turns = 2;
+    // `Ok(RunOutcome::Failed { kind: OutOfResources })` is the
+    // documented contract when max_turns is hit.
+    let _outcome = runtime
+        .run(agent_def, manifest, initial, opts)
+        .await
+        .expect("max-turns flows through Ok(RunOutcome::Failed)");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    assert!(
+        captured_vec
+            .iter()
+            .any(|c| c == "event:runtime.max_turns_reached"),
+        "missing event:runtime.max_turns_reached; captured = {captured_vec:?}"
+    );
+}
+
+/// Capability-denied path: agent attempts a tool whose required
+/// capability is NOT granted; the run loop returns `Ok(RunOutcome::Failed
+/// { kind: PolicyDenied })` and must emit `runtime.failed` before
+/// terminating.
+#[tokio::test]
+async fn runtime_failed_event_fires_on_status_failed() {
+    /// Tool that declares a non-empty `capabilities()` so the kernel's
+    /// capability check rejects the call.
+    struct RestrictedTool {
+        schema: ToolSpec,
+        required_caps: Vec<Capability>,
+        invoke_count: std::sync::Arc<AtomicUsize>,
+    }
+
+    impl Tool for RestrictedTool {
+        type Session = ();
+
+        fn name(&self) -> &str {
+            &self.schema.name
+        }
+
+        fn schema(&self) -> ToolSpec {
+            self.schema.clone()
+        }
+
+        fn capabilities(&self) -> &[Capability] {
+            &self.required_caps
+        }
+
+        async fn init(&self, _ctx: SessionContext) -> Result<(), ToolError> {
+            Ok(())
+        }
+
+        async fn invoke(
+            &self,
+            _: &mut (),
+            _args: Value,
+        ) -> Result<ToolResult, ToolError> {
+            self.invoke_count.fetch_add(1, Ordering::SeqCst);
+            Ok(tau_ports::fixtures::make_tool_result(Vec::new(), false))
+        }
+
+        async fn teardown(&self, _: ()) -> Result<(), ToolError> {
+            Ok(())
+        }
+    }
+
+    /// Build an `fs.read` capability via the canonical TOML deserialization
+    /// path. Variant-level `#[non_exhaustive]` blocks struct-literal
+    /// construction from outside `tau-domain`.
+    fn fs_read_cap(paths: &[&str]) -> Capability {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            cap: Capability,
+        }
+        let paths_toml = paths
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let toml_body = format!(
+            r#"[cap]
+kind = "fs.read"
+paths = [{paths_toml}]
+"#
+        );
+        toml::from_str::<Wrapper>(&toml_body)
+            .expect("test fs.read capability TOML must parse")
+            .cap
+    }
+
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    // LLM emits a single tool_use targeting the restricted tool.
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("restricted-reader", Value::Null);
+
+    let invoke_count = std::sync::Arc::new(AtomicUsize::new(0));
+    let restricted = RestrictedTool {
+        schema: common::empty_tool_spec("restricted-reader"),
+        required_caps: vec![fs_read_cap(&["/etc/passwd"])],
+        invoke_count: invoke_count.clone(),
+    };
+
+    let runtime = Runtime::builder()
+        .with_llm_backend(llm)
+        .with_tool(restricted)
+        .build()
+        .expect("build runtime");
+
+    let agent_def = common::agent_def("agent-1", "test-agent", "test-pkg@0.1.0", "gpt-4");
+    let manifest = common::manifest_with_no_capabilities();
+    let initial = common::user_message("read /etc/passwd");
+
+    let _outcome = runtime
+        .run(agent_def, manifest, initial, RunOptions::default())
+        .await
+        .expect("capability denial flows through Ok(RunOutcome::Failed)");
+
+    let captured_vec = captured
+        .0
+        .lock()
+        .expect("captured-events mutex poisoned")
+        .clone();
+
+    assert!(
+        captured_vec.iter().any(|c| c == "event:runtime.failed"),
+        "missing event:runtime.failed; captured = {captured_vec:?}"
+    );
+    // Sanity: tool's invoke was never reached (cap check rejected).
+    assert_eq!(invoke_count.load(Ordering::SeqCst), 0);
 }

@@ -19,7 +19,8 @@ use tau_domain::{
     PackageManifest, Value,
 };
 use tau_observe::vocabulary::{
-    EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_RUNTIME_LOOP_TERMINATED,
+    EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_RUNTIME_COMPLETED,
+    EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED,
     EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED,
     EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED, SPAN_RUNTIME_TURN,
 };
@@ -332,7 +333,7 @@ pub(crate) fn run_streaming_inner(
                     .expect("messages contains at least the initial user message");
                 info!(
                     parent: &turn_span,
-                    name = "runtime.run_completed",
+                    name = EV_RUNTIME_COMPLETED,
                     total_turns,
                     all_messages = messages.len(),
                 );
@@ -393,6 +394,13 @@ pub(crate) fn run_streaming_inner(
                                 messages,
                                 total_turns,
                                 aggregated_tokens,
+                            );
+                            warn!(
+                                parent: &turn_span,
+                                name = EV_RUNTIME_FAILED,
+                                turn_index = total_turns,
+                                failure_kind = ?tau_domain::FailureKind::PolicyDenied,
+                                detail = %tool_use.name,
                             );
                             yield RunEvent::RunCompleted { outcome };
                             return;
@@ -1037,6 +1045,13 @@ pub(crate) fn run_streaming_inner(
                         total_turns,
                         aggregated_tokens,
                     );
+                    warn!(
+                        parent: &turn_span,
+                        name = EV_RUNTIME_FAILED,
+                        turn_index = total_turns,
+                        failure_kind = ?tau_domain::FailureKind::PolicyDenied,
+                        detail = %tool_use.name,
+                    );
                     yield RunEvent::RunCompleted { outcome };
                     return;
                 }
@@ -1184,8 +1199,9 @@ pub(crate) fn run_streaming_inner(
         // last `turn_span` is no longer in scope; emit under the outer
         // `runtime.agent_run` span instead.
         warn!(
-            name = "runtime.streaming_max_turns_reached",
-            max_turns = options.max_turns
+            name = EV_RUNTIME_MAX_TURNS_REACHED,
+            turn_index = total_turns,
+            max_turns = options.max_turns,
         );
         yield make_max_turns_outcome(messages, total_turns, aggregated_tokens, options.max_turns);
     }
