@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tau_domain::{Capability, Value};
 use tau_ports::fixtures::{
-    make_completion_response, make_token_usage, make_tool_use, MockLlmBackend, MockTool,
+    make_completion_response, make_token_usage, MockLlmBackend, MockTool,
 };
 use tau_ports::{
     SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec,
@@ -502,83 +502,24 @@ async fn llm_request_and_response_events_fire() {
 /// A single LLM response carrying TWO `ToolUse` blocks must produce
 /// exactly two `llm.tool_use_emitted` events (one per block).
 ///
-/// Uses an inline `ScriptedLlm` (per `run_with_tool_calls.rs` pattern)
-/// because neither `tau_ports::fixtures::MockLlmBackend` (single canned
-/// response) nor `common::MockLlmBackend` (one tool-use per scripted
-/// turn) composes for this case: we need a multi-tool-use response
-/// followed by a terminating text response.
+/// Uses [`common::MockLlmBackend::add_tool_calls`] to script a single
+/// turn whose response contains multiple `ToolUse` blocks, followed by
+/// a terminating text turn.
 #[tokio::test]
 async fn llm_tool_use_emitted_fires_per_tool_block() {
-    use std::collections::VecDeque;
-    use tau_ports::{
-        CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError,
-    };
-
-    struct ScriptedLlm {
-        name: String,
-        responses: std::sync::Mutex<VecDeque<CompletionResponse>>,
-    }
-
-    impl LlmBackend for ScriptedLlm {
-        fn name(&self) -> &str {
-            &self.name
-        }
-        async fn complete(
-            &self,
-            _req: CompletionRequest,
-        ) -> Result<CompletionResponse, LlmError> {
-            self.responses
-                .lock()
-                .expect("responses mutex poisoned")
-                .pop_front()
-                .ok_or_else(|| LlmError::Internal {
-                    message: "ScriptedLlm: exhausted".into(),
-                })
-        }
-        async fn stream(
-            &self,
-            _req: CompletionRequest,
-        ) -> Result<CompletionStream, LlmError> {
-            let resp = self
-                .responses
-                .lock()
-                .expect("responses mutex poisoned")
-                .pop_front()
-                .ok_or_else(|| LlmError::Internal {
-                    message: "ScriptedLlm: exhausted".into(),
-                })?;
-            Ok(tau_ports::batch_to_stream(resp))
-        }
-    }
-
     let captured = CapturedEvents::default();
     let _guard = tracing_subscriber::registry()
         .with(captured.clone())
         .set_default();
 
     // Turn 1: two tool-use blocks in one response (forces a 2nd turn).
-    let multi_tool_resp = make_completion_response(
-        String::new(),
-        vec![
-            make_tool_use("tu_a".into(), "echo".into(), Value::String("a".into())),
-            make_tool_use("tu_b".into(), "echo".into(), Value::String("b".into())),
-        ],
-        StopReason::ToolUse,
-        Some(make_token_usage(10, 10)),
-    );
     // Turn 2: plain text, terminates the loop.
-    let end_resp = make_completion_response(
-        "done".into(),
-        Vec::new(),
-        StopReason::EndTurn,
-        Some(make_token_usage(1, 1)),
-    );
-    let llm = ScriptedLlm {
-        name: "gpt-4".into(),
-        responses: std::sync::Mutex::new(
-            vec![multi_tool_resp, end_resp].into(),
-        ),
-    };
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_calls(vec![
+            ("echo", Value::String("a".into())),
+            ("echo", Value::String("b".into())),
+        ])
+        .add_text("done");
 
     let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));
 
