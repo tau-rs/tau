@@ -16,7 +16,7 @@
 | # | Crate | File:line | Item | Category | Strategy |
 |---|---|---|---|---|---|
 | 1 | tau-plugin-protocol | error.rs:13 | `ProtocolError` | A | flip to executed fence |
-| 2 | tau-plugin-protocol | error.rs:83 | `RpcErrorEnvelope` | A | flip to executed fence |
+| 2 | tau-plugin-protocol | error.rs:83 | `RpcErrorEnvelope` | A* | flip + replace struct literal with `RpcErrorEnvelope::new()` (`#[non_exhaustive]` prevents external struct construction) |
 | 3 | tau-plugin-protocol | frame.rs:27 | `Frame` enum (Notification example) | A* | flip + replace `params: vec![]` with `params: vec![0x90]` (empty MessagePack array) |
 | 4 | tau-plugin-sdk | configure.rs:76 | `Configure` trait | A | flip to executed fence |
 | 5 | tau-plugin-sdk | runners/llm_backend.rs:122 | `run_llm_backend_with_config` | B | no_run + hidden `MyPlugin` impl |
