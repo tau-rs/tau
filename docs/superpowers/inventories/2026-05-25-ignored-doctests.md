@@ -62,3 +62,4 @@
 
 - 2026-05-25 — rows 1, 2, 3 → activated (PR-A).
 - 2026-05-25 — row 4 → activated; rows 5+6 → no_run with hidden fixture (PR-B).
+- 2026-05-25 — rows 7, 8, 9 → activated (PR-C, established Runtime-flow fixture pattern via `tau_ports::fixtures::MockLlmBackend`).
