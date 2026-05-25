@@ -10,15 +10,12 @@
 
 mod common;
 
-use std::collections::VecDeque;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use tau_domain::Value;
-use tau_ports::fixtures::{make_completion_response, make_token_usage, make_tool_use, MockLlmBackend, MockTool};
-use tau_ports::{
-    CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, StopReason,
-};
+use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend, MockTool};
+use tau_ports::StopReason;
 use tau_runtime::{RunOptions, Runtime};
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
@@ -166,53 +163,6 @@ async fn run_emits_structural_tracing_vocabulary() {
     );
 }
 
-/// LLM mock with a per-call response queue. Borrowed from
-/// `run_with_tool_calls.rs` because `MockLlmBackend::with_response`
-/// only stores a single canned response (each call returns the same
-/// thing), which doesn't fit a multi-turn scenario where turn 1 emits
-/// a `tool_use` and turn 2 emits a final text.
-struct ScriptedLlm {
-    name: String,
-    responses: Mutex<VecDeque<CompletionResponse>>,
-}
-
-impl ScriptedLlm {
-    fn new(name: &str, responses: Vec<CompletionResponse>) -> Self {
-        Self {
-            name: name.to_string(),
-            responses: Mutex::new(responses.into()),
-        }
-    }
-}
-
-impl LlmBackend for ScriptedLlm {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
-        self.responses
-            .lock()
-            .expect("ScriptedLlm responses mutex poisoned")
-            .pop_front()
-            .ok_or_else(|| LlmError::Internal {
-                message: "ScriptedLlm: no more scripted responses".into(),
-            })
-    }
-
-    async fn stream(&self, _req: CompletionRequest) -> Result<CompletionStream, LlmError> {
-        let resp = self
-            .responses
-            .lock()
-            .expect("ScriptedLlm responses mutex poisoned")
-            .pop_front()
-            .ok_or_else(|| LlmError::Internal {
-                message: "ScriptedLlm: no more scripted responses".into(),
-            })?;
-        Ok(tau_ports::batch_to_stream(resp))
-    }
-}
-
 #[tokio::test]
 async fn runtime_turn_span_fires_once_per_turn() {
     let captured = CapturedEvents::default();
@@ -221,25 +171,10 @@ async fn runtime_turn_span_fires_once_per_turn() {
         .set_default();
 
     // Turn 1: a tool_use that forces a second turn.
-    let turn1 = make_completion_response(
-        String::new(),
-        vec![make_tool_use(
-            "u1".into(),
-            "echo".into(),
-            Value::String("hi".into()),
-        )],
-        StopReason::ToolUse,
-        Some(make_token_usage(7, 3)),
-    );
     // Turn 2: plain text, ends the loop.
-    let turn2 = make_completion_response(
-        "done".into(),
-        Vec::new(),
-        StopReason::EndTurn,
-        Some(make_token_usage(11, 5)),
-    );
-
-    let llm = ScriptedLlm::new("gpt-4", vec![turn1, turn2]);
+    let llm = common::MockLlmBackend::new("gpt-4")
+        .add_tool_call("echo", Value::String("hi".into()))
+        .add_text("done");
     // Default `MockTool` returns Ok(empty) — sufficient for the
     // dispatch step to succeed and the loop to advance to turn 2.
     let echo_tool = MockTool::new("echo", common::empty_tool_spec("echo"));

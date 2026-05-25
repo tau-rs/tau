@@ -190,31 +190,43 @@ pub(crate) fn run_streaming_inner(
             // tool.* sessions, capability.check) attribute correctly to
             // a specific turn. `turn_index` is 1-indexed to match the
             // existing `runtime.turn_started` event's `turn` field.
+            //
+            // NOTE: we DO NOT call `turn_span.enter()` here — `EnteredSpan`
+            // mutates a thread-local span stack, and the tokio multi-thread
+            // scheduler can move this task between worker threads at any
+            // `.await`, leaving the guard pointing at the wrong thread and
+            // mis-parenting any child spans/events created on the new
+            // worker. Instead, every event inside the turn body uses
+            // `parent: &turn_span` explicitly, and every `.await` that
+            // creates a child span (e.g. `llm.complete`, recursive
+            // `run_with_history` calls) is wrapped with
+            // `.instrument(turn_span.clone())`. This is the official
+            // tracing-book pattern for spans whose body straddles awaits.
             let turn_span = info_span!(
                 SPAN_RUNTIME_TURN,
                 turn_index = u64::from(total_turns),
                 messages_len = messages.len(),
             );
-            let _turn_guard = turn_span.enter();
-            debug!(name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
+            debug!(parent: &turn_span, name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
 
             let mut request = CompletionRequest::new(agent_def.llm_backend.as_str().into());
             request.system = agent_def.system_prompt.clone();
             request.messages = crate::run::agent_messages_to_provider_messages(&messages);
             request.tools = tool_specs.clone();
             debug!(
+                parent: &turn_span,
                 name = EV_LLM_REQUEST_BUILT,
                 messages = request.messages.len(),
                 tools = request.tools.len(),
             );
 
             let llm_stream_result = async { backend.stream(request).await }
-                .instrument(info_span!("llm.complete"))
+                .instrument(info_span!(parent: &turn_span, "llm.complete"))
                 .await;
             let mut llm_stream = match llm_stream_result {
                 Ok(s) => s,
                 Err(llm_err) => {
-                    warn!(name = "runtime.streaming_llm_open_failed");
+                    warn!(parent: &turn_span, name = "runtime.streaming_llm_open_failed");
                     yield make_llm_fatal_error(llm_err);
                     return;
                 }
@@ -227,8 +239,13 @@ pub(crate) fn run_streaming_inner(
 
             // Drain the LLM stream for this turn.
             // CompletionStream is Pin<Box<dyn Stream + Send>>; .as_mut() gives Pin<&mut S>.
+            // Each chunk-poll is instrumented with `turn_span` so any tracing
+            // emitted from inside the provider's stream impl attributes to
+            // this turn.
             loop {
-                let next = std::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx)).await;
+                let next = std::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx))
+                    .instrument(turn_span.clone())
+                    .await;
                 match next {
                     None => break,
                     Some(Ok(CompletionChunk::Text { delta })) => {
@@ -239,6 +256,7 @@ pub(crate) fn run_streaming_inner(
                         // Per spec Q3-A: yield ToolCallStarted immediately on
                         // receipt — display intent BEFORE dispatch.
                         debug!(
+                            parent: &turn_span,
                             name = "runtime.streaming_tool_use_received",
                             id = %tool_use.id,
                             tool_name = %tool_use.name,
@@ -256,7 +274,7 @@ pub(crate) fn run_streaming_inner(
                         break;
                     }
                     Some(Err(llm_err)) => {
-                        warn!(name = "runtime.streaming_llm_chunk_err");
+                        warn!(parent: &turn_span, name = "runtime.streaming_llm_chunk_err");
                         yield make_llm_fatal_error(llm_err);
                         return;
                     }
@@ -266,6 +284,7 @@ pub(crate) fn run_streaming_inner(
             }
 
             debug!(
+                parent: &turn_span,
                 name = EV_LLM_RESPONSE_RECEIVED,
                 text_len = accumulated_text.len(),
                 tool_uses = pending_tool_uses.len(),
@@ -296,7 +315,11 @@ pub(crate) fn run_streaming_inner(
 
             // No tool uses → end of run.
             if pending_tool_uses.is_empty() {
-                debug!(name = EV_RUNTIME_LOOP_TERMINATED, reason = "end_turn");
+                debug!(
+                    parent: &turn_span,
+                    name = EV_RUNTIME_LOOP_TERMINATED,
+                    reason = "end_turn",
+                );
                 yield RunEvent::TurnCompleted {
                     stop_reason: turn_stop_reason.unwrap_or(StopReason::EndTurn),
                     usage: turn_usage,
@@ -308,6 +331,7 @@ pub(crate) fn run_streaming_inner(
                     .cloned()
                     .expect("messages contains at least the initial user message");
                 info!(
+                    parent: &turn_span,
                     name = "runtime.run_completed",
                     total_turns,
                     all_messages = messages.len(),
@@ -326,6 +350,7 @@ pub(crate) fn run_streaming_inner(
             // ----- Per-tool dispatch ----------------------------------------
             for tool_use in &pending_tool_uses {
                 debug!(
+                    parent: &turn_span,
                     name = "llm.streaming_tool_use_dispatching",
                     id = %tool_use.id,
                     tool_name = %tool_use.name,
@@ -351,6 +376,7 @@ pub(crate) fn run_streaming_inner(
                         if let Some(cap) = missing {
                             let kind = crate::run::capability_kind_str(cap);
                             warn!(
+                                parent: &turn_span,
                                 name = EV_CAPABILITY_DENY,
                                 tool_name = %tool_use.name,
                                 missing_kind = %kind,
@@ -576,7 +602,11 @@ pub(crate) fn run_streaming_inner(
 
                                         // Recurse. Box::pin for async recursion
                                         // (the future would otherwise be
-                                        // infinitely sized).
+                                        // infinitely sized). Instrument with
+                                        // `turn_span` so the child's
+                                        // `runtime.agent_run` span attaches to
+                                        // THIS turn rather than the outer
+                                        // `runtime.agent_run`.
                                         let child_runtime_clone = child_runtime.clone();
                                         let package_manifest_clone =
                                             package_manifest.clone();
@@ -594,6 +624,7 @@ pub(crate) fn run_streaming_inner(
                                                 )
                                                 .await
                                         })
+                                        .instrument(turn_span.clone())
                                         .await;
 
                                         match child_outcome_res {
@@ -831,6 +862,11 @@ pub(crate) fn run_streaming_inner(
                                             // Recurse. Box::pin for async
                                             // recursion (the future would
                                             // otherwise be infinitely sized).
+                                            // Instrument with `turn_span` so
+                                            // the child's `runtime.agent_run`
+                                            // span attaches to THIS turn
+                                            // rather than the outer
+                                            // `runtime.agent_run`.
                                             let child_runtime_clone = child_runtime.clone();
                                             let package_manifest_clone = package_manifest.clone();
                                             let child_outcome_res: Result<
@@ -847,6 +883,7 @@ pub(crate) fn run_streaming_inner(
                                                     )
                                                     .await
                                             })
+                                            .instrument(turn_span.clone())
                                             .await;
 
                                             match child_outcome_res {
@@ -961,6 +998,7 @@ pub(crate) fn run_streaming_inner(
                         // (unexpected LLM behavior). The batch drainer
                         // will convert this to RuntimeError::ToolNotRegistered.
                         warn!(
+                            parent: &turn_span,
                             name = "runtime.streaming_tool_not_found",
                             tool_name = %tool_use.name,
                         );
@@ -981,6 +1019,7 @@ pub(crate) fn run_streaming_inner(
                 if let Some(cap) = missing {
                     let kind = crate::run::capability_kind_str(cap);
                     warn!(
+                        parent: &turn_span,
                         name = EV_CAPABILITY_DENY,
                         tool_name = %tool_use.name,
                         missing_kind = %kind,
@@ -1017,8 +1056,9 @@ pub(crate) fn run_streaming_inner(
                 let ctx = SessionContext::new(agent_instance_id, uuid::Uuid::new_v4(), None)
                     .with_granted_capabilities(granted_for_session.clone())
                     .with_deny_entries(deny_entries.clone());
-                if let Err(err) = tool.init(ctx.clone()).await {
+                if let Err(err) = tool.init(ctx.clone()).instrument(turn_span.clone()).await {
                     warn!(
+                        parent: &turn_span,
                         name = EV_TOOL_SESSION_OPEN_FAILED,
                         tool_name = %tool_use.name,
                     );
@@ -1042,8 +1082,9 @@ pub(crate) fn run_streaming_inner(
                         // ToolError message into the conversation so the
                         // LLM gets to self-correct, then yield
                         // ToolCallCompleted with Err and continue.
-                        let _ = tool.teardown(()).await; // best-effort
+                        let _ = tool.teardown(()).instrument(turn_span.clone()).await; // best-effort
                         warn!(
+                            parent: &turn_span,
                             name = "tool.args_validation_failed",
                             tool_name = %tool_use.name,
                         );
@@ -1066,7 +1107,7 @@ pub(crate) fn run_streaming_inner(
                     Err(other) => {
                         // Defensive: validate_tool_args only emits BadArgs
                         // in v0.1 — reach here only if the contract changes.
-                        let _ = tool.teardown(()).await;
+                        let _ = tool.teardown(()).instrument(turn_span.clone()).await;
                         yield make_tool_fatal_error(other);
                         return;
                     }
@@ -1074,23 +1115,28 @@ pub(crate) fn run_streaming_inner(
                 }
 
                 // ----- Invoke -----------------------------------------------
-                let invoke_outcome = tool.invoke(&ctx, &mut (), tool_use.input.clone()).await;
+                let invoke_outcome = tool
+                    .invoke(&ctx, &mut (), tool_use.input.clone())
+                    .instrument(turn_span.clone())
+                    .await;
                 let tool_result: ToolResult = match invoke_outcome {
                     Ok(r) => r,
                     Err(err) => {
                         warn!(
+                            parent: &turn_span,
                             name = EV_TOOL_INVOKE_FAILED,
                             tool_name = %tool_use.name,
                         );
-                        let _ = tool.teardown(()).await; // best-effort
+                        let _ = tool.teardown(()).instrument(turn_span.clone()).await; // best-effort
                         yield make_tool_fatal_error(err);
                         return;
                     }
                 };
 
                 // ----- Close the session ------------------------------------
-                if let Err(err) = tool.teardown(()).await {
+                if let Err(err) = tool.teardown(()).instrument(turn_span.clone()).await {
                     warn!(
+                        parent: &turn_span,
                         name = EV_TOOL_SESSION_CLOSE_FAILED,
                         tool_name = %tool_use.name,
                     );
@@ -1134,6 +1180,9 @@ pub(crate) fn run_streaming_inner(
         }
 
         // ----- max_turns reached -------------------------------------------
+        // No `parent:` here — this fires *after* the `while` loop, so the
+        // last `turn_span` is no longer in scope; emit under the outer
+        // `runtime.agent_run` span instead.
         warn!(
             name = "runtime.streaming_max_turns_reached",
             max_turns = options.max_turns
