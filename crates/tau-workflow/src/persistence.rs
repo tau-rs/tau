@@ -81,22 +81,33 @@ pub fn run_log_path(scope_root: &std::path::Path, workflow_name: &str, run_id: &
 use std::path::Path;
 
 use tau_observe::layers::workflow_run_log::TARGET as WF_TARGET;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// Append-only run log for a single workflow run.
 ///
-/// Each `append` writes one JSONL line and fsyncs. On crash, the file
-/// contains all complete lines plus possibly a truncated trailing line;
-/// `replay` skips the trailing partial line.
+/// `append` emits a `tracing::event!` on `target = TARGET`. The
+/// `WorkflowRunLogLayer` (attached to the global subscriber by
+/// `tau workflow run`'s install path) materializes one JSONL line per
+/// event and fsyncs after each write. On crash, the file contains all
+/// complete lines plus possibly a truncated trailing line; `replay`
+/// skips the trailing partial line.
+///
+/// `RunLog` no longer owns a `File` handle — it exists only to preserve
+/// the `open_for_write` / `append` API the runner is already wired
+/// against, while delegating all actual I/O to the layer. The retained
+/// `path` is used for error reporting (e.g. when the runner needs to
+/// surface the failing log path) and to expose the file location to
+/// callers via the `RunOutcome`.
 pub struct RunLog {
-    file: File,
     path: PathBuf,
 }
 
 impl RunLog {
-    /// Open or create the run log for append. The parent directory is
-    /// created if missing.
+    /// Construct a run log handle bound to `path`. Creates the parent
+    /// directory if missing so the layer's first write doesn't race
+    /// against a non-existent ancestor. The file itself is opened
+    /// lazily by `WorkflowRunLogLayer` on the first matching event.
     pub async fn open_for_write(path: &Path) -> Result<Self, crate::WorkflowError> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
@@ -106,27 +117,25 @@ impl RunLog {
                 }
             })?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .await
-            .map_err(|e| crate::WorkflowError::PersistenceError {
-                path: path.to_path_buf(),
-                source: e,
-            })?;
         Ok(Self {
-            file,
             path: path.to_path_buf(),
         })
     }
 
-    /// Append one record + fsync.
+    /// Path the layer will write to. Used by callers that need to
+    /// report the log location (e.g. `RunOutcome::log_path`).
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Emit one record as a structured tracing event.
+    ///
+    /// The `WorkflowRunLogLayer` installed alongside the global
+    /// subscriber materializes this into the on-disk JSONL line. The
+    /// signature is intentionally `&mut self` (rather than `&self`) so
+    /// callers that previously held a unique borrow against the file
+    /// keep compiling without churn.
     pub async fn append(&mut self, record: &StepRecord) -> Result<(), crate::WorkflowError> {
-        // Emit a structured tracing event. The `WorkflowRunLogLayer` (when
-        // installed) materializes this into the on-disk JSONL line. Sub-
-        // project D Task 3 removes the direct-write path below once the
-        // layer is wired in `tau workflow run`.
         let error_field = record.error.as_deref().unwrap_or("");
         let detail_field = record.detail.as_deref().unwrap_or("");
         tracing::event!(
@@ -146,33 +155,6 @@ impl RunLog {
             error = %error_field,
             detail = %detail_field,
         );
-
-        // Existing direct-write path — preserved so RunLog still produces
-        // its JSONL output when no WorkflowRunLogLayer is installed (e.g.
-        // existing unit tests in this file). Task 3 deletes this path.
-        self.write_direct(record).await
-    }
-
-    async fn write_direct(&mut self, record: &StepRecord) -> Result<(), crate::WorkflowError> {
-        let mut line =
-            serde_json::to_string(record).map_err(|e| crate::WorkflowError::PersistenceError {
-                path: self.path.clone(),
-                source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
-            })?;
-        line.push('\n');
-        self.file.write_all(line.as_bytes()).await.map_err(|e| {
-            crate::WorkflowError::PersistenceError {
-                path: self.path.clone(),
-                source: e,
-            }
-        })?;
-        self.file
-            .sync_data()
-            .await
-            .map_err(|e| crate::WorkflowError::PersistenceError {
-                path: self.path.clone(),
-                source: e,
-            })?;
         Ok(())
     }
 }
@@ -220,6 +202,10 @@ pub async fn replay(path: &Path) -> Result<Vec<StepRecord>, crate::WorkflowError
 mod tests {
     use super::*;
     use chrono::Utc;
+    use tau_observe::layers::workflow_run_log::WorkflowRunLogLayer;
+    use tokio::io::AsyncWriteExt;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::layer::SubscriberExt;
 
     fn make_record(idx: usize, id: &str) -> StepRecord {
         let now = Utc::now();
@@ -240,15 +226,41 @@ mod tests {
         }
     }
 
+    /// Install a `WorkflowRunLogLayer` pointed at `path` as the
+    /// thread-local subscriber for the duration of the returned guard.
+    ///
+    /// `RunLog::append` is now a thin `tracing::event!` emitter, so unit
+    /// tests that assert on the on-disk JSONL need a subscriber that
+    /// actually materializes the event. We use `set_default` (not
+    /// `set_global_default`) so concurrent tests don't fight over a
+    /// single global subscriber.
+    fn install_run_log_layer(path: &Path) -> DefaultGuard {
+        let layer = WorkflowRunLogLayer::new(path.to_path_buf());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    /// Yield the runtime long enough for the layer's `tokio::spawn`
+    /// writer tasks to flush their pending lines + `sync_data`. The
+    /// layer fires-and-forgets the write so a deterministic flush
+    /// requires an external delay.
+    async fn flush_layer_writes() {
+        // Empirically a single 100ms sleep is enough on macOS / Linux
+        // CI runners; bump if the tests start flaking under load.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
     #[tokio::test]
     async fn append_then_replay_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run.jsonl");
+        let _guard = install_run_log_layer(&path);
         {
             let mut log = RunLog::open_for_write(&path).await.unwrap();
             log.append(&make_record(0, "a")).await.unwrap();
             log.append(&make_record(1, "b")).await.unwrap();
         }
+        flush_layer_writes().await;
         let records = replay(&path).await.unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].step_id, "a");
@@ -259,10 +271,12 @@ mod tests {
     async fn replay_tolerates_trailing_partial_line() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run.jsonl");
+        let _guard = install_run_log_layer(&path);
         {
             let mut log = RunLog::open_for_write(&path).await.unwrap();
             log.append(&make_record(0, "a")).await.unwrap();
         }
+        flush_layer_writes().await;
         // Append 30 bytes of garbage WITHOUT a trailing newline.
         let mut f = tokio::fs::OpenOptions::new()
             .append(true)

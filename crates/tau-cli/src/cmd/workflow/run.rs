@@ -11,7 +11,17 @@ use crate::cli::WorkflowRunArgs;
 use crate::output::Output;
 
 /// Run `tau workflow run`.
-pub async fn run(args: &WorkflowRunArgs, output: &mut Output) -> anyhow::Result<()> {
+///
+/// `workflow_run_id` is the pre-minted ULID assigned in `run_main` so
+/// the `WorkflowRunLogLayer` installed alongside the global tracing
+/// subscriber and the runner agree on the JSONL log path. `None` means
+/// the runner mints its own ULID and no `WorkflowRunLogLayer` is
+/// installed (e.g. integration tests that bypass `run_main`).
+pub async fn run(
+    args: &WorkflowRunArgs,
+    workflow_run_id: Option<String>,
+    output: &mut Output,
+) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let scope = Scope::resolve(&cwd).context("resolving package scope")?;
 
@@ -34,7 +44,7 @@ pub async fn run(args: &WorkflowRunArgs, output: &mut Output) -> anyhow::Result<
             &workflow,
             RunOpts {
                 input: args.input.clone(),
-                run_id: None,
+                run_id: workflow_run_id,
                 completed: Vec::new(),
                 agents,
             },

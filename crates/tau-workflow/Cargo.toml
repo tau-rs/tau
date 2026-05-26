@@ -29,3 +29,7 @@ tempfile    = { workspace = true }
 tokio       = { workspace = true, features = ["fs", "io-util", "time", "macros", "rt", "test-util"] }
 tau-domain  = { workspace = true, features = ["test-fixtures"] }
 tau-ports   = { workspace = true, features = ["test-fixtures"] }
+# Persistence unit tests install `WorkflowRunLogLayer` as the
+# thread-local subscriber so `RunLog::append` (a `tracing::event!`
+# emitter post-Sub-project-D Task 3) actually materializes JSONL lines.
+tracing-subscriber = { workspace = true, features = ["registry"] }

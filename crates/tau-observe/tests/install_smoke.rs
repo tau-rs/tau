@@ -22,6 +22,7 @@ fn each_format_writer_combination_installs_without_panic() {
             non_blocking: false,
             file_path: None,
             rotation: Rotation::Never,
+            extra_layers: Vec::new(),
             #[cfg(feature = "otlp")]
             otlp: None,
         };

@@ -3523,6 +3523,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "url",
  "uuid",
 ]
@@ -3808,6 +3809,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tau-domain",
+ "tau-observe",
  "tau-pkg",
  "tau-ports",
  "tau-runtime",
@@ -3816,6 +3818,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-subscriber",
  "ulid",
 ]
 

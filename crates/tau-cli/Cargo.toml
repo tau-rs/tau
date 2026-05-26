@@ -38,6 +38,10 @@ toml               = { workspace = true }
 thiserror          = { workspace = true }
 # UUID v7 for session ids (ADR-0013 / Tier 3 priority 11).
 uuid               = { workspace = true }
+# ULIDs are minted in `run_main` for workflow-run invocations so the
+# `WorkflowRunLogLayer` attached to the global subscriber agrees with
+# the `Runner`'s `RunOpts::run_id` on the on-disk log path.
+ulid               = { workspace = true }
 anyhow             = "1"
 chrono             = { workspace = true }
 termimad           = "0.34"

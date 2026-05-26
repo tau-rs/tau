@@ -16,10 +16,21 @@ pub mod resume;
 pub mod run;
 
 /// Dispatch a workflow subcommand.
-pub async fn dispatch(sub: WorkflowSubcommand, output: &mut Output) -> anyhow::Result<()> {
+///
+/// `workflow_run_id` is the pre-minted ULID built by
+/// `run_main::prepare_workflow_run_layer`. The CLI mints it before
+/// installing the global tracing subscriber so that the
+/// `WorkflowRunLogLayer` (attached to that subscriber) and the runner
+/// (called below) agree on the on-disk JSONL path. The argument is only
+/// meaningful for `WorkflowSubcommand::Run`.
+pub async fn dispatch(
+    sub: WorkflowSubcommand,
+    workflow_run_id: Option<String>,
+    output: &mut Output,
+) -> anyhow::Result<()> {
     match sub {
         WorkflowSubcommand::List => list::run(output),
-        WorkflowSubcommand::Run(args) => run::run(&args, output).await,
+        WorkflowSubcommand::Run(args) => run::run(&args, workflow_run_id, output).await,
         WorkflowSubcommand::Log(args) => log::run(&args, output).await,
         WorkflowSubcommand::Resume(args) => resume::run(&args, output).await,
     }

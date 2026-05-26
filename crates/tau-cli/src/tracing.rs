@@ -42,6 +42,26 @@ pub fn build_filter(cli: &Cli) -> EnvFilter {
 /// human-format, stderr-writer configuration. Idempotent — the
 /// underlying installer short-circuits second calls.
 pub fn install(cli: &Cli) {
+    install_with_extra_layers(cli, Vec::new())
+}
+
+/// Same as [`install`], but accepts caller-provided `extra_layers` that
+/// will be composed into the registry alongside the fmt layer.
+///
+/// Used by `tau workflow run` to attach the [`WorkflowRunLogLayer`]
+/// so step events emitted via `tracing::event!(target = "tau::workflow::step",
+/// ...)` materialize into the on-disk JSONL run log.
+pub fn install_with_extra_layers(
+    cli: &Cli,
+    extra_layers: Vec<
+        Box<
+            dyn tracing_subscriber::Layer<tracing_subscriber::Registry>
+                + Send
+                + Sync
+                + 'static,
+        >,
+    >,
+) {
     // --log-non-blocking without --log-file is a configuration error:
     // the non-blocking install path requires a file sink (it has no
     // meaning over stderr). Exit early so the misconfiguration is
@@ -58,6 +78,7 @@ pub fn install(cli: &Cli) {
         non_blocking: cli.log_non_blocking,
         file_path: cli.log_file.clone(),
         rotation: cli.log_rotation.into(),
+        extra_layers,
         // Resolution order for OTLP endpoint:
         //  1. `--otlp-endpoint` flag (clap also auto-reads
         //     `OTEL_EXPORTER_OTLP_ENDPOINT` because of `env =` on the
