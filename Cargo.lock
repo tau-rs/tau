@@ -2216,6 +2216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c13b2df4cd59c176099ac82806725ba340c8fa7b1a7004c0912daad30470f63e"
 dependencies = [
  "chrono",
+ "futures-util",
  "opentelemetry",
  "opentelemetry_sdk",
  "ordered-float",
@@ -3532,6 +3533,7 @@ dependencies = [
  "opentelemetry_sdk",
  "serde_json",
  "thiserror 2.0.18",
+ "tonic",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

@@ -58,3 +58,6 @@ tau-ports  = { workspace = true, features = ["test-fixtures", "serde"] }
 
 [features]
 default = []
+# Forwards to `tau-observe/otlp`: enables the optional OpenTelemetry/OTLP
+# exporter wiring in the CLI.
+otlp = ["tau-observe/otlp"]

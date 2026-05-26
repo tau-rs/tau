@@ -1,8 +1,7 @@
 //! OTLP endpoint configuration.
 //!
-//! Feature-gated: this module only compiles when feature `otlp` is on.
-
-#![cfg(feature = "otlp")]
+//! Feature-gated: this module only compiles when feature `otlp` is on
+//! (gated at the `pub mod otlp` declaration in `lib.rs`).
 
 use std::collections::HashMap;
 

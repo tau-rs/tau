@@ -19,6 +19,8 @@ fn each_format_writer_combination_installs_without_panic() {
             filter: env_or_directive("tau=info"),
             format,
             writer,
+            #[cfg(feature = "otlp")]
+            otlp: None,
         };
         let _g = install(opts).expect("install returned err");
     }

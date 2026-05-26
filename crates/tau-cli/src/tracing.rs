@@ -46,6 +46,8 @@ pub fn install(cli: &Cli) {
         filter: build_filter(cli),
         format: Format::Human,
         writer: Writer::Stderr,
+        #[cfg(feature = "otlp")]
+        otlp: None,
     };
     // The CLI does not propagate install errors; the only failure mode
     // is "already installed", which the underlying installer maps to a

@@ -35,6 +35,10 @@ pub struct InstallOptions {
     pub format: Format,
     /// Sink.
     pub writer: Writer,
+    /// When set, an OpenTelemetry layer exports spans over OTLP/gRPC.
+    /// Requires feature `otlp`.
+    #[cfg(feature = "otlp")]
+    pub otlp: Option<crate::otlp::OtlpEndpoint>,
 }
 
 impl InstallOptions {
@@ -45,6 +49,8 @@ impl InstallOptions {
             filter: crate::filter::env_or_directive("tau=info"),
             format: Format::Human,
             writer: Writer::Stderr,
+            #[cfg(feature = "otlp")]
+            otlp: None,
         }
     }
 
@@ -55,6 +61,8 @@ impl InstallOptions {
             filter: crate::filter::env_or_directive("info"),
             format: Format::Json,
             writer: Writer::Stderr,
+            #[cfg(feature = "otlp")]
+            otlp: None,
         }
     }
 }
@@ -80,6 +88,50 @@ pub struct InstallGuard {
 
 static INSTALL_ONCE: OnceLock<Mutex<bool>> = OnceLock::new();
 
+/// Build a `tracing-opentelemetry` layer from an [`OtlpEndpoint`].
+///
+/// Panics if the OTLP pipeline cannot be constructed (e.g. malformed
+/// endpoint). v1 deliberately treats a misconfigured OTLP endpoint as a
+/// fatal user error rather than degrading silently.
+#[cfg(feature = "otlp")]
+fn build_otel_layer<S>(
+    otlp_ep: &crate::otlp::OtlpEndpoint,
+) -> tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    use opentelemetry_otlp::WithExportConfig as _;
+    let mut exporter = opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(&otlp_ep.endpoint);
+    if !otlp_ep.headers.is_empty() {
+        let mut metadata = tonic::metadata::MetadataMap::new();
+        for (k, v) in &otlp_ep.headers {
+            if let (Ok(name), Ok(val)) = (
+                k.parse::<tonic::metadata::MetadataKey<tonic::metadata::Ascii>>(),
+                v.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>(),
+            ) {
+                metadata.insert(name, val);
+            }
+        }
+        exporter = exporter.with_metadata(metadata);
+    }
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(exporter)
+        .with_trace_config(
+            opentelemetry_sdk::trace::config().with_resource(
+                opentelemetry_sdk::Resource::default().merge(&opentelemetry_sdk::Resource::new([
+                    opentelemetry::KeyValue::new("service.name", "tau"),
+                    opentelemetry::KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                ])),
+            ),
+        )
+        .install_batch(opentelemetry_sdk::runtime::Tokio)
+        .expect("install OTLP pipeline");
+    tracing_opentelemetry::layer().with_tracer(tracer)
+}
+
 /// Install the global tracing subscriber. Idempotent: subsequent calls
 /// after a successful install are no-ops that return a fresh guard
 /// without re-installing.
@@ -94,16 +146,24 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let registry = tracing_subscriber::registry().with(opts.filter);
+    let base = tracing_subscriber::registry().with(opts.filter);
+
+    // Optional OpenTelemetry layer goes BELOW the fmt layer so that its
+    // `Layer<S>` impl resolves against the stable `Layered<EnvFilter,
+    // Registry>` subscriber type (independent of which fmt branch the
+    // match selects below). `Option<Layer>` is itself a `Layer`, so
+    // `None` is a zero-cost no-op.
+    #[cfg(feature = "otlp")]
+    let base = base.with(opts.otlp.as_ref().map(build_otel_layer));
 
     let result = match (opts.format, opts.writer) {
-        (Format::Human, Writer::Stderr) => registry
+        (Format::Human, Writer::Stderr) => base
             .with(fmt::layer().with_writer(std::io::stderr))
             .try_init(),
-        (Format::Human, Writer::Stdout) => registry
+        (Format::Human, Writer::Stdout) => base
             .with(fmt::layer().with_writer(std::io::stdout))
             .try_init(),
-        (Format::Json, Writer::Stderr) => registry
+        (Format::Json, Writer::Stderr) => base
             .with(
                 fmt::layer()
                     .json()
@@ -112,7 +172,7 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
                     .with_span_list(false),
             )
             .try_init(),
-        (Format::Json, Writer::Stdout) => registry
+        (Format::Json, Writer::Stdout) => base
             .with(
                 fmt::layer()
                     .json()
