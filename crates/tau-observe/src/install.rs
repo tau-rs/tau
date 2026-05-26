@@ -39,7 +39,6 @@ pub enum Rotation {
 }
 
 /// All knobs the canonical installer accepts.
-#[derive(Debug)]
 pub struct InstallOptions {
     /// Filter to apply. Build via `tau_observe::filter::env_or_directive`.
     pub filter: EnvFilter,
@@ -56,10 +55,42 @@ pub struct InstallOptions {
     pub file_path: Option<std::path::PathBuf>,
     /// File rotation policy. Ignored unless `file_path` is set.
     pub rotation: Rotation,
+    /// Extra layers to compose into the registry alongside the fmt layer.
+    /// Used by callers that need to wire custom on-disk JSONL sinks (e.g.
+    /// `WorkflowRunLogLayer`, `PluginRecordingLayer`).
+    ///
+    /// Each layer must implement `Layer<Registry>` so it composes against
+    /// the raw registry before the `EnvFilter` is layered on top. The
+    /// installer applies these via a fold BEFORE the `EnvFilter`, so the
+    /// `EnvFilter`'s global-filter effect still gates them — layer impls
+    /// that need to bypass the env filter should attach their own
+    /// per-layer filter via `Layer::with_filter`.
+    pub extra_layers: Vec<
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
+    >,
     /// When set, an OpenTelemetry layer exports spans over OTLP/gRPC.
     /// Requires feature `otlp`.
     #[cfg(feature = "otlp")]
     pub otlp: Option<crate::otlp::OtlpEndpoint>,
+}
+
+impl std::fmt::Debug for InstallOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut dbg = f.debug_struct("InstallOptions");
+        dbg.field("filter", &self.filter)
+            .field("format", &self.format)
+            .field("writer", &self.writer)
+            .field("non_blocking", &self.non_blocking)
+            .field("file_path", &self.file_path)
+            .field("rotation", &self.rotation)
+            .field(
+                "extra_layers",
+                &format_args!("[{} layers]", self.extra_layers.len()),
+            );
+        #[cfg(feature = "otlp")]
+        dbg.field("otlp", &self.otlp);
+        dbg.finish()
+    }
 }
 
 impl InstallOptions {
@@ -73,6 +104,7 @@ impl InstallOptions {
             non_blocking: false,
             file_path: None,
             rotation: Rotation::Never,
+            extra_layers: Vec::new(),
             #[cfg(feature = "otlp")]
             otlp: None,
         }
@@ -88,6 +120,7 @@ impl InstallOptions {
             non_blocking: false,
             file_path: None,
             rotation: Rotation::Never,
+            extra_layers: Vec::new(),
             #[cfg(feature = "otlp")]
             otlp: None,
         }
@@ -194,7 +227,21 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let base = tracing_subscriber::registry().with(opts.filter);
+    // Compose caller-provided extra layers onto the raw registry first.
+    // `Vec<Box<dyn Layer<Registry> + Send + Sync>>` implements `Layer<S>`
+    // via tracing-subscriber's blanket impl for `Vec<L>`. We wrap the
+    // vec in `Option` so it disappears entirely when empty — the Vec
+    // impl's `max_level_hint` returns `LevelFilter::OFF` for an empty
+    // vec, which would otherwise suppress all events at the registry
+    // level (see tracing-subscriber v0.3 `Vec<L>::max_level_hint`).
+    let extras = if opts.extra_layers.is_empty() {
+        None
+    } else {
+        Some(opts.extra_layers)
+    };
+    let base = tracing_subscriber::registry()
+        .with(extras)
+        .with(opts.filter);
 
     // Optional OpenTelemetry layer goes BELOW the fmt layer so that its
     // `Layer<S>` impl resolves against the stable `Layered<EnvFilter,

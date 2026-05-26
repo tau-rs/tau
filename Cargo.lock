@@ -3523,6 +3523,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "url",
  "uuid",
 ]
@@ -3554,13 +3555,17 @@ version = "0.0.0"
 name = "tau-observe"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "serde_json",
+ "tau-domain",
+ "tau-workflow",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tonic",
  "tracing",
  "tracing-appender",
@@ -3805,6 +3810,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tau-domain",
+ "tau-observe",
  "tau-pkg",
  "tau-ports",
  "tau-runtime",
@@ -3813,6 +3819,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-subscriber",
  "ulid",
 ]
 

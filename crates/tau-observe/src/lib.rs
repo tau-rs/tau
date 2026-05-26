@@ -9,6 +9,7 @@
 pub mod capture;
 pub mod filter;
 pub mod install;
+pub mod layers;
 #[cfg(feature = "otlp")]
 pub mod otlp;
 pub mod preview;

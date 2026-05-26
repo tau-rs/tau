@@ -75,6 +75,11 @@ pub async fn run(
         .await
         .with_context(|| format!("describing plugin {:?}", args.name))?;
 
+    // Flush the process-global `PluginRecordingLayer` (if any) so the
+    // describe invocation's recorded frames reach disk before the
+    // CLI exits.
+    crate::cmd::plugin_loader::flush_recorders().await;
+
     if output.is_json() {
         let payload = serde_json::json!({
             "package": args.name,

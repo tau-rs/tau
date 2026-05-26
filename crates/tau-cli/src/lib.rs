@@ -32,14 +32,61 @@ use clap::Parser;
 /// an "unimplemented" error. Tasks 10-14 land the real handlers.
 pub async fn run_main() -> std::process::ExitCode {
     let cli = cli::Cli::parse();
-    tracing::install(&cli);
+    // When the user is running `tau workflow run`, mint the run id and
+    // attach a `WorkflowRunLogLayer` to the global subscriber so step
+    // events written by the runner end up in the on-disk JSONL log.
+    // The minted run id is then handed to the workflow runner via
+    // `RunOpts::run_id` so both producer and layer point at the same
+    // file. If scope resolution fails here the install proceeds without
+    // the layer; the workflow handler will surface the same error
+    // shortly after with a richer context message.
+    let prepared_workflow_run = prepare_workflow_run_layer(&cli.command);
+    let mut extra_layers: Vec<
+        Box<
+            dyn ::tracing_subscriber::Layer<::tracing_subscriber::Registry> + Send + Sync + 'static,
+        >,
+    > = Vec::new();
+    let workflow_run_id = if let Some(prep) = prepared_workflow_run {
+        extra_layers.push(Box::new(prep.layer));
+        Some(prep.run_id)
+    } else {
+        None
+    };
+    // Sub-project D Task 5: when `--record-protocol <path>` is set,
+    // install a `PluginRecordingLayer` aimed at that path. The same
+    // layer handle is stashed in a process-global slot so the
+    // top-level command handlers (cmd::run / cmd::chat / cmd::plugin
+    // describe) can call `flush()` on exit to ensure pending writes
+    // reach disk before the process terminates.
+    //
+    // The layer is wrapped with a per-layer `FilterFn` that always
+    // enables the `tau::plugin::frame` target regardless of the
+    // global `EnvFilter`, and pins its `max_level_hint` to TRACE so
+    // the tracing macros don't short-circuit recording events when
+    // the user's filter is more restrictive than INFO (e.g.
+    // `--quiet` → `tau=warn`). Protocol recording is opt-in via the
+    // explicit `--record-protocol` flag — gating it behind any
+    // particular log-level directive would surprise users who
+    // reasonably expect "the flag is set, ergo frames are recorded".
+    if let Some(path) = cli.record_protocol.clone() {
+        use tracing_subscriber::filter::{filter_fn, LevelFilter};
+        use tracing_subscriber::layer::Layer as _;
+        let layer = tau_observe::layers::plugin_recording::PluginRecordingLayer::new(path);
+        crate::cmd::plugin_loader::set_plugin_recording_layer(layer.clone());
+        let per_layer_filter =
+            filter_fn(|meta| meta.target() == tau_observe::layers::plugin_recording::TARGET)
+                .with_max_level_hint(LevelFilter::TRACE);
+        let filtered = layer.with_filter(per_layer_filter);
+        extra_layers.push(Box::new(filtered));
+    }
+    tracing::install_with_extra_layers(&cli, extra_layers);
     // Capture `cli.debug` before `dispatch` consumes the parsed `Cli`.
     // When set, the error path renders the full `anyhow` chain via
     // `{err:?}` instead of the single-line top-level message. This is
     // the integration-level surface for `--debug` (the tracing module
     // already promotes the filter to DEBUG independently).
     let debug = cli.debug;
-    match dispatch(cli).await {
+    match dispatch(cli, workflow_run_id).await {
         Ok(()) => ExitCode::Success.into(),
         Err(err) => {
             // The AgentFailed marker is emitted by `cmd::run` when the
@@ -62,7 +109,31 @@ pub async fn run_main() -> std::process::ExitCode {
     }
 }
 
-async fn dispatch(cli: cli::Cli) -> anyhow::Result<()> {
+/// Outcome of inspecting the parsed CLI for a `tau workflow run`
+/// invocation: a pre-minted run id and the run-log layer to install.
+struct PreparedWorkflowRun {
+    run_id: String,
+    layer: tau_observe::layers::workflow_run_log::WorkflowRunLogLayer,
+}
+
+/// If `command` is `Workflow(Run(...))`, resolve the scope, mint a fresh
+/// run id, and build the `WorkflowRunLogLayer` pointing at the same
+/// `<scope>/.tau/workflow-runs/<name>-<run_id>.jsonl` path the runner
+/// will use. Returns `None` for any other command, or when scope
+/// resolution fails (the workflow handler will re-surface that error).
+fn prepare_workflow_run_layer(command: &cli::Command) -> Option<PreparedWorkflowRun> {
+    let cli::Command::Workflow(cli::WorkflowSubcommand::Run(run_args)) = command else {
+        return None;
+    };
+    let cwd = std::env::current_dir().ok()?;
+    let scope = tau_pkg::Scope::resolve(&cwd).ok()?;
+    let run_id = ulid::Ulid::new().to_string();
+    let log_path = tau_workflow::run_log_path(scope.path(), &run_args.name, &run_id);
+    let layer = tau_observe::layers::workflow_run_log::WorkflowRunLogLayer::new(log_path);
+    Some(PreparedWorkflowRun { run_id, layer })
+}
+
+async fn dispatch(cli: cli::Cli, workflow_run_id: Option<String>) -> anyhow::Result<()> {
     use cli::SandboxKindArg;
     use tau_runtime::sandbox::registry::RegistryKind;
 
@@ -114,7 +185,9 @@ async fn dispatch(cli: cli::Cli) -> anyhow::Result<()> {
         cli::Command::Sandbox(args) => cmd::sandbox::run(&args, &mut output).await,
         cli::Command::Skill(sub) => cmd::skill::dispatch(sub, &mut output).await,
         cli::Command::Target(sub) => cmd::target::run(&sub, &mut output).await,
-        cli::Command::Workflow(sub) => cmd::workflow::dispatch(sub, &mut output).await,
+        cli::Command::Workflow(sub) => {
+            cmd::workflow::dispatch(sub, workflow_run_id, &mut output).await
+        }
         cli::Command::Serve(args) => cmd::serve::run(&args).await,
         cli::Command::Check(args) => cmd::check::run(args).await,
     }

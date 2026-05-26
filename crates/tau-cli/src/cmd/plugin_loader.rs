@@ -14,14 +14,15 @@
 //! at `RuntimeBuilder::build` rather than silently being skipped.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::Context;
 use tau_domain::PortKind;
+use tau_observe::layers::plugin_recording::PluginRecordingLayer;
 use tau_pkg::scope::ScopeConfig;
 use tau_pkg::{LockFile, LockedPlugin, Scope};
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::plugin_host::{self, PluginHostOptions, RecorderHandle, RecordingSink};
+use tau_runtime::plugin_host::{self, PluginHostOptions, RecordingSink};
 use tau_runtime::sandbox::{build_plan, resolve_adapter, resolve_adapter_forced};
 use tau_runtime::RuntimeBuilder;
 
@@ -34,66 +35,71 @@ pub(crate) struct LoadedPlugins {
     /// Builder pre-populated with the LLM backend and any tool plugins.
     /// The caller is expected to call [`RuntimeBuilder::build`] on it.
     pub(crate) builder: RuntimeBuilder,
-    /// Per-plugin protocol recorders, when `--record-protocol` is set.
-    /// The caller flushes them on exit via [`flush_recorders`] to drain
-    /// the tokio file buffers (which otherwise discard pending writes
-    /// on `Drop`).
-    pub(crate) recorder_ledger: Arc<Mutex<Vec<RecorderHandle>>>,
+}
+
+/// Process-global slot for the `PluginRecordingLayer` (Sub-project D
+/// Task 5). Populated by `run_main` when `--record-protocol` is
+/// passed; read by [`flush_recorders`] on command exit so the layer's
+/// fire-and-forget `tokio::spawn` writes are drained before the
+/// process terminates.
+///
+/// Use a `RwLock` inside the `OnceLock` so test cases that create
+/// multiple `Cli` parses in one process (e.g. integration tests) can
+/// overwrite the slot without panicking.
+static PLUGIN_RECORDING_LAYER: OnceLock<RwLock<Option<PluginRecordingLayer>>> = OnceLock::new();
+
+/// Stash the layer so [`flush_recorders`] can find it later. Called
+/// from `run_main` before the global subscriber is installed.
+pub(crate) fn set_plugin_recording_layer(layer: PluginRecordingLayer) {
+    let slot = PLUGIN_RECORDING_LAYER.get_or_init(|| RwLock::new(None));
+    if let Ok(mut g) = slot.write() {
+        *g = Some(layer);
+    }
 }
 
 /// Build a [`PluginHostOptions`] tuned for the CLI:
 ///
 /// * If `record_protocol` is `Some(path)`, the returned options carry
-///   a `RecordingSink::JsonlFile { path }` plus a fresh
-///   `recorder_ledger`. The same `Arc<Mutex<Vec<RecorderHandle>>>` is
-///   returned to the caller so it can flush every per-plugin recorder
-///   on exit (Task 20: `--record-protocol` flush wiring).
+///   a `RecordingSink::JsonlFile { path }` so each spawned plugin gets
+///   a `Recorder` that emits frame events to the `tau::plugin::frame`
+///   tracing target. The actual file writer is the
+///   `PluginRecordingLayer` installed in [`run_main`]; per-plugin
+///   ledger tracking is no longer needed.
 /// * If `record_protocol` is `None`, the options carry no recording
-///   sink and an empty (but still allocated, for symmetry) ledger.
+///   sink.
 /// * `force_passthrough` and `force_adapter_kind` come from the
 ///   global `--no-sandbox` / `--sandbox <kind>` flags (Task 7).
 pub(crate) fn build_host_options(
     record_protocol: Option<&Path>,
     force_passthrough: bool,
     force_adapter_kind: Option<tau_runtime::sandbox::registry::RegistryKind>,
-) -> (PluginHostOptions, Arc<Mutex<Vec<RecorderHandle>>>) {
-    let ledger: Arc<Mutex<Vec<RecorderHandle>>> = Arc::new(Mutex::new(Vec::new()));
+) -> PluginHostOptions {
     let mut options = PluginHostOptions::default();
     if let Some(path) = record_protocol {
         options.recording = Some(RecordingSink::JsonlFile {
             path: path.to_path_buf(),
         });
-        options.recorder_ledger = Some(ledger.clone());
     }
     options.force_passthrough = force_passthrough;
     options.force_adapter_kind = force_adapter_kind;
-    (options, ledger)
+    options
 }
 
-/// Flush every recorder registered in `ledger`. Called by `cmd::run` /
-/// `cmd::chat` after the runtime is dropped (and thus every plugin
-/// process is reaped) so the JSONL recording file observes every line
-/// the host wrote, even those still buffered inside the tokio
-/// `tokio::fs::File` write half.
+/// Flush the process-global `PluginRecordingLayer` (if any). Called
+/// by `cmd::run` / `cmd::chat` / `cmd::plugin describe` after the
+/// runtime is dropped (and thus every plugin process is reaped) so
+/// the JSONL recording file observes every line the host emitted,
+/// even those still buffered inside the layer's `tokio::fs::File`
+/// write half or its fire-and-forget `tokio::spawn` write tasks.
 ///
-/// Best-effort: a poisoned mutex is logged, never bubbled.
-pub(crate) async fn flush_recorders(ledger: Arc<Mutex<Vec<RecorderHandle>>>) {
-    // Drain under the synchronous mutex so we don't hold it across the
-    // async `flush().await` boundary (which would either require a
-    // tokio::sync::Mutex or be a deadlock hazard).
-    let recorders: Vec<RecorderHandle> = match ledger.lock() {
-        Ok(mut g) => std::mem::take(&mut *g),
-        Err(e) => {
-            tracing::warn!(
-                target: "tau_cli::plugin_loader",
-                err = %e,
-                "recorder_ledger mutex poisoned; skipping flush"
-            );
-            return;
-        }
-    };
-    for r in recorders {
-        r.flush().await;
+/// Best-effort: a missing layer (no `--record-protocol` flag) is a
+/// no-op, and IO errors are logged but never propagated.
+pub(crate) async fn flush_recorders() {
+    let layer = PLUGIN_RECORDING_LAYER
+        .get()
+        .and_then(|slot| slot.read().ok().and_then(|g| g.clone()));
+    if let Some(layer) = layer {
+        layer.flush().await;
     }
 }
 
@@ -130,10 +136,6 @@ pub(crate) async fn load_plugins(
     trace_context: TraceContext,
     mut host_options: PluginHostOptions,
 ) -> anyhow::Result<LoadedPlugins> {
-    let recorder_ledger = host_options
-        .recorder_ledger
-        .clone()
-        .unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
     let lockfile = LockFile::load(&scope.lockfile_path())
         .with_context(|| format!("loading lockfile {}", scope.lockfile_path().display()))?;
 
@@ -276,10 +278,7 @@ pub(crate) async fn load_plugins(
         builder = builder.with_dyn_tool(loaded_tool);
     }
 
-    Ok(LoadedPlugins {
-        builder,
-        recorder_ledger,
-    })
+    Ok(LoadedPlugins { builder })
 }
 
 /// Read the `[sandbox]` requirements from a plugin's on-disk `tau.toml`.
