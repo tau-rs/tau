@@ -24,18 +24,18 @@
 | 7 | tau-runtime | builder.rs:405 | `Runtime::run_streaming` | B | hidden MockLlmBackend + Runtime fixture |
 | 8 | tau-runtime | builder.rs:464 | `Runtime::run_streaming_with_history` | B | same fixture shape as #7 |
 | 9 | tau-runtime | error.rs:58 | `BuildError` | C | replace placeholder with `Runtime::builder().build()` + assert NoLlmBackend |
-| 10 | tau-domain | message.rs:74 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 11 | tau-domain | package/capability.rs:20 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 12 | tau-domain | package/capability.rs:70 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 13 | tau-domain | package/capability.rs:104 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 14 | tau-domain | package/capability.rs:129 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 15 | tau-domain | package/capability.rs:149 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 16 | tau-domain | package/capability.rs:175 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 17 | tau-domain | package/manifest.rs:17 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 18 | tau-domain | package/manifest.rs:45 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 19 | tau-domain | package/manifest.rs:507 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 20 | tau-domain | package/plugin.rs:96 | TBD-by-Task-5 | ? | classify in Task 5 |
-| 21 | tau-domain | package/plugin.rs:153 | TBD-by-Task-5 | ? | classify in Task 5 |
+| 10 | tau-domain | message.rs:74 | `Message` struct | B | replace `#[non_exhaustive]` struct literal with `Message::new()` constructor; flip to executed fence |
+| 11 | tau-domain | package/capability.rs:20 | `Capability` enum | C | rewrite body: show `Capability::Custom { .. }` (constructable variant) + `.required_shape()` assert; `FsCapability::Read` variant is `#[non_exhaustive]` — not constructable externally |
+| 12 | tau-domain | package/capability.rs:70 | `FsCapability` enum | C | rewrite body: show `CapabilityShape::FilesystemRead` (the shape this verb maps to); all variants are variant-level `#[non_exhaustive]` — no external construction path |
+| 13 | tau-domain | package/capability.rs:104 | `NetCapability` enum | C | rewrite body: show `CapabilityShape::NetworkHttp`; same constraint as row 12 |
+| 14 | tau-domain | package/capability.rs:129 | `ProcessCapability` enum | C | rewrite body: show `CapabilityShape::ProcessExec`; same constraint as row 12 |
+| 15 | tau-domain | package/capability.rs:149 | `AgentCapability` enum | C | rewrite body: show `CapabilityShape::AgentSpawn`; same constraint as row 12 |
+| 16 | tau-domain | package/capability.rs:175 | `SkillCapability` enum | C | rewrite body: show `CapabilityShape::SkillSpawn`; same constraint as row 12 |
+| 17 | tau-domain | package/manifest.rs:17 | `PackageDep` struct | C | rewrite body: show `PackageName` + `VersionReq` construction (field types); `PackageDep` is `#[non_exhaustive]` with no public constructor |
+| 18 | tau-domain | package/manifest.rs:45 | `PackageId` struct | B | replace `#[non_exhaustive]` struct literal with `PackageId::new()` constructor; flip to executed fence |
+| 19 | tau-domain | package/manifest.rs:507 | `UncheckedManifest::validate` | D | no_run; `UncheckedManifest` is `#[non_exhaustive]` with no public constructor; shows call shape with `unimplemented!()` placeholder |
+| 20 | tau-domain | package/plugin.rs:96 | `PluginKind` enum | A | flip to executed fence; `from_str` + `to_string` work from outside the crate |
+| 21 | tau-domain | package/plugin.rs:153 | `PluginManifest` struct | B | replace `toml::from_str` (requires serde feature) with `PluginManifest::new()` constructor; flip to executed fence |
 | 22 | tau-pkg | install.rs:152 | TBD-by-Task-6 | ? | classify in Task 6 |
 | 23 | tau-pkg | install.rs:769 | TBD-by-Task-6 | ? | classify in Task 6 |
 | 24 | tau-pkg | lockfile.rs:135 | TBD-by-Task-6 | ? | classify in Task 6 |
@@ -63,3 +63,4 @@
 - 2026-05-25 — rows 1, 2, 3 → activated (PR-A).
 - 2026-05-25 — row 4 → activated; rows 5+6 → no_run with hidden fixture (PR-B).
 - 2026-05-25 — rows 7, 8, 9 → activated (PR-C, established Runtime-flow fixture pattern via `tau_ports::fixtures::MockLlmBackend`).
+- 2026-05-25 — rows 10-21 → activated/no_run per row classification (PR-D).

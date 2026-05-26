@@ -71,24 +71,17 @@ pub enum MessagePayload {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // E0639: `#[non_exhaustive]` blocks struct-literal construction from
-/// // outside the crate. Internal callers (and the unit test in this
-/// // module) construct `Message { .. }` directly.
-/// use tau_domain::{Message, MessageId, Address, MessagePayload};
-/// use std::time::SystemTime;
-/// use std::collections::BTreeMap;
+/// ```
+/// use tau_domain::{Address, Message, MessagePayload};
 ///
-/// let m = Message {
-///     id: MessageId::new(),
-///     sender: Address::User,
-///     recipient: Address::System,
-///     parent_id: None,
-///     created_at: SystemTime::UNIX_EPOCH,
-///     headers: BTreeMap::new(),
-///     payload: MessagePayload::Text { content: "hello".into() },
-/// };
+/// // `Message` is `#[non_exhaustive]`; use `Message::new` to construct.
+/// let m = Message::new(
+///     Address::User,
+///     Address::System,
+///     MessagePayload::Text { content: "hello".into() },
+/// );
 /// assert!(matches!(m.payload, MessagePayload::Text { .. }));
+/// assert!(m.parent_id.is_none());
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
