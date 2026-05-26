@@ -1,6 +1,5 @@
 ---
 source: crates/tau-cli/tests/help_snapshots.rs
-assertion_line: 64
 expression: s
 ---
 Run pre-flight validation against the project (config, lockfile, packages, sandbox, plugins, skills). Aggregates existing validators into one CI/IDE-friendly verb
@@ -66,6 +65,11 @@ Options:
           - native:      Linux landlock + seccomp + namespaces
           - container:   Docker / Podman shell-out
           - passthrough: No isolation (explicit opt-out)
+
+      --otlp-endpoint <URL>
+          Export traces over OTLP/gRPC to this endpoint, e.g. `https://otel.example.com:4317`. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var. Auth + tenant headers come from `OTEL_EXPORTER_OTLP_HEADERS` (comma-separated `key=value` pairs). Requires the `otlp` cargo feature (on by default)
+          
+          [env: OTEL_EXPORTER_OTLP_ENDPOINT=]
 
   -h, --help
           Print help (see a summary with '-h')

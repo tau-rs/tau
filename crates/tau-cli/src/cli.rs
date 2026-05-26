@@ -60,6 +60,20 @@ pub struct Cli {
     /// with `--no-sandbox` if both set.
     #[arg(long, global = true, value_enum, conflicts_with = "no_sandbox")]
     pub sandbox: Option<SandboxKindArg>,
+
+    /// Export traces over OTLP/gRPC to this endpoint, e.g.
+    /// `https://otel.example.com:4317`. Falls back to
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` env var. Auth + tenant headers
+    /// come from `OTEL_EXPORTER_OTLP_HEADERS` (comma-separated
+    /// `key=value` pairs). Requires the `otlp` cargo feature (on by
+    /// default).
+    #[arg(
+        long,
+        env = "OTEL_EXPORTER_OTLP_ENDPOINT",
+        global = true,
+        value_name = "URL"
+    )]
+    pub otlp_endpoint: Option<String>,
 }
 
 /// CLI value for `--sandbox <kind>`. Maps to the resolver's adapter

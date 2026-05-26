@@ -70,5 +70,10 @@ Options:
           - container:   Docker / Podman shell-out
           - passthrough: No isolation (explicit opt-out)
 
+      --otlp-endpoint <URL>
+          Export traces over OTLP/gRPC to this endpoint, e.g. `https://otel.example.com:4317`. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var. Auth + tenant headers come from `OTEL_EXPORTER_OTLP_HEADERS` (comma-separated `key=value` pairs). Requires the `otlp` cargo feature (on by default)
+          
+          [env: OTEL_EXPORTER_OTLP_ENDPOINT=]
+
   -h, --help
           Print help (see a summary with '-h')
