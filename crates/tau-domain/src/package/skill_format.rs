@@ -27,6 +27,22 @@ use crate::package::{kinds, PackageKind, PackageManifest, PackageSource, Uncheck
 use crate::version::Version;
 
 /// Classification of a directory containing a skill package.
+///
+/// Returned by [`detect_format`]. Three variants cover all recognized and
+/// unrecognized skill directory shapes.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::SkillFormat;
+///
+/// // Variants are plain unit variants — construct them directly for
+/// // comparison in router / dispatch logic.
+/// let fmt = SkillFormat::Tau;
+/// assert_eq!(fmt, SkillFormat::Tau);
+/// assert_ne!(fmt, SkillFormat::Anthropic);
+/// assert_ne!(fmt, SkillFormat::Invalid);
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillFormat {
@@ -49,6 +65,21 @@ pub enum SkillFormat {
 /// This is a peek, not a full validation. Both Skills-2's
 /// `tau-pkg::install` and `tau skill import` re-read + validate
 /// the file contents after this dispatch.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::{detect_format, SkillFormat};
+/// use std::fs;
+///
+/// let dir = tempfile::tempdir().expect("create tempdir");
+/// fs::write(dir.path().join("tau.toml"), "name = \"x\"").expect("write");
+/// assert_eq!(detect_format(dir.path()), SkillFormat::Tau);
+///
+/// let dir2 = tempfile::tempdir().expect("create tempdir");
+/// // No recognized files → Invalid
+/// assert_eq!(detect_format(dir2.path()), SkillFormat::Invalid);
+/// ```
 pub fn detect_format(dir: &Path) -> SkillFormat {
     if dir.join("tau.toml").is_file() {
         SkillFormat::Tau

@@ -8,6 +8,24 @@ use crate::id::{AgentInstanceId, MessageId};
 use crate::value::Value;
 
 /// Sender or recipient of a [`Message`].
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::{Address, AgentInstanceId};
+///
+/// // A specific agent instance:
+/// let agent_addr = Address::Agent(AgentInstanceId::new());
+/// assert!(matches!(agent_addr, Address::Agent(_)));
+///
+/// // Well-known static addresses:
+/// assert!(matches!(Address::User, Address::User));
+/// assert!(matches!(Address::System, Address::System));
+///
+/// // Tool address:
+/// let tool_addr = Address::Tool("fs-read.read".into());
+/// assert!(matches!(tool_addr, Address::Tool(_)));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -25,6 +43,28 @@ pub enum Address {
 
 /// Message body. Typed variants for known shapes; `Custom` for
 /// plugin-specific.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::{MessagePayload, Value};
+///
+/// // Text payload (most common):
+/// let text = MessagePayload::Text { content: "Hello!".into() };
+/// assert!(matches!(text, MessagePayload::Text { .. }));
+///
+/// // Tool call payload:
+/// let call = MessagePayload::ToolCall { args: Value::Null };
+/// assert!(matches!(call, MessagePayload::ToolCall { .. }));
+///
+/// // Tool error payload:
+/// let err = MessagePayload::ToolError {
+///     kind: "not_found".into(),
+///     message: "file not found".into(),
+///     details: None,
+/// };
+/// assert!(matches!(err, MessagePayload::ToolError { ref kind, .. } if kind == "not_found"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

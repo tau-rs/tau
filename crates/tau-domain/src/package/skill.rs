@@ -39,6 +39,20 @@ pub const SKILL_DIR_VAR: &str = "${SKILL_DIR}";
 /// `content` defaults to `"SKILL.md"` (the canonical Anthropic skill
 /// content filename); `requires_tools` and `requires_skills` default
 /// to empty lists.
+///
+/// `SkillManifest` is `#[non_exhaustive]` — construction outside the crate
+/// requires the `serde` feature (TOML deserialization). The canonical path
+/// to a `SkillManifest` is through `UncheckedManifest::skill` after parsing.
+///
+/// # Example
+///
+/// ```no_run
+/// use tau_domain::{UncheckedManifest, SkillManifest};
+/// // Obtained by deserializing a tau.toml with a [skill] block:
+/// // let u: UncheckedManifest = toml::from_str(toml_str)?;
+/// // let skill: &SkillManifest = u.skill.as_ref().unwrap();
+/// # let _ = std::any::type_name::<SkillManifest>();
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -71,6 +85,20 @@ fn default_skill_content() -> String {
 /// format. Other frontmatter fields are tolerated and discarded
 /// in v1 — Skills-5 may surface them if Agent Skills spec compliance
 /// requires it.
+///
+/// `SkillFrontmatter` is `#[non_exhaustive]` — struct-literal construction
+/// is blocked across crate boundaries. Instances come from
+/// [`parse_skill_md`] (requires the `serde` feature).
+///
+/// # Example
+///
+/// ```no_run
+/// use tau_domain::{SkillFrontmatter, SkillContent};
+/// // Obtained by calling parse_skill_md (requires serde feature):
+/// // let content: SkillContent = tau_domain::parse_skill_md(raw_md)?;
+/// // assert_eq!(content.frontmatter.name, "critic");
+/// # let _ = std::any::type_name::<SkillFrontmatter>();
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -89,6 +117,20 @@ pub struct SkillFrontmatter {
 /// `body` is the verbatim text between the closing `---` frontmatter
 /// delimiter and end of file. Becomes the spawned child agent's
 /// `system_prompt` at runtime (Skills-4).
+///
+/// `SkillContent` is `#[non_exhaustive]` — struct-literal construction
+/// is blocked across crate boundaries. Instances come from
+/// [`parse_skill_md`] (requires the `serde` feature).
+///
+/// # Example
+///
+/// ```no_run
+/// use tau_domain::SkillContent;
+/// // Obtained by calling parse_skill_md (requires serde feature):
+/// // let content: SkillContent = tau_domain::parse_skill_md(raw_md)?;
+/// // assert_eq!(&content.body, "\nYou are a strict editor.\n");
+/// # let _ = std::any::type_name::<SkillContent>();
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -101,6 +143,20 @@ pub struct SkillContent {
 }
 
 /// Errors raised by [`parse_skill_md`].
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::{SkillContentError, SkillFormat};
+///
+/// // MissingFrontmatterOpener is returned when the file doesn't begin with `---`.
+/// let err = SkillContentError::MissingFrontmatterOpener;
+/// assert!(err.to_string().contains("---"));
+///
+/// // MissingName is returned when the YAML block has no `name` field.
+/// let err2 = SkillContentError::MissingName;
+/// assert!(err2.to_string().contains("name"));
+/// ```
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SkillContentError {

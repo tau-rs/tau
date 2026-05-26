@@ -80,6 +80,30 @@ impl<'de> serde::Deserialize<'de> for PackageSource {
 }
 
 /// Where a git repository lives. Two shapes because git itself accepts both.
+///
+/// Constructed via `PackageSource::from_str` (which parses the full
+/// `<location>#<rev>` form); the `location` field of the resulting
+/// `PackageSource::Git` variant is a `GitLocation`.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::{GitLocation, PackageSource};
+/// use std::str::FromStr;
+///
+/// // HTTPS URL form:
+/// let s = PackageSource::from_str("https://github.com/example/repo.git").expect("valid url");
+/// if let PackageSource::Git { location, rev } = s {
+///     assert!(matches!(location, GitLocation::Url(_)));
+///     assert!(rev.is_none());
+/// }
+///
+/// // scp-style form:
+/// let s2 = PackageSource::from_str("git@github.com:owner/repo.git").expect("valid scp");
+/// if let PackageSource::Git { location: loc2, .. } = s2 {
+///     assert!(matches!(loc2, GitLocation::Scp { .. }));
+/// }
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitLocation {
