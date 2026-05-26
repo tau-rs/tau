@@ -26,17 +26,7 @@ use crate::orchestration::run_state::RunState;
 pub struct BudgetWatchdog;
 
 impl BudgetWatchdog {
-    /// New watchdog.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use tau_runtime::orchestration::budget::BudgetWatchdog;
-    ///
-    /// let _watchdog = BudgetWatchdog::new();
-    /// // Stateless — construction always succeeds.
-    /// assert!(true, "BudgetWatchdog::new() never fails");
-    /// ```
+    /// New watchdog. Unit-struct constructor; covered by the struct-level fence.
     pub fn new() -> Self {
         Self
     }

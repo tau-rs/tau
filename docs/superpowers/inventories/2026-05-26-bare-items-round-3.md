@@ -14,6 +14,7 @@
 - **skip-alias**: `pub type X = Y`.
 - **skip-display / skip-debug**: `Display` / `Debug` impl.
 - **skip-marker**: marker trait or unit-struct sentinel.
+- **skip-needs-fixture**: item requires non-trivial test fixtures (real sandbox setup, env var injection, multi-thread coordination) that exceed reasonable doctest scope; deferred to future round.
 - **skip-reexport**: `pub use`.
 - **done**: already had a fence before round 3 began.
 
@@ -213,7 +214,7 @@
 | 11 | error.rs | `HandshakeFailureReason` (enum) | include | Enum with associated-data variants; §3.1. Fence constructs `Timeout` + `ProtocolVersionMismatch`. |
 | 12 | stream.rs | `RunEvent` (enum) | include | `#[non_exhaustive]` streaming event enum; §3.1. Fence shows pattern-match helper + `TextDelta` + `ToolCallStarted` construction. |
 | 13 | orchestration/budget.rs | `BudgetWatchdog` (struct) | include | Stateless watchdog; §3.1. Fence shows default-budget succeeds. |
-| 14 | orchestration/budget.rs | `BudgetWatchdog::new` | include | Constructor; §3.1. |
+| 14 | orchestration/budget.rs | `BudgetWatchdog::new` | skip-trivial | Unit-struct constructor; covered by struct-level fence (row 13). |
 | 15 | orchestration/budget.rs | `BudgetWatchdog::tick` | include | Method returning `Result`; §3.1. Fence shows within-budget + exceeded paths. |
 | 16 | orchestration/error.rs | `OrchestrationError` (enum) | include | Error enum with multiple variants; §3.1 error path. Fence shows `TaskNotFound` + `BudgetExceeded`. |
 | 17 | orchestration/persistence.rs | `run_log_path` | include | Free function; §3.1. Fence checks path shape. |
@@ -279,6 +280,46 @@
 | 77 | plugin_host | `IpcLlmBackend`, `IpcStorage`, `IpcTool`, `PluginProcess`, `DynAsyncWriter` | skip-feature-gated | Behind `test-support` feature. |
 | 78 | plugin_host | `drive_handshake` | skip-feature-gated | `__internals` re-export only; no public path. |
 | 79 | capability_override | `CapabilityOverride`, `EffectiveCapability`, `OverrideExpandError`, `compute_effective` | skip-reexport | Pure shim re-exporting from `tau_pkg::capability_override`. |
+| 80 | lib.rs:19 | `pub mod builder` | skip-trivial | Module declaration; no doctest surface. |
+| 81 | lib.rs:21 | `pub mod capability_override` | skip-trivial | Module declaration; no doctest surface. |
+| 82 | lib.rs:23 | `pub mod error` | skip-trivial | Module declaration; no doctest surface. |
+| 83 | lib.rs:24 | `pub mod options` | skip-trivial | Module declaration; no doctest surface. |
+| 84 | lib.rs:25 | `pub mod orchestration` | skip-trivial | Module declaration; no doctest surface. |
+| 85 | lib.rs:26 | `pub mod outcome` | skip-trivial | Module declaration; no doctest surface. |
+| 86 | lib.rs:27 | `pub mod plugin_host` | skip-trivial | Module declaration; no doctest surface. |
+| 87 | lib.rs:29 | `pub mod sandbox` | skip-trivial | Module declaration; no doctest surface. |
+| 88 | lib.rs:30 | `pub mod stream` | skip-trivial | Module declaration; no doctest surface. |
+| 89 | builder.rs:59 | `pub trait DynLlmBackend` | skip-marker | Internal object-safety wrapper trait; re-implemented via blanket impl; users implement `LlmBackend` from tau-ports, not this trait. |
+| 90 | builder.rs:100 | `pub trait DynTool` | skip-marker | Internal object-safety wrapper for `Tool`; same reasoning as `DynLlmBackend`. |
+| 91 | builder.rs:163 | `pub trait DynStorage` | skip-marker | Internal object-safety wrapper for `Storage`; same reasoning. |
+| 92 | builder.rs:244 | `pub trait DynSandbox` | skip-marker | Internal object-safety wrapper for `Sandbox`; same reasoning. |
+| 93 | builder.rs:314 | `pub struct Runtime` | skip-trivial | Struct itself has no public fields; constructed exclusively via `Runtime::builder()`; covered by rows 1–9 fences. |
+| 94 | error.rs:32 | `pub enum PluginKind` | skip-display | Simple tag enum; Display impl tested via `HandshakeFailureReason` + `RuntimeError` fences; no standalone behavior to demonstrate beyond `format!("{}", PluginKind::Tool)`. |
+| 95 | error.rs:197 | `pub enum RuntimeError` | skip-trivial | Error variants carry `std::io::Error` / `ExitStatus` — not constructible in a doctest without real plugin infrastructure; `CapabilityDenial` (row 10) and `HandshakeFailureReason` (row 11) cover the constructible error-surface. |
+| 96 | orchestration/mod.rs:19 | `pub mod budget` | skip-trivial | Module declaration; no doctest surface. |
+| 97 | orchestration/mod.rs:20 | `pub mod error` | skip-trivial | Module declaration; no doctest surface. |
+| 98 | orchestration/mod.rs:21 | `pub mod persistence` | skip-trivial | Module declaration; no doctest surface. |
+| 99 | orchestration/mod.rs:22 | `pub mod run_state` | skip-trivial | Module declaration; no doctest surface. |
+| 100 | orchestration/mod.rs:23 | `pub mod skill_resolve` | skip-trivial | Module declaration; no doctest surface. |
+| 101 | orchestration/mod.rs:24 | `pub mod task_list` | skip-trivial | Module declaration; no doctest surface. |
+| 102 | orchestration/mod.rs:25 | `pub mod trace` | skip-trivial | Module declaration; no doctest surface. |
+| 103 | orchestration/mod.rs:26 | `pub mod virtual_tools` | skip-trivial | Module declaration; no doctest surface. |
+| 104 | orchestration/task_list.rs:11 | `pub const DEFAULT_LEASE: Duration` | skip-trivial | Duration constant (5 min); value documented in prose; no behavior to demonstrate. |
+| 105 | orchestration/trace.rs:17 | `pub type TraceSubscriber` | skip-alias | `pub type X = Y`; alias for `mpsc::UnboundedSender<TraceEvent>`; exercised by `TraceStream::subscribe` fence (row 44). |
+| 106 | orchestration/skill_resolve.rs:282 | `pub fn resolve_skill_for_spawn` | skip-needs-fixture | Requires a real filesystem-backed `Scope` (reads installed skill directory); deferred to future round. |
+| 107 | sandbox/mod.rs:3 | `pub mod passthrough` | skip-trivial | Module declaration; no doctest surface. |
+| 108 | sandbox/mod.rs:5 | `pub mod registry` | skip-trivial | Module declaration; no doctest surface. |
+| 109 | sandbox/mod.rs:6 | `pub mod resolution_error` | skip-trivial | Module declaration; no doctest surface. |
+| 110 | sandbox/mod.rs:7 | `pub mod resolver` | skip-trivial | Module declaration; no doctest surface. |
+| 111 | sandbox/mod.rs:18 | `pub mod target_match` | skip-trivial | Module declaration; no doctest surface. |
+| 112 | sandbox/registry.rs:149 | `pub struct AdapterRegistration` | skip-trivial | No public constructor; instances exist only as static registry entries (`REGISTRY`); all fields are readable but the struct is only meaningful in context of the registry; covered by `PlatformSet::includes` (row 55) and `RegistryKind::name` (row 57) fences. |
+| 113 | sandbox/plan.rs:25 | `pub fn build_plan(...)` | include | Free function returning `Result`; §3.1. Fence constructs minimal `Capability` slice + empty override, asserts `plan.capabilities.len()`. |
+| 114 | sandbox/resolver.rs:284 | `pub fn instantiate_for_probe(kind)` | skip-needs-fixture | Probes the real sandbox adapter stack (feature-dependent: NativeSandbox on Linux, DarwinSandbox on macOS, WindowsSandbox on Windows); result varies by OS and privilege; deferred to future round. |
+| 115 | sandbox/resolver.rs:332 | `pub async fn resolve_adapter(...)` | skip-needs-fixture | Reads `TAU_TESTING_ALLOW_MOCK_SANDBOX` env var + invokes the full filter pipeline; requires real platform detection and optional sandbox probes; deferred to future round. |
+| 116 | sandbox/resolver.rs:520 | `pub async fn resolve_strict_for_validation()` | skip-needs-fixture | Calls `resolve_adapter` with a strict-tier requirements object; same OS/fixture dependency; deferred. |
+| 117 | sandbox/resolver.rs:588 | `pub async fn resolve_adapter_forced(kind)` | skip-needs-fixture | Bypasses the filter pipeline but still instantiates the real adapter; same fixture dependency; deferred. |
+| 118 | orchestration/persistence.rs:76 | `pub fn spawn_writer(path, rx)` | skip-needs-fixture | Spawns a tokio task writing to a real filesystem path; requires a running tokio runtime + tempdir; comprehensive `#[tokio::test]` coverage already in `persistence.rs`. |
+| 119 | orchestration/persistence.rs:123 | `pub async fn replay(path)` | skip-needs-fixture | Reads from a real filesystem JSONL path; requires a pre-written file and a running tokio runtime; comprehensive `#[tokio::test]` coverage already in `persistence.rs`. |
 
 ## Status log
 
@@ -287,3 +328,4 @@
 - 2026-05-26 — tau-plugin-sdk classifications + 14 includes (PR-B).
 - 2026-05-26 — tau-domain classifications + 17 includes (PR-C).
 - 2026-05-26 — tau-runtime classifications + 69 includes (PR-D); 74 doctests passing, 0 failed; added `CapabilityDenial::new()` constructor + re-exported `Direction` from plugin_host; fixed `SandboxValidationError` + `validate_plan_against_adapter` import paths; corrected `TraceEventKind::RunStarted` → `Turn` variant.
+- 2026-05-26 — PR-D spec-review fix: (1) added 40 missing inventory rows (rows 80–119): lib.rs/orchestration/sandbox pub mod declarations → skip-trivial; DynLlmBackend/DynTool/DynStorage/DynSandbox → skip-marker; Runtime struct → skip-trivial; PluginKind/RuntimeError → skip-trivial; DEFAULT_LEASE → skip-trivial; TraceSubscriber → skip-alias; resolve_skill_for_spawn → skip-needs-fixture; AdapterRegistration → skip-trivial; build_plan → include (fence added); resolver async fns + persistence spawn_writer/replay → skip-needs-fixture; (2) BudgetWatchdog::new downgraded from include to skip-trivial (tautological assert removed); (3) added skip-needs-fixture category; 73 doctests passing, 0 failed.

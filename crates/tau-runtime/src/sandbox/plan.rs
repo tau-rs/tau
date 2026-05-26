@@ -22,6 +22,20 @@ use crate::capability_override::{CapabilityOverride, OverrideExpandError};
 ///    shape-relevant).
 /// 3. Constructs and returns a [`SandboxPlan`] with the resulting capability
 ///    list, `working_context`, and `limits` threaded through unchanged.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::Capability;
+/// use tau_runtime::sandbox::build_plan;
+///
+/// let cap: Capability = serde_json::from_str(r#"{"kind":"fs.read","paths":["/data/**"]}"#)
+///     .expect("valid capability JSON");
+/// let plan = build_plan(&[cap], &[], None, None).expect("build_plan succeeds with no override");
+/// assert_eq!(plan.capabilities.len(), 1);
+/// assert!(plan.context.is_none());
+/// assert!(plan.limits.is_none());
+/// ```
 pub fn build_plan(
     package_caps: &[Capability],
     project_override: &[CapabilityOverride],
