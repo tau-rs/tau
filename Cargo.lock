@@ -3562,6 +3562,7 @@ dependencies = [
  "opentelemetry_sdk",
  "serde_json",
  "tau-domain",
+ "tau-workflow",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

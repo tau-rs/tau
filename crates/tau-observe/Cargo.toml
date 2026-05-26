@@ -35,6 +35,16 @@ tonic                 = { version = "0.9", default-features = false, optional = 
 # `opentelemetry 0.21` family above.
 opentelemetry-stdout = { version = "0.2", features = ["trace"] }
 tempfile             = { workspace = true }
+# `tokio::test` + the polling helper in `tests/layer_format_compat.rs`
+# need the macros + multi-thread runtime + time features. The
+# production-side `tokio` line above sticks to `["fs", "sync"]`; Cargo
+# unions the feature sets in tests.
+tokio                = { workspace = true, features = ["fs", "sync", "macros", "rt", "rt-multi-thread", "time"] }
+# Byte-identical output assertions in `tests/layer_format_compat.rs`
+# construct a `StepRecord` and round-trip the layer's JSONL through
+# serde. Dev-dep cycle (tau-workflow already depends on tau-observe)
+# is allowed by Cargo for `[dev-dependencies]`.
+tau-workflow         = { workspace = true }
 
 [features]
 default = []
