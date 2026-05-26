@@ -44,10 +44,28 @@ impl Default for FramerOptions {
 ///
 /// # Example
 ///
+/// Round-trip a single MessagePack frame through a `tokio::io::duplex` pair:
+///
 /// ```
-/// use tau_plugin_protocol::{FramedReader, FramerOptions};
-/// // tokio::io::empty() is a zero-byte reader that satisfies AsyncRead + Unpin.
-/// let _reader = FramedReader::new(tokio::io::empty(), FramerOptions::default());
+/// # tokio_test::block_on(async {
+/// use tau_plugin_protocol::{Frame, FramedReader, FramedWriter, FramerOptions};
+///
+/// let (rx, tx) = tokio::io::duplex(64);
+/// let mut writer = FramedWriter::new(tx);
+/// let mut reader = FramedReader::new(rx, FramerOptions::default());
+///
+/// let frame = Frame::Notification {
+///     method: "stream.chunk".into(),
+///     params: vec![0x90], // empty MessagePack array
+/// };
+/// let bytes = frame.clone().encode().expect("encode should succeed");
+/// writer.write_frame(&bytes).await.expect("write_frame should succeed");
+/// drop(writer); // EOF the reader's stream
+///
+/// let raw = reader.next_frame().await.expect("read should succeed").expect("frame present");
+/// let decoded = Frame::decode(&raw).expect("decode should succeed");
+/// assert_eq!(decoded, frame);
+/// # });
 /// ```
 pub struct FramedReader<R> {
     inner: R,
@@ -102,10 +120,27 @@ where
 ///
 /// # Example
 ///
+/// Write a frame into a duplex pair and confirm the raw bytes arrive:
+///
 /// ```
-/// use tau_plugin_protocol::FramedWriter;
-/// // tokio::io::sink() discards all bytes; satisfies AsyncWrite + Unpin.
-/// let _writer = FramedWriter::new(tokio::io::sink());
+/// # tokio_test::block_on(async {
+/// use tau_plugin_protocol::{Frame, FramedReader, FramedWriter, FramerOptions};
+///
+/// let (rx, tx) = tokio::io::duplex(64);
+/// let mut writer = FramedWriter::new(tx);
+/// let mut reader = FramedReader::new(rx, FramerOptions::default());
+///
+/// let frame = Frame::Notification {
+///     method: "stream.chunk".into(),
+///     params: vec![0x90], // empty MessagePack array
+/// };
+/// let bytes = frame.clone().encode().expect("encode should succeed");
+/// writer.write_frame(&bytes).await.expect("write_frame should succeed");
+/// drop(writer); // EOF the reader's stream
+///
+/// let raw = reader.next_frame().await.expect("read should succeed").expect("frame present");
+/// assert_eq!(raw, bytes);
+/// # });
 /// ```
 pub struct FramedWriter<W> {
     inner: W,
