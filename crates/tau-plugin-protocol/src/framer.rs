@@ -41,6 +41,14 @@ impl Default for FramerOptions {
 }
 
 /// Async reader for length-prefixed MessagePack frames.
+///
+/// # Example
+///
+/// ```
+/// use tau_plugin_protocol::{FramedReader, FramerOptions};
+/// // tokio::io::empty() is a zero-byte reader that satisfies AsyncRead + Unpin.
+/// let _reader = FramedReader::new(tokio::io::empty(), FramerOptions::default());
+/// ```
 pub struct FramedReader<R> {
     inner: R,
     options: FramerOptions,
@@ -91,6 +99,14 @@ where
 }
 
 /// Async writer for length-prefixed MessagePack frames.
+///
+/// # Example
+///
+/// ```
+/// use tau_plugin_protocol::FramedWriter;
+/// // tokio::io::sink() discards all bytes; satisfies AsyncWrite + Unpin.
+/// let _writer = FramedWriter::new(tokio::io::sink());
+/// ```
 pub struct FramedWriter<W> {
     inner: W,
 }
