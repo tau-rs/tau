@@ -147,7 +147,7 @@ pub struct SkillContent {
 /// # Example
 ///
 /// ```
-/// use tau_domain::{SkillContentError, SkillFormat};
+/// use tau_domain::SkillContentError;
 ///
 /// // MissingFrontmatterOpener is returned when the file doesn't begin with `---`.
 /// let err = SkillContentError::MissingFrontmatterOpener;

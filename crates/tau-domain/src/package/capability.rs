@@ -341,6 +341,22 @@ impl Capability {
     /// The [`CapabilityShape`] this capability requires from a sandbox
     /// adapter. Used by `tau-runtime`'s validation layer to cross-check
     /// plan-required shapes against adapter-supported shapes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_domain::{Capability, CapabilityShape};
+    /// use std::collections::BTreeMap;
+    ///
+    /// let cap = Capability::Custom {
+    ///     name: "my.tool".into(),
+    ///     params: BTreeMap::new(),
+    /// };
+    /// assert_eq!(
+    ///     cap.required_shape(),
+    ///     CapabilityShape::Custom { name: "my.tool".into() },
+    /// );
+    /// ```
     pub fn required_shape(&self) -> CapabilityShape {
         match self {
             Capability::Filesystem(FsCapability::Read { .. }) => CapabilityShape::FilesystemRead,
