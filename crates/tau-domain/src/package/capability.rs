@@ -275,6 +275,23 @@ pub enum CapabilityShape {
 /// A set of [`CapabilityShape`]s, used by adapters to declare what they support
 /// and by the runtime to declare what a plan requires. Subset / membership
 /// queries are O(n) where n is the set size; we expect at most ~6 entries.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::{CapabilityShape, CapabilityShapeSet};
+///
+/// let mut adapter = CapabilityShapeSet::new();
+/// adapter.insert(CapabilityShape::FilesystemRead);
+/// adapter.insert(CapabilityShape::NetworkHttp);
+///
+/// let mut plan = CapabilityShapeSet::new();
+/// plan.insert(CapabilityShape::FilesystemRead);
+///
+/// assert!(plan.is_subset_of(&adapter));
+/// assert!(adapter.contains(&CapabilityShape::NetworkHttp));
+/// assert_eq!(adapter.len(), 2);
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CapabilityShapeSet {

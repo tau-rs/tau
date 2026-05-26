@@ -131,6 +131,16 @@ pub enum PackageSourceError {
 }
 
 /// Validation errors for [`crate::package::PackageKind`].
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::PackageKindError;
+///
+/// // Empty is the only variant at v0.1.
+/// let err = PackageKindError::Empty;
+/// assert!(err.to_string().contains("empty"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PackageKindError {
@@ -144,6 +154,21 @@ pub enum PackageKindError {
 /// Composes leaf errors (`PackageNameError`, `PackageSourceError`,
 /// `PackageKindError`) via `#[from]` for the first occurrence and
 /// `#[source]` for repeated uses.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::PackageManifestError;
+///
+/// // EmptyDescription is returned when the `description` field is blank.
+/// let err = PackageManifestError::EmptyDescription;
+/// assert!(err.to_string().contains("description"));
+///
+/// // CapabilityEmptyName is returned when a Custom capability has no name.
+/// let err2 = PackageManifestError::CapabilityEmptyName { index: 0 };
+/// assert!(err2.to_string().contains("capability"));
+/// assert!(err2.to_string().contains('0'.to_string().as_str()));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PackageManifestError {

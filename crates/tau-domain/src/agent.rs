@@ -190,12 +190,60 @@ impl AgentDefinition {
     }
 
     /// Set `system_prompt`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_domain::{AgentDefinition, AgentId, PackageId, PackageName, Version};
+    /// use std::str::FromStr;
+    ///
+    /// let def = AgentDefinition::new(
+    ///     AgentId::from_str("assistant").expect("valid id"),
+    ///     "Assistant".into(),
+    ///     PackageId::new(
+    ///         PackageName::from_str("assistant-pkg").expect("valid name"),
+    ///         Version::parse("0.1.0").expect("valid version"),
+    ///     ),
+    ///     PackageName::from_str("claude-anthropic").expect("valid name"),
+    /// )
+    /// .with_system_prompt("You are a helpful assistant.".into());
+    /// assert_eq!(
+    ///     def.system_prompt.as_deref(),
+    ///     Some("You are a helpful assistant."),
+    /// );
+    /// ```
     pub fn with_system_prompt(mut self, prompt: String) -> Self {
         self.system_prompt = Some(prompt);
         self
     }
 
     /// Set `config`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_domain::{AgentDefinition, AgentId, PackageId, PackageName, Value, Version};
+    /// use std::collections::BTreeMap;
+    /// use std::str::FromStr;
+    ///
+    /// let mut cfg = BTreeMap::new();
+    /// cfg.insert("model".into(), Value::String("claude-opus-4".into()));
+    ///
+    /// let def = AgentDefinition::new(
+    ///     AgentId::from_str("analyst").expect("valid id"),
+    ///     "Analyst".into(),
+    ///     PackageId::new(
+    ///         PackageName::from_str("analyst-pkg").expect("valid name"),
+    ///         Version::parse("0.1.0").expect("valid version"),
+    ///     ),
+    ///     PackageName::from_str("claude-anthropic").expect("valid name"),
+    /// )
+    /// .with_config(cfg);
+    /// assert_eq!(
+    ///     def.config.get("model").and_then(|v| v.as_string()),
+    ///     Some("claude-opus-4"),
+    /// );
+    /// ```
     pub fn with_config(mut self, config: BTreeMap<String, Value>) -> Self {
         self.config = config;
         self

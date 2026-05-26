@@ -50,6 +50,22 @@ pub struct PluginSandboxRequirements {
 /// `tau-domain` free of `tau-pkg` dependencies.
 ///
 /// The runtime maps `PluginRequiredTier` to `tau_ports::SandboxTier`.
+///
+/// Variants implement `PartialOrd`/`Ord` in ascending tier order:
+/// `None < Light < Strict`.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::PluginRequiredTier;
+///
+/// assert!(PluginRequiredTier::None < PluginRequiredTier::Light);
+/// assert!(PluginRequiredTier::Light < PluginRequiredTier::Strict);
+/// assert_eq!(
+///     PluginRequiredTier::Strict.max(PluginRequiredTier::Light),
+///     PluginRequiredTier::Strict,
+/// );
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

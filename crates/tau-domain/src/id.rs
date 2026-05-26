@@ -255,6 +255,19 @@ impl AgentInstanceId {
     }
 
     /// Wrap an existing `Uuid`.
+    ///
+    /// Useful when deserializing a stored identifier back into the typed
+    /// wrapper, or when composing identifiers in cross-crate tests.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_domain::{AgentInstanceId, Uuid};
+    ///
+    /// let u = Uuid::now_v7();
+    /// let id = AgentInstanceId::from_uuid(u);
+    /// assert_eq!(id.as_uuid(), u);
+    /// ```
     pub fn from_uuid(u: uuid::Uuid) -> Self {
         Self(u)
     }
@@ -307,6 +320,19 @@ impl MessageId {
     }
 
     /// Wrap an existing `Uuid`.
+    ///
+    /// Useful when deserializing a stored identifier back into the typed
+    /// wrapper, or when composing message chains in cross-crate tests.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_domain::{MessageId, Uuid};
+    ///
+    /// let u = Uuid::now_v7();
+    /// let id = MessageId::from_uuid(u);
+    /// assert_eq!(id.as_uuid(), u);
+    /// ```
     pub fn from_uuid(u: uuid::Uuid) -> Self {
         Self(u)
     }
