@@ -128,14 +128,13 @@ pub async fn run(
             .unwrap_or(0)
     );
     let trace_context = TraceContext::new(run_id, args.agent_id.clone(), "root".to_string());
-    let (host_options, _ledger) = plugin_loader::build_host_options(
+    let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
         force_passthrough,
         force_adapter_kind,
     );
 
     let loaded = plugin_loader::load_plugins(entry, &scope, trace_context, host_options).await?;
-    let recorder_ledger = loaded.recorder_ledger.clone();
 
     let runtime = loaded
         .builder
@@ -201,7 +200,7 @@ pub async fn run(
             .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
 
         drop(runtime_arc);
-        plugin_loader::flush_recorders(recorder_ledger).await;
+        plugin_loader::flush_recorders().await;
 
         // Print snapshot summary. Live trace rendering is deferred;
         // v1 reads the JSONL log post-hoc. Stats are empty here because
@@ -226,7 +225,7 @@ pub async fn run(
         let result =
             run_streaming_path(&runtime, agent_def, manifest, initial, options, output).await;
         drop(runtime);
-        plugin_loader::flush_recorders(recorder_ledger).await;
+        plugin_loader::flush_recorders().await;
         result
     } else {
         let run_outcome = runtime.run(agent_def, manifest, initial, options).await;
@@ -236,7 +235,7 @@ pub async fn run(
         // task has completed, so `flush_recorders` drains a quiescent set
         // of file buffers rather than racing with in-flight `record(...)`.
         drop(runtime);
-        plugin_loader::flush_recorders(recorder_ledger).await;
+        plugin_loader::flush_recorders().await;
 
         let outcome = run_outcome.context("running agent")?;
 

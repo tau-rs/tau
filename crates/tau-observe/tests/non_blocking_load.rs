@@ -38,6 +38,7 @@ fn producer_latency_stays_within_budget() {
         non_blocking: true,
         file_path: Some(log_path.clone()),
         rotation: Rotation::Never,
+        extra_layers: Vec::new(),
         #[cfg(feature = "otlp")]
         otlp: None,
     };
