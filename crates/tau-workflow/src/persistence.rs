@@ -246,11 +246,7 @@ mod tests {
     /// layer's writes are fire-and-forget `tokio::spawn` tasks, so
     /// deterministic observation requires polling — a fixed sleep races
     /// under CI load + slow fsync.
-    async fn await_layer_flush(
-        path: &Path,
-        expected_records: usize,
-        timeout: std::time::Duration,
-    ) {
+    async fn await_layer_flush(path: &Path, expected_records: usize, timeout: std::time::Duration) {
         let start = std::time::Instant::now();
         loop {
             // `replay` tolerates a partial trailing line, so it only
