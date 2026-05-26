@@ -142,6 +142,19 @@ pub struct BundleEffectiveCapabilities {
 
 impl BundleEffectiveCapabilities {
     /// True when every list is empty (the table can be omitted entirely).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::bundle::manifest::BundleEffectiveCapabilities;
+    ///
+    /// let caps = BundleEffectiveCapabilities::default();
+    /// assert!(caps.is_empty());
+    ///
+    /// let mut caps2 = BundleEffectiveCapabilities::default();
+    /// caps2.allow_fs_read.push("/proj/**".to_string());
+    /// assert!(!caps2.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.allow_fs_read.is_empty()
             && self.deny_fs_read.is_empty()
@@ -158,6 +171,30 @@ impl BundleEffectiveCapabilities {
 
 impl BundleManifest {
     /// Parse a bundle manifest from a TOML string.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::bundle::manifest::BundleManifest;
+    ///
+    /// let toml = r#"
+    /// schema_version = 1
+    ///
+    /// [bundle]
+    /// sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+    /// created_at = "2026-01-01T00:00:00Z"
+    /// tau_version = "0.1.0"
+    /// target = "passthrough"
+    ///
+    /// [project]
+    /// name = "my-bot"
+    /// version = "0.1.0"
+    /// tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    /// "#;
+    /// let manifest = BundleManifest::parse_str(toml).expect("valid bundle TOML");
+    /// assert_eq!(manifest.project.name, "my-bot");
+    /// assert_eq!(manifest.schema_version, 1);
+    /// ```
     pub fn parse_str(s: &str) -> Result<Self, BundleParseError> {
         let manifest: BundleManifest = toml::from_str(s)?;
         if manifest.schema_version != 1 {
@@ -182,12 +219,59 @@ impl BundleManifest {
     /// Emit the canonical-TOML serialization of this manifest. See
     /// `crate::bundle::canonical::to_canonical_toml` for the format
     /// specification.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::bundle::manifest::BundleManifest;
+    ///
+    /// # let toml = r#"
+    /// # schema_version = 1
+    /// # [bundle]
+    /// # sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+    /// # created_at = "2026-01-01T00:00:00Z"
+    /// # tau_version = "0.1.0"
+    /// # target = "passthrough"
+    /// # [project]
+    /// # name = "bot"
+    /// # version = "0.1.0"
+    /// # tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    /// # "#;
+    /// # let manifest = BundleManifest::parse_str(toml).unwrap();
+    /// let canonical = manifest.to_canonical_toml();
+    /// assert!(canonical.contains("schema_version = 1"));
+    /// assert!(canonical.contains("[bundle]"));
+    /// assert!(canonical.contains("[project]"));
+    /// ```
     pub fn to_canonical_toml(&self) -> String {
         crate::bundle::canonical::to_canonical_toml(self)
     }
 
     /// Compute the canonical self-hash of this manifest. Does not mutate.
     /// See `crate::bundle::hash::compute_self_hash`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::bundle::manifest::BundleManifest;
+    ///
+    /// # let toml = r#"
+    /// # schema_version = 1
+    /// # [bundle]
+    /// # sha256 = ""
+    /// # created_at = "2026-01-01T00:00:00Z"
+    /// # tau_version = "0.1.0"
+    /// # target = "passthrough"
+    /// # [project]
+    /// # name = "bot"
+    /// # version = "0.1.0"
+    /// # tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    /// # "#;
+    /// # let manifest = BundleManifest::parse_str(toml).unwrap();
+    /// let hash = manifest.compute_self_hash();
+    /// assert_eq!(hash.len(), 64);
+    /// assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    /// ```
     pub fn compute_self_hash(&self) -> String {
         crate::bundle::hash::compute_self_hash(self)
     }
@@ -195,6 +279,33 @@ impl BundleManifest {
     /// Verify that this manifest's `bundle.sha256` field equals the
     /// recomputed canonical self-hash. See
     /// `crate::bundle::hash::verify_self_hash`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::bundle::manifest::BundleManifest;
+    ///
+    /// # let toml = r#"
+    /// # schema_version = 1
+    /// # [bundle]
+    /// # sha256 = ""
+    /// # created_at = "2026-01-01T00:00:00Z"
+    /// # tau_version = "0.1.0"
+    /// # target = "passthrough"
+    /// # [project]
+    /// # name = "bot"
+    /// # version = "0.1.0"
+    /// # tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    /// # "#;
+    /// # let mut manifest = BundleManifest::parse_str(toml).unwrap();
+    /// // Fill the sha256 with the correct self-hash, then verify.
+    /// manifest.bundle.sha256 = manifest.compute_self_hash();
+    /// assert!(manifest.verify_self_hash().is_ok());
+    ///
+    /// // Tamper with the hash → mismatch.
+    /// manifest.bundle.sha256 = "wrong".to_string();
+    /// assert!(manifest.verify_self_hash().is_err());
+    /// ```
     pub fn verify_self_hash(&self) -> Result<(), crate::bundle::error::BundleIntegrityError> {
         crate::bundle::hash::verify_self_hash(self)
     }

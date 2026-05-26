@@ -1,6 +1,17 @@
 //! Error types for bundle parsing, IO, and integrity checks.
 
 /// Errors raised when parsing bundle TOML.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::bundle::error::BundleParseError;
+///
+/// let err = BundleParseError::UnsupportedSchemaVersion { found: 99 };
+/// let display = format!("{err}");
+/// assert!(display.contains("99"));
+/// assert!(display.contains("unsupported"));
+/// ```
 #[derive(Debug, thiserror::Error)]
 pub enum BundleParseError {
     /// Underlying TOML syntax/schema error.
@@ -31,6 +42,23 @@ pub enum BundleIoError {
 }
 
 /// Errors raised when verifying a bundle's self-hash. Used by Task 3.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::bundle::error::BundleIntegrityError;
+///
+/// let err = BundleIntegrityError::HashFieldEmpty;
+/// let display = format!("{err}");
+/// assert!(display.contains("empty"));
+///
+/// let err2 = BundleIntegrityError::HashMismatch {
+///     claimed: "aaaa".to_string(),
+///     computed: "bbbb".to_string(),
+/// };
+/// let display2 = format!("{err2}");
+/// assert!(display2.contains("mismatch"));
+/// ```
 #[derive(Debug, thiserror::Error)]
 pub enum BundleIntegrityError {
     /// `bundle.sha256` does not match the recomputed canonical-TOML SHA-256.

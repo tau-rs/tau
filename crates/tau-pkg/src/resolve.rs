@@ -28,6 +28,21 @@ use crate::source_list::{list_versions_at_source, SourceListError};
 /// into [`resolve_requires_tools`] as `(AgentId, RequiredTool)` pairs.
 ///
 /// `#[non_exhaustive]`: external callers must use [`RequiredTool::new`].
+///
+/// # Example
+///
+/// ```
+/// use std::str::FromStr;
+/// use semver::VersionReq;
+/// use tau_domain::{PackageName, PackageSource};
+/// use tau_pkg::resolve::RequiredTool;
+///
+/// let name = PackageName::from_str("fs-read").expect("valid name");
+/// let source = PackageSource::from_str("https://example.com/fs-read.git").expect("valid source");
+/// let version_req = VersionReq::parse("^0.1").expect("valid req");
+/// let tool = RequiredTool::new(name, source, version_req);
+/// assert_eq!(tool.name.as_str(), "fs-read");
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct RequiredTool {
@@ -52,6 +67,16 @@ impl RequiredTool {
 }
 
 /// Output of [`resolve_requires_tools`].
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::resolve::ResolutionPlan;
+///
+/// let plan = ResolutionPlan::default();
+/// assert!(plan.installs.is_empty());
+/// assert!(plan.reuses.is_empty());
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct ResolutionPlan {
@@ -86,6 +111,20 @@ pub struct ReusedInstall {
 }
 
 /// Errors returned by [`resolve_requires_tools`].
+///
+/// # Example
+///
+/// ```
+/// use std::str::FromStr;
+/// use tau_domain::PackageName;
+/// use tau_pkg::resolve::ResolveError;
+///
+/// let err = ResolveError::Registry(tau_pkg::error::RegistryError::Parse {
+///     reason: "unexpected EOF".to_string(),
+/// });
+/// let display = format!("{err}");
+/// assert!(display.contains("reading lockfile"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {

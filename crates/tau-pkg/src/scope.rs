@@ -48,6 +48,16 @@ pub enum ScopeKind {
 /// Replaces the schema-v2 `SandboxConfig` (which used `chain` +
 /// `minimum_tier`). v2 configs auto-migrate at load time with a
 /// `tracing::warn!`. See [`deserialize_sandbox_with_migration`].
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::scope::{SandboxRequirements, SandboxRequiredTier};
+///
+/// let req = SandboxRequirements::with_tier(SandboxRequiredTier::Light);
+/// assert_eq!(req.required_tier, SandboxRequiredTier::Light);
+/// assert!(req.required_shapes.is_empty());
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct SandboxRequirements {
@@ -77,6 +87,20 @@ impl SandboxRequirements {
 /// `tau_ports::SandboxTier` but lives at the config layer (we don't
 /// depend on tau-ports from tau-pkg). The runtime maps these to
 /// `SandboxTier`.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::scope::SandboxRequiredTier;
+///
+/// // Tier ordering: None < Light < Strict.
+/// assert!(SandboxRequiredTier::None < SandboxRequiredTier::Light);
+/// assert!(SandboxRequiredTier::Light < SandboxRequiredTier::Strict);
+///
+/// let tiers = [SandboxRequiredTier::Strict, SandboxRequiredTier::None];
+/// let max = tiers.iter().max().copied().unwrap();
+/// assert_eq!(max, SandboxRequiredTier::Strict);
+/// ```
 #[non_exhaustive]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
@@ -215,6 +239,17 @@ pub struct ScopeConfig {
 impl ScopeConfig {
     /// Construct a new `ScopeConfig` with the current time, the current
     /// crate version, schema version 3, and default sandbox requirements.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::scope::{ScopeConfig, ScopeKind};
+    ///
+    /// let cfg = ScopeConfig::new(ScopeKind::Project);
+    /// assert_eq!(cfg.kind, ScopeKind::Project);
+    /// assert_eq!(cfg.schema_version, 3);
+    /// assert!(cfg.defaults.is_empty());
+    /// ```
     pub fn new(kind: ScopeKind) -> Self {
         Self {
             schema_version: MAX_SUPPORTED_SCOPE_CONFIG_SCHEMA_VERSION,
@@ -228,6 +263,22 @@ impl ScopeConfig {
 
     /// Parse a `ScopeConfig` from a TOML string. Validates
     /// `schema_version` against [`MAX_SUPPORTED_SCOPE_CONFIG_SCHEMA_VERSION`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::scope::{ScopeConfig, ScopeKind};
+    ///
+    /// let toml = r#"
+    /// schema_version = 3
+    /// kind = "global"
+    /// created_at = "2026-01-01T00:00:00Z"
+    /// created_by_tau_version = "0.1.0"
+    /// "#;
+    /// let cfg = ScopeConfig::read_from_str(toml).expect("valid config");
+    /// assert_eq!(cfg.kind, ScopeKind::Global);
+    /// assert_eq!(cfg.schema_version, 3);
+    /// ```
     pub fn read_from_str(text: &str) -> Result<Self, ScopeError> {
         let mut cfg: Self = toml::from_str(text).map_err(|e| ScopeError::ConfigParse {
             reason: e.to_string(),
@@ -247,6 +298,17 @@ impl ScopeConfig {
     }
 
     /// Serialize the config as TOML.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::scope::{ScopeConfig, ScopeKind};
+    ///
+    /// let cfg = ScopeConfig::new(ScopeKind::Global);
+    /// let toml = cfg.to_toml_string().expect("serialize ScopeConfig");
+    /// assert!(toml.contains("schema_version"));
+    /// assert!(toml.contains("kind = \"global\""));
+    /// ```
     pub fn to_toml_string(&self) -> Result<String, ScopeError> {
         toml::to_string_pretty(self).map_err(|e| ScopeError::Internal {
             message: format!("config TOML serialization: {e}"),
@@ -490,6 +552,23 @@ impl Scope {
 
     /// Returns the path to a specific package version:
     /// `<state_path>/packages/<name>/<version>`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::str::FromStr;
+    /// use tau_pkg::scope::{Scope, ScopeKind};
+    /// use tau_domain::PackageName;
+    ///
+    /// # let tmp = tempfile::tempdir().expect("tempdir");
+    /// let scope = Scope::new_project(tmp.path()).expect("new_project");
+    /// let name = PackageName::from_str("my-pkg").expect("valid name");
+    /// let version = semver::Version::parse("0.1.0").expect("valid version");
+    /// let dir = scope.package_dir(&name, &version);
+    /// assert!(dir.starts_with(tmp.path()));
+    /// assert!(dir.to_string_lossy().contains("my-pkg"));
+    /// assert!(dir.to_string_lossy().contains("0.1.0"));
+    /// ```
     pub fn package_dir(
         &self,
         name: &tau_domain::PackageName,

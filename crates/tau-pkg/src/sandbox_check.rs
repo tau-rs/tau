@@ -34,6 +34,21 @@ const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// `#[non_exhaustive]`: future verification layers may add variants without
 /// breaking callers.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::sandbox_check::CrossCheckError;
+///
+/// let err = CrossCheckError::SpawnFailed("permission denied".to_string());
+/// let display = format!("{err}");
+/// assert!(display.contains("plugin spawn failed"));
+/// assert!(display.contains("permission denied"));
+///
+/// let err2 = CrossCheckError::HandshakeFailed("timed out after 10s".to_string());
+/// let display2 = format!("{err2}");
+/// assert!(display2.contains("handshake failed"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum CrossCheckError {

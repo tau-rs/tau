@@ -154,6 +154,26 @@ pub struct ProjectConfig {
 }
 
 /// Validated entry for a single agent.
+///
+/// # Example
+///
+/// ```
+/// use std::collections::BTreeMap;
+/// use tau_pkg::project::project::{AgentEntry, RequiresEntry, PromptEntry};
+///
+/// let entry = AgentEntry::new(
+///     "reviewer".to_string(),
+///     "Code Reviewer".to_string(),
+///     "code-reviewer@^0.1".to_string(),
+///     "anthropic".to_string(),
+///     RequiresEntry::default(),
+///     BTreeMap::new(),
+///     PromptEntry::None,
+///     vec![],
+/// );
+/// assert_eq!(entry.id, "reviewer");
+/// assert_eq!(entry.display_name, "Code Reviewer");
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct AgentEntry {
@@ -219,6 +239,20 @@ pub struct RequiresEntry {
 
 /// Validated prompt selection. `system` and `system_file` are mutually
 /// exclusive, so this enum encodes the three valid states.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::project::project::PromptEntry;
+///
+/// let p = PromptEntry::Inline("You are a careful reviewer.".to_string());
+/// assert!(matches!(p, PromptEntry::Inline(_)));
+///
+/// let p2 = PromptEntry::File(std::path::PathBuf::from("prompts/r.md"));
+/// assert!(matches!(p2, PromptEntry::File(_)));
+///
+/// assert!(matches!(PromptEntry::None, PromptEntry::None));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub enum PromptEntry {
@@ -234,6 +268,24 @@ pub enum PromptEntry {
 // ----- Errors -----
 
 /// Errors produced when loading or validating a project `tau.toml`.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::project::project::ProjectConfigError;
+///
+/// let err = ProjectConfigError::EmptyProjectName;
+/// let display = format!("{err}");
+/// assert!(display.contains("non-empty"));
+///
+/// let err2 = ProjectConfigError::AgentValidation {
+///     id: "reviewer".to_string(),
+///     message: "display_name must be non-empty".to_string(),
+/// };
+/// let display2 = format!("{err2}");
+/// assert!(display2.contains("reviewer"));
+/// assert!(display2.contains("display_name"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectConfigError {
@@ -316,6 +368,21 @@ pub enum ProjectConfigError {
 
 impl UncheckedProjectConfig {
     /// Validate semantic invariants and produce a [`ProjectConfig`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::project::project::UncheckedProjectConfig;
+    ///
+    /// let toml_str = r#"
+    /// [project]
+    /// name = "my-project"
+    /// "#;
+    /// let unchecked: UncheckedProjectConfig = toml::from_str(toml_str).expect("parse");
+    /// let config = unchecked.validate().expect("valid config");
+    /// assert_eq!(config.project_name, "my-project");
+    /// assert!(config.agents.is_empty());
+    /// ```
     pub fn validate(self) -> Result<ProjectConfig, ProjectConfigError> {
         if self.project.name.trim().is_empty() {
             return Err(ProjectConfigError::EmptyProjectName);

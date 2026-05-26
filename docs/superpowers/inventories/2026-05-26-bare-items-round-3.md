@@ -344,12 +344,142 @@
 | 118 | orchestration/persistence.rs:76 | `pub fn spawn_writer(path, rx)` | skip-needs-fixture | Spawns a tokio task writing to a real filesystem path; requires a running tokio runtime + tempdir; comprehensive `#[tokio::test]` coverage already in `persistence.rs`. |
 | 119 | orchestration/persistence.rs:123 | `pub async fn replay(path)` | skip-needs-fixture | Reads from a real filesystem JSONL path; requires a pre-written file and a running tokio runtime; comprehensive `#[tokio::test]` coverage already in `persistence.rs`. |
 
+## tau-pkg
+
+| # | File:line | Item | Classification | Strategy |
+|---|---|---|---|---|
+| 1 | bundle/error.rs:5 | `pub enum BundleParseError` | include | Error enum with constructible variant `UnsupportedSchemaVersion { found }`; fence shows `format!("{err}")` contains "unsupported". |
+| 2 | bundle/error.rs:19 | `pub enum BundleIoError` | skip-needs-fixture | `Read` variant requires a real `std::io::Error` from a real filesystem; `Parse` variant wraps `BundleParseError` (covered by row 1). |
+| 3 | bundle/error.rs:35 | `pub enum BundleIntegrityError` | include | Both variants constructible without fixtures; fence shows `HashFieldEmpty` + `HashMismatch { claimed, computed }` + `format!` assertions. |
+| 4 | bundle/canonical.rs:18 | `pub fn to_canonical_toml(manifest)` | skip-trivial | Accessed via `BundleManifest::to_canonical_toml` (row 12 fence). |
+| 5 | bundle/hash.rs:11 | `pub fn compute_self_hash(manifest)` | skip-trivial | Accessed via `BundleManifest::compute_self_hash` (row 13 fence). |
+| 6 | bundle/hash.rs:22 | `pub fn verify_self_hash(manifest)` | skip-trivial | Accessed via `BundleManifest::verify_self_hash` (row 14 fence). |
+| 7 | bundle/manifest.rs:14 | `pub struct BundleManifest` | skip-trivial | Not `#[non_exhaustive]`; struct-literal construction works; but construction requires all sub-structs — covered by `parse_str` (row 11) and the canonical TOML fences below. |
+| 8 | bundle/manifest.rs:32 | `pub struct BundleMeta` | skip-trivial | Plain struct; no constructor; all fields covered by round-trip tests. |
+| 9 | bundle/manifest.rs:47 | `pub struct ProjectInfo` | skip-trivial | Plain struct; no constructor. |
+| 10 | bundle/manifest.rs:58 | `pub struct BundlePackage` | skip-trivial | Plain struct; no constructor. |
+| 11 | bundle/manifest.rs:77 | `pub struct BundleAgent` | skip-trivial | Plain struct; no constructor. |
+| 12 | bundle/manifest.rs:95 | `pub struct BackendRef` | skip-trivial | Plain struct; no constructor; exercised by `parse_str` fence. |
+| 13 | bundle/manifest.rs:110 | `pub struct BundleEffectiveCapabilities` | skip-trivial | `Default`; `is_empty` fence covers it (row 17). |
+| 14 | bundle/manifest.rs:161 | `BundleManifest::parse_str(s)` | include | Pure TOML parse; fence shows minimal TOML → asserts `project.name` + `schema_version`. |
+| 15 | bundle/manifest.rs:172 | `BundleManifest::from_path(p)` | skip-needs-fixture | Reads a real file; deferred. |
+| 16 | bundle/manifest.rs:185 | `BundleManifest::to_canonical_toml(&self)` | include | Pure serialization; fence asserts `canonical` contains `schema_version = 1`, `[bundle]`, `[project]`. |
+| 17 | bundle/manifest.rs:191 | `BundleManifest::compute_self_hash(&self)` | include | Pure, no FS; fence asserts 64 hex chars. |
+| 18 | bundle/manifest.rs:198 | `BundleManifest::verify_self_hash(&self)` | include | Pure, no FS; fence sets correct hash then tampers it; asserts `Ok`/`Err`. |
+| 19 | bundle/manifest.rs:145 | `BundleEffectiveCapabilities::is_empty(&self)` | include | Pure predicate; fence shows `Default::default()` → `is_empty()` true, push path → false. |
+| 20 | capability_override/mod.rs:22 | `pub struct CapabilityOverride` | include | `#[non_exhaustive]`; fence uses `::new()` constructor; asserts `kind`, `allow`, `deny` fields. |
+| 21 | capability_override/mod.rs:57 | `pub struct EffectiveCapability` | skip-trivial | `#[non_exhaustive]`; no constructor; result type of `compute_effective` only; covered by `compute_effective` fence (row 23). |
+| 22 | capability_override/mod.rs:73 | `pub struct OverrideExpandError` | include | Has public fields + `Display`; fence constructs directly and asserts display contains "expands package grant". |
+| 23 | capability_override/mod.rs:96 | `pub fn compute_effective(package_caps, project_override)` | include | Pure; fence calls with `fs.read` Capability from serde_json, empty override, asserts `len == 1`. |
+| 24 | error.rs:27 | `pub enum ScopeError` | include | Fence constructs `HomeNotFound` + asserts display contains "HOME". |
+| 25 | error.rs:75 | `pub enum GitError` | include | Fence constructs `GitMissing` + asserts display contains "git". |
+| 26 | error.rs:106 | `pub enum ManifestReadError` | include | Fence constructs `NotFound { path }` + asserts display. |
+| 27 | error.rs:133 | `pub enum RegistryError` | include | Fence constructs `Parse { reason }` + asserts display. |
+| 28 | error.rs:178 | `pub enum InstallError` | include | Fence shows `GitError → InstallError` via `From`; asserts `matches!` + display. |
+| 29 | error.rs:306 | `pub enum UninstallError` | include | Fence constructs `NotInstalled { name }` + asserts display. |
+| 30 | install.rs:69 | `pub struct BuildOptions` | done | Fence at line 57 (round-3 prior art); shows `Default` + field mutation. |
+| 31 | install.rs:88 | `BuildOptions::new()` | include | Fence asserts `!skip_build`, `cargo_path.is_none()`, `extra_args.is_empty()`. |
+| 32 | install.rs:96 | `pub struct InstallOptions` | skip-trivial | `Default`; `block_on_lock`, `force`, `build`, `skip_cross_check` — covered by prose and `install_with_options` doctest. |
+| 33 | install.rs:134 | `pub struct InstalledPackage` | skip-trivial | No constructor; only produced by `install`; covered by `install` fence (no_run). |
+| 34 | install.rs:164 | `pub fn install(source, scope)` | done | Fence at line 152 (`no_run`; shells out to `git clone`). |
+| 35 | install.rs:170 | `pub fn install_with_options(source, scope, options)` | skip-needs-fixture | Same as `install`; shells out to `git clone`. |
+| 36 | install.rs:779 | `pub fn uninstall(name, version, scope)` | skip-needs-fixture | Mutates real filesystem; shells out to `git clone` + lockfile update; deferred. |
+| 37 | lockfile.rs:63 | `pub const MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION: u32` | skip-trivial | Numeric constant; value documented in inline comment; no behavior to demonstrate. |
+| 38 | lockfile.rs:82 | `pub struct LockFile` | done | Fence at line 72 (round-3 prior art); shows `Default` + `schema_version == 6`. |
+| 39 | lockfile.rs:120 | `pub enum SynthesizedSource` | include | Fence constructs `Anthropic` + asserts `matches!`. |
+| 40 | lockfile.rs:157 | `pub struct LockedPackage` | done | Fence at line 144 (round-3 prior art); shows TOML round-trip + `find` result. |
+| 41 | lockfile.rs:232 | `pub struct LockedPlugin` | done | Fence at line 216 (round-3 prior art); shows `LockedPlugin::new` + field assertions. |
+| 42 | lockfile.rs:292 | `pub struct SkillFrontmatterSnapshot` | include | `#[non_exhaustive]`; added `::new()` constructor; fence uses it, asserts `name`, `description`. |
+| 43 | lockfile.rs:315 | `pub struct LockedSkill` | skip-trivial | `#[non_exhaustive]`; no standalone use; covered by `LockedSkill::new` (row 44). |
+| 44 | lockfile.rs (impl) | `LockedSkill::new(sha256, frontmatter)` | include | Fence uses `SkillFrontmatterSnapshot::new` then `LockedSkill::new`; asserts `content_sha256` + `frontmatter.name`. |
+| 45 | lockfile.rs:376 | `pub struct LockedVersion` | done | Fence at line 387 (round-3 prior art); shows TOML round-trip obtain + field assertion. |
+| 46 | lockfile.rs (impl) | `LockFile::load(path)` | done | Fence at line 502; shows non-existent path → empty default. |
+| 47 | lockfile.rs (impl) | `LockFile::from_toml_str(text)` | include | Fence parses inline TOML string with `[[package]]`; asserts `packages.len() == 1`. |
+| 48 | lockfile.rs (impl) | `LockFile::save(path)` | done | Fence at line 649. |
+| 49 | lockfile.rs (impl) | `LockFile::find(name)` | done | Fence at line 700. |
+| 50 | lockfile.rs (impl) | `LockFile::upsert(pkg)` | done | Fence at line 721. |
+| 51 | lockfile.rs (impl) | `LockFile::remove(name, version)` | done | Fence at line 759. |
+| 52 | manifest.rs:59 | `pub fn read_manifest(path)` | done | Fence at line 41 (round-3 prior art); shows `read_manifest` on a tempdir-written file. |
+| 53 | project/agent.rs:27 | `pub enum AgentResolutionError` | skip-needs-fixture | Requires real scope + lockfile + manifest; only returned by `build_agent_definition`. |
+| 54 | project/agent.rs:149 | `pub fn build_agent_definition(...)` | skip-needs-fixture | Reads real lockfile + manifest from scope; deferred. |
+| 55 | project/project.rs:13 | `pub struct UncheckedProjectConfig` | skip-trivial | Raw serde shape; no semantic behavior; covered by `validate` fence (row 60). |
+| 56 | project/project.rs:23 | `pub struct UncheckedProject` | skip-trivial | Plain serde struct. |
+| 57 | project/project.rs:33 | `pub struct UncheckedAgent` | skip-trivial | Plain serde struct. |
+| 58 | project/project.rs:58 | `pub struct UncheckedRequires` | skip-trivial | Plain serde struct. |
+| 59 | project/project.rs:78 | `pub struct UncheckedRequiredTool` | skip-trivial | `#[non_exhaustive]` serde struct; no standalone use beyond `validate`. |
+| 60 | project/project.rs:91 | `pub struct UncheckedPrompt` | skip-trivial | Plain serde struct. |
+| 61 | project/project.rs:113 | `pub struct UncheckedCapabilityOverride` | skip-trivial | `#[serde(deny_unknown_fields)]` serde struct; covered by `validate` tests. |
+| 62 | project/project.rs:147 | `pub struct ProjectConfig` | skip-trivial | `#[non_exhaustive]`; no constructor; produced by `validate`; covered by `validate` fence (row 65). |
+| 63 | project/project.rs:159 | `pub struct AgentEntry` | include | `#[non_exhaustive]`; `::new()` constructor; fence calls it with all 8 args; asserts `id`, `display_name`. |
+| 64 | project/project.rs:213 | `pub struct RequiresEntry` | skip-trivial | `#[non_exhaustive]`; `Default` produces `tools = []`; no standalone behavior. |
+| 65 | project/project.rs:224 | `pub enum PromptEntry` | include | Fence shows all 3 variants (`None`, `Inline`, `File`) with `matches!` assertions. |
+| 66 | project/project.rs:239 | `pub enum ProjectConfigError` | include | Fence constructs `EmptyProjectName` + `AgentValidation { id, message }`; asserts display strings. |
+| 67 | project/project.rs (impl) | `UncheckedProjectConfig::validate(self)` | include | Fence parses minimal TOML, calls `validate()`, asserts `project_name`. |
+| 68 | project/project.rs (impl) | `ProjectConfig::from_path(path)` | skip-needs-fixture | Reads a real file; deferred. |
+| 69 | registry.rs:33 | `pub fn list(scope)` | done | Fence at line 25 (round-3 prior art). |
+| 70 | registry.rs:54 | `pub fn get(scope, name)` | done | Fence at line 45 (round-3 prior art). |
+| 71 | resolve.rs:33 | `pub struct RequiredTool` | include | `#[non_exhaustive]`; fence calls `::new(name, source, version_req)`; asserts `name.as_str()`. |
+| 72 | resolve.rs:57 | `pub struct ResolutionPlan` | include | `Default`; fence asserts `installs.is_empty()`, `reuses.is_empty()`. |
+| 73 | resolve.rs:67 | `pub struct PlannedInstall` | skip-trivial | `#[non_exhaustive]`; no constructor; only produced by `resolve_requires_tools`. |
+| 74 | resolve.rs:81 | `pub struct ReusedInstall` | skip-trivial | `#[non_exhaustive]`; no constructor; only produced by `resolve_requires_tools`. |
+| 75 | resolve.rs:91 | `pub enum ResolveError` | include | Fence constructs `Registry(RegistryError::Parse { … })`; asserts display. |
+| 76 | resolve.rs:136 | `pub fn resolve_requires_tools(requires, scope)` | skip-needs-fixture | Shells out to `git ls-remote`; deferred. |
+| 77 | sandbox_check.rs:39 | `pub enum CrossCheckError` | include | Fence constructs `SpawnFailed` + `HandshakeFailed`; asserts display. |
+| 78 | sandbox_check.rs:89 | `pub async fn cross_check_plugin_capabilities(binary, manifest)` | skip-needs-fixture | Spawns a real plugin binary; deferred. |
+| 79 | scope.rs:28 | `pub const MAX_SUPPORTED_SCOPE_CONFIG_SCHEMA_VERSION: u32` | skip-trivial | Numeric constant. |
+| 80 | scope.rs:37 | `pub enum ScopeKind` | skip-trivial | Simple tag enum; covered by `ScopeConfig::read_from_str` fence. |
+| 81 | scope.rs:53 | `pub struct SandboxRequirements` | done | Fence added in round-3 (prior session); shows `with_tier` + field assertions. |
+| 82 | scope.rs:85 | `pub enum SandboxRequiredTier` | done | Fence added in round-3 (prior session); shows ordering + `max()`. |
+| 83 | scope.rs:195 | `pub struct ScopeConfig` | done | Fence at line 207 (round-3 prior art). |
+| 84 | scope.rs (impl) | `ScopeConfig::read_from_str(s)` | done | Fence added in round-3 (prior session); parses TOML string. |
+| 85 | scope.rs:272 | `pub struct Scope` | done | Fence at line 302 (round-3 prior art). |
+| 86 | scope.rs (impl) | `Scope::resolve(dir)` | done | Fence at line 336. |
+| 87 | scope.rs (impl) | `Scope::global()` | done | Fence at line 370. |
+| 88 | scope.rs (impl) | `Scope::new_project(dir)` | done | Fence at line 448. |
+| 89 | scope.rs:78 | `SandboxRequirements::with_tier(required_tier)` | done | Covered by `SandboxRequirements` struct fence (row 81); shows `with_tier` + field assertions. |
+| 90 | scope.rs:242 | `ScopeConfig::new(kind)` | include | Fence added in PR-E spec-review fix; asserts `kind`, `schema_version == 3`, `defaults.is_empty()`. |
+| 91 | scope.rs:290 | `ScopeConfig::to_toml_string(&self)` | include | Fence added in PR-E spec-review fix; asserts TOML contains `schema_version` + `kind = "global"`. |
+| 92 | scope.rs:497 | `Scope::path(&self)` | skip-getter | Trivial accessor returning `&Path`; no behavior to demonstrate beyond what `new_project` / `global` fences already show. |
+| 93 | scope.rs:502 | `Scope::state_path(&self)` | skip-getter | Trivial accessor returning `&Path`. |
+| 94 | scope.rs:507 | `Scope::kind(&self)` | skip-getter | Trivial accessor returning `ScopeKind`; already asserted in `Scope::resolve` + `new_project` fences. |
+| 95 | scope.rs:512 | `Scope::lockfile_path(&self)` | skip-getter | Path derivation (`<path>/tau-lock.toml`); trivial accessor. |
+| 96 | scope.rs:517 | `Scope::config_path(&self)` | skip-getter | Path derivation (`<state_path>/config.toml`); trivial accessor. |
+| 97 | scope.rs:522 | `Scope::packages_dir(&self)` | skip-getter | Path derivation (`<state_path>/packages`); trivial accessor. |
+| 98 | scope.rs:527 | `Scope::install_lock_path(&self)` | skip-getter | Path derivation (`<state_path>/locks/install.lock`); trivial accessor. |
+| 99 | scope.rs:533 | `Scope::package_dir(&self, name, version)` | include | Fence added in PR-E spec-review fix; 2-param method; asserts path starts with tmp root and contains name + version segments. |
+| 100 | skill_check.rs:41 | `pub fn cross_check_skill_package(...)` | skip-needs-fixture | Reads real SKILL.md from installed directory; deferred. |
+| 101 | skill_resolve.rs:18 | `pub struct InstalledSkill` | skip-trivial | No constructor; only produced by `find_installed_skill`. |
+| 102 | skill_resolve.rs:39 | `pub enum FindSkillError` | include | Fence constructs `InstallPathMissing { name, path }`; asserts display. |
+| 103 | skill_resolve.rs:91 | `pub fn find_installed_skill(scope, name)` | skip-needs-fixture | Reads real lockfile + manifest from scope; deferred. |
+| 104 | source_list.rs:23 | `pub fn list_versions_at_source(source)` | skip-needs-fixture | Shells out to `git ls-remote`; deferred. |
+| 105 | source_list.rs:122 | `pub enum SourceListError` | include | Fence constructs `GitInvoke { message }` + `Unsupported`; asserts display. |
+| 106 | synthesize.rs:23 | `pub fn synthesize_anthropic_skill(workspace, source)` | skip-needs-fixture | Reads real SKILL.md from cloned workspace; deferred. |
+| 107 | synthesize.rs:51 | `pub enum SynthesizeError` | include | Fence constructs `ReadSkillMd { path, detail }`; asserts display. |
+| 108 | tree_hash.rs:35 | `pub enum TreeHashError` | include | Fence constructs `Io { path, message }`; asserts display contains "io error at" + path. |
+| 109 | tree_hash.rs:50 | `pub fn sha256_of_file(path)` | include | Fence writes tempfile, calls `sha256_of_file`, asserts 64-char hex. |
+| 110 | tree_hash.rs:63 | `pub struct FileHash` | include | `#[non_exhaustive]`; no public constructor; fence illustrates round-trip concept via `sha256_of_file`. |
+| 111 | tree_hash.rs:94 | `pub fn tree_hash(root)` | done | Fence at line 127 (round-3 prior art). |
+| 112 | update.rs:41 | `pub enum UpdateError` | done | Fence at line 28 (round-3 prior art). |
+| 113 | update.rs:113 | `pub struct UpdateResult` | done | Fence at line 101 (round-3 prior art). |
+| 114 | update.rs:145 | `pub fn update_package(name, version, scope)` | skip-needs-fixture | Shells out to `git clone`; deferred. |
+| 115 | verify.rs:18 | `pub enum VerifyStatus` | include | Fence constructs `Ok`, `Unverified`, `TreeDrift`; asserts `is_drift()`. |
+| 116 | verify.rs:74 | `pub enum AnthropicConformanceIssue` | include | Fence constructs `MissingDescription` + `MalformedFrontmatter { detail }`; asserts `matches!`. |
+| 117 | verify.rs (impl) | `VerifyStatus::is_drift(&self)` | include | Fence shows `Ok`/`Unverified` → `false`, `Missing` → `true`. |
+| 118 | verify.rs:106 | `pub struct VerifyReport` | skip-trivial | `#[non_exhaustive]`; no constructor; only produced by `verify`; covered by `VerifyStatus` + `VerifyError` fences. |
+| 119 | verify.rs:118 | `pub enum VerifyError` | include | Fence constructs `PackageNotInstalled { name }`; asserts display. |
+| 120 | verify.rs:163 | `pub fn verify_skill_content(install_dir, name, locked)` | include | Fence writes tempfile `SKILL.md`, uses `LockedSkill::new` with wrong sha; asserts `SkillContentDrift`. |
+| 121 | verify.rs:199 | `pub fn verify(scope, name, version)` | skip-needs-fixture | Reads real lockfile + install dir; deferred. |
+| 122 | verify.rs:288 | `pub fn verify_all(scope)` | skip-needs-fixture | Reads real lockfile; deferred. |
+| 123 | verify.rs:305 | `pub fn verify_all_with_options(scope, anthropic_strict)` | skip-needs-fixture | Same as `verify_all`; deferred. |
+
 ## Status log
 
 - 2026-05-26 — tau-plugin-protocol classifications + 2 includes (PR-A).
 - 2026-05-26 — round-3 spec-review fixes: added missing impl-method rows (Frame::decode/encode, FramedReader/Writer methods, all TraceContext/HandshakeRequest/MethodSchema/HandshakeResponse ::new constructors, meta constants, all FakeStdioPeer methods); added skip-feature-gated category; relabeled FakeStdioPeer + methods from skip-trivial to skip-feature-gated; rewrote FramedReader/FramedWriter fences as duplex round-trips with .expect() assertions.
 - 2026-05-26 — tau-plugin-sdk classifications + 14 includes (PR-B).
 - 2026-05-26 — tau-domain classifications + 17 includes (PR-C).
+- 2026-05-26 — PR-E spec-review fix: added 11 missing scope.rs rows + 3 new fences (ScopeConfig::new, ScopeConfig::to_toml_string, Scope::package_dir).
 - 2026-05-26 — round-3 spec-review fixes (PR-C round-3): SynthesizeError reclassified from skip-feature-gated to include (+1 fence); added 23 missing impl-method rows (7 CapabilityShapeSet methods, 1 Capability::required_shape with new fence, 12 PackageManifest skip-getter rows, PackageId::new done, PluginManifest::new done, UncheckedManifest::validate done); tau-domain include count now 18.
 - 2026-05-26 — tau-runtime classifications + 69 includes (PR-D); 74 doctests passing, 0 failed; added `CapabilityDenial::new()` constructor + re-exported `Direction` from plugin_host; fixed `SandboxValidationError` + `validate_plan_against_adapter` import paths; corrected `TraceEventKind::RunStarted` → `Turn` variant.
 - 2026-05-26 — PR-D spec-review fix: (1) added 40 missing inventory rows (rows 80–119): lib.rs/orchestration/sandbox pub mod declarations → skip-trivial; DynLlmBackend/DynTool/DynStorage/DynSandbox → skip-marker; Runtime struct → skip-trivial; PluginKind/RuntimeError → skip-trivial; DEFAULT_LEASE → skip-trivial; TraceSubscriber → skip-alias; resolve_skill_for_spawn → skip-needs-fixture; AdapterRegistration → skip-trivial; build_plan → include (fence added); resolver async fns + persistence spawn_writer/replay → skip-needs-fixture; (2) BudgetWatchdog::new downgraded from include to skip-trivial (tautological assert removed); (3) added skip-needs-fixture category; 73 doctests passing, 0 failed.
+- 2026-05-26 — tau-pkg classifications + 43 includes (PR-E); 66 doctests passing, 0 failed; added `SkillFrontmatterSnapshot::new()` constructor to fix `#[non_exhaustive]` struct-literal issue in external-crate doctests. Closes round 3.

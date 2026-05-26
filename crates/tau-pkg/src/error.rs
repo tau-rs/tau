@@ -22,6 +22,17 @@ use thiserror::Error;
 ///
 /// Returned by `Scope::resolve`, `Scope::global`, and `Scope::new_project`
 /// (added in Task 5) and by `ScopeConfig` deserialization (Task 4).
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::error::ScopeError;
+///
+/// let err = ScopeError::HomeNotFound;
+/// assert!(matches!(err, ScopeError::HomeNotFound));
+/// let display = format!("{err}");
+/// assert!(display.contains("HOME"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ScopeError {
@@ -70,6 +81,17 @@ pub enum ScopeError {
 /// command failure with stderr, or std::io). Adding `Internal` would
 /// invite catch-all use; new git failure modes get new typed variants
 /// instead.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::error::GitError;
+///
+/// let err = GitError::GitMissing;
+/// assert!(matches!(err, GitError::GitMissing));
+/// let display = format!("{err}");
+/// assert!(display.contains("git"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum GitError {
@@ -101,6 +123,16 @@ pub enum GitError {
 }
 
 /// Errors from `read_manifest` (added in Task 9).
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::error::ManifestReadError;
+///
+/// let err = ManifestReadError::NotFound { path: "/no/such/tau.toml".to_string() };
+/// let display = format!("{err}");
+/// assert!(display.contains("manifest not found"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ManifestReadError {
@@ -128,6 +160,16 @@ pub enum ManifestReadError {
 }
 
 /// Errors from lockfile load/save and registry read accessors (added in Tasks 6, 7, 12).
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::error::RegistryError;
+///
+/// let err = RegistryError::Parse { reason: "unexpected EOF".to_string() };
+/// let display = format!("{err}");
+/// assert!(display.contains("TOML parse"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RegistryError {
@@ -173,6 +215,19 @@ pub enum RegistryError {
 /// Composes `GitError`, `ManifestReadError`, `RegistryError`, and
 /// `ScopeError` via `#[from]` so the install lifecycle can use `?`
 /// propagation throughout.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::error::{InstallError, GitError};
+///
+/// // `InstallError` composes `GitError` via `From`.
+/// let git_err = GitError::GitMissing;
+/// let install_err: InstallError = git_err.into();
+/// assert!(matches!(install_err, InstallError::Git(GitError::GitMissing)));
+/// let display = format!("{install_err}");
+/// assert!(display.contains("git"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InstallError {
@@ -301,6 +356,17 @@ pub enum InstallError {
 }
 
 /// Errors from `uninstall` (added in Task 11).
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::error::UninstallError;
+///
+/// let err = UninstallError::NotInstalled { name: "my-tool".to_string() };
+/// let display = format!("{err}");
+/// assert!(display.contains("my-tool"));
+/// assert!(display.contains("not installed"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum UninstallError {
