@@ -240,14 +240,35 @@ mod tests {
         tracing::subscriber::set_default(subscriber)
     }
 
-    /// Yield the runtime long enough for the layer's `tokio::spawn`
-    /// writer tasks to flush their pending lines + `sync_data`. The
-    /// layer fires-and-forgets the write so a deterministic flush
-    /// requires an external delay.
-    async fn flush_layer_writes() {
-        // Empirically a single 100ms sleep is enough on macOS / Linux
-        // CI runners; bump if the tests start flaking under load.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    /// Wait until the `WorkflowRunLogLayer`'s detached writer has flushed
+    /// at least `expected_records` complete JSONL lines to `path`. Polls
+    /// every 10ms up to `timeout`, then panics with a diagnostic. The
+    /// layer's writes are fire-and-forget `tokio::spawn` tasks, so
+    /// deterministic observation requires polling — a fixed sleep races
+    /// under CI load + slow fsync.
+    async fn await_layer_flush(
+        path: &Path,
+        expected_records: usize,
+        timeout: std::time::Duration,
+    ) {
+        let start = std::time::Instant::now();
+        loop {
+            // `replay` tolerates a partial trailing line, so it only
+            // returns fully-flushed records — exactly what we want to
+            // count.
+            if let Ok(records) = replay(path).await {
+                if records.len() >= expected_records {
+                    return;
+                }
+            }
+            if start.elapsed() >= timeout {
+                let actual = replay(path).await.map(|r| r.len()).unwrap_or(0);
+                panic!(
+                    "layer flush did not reach {expected_records} records at {path:?} within {timeout:?} (actual: {actual} records)"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     #[tokio::test]
@@ -260,7 +281,7 @@ mod tests {
             log.append(&make_record(0, "a")).await.unwrap();
             log.append(&make_record(1, "b")).await.unwrap();
         }
-        flush_layer_writes().await;
+        await_layer_flush(&path, 2, std::time::Duration::from_secs(5)).await;
         let records = replay(&path).await.unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].step_id, "a");
@@ -276,7 +297,7 @@ mod tests {
             let mut log = RunLog::open_for_write(&path).await.unwrap();
             log.append(&make_record(0, "a")).await.unwrap();
         }
-        flush_layer_writes().await;
+        await_layer_flush(&path, 1, std::time::Duration::from_secs(5)).await;
         // Append 30 bytes of garbage WITHOUT a trailing newline.
         let mut f = tokio::fs::OpenOptions::new()
             .append(true)
