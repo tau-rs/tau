@@ -12,6 +12,7 @@ authors.workspace = true
 serde_json         = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
+tracing-appender   = { version = "0.2", optional = true }
 thiserror          = { workspace = true }
 
 [features]
@@ -20,3 +21,5 @@ default = []
 # typically add this under `[dev-dependencies]` of crates whose tests
 # assert on emitted spans/events.
 test-fixtures = []
+# Enables the non-blocking MPSC writer + log rotation via tracing-appender.
+non_blocking = ["dep:tracing-appender"]
