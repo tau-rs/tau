@@ -19,9 +19,12 @@ use tau_domain::{
     PackageManifest, Value,
 };
 use tau_observe::vocabulary::{
-    EV_CAPABILITY_DENY, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_RUNTIME_LOOP_TERMINATED,
+    EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON,
+    EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_MESSAGE_ADDED, EV_RUNTIME_COMPLETED,
+    EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED,
     EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED,
-    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED,
+    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED, SPAN_DISPATCH_TOOL,
+    SPAN_RUNTIME_TURN, SPAN_TOOL_INVOKE, SPAN_TOOL_SESSION_CLOSE, SPAN_TOOL_SESSION_OPEN,
 };
 use tau_ports::{
     CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
@@ -168,7 +171,21 @@ pub(crate) fn run_streaming_inner(
     async_stream::stream! {
         let agent_instance_id = AgentInstanceId::new();
         let mut messages: Vec<Message> = Vec::with_capacity(history.len() + 1);
+        // ADR-0006 §3.9: emit one `message.added` per message pushed onto
+        // the run history. No explicit `parent:` here — these fire before
+        // any `runtime.turn` span opens, so they attach to the outer
+        // `runtime.agent_run` span (or the caller's current span).
+        for m in &history {
+            debug!(
+                name = EV_MESSAGE_ADDED,
+                role = ?m.sender,
+            );
+        }
         messages.extend(history);
+        debug!(
+            name = EV_MESSAGE_ADDED,
+            role = ?initial_message.sender,
+        );
         messages.push(initial_message);
         let mut total_turns: u32 = 0;
         let mut aggregated_tokens = crate::options::TokenUsage::default();
@@ -185,25 +202,48 @@ pub(crate) fn run_streaming_inner(
         // OR max_turns is reached.
         while total_turns < options.max_turns {
             total_turns += 1;
-            debug!(name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
+            // Per ADR-0006 §3.9: wrap the turn body in a `runtime.turn`
+            // span so child spans/events (llm.complete, dispatch.tool,
+            // tool.* sessions, capability.check) attribute correctly to
+            // a specific turn. `turn_index` is 1-indexed to match the
+            // existing `runtime.turn_started` event's `turn` field.
+            //
+            // NOTE: we DO NOT call `turn_span.enter()` here — `EnteredSpan`
+            // mutates a thread-local span stack, and the tokio multi-thread
+            // scheduler can move this task between worker threads at any
+            // `.await`, leaving the guard pointing at the wrong thread and
+            // mis-parenting any child spans/events created on the new
+            // worker. Instead, every event inside the turn body uses
+            // `parent: &turn_span` explicitly, and every `.await` that
+            // creates a child span (e.g. `llm.complete`, recursive
+            // `run_with_history` calls) is wrapped with
+            // `.instrument(turn_span.clone())`. This is the official
+            // tracing-book pattern for spans whose body straddles awaits.
+            let turn_span = info_span!(
+                SPAN_RUNTIME_TURN,
+                turn_index = u64::from(total_turns),
+                messages_len = messages.len(),
+            );
+            debug!(parent: &turn_span, name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
 
             let mut request = CompletionRequest::new(agent_def.llm_backend.as_str().into());
             request.system = agent_def.system_prompt.clone();
             request.messages = crate::run::agent_messages_to_provider_messages(&messages);
             request.tools = tool_specs.clone();
             debug!(
+                parent: &turn_span,
                 name = EV_LLM_REQUEST_BUILT,
                 messages = request.messages.len(),
                 tools = request.tools.len(),
             );
 
             let llm_stream_result = async { backend.stream(request).await }
-                .instrument(info_span!("llm.complete"))
+                .instrument(info_span!(parent: &turn_span, "llm.complete"))
                 .await;
             let mut llm_stream = match llm_stream_result {
                 Ok(s) => s,
                 Err(llm_err) => {
-                    warn!(name = "runtime.streaming_llm_open_failed");
+                    warn!(parent: &turn_span, name = "runtime.streaming_llm_open_failed");
                     yield make_llm_fatal_error(llm_err);
                     return;
                 }
@@ -216,8 +256,13 @@ pub(crate) fn run_streaming_inner(
 
             // Drain the LLM stream for this turn.
             // CompletionStream is Pin<Box<dyn Stream + Send>>; .as_mut() gives Pin<&mut S>.
+            // Each chunk-poll is instrumented with `turn_span` so any tracing
+            // emitted from inside the provider's stream impl attributes to
+            // this turn.
             loop {
-                let next = std::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx)).await;
+                let next = std::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx))
+                    .instrument(turn_span.clone())
+                    .await;
                 match next {
                     None => break,
                     Some(Ok(CompletionChunk::Text { delta })) => {
@@ -228,6 +273,7 @@ pub(crate) fn run_streaming_inner(
                         // Per spec Q3-A: yield ToolCallStarted immediately on
                         // receipt — display intent BEFORE dispatch.
                         debug!(
+                            parent: &turn_span,
                             name = "runtime.streaming_tool_use_received",
                             id = %tool_use.id,
                             tool_name = %tool_use.name,
@@ -245,7 +291,7 @@ pub(crate) fn run_streaming_inner(
                         break;
                     }
                     Some(Err(llm_err)) => {
-                        warn!(name = "runtime.streaming_llm_chunk_err");
+                        warn!(parent: &turn_span, name = "runtime.streaming_llm_chunk_err");
                         yield make_llm_fatal_error(llm_err);
                         return;
                     }
@@ -255,22 +301,67 @@ pub(crate) fn run_streaming_inner(
             }
 
             debug!(
+                parent: &turn_span,
                 name = EV_LLM_RESPONSE_RECEIVED,
                 text_len = accumulated_text.len(),
                 tool_uses = pending_tool_uses.len(),
                 stop_reason = ?turn_stop_reason,
             );
 
+            // ADR-0006 §3.9: emit `llm.token_usage` when the backend
+            // reports per-turn usage. Skip when `None` to avoid emitting
+            // misleading zeros.
+            if let Some(usage) = turn_usage {
+                let input = u64::from(usage.input_tokens);
+                let output = u64::from(usage.output_tokens);
+                info!(
+                    parent: &turn_span,
+                    name = EV_LLM_TOKEN_USAGE,
+                    input_tokens = input,
+                    output_tokens = output,
+                    total_tokens = input.saturating_add(output),
+                );
+            }
+
+            // ADR-0006 §3.9: emit `llm.stop_reason` when the backend
+            // reports one (StopReason has Debug, not Display).
+            if let Some(reason) = turn_stop_reason {
+                debug!(
+                    parent: &turn_span,
+                    name = EV_LLM_STOP_REASON,
+                    stop_reason = ?reason,
+                );
+            }
+
+            // ADR-0006 §3.9: emit one `llm.tool_use_emitted` per ToolUse
+            // block returned by the LLM. Fires before dispatch so the
+            // event records the model's intent regardless of whether
+            // dispatch later succeeds.
+            for tu in &pending_tool_uses {
+                debug!(
+                    parent: &turn_span,
+                    name = EV_LLM_TOOL_USE_EMITTED,
+                    tool_name = %tu.name,
+                    tool_use_id = %tu.id,
+                );
+            }
+
             // Append assistant text to history if present.
             if !accumulated_text.is_empty() {
                 let agent_addr = Address::Agent(agent_instance_id);
-                messages.push(Message::new(
+                let assistant_msg = Message::new(
                     agent_addr,
                     Address::User,
                     MessagePayload::Text {
                         content: accumulated_text.clone(),
                     },
-                ));
+                );
+                debug!(
+                    parent: &turn_span,
+                    name = EV_MESSAGE_ADDED,
+                    role = ?assistant_msg.sender,
+                );
+                messages.push(assistant_msg);
             }
 
             // Accumulate token usage.
@@ -285,7 +376,11 @@ pub(crate) fn run_streaming_inner(
 
             // No tool uses → end of run.
             if pending_tool_uses.is_empty() {
-                debug!(name = EV_RUNTIME_LOOP_TERMINATED, reason = "end_turn");
+                debug!(
+                    parent: &turn_span,
+                    name = EV_RUNTIME_LOOP_TERMINATED,
+                    reason = "end_turn",
+                );
                 yield RunEvent::TurnCompleted {
                     stop_reason: turn_stop_reason.unwrap_or(StopReason::EndTurn),
                     usage: turn_usage,
@@ -297,8 +392,9 @@ pub(crate) fn run_streaming_inner(
                     .cloned()
                     .expect("messages contains at least the initial user message");
                 info!(
-                    name = "runtime.run_completed",
-                    total_turns,
+                    parent: &turn_span,
+                    name = EV_RUNTIME_COMPLETED,
+                    turn_index = total_turns,
                     all_messages = messages.len(),
                 );
                 yield RunEvent::RunCompleted {
@@ -314,7 +410,19 @@ pub(crate) fn run_streaming_inner(
 
             // ----- Per-tool dispatch ----------------------------------------
             for tool_use in &pending_tool_uses {
+                // ADR-0006 §3.9: each tool dispatch is wrapped in a
+                // `dispatch.tool` span as a child of the turn span.
+                // Same straddles-await discipline as `turn_span`: do not
+                // call `.enter()`; events use `parent: &dispatch_span`
+                // and `.await`s use `.instrument(dispatch_span.clone())`.
+                let dispatch_span = info_span!(
+                    parent: &turn_span,
+                    SPAN_DISPATCH_TOOL,
+                    tool_name = %tool_use.name,
+                    tool_use_id = %tool_use.id,
+                );
                 debug!(
+                    parent: &dispatch_span,
                     name = "llm.streaming_tool_use_dispatching",
                     id = %tool_use.id,
                     tool_name = %tool_use.name,
@@ -328,22 +436,39 @@ pub(crate) fn run_streaming_inner(
                 // an is_error=true ToolResult noting deferred-to-follow-up.
                 if let Some(state_arc) = options.orchestration_state.as_ref() {
                     if crate::orchestration::is_virtual(&tool_use.name) {
+                        // ADR-0006 §3.9: dispatch.tool_resolved fires after
+                        // resolution succeeds. Virtual tools resolve to the
+                        // in-kernel orchestration dispatcher rather than a
+                        // registered plugin; use a sentinel plugin_id.
+                        debug!(
+                            parent: &dispatch_span,
+                            name = EV_DISPATCH_TOOL_RESOLVED,
+                            tool_name = %tool_use.name,
+                            plugin_id = "kernel:virtual",
+                        );
                         // Capability check against agent's grant.
+                        // ADR-0006 §3.9: `check_capabilities_for_tool` owns
+                        // the `capability.check` span plus the 5 capability
+                        // events (required_loaded, granted_loaded,
+                        // satisfies_check, allow, deny). Wrap in
+                        // `dispatch_span.in_scope` so the span nests under
+                        // `dispatch.tool` — `dispatch_span` is never
+                        // `.enter()`'d (it straddles awaits), so without
+                        // this the span would attach to whatever was
+                        // entered higher up.
                         let required_cap = crate::orchestration::required_capability(
                             &tool_use.name,
                         );
                         let required_slice = std::slice::from_ref(&required_cap);
-                        let missing = crate::capability::check_capabilities(
-                            &granted_capabilities,
-                            required_slice,
-                        );
+                        let missing = dispatch_span.in_scope(|| {
+                            crate::capability::check_capabilities_for_tool(
+                                &tool_use.name,
+                                &granted_capabilities,
+                                required_slice,
+                            )
+                        });
                         if let Some(cap) = missing {
                             let kind = crate::run::capability_kind_str(cap);
-                            warn!(
-                                name = EV_CAPABILITY_DENY,
-                                tool_name = %tool_use.name,
-                                missing_kind = %kind,
-                            );
                             let denial = crate::error::CapabilityDenial {
                                 agent_id: agent_def.id.to_string(),
                                 package_id: agent_def.package.name.to_string(),
@@ -357,6 +482,7 @@ pub(crate) fn run_streaming_inner(
                                 total_turns,
                                 aggregated_tokens,
                             );
+                            emit_policy_denied_failure(&turn_span, total_turns, &tool_use.name);
                             yield RunEvent::RunCompleted { outcome };
                             return;
                         }
@@ -364,13 +490,19 @@ pub(crate) fn run_streaming_inner(
                         // Append the tool-call message (parallels normal path).
                         let agent_addr = Address::Agent(agent_instance_id);
                         let tool_addr = Address::Tool(tool_use.name.clone());
-                        messages.push(Message::new(
+                        let tool_call_msg = Message::new(
                             agent_addr.clone(),
                             tool_addr.clone(),
                             MessagePayload::ToolCall {
                                 args: tool_use.input.clone(),
                             },
-                        ));
+                        );
+                        debug!(
+                            parent: &turn_span,
+                            name = EV_MESSAGE_ADDED,
+                            role = ?tool_call_msg.sender,
+                        );
+                        messages.push(tool_call_msg);
 
                         // Build the ToolResult.
                         let is_agent_spawn = tool_use.name.starts_with("agent.")
@@ -408,7 +540,7 @@ pub(crate) fn run_streaming_inner(
                                     );
                                     // Append error tool-result message so LLM
                                     // history is coherent.
-                                    messages.push(Message::new(
+                                    let err_msg = Message::new(
                                         tool_addr.clone(),
                                         agent_addr.clone(),
                                         MessagePayload::ToolError {
@@ -419,7 +551,13 @@ pub(crate) fn run_streaming_inner(
                                                 .into(),
                                             details: None,
                                         },
-                                    ));
+                                    );
+                                    debug!(
+                                        parent: &turn_span,
+                                        name = EV_MESSAGE_ADDED,
+                                        role = ?err_msg.sender,
+                                    );
+                                    messages.push(err_msg);
                                     continue;
                                 }
                             };
@@ -441,7 +579,7 @@ pub(crate) fn run_streaming_inner(
                                         tool_use,
                                         &err_msg,
                                     );
-                                    messages.push(Message::new(
+                                    let err_event_msg = Message::new(
                                         tool_addr.clone(),
                                         agent_addr.clone(),
                                         MessagePayload::ToolError {
@@ -452,7 +590,13 @@ pub(crate) fn run_streaming_inner(
                                             ),
                                             details: None,
                                         },
-                                    ));
+                                    );
+                                    debug!(
+                                        parent: &turn_span,
+                                        name = EV_MESSAGE_ADDED,
+                                        role = ?err_event_msg.sender,
+                                    );
+                                    messages.push(err_event_msg);
                                     continue;
                                 }
                             };
@@ -565,7 +709,11 @@ pub(crate) fn run_streaming_inner(
 
                                         // Recurse. Box::pin for async recursion
                                         // (the future would otherwise be
-                                        // infinitely sized).
+                                        // infinitely sized). Instrument with
+                                        // `turn_span` so the child's
+                                        // `runtime.agent_run` span attaches to
+                                        // THIS turn rather than the outer
+                                        // `runtime.agent_run`.
                                         let child_runtime_clone = child_runtime.clone();
                                         let package_manifest_clone =
                                             package_manifest.clone();
@@ -583,6 +731,7 @@ pub(crate) fn run_streaming_inner(
                                                 )
                                                 .await
                                         })
+                                        .instrument(turn_span.clone())
                                         .await;
 
                                         match child_outcome_res {
@@ -646,11 +795,17 @@ pub(crate) fn run_streaming_inner(
                                     ),
                                 }
                             };
-                            messages.push(Message::new(
+                            let skill_result_msg = Message::new(
                                 tool_addr.clone(),
                                 agent_addr.clone(),
                                 skill_result_payload,
-                            ));
+                            );
+                            debug!(
+                                parent: &turn_span,
+                                name = EV_MESSAGE_ADDED,
+                                role = ?skill_result_msg.sender,
+                            );
+                            messages.push(skill_result_msg);
 
                             yield RunEvent::ToolCallCompleted {
                                 id: tool_use.id.clone(),
@@ -820,6 +975,11 @@ pub(crate) fn run_streaming_inner(
                                             // Recurse. Box::pin for async
                                             // recursion (the future would
                                             // otherwise be infinitely sized).
+                                            // Instrument with `turn_span` so
+                                            // the child's `runtime.agent_run`
+                                            // span attaches to THIS turn
+                                            // rather than the outer
+                                            // `runtime.agent_run`.
                                             let child_runtime_clone = child_runtime.clone();
                                             let package_manifest_clone = package_manifest.clone();
                                             let child_outcome_res: Result<
@@ -836,6 +996,7 @@ pub(crate) fn run_streaming_inner(
                                                     )
                                                     .await
                                             })
+                                            .instrument(turn_span.clone())
                                             .await;
 
                                             match child_outcome_res {
@@ -927,11 +1088,17 @@ pub(crate) fn run_streaming_inner(
                                 body: crate::run::content_to_value(&tool_result.content),
                             }
                         };
-                        messages.push(Message::new(
+                        let orch_result_msg = Message::new(
                             tool_addr,
                             agent_addr,
                             result_payload,
-                        ));
+                        );
+                        debug!(
+                            parent: &turn_span,
+                            name = EV_MESSAGE_ADDED,
+                            role = ?orch_result_msg.sender,
+                        );
+                        messages.push(orch_result_msg);
 
                         yield RunEvent::ToolCallCompleted {
                             id: tool_use.id.clone(),
@@ -950,6 +1117,7 @@ pub(crate) fn run_streaming_inner(
                         // (unexpected LLM behavior). The batch drainer
                         // will convert this to RuntimeError::ToolNotRegistered.
                         warn!(
+                            parent: &dispatch_span,
                             name = "runtime.streaming_tool_not_found",
                             tool_name = %tool_use.name,
                         );
@@ -962,18 +1130,31 @@ pub(crate) fn run_streaming_inner(
                         return;
                     }
                 };
+                // ADR-0006 §3.9: emit dispatch.tool_resolved once the
+                // registry lookup returns a concrete plugin.
+                debug!(
+                    parent: &dispatch_span,
+                    name = EV_DISPATCH_TOOL_RESOLVED,
+                    tool_name = %tool_use.name,
+                    plugin_id = %tool.name(),
+                );
 
                 // ----- Capability check -------------------------------------
+                // ADR-0006 §3.9: `check_capabilities_for_tool` owns the
+                // `capability.check` span + 5 capability events. Wrap
+                // in `dispatch_span.in_scope` so the span nests under
+                // `dispatch.tool`; `dispatch_span` straddles awaits and
+                // is never `.enter()`'d.
                 let required: &[Capability] = tool.capabilities();
-                let missing =
-                    crate::capability::check_capabilities(&granted_capabilities, required);
+                let missing = dispatch_span.in_scope(|| {
+                    crate::capability::check_capabilities_for_tool(
+                        &tool_use.name,
+                        &granted_capabilities,
+                        required,
+                    )
+                });
                 if let Some(cap) = missing {
                     let kind = crate::run::capability_kind_str(cap);
-                    warn!(
-                        name = EV_CAPABILITY_DENY,
-                        tool_name = %tool_use.name,
-                        missing_kind = %kind,
-                    );
                     let denial = crate::error::CapabilityDenial {
                         agent_id: agent_def.id.to_string(),
                         package_id: agent_def.package.name.to_string(),
@@ -987,6 +1168,7 @@ pub(crate) fn run_streaming_inner(
                         total_turns,
                         aggregated_tokens,
                     );
+                    emit_policy_denied_failure(&turn_span, total_turns, &tool_use.name);
                     yield RunEvent::RunCompleted { outcome };
                     return;
                 }
@@ -994,26 +1176,48 @@ pub(crate) fn run_streaming_inner(
                 // ----- Append the tool-call message -------------------------
                 let agent_addr = Address::Agent(agent_instance_id);
                 let tool_addr = Address::Tool(tool_use.name.clone());
-                messages.push(Message::new(
+                let tool_call_msg = Message::new(
                     agent_addr.clone(),
                     tool_addr.clone(),
                     MessagePayload::ToolCall {
                         args: tool_use.input.clone(),
                     },
-                ));
+                );
+                debug!(
+                    parent: &turn_span,
+                    name = EV_MESSAGE_ADDED,
+                    role = ?tool_call_msg.sender,
+                );
+                messages.push(tool_call_msg);
 
                 // ----- Open a session ---------------------------------------
                 let ctx = SessionContext::new(agent_instance_id, uuid::Uuid::new_v4(), None)
                     .with_granted_capabilities(granted_for_session.clone())
                     .with_deny_entries(deny_entries.clone());
-                if let Err(err) = tool.init(ctx.clone()).await {
+                // ADR-0006 §3.9: `tool.session_open` span wraps the
+                // `init` call AND the FAILED-event emit on the Err
+                // branch so the failed event nests inside the span.
+                // Parent is `dispatch.tool` (current at this point).
+                let session_open_span = info_span!(
+                    parent: &dispatch_span,
+                    SPAN_TOOL_SESSION_OPEN,
+                    tool_name = %tool_use.name,
+                    session_id = %ctx.session_id,
+                );
+                if let Err(err) = tool
+                    .init(ctx.clone())
+                    .instrument(session_open_span.clone())
+                    .await
+                {
                     warn!(
+                        parent: &session_open_span,
                         name = EV_TOOL_SESSION_OPEN_FAILED,
                         tool_name = %tool_use.name,
                     );
                     yield make_tool_fatal_error(err);
                     return;
                 }
+                drop(session_open_span);
 
                 // ----- Schema validation ------------------------------------
                 let validator = tool_validators.get(tool_use.name.as_str()).expect(
@@ -1031,12 +1235,19 @@ pub(crate) fn run_streaming_inner(
                         // ToolError message into the conversation so the
                         // LLM gets to self-correct, then yield
                         // ToolCallCompleted with Err and continue.
-                        let _ = tool.teardown(()).await; // best-effort
+                        let close_span = info_span!(
+                            parent: &dispatch_span,
+                            SPAN_TOOL_SESSION_CLOSE,
+                            tool_name = %tool_use.name,
+                            session_id = %ctx.session_id,
+                        );
+                        let _ = tool.teardown(()).instrument(close_span).await; // best-effort
                         warn!(
+                            parent: &turn_span,
                             name = "tool.args_validation_failed",
                             tool_name = %tool_use.name,
                         );
-                        messages.push(Message::new(
+                        let validation_err_msg = Message::new(
                             tool_addr.clone(),
                             agent_addr.clone(),
                             MessagePayload::ToolError {
@@ -1044,7 +1255,13 @@ pub(crate) fn run_streaming_inner(
                                 message: reason.clone(),
                                 details: None,
                             },
-                        ));
+                        );
+                        debug!(
+                            parent: &turn_span,
+                            name = EV_MESSAGE_ADDED,
+                            role = ?validation_err_msg.sender,
+                        );
+                        messages.push(validation_err_msg);
                         yield RunEvent::ToolCallCompleted {
                             id: tool_use.id.clone(),
                             name: tool_use.name.clone(),
@@ -1055,7 +1272,13 @@ pub(crate) fn run_streaming_inner(
                     Err(other) => {
                         // Defensive: validate_tool_args only emits BadArgs
                         // in v0.1 — reach here only if the contract changes.
-                        let _ = tool.teardown(()).await;
+                        let close_span = info_span!(
+                            parent: &dispatch_span,
+                            SPAN_TOOL_SESSION_CLOSE,
+                            tool_name = %tool_use.name,
+                            session_id = %ctx.session_id,
+                        );
+                        let _ = tool.teardown(()).instrument(close_span).await;
                         yield make_tool_fatal_error(other);
                         return;
                     }
@@ -1063,29 +1286,67 @@ pub(crate) fn run_streaming_inner(
                 }
 
                 // ----- Invoke -----------------------------------------------
-                let invoke_outcome = tool.invoke(&ctx, &mut (), tool_use.input.clone()).await;
+                // ADR-0006 §3.9: `tool.invoke` span wraps the `invoke`
+                // call AND the FAILED-event emit on Err so the failed
+                // event nests inside the span. The `tool.args_received`
+                // and `tool.result_received` events emitted inside
+                // `IpcTool::invoke` also nest naturally under this span
+                // (current-span propagation through `.instrument`).
+                let invoke_span = info_span!(
+                    parent: &dispatch_span,
+                    SPAN_TOOL_INVOKE,
+                    tool_name = %tool_use.name,
+                    session_id = %ctx.session_id,
+                );
+                let invoke_outcome = tool
+                    .invoke(&ctx, &mut (), tool_use.input.clone())
+                    .instrument(invoke_span.clone())
+                    .await;
                 let tool_result: ToolResult = match invoke_outcome {
                     Ok(r) => r,
                     Err(err) => {
                         warn!(
+                            parent: &invoke_span,
                             name = EV_TOOL_INVOKE_FAILED,
                             tool_name = %tool_use.name,
                         );
-                        let _ = tool.teardown(()).await; // best-effort
+                        drop(invoke_span);
+                        // best-effort teardown; nest under its own span
+                        // so any failure inside teardown is observable.
+                        let close_span = info_span!(
+                            parent: &dispatch_span,
+                            SPAN_TOOL_SESSION_CLOSE,
+                            tool_name = %tool_use.name,
+                            session_id = %ctx.session_id,
+                        );
+                        let _ = tool.teardown(()).instrument(close_span).await;
                         yield make_tool_fatal_error(err);
                         return;
                     }
                 };
+                drop(invoke_span);
 
                 // ----- Close the session ------------------------------------
-                if let Err(err) = tool.teardown(()).await {
+                let close_span = info_span!(
+                    parent: &dispatch_span,
+                    SPAN_TOOL_SESSION_CLOSE,
+                    tool_name = %tool_use.name,
+                    session_id = %ctx.session_id,
+                );
+                if let Err(err) = tool
+                    .teardown(())
+                    .instrument(close_span.clone())
+                    .await
+                {
                     warn!(
+                        parent: &close_span,
                         name = EV_TOOL_SESSION_CLOSE_FAILED,
                         tool_name = %tool_use.name,
                     );
                     yield make_tool_fatal_error(err);
                     return;
                 }
+                drop(close_span);
 
                 // ----- Append the tool-result message ----------------------
                 let result_payload = if tool_result.is_error {
@@ -1099,11 +1360,17 @@ pub(crate) fn run_streaming_inner(
                         body: crate::run::content_to_value(&tool_result.content),
                     }
                 };
-                messages.push(Message::new(
+                let tool_result_msg = Message::new(
                     tool_addr,
                     agent_addr,
                     result_payload,
-                ));
+                );
+                debug!(
+                    parent: &turn_span,
+                    name = EV_MESSAGE_ADDED,
+                    role = ?tool_result_msg.sender,
+                );
+                messages.push(tool_result_msg);
 
                 yield RunEvent::ToolCallCompleted {
                     id: tool_use.id.clone(),
@@ -1123,9 +1390,13 @@ pub(crate) fn run_streaming_inner(
         }
 
         // ----- max_turns reached -------------------------------------------
+        // No `parent:` here — this fires *after* the `while` loop, so the
+        // last `turn_span` is no longer in scope; emit under the outer
+        // `runtime.agent_run` span instead.
         warn!(
-            name = "runtime.streaming_max_turns_reached",
-            max_turns = options.max_turns
+            name = EV_RUNTIME_MAX_TURNS_REACHED,
+            turn_index = total_turns,
+            max_turns = options.max_turns,
         );
         yield make_max_turns_outcome(messages, total_turns, aggregated_tokens, options.max_turns);
     }
@@ -1134,6 +1405,19 @@ pub(crate) fn run_streaming_inner(
 // ---------------------------------------------------------------------------
 // Outcome helpers
 // ---------------------------------------------------------------------------
+
+/// Emit `runtime.failed` with `failure_kind = PolicyDenied` under the given
+/// turn span. Dedupes two byte-identical warn! sites (orchestration
+/// virtual-tool deny + regular tool-dispatch deny).
+fn emit_policy_denied_failure(turn_span: &tracing::Span, turn_index: u32, tool_name: &str) {
+    warn!(
+        parent: turn_span,
+        name = EV_RUNTIME_FAILED,
+        turn_index = turn_index,
+        failure_kind = ?tau_domain::FailureKind::PolicyDenied,
+        detail = %tool_name,
+    );
+}
 
 // FatalError helpers: emit RunEvent::FatalError so the batch-path
 // drainer (run_with_history) can convert them back to Err(RuntimeError),

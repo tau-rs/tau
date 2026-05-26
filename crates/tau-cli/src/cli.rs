@@ -81,6 +81,20 @@ pub struct Cli {
         env = "TAU_LOG_ROTATION"
     )]
     pub log_rotation: LogRotationCli,
+
+    /// Export traces over OTLP/gRPC to this endpoint, e.g.
+    /// `https://otel.example.com:4317`. Falls back to
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` env var. Auth + tenant headers
+    /// come from `OTEL_EXPORTER_OTLP_HEADERS` (comma-separated
+    /// `key=value` pairs). Requires the `otlp` cargo feature (on by
+    /// default).
+    #[arg(
+        long,
+        env = "OTEL_EXPORTER_OTLP_ENDPOINT",
+        global = true,
+        value_name = "URL"
+    )]
+    pub otlp_endpoint: Option<String>,
 }
 
 /// CLI value for `--log-rotation <policy>`. Translates to

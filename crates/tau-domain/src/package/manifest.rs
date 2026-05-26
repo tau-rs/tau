@@ -12,21 +12,21 @@ use crate::version::{Version, VersionReq};
 
 /// A dependency declaration: a package name plus a SemVer requirement.
 ///
+/// `PackageDep` is `#[non_exhaustive]` with no public constructor; instances
+/// are produced by tau-pkg during manifest parsing. The field types are
+/// directly constructable:
+///
 /// # Example
 ///
-/// ```ignore
-/// // Construction is performed inside `tau-domain` (e.g. by manifest
-/// // validation in tau-pkg). External crates receive `PackageDep` values;
-/// // they cannot be built via struct expression because the type is
-/// // `#[non_exhaustive]`.
-/// use tau_domain::{PackageDep, PackageName, VersionReq};
+/// ```
+/// use tau_domain::{PackageName, VersionReq};
 /// use std::str::FromStr;
 ///
-/// let dep = PackageDep {
-///     name: PackageName::from_str("fs-tools").unwrap(),
-///     version_req: VersionReq::parse("^0.3").unwrap(),
-/// };
-/// assert_eq!(dep.name.as_str(), "fs-tools");
+/// // These are the field types that appear in a `PackageDep`.
+/// let name = PackageName::from_str("fs-tools").unwrap();
+/// let req  = VersionReq::parse("^0.3").unwrap();
+/// assert_eq!(name.as_str(), "fs-tools");
+/// assert!(req.to_string().contains("0.3"));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -42,18 +42,17 @@ pub struct PackageDep {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Like `PackageDep`, `PackageId` is `#[non_exhaustive]` and cannot be
-/// // built via struct expression from outside `tau-domain`. External
-/// // crates receive instances from manifest validation in tau-pkg.
+/// ```
 /// use tau_domain::{PackageId, PackageName, Version};
 /// use std::str::FromStr;
 ///
-/// let id = PackageId {
-///     name: PackageName::from_str("fs-tools").unwrap(),
-///     version: Version::parse("0.3.0").unwrap(),
-/// };
+/// // `PackageId` is `#[non_exhaustive]`; use `PackageId::new` to construct.
+/// let id = PackageId::new(
+///     PackageName::from_str("fs-tools").unwrap(),
+///     Version::parse("0.3.0").unwrap(),
+/// );
 /// assert_eq!(id.name.as_str(), "fs-tools");
+/// assert_eq!(id.version.to_string(), "0.3.0");
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -502,18 +501,19 @@ impl UncheckedManifest {
     /// can't enforce alone (non-empty description, non-empty Custom
     /// capability names, etc.).
     ///
+    /// (`no_run` because `UncheckedManifest` is `#[non_exhaustive]` with no
+    /// public constructor; instances are produced by tau-pkg during manifest
+    /// deserialization. The `validate` call shape is shown here for reference.)
+    ///
     /// # Example
     ///
-    /// ```ignore
-    /// // `UncheckedManifest` is `#[non_exhaustive]`, so it cannot be
-    /// // built via struct expression from outside `tau-domain`. In
-    /// // practice, callers obtain one by deserializing a manifest file
-    /// // (in tau-pkg) and then call `.validate()`.
+    /// ```no_run
     /// use tau_domain::{UncheckedManifest, PackageManifestError};
-    /// // let err = unchecked.validate().unwrap_err();
-    /// // assert_eq!(err, PackageManifestError::EmptyDescription);
-    /// # let _ = std::any::type_name::<UncheckedManifest>();
-    /// # let _ = std::any::type_name::<PackageManifestError>();
+    ///
+    /// // Obtained from tau-pkg's TOML/JSON deserializer:
+    /// let unchecked: UncheckedManifest = unimplemented!();
+    /// let manifest = unchecked.validate()?;
+    /// # Ok::<_, PackageManifestError>(())
     /// ```
     pub fn validate(self) -> Result<PackageManifest, PackageManifestError> {
         if self.description.is_empty() {

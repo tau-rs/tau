@@ -33,8 +33,9 @@ use tau_domain::{
     AgentDefinition, AgentStatus, Capability, FailureKind, Message, MessagePayload,
     PackageManifest, Value,
 };
+use tau_observe::vocabulary::{EV_DISPATCH_TOOL_RESOLVED, SPAN_DISPATCH_TOOL};
 use tau_ports::{ContentBlock, LlmProviderMessage, ToolContent, ToolUse};
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::builder::Runtime;
 use crate::capability_override::EffectiveCapability;
@@ -256,6 +257,11 @@ impl Runtime {
     ///   the direct-dispatch caller has no `RunOutcome` envelope).
     /// - [`RuntimeError::Tool`] — the tool's `init`, `invoke`, or
     ///   `teardown` returned a [`tau_ports::ToolError`].
+    #[instrument(
+        name = SPAN_DISPATCH_TOOL,
+        skip_all,
+        fields(tool_name = %tool_name),
+    )]
     pub async fn invoke_tool(
         &self,
         agent_def: &AgentDefinition,
@@ -267,6 +273,11 @@ impl Runtime {
         use tau_ports::SessionContext;
 
         let tool = self.resolve_tool(tool_name)?.clone();
+        debug!(
+            name = EV_DISPATCH_TOOL_RESOLVED,
+            tool_name = %tool_name,
+            plugin_id = %tool.name(),
+        );
 
         // Capability check: mirror the run loop's structural check.
         // If the agent's package grants are insufficient, surface as
@@ -275,7 +286,14 @@ impl Runtime {
         // the same situation, but invoke_tool has no RunOutcome envelope).
         let granted: Vec<tau_domain::Capability> = package_manifest.capabilities().to_vec();
         let required: &[tau_domain::Capability] = tool.capabilities();
-        if let Some(missing) = crate::capability::check_capabilities(&granted, required) {
+        // ADR-0006 §3.9: `check_capabilities_for_tool` emits the
+        // `capability.check` span + 5 capability events. `invoke_tool`
+        // is itself `#[instrument]`'d (the macro enters its span for
+        // the body), so the wrapper's span nests naturally without an
+        // explicit `in_scope`.
+        if let Some(missing) =
+            crate::capability::check_capabilities_for_tool(tool_name, &granted, required)
+        {
             let denial = crate::error::CapabilityDenial {
                 agent_id: agent_def.id.to_string(),
                 package_id: agent_def.package.name.to_string(),

@@ -93,7 +93,7 @@ impl<'de> serde::Deserialize<'de> for PortKind {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_domain::PluginKind;
 /// use std::str::FromStr;
 ///
@@ -150,18 +150,18 @@ impl<'de> serde::Deserialize<'de> for PluginKind {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `PluginManifest` is `#[non_exhaustive]`; constructed by tau-pkg
-/// // during install. External callers (notably tau-runtime integration
-/// // tests that synthesize a lockfile) build it via `serde::from_str`.
-/// use tau_domain::PluginManifest;
-/// let toml = r#"
-///     provides = "llm_backend"
-///     kind     = "rust-cargo"
-///     bin      = "anthropic-plugin"
-/// "#;
-/// let m: PluginManifest = toml::from_str(toml).unwrap();
+/// ```
+/// use tau_domain::{PluginManifest, PluginKind, PortKind};
+/// use std::str::FromStr;
+///
+/// // `PluginManifest` is `#[non_exhaustive]`; use `PluginManifest::new`.
+/// let m = PluginManifest::new(
+///     PortKind::from_str("llm_backend").unwrap(),
+///     PluginKind::from_str("rust-cargo").unwrap(),
+///     "anthropic-plugin".to_string(),
+/// );
 /// assert_eq!(m.bin, "anthropic-plugin");
+/// assert_eq!(m.provides.to_string(), "llm_backend");
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]

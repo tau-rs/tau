@@ -22,6 +22,8 @@ fn each_format_writer_combination_installs_without_panic() {
             non_blocking: false,
             file_path: None,
             rotation: Rotation::Never,
+            #[cfg(feature = "otlp")]
+            otlp: None,
         };
         let _g = install(opts).expect("install returned err");
     }

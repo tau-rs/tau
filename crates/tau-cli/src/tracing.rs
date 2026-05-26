@@ -58,6 +58,26 @@ pub fn install(cli: &Cli) {
         non_blocking: cli.log_non_blocking,
         file_path: cli.log_file.clone(),
         rotation: cli.log_rotation.into(),
+        // Resolution order for OTLP endpoint:
+        //  1. `--otlp-endpoint` flag (clap also auto-reads
+        //     `OTEL_EXPORTER_OTLP_ENDPOINT` because of `env =` on the
+        //     flag, so the flag arm covers both cases).
+        //  2. `OtlpEndpoint::from_env()` — picks up
+        //     `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` too, with its own
+        //     header parsing. Reached when no flag was given AND the
+        //     base env var is unset (clap would otherwise have
+        //     populated `cli.otlp_endpoint`).
+        #[cfg(feature = "otlp")]
+        otlp: match cli.otlp_endpoint.clone() {
+            Some(endpoint) => {
+                let headers = std::env::var("OTEL_EXPORTER_OTLP_HEADERS")
+                    .ok()
+                    .map(parse_headers_str)
+                    .unwrap_or_default();
+                Some(tau_observe::otlp::OtlpEndpoint { endpoint, headers })
+            }
+            None => tau_observe::otlp::OtlpEndpoint::from_env(),
+        },
     };
     // The CLI does not propagate install errors; the only failure mode
     // is "already installed", which the underlying installer maps to a
@@ -71,6 +91,26 @@ pub fn install(cli: &Cli) {
     let guard =
         observe_install(opts).expect("tau_observe::install never returns Err in current impl");
     std::mem::forget(guard);
+}
+
+/// Parse `OTEL_EXPORTER_OTLP_HEADERS` form (`key=value,key2=value2`) into a
+/// map. Duplicates `tau_observe::otlp::parse_headers` because that helper
+/// is module-private; the spec for the header format is fixed by the OTel
+/// SDK so divergence is unlikely.
+#[cfg(feature = "otlp")]
+fn parse_headers_str(raw: String) -> std::collections::HashMap<String, String> {
+    raw.split(',')
+        .filter_map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            let key = parts.next()?.trim().to_string();
+            let val = parts.next()?.trim().to_string();
+            if key.is_empty() {
+                None
+            } else {
+                Some((key, val))
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -98,6 +138,7 @@ mod tests {
             log_non_blocking: false,
             log_file: None,
             log_rotation: LogRotationCli::Never,
+            otlp_endpoint: None,
         }
     }
 

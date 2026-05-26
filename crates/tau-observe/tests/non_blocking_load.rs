@@ -28,6 +28,8 @@ fn producer_latency_stays_under_10ms_per_event() {
         non_blocking: true,
         file_path: Some(log_path.clone()),
         rotation: Rotation::Never,
+        #[cfg(feature = "otlp")]
+        otlp: None,
     };
     let _guard = install(opts).expect("install");
 
