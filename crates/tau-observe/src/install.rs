@@ -119,14 +119,12 @@ where
     let tracer = opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(exporter)
-        .with_trace_config(
-            opentelemetry_sdk::trace::config().with_resource(
-                opentelemetry_sdk::Resource::default().merge(&opentelemetry_sdk::Resource::new([
-                    opentelemetry::KeyValue::new("service.name", "tau"),
-                    opentelemetry::KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-                ])),
-            ),
-        )
+        .with_trace_config(opentelemetry_sdk::trace::config().with_resource(
+            opentelemetry_sdk::Resource::default().merge(&opentelemetry_sdk::Resource::new([
+                opentelemetry::KeyValue::new("service.name", "tau"),
+                opentelemetry::KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+            ])),
+        ))
         .install_batch(opentelemetry_sdk::runtime::Tokio)
         .expect("install OTLP pipeline");
     tracing_opentelemetry::layer().with_tracer(tracer)

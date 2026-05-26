@@ -67,7 +67,12 @@ pub struct Cli {
     /// come from `OTEL_EXPORTER_OTLP_HEADERS` (comma-separated
     /// `key=value` pairs). Requires the `otlp` cargo feature (on by
     /// default).
-    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT", global = true, value_name = "URL")]
+    #[arg(
+        long,
+        env = "OTEL_EXPORTER_OTLP_ENDPOINT",
+        global = true,
+        value_name = "URL"
+    )]
     pub otlp_endpoint: Option<String>,
 }
 

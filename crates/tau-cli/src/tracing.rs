@@ -85,7 +85,11 @@ fn parse_headers_str(raw: String) -> std::collections::HashMap<String, String> {
             let mut parts = pair.splitn(2, '=');
             let key = parts.next()?.trim().to_string();
             let val = parts.next()?.trim().to_string();
-            if key.is_empty() { None } else { Some((key, val)) }
+            if key.is_empty() {
+                None
+            } else {
+                Some((key, val))
+            }
         })
         .collect()
 }

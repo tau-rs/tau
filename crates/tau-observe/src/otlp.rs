@@ -37,7 +37,11 @@ fn parse_headers(raw: String) -> HashMap<String, String> {
             let mut parts = pair.splitn(2, '=');
             let key = parts.next()?.trim().to_string();
             let val = parts.next()?.trim().to_string();
-            if key.is_empty() { None } else { Some((key, val)) }
+            if key.is_empty() {
+                None
+            } else {
+                Some((key, val))
+            }
         })
         .collect()
 }
@@ -49,7 +53,10 @@ mod tests {
     #[test]
     fn parse_headers_splits_on_comma_and_equals() {
         let h = parse_headers("authorization=Bearer abc,tenant=acme".to_string());
-        assert_eq!(h.get("authorization").map(String::as_str), Some("Bearer abc"));
+        assert_eq!(
+            h.get("authorization").map(String::as_str),
+            Some("Bearer abc")
+        );
         assert_eq!(h.get("tenant").map(String::as_str), Some("acme"));
     }
 
