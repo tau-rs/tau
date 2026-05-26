@@ -9,5 +9,7 @@
 pub mod capture;
 pub mod filter;
 pub mod install;
+#[cfg(feature = "otlp")]
+pub mod otlp;
 pub mod preview;
 pub mod vocabulary;
