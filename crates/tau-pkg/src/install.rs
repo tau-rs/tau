@@ -85,6 +85,17 @@ impl BuildOptions {
     /// `BuildOptions` is `#[non_exhaustive]`; external callers use this
     /// constructor (or [`BuildOptions::default`]) and mutate fields by
     /// name.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::BuildOptions;
+    ///
+    /// let opts = BuildOptions::new();
+    /// assert!(!opts.skip_build);
+    /// assert!(opts.cargo_path.is_none());
+    /// assert!(opts.extra_args.is_empty());
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }

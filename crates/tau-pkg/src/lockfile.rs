@@ -114,6 +114,15 @@ pub struct LockFile {
 /// to the user.
 ///
 /// Added in lockfile schema v6.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::lockfile::SynthesizedSource;
+///
+/// let src = SynthesizedSource::Anthropic;
+/// assert!(matches!(src, SynthesizedSource::Anthropic));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -287,6 +296,16 @@ impl LockedPlugin {
 /// arbitrarily large; loaded lazily at spawn time by Skills-4.
 ///
 /// Added in lockfile schema v5.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::lockfile::SkillFrontmatterSnapshot;
+///
+/// let snap = SkillFrontmatterSnapshot::new("critic".to_string(), "Reviews drafts".to_string());
+/// assert_eq!(snap.name, "critic");
+/// assert_eq!(snap.description, "Reviews drafts");
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillFrontmatterSnapshot {
@@ -295,6 +314,14 @@ pub struct SkillFrontmatterSnapshot {
     pub name: String,
     /// Short human-readable description.
     pub description: String,
+}
+
+impl SkillFrontmatterSnapshot {
+    /// Construct a `SkillFrontmatterSnapshot`. `#[non_exhaustive]` blocks
+    /// struct-literal construction outside this crate.
+    pub fn new(name: String, description: String) -> Self {
+        Self { name, description }
+    }
 }
 
 /// Recorded install-time metadata for a `kind = "skill"` package.
@@ -325,6 +352,17 @@ pub struct LockedSkill {
 impl LockedSkill {
     /// Construct a `LockedSkill`. `#[non_exhaustive]`; external callers
     /// (notably test synthesis) use this constructor.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::lockfile::{LockedSkill, SkillFrontmatterSnapshot};
+    ///
+    /// let fm = SkillFrontmatterSnapshot::new("critic".to_string(), "Reviews drafts".to_string());
+    /// let skill = LockedSkill::new("abc123".to_string(), fm);
+    /// assert_eq!(skill.content_sha256, "abc123");
+    /// assert_eq!(skill.frontmatter.name, "critic");
+    /// ```
     pub fn new(content_sha256: String, frontmatter: SkillFrontmatterSnapshot) -> Self {
         Self {
             content_sha256,
@@ -505,6 +543,26 @@ impl LockFile {
     ///   match the expected schema shape.
     /// - [`RegistryError::SchemaTooNew`] — the file's `schema_version`
     ///   is higher than this binary supports.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::lockfile::LockFile;
+    ///
+    /// let toml = r#"
+    /// schema_version = 6
+    /// generated_by_tau_version = "0.1.0"
+    /// generated_at = "2024-01-01T00:00:00Z"
+    ///
+    /// [[package]]
+    /// name = "acme-tool"
+    /// active_version = "1.0.0"
+    /// source = "https://example.com/acme.git"
+    /// "#;
+    /// let lf = LockFile::from_toml_str(toml).expect("valid lockfile");
+    /// assert_eq!(lf.packages.len(), 1);
+    /// assert_eq!(lf.packages[0].name.as_str(), "acme-tool");
+    /// ```
     pub fn from_toml_str(text: &str) -> Result<Self, RegistryError> {
         let mut parsed: LockFile = toml::from_str(text).map_err(|e| RegistryError::Parse {
             reason: e.to_string(),

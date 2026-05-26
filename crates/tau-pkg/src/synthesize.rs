@@ -46,6 +46,20 @@ pub fn synthesize_anthropic_skill(
 /// All variants store human-readable strings (not raw I/O errors) so
 /// the enum can derive `Clone + PartialEq + Eq` and compose cleanly
 /// with [`crate::error::InstallError`]'s `#[from]` adapter.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::synthesize::SynthesizeError;
+///
+/// let err = SynthesizeError::ReadSkillMd {
+///     path: "/workspace/SKILL.md".to_string(),
+///     detail: "No such file or directory".to_string(),
+/// };
+/// let display = format!("{err}");
+/// assert!(display.contains("SKILL.md"));
+/// assert!(display.contains("/workspace/SKILL.md"));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SynthesizeError {

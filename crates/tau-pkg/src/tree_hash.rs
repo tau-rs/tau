@@ -30,6 +30,20 @@ pub(crate) fn to_hex_lower(bytes: &[u8]) -> String {
 }
 
 /// Error from `tree_hash`.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::tree_hash::TreeHashError;
+///
+/// let err = TreeHashError::Io {
+///     path: std::path::PathBuf::from("/no/such/file"),
+///     message: "reading file: No such file or directory".to_string(),
+/// };
+/// let display = format!("{err}");
+/// assert!(display.contains("io error at"));
+/// assert!(display.contains("/no/such/file"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum TreeHashError {
@@ -47,6 +61,19 @@ pub enum TreeHashError {
 /// (`LockedPlugin.binary_sha256`).
 ///
 /// Returns 64-char lowercase hex.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::tree_hash::sha256_of_file;
+///
+/// # let tmp = tempfile::tempdir().expect("tempdir");
+/// # let path = tmp.path().join("file.bin");
+/// # std::fs::write(&path, b"hello world").expect("write");
+/// let hex = sha256_of_file(&path).expect("sha256_of_file");
+/// assert_eq!(hex.len(), 64);
+/// assert!(hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+/// ```
 pub fn sha256_of_file(path: &Path) -> Result<String, TreeHashError> {
     let bytes = fs::read(path).map_err(|e| TreeHashError::Io {
         path: path.to_path_buf(),
@@ -58,6 +85,20 @@ pub fn sha256_of_file(path: &Path) -> Result<String, TreeHashError> {
 }
 
 /// Hash entry for a single file in the tree.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::tree_hash::sha256_of_file;
+///
+/// // `FileHash` is produced internally by `tree_hash`; obtain a SHA-256
+/// // via `sha256_of_file` to verify the same hex encoding is used.
+/// # let tmp = tempfile::tempdir().expect("tempdir");
+/// # let path = tmp.path().join("a.txt");
+/// # std::fs::write(&path, b"content").expect("write");
+/// let hex = sha256_of_file(&path).expect("sha256");
+/// assert_eq!(hex.len(), 64, "SHA-256 is always 64 hex chars");
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileHash {

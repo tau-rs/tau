@@ -117,6 +117,22 @@ fn single_version_at_rev(
 }
 
 /// Errors produced by [`list_versions_at_source`].
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::source_list::SourceListError;
+///
+/// let err = SourceListError::GitInvoke {
+///     message: "spawning `git ls-remote`: No such file or directory".to_string(),
+/// };
+/// let display = format!("{err}");
+/// assert!(display.contains("git invocation failed"));
+///
+/// let err2 = SourceListError::Unsupported;
+/// let display2 = format!("{err2}");
+/// assert!(display2.contains("not supported"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum SourceListError {

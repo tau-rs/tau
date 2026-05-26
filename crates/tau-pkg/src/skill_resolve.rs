@@ -34,6 +34,20 @@ pub struct InstalledSkill {
 }
 
 /// Errors raised by [`find_installed_skill`].
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::skill_resolve::FindSkillError;
+///
+/// let err = FindSkillError::InstallPathMissing {
+///     name: "critic".to_string(),
+///     path: std::path::PathBuf::from("/home/.tau/packages/critic/0.1.0"),
+/// };
+/// let display = format!("{err}");
+/// assert!(display.contains("critic"));
+/// assert!(display.contains("tau.toml"));
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FindSkillError {

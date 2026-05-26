@@ -13,6 +13,19 @@ use crate::scope::Scope;
 use crate::tree_hash::{sha256_of_file, tree_hash, TreeHashError};
 
 /// Per-package verification status.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::verify::VerifyStatus;
+///
+/// assert!(!VerifyStatus::Ok.is_drift());
+/// assert!(!VerifyStatus::Unverified.is_drift());
+/// assert!(VerifyStatus::TreeDrift {
+///     expected: "aaa".to_string(),
+///     actual: "bbb".to_string(),
+/// }.is_drift());
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyStatus {
@@ -69,6 +82,20 @@ pub enum VerifyStatus {
 
 /// Specific Anthropic-conformance issues raised by Skills-5's
 /// `tau verify --anthropic-strict` mode.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::verify::AnthropicConformanceIssue;
+///
+/// let issue = AnthropicConformanceIssue::MissingDescription;
+/// assert!(matches!(issue, AnthropicConformanceIssue::MissingDescription));
+///
+/// let issue2 = AnthropicConformanceIssue::MalformedFrontmatter {
+///     detail: "missing closing ---".to_string(),
+/// };
+/// assert!(matches!(issue2, AnthropicConformanceIssue::MalformedFrontmatter { .. }));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AnthropicConformanceIssue {
@@ -88,6 +115,22 @@ pub enum AnthropicConformanceIssue {
 
 impl VerifyStatus {
     /// Whether this status represents drift (non-zero exit).
+    ///
+    /// Returns `true` for `TreeDrift`, `BinaryDrift`, `Missing`,
+    /// `SkillContentDrift`, and `AnthropicConformance`; `false` for
+    /// `Ok` and `Unverified`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::verify::VerifyStatus;
+    ///
+    /// assert!(!VerifyStatus::Ok.is_drift());
+    /// assert!(!VerifyStatus::Unverified.is_drift());
+    /// assert!(VerifyStatus::Missing {
+    ///     path: std::path::PathBuf::from("/gone"),
+    /// }.is_drift());
+    /// ```
     pub fn is_drift(&self) -> bool {
         matches!(
             self,
@@ -113,6 +156,17 @@ pub struct VerifyReport {
 }
 
 /// Error from `verify` / `verify_all`.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::verify::VerifyError;
+///
+/// let err = VerifyError::PackageNotInstalled { name: "missing-pkg".to_string() };
+/// let display = format!("{err}");
+/// assert!(display.contains("missing-pkg"));
+/// assert!(display.contains("not installed"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
@@ -160,6 +214,22 @@ pub enum VerifyError {
 /// `install_dir` is the absolute path of the installed skill
 /// directory (i.e. where `SKILL.md` lives). `name` is the package
 /// name (carried into the error for human-readable display).
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::verify::{verify_skill_content, VerifyStatus};
+/// use tau_pkg::lockfile::{LockedSkill, SkillFrontmatterSnapshot};
+///
+/// # let tmp = tempfile::tempdir().expect("tempdir");
+/// # let content = b"---\nname: critic\ndescription: x\n---\nbody\n";
+/// # std::fs::write(tmp.path().join("SKILL.md"), content).expect("write");
+/// // Mismatch: locked sha is empty string, on-disk file is non-empty → drift.
+/// let fm = SkillFrontmatterSnapshot::new("critic".to_string(), "x".to_string());
+/// let locked = LockedSkill::new("wrong-sha".to_string(), fm);
+/// let result = verify_skill_content(tmp.path(), "critic", &locked);
+/// assert!(matches!(result, Err(VerifyStatus::SkillContentDrift { .. })));
+/// ```
 pub fn verify_skill_content(
     install_dir: &std::path::Path,
     name: &str,

@@ -16,6 +16,22 @@ use self::glob_subset::is_glob_subset_set;
 
 /// Override entry parsed from project tau.toml. Constructed by tau-cli at
 /// parse time and passed through to the runtime via `RunOptions.project_override`.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::capability_override::CapabilityOverride;
+///
+/// let ov = CapabilityOverride::new(
+///     "fs.read".to_string(),
+///     Some(vec!["/proj/src/**".to_string()]),
+///     vec!["/proj/secrets/**".to_string()],
+///     None,
+/// );
+/// assert_eq!(ov.kind, "fs.read");
+/// assert_eq!(ov.allow.as_deref().unwrap(), &["/proj/src/**".to_string()]);
+/// assert_eq!(ov.deny, vec!["/proj/secrets/**".to_string()]);
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // wired up by Task 3 (tau-cli) and Task 5 (RunOptions)
@@ -68,6 +84,20 @@ pub struct EffectiveCapability {
 }
 
 /// Error returned when a project override expands the package's grants.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::capability_override::OverrideExpandError;
+///
+/// let err = OverrideExpandError {
+///     kind: "fs.read".to_string(),
+///     reason: "allow entry \"/etc/**\" is not a subset of any package grant".to_string(),
+/// };
+/// let display = format!("{err}");
+/// assert!(display.contains("fs.read"));
+/// assert!(display.contains("expands package grant"));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)] // wired up by Task 5 (RunOptions) and Task 6 (RuntimeError)
 pub struct OverrideExpandError {
@@ -92,6 +122,21 @@ impl std::error::Error for OverrideExpandError {}
 /// Compute the effective capability set by intersecting `package_caps` with
 /// `project_override`. Returns the effective list, or `OverrideExpandError`
 /// if any override entry expands the corresponding package grant.
+///
+/// # Example
+///
+/// ```
+/// use tau_pkg::capability_override::{CapabilityOverride, compute_effective};
+/// use tau_domain::Capability;
+///
+/// // Package declares fs.read on /proj/**; no override → effective passes through.
+/// let pkg: Vec<Capability> = serde_json::from_str(
+///     r#"[{"kind":"fs.read","paths":["/proj/**"]}]"#
+/// ).expect("parse capability");
+/// let result = compute_effective(&pkg, &[]).expect("compute_effective");
+/// assert_eq!(result.len(), 1);
+/// assert!(result[0].allow_override.is_none());
+/// ```
 #[allow(dead_code)] // wired up by Task 5 (run.rs)
 pub fn compute_effective(
     package_caps: &[Capability],
