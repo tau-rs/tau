@@ -41,6 +41,32 @@ impl Default for FramerOptions {
 }
 
 /// Async reader for length-prefixed MessagePack frames.
+///
+/// # Example
+///
+/// Round-trip a single MessagePack frame through a `tokio::io::duplex` pair:
+///
+/// ```
+/// # tokio_test::block_on(async {
+/// use tau_plugin_protocol::{Frame, FramedReader, FramedWriter, FramerOptions};
+///
+/// let (rx, tx) = tokio::io::duplex(64);
+/// let mut writer = FramedWriter::new(tx);
+/// let mut reader = FramedReader::new(rx, FramerOptions::default());
+///
+/// let frame = Frame::Notification {
+///     method: "stream.chunk".into(),
+///     params: vec![0x90], // empty MessagePack array
+/// };
+/// let bytes = frame.clone().encode().expect("encode should succeed");
+/// writer.write_frame(&bytes).await.expect("write_frame should succeed");
+/// drop(writer); // EOF the reader's stream
+///
+/// let raw = reader.next_frame().await.expect("read should succeed").expect("frame present");
+/// let decoded = Frame::decode(&raw).expect("decode should succeed");
+/// assert_eq!(decoded, frame);
+/// # });
+/// ```
 pub struct FramedReader<R> {
     inner: R,
     options: FramerOptions,
@@ -91,6 +117,31 @@ where
 }
 
 /// Async writer for length-prefixed MessagePack frames.
+///
+/// # Example
+///
+/// Write a frame into a duplex pair and confirm the raw bytes arrive:
+///
+/// ```
+/// # tokio_test::block_on(async {
+/// use tau_plugin_protocol::{Frame, FramedReader, FramedWriter, FramerOptions};
+///
+/// let (rx, tx) = tokio::io::duplex(64);
+/// let mut writer = FramedWriter::new(tx);
+/// let mut reader = FramedReader::new(rx, FramerOptions::default());
+///
+/// let frame = Frame::Notification {
+///     method: "stream.chunk".into(),
+///     params: vec![0x90], // empty MessagePack array
+/// };
+/// let bytes = frame.clone().encode().expect("encode should succeed");
+/// writer.write_frame(&bytes).await.expect("write_frame should succeed");
+/// drop(writer); // EOF the reader's stream
+///
+/// let raw = reader.next_frame().await.expect("read should succeed").expect("frame present");
+/// assert_eq!(raw, bytes);
+/// # });
+/// ```
 pub struct FramedWriter<W> {
     inner: W,
 }
