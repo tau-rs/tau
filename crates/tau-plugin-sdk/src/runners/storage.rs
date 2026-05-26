@@ -31,6 +31,29 @@ use crate::tracing_layer;
 ///
 /// v0.1 stub: handshake works; `storage.*` methods return
 /// `METHOD_NOT_FOUND` until the host wiring lands.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_ports::{Storage, StorageError, Namespace, Key};
+/// # struct MyStorage;
+/// # impl Storage for MyStorage {
+/// #     fn name(&self) -> &str { "my-storage" }
+/// #     async fn get(&self, _: &Namespace, _: &Key) -> Result<Option<Vec<u8>>, StorageError> { Ok(None) }
+/// #     async fn put(&self, _: &Namespace, _: &Key, _: &[u8]) -> Result<(), StorageError> { Ok(()) }
+/// #     async fn delete(&self, _: &Namespace, _: &Key) -> Result<bool, StorageError> { Ok(false) }
+/// #     async fn list(&self, _: &Namespace, _: &str) -> Result<Vec<Key>, StorageError> { Ok(vec![]) }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     tau_plugin_sdk::run_storage(
+///         MyStorage,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_storage<P>(
     plugin: P,
     plugin_name: &str,
@@ -57,6 +80,36 @@ where
 }
 
 /// Same as [`run_storage`] but accepts an explicit reader and writer.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_ports::{Storage, StorageError, Namespace, Key};
+/// # use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+/// # struct MyStorage;
+/// # impl Storage for MyStorage {
+/// #     fn name(&self) -> &str { "my-storage" }
+/// #     async fn get(&self, _: &Namespace, _: &Key) -> Result<Option<Vec<u8>>, StorageError> { Ok(None) }
+/// #     async fn put(&self, _: &Namespace, _: &Key, _: &[u8]) -> Result<(), StorageError> { Ok(()) }
+/// #     async fn delete(&self, _: &Namespace, _: &Key) -> Result<bool, StorageError> { Ok(false) }
+/// #     async fn list(&self, _: &Namespace, _: &str) -> Result<Vec<Key>, StorageError> { Ok(vec![]) }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdin = tokio::io::stdin();
+///     let stdout = tokio::io::stdout();
+///     let mut reader = FramedReader::new(stdin, FramerOptions::default());
+///     let mut writer = FramedWriter::new(stdout);
+///     tau_plugin_sdk::run_storage_with_io(
+///         &mut reader,
+///         &mut writer,
+///         MyStorage,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_storage_with_io<R, W, P>(
     reader: &mut FramedReader<R>,
     writer: &mut FramedWriter<W>,
@@ -109,6 +162,37 @@ where
 /// [`Configure::from_config`] using the JSON config field from the
 /// handshake. v0.1 stub: same dispatch shape as [`run_storage`] —
 /// handshake-and-loop with `METHOD_NOT_FOUND` for `storage.*`.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_plugin_sdk::{Configure, ConfigError};
+/// # use tau_ports::{Storage, StorageError, Namespace, Key};
+/// # use serde::Deserialize;
+/// # #[derive(Deserialize)] struct MyConfig { path: String }
+/// # struct MyStorage { _path: String }
+/// # impl Configure for MyStorage {
+/// #     type Config = MyConfig;
+/// #     fn from_config(c: MyConfig) -> Result<Self, ConfigError> {
+/// #         Ok(MyStorage { _path: c.path })
+/// #     }
+/// # }
+/// # impl Storage for MyStorage {
+/// #     fn name(&self) -> &str { "my-storage" }
+/// #     async fn get(&self, _: &Namespace, _: &Key) -> Result<Option<Vec<u8>>, StorageError> { Ok(None) }
+/// #     async fn put(&self, _: &Namespace, _: &Key, _: &[u8]) -> Result<(), StorageError> { Ok(()) }
+/// #     async fn delete(&self, _: &Namespace, _: &Key) -> Result<bool, StorageError> { Ok(false) }
+/// #     async fn list(&self, _: &Namespace, _: &str) -> Result<Vec<Key>, StorageError> { Ok(vec![]) }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     tau_plugin_sdk::run_storage_with_config::<MyStorage>(
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_storage_with_config<P>(
     plugin_name: &str,
     plugin_version: &str,
@@ -134,6 +218,44 @@ where
 
 /// Same as [`run_storage_with_config`] but accepts an explicit reader
 /// and writer.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_plugin_sdk::{Configure, ConfigError};
+/// # use tau_ports::{Storage, StorageError, Namespace, Key};
+/// # use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+/// # use serde::Deserialize;
+/// # #[derive(Deserialize)] struct MyConfig { path: String }
+/// # struct MyStorage { _path: String }
+/// # impl Configure for MyStorage {
+/// #     type Config = MyConfig;
+/// #     fn from_config(c: MyConfig) -> Result<Self, ConfigError> {
+/// #         Ok(MyStorage { _path: c.path })
+/// #     }
+/// # }
+/// # impl Storage for MyStorage {
+/// #     fn name(&self) -> &str { "my-storage" }
+/// #     async fn get(&self, _: &Namespace, _: &Key) -> Result<Option<Vec<u8>>, StorageError> { Ok(None) }
+/// #     async fn put(&self, _: &Namespace, _: &Key, _: &[u8]) -> Result<(), StorageError> { Ok(()) }
+/// #     async fn delete(&self, _: &Namespace, _: &Key) -> Result<bool, StorageError> { Ok(false) }
+/// #     async fn list(&self, _: &Namespace, _: &str) -> Result<Vec<Key>, StorageError> { Ok(vec![]) }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdin = tokio::io::stdin();
+///     let stdout = tokio::io::stdout();
+///     let mut reader = FramedReader::new(stdin, FramerOptions::default());
+///     let mut writer = FramedWriter::new(stdout);
+///     tau_plugin_sdk::run_storage_with_config_with_io::<_, _, MyStorage>(
+///         &mut reader,
+///         &mut writer,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_storage_with_config_with_io<R, W, P>(
     reader: &mut FramedReader<R>,
     writer: &mut FramedWriter<W>,

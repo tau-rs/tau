@@ -43,6 +43,31 @@ const LLM_COMPLETE_METHOD: &str = "llm.complete";
 /// The plugin author passes their crate's `env!("CARGO_PKG_NAME")` and
 /// `env!("CARGO_PKG_VERSION")` so the handshake response advertises
 /// the plugin's own identity (not the SDK's).
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_ports::{LlmBackend, CompletionRequest, CompletionResponse, CompletionStream, LlmError};
+/// # struct MyPlugin;
+/// # impl LlmBackend for MyPlugin {
+/// #     fn name(&self) -> &str { "my-plugin" }
+/// #     async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn stream(&self, _: CompletionRequest) -> Result<CompletionStream, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     tau_plugin_sdk::run_llm_backend(
+///         MyPlugin,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_llm_backend<P>(
     plugin: P,
     plugin_name: &str,
@@ -70,6 +95,38 @@ where
 
 /// Same as [`run_llm_backend`] but accepts an explicit reader and writer.
 /// Used by integration tests over `tau_plugin_protocol::test_support::FakeStdioPeer`.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_ports::{LlmBackend, CompletionRequest, CompletionResponse, CompletionStream, LlmError};
+/// # use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+/// # struct MyPlugin;
+/// # impl LlmBackend for MyPlugin {
+/// #     fn name(&self) -> &str { "my-plugin" }
+/// #     async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn stream(&self, _: CompletionRequest) -> Result<CompletionStream, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdin = tokio::io::stdin();
+///     let stdout = tokio::io::stdout();
+///     let mut reader = FramedReader::new(stdin, FramerOptions::default());
+///     let mut writer = FramedWriter::new(stdout);
+///     tau_plugin_sdk::run_llm_backend_with_io(
+///         &mut reader,
+///         &mut writer,
+///         MyPlugin,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_llm_backend_with_io<R, W, P>(
     reader: &mut FramedReader<R>,
     writer: &mut FramedWriter<W>,
@@ -176,6 +233,46 @@ where
 /// Same as [`run_llm_backend_with_config`] but accepts an explicit
 /// reader and writer. Used by integration tests over
 /// `tau_plugin_protocol::test_support::FakeStdioPeer`.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_plugin_sdk::{Configure, ConfigError};
+/// # use tau_ports::{LlmBackend, CompletionRequest, CompletionResponse, CompletionStream, LlmError};
+/// # use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+/// # use serde::Deserialize;
+/// # #[derive(Deserialize)] struct MyConfig { api_key: String }
+/// # struct MyPlugin { _api_key: String }
+/// # impl Configure for MyPlugin {
+/// #     type Config = MyConfig;
+/// #     fn from_config(c: MyConfig) -> Result<Self, ConfigError> {
+/// #         Ok(MyPlugin { _api_key: c.api_key })
+/// #     }
+/// # }
+/// # impl LlmBackend for MyPlugin {
+/// #     fn name(&self) -> &str { "my-plugin" }
+/// #     async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn stream(&self, _: CompletionRequest) -> Result<CompletionStream, LlmError> {
+/// #         unimplemented!()
+/// #     }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdin = tokio::io::stdin();
+///     let stdout = tokio::io::stdout();
+///     let mut reader = FramedReader::new(stdin, FramerOptions::default());
+///     let mut writer = FramedWriter::new(stdout);
+///     tau_plugin_sdk::run_llm_backend_with_config_with_io::<_, _, MyPlugin>(
+///         &mut reader,
+///         &mut writer,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_llm_backend_with_config_with_io<R, W, P>(
     reader: &mut FramedReader<R>,
     writer: &mut FramedWriter<W>,

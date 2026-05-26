@@ -65,7 +65,39 @@
 | 42 | test_support.rs:159 | `FakeStdioPeer::send_stream_chunk<T>(&mut self, ...)` | skip-feature-gated | Same as above; feature-gated. |
 | 43 | test_support.rs:178 | `FakeStdioPeer::send_crash(self)` | skip-feature-gated | Same as above; feature-gated. |
 
+## tau-plugin-sdk
+
+| # | File:line | Item | Classification | Strategy |
+|---|---|---|---|---|
+| 1 | configure.rs:31 | `pub enum ConfigError` | done | Fence at line 24 (round 2 or prior); shows `ConfigError::MissingField` + `format!` assertion. |
+| 2 | configure.rs:99 | `pub trait Configure` | done | Fence at line 76 (round 2 or prior); shows full `impl Configure for MyPlugin` with `from_config`. |
+| 3 | error.rs:19 | `pub enum SdkError` | done | Fence at line 12; shows `SdkError::HandshakeMissing` + `format!` assertion. |
+| 4 | handshake.rs:29 | `pub struct PluginMeta` | include | Constructor with 5 params + `#[non_exhaustive]`; §3.1 constructor rule. New fence calls `PluginMeta::new` with all 5 args and asserts `plugin_name`, `port`, `methods.len()`. |
+| 5 | handshake.rs:45 | `PluginMeta::new(...)` (impl method) | done | Covered by `PluginMeta` struct-level fence (row 4 above) which calls `::new`. |
+| 6 | handshake.rs:77 | `pub async fn drive_handshake` | include | 2+ generic params (`R: AsyncRead + Unpin`, `W: AsyncWrite + Unpin`) + returns `Result`; §3.1 generic-bounds + error-path rule. `no_run` fence (blocks on stdin in real use). Asserts `request.port` after a hypothetical successful handshake. |
+| 7 | lib.rs:21 | `pub mod configure` | skip-trivial | Module declaration; no doctest surface. |
+| 8 | lib.rs:22 | `pub mod error` | skip-trivial | Module declaration; no doctest surface. |
+| 9 | lib.rs:23 | `pub mod handshake` | skip-trivial | Module declaration; no doctest surface. |
+| 10 | lib.rs:24 | `pub mod runners` | skip-trivial | Module declaration; no doctest surface. |
+| 11 | lib.rs:25 | `pub mod streaming` | skip-trivial | Module declaration; no doctest surface. |
+| 12 | lib.rs:26 | `pub mod tracing_layer` | skip-trivial | Module declaration; no doctest surface. |
+| 13 | runners/llm_backend.rs:46 | `pub async fn run_llm_backend` | include | Entry-point runner; §3.1 free-function with generic `P: LlmBackend + Send + Sync + 'static`. `no_run` fence (blocks on stdin). Shows typical `#[tokio::main]` entry-point pattern with hidden `MyPlugin` LlmBackend impl. |
+| 14 | runners/llm_backend.rs:73 | `pub async fn run_llm_backend_with_io` | include | Same family; 3 generic params + explicit reader/writer; §3.1 generic-bounds. `no_run` fence with full hidden LlmBackend impl and FramedReader/FramedWriter construction. |
+| 15 | runners/llm_backend.rs:153 | `pub async fn run_llm_backend_with_config` | done | Fence at line 122 (`no_run`); shows `run_llm_backend_with_config::<MyPlugin>` in `main`. |
+| 16 | runners/llm_backend.rs:179 | `pub async fn run_llm_backend_with_config_with_io` | include | `_with_io` variant of above; 3 generics + Configure bound; no prior fence. `no_run` with hidden Configure + LlmBackend impl, shows turbofish `::< _, _, MyPlugin>`. |
+| 17 | runners/storage.rs:34 | `pub async fn run_storage` | include | Entry-point runner for Storage port; §3.1 free-function. `no_run` fence with hidden Storage impl showing all 4 async methods. |
+| 18 | runners/storage.rs:60 | `pub async fn run_storage_with_io` | include | `_with_io` variant; 3 generic params. `no_run` fence with full hidden Storage impl + FramedReader/FramedWriter. |
+| 19 | runners/storage.rs:112 | `pub async fn run_storage_with_config` | include | Configure variant; no prior fence. `no_run` with hidden Configure + Storage impl. |
+| 20 | runners/storage.rs:137 | `pub async fn run_storage_with_config_with_io` | include | `_with_io` + Configure variant; no prior fence. `no_run` with full hidden impls + turbofish. |
+| 21 | runners/tool.rs:53 | `pub async fn run_tool` | include | Entry-point runner for Tool port; §3.1 free-function. `no_run` fence with hidden Tool impl (all 5 methods + `type Session = ()`). |
+| 22 | runners/tool.rs:76 | `pub async fn run_tool_with_io` | include | `_with_io` variant; 3 generic params. `no_run` fence with full hidden Tool impl + FramedReader/FramedWriter. |
+| 23 | runners/tool.rs:158 | `pub async fn run_tool_with_config` | done | Fence at line 125 (`no_run`); shows `run_tool_with_config::<MyTool>` in `main`. |
+| 24 | runners/tool.rs:179 | `pub async fn run_tool_with_config_with_io` | include | `_with_io` + Configure variant; no prior fence. `no_run` with full hidden impls + turbofish. |
+| 25 | streaming.rs:42 | `pub async fn stream_completion` | include | Takes `CompletionStream` (generic stream); §3.1 free-function + non-trivial params. `no_run` fence showing `Box::pin(stream::iter(...))` with `CompletionChunk::Text { delta }` + `Finish` then `stream_completion` call. |
+| 26 | tracing_layer.rs:17 | `pub fn install()` | include | Idempotent install with no return value; §3.1 free-function. Executable fence (calls `install()` twice, asserts `true` to verify no panic). |
+
 ## Status log
 
 - 2026-05-26 — tau-plugin-protocol classifications + 2 includes (PR-A).
 - 2026-05-26 — round-3 spec-review fixes: added missing impl-method rows (Frame::decode/encode, FramedReader/Writer methods, all TraceContext/HandshakeRequest/MethodSchema/HandshakeResponse ::new constructors, meta constants, all FakeStdioPeer methods); added skip-feature-gated category; relabeled FakeStdioPeer + methods from skip-trivial to skip-feature-gated; rewrote FramedReader/FramedWriter fences as duplex round-trips with .expect() assertions.
+- 2026-05-26 — tau-plugin-sdk classifications + 14 includes (PR-B).

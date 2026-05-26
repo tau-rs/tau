@@ -39,6 +39,29 @@ struct StreamSummary {
 /// the stream yields an error, that final response carries an error
 /// envelope with code [`INTERNAL_ERROR`] and the dispatch terminates
 /// without exhausting any further items.
+///
+/// # Example
+///
+/// ```no_run
+/// # use futures_util::stream;
+/// # use tau_ports::{CompletionChunk, CompletionStream, LlmError, StopReason, TokenUsage};
+/// # use tau_plugin_protocol::{FramedWriter};
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdout = tokio::io::stdout();
+///     let mut writer = FramedWriter::new(stdout);
+///     // Build a minimal two-chunk stream: one text chunk + one finish.
+///     let chunks: CompletionStream = Box::pin(stream::iter(vec![
+///         Ok(CompletionChunk::Text { delta: "hello".to_string() }),
+///         Ok(CompletionChunk::Finish {
+///             stop_reason: StopReason::EndTurn,
+///             usage: None,
+///         }),
+///     ]));
+///     tau_plugin_sdk::stream_completion(&mut writer, 1, chunks).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn stream_completion<W>(
     writer: &mut FramedWriter<W>,
     msgid: u32,
