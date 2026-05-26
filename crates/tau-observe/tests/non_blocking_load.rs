@@ -1,12 +1,20 @@
 //! Producer-side latency assertion for the non_blocking install path.
 //!
-//! Emits 100,000 INFO events to a file-backed subscriber and asserts
-//! no single emission took longer than 10 ms. The exact bound is
-//! generous on purpose; the point is to catch a regression where the
-//! writer goes back to blocking semantics. Producer-emit timing can
-//! shift under CI noise (captured stdio, shared runners), so the
-//! threshold is several orders of magnitude above the warm-machine
-//! steady-state (typically <1 ms).
+//! Emits 100,000 INFO events to a file-backed subscriber and asserts no
+//! single emission exceeds the latency budget. The point is to catch a
+//! regression where the writer goes back to blocking semantics — if
+//! that happens, worst-case latency jumps to seconds, not tens of
+//! milliseconds.
+//!
+//! Threshold is set well above platform scheduler granularity:
+//! - Linux/macOS typical: <1 ms (steady-state observed ~160µs).
+//! - Windows: ~15.6 ms (default scheduler tick) is the floor; CI
+//!   runners can spike above that under contention.
+//!
+//! 100 ms is two orders of magnitude above the warm-machine steady
+//! state, comfortably above Windows' tick budget, and still
+//! 50–500x below the seconds-range failure mode the assertion exists
+//! to catch.
 
 #![cfg(feature = "non_blocking")]
 
@@ -16,8 +24,10 @@ use std::time::{Duration, Instant};
 use tau_observe::filter::env_or_directive;
 use tau_observe::install::{install, Format, InstallOptions, Rotation, Writer};
 
+const LATENCY_BUDGET: Duration = Duration::from_millis(100);
+
 #[test]
-fn producer_latency_stays_under_10ms_per_event() {
+fn producer_latency_stays_within_budget() {
     let tmp = tempfile::tempdir().unwrap();
     let log_path: PathBuf = tmp.path().join("load.log");
 
@@ -43,8 +53,7 @@ fn producer_latency_stays_under_10ms_per_event() {
         }
     }
     assert!(
-        worst < Duration::from_millis(10),
-        "worst-case producer latency {:?} exceeded 10ms",
-        worst
+        worst < LATENCY_BUDGET,
+        "worst-case producer latency {worst:?} exceeded {LATENCY_BUDGET:?}",
     );
 }
