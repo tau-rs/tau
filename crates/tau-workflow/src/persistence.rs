@@ -55,6 +55,20 @@ pub enum StepStatus {
     Failed,
 }
 
+impl StepStatus {
+    /// Lowercase wire form, matching the `serde(rename_all = "lowercase")`
+    /// JSON serialization. Used when emitting the variant through
+    /// `tracing::event!` so the on-disk JSONL produced by
+    /// `WorkflowRunLogLayer` is byte-identical to the legacy direct
+    /// writer in `RunLog::write_direct`.
+    pub fn as_str_lowercase(&self) -> &'static str {
+        match self {
+            StepStatus::Ok => "ok",
+            StepStatus::Failed => "failed",
+        }
+    }
+}
+
 /// Builds the canonical run-log path:
 /// `<scope_root>/.tau/workflow-runs/<workflow_name>-<run_id>.jsonl`.
 pub fn run_log_path(scope_root: &std::path::Path, workflow_name: &str, run_id: &str) -> PathBuf {
@@ -66,6 +80,7 @@ pub fn run_log_path(scope_root: &std::path::Path, workflow_name: &str, run_id: &
 
 use std::path::Path;
 
+use tau_observe::layers::workflow_run_log::TARGET as WF_TARGET;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -108,6 +123,37 @@ impl RunLog {
 
     /// Append one record + fsync.
     pub async fn append(&mut self, record: &StepRecord) -> Result<(), crate::WorkflowError> {
+        // Emit a structured tracing event. The `WorkflowRunLogLayer` (when
+        // installed) materializes this into the on-disk JSONL line. Sub-
+        // project D Task 3 removes the direct-write path below once the
+        // layer is wired in `tau workflow run`.
+        let error_field = record.error.as_deref().unwrap_or("");
+        let detail_field = record.detail.as_deref().unwrap_or("");
+        tracing::event!(
+            target: WF_TARGET,
+            tracing::Level::INFO,
+            ts = %record.ts,
+            run_id = %record.run_id,
+            step_id = %record.step_id,
+            step_index = record.step_index as u64,
+            kind = %record.kind,
+            input = %record.input,
+            output = %record.output,
+            started_at = %record.started_at,
+            ended_at = %record.ended_at,
+            duration_ms = record.duration_ms,
+            status = %record.status.as_str_lowercase(),
+            error = %error_field,
+            detail = %detail_field,
+        );
+
+        // Existing direct-write path — preserved so RunLog still produces
+        // its JSONL output when no WorkflowRunLogLayer is installed (e.g.
+        // existing unit tests in this file). Task 3 deletes this path.
+        self.write_direct(record).await
+    }
+
+    async fn write_direct(&mut self, record: &StepRecord) -> Result<(), crate::WorkflowError> {
         let mut line =
             serde_json::to_string(record).map_err(|e| crate::WorkflowError::PersistenceError {
                 path: self.path.clone(),
