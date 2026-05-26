@@ -157,44 +157,67 @@
 | 54 | message.rs:89 | `pub struct Message` | done | Fence at line 74 (shows `Message::new` + `parent_id.is_none()`). |
 | 55 | message.rs:131 | `Message::new(sender, recipient, payload)` | done | Fence at line 119 (shows `Message::new` + `matches!` + `parent_id.is_none()`). |
 | 56 | package/capability.rs:35 | `pub enum Capability` | done | Fence at line 20 (shows `Capability::Custom` + `required_shape()`). |
-| 57 | package/capability.rs:89 | `pub enum FsCapability` | done | Fence at line 78 (shows `CapabilityShape::FilesystemRead` assertion). |
-| 58 | package/capability.rs:131 | `pub enum NetCapability` | done | Fence at line 120 (shows `CapabilityShape::NetworkHttp` assertion). |
-| 59 | package/capability.rs:161 | `pub enum ProcessCapability` | done | Fence at line 150 (shows `CapabilityShape::ProcessExec` assertion). |
-| 60 | package/capability.rs:189 | `pub enum AgentCapability` | done | Fence at line 178 (shows `CapabilityShape::AgentSpawn` assertion). |
-| 61 | package/capability.rs:223 | `pub enum SkillCapability` | done | Fence at line 212 (shows `CapabilityShape::SkillSpawn` assertion). |
-| 62 | package/capability.rs:250 | `pub enum CapabilityShape` | skip-trivial | Enum variants demonstrated by sub-capability fences above (rows 57-61). |
-| 63 | package/capability.rs:280 | `pub struct CapabilityShapeSet` | include | Constructor `::new()` + `insert` + `contains` + `is_subset_of` methods with 2+ params; §3.1. New executable fence: builds two sets, asserts `is_subset_of` + `contains` + `len`. |
-| 64 | package/manifest.rs:34 | `pub struct PackageDep` | done | Fence at line 21 (shows field-type construction + assertions). |
-| 65 | package/manifest.rs:60 | `pub struct PackageId` | done | Fence at line 45 (shows `::new` + field assertions). |
-| 66 | package/manifest.rs:110 | `pub enum PackageKind` | done | Fence at line 100 (shows `PackageKind::Custom { kind: tool }` + `matches!`). |
-| 67 | package/manifest.rs:171 | `pub mod kinds` | skip-trivial | Module with string constants; individually covered by prose. |
-| 68 | package/manifest.rs:203 | `pub struct UncheckedManifest` | done | Fence at line 195 (`no_run`; shows TOML parse + validate pattern). |
-| 69 | package/manifest.rs:262 | `pub struct PackageManifest(UncheckedManifest)` | done | Fence at line 255 (`no_run`; shows `unchecked.validate()?` pattern). |
-| 70 | package/mod.rs:3 | `pub mod capability` | skip-trivial | Module declaration. |
-| 71 | package/mod.rs:4 | `pub mod manifest` | skip-trivial | Module declaration. |
-| 72 | package/mod.rs:5 | `pub mod plugin` | skip-trivial | Module declaration. |
-| 73 | package/mod.rs:6 | `pub mod sandbox` | skip-trivial | Module declaration. |
-| 74 | package/mod.rs:7 | `pub mod skill` | skip-trivial | Module declaration. |
-| 75 | package/mod.rs:8 | `pub mod skill_format` | skip-trivial | Module declaration. |
-| 76 | package/mod.rs:9 | `pub mod source` | skip-trivial | Module declaration. |
-| 77 | package/plugin.rs:33 | `pub enum PortKind` | done | Fence at line 21 (shows `from_str("llm_backend")` + `to_string()` round-trip). |
-| 78 | package/plugin.rs:105 | `pub enum PluginKind` | done | Fence at line 96 (shows `from_str("rust-cargo")` + `to_string()` round-trip). |
-| 79 | package/plugin.rs:169 | `pub struct PluginManifest` | done | Fence at line 153 (shows `::new` with all 3 params + field assertions). |
-| 80 | package/sandbox.rs:34 | `pub struct PluginSandboxRequirements` | done | Fence at line 21 (shows `default()` + assertions on null state). |
-| 81 | package/sandbox.rs:57 | `pub enum PluginRequiredTier` | include | Enum with `PartialOrd`/`Ord` impl (non-trivial ordering); §3.1 non-trivial impl. New executable fence: asserts ordering `None < Light < Strict` and `max()` behavior. |
-| 82 | package/skill.rs:35 | `pub const SKILL_DIR_VAR: &str` | skip-trivial | String constant (`"${SKILL_DIR}"`); value documented in prose. |
-| 83 | package/skill.rs:45 | `pub struct SkillManifest` | include | `#[non_exhaustive]` struct; §3.1 (production type). `no_run` fence — construction requires `serde` + TOML parsing; pattern shows TOML-parse → `u.skill.as_ref()` access. |
-| 84 | package/skill.rs:77 | `pub struct SkillFrontmatter` | include | `#[non_exhaustive]` struct; §3.1 (production type). `no_run` fence — instances come from `parse_skill_md` (feature-gated); pattern shows parse → `.frontmatter.name`. |
-| 85 | package/skill.rs:95 | `pub struct SkillContent` | include | `#[non_exhaustive]` struct; §3.1 (production type). `no_run` fence — instances come from `parse_skill_md` (feature-gated); pattern shows parse → `.body`. |
-| 86 | package/skill.rs:106 | `pub enum SkillContentError` | include | Error enum with multiple variants; §3.1 error path. New executable fence: constructs `MissingFrontmatterOpener` and `MissingName`, asserts `to_string()` content. |
-| 87 | package/skill.rs:144 | `pub fn parse_skill_md(input)` | skip-feature-gated | Gated behind `#[cfg(feature = "serde")]`; serde not on by default; comprehensive tests in `#[cfg(all(test, feature = "serde"))]`. |
-| 88 | package/skill_format.rs:32 | `pub enum SkillFormat` | include | `#[non_exhaustive]` enum; §3.1. New executable fence: constructs all 3 variants and asserts `eq` / `ne`. |
-| 89 | package/skill_format.rs:52 | `pub fn detect_format(dir)` | include | Free function; §3.1 free function. New executable fence: creates two `tempdir()`s (with `tau.toml` / empty), asserts `Tau` and `Invalid`. |
-| 90 | package/skill_format.rs:78 | `pub fn synthesize_manifest_from_skill_md(parsed, source)` | skip-feature-gated | Gated behind `#[cfg(feature = "serde")]`; same reasoning as `parse_skill_md`. |
-| 91 | package/skill_format.rs:123 | `pub enum SynthesizeError` | skip-feature-gated | Produced only by feature-gated `synthesize_manifest_from_skill_md`; classifying alongside it. |
-| 92 | package/source.rs:31 | `pub enum PackageSource` | done | Fence at line 19 (shows `from_str("https://…#main")` + `to_string()` round-trip). |
-| 93 | package/source.rs:85 | `pub enum GitLocation` | include | `#[non_exhaustive]` enum with `Scp { user, host, path }` associated-data variant; §3.1. New executable fence: constructs both shapes via `PackageSource::from_str`, asserts variant via `matches!`. |
-| 94 | value.rs:52 | `pub enum Value` | done | Two fences at lines 23 and 40 (Object + accessor chain; Bytes serde round-trip). |
+| 57 | package/capability.rs:344 | `Capability::required_shape(&self)` | include | Returns non-trivial `CapabilityShape`; §3.1 non-trivial method. New executable fence on `impl Capability` block: constructs `Capability::Custom`, asserts `required_shape()` equals `CapabilityShape::Custom { name }`. |
+| 58 | package/capability.rs:89 | `pub enum FsCapability` | done | Fence at line 78 (shows `CapabilityShape::FilesystemRead` assertion). |
+| 59 | package/capability.rs:131 | `pub enum NetCapability` | done | Fence at line 120 (shows `CapabilityShape::NetworkHttp` assertion). |
+| 60 | package/capability.rs:161 | `pub enum ProcessCapability` | done | Fence at line 150 (shows `CapabilityShape::ProcessExec` assertion). |
+| 61 | package/capability.rs:189 | `pub enum AgentCapability` | done | Fence at line 178 (shows `CapabilityShape::AgentSpawn` assertion). |
+| 62 | package/capability.rs:223 | `pub enum SkillCapability` | done | Fence at line 212 (shows `CapabilityShape::SkillSpawn` assertion). |
+| 63 | package/capability.rs:250 | `pub enum CapabilityShape` | skip-trivial | Enum variants demonstrated by sub-capability fences above (rows 58-62). |
+| 64 | package/capability.rs:280 | `pub struct CapabilityShapeSet` | include | Constructor `::new()` + `insert` + `contains` + `is_subset_of` methods with 2+ params; §3.1. New executable fence: builds two sets, asserts `is_subset_of` + `contains` + `len`. |
+| 65 | package/capability.rs:303 | `CapabilityShapeSet::new()` | done | Exercised by struct-level fence at line 280 (`new()` called to build both sets). |
+| 66 | package/capability.rs:308 | `CapabilityShapeSet::insert(&mut self, shape)` | done | Exercised by struct-level fence at line 280 (`insert` called on both sets). |
+| 67 | package/capability.rs:315 | `CapabilityShapeSet::contains(&self, shape)` | done | Exercised by struct-level fence at line 280 (`assert!(adapter.contains(…))`). |
+| 68 | package/capability.rs:320 | `CapabilityShapeSet::is_subset_of(&self, other)` | done | Exercised by struct-level fence at line 280 (`assert!(plan.is_subset_of(&adapter))`). |
+| 69 | package/capability.rs:325 | `CapabilityShapeSet::iter(&self)` | skip-getter | Trivial iterator accessor; not called in struct-level fence; pattern is straightforward `.iter()` delegation. |
+| 70 | package/capability.rs:330 | `CapabilityShapeSet::len(&self)` | done | Exercised by struct-level fence at line 280 (`assert_eq!(adapter.len(), 2)`). |
+| 71 | package/capability.rs:335 | `CapabilityShapeSet::is_empty(&self)` | skip-getter | Trivial boolean getter; not called in struct-level fence; no behavior to demonstrate beyond `is_empty() == (len() == 0)`. |
+| 72 | package/manifest.rs:34 | `pub struct PackageDep` | done | Fence at line 21 (shows field-type construction + assertions). |
+| 73 | package/manifest.rs:60 | `pub struct PackageId` | done | Fence at line 45 (shows `::new` + field assertions). |
+| 74 | package/manifest.rs:87 | `PackageId::new(name, version)` | done | Exercised by struct-level fence at line 45 (`PackageId::new(…)` called directly). |
+| 75 | package/manifest.rs:110 | `pub enum PackageKind` | done | Fence at line 100 (shows `PackageKind::Custom { kind: tool }` + `matches!`). |
+| 76 | package/manifest.rs:171 | `pub mod kinds` | skip-trivial | Module with string constants; individually covered by prose. |
+| 77 | package/manifest.rs:203 | `pub struct UncheckedManifest` | done | Fence at line 195 (`no_run`; shows TOML parse + validate pattern). |
+| 78 | package/manifest.rs:518 | `UncheckedManifest::validate(self)` | done | Fence at line 508 (`no_run`; `UncheckedManifest` is `#[non_exhaustive]` with no public constructor; shows `unchecked.validate()?` pattern). |
+| 79 | package/manifest.rs:262 | `pub struct PackageManifest(UncheckedManifest)` | done | Fence at line 255 (`no_run`; shows `unchecked.validate()?` pattern). |
+| 80 | package/manifest.rs:266 | `PackageManifest::name(&self)` | skip-getter | Trivial accessor returning `&PackageName`. |
+| 81 | package/manifest.rs:270 | `PackageManifest::version(&self)` | skip-getter | Trivial accessor returning `&Version`. |
+| 82 | package/manifest.rs:274 | `PackageManifest::description(&self)` | skip-getter | Trivial accessor returning `&str`. |
+| 83 | package/manifest.rs:278 | `PackageManifest::authors(&self)` | skip-getter | Trivial accessor returning `&[String]`. |
+| 84 | package/manifest.rs:282 | `PackageManifest::license(&self)` | skip-getter | Trivial accessor returning `Option<&str>`. |
+| 85 | package/manifest.rs:286 | `PackageManifest::source(&self)` | skip-getter | Trivial accessor returning `&PackageSource`. |
+| 86 | package/manifest.rs:290 | `PackageManifest::kind(&self)` | skip-getter | Trivial accessor returning `&PackageKind`. |
+| 87 | package/manifest.rs:294 | `PackageManifest::dependencies(&self)` | skip-getter | Trivial accessor returning `&[PackageDep]`. |
+| 88 | package/manifest.rs:298 | `PackageManifest::capabilities(&self)` | skip-getter | Trivial accessor returning `&[Capability]`. |
+| 89 | package/manifest.rs:306 | `PackageManifest::plugin(&self)` | skip-getter | Trivial accessor returning `Option<&PluginManifest>`. |
+| 90 | package/manifest.rs:311 | `PackageManifest::sandbox(&self)` | skip-getter | Trivial accessor returning `&PluginSandboxRequirements`. |
+| 91 | package/manifest.rs:319 | `PackageManifest::skill(&self)` | skip-getter | Trivial accessor returning `Option<&SkillManifest>`. |
+| 92 | package/mod.rs:3 | `pub mod capability` | skip-trivial | Module declaration. |
+| 93 | package/mod.rs:4 | `pub mod manifest` | skip-trivial | Module declaration. |
+| 94 | package/mod.rs:5 | `pub mod plugin` | skip-trivial | Module declaration. |
+| 95 | package/mod.rs:6 | `pub mod sandbox` | skip-trivial | Module declaration. |
+| 96 | package/mod.rs:7 | `pub mod skill` | skip-trivial | Module declaration. |
+| 97 | package/mod.rs:8 | `pub mod skill_format` | skip-trivial | Module declaration. |
+| 98 | package/mod.rs:9 | `pub mod source` | skip-trivial | Module declaration. |
+| 99 | package/plugin.rs:33 | `pub enum PortKind` | done | Fence at line 21 (shows `from_str("llm_backend")` + `to_string()` round-trip). |
+| 100 | package/plugin.rs:105 | `pub enum PluginKind` | done | Fence at line 96 (shows `from_str("rust-cargo")` + `to_string()` round-trip). |
+| 101 | package/plugin.rs:169 | `pub struct PluginManifest` | done | Fence at line 153 (shows `::new` with all 3 params + field assertions). |
+| 102 | package/plugin.rs:181 | `PluginManifest::new(provides, kind, bin)` | done | Exercised by struct-level fence at line 153 (`PluginManifest::new(…)` called directly). |
+| 103 | package/sandbox.rs:34 | `pub struct PluginSandboxRequirements` | done | Fence at line 21 (shows `default()` + assertions on null state). |
+| 104 | package/sandbox.rs:57 | `pub enum PluginRequiredTier` | include | Enum with `PartialOrd`/`Ord` impl (non-trivial ordering); §3.1 non-trivial impl. New executable fence: asserts ordering `None < Light < Strict` and `max()` behavior. |
+| 105 | package/skill.rs:35 | `pub const SKILL_DIR_VAR: &str` | skip-trivial | String constant (`"${SKILL_DIR}"`); value documented in prose. |
+| 106 | package/skill.rs:45 | `pub struct SkillManifest` | include | `#[non_exhaustive]` struct; §3.1 (production type). `no_run` fence — construction requires `serde` + TOML parsing; pattern shows TOML-parse → `u.skill.as_ref()` access. |
+| 107 | package/skill.rs:77 | `pub struct SkillFrontmatter` | include | `#[non_exhaustive]` struct; §3.1 (production type). `no_run` fence — instances come from `parse_skill_md` (feature-gated); pattern shows parse → `.frontmatter.name`. |
+| 108 | package/skill.rs:95 | `pub struct SkillContent` | include | `#[non_exhaustive]` struct; §3.1 (production type). `no_run` fence — instances come from `parse_skill_md` (feature-gated); pattern shows parse → `.body`. |
+| 109 | package/skill.rs:106 | `pub enum SkillContentError` | include | Error enum with multiple variants; §3.1 error path. New executable fence: constructs `MissingFrontmatterOpener` and `MissingName`, asserts `to_string()` content. |
+| 110 | package/skill.rs:144 | `pub fn parse_skill_md(input)` | skip-feature-gated | Gated behind `#[cfg(feature = "serde")]`; serde not on by default; comprehensive tests in `#[cfg(all(test, feature = "serde"))]`. |
+| 111 | package/skill_format.rs:32 | `pub enum SkillFormat` | include | `#[non_exhaustive]` enum; §3.1. New executable fence: constructs all 3 variants and asserts `eq` / `ne`. |
+| 112 | package/skill_format.rs:52 | `pub fn detect_format(dir)` | include | Free function; §3.1 free function. New executable fence: creates two `tempdir()`s (with `tau.toml` / empty), asserts `Tau` and `Invalid`. |
+| 113 | package/skill_format.rs:78 | `pub fn synthesize_manifest_from_skill_md(parsed, source)` | skip-feature-gated | Gated behind `#[cfg(feature = "serde")]`; same reasoning as `parse_skill_md`. |
+| 114 | package/skill_format.rs:123 | `pub enum SynthesizeError` | include | Error enum; variants constructible externally without any feature gate (only the producer `synthesize_manifest_from_skill_md` is feature-gated). New executable fence: constructs `InvalidName`, asserts `to_string()` contains the name. |
+| 115 | package/source.rs:31 | `pub enum PackageSource` | done | Fence at line 19 (shows `from_str("https://…#main")` + `to_string()` round-trip). |
+| 116 | package/source.rs:85 | `pub enum GitLocation` | include | `#[non_exhaustive]` enum with `Scp { user, host, path }` associated-data variant; §3.1. New executable fence: constructs both shapes via `PackageSource::from_str`, asserts variant via `matches!`. |
+| 117 | value.rs:52 | `pub enum Value` | done | Two fences at lines 23 and 40 (Object + accessor chain; Bytes serde round-trip). |
 
 ## Status log
 
@@ -202,3 +225,4 @@
 - 2026-05-26 — round-3 spec-review fixes: added missing impl-method rows (Frame::decode/encode, FramedReader/Writer methods, all TraceContext/HandshakeRequest/MethodSchema/HandshakeResponse ::new constructors, meta constants, all FakeStdioPeer methods); added skip-feature-gated category; relabeled FakeStdioPeer + methods from skip-trivial to skip-feature-gated; rewrote FramedReader/FramedWriter fences as duplex round-trips with .expect() assertions.
 - 2026-05-26 — tau-plugin-sdk classifications + 14 includes (PR-B).
 - 2026-05-26 — tau-domain classifications + 17 includes (PR-C).
+- 2026-05-26 — round-3 spec-review fixes (PR-C round-3): SynthesizeError reclassified from skip-feature-gated to include (+1 fence); added 23 missing impl-method rows (7 CapabilityShapeSet methods, 1 Capability::required_shape with new fence, 12 PackageManifest skip-getter rows, PackageId::new done, PluginManifest::new done, UncheckedManifest::validate done); tau-domain include count now 18.
