@@ -4,7 +4,7 @@
 //! check that the global init path doesn't panic.
 
 use tau_observe::filter::env_or_directive;
-use tau_observe::install::{install, Format, InstallOptions, Writer};
+use tau_observe::install::{install, Format, InstallOptions, Rotation, Writer};
 
 #[test]
 fn each_format_writer_combination_installs_without_panic() {
@@ -19,6 +19,9 @@ fn each_format_writer_combination_installs_without_panic() {
             filter: env_or_directive("tau=info"),
             format,
             writer,
+            non_blocking: false,
+            file_path: None,
+            rotation: Rotation::Never,
             #[cfg(feature = "otlp")]
             otlp: None,
         };

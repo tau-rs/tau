@@ -12,6 +12,7 @@ authors.workspace = true
 serde_json         = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
+tracing-appender   = { version = "0.2", optional = true }
 thiserror          = { workspace = true }
 
 # Optional OpenTelemetry stack — enabled by the `otlp` feature. The
@@ -30,6 +31,7 @@ tonic                 = { version = "0.9", default-features = false, optional = 
 # Offline OTLP exporter used by feature-gated smoke tests; matches the
 # `opentelemetry 0.21` family above.
 opentelemetry-stdout = { version = "0.2", features = ["trace"] }
+tempfile             = { workspace = true }
 
 [features]
 default = []
@@ -37,6 +39,8 @@ default = []
 # typically add this under `[dev-dependencies]` of crates whose tests
 # assert on emitted spans/events.
 test-fixtures = []
+# Enables the non-blocking MPSC writer + log rotation via tracing-appender.
+non_blocking = ["dep:tracing-appender"]
 # Enables the optional OpenTelemetry/OTLP exporter wiring. Off by
 # default — opted into by the CLI when `--otlp-endpoint` or
 # `OTEL_EXPORTER_OTLP_ENDPOINT` is set.

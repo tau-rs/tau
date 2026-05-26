@@ -58,6 +58,27 @@ Options:
           - container:   Docker / Podman shell-out
           - passthrough: No isolation (explicit opt-out)
 
+      --log-non-blocking
+          Write logs through a non-blocking MPSC channel (high-throughput). Requires `--log-file`. Env: `TAU_LOG_NON_BLOCKING=1`
+          
+          [env: TAU_LOG_NON_BLOCKING=]
+
+      --log-file <PATH>
+          Write logs to the given file instead of stderr. Required when `--log-non-blocking` is set. Env: `TAU_LOG_FILE`
+          
+          [env: TAU_LOG_FILE=]
+
+      --log-rotation <LOG_ROTATION>
+          Log file rotation policy. Ignored unless `--log-file` is set. Env: `TAU_LOG_ROTATION`
+
+          Possible values:
+          - never:  No rotation — append forever to a single file
+          - daily:  Roll over each day at UTC midnight (filename gains a date suffix)
+          - hourly: Roll over each hour (filename gains a date+hour suffix)
+          
+          [env: TAU_LOG_ROTATION=]
+          [default: never]
+
       --otlp-endpoint <URL>
           Export traces over OTLP/gRPC to this endpoint, e.g. `https://otel.example.com:4317`. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` env var. Auth + tenant headers come from `OTEL_EXPORTER_OTLP_HEADERS` (comma-separated `key=value` pairs). Requires the `otlp` cargo feature (on by default)
           
