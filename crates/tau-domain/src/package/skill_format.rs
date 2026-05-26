@@ -149,6 +149,18 @@ pub fn synthesize_manifest_from_skill_md(
 }
 
 /// Errors raised by [`synthesize_manifest_from_skill_md`].
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::SynthesizeError;
+///
+/// let err = SynthesizeError::InvalidName {
+///     name: "bad name".into(),
+///     detail: "contains a space".into(),
+/// };
+/// assert!(err.to_string().contains("bad name"));
+/// ```
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SynthesizeError {
