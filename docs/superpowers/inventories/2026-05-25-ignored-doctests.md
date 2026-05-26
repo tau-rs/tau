@@ -36,25 +36,25 @@
 | 19 | tau-domain | package/manifest.rs:507 | `UncheckedManifest::validate` | D | no_run; `UncheckedManifest` is `#[non_exhaustive]` with no public constructor; shows call shape with `unimplemented!()` placeholder |
 | 20 | tau-domain | package/plugin.rs:96 | `PluginKind` enum | A | flip to executed fence; `from_str` + `to_string` work from outside the crate |
 | 21 | tau-domain | package/plugin.rs:153 | `PluginManifest` struct | B | replace `toml::from_str` (requires serde feature) with `PluginManifest::new()` constructor; flip to executed fence |
-| 22 | tau-pkg | install.rs:152 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 23 | tau-pkg | install.rs:769 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 24 | tau-pkg | lockfile.rs:135 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 25 | tau-pkg | lockfile.rs:192 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 26 | tau-pkg | lockfile.rs:317 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 27 | tau-pkg | lockfile.rs:538 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 28 | tau-pkg | lockfile.rs:587 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 29 | tau-pkg | lockfile.rs:608 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 30 | tau-pkg | lockfile.rs:632 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 31 | tau-pkg | manifest.rs:41 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 32 | tau-pkg | registry.rs:25 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 33 | tau-pkg | registry.rs:46 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 34 | tau-pkg | scope.rs:262 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 35 | tau-pkg | scope.rs:296 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 36 | tau-pkg | scope.rs:326 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 37 | tau-pkg | scope.rs:400 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 38 | tau-pkg | tree_hash.rs:86 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 39 | tau-pkg | update.rs:28 | TBD-by-Task-6 | ? | classify in Task 6 |
-| 40 | tau-pkg | update.rs:94 | TBD-by-Task-6 | ? | classify in Task 6 |
+| 22 | tau-pkg | install.rs:152 | `install` fn | D | no_run — shells out to `git clone` (subprocess + network) |
+| 23 | tau-pkg | install.rs:769 | `uninstall` fn | D | no_run — acquires file lock + modifies on-disk install state |
+| 24 | tau-pkg | lockfile.rs:135 | `LockedPackage` struct | B | parse via `LockFile::from_toml_str`; assert `pkg.name.as_str()` |
+| 25 | tau-pkg | lockfile.rs:192 | `LockedPlugin` struct | B | construct via `LockedPlugin::new(PluginManifest::new(…), …)`; assert `manifest.bin` |
+| 26 | tau-pkg | lockfile.rs:317 | `LockedVersion` struct | B | parse via `LockFile::from_toml_str` with `[[package.versions]]`; assert `ver.version` |
+| 27 | tau-pkg | lockfile.rs:538 | `LockFile::save` | B | hidden `tempfile::tempdir()` + assert `path.exists()` |
+| 28 | tau-pkg | lockfile.rs:587 | `LockFile::find` | A | pure — `LockFile::default()` + `find` on empty; assert `None` |
+| 29 | tau-pkg | lockfile.rs:608 | `LockFile::upsert` | B | parse `LockedPackage` via `from_toml_str`; call `upsert`; assert `len == 1` |
+| 30 | tau-pkg | lockfile.rs:632 | `LockFile::remove` | A | pure — `LockFile::default()` + `remove` on empty; assert `None` |
+| 31 | tau-pkg | manifest.rs:41 | `read_manifest` fn | B | write minimal `tau.toml` to `tempfile::tempdir()`; assert `name` |
+| 32 | tau-pkg | registry.rs:25 | `list` fn | B | `Scope::new_project(tmp.path())`; assert empty list |
+| 33 | tau-pkg | registry.rs:46 | `get` fn | B | `Scope::new_project(tmp.path())`; assert `None` |
+| 34 | tau-pkg | scope.rs:262 | `Scope` struct | B | `Scope::new_project(tmp.path())`; assert `kind == Project` |
+| 35 | tau-pkg | scope.rs:296 | `Scope::resolve` | B | create `.tau/` in tempdir; `Scope::resolve` detects it; assert `kind == Project` |
+| 36 | tau-pkg | scope.rs:326 | `Scope::global` | B | set `TAU_HOME` to tempdir path via `std::env::set_var`; assert `kind == Global` |
+| 37 | tau-pkg | scope.rs:400 | `Scope::new_project` | B | `Scope::new_project(tmp.path())`; assert `state_path` ends with `.tau` |
+| 38 | tau-pkg | tree_hash.rs:86 | `tree_hash` fn | B | write one file to tempdir; assert hash len == 64 |
+| 39 | tau-pkg | update.rs:28 | `UpdateError` enum | A | define `fn describe(e: &UpdateError)` with `_ =>` catch-all; compiles |
+| 40 | tau-pkg | update.rs:94 | `UpdateResult` struct | A | define `fn log_update(r: &UpdateResult)` referencing `from_version`/`to_version`; compiles |
 
 ## Status log
 
@@ -64,3 +64,4 @@
 - 2026-05-25 — row 4 → activated; rows 5+6 → no_run with hidden fixture (PR-B).
 - 2026-05-25 — rows 7, 8, 9 → activated (PR-C, established Runtime-flow fixture pattern via `tau_ports::fixtures::MockLlmBackend`).
 - 2026-05-25 — rows 10-21 → activated/no_run per row classification (PR-D).
+- 2026-05-25 — rows 22-40 → activated/no_run per row classification (PR-E).

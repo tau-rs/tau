@@ -132,10 +132,25 @@ pub enum SynthesizedSource {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `LockedPackage` is `#[non_exhaustive]`; in tests, construct via
-/// // struct literal from within the crate. External callers receive
-/// // values from `LockFile::find` / `list` / `get`.
+/// ```
+/// use tau_pkg::lockfile::LockFile;
+///
+/// // `LockedPackage` is `#[non_exhaustive]`; external callers receive
+/// // values from `LockFile::find`, `LockFile::packages`, or `registry::list`.
+/// // Here we round-trip a minimal lockfile to obtain one.
+/// # let toml = r#"
+/// # schema_version = 6
+/// # generated_by_tau_version = "0.1.0"
+/// # generated_at = "2024-01-01T00:00:00Z"
+/// #
+/// # [[package]]
+/// # name = "acme-tool"
+/// # active_version = "1.0.0"
+/// # source = "https://example.com/acme/tool.git"
+/// # "#;
+/// # let lf = LockFile::from_toml_str(toml).unwrap();
+/// # let pkg = lf.packages.first().unwrap();
+/// assert_eq!(pkg.name.as_str(), "acme-tool");
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -189,11 +204,28 @@ pub struct LockedPackage {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `LockedPlugin` is `#[non_exhaustive]`; constructed by the install
-/// // lifecycle (Task 12). External callers (notably tau-runtime
-/// // integration tests that synthesize a lockfile against pre-built
-/// // binaries) build it via [`LockedPlugin::new`].
+/// ```
+/// use std::path::PathBuf;
+/// use std::time::SystemTime;
+/// use std::str::FromStr;
+/// use tau_domain::{PluginManifest, PluginKind, PortKind};
+/// use tau_pkg::lockfile::LockedPlugin;
+///
+/// // `LockedPlugin` is `#[non_exhaustive]`; external callers use
+/// // [`LockedPlugin::new`] (tau-runtime integration tests use this to
+/// // synthesize a lockfile against a pre-built binary).
+/// let manifest = PluginManifest::new(
+///     PortKind::from_str("llm_backend").unwrap(),
+///     PluginKind::from_str("rust-cargo").unwrap(),
+///     "my-plugin".to_string(),
+/// );
+/// let plugin = LockedPlugin::new(
+///     manifest,
+///     PathBuf::from("/path/to/binary"),
+///     SystemTime::UNIX_EPOCH,
+///     String::new(),
+/// );
+/// assert_eq!(plugin.manifest.bin, "my-plugin");
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -314,9 +346,30 @@ impl LockedSkill {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `LockedVersion` is `#[non_exhaustive]`; constructed by the install
-/// // lifecycle (Task 10) and consumed by `LockFile` accessors (Task 7).
+/// ```
+/// use tau_pkg::lockfile::LockFile;
+///
+/// // `LockedVersion` is `#[non_exhaustive]`; external callers receive
+/// // values from `LockedPackage::installed_versions`.
+/// // Round-trip a lockfile to obtain one.
+/// # let toml = r#"
+/// # schema_version = 6
+/// # generated_by_tau_version = "0.1.0"
+/// # generated_at = "2024-01-01T00:00:00Z"
+/// #
+/// # [[package]]
+/// # name = "acme-tool"
+/// # active_version = "1.0.0"
+/// # source = "https://example.com/acme/tool.git"
+/// #
+/// # [[package.versions]]
+/// # version = "1.0.0"
+/// # resolved_commit = "0000000000000000000000000000000000000001"
+/// # installed_at = "2024-01-01T00:00:00Z"
+/// # "#;
+/// # let lf = LockFile::from_toml_str(toml).unwrap();
+/// # let ver = &lf.packages[0].installed_versions[0];
+/// assert_eq!(ver.version.to_string(), "1.0.0");
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -535,12 +588,14 @@ impl LockFile {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use std::path::Path;
+    /// ```
     /// use tau_pkg::lockfile::LockFile;
     ///
+    /// # let tmp = tempfile::tempdir().unwrap();
+    /// # let path = tmp.path().join("tau-lock.toml");
     /// let lf = LockFile::default();
-    /// lf.save(Path::new("/tmp/tau-lock.toml")).unwrap();
+    /// lf.save(&path).unwrap();
+    /// assert!(path.exists());
     /// ```
     pub fn save(&self, path: &Path) -> Result<(), RegistryError> {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -584,7 +639,7 @@ impl LockFile {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
     /// use tau_pkg::lockfile::LockFile;
     ///
     /// let lf = LockFile::default();
@@ -605,11 +660,25 @@ impl LockFile {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
     /// use tau_pkg::lockfile::LockFile;
     ///
+    /// // `LockedPackage` is `#[non_exhaustive]`; parse it from a lockfile string.
+    /// # let toml = r#"
+    /// # schema_version = 6
+    /// # generated_by_tau_version = "0.1.0"
+    /// # generated_at = "2024-01-01T00:00:00Z"
+    /// #
+    /// # [[package]]
+    /// # name = "acme-tool"
+    /// # active_version = "1.0.0"
+    /// # source = "https://example.com/acme/tool.git"
+    /// # "#;
+    /// # let source_lf = LockFile::from_toml_str(toml).unwrap();
+    /// # let pkg = source_lf.packages.into_iter().next().unwrap();
     /// let mut lf = LockFile::default();
-    /// // lf.upsert(pkg);  // pkg: LockedPackage
+    /// lf.upsert(pkg);
+    /// assert_eq!(lf.packages.len(), 1);
     /// ```
     pub fn upsert(&mut self, package: LockedPackage) {
         if let Some(existing) = self.packages.iter_mut().find(|p| p.name == package.name) {
@@ -629,7 +698,7 @@ impl LockFile {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
     /// use tau_pkg::lockfile::LockFile;
     ///
     /// let mut lf = LockFile::default();

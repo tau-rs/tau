@@ -149,9 +149,9 @@ pub struct InstalledPackage {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `Scope` is `#[non_exhaustive]`; use `Scope::resolve` / `global` /
-/// // `new_project` to obtain one.
+/// ```no_run
+/// // `install` shells out to `git clone` — cannot run in a doctest
+/// // without network access and a real git binary on PATH.
 /// use std::str::FromStr;
 /// use tau_domain::PackageSource;
 /// use tau_pkg::{install, Scope};
@@ -766,8 +766,9 @@ fn warn_non_namespaced_custom_capabilities(manifest: &tau_domain::PackageManifes
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `Scope` and `PackageName` are constructed via their respective APIs.
+/// ```no_run
+/// // `uninstall` acquires a file lock and modifies on-disk state —
+/// // cannot run in a doctest without a pre-populated install scope.
 /// use tau_pkg::{uninstall, Scope};
 /// use std::str::FromStr;
 ///

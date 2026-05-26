@@ -83,13 +83,13 @@ pub struct FileHash {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_pkg::tree_hash;
-/// use std::path::Path;
 ///
-/// let hash = tree_hash(Path::new("/some/install/dir"))?;
+/// # let tmp = tempfile::tempdir().unwrap();
+/// # std::fs::write(tmp.path().join("hello.txt"), b"hello world").unwrap();
+/// let hash = tree_hash(tmp.path()).unwrap();
 /// assert_eq!(hash.len(), 64);
-/// # Ok::<(), tau_pkg::TreeHashError>(())
 /// ```
 pub fn tree_hash(root: &Path) -> Result<String, TreeHashError> {
     let mut entries: Vec<(String, PathBuf)> = Vec::new();

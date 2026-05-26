@@ -38,12 +38,23 @@ use crate::error::ManifestReadError;
 ///
 /// # Example
 ///
-/// ```ignore
-/// use std::path::Path;
+/// ```
 /// use tau_pkg::read_manifest;
 ///
-/// let manifest = read_manifest(Path::new("/some/package/tau.toml")).unwrap();
-/// println!("{}", manifest.name());
+/// # let tmp = tempfile::tempdir().unwrap();
+/// # let path = tmp.path().join("tau.toml");
+/// # std::fs::write(&path, concat!(
+/// #     "name = \"acme-tool\"\n",
+/// #     "version = \"1.0.0\"\n",
+/// #     "description = \"A tool\"\n",
+/// #     "authors = [\"Acme <acme@example.com>\"]\n",
+/// #     "source = \"https://example.com/acme/tool.git\"\n",
+/// #     "kind = \"tool\"\n",
+/// #     "dependencies = []\n",
+/// #     "capabilities = []\n",
+/// # )).unwrap();
+/// let manifest = read_manifest(&path).unwrap();
+/// assert_eq!(manifest.name().as_str(), "acme-tool");
 /// ```
 pub fn read_manifest(path: &Path) -> Result<PackageManifest, ManifestReadError> {
     let text = fs::read_to_string(path).map_err(|e| {

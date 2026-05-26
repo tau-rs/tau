@@ -22,14 +22,13 @@ use crate::scope::Scope;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `Scope` is `#[non_exhaustive]`; constructed via Scope::resolve / global / new_project.
+/// ```
 /// use tau_pkg::{list, Scope};
 ///
-/// let scope = Scope::global().unwrap();
-/// for pkg in list(&scope).unwrap() {
-///     println!("{}@{}", pkg.name, pkg.active_version);
-/// }
+/// # let tmp = tempfile::tempdir().unwrap();
+/// # let scope = Scope::new_project(tmp.path()).unwrap();
+/// // An empty scope has no installed packages.
+/// assert!(list(&scope).unwrap().is_empty());
 /// ```
 pub fn list(scope: &Scope) -> Result<Vec<LockedPackage>, RegistryError> {
     Ok(LockFile::load(&scope.lockfile_path())?.packages)
@@ -43,14 +42,14 @@ pub fn list(scope: &Scope) -> Result<Vec<LockedPackage>, RegistryError> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_pkg::{get, Scope};
 ///
-/// let scope = Scope::global().unwrap();
+/// # let tmp = tempfile::tempdir().unwrap();
+/// # let scope = Scope::new_project(tmp.path()).unwrap();
 /// let name: tau_domain::PackageName = "acme-tool".parse().unwrap();
-/// if let Some(pkg) = get(&scope, &name).unwrap() {
-///     println!("{} installed at {}", pkg.name, pkg.active_version);
-/// }
+/// // Returns `Ok(None)` when the package is not installed.
+/// assert!(get(&scope, &name).unwrap().is_none());
 /// ```
 pub fn get(scope: &Scope, name: &PackageName) -> Result<Option<LockedPackage>, RegistryError> {
     Ok(LockFile::load(&scope.lockfile_path())?.find(name).cloned())
