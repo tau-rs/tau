@@ -3554,13 +3554,16 @@ version = "0.0.0"
 name = "tau-observe"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "serde_json",
+ "tau-domain",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tonic",
  "tracing",
  "tracing-appender",
