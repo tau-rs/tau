@@ -24,6 +24,26 @@ use crate::error::SdkError;
 /// `#[non_exhaustive]`: future revisions may add fields without
 /// breaking external callers; per-port runners (see Task 9) construct
 /// instances via [`PluginMeta::new`].
+///
+/// # Example
+///
+/// ```
+/// use std::collections::BTreeMap;
+/// use tau_domain::PortKind;
+/// use tau_plugin_sdk::handshake::PluginMeta;
+///
+/// let meta = PluginMeta::new(
+///     "my-llm-plugin".to_string(),
+///     "0.1.0".to_string(),
+///     PortKind::LlmBackend,
+///     vec!["llm.complete".to_string(), "llm.stream".to_string()],
+///     BTreeMap::new(),
+/// );
+/// assert_eq!(meta.plugin_name, "my-llm-plugin");
+/// assert_eq!(meta.plugin_version, "0.1.0");
+/// assert_eq!(meta.port, PortKind::LlmBackend);
+/// assert_eq!(meta.methods.len(), 2);
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct PluginMeta {
@@ -74,6 +94,32 @@ impl PluginMeta {
 ///   back to the host so it can surface a typed error rather than EOF.
 /// * [`SdkError::Protocol`] / [`SdkError::PayloadDecodeFailed`] /
 ///   [`SdkError::PayloadEncodeFailed`] for wire-level failures.
+///
+/// # Example
+///
+/// ```no_run
+/// # use std::collections::BTreeMap;
+/// # use tau_domain::PortKind;
+/// # use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+/// # use tau_plugin_sdk::handshake::{drive_handshake, PluginMeta};
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdin = tokio::io::stdin();
+///     let stdout = tokio::io::stdout();
+///     let mut reader = FramedReader::new(stdin, FramerOptions::default());
+///     let mut writer = FramedWriter::new(stdout);
+///     let meta = PluginMeta::new(
+///         "my-plugin".to_string(),
+///         "0.1.0".to_string(),
+///         PortKind::LlmBackend,
+///         vec!["llm.complete".to_string()],
+///         BTreeMap::new(),
+///     );
+///     let request = drive_handshake(&mut reader, &mut writer, meta).await?;
+///     assert_eq!(request.port, PortKind::LlmBackend);
+///     Ok(())
+/// }
+/// ```
 pub async fn drive_handshake<R, W>(
     reader: &mut FramedReader<R>,
     writer: &mut FramedWriter<W>,

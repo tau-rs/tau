@@ -14,6 +14,16 @@
 ///
 /// The default filter level is `info`; override via `RUST_LOG` env var
 /// (e.g., `RUST_LOG=tau_plugin_sdk=debug,my_plugin=trace`).
+///
+/// # Example
+///
+/// ```
+/// // Calling install() more than once is safe — subsequent calls are no-ops.
+/// tau_plugin_sdk::tracing_layer::install();
+/// tau_plugin_sdk::tracing_layer::install();
+/// // No panic means install is idempotent.
+/// assert!(true);
+/// ```
 pub fn install() {
     let _guard = tau_observe::install::install(tau_observe::install::InstallOptions::plugin_sdk())
         .expect("tau_observe::install never returns Err in current impl");

@@ -50,6 +50,33 @@ const TOOL_DESCRIBE_CAPABILITIES_METHOD: &str = "tool.describe_capabilities";
 /// The plugin author passes their crate's `env!("CARGO_PKG_NAME")` and
 /// `env!("CARGO_PKG_VERSION")` so the handshake response advertises
 /// the plugin's own identity (not the SDK's).
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_ports::{Tool, SessionContext, ToolResult, ToolSpec, ToolError};
+/// # use tau_domain::Value;
+/// # struct MyTool;
+/// # impl Tool for MyTool {
+/// #     type Session = ();
+/// #     fn name(&self) -> &str { "my-tool" }
+/// #     fn schema(&self) -> ToolSpec { unimplemented!() }
+/// #     async fn init(&self, _: SessionContext) -> Result<Self::Session, ToolError> { Ok(()) }
+/// #     async fn invoke(&self, _: &mut Self::Session, _: Value) -> Result<ToolResult, ToolError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn teardown(&self, _: Self::Session) -> Result<(), ToolError> { Ok(()) }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     tau_plugin_sdk::run_tool(
+///         MyTool,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_tool<P>(plugin: P, plugin_name: &str, plugin_version: &str) -> Result<(), SdkError>
 where
     P: Tool + Send + Sync + 'static,
@@ -73,6 +100,40 @@ where
 
 /// Same as [`run_tool`] but accepts an explicit reader and writer.
 /// Used by integration tests over `tau_plugin_protocol::test_support::FakeStdioPeer`.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_ports::{Tool, SessionContext, ToolResult, ToolSpec, ToolError};
+/// # use tau_domain::Value;
+/// # use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+/// # struct MyTool;
+/// # impl Tool for MyTool {
+/// #     type Session = ();
+/// #     fn name(&self) -> &str { "my-tool" }
+/// #     fn schema(&self) -> ToolSpec { unimplemented!() }
+/// #     async fn init(&self, _: SessionContext) -> Result<Self::Session, ToolError> { Ok(()) }
+/// #     async fn invoke(&self, _: &mut Self::Session, _: Value) -> Result<ToolResult, ToolError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn teardown(&self, _: Self::Session) -> Result<(), ToolError> { Ok(()) }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdin = tokio::io::stdin();
+///     let stdout = tokio::io::stdout();
+///     let mut reader = FramedReader::new(stdin, FramerOptions::default());
+///     let mut writer = FramedWriter::new(stdout);
+///     tau_plugin_sdk::run_tool_with_io(
+///         &mut reader,
+///         &mut writer,
+///         MyTool,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_tool_with_io<R, W, P>(
     reader: &mut FramedReader<R>,
     writer: &mut FramedWriter<W>,
@@ -176,6 +237,48 @@ where
 /// Same as [`run_tool_with_config`] but accepts an explicit reader and
 /// writer. Used by integration tests over
 /// `tau_plugin_protocol::test_support::FakeStdioPeer`.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tau_plugin_sdk::{Configure, ConfigError};
+/// # use tau_ports::{Tool, SessionContext, ToolResult, ToolSpec, ToolError};
+/// # use tau_domain::Value;
+/// # use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
+/// # use serde::Deserialize;
+/// # #[derive(Deserialize)] struct MyConfig { base_url: String }
+/// # struct MyTool { _base_url: String }
+/// # impl Configure for MyTool {
+/// #     type Config = MyConfig;
+/// #     fn from_config(c: MyConfig) -> Result<Self, ConfigError> {
+/// #         Ok(MyTool { _base_url: c.base_url })
+/// #     }
+/// # }
+/// # impl Tool for MyTool {
+/// #     type Session = ();
+/// #     fn name(&self) -> &str { "my-tool" }
+/// #     fn schema(&self) -> ToolSpec { unimplemented!() }
+/// #     async fn init(&self, _: SessionContext) -> Result<Self::Session, ToolError> { Ok(()) }
+/// #     async fn invoke(&self, _: &mut Self::Session, _: Value) -> Result<ToolResult, ToolError> {
+/// #         unimplemented!()
+/// #     }
+/// #     async fn teardown(&self, _: Self::Session) -> Result<(), ToolError> { Ok(()) }
+/// # }
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let stdin = tokio::io::stdin();
+///     let stdout = tokio::io::stdout();
+///     let mut reader = FramedReader::new(stdin, FramerOptions::default());
+///     let mut writer = FramedWriter::new(stdout);
+///     tau_plugin_sdk::run_tool_with_config_with_io::<_, _, MyTool>(
+///         &mut reader,
+///         &mut writer,
+///         env!("CARGO_PKG_NAME"),
+///         env!("CARGO_PKG_VERSION"),
+///     ).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn run_tool_with_config_with_io<R, W, P>(
     reader: &mut FramedReader<R>,
     writer: &mut FramedWriter<W>,
