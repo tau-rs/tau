@@ -54,12 +54,7 @@ pub fn install(cli: &Cli) {
 pub fn install_with_extra_layers(
     cli: &Cli,
     extra_layers: Vec<
-        Box<
-            dyn tracing_subscriber::Layer<tracing_subscriber::Registry>
-                + Send
-                + Sync
-                + 'static,
-        >,
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
 ) {
     // --log-non-blocking without --log-file is a configuration error:

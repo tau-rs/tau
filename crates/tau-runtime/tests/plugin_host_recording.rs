@@ -2,13 +2,14 @@
 //!
 //! Pairs an [`IpcLlmBackend`] with a [`FakeStdioPeer`] over duplex
 //! streams (mirroring `plugin_host_ipc_llm.rs::paired_process`),
-//! additionally constructs a [`Recorder`] aimed at a tempdir log file,
-//! and asserts that one `llm.complete` roundtrip produces both a
-//! `dir = "h2p"` (request) and a `dir = "p2h"` (response) entry in the
-//! JSONL log with the expected fields.
+//! additionally installs a thread-local [`PluginRecordingLayer`]
+//! aimed at a tempdir log file, and asserts that one `llm.complete`
+//! roundtrip produces both a `dir = "h2p"` (request) and a `dir =
+//! "p2h"` (response) entry in the JSONL log with the expected fields.
 //!
 //! Covers the read- and write-side tap points wired in
-//! `plugin_host::process` (Task 17) end-to-end.
+//! `plugin_host::process` (Task 17) end-to-end through the Layer
+//! pipeline migrated in Logging Sub-project D Task 5.
 
 #![cfg(feature = "test-support")]
 
@@ -16,6 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tau_observe::layers::plugin_recording::PluginRecordingLayer;
 use tau_plugin_protocol::test_support::FakeStdioPeer;
 use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
 use tau_ports::fixtures::make_completion_response;
@@ -25,21 +27,35 @@ use tau_runtime::plugin_host::__internals::{
     DynAsyncWriter, IpcLlmBackend, PluginProcess, Recorder,
 };
 use tokio::io::DuplexStream;
+use tracing::subscriber::DefaultGuard;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::Registry;
 
-/// Build a [`PluginProcess`] paired with a [`FakeStdioPeer`] *and* a
-/// [`Recorder`] aimed at `log_path`. The recorder is shared between
-/// the read-loop tap (set up internally by `new_for_test_with_recorder`)
-/// and the writer tap (set up via the same recorder being stored on the
-/// `PluginProcess`).
+/// Install a `PluginRecordingLayer` aimed at `log_path` as the
+/// thread-local subscriber for the duration of the returned guard.
+///
+/// `Recorder::record` (Sub-project D Task 5) is now a thin
+/// `tracing::event!` emitter, so integration tests need a subscriber
+/// that actually materializes the event to disk. `set_default`
+/// (not `set_global_default`) keeps concurrent tests from fighting
+/// over one global subscriber; the `#[tokio::test]` current-thread
+/// runtime ensures the same thread-local sees every `tokio::spawn`'d
+/// task.
+fn install_plugin_recording_layer(log_path: &Path) -> (DefaultGuard, PluginRecordingLayer) {
+    let layer = PluginRecordingLayer::new(log_path.to_path_buf());
+    let subscriber = Registry::default().with(layer.clone());
+    let guard = tracing::subscriber::set_default(subscriber);
+    (guard, layer)
+}
+
+/// Build a [`PluginProcess`] paired with a [`FakeStdioPeer`] and a
+/// stateless [`Recorder`]. Recording events are routed to whatever
+/// `PluginRecordingLayer` is active on the calling thread's
+/// subscriber.
 async fn paired_process_with_recording(
     plugin_name: &str,
-    log_path: &Path,
 ) -> (Arc<PluginProcess>, FakeStdioPeer, Arc<Recorder>) {
-    let recorder = Arc::new(
-        Recorder::open_jsonl(plugin_name, log_path)
-            .await
-            .expect("open recorder"),
-    );
+    let recorder = Arc::new(Recorder::new(plugin_name));
 
     let (peer_read_half, sut_write_half) = tokio::io::duplex(64 * 1024);
     let (sut_read_half, peer_write_half) = tokio::io::duplex(64 * 1024);
@@ -67,8 +83,12 @@ async fn jsonl_file_recording_captures_frames_in_both_directions() {
     let tmp = tempfile::tempdir().unwrap();
     let log_path = tmp.path().join("wire.log");
 
-    let (process, mut peer, recorder) =
-        paired_process_with_recording("test-plugin", &log_path).await;
+    // Install the layer BEFORE creating the paired process so the
+    // read-loop spawned by `new_for_test_with_recorder` already sees
+    // the active subscriber when it begins recording inbound frames.
+    let (_guard, layer) = install_plugin_recording_layer(&log_path);
+
+    let (process, mut peer, _recorder) = paired_process_with_recording("test-plugin").await;
     let backend = IpcLlmBackend::new("test-plugin".to_string(), process);
 
     let req = CompletionRequest::new("test-plugin".to_string());
@@ -88,16 +108,15 @@ async fn jsonl_file_recording_captures_frames_in_both_directions() {
     let resp = call_result.expect("complete should succeed");
     assert_eq!(resp.text, "hello");
 
-    // Drop the peer so the read loop sees EOF and yield until both the
-    // host-side write tap (which already ran during `complete()`) and
-    // the read-loop side's record-on-receive call have committed their
-    // bytes to the in-memory file buffer. Then explicitly flush the
-    // recorder to drain that buffer to disk.
+    // Drop the peer so the read loop sees EOF, then flush the layer
+    // — `flush` blocks on the in-flight `tokio::spawn` write tasks
+    // and `sync_all`s the file so the subsequent synchronous read
+    // observes every line.
     drop(peer);
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }
-    recorder.flush().await;
+    layer.flush().await;
 
     let log_contents = std::fs::read_to_string(&log_path).unwrap();
     let lines: Vec<&str> = log_contents.lines().filter(|l| !l.is_empty()).collect();

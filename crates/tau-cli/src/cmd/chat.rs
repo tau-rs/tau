@@ -177,14 +177,13 @@ pub async fn run(
             .unwrap_or(0)
     );
     let trace_context = TraceContext::new(run_id, args.agent_id.clone(), "root".to_string());
-    let (host_options, _ledger) = plugin_loader::build_host_options(
+    let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
         force_passthrough,
         force_adapter_kind,
     );
 
     let loaded = plugin_loader::load_plugins(entry, &scope, trace_context, host_options).await?;
-    let recorder_ledger = loaded.recorder_ledger.clone();
 
     let runtime = loaded
         .builder
@@ -290,7 +289,7 @@ pub async fn run(
     // Drop the runtime before flushing recorders so every plugin
     // process is reaped and the host-side write task is quiescent.
     drop(runtime);
-    plugin_loader::flush_recorders(recorder_ledger).await;
+    plugin_loader::flush_recorders().await;
 
     result
 }

@@ -25,8 +25,9 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tracing::{field::Visit, Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
@@ -35,9 +36,23 @@ use tracing_subscriber::layer::{Context, Layer};
 pub const TARGET: &str = "tau::plugin::frame";
 
 /// Layer that appends each matching event to a JSONL file.
+///
+/// Writes are dispatched to `tokio::spawn`'d tasks so the producing
+/// thread is never blocked on disk IO. A pending-write counter +
+/// [`Notify`] let callers `flush()` and await drainage at process
+/// exit (see `PluginRecordingLayer::flush`); the layer also locks +
+/// `flush`/`sync_all`s the underlying file at that point so a
+/// subsequent synchronous read observes every recorded line.
 #[derive(Clone)]
 pub struct PluginRecordingLayer {
     inner: Arc<Mutex<Inner>>,
+    /// Number of in-flight write tasks (spawned but not yet finished).
+    /// Producers increment before `tokio::spawn`; the spawned task
+    /// decrements and notifies after either writing or aborting.
+    pending: Arc<AtomicUsize>,
+    /// Pulsed every time `pending` decrements toward zero so
+    /// [`PluginRecordingLayer::flush`] can wake without busy-polling.
+    pending_notify: Arc<Notify>,
 }
 
 struct Inner {
@@ -53,6 +68,53 @@ impl PluginRecordingLayer {
     pub fn new(path: PathBuf) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner { path, file: None })),
+            pending: Arc::new(AtomicUsize::new(0)),
+            pending_notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Wait until every in-flight `on_event`-spawned write task has
+    /// finished, then `flush` + `sync_all` the underlying file so a
+    /// subsequent synchronous reader observes every recorded line.
+    ///
+    /// Called by the CLI's `cmd::run` / `cmd::chat` / `cmd::plugin
+    /// describe` on exit when `--record-protocol` is set. Best-effort:
+    /// IO errors are logged at WARN, never propagated.
+    pub async fn flush(&self) {
+        // Wait for pending writes to drain. Each finishing task
+        // notifies all waiters; we re-check after each wake. The
+        // `notified()` future MUST be created before the `pending`
+        // check, otherwise a task that finishes between the check and
+        // the wait would leave us hanging — `Notify::notify_waiters`
+        // wakes only futures registered at the time of the call.
+        loop {
+            let notified = self.pending_notify.notified();
+            tokio::pin!(notified);
+            // `enable()` arms the future so subsequent notify_waiters
+            // calls are observed even before this future is polled.
+            notified.as_mut().enable();
+            if self.pending.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            notified.await;
+        }
+        use tokio::io::AsyncWriteExt as _;
+        let mut guard = self.inner.lock().await;
+        if let Some(file) = guard.file.as_mut() {
+            if let Err(e) = file.flush().await {
+                tracing::warn!(
+                    target: "tau_observe::layers::plugin_recording",
+                    err = %e,
+                    "plugin recording flush failed",
+                );
+            }
+            if let Err(e) = file.sync_all().await {
+                tracing::warn!(
+                    target: "tau_observe::layers::plugin_recording",
+                    err = %e,
+                    "plugin recording sync_all failed",
+                );
+            }
         }
     }
 }
@@ -70,11 +132,35 @@ where
         event.record(&mut visitor);
         let line = serialize_frame_record(&visitor.fields);
         let inner = self.inner.clone();
+        let pending = self.pending.clone();
+        let pending_notify = self.pending_notify.clone();
+        // Increment BEFORE spawn so `flush` can observe the in-flight
+        // work even if the spawned task is queued behind the flush
+        // call.
+        pending.fetch_add(1, Ordering::AcqRel);
         // Hand off the write to the runtime so we don't block the
         // emitting task. Best-effort: errors are logged at WARN to a
         // *different* target so they don't recursively re-enter this
         // layer's filter.
         tokio::spawn(async move {
+            // Always decrement + notify on exit (success or early
+            // return). A guard struct keeps the bookkeeping
+            // panic-safe without an explicit `defer!` macro.
+            struct PendingGuard {
+                pending: Arc<AtomicUsize>,
+                notify: Arc<Notify>,
+            }
+            impl Drop for PendingGuard {
+                fn drop(&mut self) {
+                    self.pending.fetch_sub(1, Ordering::AcqRel);
+                    self.notify.notify_waiters();
+                }
+            }
+            let _guard = PendingGuard {
+                pending,
+                notify: pending_notify,
+            };
+
             use tokio::io::AsyncWriteExt as _;
             let mut guard = inner.lock().await;
             let path = guard.path.clone();
@@ -115,7 +201,9 @@ where
             }
             // NOTE: no `sync_data` here — the legacy `Recorder::record`
             // only `write_all`s, and matching that behavior is required
-            // for the byte-identical-output assertion in Task 6.
+            // for the byte-identical-output assertion in Task 6. The
+            // CLI calls `PluginRecordingLayer::flush` on exit to ensure
+            // durability before the process terminates.
         });
     }
 }
@@ -196,10 +284,7 @@ fn serialize_frame_record(fields: &BTreeMap<String, serde_json::Value>) -> Strin
     // Optional fields: emit explicit `null` if the producer omitted them
     // so the output schema is stable.
     for key in ["msgid", "method"] {
-        let v = fields
-            .get(key)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let v = fields.get(key).cloned().unwrap_or(serde_json::Value::Null);
         obj.insert(key.to_string(), v);
     }
     // `Value::Object` serializes its `Map` in `BTreeMap` order

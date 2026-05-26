@@ -43,10 +43,7 @@ pub async fn run_main() -> std::process::ExitCode {
     let prepared_workflow_run = prepare_workflow_run_layer(&cli.command);
     let mut extra_layers: Vec<
         Box<
-            dyn ::tracing_subscriber::Layer<::tracing_subscriber::Registry>
-                + Send
-                + Sync
-                + 'static,
+            dyn ::tracing_subscriber::Layer<::tracing_subscriber::Registry> + Send + Sync + 'static,
         >,
     > = Vec::new();
     let workflow_run_id = if let Some(prep) = prepared_workflow_run {
@@ -55,6 +52,33 @@ pub async fn run_main() -> std::process::ExitCode {
     } else {
         None
     };
+    // Sub-project D Task 5: when `--record-protocol <path>` is set,
+    // install a `PluginRecordingLayer` aimed at that path. The same
+    // layer handle is stashed in a process-global slot so the
+    // top-level command handlers (cmd::run / cmd::chat / cmd::plugin
+    // describe) can call `flush()` on exit to ensure pending writes
+    // reach disk before the process terminates.
+    //
+    // The layer is wrapped with a per-layer `FilterFn` that always
+    // enables the `tau::plugin::frame` target regardless of the
+    // global `EnvFilter`, and pins its `max_level_hint` to TRACE so
+    // the tracing macros don't short-circuit recording events when
+    // the user's filter is more restrictive than INFO (e.g.
+    // `--quiet` → `tau=warn`). Protocol recording is opt-in via the
+    // explicit `--record-protocol` flag — gating it behind any
+    // particular log-level directive would surprise users who
+    // reasonably expect "the flag is set, ergo frames are recorded".
+    if let Some(path) = cli.record_protocol.clone() {
+        use tracing_subscriber::filter::{filter_fn, LevelFilter};
+        use tracing_subscriber::layer::Layer as _;
+        let layer = tau_observe::layers::plugin_recording::PluginRecordingLayer::new(path);
+        crate::cmd::plugin_loader::set_plugin_recording_layer(layer.clone());
+        let per_layer_filter =
+            filter_fn(|meta| meta.target() == tau_observe::layers::plugin_recording::TARGET)
+                .with_max_level_hint(LevelFilter::TRACE);
+        let filtered = layer.with_filter(per_layer_filter);
+        extra_layers.push(Box::new(filtered));
+    }
     tracing::install_with_extra_layers(&cli, extra_layers);
     // Capture `cli.debug` before `dispatch` consumes the parsed `Cli`.
     // When set, the error path renders the full `anyhow` chain via
@@ -104,8 +128,7 @@ fn prepare_workflow_run_layer(command: &cli::Command) -> Option<PreparedWorkflow
     let cwd = std::env::current_dir().ok()?;
     let scope = tau_pkg::Scope::resolve(&cwd).ok()?;
     let run_id = ulid::Ulid::new().to_string();
-    let log_path =
-        tau_workflow::run_log_path(scope.path(), &run_args.name, &run_id);
+    let log_path = tau_workflow::run_log_path(scope.path(), &run_args.name, &run_id);
     let layer = tau_observe::layers::workflow_run_log::WorkflowRunLogLayer::new(log_path);
     Some(PreparedWorkflowRun { run_id, layer })
 }

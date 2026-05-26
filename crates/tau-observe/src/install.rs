@@ -66,12 +66,7 @@ pub struct InstallOptions {
     /// that need to bypass the env filter should attach their own
     /// per-layer filter via `Layer::with_filter`.
     pub extra_layers: Vec<
-        Box<
-            dyn tracing_subscriber::Layer<tracing_subscriber::Registry>
-                + Send
-                + Sync
-                + 'static,
-        >,
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
     /// When set, an OpenTelemetry layer exports spans over OTLP/gRPC.
     /// Requires feature `otlp`.

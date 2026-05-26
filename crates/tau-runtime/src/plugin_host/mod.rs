@@ -151,60 +151,30 @@ pub async fn describe_plugin(
     // is one-shot.
     process.shutdown().await;
 
-    // Best-effort: flush the recorder so the JSONL file is durable
-    // before the function returns (matches the `--record-protocol`
-    // flush wired in `cmd::run` / `cmd::chat`).
-    if let Some(recorder) = recorder {
-        recorder.flush().await;
-    }
+    // The recorder is now a stateless tracing emitter (Sub-project D
+    // Task 5). The actual file is owned by `PluginRecordingLayer`,
+    // installed by the CLI; the caller is responsible for flushing
+    // the layer on process exit when `--record-protocol` is set.
+    let _ = recorder;
 
     Ok(response)
 }
 
 /// Build a [`recording::RecorderHandle`] from
-/// [`PluginHostOptions::recording`]. Failures to open the recording
-/// file are logged at WARN and yield `Ok(None)` so plugin loading
-/// continues without recording (per spec §7.8: "best-effort").
+/// [`PluginHostOptions::recording`]. Post Sub-project D Task 5 this is
+/// a pure constructor: the recorder no longer opens any file, it just
+/// holds the plugin name so per-plugin attribution can be carried on
+/// each `tracing::event!` it emits. The actual JSONL writer is
+/// [`tau_observe::layers::plugin_recording::PluginRecordingLayer`],
+/// which the CLI installs alongside the global subscriber.
 async fn build_recorder(
     plugin_name: &str,
     options: &PluginHostOptions,
 ) -> Option<recording::RecorderHandle> {
-    let handle = match &options.recording {
-        Some(RecordingSink::JsonlFile { path }) => {
-            match recording::Recorder::open_jsonl(plugin_name, path).await {
-                Ok(r) => Some(Arc::new(r)),
-                Err(e) => {
-                    tracing::warn!(
-                        target: "tau_runtime::plugin_host::recording",
-                        plugin = plugin_name,
-                        path = ?path,
-                        err = %e,
-                        "failed to open recording file; recording disabled for this plugin"
-                    );
-                    None
-                }
-            }
-        }
-        None => None,
-    };
-    // Register the freshly-opened recorder with the CLI-side ledger
-    // (if any) so `--record-protocol` can flush every per-plugin
-    // recorder on exit. Best-effort: a poisoned mutex is logged but
-    // does not abort plugin loading.
-    if let (Some(h), Some(ledger)) = (handle.as_ref(), options.recorder_ledger.as_ref()) {
-        match ledger.lock() {
-            Ok(mut guard) => guard.push(h.clone()),
-            Err(e) => {
-                tracing::warn!(
-                    target: "tau_runtime::plugin_host::recording",
-                    plugin = plugin_name,
-                    err = %e,
-                    "recorder_ledger mutex poisoned; flush coordination disabled for this plugin"
-                );
-            }
-        }
-    }
-    handle
+    options
+        .recording
+        .as_ref()
+        .map(|RecordingSink::JsonlFile { .. }| Arc::new(recording::Recorder::new(plugin_name)))
 }
 
 /// Optional protocol-recording sink. Currently only
@@ -270,18 +240,15 @@ pub struct PluginHostOptions {
     /// If `Some`, every frame in either direction is mirrored to the
     /// supplied sink. Used by `tau --record-protocol <path>` (Task 20)
     /// and integration-test golden files. Defaults to `None`.
-    pub recording: Option<RecordingSink>,
-
-    /// Shared ledger of every recorder the host opens against
-    /// [`PluginHostOptions::recording`]. When `Some(_)`, each per-plugin
-    /// `Recorder` is appended here so the caller can later call
-    /// [`Recorder::flush`] on every entry to drain the tokio file
-    /// buffers (which otherwise discard pending writes on `Drop`).
     ///
-    /// Used by `tau --record-protocol` (Task 20) on `cmd::run` /
-    /// `cmd::chat` exit paths. Defaults to `None`; non-CLI embedders
-    /// don't need it.
-    pub recorder_ledger: Option<Arc<std::sync::Mutex<Vec<RecorderHandle>>>>,
+    /// Post Sub-project D Task 5, the actual file writer is the
+    /// process-global
+    /// [`tau_observe::layers::plugin_recording::PluginRecordingLayer`]
+    /// installed by the CLI; this option only governs whether the
+    /// plugin host wires up a per-plugin tracing emitter ([`Recorder`])
+    /// so the layer can pick the frames up. Both pieces are toggled
+    /// by `--record-protocol <path>`.
+    pub recording: Option<RecordingSink>,
 
     /// Sandbox adapter to wrap each plugin spawn. If `None`, plugins
     /// run unsandboxed (the legacy default for non-CLI embedders).
@@ -315,7 +282,6 @@ impl Default for PluginHostOptions {
             // sides of the wire.
             max_message_size: 64 * 1024 * 1024,
             recording: None,
-            recorder_ledger: None,
             sandbox_adapter: None,
             force_passthrough: false,
             force_adapter_kind: None,
