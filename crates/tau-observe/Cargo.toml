@@ -23,3 +23,6 @@ default = []
 test-fixtures = []
 # Enables the non-blocking MPSC writer + log rotation via tracing-appender.
 non_blocking = ["dep:tracing-appender"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
