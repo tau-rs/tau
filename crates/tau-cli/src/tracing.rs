@@ -46,6 +46,9 @@ pub fn install(cli: &Cli) {
         filter: build_filter(cli),
         format: Format::Human,
         writer: Writer::Stderr,
+        non_blocking: false,
+        file_path: None,
+        rotation: tau_observe::install::Rotation::Never,
     };
     // The CLI does not propagate install errors; the only failure mode
     // is "already installed", which the underlying installer maps to a
