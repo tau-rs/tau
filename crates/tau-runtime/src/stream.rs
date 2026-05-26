@@ -52,6 +52,36 @@ use crate::tool_args::ToolArgsValidator;
 ///   all that turn's tool dispatches resolved.
 /// - Stream order preserves LLM source order; the kernel never
 ///   reorders events.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::stream::RunEvent;
+/// use tau_domain::Value;
+///
+/// // Classify events by variant.
+/// fn describe(event: &RunEvent) -> &'static str {
+///     match event {
+///         RunEvent::TextDelta { .. } => "text",
+///         RunEvent::ToolCallStarted { .. } => "tool-started",
+///         RunEvent::ToolCallCompleted { .. } => "tool-completed",
+///         RunEvent::TurnCompleted { .. } => "turn-completed",
+///         RunEvent::RunCompleted { .. } => "run-completed",
+///         RunEvent::FatalError { .. } => "fatal",
+///         _ => "other",
+///     }
+/// }
+///
+/// let text_ev = RunEvent::TextDelta { delta: "hello".into() };
+/// assert_eq!(describe(&text_ev), "text");
+///
+/// let tool_ev = RunEvent::ToolCallStarted {
+///     id: "call-1".into(),
+///     name: "echo".into(),
+///     args: Value::Object(Default::default()),
+/// };
+/// assert_eq!(describe(&tool_ev), "tool-started");
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum RunEvent {

@@ -105,6 +105,24 @@ pub enum BuildError {
 /// denial is an agent-level failure (`Ok(RunOutcome::Failed)`), not
 /// a kernel-level error (`Err(RuntimeError)`). See ADR-0006 for the
 /// dichotomy.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::error::CapabilityDenial;
+///
+/// let denial = CapabilityDenial::new(
+///     "researcher",
+///     "fs-tools@1.0.0",
+///     "file_write",
+///     "filesystem.write",
+///     "/etc/**",
+/// );
+/// let msg = denial.to_string();
+/// assert!(msg.contains("researcher"));
+/// assert!(msg.contains("filesystem.write"));
+/// assert!(msg.contains("file_write"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityDenial {
@@ -119,6 +137,28 @@ pub struct CapabilityDenial {
     pub required_kind: String,
     /// Human-readable description of the capability that wasn't satisfied.
     pub required_detail: String,
+}
+
+impl CapabilityDenial {
+    /// Construct a [`CapabilityDenial`].
+    ///
+    /// `#[non_exhaustive]` blocks struct-literal construction outside this
+    /// crate; use this constructor instead.
+    pub fn new(
+        agent_id: impl Into<String>,
+        package_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        required_kind: impl Into<String>,
+        required_detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            package_id: package_id.into(),
+            tool_name: tool_name.into(),
+            required_kind: required_kind.into(),
+            required_detail: required_detail.into(),
+        }
+    }
 }
 
 impl std::fmt::Display for CapabilityDenial {
@@ -301,6 +341,22 @@ pub enum RuntimeError {
 /// `#[non_exhaustive]`: the Phase-1 protocol surface may grow
 /// additional handshake-failure modes as the schema-introspection
 /// surface evolves; additive variants must remain non-breaking.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::error::HandshakeFailureReason;
+///
+/// let reason = HandshakeFailureReason::Timeout;
+/// assert_eq!(reason.to_string(), "timeout");
+///
+/// let mismatch = HandshakeFailureReason::ProtocolVersionMismatch {
+///     host: "1".into(),
+///     plugin: "2".into(),
+/// };
+/// assert!(mismatch.to_string().contains("mismatch"));
+/// assert!(mismatch.to_string().contains('1'));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum HandshakeFailureReason {

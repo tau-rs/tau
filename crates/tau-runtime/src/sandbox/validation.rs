@@ -31,6 +31,19 @@ impl SandboxValidationError {
     ///
     /// `#[non_exhaustive]` blocks struct-literal construction outside this
     /// crate; use this constructor instead.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_domain::Capability;
+    /// use tau_runtime::sandbox::SandboxValidationError;
+    ///
+    /// let cap: Capability = serde_json::from_value(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})).unwrap();
+    /// let err = SandboxValidationError::new("my-plugin", cap, "shape not supported");
+    /// assert_eq!(err.plan_id, "my-plugin");
+    /// assert!(err.to_string().contains("my-plugin"));
+    /// assert!(err.to_string().contains("shape not supported"));
+    /// ```
     pub fn new(
         plan_id: impl Into<String>,
         capability: Capability,
@@ -71,6 +84,27 @@ impl std::error::Error for SandboxValidationError {}
 ///
 /// `Ok(())` if every capability shape in `plan` is in `adapter.supported_shapes()`.
 /// `Err(errors)` with the complete list of failures otherwise.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::Capability;
+/// use tau_ports::{SandboxPlan, fixtures::MockSandbox};
+/// use tau_runtime::sandbox::validate_plan_against_adapter;
+///
+/// let adapter = MockSandbox::new("mock");
+///
+/// // A standard fs.read capability is supported by MockSandbox.
+/// let cap: Capability = serde_json::from_value(
+///     serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})
+/// ).unwrap();
+/// let plan = SandboxPlan::new(vec![cap], None, None);
+/// assert!(validate_plan_against_adapter("my-plugin", &plan, &adapter).is_ok());
+///
+/// // An empty plan always passes.
+/// let empty = SandboxPlan::new(vec![], None, None);
+/// assert!(validate_plan_against_adapter("my-plugin", &empty, &adapter).is_ok());
+/// ```
 pub fn validate_plan_against_adapter<S: Sandbox>(
     plan_id: &str,
     plan: &SandboxPlan,

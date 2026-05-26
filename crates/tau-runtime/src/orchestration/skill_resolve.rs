@@ -20,6 +20,30 @@ use crate::orchestration::error::OrchestrationError;
 use crate::orchestration::virtual_tools::check_capability_subset;
 
 /// A validated, ready-to-spawn skill invocation.
+///
+/// Produced by [`resolve_skill_for_spawn`]; consumed by the kernel's
+/// `skill.<name>.spawn` virtual-tool handler. Fields carry the
+/// fully-resolved capability grant and initial message for the child run.
+///
+/// # Example
+///
+/// ```
+/// use std::path::PathBuf;
+/// use tau_runtime::orchestration::skill_resolve::SkillSpawnRequest;
+///
+/// // Demonstrate field access (in practice, SkillSpawnRequest is produced
+/// // by resolve_skill_for_spawn, not constructed directly).
+/// let req = SkillSpawnRequest {
+///     skill_name: "critic".into(),
+///     install_path: PathBuf::from("/skills/critic"),
+///     system_prompt: "You are a critical reviewer.".into(),
+///     grant: vec![],
+///     message: "Review this draft.".into(),
+/// };
+/// assert_eq!(req.skill_name, "critic");
+/// assert_eq!(req.message, "Review this draft.");
+/// assert!(req.grant.is_empty());
+/// ```
 #[derive(Debug, Clone)]
 pub struct SkillSpawnRequest {
     /// Skill name (as referenced in `skill.<name>.spawn`).
@@ -35,6 +59,20 @@ pub struct SkillSpawnRequest {
 }
 
 /// Caller's spawn args.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::orchestration::skill_resolve::SkillSpawnArgs;
+///
+/// let args = SkillSpawnArgs {
+///     message: "Summarise this document.".into(),
+///     system_prompt: Some("Be concise.".into()),
+///     scope_paths: Some(vec!["/workspace/docs/**".into()]),
+/// };
+/// assert_eq!(args.message, "Summarise this document.");
+/// assert_eq!(args.system_prompt.as_deref(), Some("Be concise."));
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SkillSpawnArgs {
     /// Required initial user message.
@@ -49,6 +87,24 @@ pub struct SkillSpawnArgs {
 /// Substitute `${SKILL_DIR}` literal in capability `paths` entries
 /// with `install_path.display()`. Non-path capabilities (net.http,
 /// task_list, plan, agent.spawn, skill.spawn, custom) pass through.
+///
+/// # Example
+///
+/// ```
+/// use std::path::Path;
+/// use tau_domain::{Capability, FsCapability, SKILL_DIR_VAR};
+/// use tau_runtime::orchestration::skill_resolve::substitute_skill_dir;
+///
+/// let cap: Capability = serde_json::from_value(serde_json::json!({
+///     "kind": "fs.read",
+///     "paths": [format!("{SKILL_DIR_VAR}/refs/**")]
+/// })).expect("valid capability");
+///
+/// let out = substitute_skill_dir(&[cap], Path::new("/skills/critic/1.0.0"));
+/// if let Capability::Filesystem(FsCapability::Read { paths, .. }) = &out[0] {
+///     assert_eq!(paths[0], "/skills/critic/1.0.0/refs/**");
+/// }
+/// ```
 pub fn substitute_skill_dir(caps: &[Capability], install_path: &Path) -> Vec<Capability> {
     let install_str = install_path.display().to_string();
     let subst = |paths: &[String]| -> Vec<String> {
@@ -110,6 +166,29 @@ fn glob_covers(glob: &str, candidate: &str) -> bool {
 ///
 /// Hard-fail if any `scope_path` is not covered by ANY declared
 /// fs.* path (typo detection).
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::Capability;
+/// use tau_runtime::orchestration::skill_resolve::apply_scope_paths;
+///
+/// let cap: Capability = serde_json::from_value(serde_json::json!({
+///     "kind": "fs.read", "paths": ["/workspace/**"]
+/// })).expect("valid capability");
+///
+/// // Narrowing: only keep the sub-path.
+/// let narrowed = apply_scope_paths(vec![cap], &["/workspace/project/**".to_string()])
+///     .expect("path is covered");
+/// assert_eq!(narrowed.len(), 1);
+///
+/// // Out-of-scope path → error.
+/// let cap2: Capability = serde_json::from_value(serde_json::json!({
+///     "kind": "fs.read", "paths": ["/workspace/**"]
+/// })).expect("valid capability");
+/// let err = apply_scope_paths(vec![cap2], &["/home/alice/**".to_string()]);
+/// assert!(err.is_err());
+/// ```
 pub fn apply_scope_paths(
     caps: Vec<Capability>,
     scope_paths: &[String],

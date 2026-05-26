@@ -10,16 +10,52 @@ use crate::orchestration::error::OrchestrationError;
 use crate::orchestration::run_state::RunState;
 
 /// Watchdog handle. Stateless; checks are pure functions of RunState + now.
+///
+/// # Example
+///
+/// ```
+/// use chrono::Utc;
+/// use tau_runtime::orchestration::budget::BudgetWatchdog;
+/// use tau_runtime::orchestration::run_state::RunState;
+/// use tau_ports::RunBudget;
+///
+/// let state = RunState::new("run-1".into(), "agent-1".into(), RunBudget::default(), Utc::now());
+/// // Default budget has no limits — tick always succeeds.
+/// BudgetWatchdog.tick(&state, Utc::now()).expect("within default budget");
+/// ```
 pub struct BudgetWatchdog;
 
 impl BudgetWatchdog {
-    /// New watchdog.
+    /// New watchdog. Unit-struct constructor; covered by the struct-level fence.
     pub fn new() -> Self {
         Self
     }
 
     /// Returns `Ok(())` if within budget, `Err(BudgetExceeded { ... })` otherwise.
     /// Caller emits a TraceEventKind::BudgetExceeded + aborts.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::budget::BudgetWatchdog;
+    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_runtime::orchestration::error::OrchestrationError;
+    /// use tau_ports::RunBudget;
+    ///
+    /// let state = RunState::new(
+    ///     "run-1".into(),
+    ///     "agent-1".into(),
+    ///     RunBudget { max_total_tokens: Some(100), ..Default::default() },
+    ///     Utc::now(),
+    /// );
+    /// state.add_tokens(50);
+    /// BudgetWatchdog.tick(&state, Utc::now()).expect("50 < 100: within budget");
+    ///
+    /// state.add_tokens(60); // now 110 > 100
+    /// let err = BudgetWatchdog.tick(&state, Utc::now()).unwrap_err();
+    /// assert!(matches!(err, OrchestrationError::BudgetExceeded { .. }));
+    /// ```
     pub fn tick(&self, state: &RunState, now: DateTime<Utc>) -> Result<(), OrchestrationError> {
         if let Some(limit) = state.budget.max_total_tokens {
             let used = state.tokens_used.load(std::sync::atomic::Ordering::Relaxed);

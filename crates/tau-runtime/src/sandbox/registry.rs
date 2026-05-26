@@ -44,6 +44,21 @@ pub enum PlatformSet {
 impl PlatformSet {
     /// Does this set include the given platform name (`"linux"`,
     /// `"macos"`, `"windows"`)?
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::sandbox::registry::PlatformSet;
+    ///
+    /// assert!(PlatformSet::Any.includes("linux"));
+    /// assert!(PlatformSet::Any.includes("windows"));
+    ///
+    /// assert!(PlatformSet::LinuxAndDarwin.includes("linux"));
+    /// assert!(PlatformSet::LinuxAndDarwin.includes("macos"));
+    /// assert!(!PlatformSet::LinuxAndDarwin.includes("windows"));
+    ///
+    /// assert!(!PlatformSet::LinuxOnly.includes("macos"));
+    /// ```
     pub fn includes(&self, platform: &str) -> bool {
         match self {
             PlatformSet::Any => true,
@@ -57,6 +72,15 @@ impl PlatformSet {
 }
 
 /// Detect the current platform name.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::sandbox::registry::detect_platform;
+///
+/// let p = detect_platform();
+/// assert!(matches!(p, "linux" | "macos" | "windows" | "unknown"));
+/// ```
 pub fn detect_platform() -> &'static str {
     #[cfg(target_os = "linux")]
     {
@@ -94,6 +118,16 @@ pub enum RegistryKind {
 
 impl RegistryKind {
     /// Adapter name as surfaced in logs and error messages.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::sandbox::registry::RegistryKind;
+    ///
+    /// assert_eq!(RegistryKind::Native.name(), "native");
+    /// assert_eq!(RegistryKind::Container.name(), "container");
+    /// assert_eq!(RegistryKind::Passthrough.name(), "passthrough");
+    /// ```
     pub fn name(&self) -> &'static str {
         match self {
             RegistryKind::Native => "native",

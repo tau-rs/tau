@@ -14,6 +14,7 @@
 - **skip-alias**: `pub type X = Y`.
 - **skip-display / skip-debug**: `Display` / `Debug` impl.
 - **skip-marker**: marker trait or unit-struct sentinel.
+- **skip-needs-fixture**: item requires non-trivial test fixtures (real sandbox setup, env var injection, multi-thread coordination) that exceed reasonable doctest scope; deferred to future round.
 - **skip-reexport**: `pub use`.
 - **done**: already had a fence before round 3 began.
 
@@ -219,6 +220,130 @@
 | 116 | package/source.rs:85 | `pub enum GitLocation` | include | `#[non_exhaustive]` enum with `Scp { user, host, path }` associated-data variant; §3.1. New executable fence: constructs both shapes via `PackageSource::from_str`, asserts variant via `matches!`. |
 | 117 | value.rs:52 | `pub enum Value` | done | Two fences at lines 23 and 40 (Object + accessor chain; Bytes serde round-trip). |
 
+## tau-runtime
+
+| # | File:line | Item | Classification | Strategy |
+|---|---|---|---|---|
+| 1 | builder.rs | `Runtime::builder()` | include | Factory with no args; §3.1 constructor + fluent chain. Fence shows `builder() → with_llm_backend → build`. |
+| 2 | builder.rs | `RuntimeBuilder::with_llm_backend` | include | Builder method; §3.1 constructor. Fence shows MockLlmBackend attachment. |
+| 3 | builder.rs | `RuntimeBuilder::with_tool` | include | Builder method; §3.1. |
+| 4 | builder.rs | `RuntimeBuilder::with_storage` | include | Builder method; §3.1. |
+| 5 | builder.rs | `RuntimeBuilder::with_dyn_llm_backend` | include | Builder method (dyn variant); §3.1. |
+| 6 | builder.rs | `RuntimeBuilder::with_dyn_tool` | include | Builder method (dyn variant); §3.1. |
+| 7 | builder.rs | `RuntimeBuilder::with_dyn_storage` | include | Builder method (dyn variant); §3.1. |
+| 8 | builder.rs | `RuntimeBuilder::build` | include | Builder terminal; returns `Result`; §3.1 Result. |
+| 9 | builder.rs | `RuntimeBuilder::build_allow_empty` | include | Builder terminal (serve-mode variant); §3.1 Result. |
+| 10 | error.rs | `CapabilityDenial` (struct) | include | Production struct; §3.1. Added `::new()` constructor; fence exercises it + `to_string()`. |
+| 11 | error.rs | `HandshakeFailureReason` (enum) | include | Enum with associated-data variants; §3.1. Fence constructs `Timeout` + `ProtocolVersionMismatch`. |
+| 12 | stream.rs | `RunEvent` (enum) | include | `#[non_exhaustive]` streaming event enum; §3.1. Fence shows pattern-match helper + `TextDelta` + `ToolCallStarted` construction. |
+| 13 | orchestration/budget.rs | `BudgetWatchdog` (struct) | include | Stateless watchdog; §3.1. Fence shows default-budget succeeds. |
+| 14 | orchestration/budget.rs | `BudgetWatchdog::new` | skip-trivial | Unit-struct constructor; covered by struct-level fence (row 13). |
+| 15 | orchestration/budget.rs | `BudgetWatchdog::tick` | include | Method returning `Result`; §3.1. Fence shows within-budget + exceeded paths. |
+| 16 | orchestration/error.rs | `OrchestrationError` (enum) | include | Error enum with multiple variants; §3.1 error path. Fence shows `TaskNotFound` + `BudgetExceeded`. |
+| 17 | orchestration/persistence.rs | `run_log_path` | include | Free function; §3.1. Fence checks path shape. |
+| 18 | orchestration/persistence.rs | `RunLogLine` (enum) | include | Serde-tagged union; §3.1. Fence round-trips `TaskMutation` through JSON. |
+| 19 | orchestration/run_state.rs | `RunState` (struct) | include | Core per-run state; §3.1. Fence constructs + asserts `run_id`/`status`. |
+| 20 | orchestration/run_state.rs | `RunState::new` | include | Constructor with 4 params; §3.1. Fence checks `root_agent_id` + `plan.is_empty()`. |
+| 21 | orchestration/run_state.rs | `RunState::append_plan_note` | include | Method; §3.1. Fence shows 2-note append + `ends_with('\n')`. |
+| 22 | orchestration/run_state.rs | `RunState::add_tokens` | include | Method; §3.1. Fence shows cumulative add. |
+| 23 | orchestration/run_state.rs | `RunState::record_agent_spawn` | include | Method; §3.1. Fence shows counter increments. |
+| 24 | orchestration/run_state.rs | `RunState::snapshot` | include | Method returning snapshot; §3.1 non-trivial return. Fence checks `tokens_used` + `status`. |
+| 25 | orchestration/skill_resolve.rs | `SkillSpawnRequest` (struct) | include | Result struct; §3.1. Fence shows field access. |
+| 26 | orchestration/skill_resolve.rs | `SkillSpawnArgs` (struct) | include | Input struct with optional fields; §3.1. Fence constructs + asserts fields. |
+| 27 | orchestration/skill_resolve.rs | `substitute_skill_dir` | include | Free function; §3.1. Fence shows `${SKILL_DIR}` substitution. |
+| 28 | orchestration/skill_resolve.rs | `apply_scope_paths` | include | Free function returning `Result`; §3.1. Fence shows narrowing + error path. |
+| 29 | orchestration/task_list.rs | `TaskList` (struct) | include | Core task store; §3.1. Fence constructs + asserts empty. |
+| 30 | orchestration/task_list.rs | `TaskList::new` | include | Constructor; §3.1. |
+| 31 | orchestration/task_list.rs | `TaskList::create` | include | Method with 5 params; §3.1. Fence shows hierarchical id allocation. |
+| 32 | orchestration/task_list.rs | `TaskList::claim` | include | CAS claim returning `Result`; §3.1. Fence shows success + `TaskLocked` failure. |
+| 33 | orchestration/task_list.rs | `TaskList::heartbeat` | include | Method returning `Result`; §3.1. Fence shows lease extension. |
+| 34 | orchestration/task_list.rs | `TaskList::release` | include | Method returning `Result`; §3.1. Fence shows status → Pending. |
+| 35 | orchestration/task_list.rs | `TaskList::update` | include | Method returning `Result`; §3.1. Fence shows InProgress transition. |
+| 36 | orchestration/task_list.rs | `TaskList::complete` | include | Method returning `Result`; §3.1. Fence shows Done + result_summary. |
+| 37 | orchestration/task_list.rs | `TaskList::fail` | include | Method returning `Result`; §3.1. Fence shows Failed + error field. |
+| 38 | orchestration/task_list.rs | `TaskList::discard` | include | Method returning `Result`; §3.1. Fence shows Discarded state. |
+| 39 | orchestration/task_list.rs | `TaskList::list` | include | Query method; §3.1 non-trivial params. Fence shows filter by status. |
+| 40 | orchestration/task_list.rs | `TaskList::expire_leases` | include | Sweep method; §3.1. Fence uses fixed timestamps to deterministically test expiry. |
+| 41 | orchestration/task_list.rs | `TaskList::all_terminal` | include | Predicate; §3.1. Fence shows vacuous true, pending false, done true. |
+| 42 | orchestration/trace.rs | `TraceStream` (struct) | include | Fan-out stream; §3.1. Fence shows `new` + `subscribe` + `subscriber_count`. |
+| 43 | orchestration/trace.rs | `TraceStream::new` | include | Constructor; §3.1. Fence asserts `subscriber_count() == 0`. |
+| 44 | orchestration/trace.rs | `TraceStream::subscribe` | include | Method; §3.1. Fence shows two-subscriber count. |
+| 45 | orchestration/trace.rs | `TraceStream::emit` | include | Fan-out method; §3.1. Fence uses `try_recv()` to verify delivery. |
+| 46 | orchestration/virtual_tools.rs | `is_virtual` | include | Free function; §3.1. Fence checks `task.*`, `agent.*.spawn`, `skill.*.spawn`, negative cases. |
+| 47 | orchestration/virtual_tools.rs | `required_capability` | include | Free function; §3.1. Fence checks `task.list` → read, `task.create` → write, `task.discard` → manage. |
+| 48 | orchestration/virtual_tools.rs | `dispatch` | include | Free function returning `Result`; §3.1. Fence shows `task.create` + `run.note` + `run.plan`. |
+| 49 | orchestration/virtual_tools.rs | `check_capability_subset` | include | Free function returning `Result`; §3.1. Fence shows subset allowed + extras rejected. |
+| 50 | orchestration/virtual_tools.rs | `AgentSpawnRequest` (struct) | include | Result struct; §3.1. Fence constructs via `validate_agent_spawn`. |
+| 51 | orchestration/virtual_tools.rs | `validate_agent_spawn` | include | Free function returning `Result`; §3.1. Fence shows authorized success + unauthorized failure. |
+| 52 | orchestration/virtual_tools.rs | `validate_skill_spawn` | skip-trivial | Requires real `Scope` object (filesystem-backed); dispatches to `resolve_skill_for_spawn` which is already tested in integration tests. No meaningful stub. |
+| 53 | sandbox/passthrough.rs | `PassthroughSandbox` (struct) | include | No-isolation adapter; §3.1. Fence constructs + asserts `name() == "passthrough"`. |
+| 54 | sandbox/passthrough.rs | `PassthroughSandbox::new` | include | Constructor; §3.1. Fence calls `validate_plan` with empty plan → Ok. |
+| 55 | sandbox/registry.rs | `PlatformSet::includes` | include | Method with `&str` param; §3.1. Fence checks All, LinuxAndDarwin, LinuxOnly. |
+| 56 | sandbox/registry.rs | `detect_platform` | include | Free function; §3.1. Fence asserts known values. |
+| 57 | sandbox/registry.rs | `RegistryKind::name` | include | Method; §3.1. Fence asserts all 3 names. |
+| 58 | sandbox/resolution_error.rs | `ResolutionRejection` (enum) | include | Error enum; §3.1. Fence shows `PlatformMismatch` + `ProbeUnavailable` Display. |
+| 59 | sandbox/resolution_error.rs | `ResolutionError` (enum) | include | Error enum with associated data; §3.1. Fence constructs `NoAdapterMatches` + asserts Display content. |
+| 60 | sandbox/resolver.rs | `SandboxAdapter::name` | include | Dispatch method; §3.1. Fence wraps `PassthroughSandbox` + asserts name. |
+| 61 | sandbox/target_match.rs | `kind_to_family` | include | Free function; §3.1. Fence checks 3 variants. |
+| 62 | sandbox/target_match.rs | `adapter_satisfies` | include | Free function returning bool; §3.1. Fence checks passthrough + linux-native-strict. |
+| 63 | sandbox/target_match.rs | `registration_for_triple` | include | Free function returning `Option`; §3.1. Fence shows Some + None (Reserved triple). |
+| 64 | sandbox/validation.rs | `SandboxValidationError::new` | include | Constructor (`#[non_exhaustive]` struct); §3.1. Fence constructs + asserts `plan_id` + `to_string()`. |
+| 65 | sandbox/validation.rs | `validate_plan_against_adapter` | include | Free function returning `Result<(), Vec<_>>`; §3.1. Fence shows fs.read passes, empty plan passes. |
+| 66 | plugin_host/mod.rs | `RecordingSink` (enum) | include | Enum with path variant; §3.1. Fence constructs `JsonlFile` + asserts `matches!`. |
+| 67 | plugin_host/mod.rs | `PluginHostOptions` (struct) | include | `#[non_exhaustive]`; §3.1. Fence converts `rust,ignore` to executable: `default()` + field mutation + assertions. |
+| 68 | plugin_host/recording.rs | `Direction` (enum) | include | Direction enum; §3.1. Fence constructs both variants + asserts `matches!`. |
+| 69 | plugin_host/recording.rs | `Recorder::new` | include | Constructor; §3.1. Fence asserts `{:?}` contains plugin name. |
+| 70 | options.rs | `TokenUsage` | done | Fence at line 12 (shows `default()` + field assertions). |
+| 71 | options.rs | `RunOptions` | done | Fence at line 38 (shows `default()` + `max_turns` + `trace_label` mutation). |
+| 72 | outcome.rs | `RunOutcome` | done | Fence at line 24 (shows pattern-match helper with `_ => {}` catch-all). |
+| 73 | builder.rs | `BuildError` | done | Fence at line 54 (shows `builder().build().unwrap_err()` → `NoLlmBackend`). |
+| 74 | run.rs | `Runtime::run_streaming` | done | Fence at line ~xxx (round-2 fixture; `tokio_test::block_on` + `MockLlmBackend` + stream collect). |
+| 75 | run.rs | `Runtime::run_streaming_with_history` | done | Fence at line ~xxx (round-2 fixture; `tokio_test::block_on` + history replay). |
+| 76 | plugin_host/mod.rs | `__internals` (mod) | skip-feature-gated | Items require `test-support` feature or are `#[doc(hidden)]`. |
+| 77 | plugin_host | `IpcLlmBackend`, `IpcStorage`, `IpcTool`, `PluginProcess`, `DynAsyncWriter` | skip-feature-gated | Behind `test-support` feature. |
+| 78 | plugin_host | `drive_handshake` | skip-feature-gated | `__internals` re-export only; no public path. |
+| 79 | capability_override | `CapabilityOverride`, `EffectiveCapability`, `OverrideExpandError`, `compute_effective` | skip-reexport | Pure shim re-exporting from `tau_pkg::capability_override`. |
+| 80 | lib.rs:19 | `pub mod builder` | skip-trivial | Module declaration; no doctest surface. |
+| 81 | lib.rs:21 | `pub mod capability_override` | skip-trivial | Module declaration; no doctest surface. |
+| 82 | lib.rs:23 | `pub mod error` | skip-trivial | Module declaration; no doctest surface. |
+| 83 | lib.rs:24 | `pub mod options` | skip-trivial | Module declaration; no doctest surface. |
+| 84 | lib.rs:25 | `pub mod orchestration` | skip-trivial | Module declaration; no doctest surface. |
+| 85 | lib.rs:26 | `pub mod outcome` | skip-trivial | Module declaration; no doctest surface. |
+| 86 | lib.rs:27 | `pub mod plugin_host` | skip-trivial | Module declaration; no doctest surface. |
+| 87 | lib.rs:29 | `pub mod sandbox` | skip-trivial | Module declaration; no doctest surface. |
+| 88 | lib.rs:30 | `pub mod stream` | skip-trivial | Module declaration; no doctest surface. |
+| 89 | builder.rs:59 | `pub trait DynLlmBackend` | skip-marker | Internal object-safety wrapper trait; re-implemented via blanket impl; users implement `LlmBackend` from tau-ports, not this trait. |
+| 90 | builder.rs:100 | `pub trait DynTool` | skip-marker | Internal object-safety wrapper for `Tool`; same reasoning as `DynLlmBackend`. |
+| 91 | builder.rs:163 | `pub trait DynStorage` | skip-marker | Internal object-safety wrapper for `Storage`; same reasoning. |
+| 92 | builder.rs:244 | `pub trait DynSandbox` | skip-marker | Internal object-safety wrapper for `Sandbox`; same reasoning. |
+| 93 | builder.rs:314 | `pub struct Runtime` | skip-trivial | Struct itself has no public fields; constructed exclusively via `Runtime::builder()`; covered by rows 1–9 fences. |
+| 94 | error.rs:32 | `pub enum PluginKind` | skip-display | Simple tag enum; Display impl tested via `HandshakeFailureReason` + `RuntimeError` fences; no standalone behavior to demonstrate beyond `format!("{}", PluginKind::Tool)`. |
+| 95 | error.rs:197 | `pub enum RuntimeError` | skip-trivial | Error variants carry `std::io::Error` / `ExitStatus` — not constructible in a doctest without real plugin infrastructure; `CapabilityDenial` (row 10) and `HandshakeFailureReason` (row 11) cover the constructible error-surface. |
+| 96 | orchestration/mod.rs:19 | `pub mod budget` | skip-trivial | Module declaration; no doctest surface. |
+| 97 | orchestration/mod.rs:20 | `pub mod error` | skip-trivial | Module declaration; no doctest surface. |
+| 98 | orchestration/mod.rs:21 | `pub mod persistence` | skip-trivial | Module declaration; no doctest surface. |
+| 99 | orchestration/mod.rs:22 | `pub mod run_state` | skip-trivial | Module declaration; no doctest surface. |
+| 100 | orchestration/mod.rs:23 | `pub mod skill_resolve` | skip-trivial | Module declaration; no doctest surface. |
+| 101 | orchestration/mod.rs:24 | `pub mod task_list` | skip-trivial | Module declaration; no doctest surface. |
+| 102 | orchestration/mod.rs:25 | `pub mod trace` | skip-trivial | Module declaration; no doctest surface. |
+| 103 | orchestration/mod.rs:26 | `pub mod virtual_tools` | skip-trivial | Module declaration; no doctest surface. |
+| 104 | orchestration/task_list.rs:11 | `pub const DEFAULT_LEASE: Duration` | skip-trivial | Duration constant (5 min); value documented in prose; no behavior to demonstrate. |
+| 105 | orchestration/trace.rs:17 | `pub type TraceSubscriber` | skip-alias | `pub type X = Y`; alias for `mpsc::UnboundedSender<TraceEvent>`; exercised by `TraceStream::subscribe` fence (row 44). |
+| 106 | orchestration/skill_resolve.rs:282 | `pub fn resolve_skill_for_spawn` | skip-needs-fixture | Requires a real filesystem-backed `Scope` (reads installed skill directory); deferred to future round. |
+| 107 | sandbox/mod.rs:3 | `pub mod passthrough` | skip-trivial | Module declaration; no doctest surface. |
+| 108 | sandbox/mod.rs:5 | `pub mod registry` | skip-trivial | Module declaration; no doctest surface. |
+| 109 | sandbox/mod.rs:6 | `pub mod resolution_error` | skip-trivial | Module declaration; no doctest surface. |
+| 110 | sandbox/mod.rs:7 | `pub mod resolver` | skip-trivial | Module declaration; no doctest surface. |
+| 111 | sandbox/mod.rs:18 | `pub mod target_match` | skip-trivial | Module declaration; no doctest surface. |
+| 112 | sandbox/registry.rs:149 | `pub struct AdapterRegistration` | skip-trivial | No public constructor; instances exist only as static registry entries (`REGISTRY`); all fields are readable but the struct is only meaningful in context of the registry; covered by `PlatformSet::includes` (row 55) and `RegistryKind::name` (row 57) fences. |
+| 113 | sandbox/plan.rs:25 | `pub fn build_plan(...)` | include | Free function returning `Result`; §3.1. Fence constructs minimal `Capability` slice + empty override, asserts `plan.capabilities.len()`. |
+| 114 | sandbox/resolver.rs:284 | `pub fn instantiate_for_probe(kind)` | skip-needs-fixture | Probes the real sandbox adapter stack (feature-dependent: NativeSandbox on Linux, DarwinSandbox on macOS, WindowsSandbox on Windows); result varies by OS and privilege; deferred to future round. |
+| 115 | sandbox/resolver.rs:332 | `pub async fn resolve_adapter(...)` | skip-needs-fixture | Reads `TAU_TESTING_ALLOW_MOCK_SANDBOX` env var + invokes the full filter pipeline; requires real platform detection and optional sandbox probes; deferred to future round. |
+| 116 | sandbox/resolver.rs:520 | `pub async fn resolve_strict_for_validation()` | skip-needs-fixture | Calls `resolve_adapter` with a strict-tier requirements object; same OS/fixture dependency; deferred. |
+| 117 | sandbox/resolver.rs:588 | `pub async fn resolve_adapter_forced(kind)` | skip-needs-fixture | Bypasses the filter pipeline but still instantiates the real adapter; same fixture dependency; deferred. |
+| 118 | orchestration/persistence.rs:76 | `pub fn spawn_writer(path, rx)` | skip-needs-fixture | Spawns a tokio task writing to a real filesystem path; requires a running tokio runtime + tempdir; comprehensive `#[tokio::test]` coverage already in `persistence.rs`. |
+| 119 | orchestration/persistence.rs:123 | `pub async fn replay(path)` | skip-needs-fixture | Reads from a real filesystem JSONL path; requires a pre-written file and a running tokio runtime; comprehensive `#[tokio::test]` coverage already in `persistence.rs`. |
+
 ## Status log
 
 - 2026-05-26 — tau-plugin-protocol classifications + 2 includes (PR-A).
@@ -226,3 +351,5 @@
 - 2026-05-26 — tau-plugin-sdk classifications + 14 includes (PR-B).
 - 2026-05-26 — tau-domain classifications + 17 includes (PR-C).
 - 2026-05-26 — round-3 spec-review fixes (PR-C round-3): SynthesizeError reclassified from skip-feature-gated to include (+1 fence); added 23 missing impl-method rows (7 CapabilityShapeSet methods, 1 Capability::required_shape with new fence, 12 PackageManifest skip-getter rows, PackageId::new done, PluginManifest::new done, UncheckedManifest::validate done); tau-domain include count now 18.
+- 2026-05-26 — tau-runtime classifications + 69 includes (PR-D); 74 doctests passing, 0 failed; added `CapabilityDenial::new()` constructor + re-exported `Direction` from plugin_host; fixed `SandboxValidationError` + `validate_plan_against_adapter` import paths; corrected `TraceEventKind::RunStarted` → `Turn` variant.
+- 2026-05-26 — PR-D spec-review fix: (1) added 40 missing inventory rows (rows 80–119): lib.rs/orchestration/sandbox pub mod declarations → skip-trivial; DynLlmBackend/DynTool/DynStorage/DynSandbox → skip-marker; Runtime struct → skip-trivial; PluginKind/RuntimeError → skip-trivial; DEFAULT_LEASE → skip-trivial; TraceSubscriber → skip-alias; resolve_skill_for_spawn → skip-needs-fixture; AdapterRegistration → skip-trivial; build_plan → include (fence added); resolver async fns + persistence spawn_writer/replay → skip-needs-fixture; (2) BudgetWatchdog::new downgraded from include to skip-trivial (tautological assert removed); (3) added skip-needs-fixture category; 73 doctests passing, 0 failed.

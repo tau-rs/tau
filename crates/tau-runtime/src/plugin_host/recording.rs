@@ -42,6 +42,18 @@ use tau_plugin_protocol::Frame;
 /// `pub` (rather than `pub(crate)`) so the test-only `__internals`
 /// re-exports can surface it; production code only sees the JSONL
 /// `dir` string field, never the typed enum.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::plugin_host::Direction;
+///
+/// let d = Direction::HostToPlugin;
+/// assert!(matches!(d, Direction::HostToPlugin));
+///
+/// let d2 = Direction::PluginToHost;
+/// assert!(matches!(d2, Direction::PluginToHost));
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
     /// Host → plugin (request, host-side notification).
@@ -83,6 +95,15 @@ impl Recorder {
     /// Construct a stateless recorder for `plugin_name`. The recorder
     /// emits tracing events on each `record(...)`; the actual file
     /// write happens in a `PluginRecordingLayer` installed elsewhere.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::plugin_host::Recorder;
+    ///
+    /// let recorder = Recorder::new("echo-llm");
+    /// assert!(format!("{recorder:?}").contains("echo-llm"));
+    /// ```
     pub fn new(plugin_name: impl Into<String>) -> Self {
         Self {
             plugin_name: plugin_name.into(),

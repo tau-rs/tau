@@ -17,12 +17,33 @@ use tau_ports::{Sandbox, SandboxError, SandboxHandle, SandboxPlan, SandboxProbe,
 ///   Layer-3 shape check passes).
 /// - `validate_plan(_)` always returns `Ok(())`.
 /// - `wrap_spawn(_, _)` is a no-op; returns `SandboxHandle::noop()`.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
+/// use tau_ports::Sandbox;
+///
+/// let p = PassthroughSandbox::new();
+/// assert_eq!(p.name(), "passthrough");
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct PassthroughSandbox;
 
 impl PassthroughSandbox {
     /// Construct a fresh passthrough adapter.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
+    /// use tau_ports::{Sandbox, SandboxPlan};
+    ///
+    /// let p = PassthroughSandbox::new();
+    /// let plan = SandboxPlan::new(vec![], None, None);
+    /// assert!(p.validate_plan(&plan).is_ok());
+    /// ```
     pub fn new() -> Self {
         Self
     }

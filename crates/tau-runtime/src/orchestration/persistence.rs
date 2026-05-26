@@ -16,6 +16,17 @@ use tau_ports::{RunId, TraceEvent};
 use crate::orchestration::error::OrchestrationError;
 
 /// Build the JSONL path: `<scope_root>/.tau/runs/<run_id>.jsonl`.
+///
+/// # Example
+///
+/// ```
+/// use std::path::Path;
+/// use tau_runtime::orchestration::persistence::run_log_path;
+///
+/// let path = run_log_path(Path::new("/workspace"), &"run-abc".into());
+/// assert!(path.ends_with("run-abc.jsonl"));
+/// assert!(path.to_str().unwrap().contains(".tau/runs"));
+/// ```
 pub fn run_log_path(scope_root: &Path, run_id: &RunId) -> PathBuf {
     scope_root
         .join(".tau")
@@ -24,6 +35,22 @@ pub fn run_log_path(scope_root: &Path, run_id: &RunId) -> PathBuf {
 }
 
 /// Wrapped line shape for the JSONL — tagged union for forward-compat.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::orchestration::persistence::RunLogLine;
+///
+/// // TaskMutation is a forward-compat placeholder; ensure it
+/// // round-trips through JSON.
+/// let line = RunLogLine::TaskMutation {
+///     task_id: "01".into(),
+///     mutation: r#"{"status":"done"}"#.into(),
+/// };
+/// let json = serde_json::to_string(&line).expect("serialize RunLogLine");
+/// assert!(json.contains("task_mutation"));
+/// assert!(json.contains("01"));
+/// ```
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "line_kind", rename_all = "snake_case")]
 pub enum RunLogLine {

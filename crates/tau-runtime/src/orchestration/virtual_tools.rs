@@ -14,6 +14,19 @@ use crate::orchestration::error::OrchestrationError;
 use crate::orchestration::run_state::RunState;
 
 /// Returns true iff `tool_name` is handled by the virtual-tool resolver.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::orchestration::virtual_tools::is_virtual;
+///
+/// assert!(is_virtual("task.create"));
+/// assert!(is_virtual("task.list"));
+/// assert!(is_virtual("agent.researcher.spawn"));
+/// assert!(is_virtual("skill.critic.spawn"));
+/// assert!(!is_virtual("fs.read"));
+/// assert!(!is_virtual("skill.spawn")); // malformed — missing name
+/// ```
 pub fn is_virtual(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -39,6 +52,22 @@ pub fn is_virtual(tool_name: &str) -> bool {
 
 /// Capability requirement for a given virtual tool. Used by the dispatch
 /// path to gate the call before invoking the handler.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::Capability;
+/// use tau_runtime::orchestration::virtual_tools::required_capability;
+///
+/// let cap = required_capability("task.list");
+/// assert!(matches!(cap, Capability::TaskList { mode } if mode == "read"));
+///
+/// let cap = required_capability("task.create");
+/// assert!(matches!(cap, Capability::TaskList { mode } if mode == "write"));
+///
+/// let cap = required_capability("task.discard");
+/// assert!(matches!(cap, Capability::TaskList { mode } if mode == "manage"));
+/// ```
 pub fn required_capability(tool_name: &str) -> Capability {
     match tool_name {
         "task.list" | "task.get" => Capability::TaskList {
@@ -90,6 +119,33 @@ pub fn required_capability(tool_name: &str) -> Capability {
 /// Note: `agent.<kind>.spawn` is NOT dispatched here — it requires recursive
 /// Runtime::run invocation at the kernel layer (Task 12). Callers must use
 /// `validate_agent_spawn` instead for those tools.
+///
+/// # Example
+///
+/// ```
+/// use chrono::Utc;
+/// use serde_json::json;
+/// use tau_runtime::orchestration::run_state::RunState;
+/// use tau_runtime::orchestration::virtual_tools::dispatch;
+/// use tau_ports::RunBudget;
+///
+/// let mut state = RunState::new("r".into(), "root".into(), RunBudget::default(), Utc::now());
+///
+/// // Create a task via virtual dispatch.
+/// let result = dispatch(
+///     "task.create",
+///     json!({"description": "analyse data"}),
+///     &"root".into(),
+///     &mut state,
+/// ).expect("dispatch ok");
+/// let task_id = result["task_id"].as_str().expect("task_id present");
+/// assert!(!task_id.is_empty());
+///
+/// // Write a plan note.
+/// dispatch("run.note", json!({"text": "step 1"}), &"root".into(), &mut state).unwrap();
+/// let plan = dispatch("run.plan", serde_json::Value::Null, &"root".into(), &mut state).unwrap();
+/// assert!(plan["plan"].as_str().unwrap().contains("step 1"));
+/// ```
 pub fn dispatch(
     tool_name: &str,
     args: Value,
@@ -338,6 +394,25 @@ fn handle_run_plan(state: &mut RunState) -> Result<Value, OrchestrationError> {
 /// Check the capability subset law: every capability in `child_grant` must
 /// be present in `parent_grant`. v1 uses strict equality on the JSON-serialized
 /// form; future versions may relax to allow narrowing.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::Capability;
+/// use tau_runtime::orchestration::virtual_tools::check_capability_subset;
+/// use tau_runtime::orchestration::error::OrchestrationError;
+///
+/// let parent = vec![
+///     Capability::TaskList { mode: "read".into() },
+///     Capability::TaskList { mode: "write".into() },
+/// ];
+/// let child_ok = vec![Capability::TaskList { mode: "read".into() }];
+/// check_capability_subset(&parent, &child_ok).expect("subset is allowed");
+///
+/// let child_bad = vec![Capability::TaskList { mode: "manage".into() }];
+/// let err = check_capability_subset(&parent, &child_bad).unwrap_err();
+/// assert!(matches!(err, OrchestrationError::GrantNotSubset { .. }));
+/// ```
 pub fn check_capability_subset(
     parent_grant: &[Capability],
     child_grant: &[Capability],
@@ -376,6 +451,26 @@ struct AgentSpawnArgs {
 
 /// A validated agent.spawn request, ready for the runtime kernel to
 /// transform into a recursive `Runtime::run` invocation.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::Capability;
+/// use tau_runtime::orchestration::virtual_tools::{AgentSpawnRequest, validate_agent_spawn};
+///
+/// let parent_grant: Vec<Capability> = vec![
+///     serde_json::from_value(serde_json::json!({
+///         "kind": "agent.spawn",
+///         "allowed_kinds": ["researcher"]
+///     })).unwrap(),
+/// ];
+/// let args = serde_json::json!({"message": "go investigate"});
+/// let req = validate_agent_spawn("agent.researcher.spawn", &args, &"sup".into(), &parent_grant)
+///     .expect("valid spawn request");
+/// assert_eq!(req.kind, "researcher");
+/// assert_eq!(req.message, "go investigate");
+/// assert!(req.system_prompt.is_none());
+/// ```
 #[derive(Debug, Clone)]
 pub struct AgentSpawnRequest {
     /// The agent kind parsed from the tool name.
@@ -398,6 +493,39 @@ pub struct AgentSpawnRequest {
 ///
 /// Returns a validated [`AgentSpawnRequest`] the kernel uses to invoke a
 /// recursive `Runtime::run`.
+///
+/// # Example
+///
+/// ```
+/// use tau_domain::Capability;
+/// use tau_runtime::orchestration::virtual_tools::validate_agent_spawn;
+/// use tau_runtime::orchestration::error::OrchestrationError;
+///
+/// let parent_grant: Vec<Capability> = vec![
+///     serde_json::from_value(serde_json::json!({
+///         "kind": "agent.spawn",
+///         "allowed_kinds": ["critic"]
+///     })).unwrap(),
+/// ];
+///
+/// // Authorized kind succeeds.
+/// let req = validate_agent_spawn(
+///     "agent.critic.spawn",
+///     &serde_json::json!({"message": "review this"}),
+///     &"supervisor".into(),
+///     &parent_grant,
+/// ).expect("critic is authorized");
+/// assert_eq!(req.kind, "critic");
+///
+/// // Unauthorized kind fails.
+/// let err = validate_agent_spawn(
+///     "agent.writer.spawn",
+///     &serde_json::json!({"message": "write this"}),
+///     &"supervisor".into(),
+///     &parent_grant,
+/// ).unwrap_err();
+/// assert!(matches!(err, OrchestrationError::SpawnNotAuthorized { .. }));
+/// ```
 pub fn validate_agent_spawn(
     tool_name: &str,
     args: &Value,

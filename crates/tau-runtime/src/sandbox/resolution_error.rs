@@ -33,6 +33,19 @@ use thiserror::Error;
 ///
 /// `#[non_exhaustive]`: future filter stages may add new rejection reasons
 /// without breaking existing match arms.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::sandbox::resolution_error::ResolutionRejection;
+///
+/// let r = ResolutionRejection::PlatformMismatch;
+/// assert!(r.to_string().contains("platform"));
+///
+/// let r = ResolutionRejection::ProbeUnavailable("docker not found".into());
+/// assert!(r.to_string().contains("probe failed"));
+/// assert!(r.to_string().contains("docker not found"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Error)]
 pub enum ResolutionRejection {
@@ -84,6 +97,23 @@ pub enum ResolutionRejection {
 /// `#[non_exhaustive]`: future resolution stages (e.g., remote-sandbox
 /// negotiation) may introduce new failure modes without breaking existing
 /// match arms.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::sandbox::resolution_error::{ResolutionError, ResolutionRejection};
+/// use tau_ports::SandboxTier;
+///
+/// let e = ResolutionError::NoAdapterMatches {
+///     tried: vec![("native".into(), ResolutionRejection::PlatformMismatch)],
+///     platform: "linux".into(),
+///     required_tier: SandboxTier::Strict,
+/// };
+/// let s = e.to_string();
+/// assert!(s.contains("1"));
+/// assert!(s.contains("linux"));
+/// assert!(s.contains("Strict"));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Error)]
 pub enum ResolutionError {

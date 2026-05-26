@@ -3,6 +3,23 @@
 use tau_ports::{AgentId, TaskId};
 
 /// Errors surfaced by virtual-tool dispatch + TaskList state transitions.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::orchestration::error::OrchestrationError;
+///
+/// let not_found = OrchestrationError::TaskNotFound { task: "99".into() };
+/// assert!(not_found.to_string().contains("99"));
+/// assert!(not_found.to_string().contains("not found"));
+///
+/// let budget_err = OrchestrationError::BudgetExceeded {
+///     budget: "max_total_tokens".into(),
+///     value: 150,
+///     limit: 100,
+/// };
+/// assert!(budget_err.to_string().contains("max_total_tokens"));
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum OrchestrationError {
