@@ -57,7 +57,10 @@ url        = { workspace = true }
 tau-ports  = { workspace = true, features = ["test-fixtures", "serde"] }
 
 [features]
-default = []
+# Production `tau` binary ships with OTLP support enabled out of the box.
+# Runtime opt-in via `--otlp-endpoint` flag (or `OTEL_EXPORTER_OTLP_ENDPOINT`
+# env var); compile-time opt-out via `--no-default-features`.
+default = ["otlp"]
 # Forwards to `tau-observe/otlp`: enables the optional OpenTelemetry/OTLP
 # exporter wiring in the CLI.
 otlp = ["tau-observe/otlp"]
