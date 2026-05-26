@@ -189,6 +189,32 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
     }
 }
 
+/// Split a file path into the (directory, file-name) pair that
+/// `tracing-appender` needs.
+///
+/// `Path::parent()` returns `Some("")` for a bare filename like
+/// `PathBuf::from("app.log")` (it is `None` only for paths like `/`
+/// and `""`). `tracing-appender` treats an empty directory as the
+/// process CWD silently — we make that explicit by normalizing to
+/// `"."` so logs always land somewhere predictable.
+///
+/// The `file_name()` `.expect()` stays: paths ending in `/` or `..`
+/// have no filename, and the resulting panic surfaces a programmer
+/// error instead of passing nonsense to `tracing-appender`.
+#[cfg(feature = "non_blocking")]
+fn resolve_appender_paths(path: &std::path::Path) -> (std::path::PathBuf, String) {
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let prefix = path
+        .file_name()
+        .expect("file_path has no filename component")
+        .to_string_lossy()
+        .into_owned();
+    (dir, prefix)
+}
+
 /// Build the non-blocking install path. Caller must have validated
 /// that `opts.file_path.is_some()` and holds the install lock.
 #[cfg(feature = "non_blocking")]
@@ -202,15 +228,7 @@ fn install_non_blocking_inner(opts: InstallOptions) -> Result<InstallGuard, Inst
         .file_path
         .clone()
         .expect("install_non_blocking_inner called without file_path");
-    let dir = path
-        .parent()
-        .expect("file_path has no parent directory")
-        .to_path_buf();
-    let prefix = path
-        .file_name()
-        .expect("file_path has no filename")
-        .to_string_lossy()
-        .to_string();
+    let (dir, prefix) = resolve_appender_paths(&path);
 
     let file_appender = match opts.rotation {
         Rotation::Never => rolling::never(&dir, &prefix),
@@ -273,5 +291,37 @@ mod tests {
         // Two installs in the same test binary must both succeed.
         let _g1 = install(InstallOptions::cli_default()).unwrap();
         let _g2 = install(InstallOptions::cli_default()).unwrap();
+    }
+
+    #[cfg(feature = "non_blocking")]
+    #[test]
+    fn resolve_appender_paths_normalizes_bare_filename_to_cwd() {
+        use std::path::{Path, PathBuf};
+
+        // Bare filename: parent() yields Some(""), which we normalize
+        // to "." so tracing-appender doesn't silently fall back to CWD.
+        let (dir, prefix) = resolve_appender_paths(Path::new("app.log"));
+        assert_eq!(dir, PathBuf::from("."));
+        assert_eq!(prefix, "app.log");
+    }
+
+    #[cfg(feature = "non_blocking")]
+    #[test]
+    fn resolve_appender_paths_preserves_nested_directory() {
+        use std::path::{Path, PathBuf};
+
+        let (dir, prefix) = resolve_appender_paths(Path::new("logs/sub/app.log"));
+        assert_eq!(dir, PathBuf::from("logs/sub"));
+        assert_eq!(prefix, "app.log");
+    }
+
+    #[cfg(feature = "non_blocking")]
+    #[test]
+    fn resolve_appender_paths_preserves_absolute_directory() {
+        use std::path::{Path, PathBuf};
+
+        let (dir, prefix) = resolve_appender_paths(Path::new("/var/log/tau/app.log"));
+        assert_eq!(dir, PathBuf::from("/var/log/tau"));
+        assert_eq!(prefix, "app.log");
     }
 }
