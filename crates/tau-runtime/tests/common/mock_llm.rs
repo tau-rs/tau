@@ -13,6 +13,10 @@
 //!     .add_end();
 //! ```
 //!
+//! For a single LLM turn that emits multiple `ToolUse` blocks in one
+//! response, use [`MockLlmBackend::add_tool_calls`] (variant
+//! [`MockTurn::ToolCalls`]).
+//!
 //! # Improvement over `ScriptedLlm`
 //!
 //! `ScriptedLlm` takes a pre-built `Vec<CompletionResponse>` — callers must
@@ -49,6 +53,19 @@ pub enum MockTurn {
         name: String,
         /// Tool arguments.
         args: Value,
+    },
+    /// A multi-tool-call response: a single LLM completion containing
+    /// several `ToolUse` blocks. Produces one `CompletionResponse` whose
+    /// `tool_uses` vector has one entry per `(name, args)` pair, with
+    /// `StopReason::ToolUse`.
+    ///
+    /// Used to exercise code paths that fan out over multiple tool
+    /// blocks in a single turn (e.g. spec §3.9
+    /// `llm.tool_use_emitted` firing once per block).
+    ToolCalls {
+        /// Ordered list of `(tool_name, args)` pairs. Each becomes one
+        /// `ToolUse` in the synthesized response, with id `tu_<name>_<idx>`.
+        calls: Vec<(String, Value)>,
     },
     /// End-of-script marker: returns an empty text response with
     /// `StopReason::EndTurn`. Callers add this to make it explicit that
@@ -105,6 +122,21 @@ impl MockLlmBackend {
             name: name.to_string(),
             args,
         })
+    }
+
+    /// Convenience: add a single turn whose response contains multiple
+    /// `ToolUse` blocks. Each `(name, args)` pair becomes one ToolUse
+    /// in the synthesized `CompletionResponse`.
+    pub fn add_tool_calls<S, I>(self, calls: I) -> Self
+    where
+        S: Into<String>,
+        I: IntoIterator<Item = (S, Value)>,
+    {
+        let calls = calls
+            .into_iter()
+            .map(|(name, args)| (name.into(), args))
+            .collect();
+        self.add_turn(MockTurn::ToolCalls { calls })
     }
 
     /// Convenience: add an explicit end-of-script turn.
@@ -191,6 +223,22 @@ impl MockLlmBackend {
                 make_completion_response(
                     String::new(),
                     vec![ToolUse::new(id, name, args)],
+                    StopReason::ToolUse,
+                    Some(make_token_usage(10, 10)),
+                )
+            }
+            MockTurn::ToolCalls { calls } => {
+                let tool_uses = calls
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, (name, args))| {
+                        let id = format!("tu_{name}_{idx}");
+                        ToolUse::new(id, name, args)
+                    })
+                    .collect();
+                make_completion_response(
+                    String::new(),
+                    tool_uses,
                     StopReason::ToolUse,
                     Some(make_token_usage(10, 10)),
                 )
@@ -323,6 +371,26 @@ mod tests {
         backend.complete(req.clone()).await.unwrap();
         backend.complete(req.clone()).await.unwrap();
         backend.verify_fully_consumed();
+    }
+
+    /// `add_tool_calls` produces a single response whose `tool_uses`
+    /// vector has one entry per `(name, args)` pair, in order, with
+    /// `StopReason::ToolUse`.
+    #[tokio::test]
+    async fn add_tool_calls_produces_multi_tool_response() {
+        let backend = MockLlmBackend::new("test").add_tool_calls(vec![
+            ("alpha", Value::String("a".into())),
+            ("beta", Value::String("b".into())),
+        ]);
+        let req = CompletionRequest::new("m".to_string());
+        let resp = backend.complete(req).await.unwrap();
+        assert_eq!(resp.stop_reason, StopReason::ToolUse);
+        assert_eq!(resp.tool_uses.len(), 2);
+        assert_eq!(resp.tool_uses[0].name, "alpha");
+        assert_eq!(resp.tool_uses[1].name, "beta");
+        // Ids are unique-per-index to avoid collisions when the same
+        // tool name appears twice in one turn.
+        assert_ne!(resp.tool_uses[0].id, resp.tool_uses[1].id);
     }
 
     /// `verify_fully_consumed` panics when scripted turns remain.

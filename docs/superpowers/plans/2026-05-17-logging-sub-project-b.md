@@ -2,6 +2,88 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## State addendum (2026-05-25)
+
+Tasks 1 and 9 shipped ahead of Tasks 2-8 (PRs #198 and #196 respectively).
+The remaining work is **Tasks 2-8** + Task 10 final-verify. This addendum
+records every drift between the plan body below and the current `main`,
+so implementer subagents can trust the task text once they've read this.
+
+**Already in place (do not re-add):**
+
+- `tau_observe::vocabulary::*` — all 8 span + 20 event constants exist
+  with the expected names (see `crates/tau-observe/src/vocabulary.rs`).
+- `tau_observe::capture::Captor` — gated behind the `test-fixtures`
+  feature, exported from `lib.rs`.
+- `crates/tau-runtime/Cargo.toml` — `tau-observe = { workspace = true }`
+  is already a non-dev dependency. The **dev-dep with `features =
+  ["test-fixtures"]` was added in this branch's first commit**; nothing
+  more to do.
+- `crates/tau-runtime/tests/tracing_emission.rs` — an existing
+  integration test already wires a custom `Layer` (not `Captor`) and
+  asserts a small set of milestone events fire. **Extend or replace it;
+  do not create a parallel `tracing_vocabulary.rs`.** The fixture
+  pattern uses `tau_ports::fixtures::{make_completion_response,
+  make_token_usage, MockLlmBackend}` plus `common::agent_def` /
+  `common::manifest_with_no_capabilities` / `common::user_message`.
+- `crates/tau-runtime/tests/common/mock_llm.rs` — the real MockLlmBackend
+  pattern. (The plan body mentions porting from a nonexistent
+  `orchestration_patterns.rs`; ignore that — `common::` is the
+  reusable home.)
+- `runtime.agent_run` span exists (via `#[instrument]` on
+  `Runtime::run_with_history`).
+- `llm.complete` span exists (via `#[instrument(name = "llm.complete")]`
+  in `stream.rs` around line 201).
+- `EV_RUNTIME_RUN_STARTED`, `EV_RUNTIME_TURN_STARTED`,
+  `EV_RUNTIME_LOOP_TERMINATED`, `EV_LLM_REQUEST_BUILT`,
+  `EV_LLM_RESPONSE_RECEIVED` — already emitted in `stream.rs`.
+- `EV_CAPABILITY_DENY` — emitted inline at `stream.rs:343` and `:973`
+  (Task 6 must decide: leave inline, or move inside the new
+  `capability.check` span. The latter is cleaner; do that unless it
+  forces a refactor of the failure path).
+- `EV_TOOL_SESSION_OPEN_FAILED`, `EV_TOOL_INVOKE_FAILED`,
+  `EV_TOOL_SESSION_CLOSE_FAILED` — already emitted at the error
+  branches inside `plugin_host/ipc_tool.rs`. Task 7 must verify they
+  fall inside the new spans; if not, restructure.
+
+**Known drift to fix (Task 3 / sweep):**
+
+- `stream.rs:300` emits `name = "runtime.run_completed"` as a **literal
+  string**, NOT through `EV_RUNTIME_COMPLETED` (`"runtime.completed"`).
+  These are the same conceptual event. **Migrate the literal to
+  `EV_RUNTIME_COMPLETED` as part of Task 3.** Two consequences:
+  - The existing `tracing_emission.rs` assertion `event:runtime.run_completed`
+    must update to `event:runtime.completed`.
+  - Any downstream consumer (log dashboards, JSON-event parsers) sees a
+    name change. None exist yet outside the kernel, so this is safe.
+
+**Files to touch (corrected from plan body):**
+
+- `crates/tau-runtime/src/run.rs` — `Runtime::invoke_tool` is at line
+  259 (Task 5). The plan body says `crates/tau-runtime/src/dispatch.rs`;
+  there is no `dispatch.rs`.
+- `crates/tau-runtime/src/capability.rs:70` — `check_capabilities` lives
+  here (Task 6). The plan body says `capability_check.rs`; the file is
+  `capability.rs`.
+- `crates/tau-runtime/src/plugin_host/ipc_tool.rs` — `IpcTool` impl
+  with the `Open`/`Invoke`/`Close` paths (Task 7). The plan body says
+  `plugin_host/mod.rs` or "send_open / send_invoke / send_close"; the
+  real names are methods on `IpcTool`, not free functions.
+
+**Test file convention:**
+
+- Extend `crates/tau-runtime/tests/tracing_emission.rs` rather than
+  creating `tracing_vocabulary.rs`. Optionally replace the custom Layer
+  with `Captor` for richer field assertions; an incremental migration
+  (keep the custom Layer for the existing milestones; use `Captor` for
+  new field-level asserts) is acceptable.
+
+The task bodies below stand as written; treat conflicts between the body
+and this addendum as: **the addendum wins**.
+
+---
+
+
 **Goal:** Make the kernel emit the full ADR-0006 §3.9 vocabulary: six new spans and ~15 new events on top of the two spans and seven events that already exist.
 
 **Architecture:** Add `#[instrument]` / `info_span!` decorations at six call sites inside the streaming pump (`stream.rs`), the dispatch path, the capability-check path, and the plugin-host session/invoke path. Every span name and event name is imported from `tau_observe::vocabulary` (introduced in Sub-project A) so the §3.9 dictionary cannot drift. Each event has unit-test coverage via a capture subscriber.

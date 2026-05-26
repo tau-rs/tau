@@ -231,6 +231,15 @@ impl DynTool for IpcTool {
                 rmp_serde::to_vec(&(ctx_owned, &args)).map_err(|e| ToolError::Internal {
                     message: format!("rmp encode tool.call params: {e}"),
                 })?;
+            // ADR-0006 §3.9: emit `tool.args_received` BEFORE forwarding
+            // args to the plugin. `args_size_bytes` is the rmp-serde-
+            // encoded byte length (the on-wire size). Payload contents
+            // are intentionally NOT logged — that's redaction sub-project
+            // C's territory.
+            tracing::debug!(
+                name = tau_observe::vocabulary::EV_TOOL_ARGS_RECEIVED,
+                args_size_bytes = params_bytes.len(),
+            );
             let frame = Frame::Request {
                 id,
                 method: TOOL_CALL_METHOD.to_string(),
@@ -250,6 +259,14 @@ impl DynTool for IpcTool {
             })?;
             match result {
                 Ok(bytes) => {
+                    // ADR-0006 §3.9: emit `tool.result_received` on the
+                    // Ok branch (Err is covered by `tool.invoke_failed`
+                    // at the stream.rs call site). `result_size_bytes`
+                    // is the rmp-serde-encoded response byte length.
+                    tracing::debug!(
+                        name = tau_observe::vocabulary::EV_TOOL_RESULT_RECEIVED,
+                        result_size_bytes = bytes.len(),
+                    );
                     rmp_serde::from_slice::<ToolResult>(&bytes).map_err(|e| ToolError::Internal {
                         message: format!("rmp decode ToolResult: {e}"),
                     })
