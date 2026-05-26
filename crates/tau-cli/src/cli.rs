@@ -60,6 +60,52 @@ pub struct Cli {
     /// with `--no-sandbox` if both set.
     #[arg(long, global = true, value_enum, conflicts_with = "no_sandbox")]
     pub sandbox: Option<SandboxKindArg>,
+
+    /// Write logs through a non-blocking MPSC channel (high-throughput).
+    /// Requires `--log-file`. Env: `TAU_LOG_NON_BLOCKING=1`.
+    #[arg(long, global = true, env = "TAU_LOG_NON_BLOCKING")]
+    pub log_non_blocking: bool,
+
+    /// Write logs to the given file instead of stderr. Required when
+    /// `--log-non-blocking` is set. Env: `TAU_LOG_FILE`.
+    #[arg(long, global = true, env = "TAU_LOG_FILE", value_name = "PATH")]
+    pub log_file: Option<PathBuf>,
+
+    /// Log file rotation policy. Ignored unless `--log-file` is set.
+    /// Env: `TAU_LOG_ROTATION`.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t,
+        env = "TAU_LOG_ROTATION"
+    )]
+    pub log_rotation: LogRotationCli,
+}
+
+/// CLI value for `--log-rotation <policy>`. Translates to
+/// `tau_observe::install::Rotation` at the install boundary so
+/// `tau-observe` stays free of any clap dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum LogRotationCli {
+    /// No rotation — append forever to a single file.
+    #[default]
+    Never,
+    /// Roll over each day at UTC midnight (filename gains a date suffix).
+    Daily,
+    /// Roll over each hour (filename gains a date+hour suffix).
+    Hourly,
+}
+
+impl From<LogRotationCli> for tau_observe::install::Rotation {
+    fn from(value: LogRotationCli) -> Self {
+        match value {
+            LogRotationCli::Never => Self::Never,
+            LogRotationCli::Daily => Self::Daily,
+            LogRotationCli::Hourly => Self::Hourly,
+        }
+    }
 }
 
 /// CLI value for `--sandbox <kind>`. Maps to the resolver's adapter

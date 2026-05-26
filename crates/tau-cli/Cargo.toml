@@ -20,7 +20,7 @@ tau-plugin-protocol = { workspace = true }
 tau-runtime         = { workspace = true }
 tau-workflow        = { workspace = true }
 tau-app             = { workspace = true }
-tau-observe         = { workspace = true }
+tau-observe         = { workspace = true, features = ["non_blocking"] }
 futures-core        = { workspace = true }
 base64             = { workspace = true }
 humantime          = "2"

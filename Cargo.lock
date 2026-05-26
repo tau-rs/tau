@@ -3170,6 +3170,7 @@ name = "tau-observe"
 version = "0.0.0"
 dependencies = [
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-appender",

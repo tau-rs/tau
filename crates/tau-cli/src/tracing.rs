@@ -42,25 +42,41 @@ pub fn build_filter(cli: &Cli) -> EnvFilter {
 /// human-format, stderr-writer configuration. Idempotent — the
 /// underlying installer short-circuits second calls.
 pub fn install(cli: &Cli) {
+    // --log-non-blocking without --log-file is a configuration error:
+    // the non-blocking install path requires a file sink (it has no
+    // meaning over stderr). Exit early so the misconfiguration is
+    // surfaced loudly instead of being silently downgraded.
+    if cli.log_non_blocking && cli.log_file.is_none() {
+        eprintln!("error: --log-non-blocking requires --log-file");
+        std::process::exit(2);
+    }
+
     let opts = InstallOptions {
         filter: build_filter(cli),
         format: Format::Human,
         writer: Writer::Stderr,
-        non_blocking: false,
-        file_path: None,
-        rotation: tau_observe::install::Rotation::Never,
+        non_blocking: cli.log_non_blocking,
+        file_path: cli.log_file.clone(),
+        rotation: cli.log_rotation.into(),
     };
     // The CLI does not propagate install errors; the only failure mode
     // is "already installed", which the underlying installer maps to a
     // no-op guard.
-    let _guard =
+    //
+    // The non-blocking guard MUST live for the process lifetime so the
+    // appender's worker thread keeps draining the MPSC channel. The
+    // CLI `main` returns immediately after the subcommand handler, so
+    // we forget the guard rather than `let _ =` it (which would drop
+    // at end-of-fn and flush+stop the worker mid-write).
+    let guard =
         observe_install(opts).expect("tau_observe::install never returns Err in current impl");
+    std::mem::forget(guard);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{Cli, ColorMode, Command, ListArgs, ListResource};
+    use crate::cli::{Cli, ColorMode, Command, ListArgs, ListResource, LogRotationCli};
 
     fn make_cli(verbose: u8, quiet: bool, debug: bool) -> Cli {
         Cli {
@@ -79,6 +95,9 @@ mod tests {
             record_protocol: None,
             no_sandbox: false,
             sandbox: None,
+            log_non_blocking: false,
+            log_file: None,
+            log_rotation: LogRotationCli::Never,
         }
     }
 
