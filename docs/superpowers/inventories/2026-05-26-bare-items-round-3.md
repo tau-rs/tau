@@ -436,30 +436,41 @@
 | 86 | scope.rs (impl) | `Scope::resolve(dir)` | done | Fence at line 336. |
 | 87 | scope.rs (impl) | `Scope::global()` | done | Fence at line 370. |
 | 88 | scope.rs (impl) | `Scope::new_project(dir)` | done | Fence at line 448. |
-| 89 | skill_check.rs:41 | `pub fn cross_check_skill_package(...)` | skip-needs-fixture | Reads real SKILL.md from installed directory; deferred. |
-| 90 | skill_resolve.rs:18 | `pub struct InstalledSkill` | skip-trivial | No constructor; only produced by `find_installed_skill`. |
-| 91 | skill_resolve.rs:39 | `pub enum FindSkillError` | include | Fence constructs `InstallPathMissing { name, path }`; asserts display. |
-| 92 | skill_resolve.rs:91 | `pub fn find_installed_skill(scope, name)` | skip-needs-fixture | Reads real lockfile + manifest from scope; deferred. |
-| 93 | source_list.rs:23 | `pub fn list_versions_at_source(source)` | skip-needs-fixture | Shells out to `git ls-remote`; deferred. |
-| 94 | source_list.rs:122 | `pub enum SourceListError` | include | Fence constructs `GitInvoke { message }` + `Unsupported`; asserts display. |
-| 95 | synthesize.rs:23 | `pub fn synthesize_anthropic_skill(workspace, source)` | skip-needs-fixture | Reads real SKILL.md from cloned workspace; deferred. |
-| 96 | synthesize.rs:51 | `pub enum SynthesizeError` | include | Fence constructs `ReadSkillMd { path, detail }`; asserts display. |
-| 97 | tree_hash.rs:35 | `pub enum TreeHashError` | include | Fence constructs `Io { path, message }`; asserts display contains "io error at" + path. |
-| 98 | tree_hash.rs:50 | `pub fn sha256_of_file(path)` | include | Fence writes tempfile, calls `sha256_of_file`, asserts 64-char hex. |
-| 99 | tree_hash.rs:63 | `pub struct FileHash` | include | `#[non_exhaustive]`; no public constructor; fence illustrates round-trip concept via `sha256_of_file`. |
-| 100 | tree_hash.rs:94 | `pub fn tree_hash(root)` | done | Fence at line 127 (round-3 prior art). |
-| 101 | update.rs:41 | `pub enum UpdateError` | done | Fence at line 28 (round-3 prior art). |
-| 102 | update.rs:113 | `pub struct UpdateResult` | done | Fence at line 101 (round-3 prior art). |
-| 103 | update.rs:145 | `pub fn update_package(name, version, scope)` | skip-needs-fixture | Shells out to `git clone`; deferred. |
-| 104 | verify.rs:18 | `pub enum VerifyStatus` | include | Fence constructs `Ok`, `Unverified`, `TreeDrift`; asserts `is_drift()`. |
-| 105 | verify.rs:74 | `pub enum AnthropicConformanceIssue` | include | Fence constructs `MissingDescription` + `MalformedFrontmatter { detail }`; asserts `matches!`. |
-| 106 | verify.rs (impl) | `VerifyStatus::is_drift(&self)` | include | Fence shows `Ok`/`Unverified` → `false`, `Missing` → `true`. |
-| 107 | verify.rs:106 | `pub struct VerifyReport` | skip-trivial | `#[non_exhaustive]`; no constructor; only produced by `verify`; covered by `VerifyStatus` + `VerifyError` fences. |
-| 108 | verify.rs:118 | `pub enum VerifyError` | include | Fence constructs `PackageNotInstalled { name }`; asserts display. |
-| 109 | verify.rs:163 | `pub fn verify_skill_content(install_dir, name, locked)` | include | Fence writes tempfile `SKILL.md`, uses `LockedSkill::new` with wrong sha; asserts `SkillContentDrift`. |
-| 110 | verify.rs:199 | `pub fn verify(scope, name, version)` | skip-needs-fixture | Reads real lockfile + install dir; deferred. |
-| 111 | verify.rs:288 | `pub fn verify_all(scope)` | skip-needs-fixture | Reads real lockfile; deferred. |
-| 112 | verify.rs:305 | `pub fn verify_all_with_options(scope, anthropic_strict)` | skip-needs-fixture | Same as `verify_all`; deferred. |
+| 89 | scope.rs:78 | `SandboxRequirements::with_tier(required_tier)` | done | Covered by `SandboxRequirements` struct fence (row 81); shows `with_tier` + field assertions. |
+| 90 | scope.rs:242 | `ScopeConfig::new(kind)` | include | Fence added in PR-E spec-review fix; asserts `kind`, `schema_version == 3`, `defaults.is_empty()`. |
+| 91 | scope.rs:290 | `ScopeConfig::to_toml_string(&self)` | include | Fence added in PR-E spec-review fix; asserts TOML contains `schema_version` + `kind = "global"`. |
+| 92 | scope.rs:497 | `Scope::path(&self)` | skip-getter | Trivial accessor returning `&Path`; no behavior to demonstrate beyond what `new_project` / `global` fences already show. |
+| 93 | scope.rs:502 | `Scope::state_path(&self)` | skip-getter | Trivial accessor returning `&Path`. |
+| 94 | scope.rs:507 | `Scope::kind(&self)` | skip-getter | Trivial accessor returning `ScopeKind`; already asserted in `Scope::resolve` + `new_project` fences. |
+| 95 | scope.rs:512 | `Scope::lockfile_path(&self)` | skip-getter | Path derivation (`<path>/tau-lock.toml`); trivial accessor. |
+| 96 | scope.rs:517 | `Scope::config_path(&self)` | skip-getter | Path derivation (`<state_path>/config.toml`); trivial accessor. |
+| 97 | scope.rs:522 | `Scope::packages_dir(&self)` | skip-getter | Path derivation (`<state_path>/packages`); trivial accessor. |
+| 98 | scope.rs:527 | `Scope::install_lock_path(&self)` | skip-getter | Path derivation (`<state_path>/locks/install.lock`); trivial accessor. |
+| 99 | scope.rs:533 | `Scope::package_dir(&self, name, version)` | include | Fence added in PR-E spec-review fix; 2-param method; asserts path starts with tmp root and contains name + version segments. |
+| 100 | skill_check.rs:41 | `pub fn cross_check_skill_package(...)` | skip-needs-fixture | Reads real SKILL.md from installed directory; deferred. |
+| 101 | skill_resolve.rs:18 | `pub struct InstalledSkill` | skip-trivial | No constructor; only produced by `find_installed_skill`. |
+| 102 | skill_resolve.rs:39 | `pub enum FindSkillError` | include | Fence constructs `InstallPathMissing { name, path }`; asserts display. |
+| 103 | skill_resolve.rs:91 | `pub fn find_installed_skill(scope, name)` | skip-needs-fixture | Reads real lockfile + manifest from scope; deferred. |
+| 104 | source_list.rs:23 | `pub fn list_versions_at_source(source)` | skip-needs-fixture | Shells out to `git ls-remote`; deferred. |
+| 105 | source_list.rs:122 | `pub enum SourceListError` | include | Fence constructs `GitInvoke { message }` + `Unsupported`; asserts display. |
+| 106 | synthesize.rs:23 | `pub fn synthesize_anthropic_skill(workspace, source)` | skip-needs-fixture | Reads real SKILL.md from cloned workspace; deferred. |
+| 107 | synthesize.rs:51 | `pub enum SynthesizeError` | include | Fence constructs `ReadSkillMd { path, detail }`; asserts display. |
+| 108 | tree_hash.rs:35 | `pub enum TreeHashError` | include | Fence constructs `Io { path, message }`; asserts display contains "io error at" + path. |
+| 109 | tree_hash.rs:50 | `pub fn sha256_of_file(path)` | include | Fence writes tempfile, calls `sha256_of_file`, asserts 64-char hex. |
+| 110 | tree_hash.rs:63 | `pub struct FileHash` | include | `#[non_exhaustive]`; no public constructor; fence illustrates round-trip concept via `sha256_of_file`. |
+| 111 | tree_hash.rs:94 | `pub fn tree_hash(root)` | done | Fence at line 127 (round-3 prior art). |
+| 112 | update.rs:41 | `pub enum UpdateError` | done | Fence at line 28 (round-3 prior art). |
+| 113 | update.rs:113 | `pub struct UpdateResult` | done | Fence at line 101 (round-3 prior art). |
+| 114 | update.rs:145 | `pub fn update_package(name, version, scope)` | skip-needs-fixture | Shells out to `git clone`; deferred. |
+| 115 | verify.rs:18 | `pub enum VerifyStatus` | include | Fence constructs `Ok`, `Unverified`, `TreeDrift`; asserts `is_drift()`. |
+| 116 | verify.rs:74 | `pub enum AnthropicConformanceIssue` | include | Fence constructs `MissingDescription` + `MalformedFrontmatter { detail }`; asserts `matches!`. |
+| 117 | verify.rs (impl) | `VerifyStatus::is_drift(&self)` | include | Fence shows `Ok`/`Unverified` → `false`, `Missing` → `true`. |
+| 118 | verify.rs:106 | `pub struct VerifyReport` | skip-trivial | `#[non_exhaustive]`; no constructor; only produced by `verify`; covered by `VerifyStatus` + `VerifyError` fences. |
+| 119 | verify.rs:118 | `pub enum VerifyError` | include | Fence constructs `PackageNotInstalled { name }`; asserts display. |
+| 120 | verify.rs:163 | `pub fn verify_skill_content(install_dir, name, locked)` | include | Fence writes tempfile `SKILL.md`, uses `LockedSkill::new` with wrong sha; asserts `SkillContentDrift`. |
+| 121 | verify.rs:199 | `pub fn verify(scope, name, version)` | skip-needs-fixture | Reads real lockfile + install dir; deferred. |
+| 122 | verify.rs:288 | `pub fn verify_all(scope)` | skip-needs-fixture | Reads real lockfile; deferred. |
+| 123 | verify.rs:305 | `pub fn verify_all_with_options(scope, anthropic_strict)` | skip-needs-fixture | Same as `verify_all`; deferred. |
 
 ## Status log
 
@@ -467,6 +478,7 @@
 - 2026-05-26 — round-3 spec-review fixes: added missing impl-method rows (Frame::decode/encode, FramedReader/Writer methods, all TraceContext/HandshakeRequest/MethodSchema/HandshakeResponse ::new constructors, meta constants, all FakeStdioPeer methods); added skip-feature-gated category; relabeled FakeStdioPeer + methods from skip-trivial to skip-feature-gated; rewrote FramedReader/FramedWriter fences as duplex round-trips with .expect() assertions.
 - 2026-05-26 — tau-plugin-sdk classifications + 14 includes (PR-B).
 - 2026-05-26 — tau-domain classifications + 17 includes (PR-C).
+- 2026-05-26 — PR-E spec-review fix: added 11 missing scope.rs rows + 3 new fences (ScopeConfig::new, ScopeConfig::to_toml_string, Scope::package_dir).
 - 2026-05-26 — round-3 spec-review fixes (PR-C round-3): SynthesizeError reclassified from skip-feature-gated to include (+1 fence); added 23 missing impl-method rows (7 CapabilityShapeSet methods, 1 Capability::required_shape with new fence, 12 PackageManifest skip-getter rows, PackageId::new done, PluginManifest::new done, UncheckedManifest::validate done); tau-domain include count now 18.
 - 2026-05-26 — tau-runtime classifications + 69 includes (PR-D); 74 doctests passing, 0 failed; added `CapabilityDenial::new()` constructor + re-exported `Direction` from plugin_host; fixed `SandboxValidationError` + `validate_plan_against_adapter` import paths; corrected `TraceEventKind::RunStarted` → `Turn` variant.
 - 2026-05-26 — PR-D spec-review fix: (1) added 40 missing inventory rows (rows 80–119): lib.rs/orchestration/sandbox pub mod declarations → skip-trivial; DynLlmBackend/DynTool/DynStorage/DynSandbox → skip-marker; Runtime struct → skip-trivial; PluginKind/RuntimeError → skip-trivial; DEFAULT_LEASE → skip-trivial; TraceSubscriber → skip-alias; resolve_skill_for_spawn → skip-needs-fixture; AdapterRegistration → skip-trivial; build_plan → include (fence added); resolver async fns + persistence spawn_writer/replay → skip-needs-fixture; (2) BudgetWatchdog::new downgraded from include to skip-trivial (tautological assert removed); (3) added skip-needs-fixture category; 73 doctests passing, 0 failed.
