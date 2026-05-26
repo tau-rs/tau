@@ -2,7 +2,7 @@
 //!
 //! The runtime emits a curated set of tracing events through
 //! `tracing::{info,debug,warn}!(name = "...")` (e.g.
-//! `runtime.run_started`, `runtime.run_completed`,
+//! `runtime.run_started`, `runtime.completed`,
 //! `runtime.turn_started`). The CLI installs a `tracing-subscriber` fmt
 //! layer that writes those events to stderr in the standard human
 //! format.
@@ -80,7 +80,7 @@ fn run_emits_turn_lifecycle_events_at_debug() {
     //
     // NOTE: `runtime.turn_completed` only fires after a tool dispatch
     // step; the happy-path `EndTurn` short-circuits via
-    // `runtime.loop_terminated` then `runtime.run_completed` (info!),
+    // `runtime.loop_terminated` then `runtime.completed` (info!),
     // so we assert the events that DO fire on a no-tool happy path.
     assert!(
         stderr.contains("runtime.turn_started"),
@@ -91,8 +91,8 @@ fn run_emits_turn_lifecycle_events_at_debug() {
         "expected runtime.loop_terminated; got:\n{stderr}"
     );
     assert!(
-        stderr.contains("runtime.run_completed"),
-        "expected runtime.run_completed; got:\n{stderr}"
+        stderr.contains("runtime.completed"),
+        "expected runtime.completed; got:\n{stderr}"
     );
     // LLM-side events are also part of the surface.
     assert!(

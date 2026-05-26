@@ -756,7 +756,10 @@ mode = "write"
         // requires a string literal, so the SPAN_CAPABILITY_CHECK
         // constant cannot be referenced directly. This guard prevents
         // the literal from drifting out of sync with the vocabulary.
-        assert_eq!(tau_observe::vocabulary::SPAN_CAPABILITY_CHECK, "capability.check");
+        assert_eq!(
+            tau_observe::vocabulary::SPAN_CAPABILITY_CHECK,
+            "capability.check"
+        );
     }
 
     #[test]

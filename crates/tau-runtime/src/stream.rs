@@ -1409,11 +1409,7 @@ pub(crate) fn run_streaming_inner(
 /// Emit `runtime.failed` with `failure_kind = PolicyDenied` under the given
 /// turn span. Dedupes two byte-identical warn! sites (orchestration
 /// virtual-tool deny + regular tool-dispatch deny).
-fn emit_policy_denied_failure(
-    turn_span: &tracing::Span,
-    turn_index: u32,
-    tool_name: &str,
-) {
+fn emit_policy_denied_failure(turn_span: &tracing::Span, turn_index: u32, tool_name: &str) {
     warn!(
         parent: turn_span,
         name = EV_RUNTIME_FAILED,

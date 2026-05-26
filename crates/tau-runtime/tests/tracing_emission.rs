@@ -16,12 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tau_domain::{Capability, Value};
-use tau_ports::fixtures::{
-    make_completion_response, make_token_usage, MockLlmBackend, MockTool,
-};
-use tau_ports::{
-    SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec,
-};
+use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend, MockTool};
+use tau_ports::{SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec};
 use tau_runtime::{RunOptions, Runtime};
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
@@ -360,11 +356,7 @@ async fn runtime_failed_event_fires_on_status_failed() {
             Ok(())
         }
 
-        async fn invoke(
-            &self,
-            _: &mut (),
-            _args: Value,
-        ) -> Result<ToolResult, ToolError> {
+        async fn invoke(&self, _: &mut (), _args: Value) -> Result<ToolResult, ToolError> {
             self.invoke_count.fetch_add(1, Ordering::SeqCst);
             Ok(tau_ports::fixtures::make_tool_result(Vec::new(), false))
         }
@@ -404,8 +396,7 @@ paths = [{paths_toml}]
         .set_default();
 
     // LLM emits a single tool_use targeting the restricted tool.
-    let llm = common::MockLlmBackend::new("gpt-4")
-        .add_tool_call("restricted-reader", Value::Null);
+    let llm = common::MockLlmBackend::new("gpt-4").add_tool_call("restricted-reader", Value::Null);
 
     let invoke_count = std::sync::Arc::new(AtomicUsize::new(0));
     let restricted = RestrictedTool {
@@ -708,11 +699,7 @@ async fn capability_deny_fires_when_check_fails() {
             Ok(())
         }
 
-        async fn invoke(
-            &self,
-            _: &mut (),
-            _args: Value,
-        ) -> Result<ToolResult, ToolError> {
+        async fn invoke(&self, _: &mut (), _args: Value) -> Result<ToolResult, ToolError> {
             Ok(tau_ports::fixtures::make_tool_result(Vec::new(), false))
         }
 
@@ -747,8 +734,7 @@ paths = [{paths_toml}]
         .with(captured.clone())
         .set_default();
 
-    let llm = common::MockLlmBackend::new("gpt-4")
-        .add_tool_call("restricted-reader", Value::Null);
+    let llm = common::MockLlmBackend::new("gpt-4").add_tool_call("restricted-reader", Value::Null);
 
     let restricted = RestrictedTool {
         schema: common::empty_tool_spec("restricted-reader"),
@@ -956,7 +942,11 @@ async fn tool_ipc_args_and_result_events_fire_for_invoke() {
         Duration::from_secs(5),
     );
 
-    let spec = make_tool_spec("echo".into(), "echo".into(), Value::Object(Default::default()));
+    let spec = make_tool_spec(
+        "echo".into(),
+        "echo".into(),
+        Value::Object(Default::default()),
+    );
     let ipc_tool: Arc<dyn tau_runtime::builder::DynTool> =
         Arc::new(IpcTool::new("echo".to_string(), spec, Vec::new(), process));
 
@@ -982,7 +972,9 @@ async fn tool_ipc_args_and_result_events_fire_for_invoke() {
     let peer_fut = async {
         let (msgid, _params) = peer.expect_request("tool.call").await;
         let result = make_tool_result(
-            vec![ToolContent::Text { text: "echoed".into() }],
+            vec![ToolContent::Text {
+                text: "echoed".into(),
+            }],
             false,
         );
         peer.send_response(msgid, &result)
