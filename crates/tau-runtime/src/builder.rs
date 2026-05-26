@@ -342,6 +342,19 @@ impl std::fmt::Debug for Runtime {
 
 impl Runtime {
     /// Construct a fresh [`RuntimeBuilder`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::Runtime;
+    /// use tau_ports::fixtures::MockLlmBackend;
+    ///
+    /// let runtime = Runtime::builder()
+    ///     .with_llm_backend(MockLlmBackend::new("test-pkg"))
+    ///     .build()
+    ///     .expect("build runtime");
+    /// assert!(format!("{runtime:?}").contains("test-pkg"));
+    /// ```
     pub fn builder() -> RuntimeBuilder {
         RuntimeBuilder::default()
     }
@@ -693,6 +706,21 @@ impl RuntimeBuilder {
     /// dyn-compatible. Accepting a generic `L: LlmBackend + 'static`
     /// keeps the public API ergonomic; the builder boxes through
     /// [`DynLlmBackend`] internally.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::Runtime;
+    /// use tau_ports::fixtures::MockLlmBackend;
+    ///
+    /// let runtime = Runtime::builder()
+    ///     .with_llm_backend(MockLlmBackend::new("backend-a"))
+    ///     .with_llm_backend(MockLlmBackend::new("backend-b"))
+    ///     .build()
+    ///     .expect("both backends registered");
+    /// assert!(format!("{runtime:?}").contains("backend-a"));
+    /// assert!(format!("{runtime:?}").contains("backend-b"));
+    /// ```
     pub fn with_llm_backend<L: LlmBackend + 'static>(mut self, backend: L) -> Self {
         self.llm_backends.push(Arc::new(backend));
         self
@@ -705,6 +733,24 @@ impl RuntimeBuilder {
     ///
     /// **Deviation from spec:** see [`RuntimeBuilder::with_llm_backend`]
     /// for the dyn-compatibility rationale; the same applies here.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::Runtime;
+    /// use tau_ports::fixtures::{MockLlmBackend, MockTool, make_tool_spec};
+    /// use tau_domain::Value;
+    ///
+    /// let spec = make_tool_spec(
+    ///     "echo".into(), "echo tool".into(), Value::Object(Default::default()),
+    /// );
+    /// let runtime = Runtime::builder()
+    ///     .with_llm_backend(MockLlmBackend::new("test-pkg"))
+    ///     .with_tool(MockTool::new("echo", spec))
+    ///     .build()
+    ///     .expect("tool registered");
+    /// assert!(format!("{runtime:?}").contains("echo"));
+    /// ```
     pub fn with_tool<T: Tool<Session = ()> + 'static>(mut self, tool: T) -> Self {
         self.tools.push(Arc::new(tool));
         self
@@ -716,6 +762,20 @@ impl RuntimeBuilder {
     ///
     /// **Deviation from spec:** see [`RuntimeBuilder::with_llm_backend`]
     /// for the dyn-compatibility rationale; the same applies here.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::Runtime;
+    /// use tau_ports::fixtures::{MockLlmBackend, MockStorage};
+    ///
+    /// let runtime = Runtime::builder()
+    ///     .with_llm_backend(MockLlmBackend::new("test-pkg"))
+    ///     .with_storage(MockStorage::new("mem"))
+    ///     .build()
+    ///     .expect("storage registered");
+    /// assert!(format!("{runtime:?}").contains("mem"));
+    /// ```
     pub fn with_storage<S: Storage + 'static>(mut self, storage: S) -> Self {
         self.storages.push(Arc::new(storage));
         self
@@ -735,6 +795,22 @@ impl RuntimeBuilder {
     /// through this method.
     ///
     /// [`with_llm_backend`]: RuntimeBuilder::with_llm_backend
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tau_runtime::{Runtime, builder::DynLlmBackend};
+    /// use tau_ports::fixtures::MockLlmBackend;
+    ///
+    /// // Simulate the IPC path: obtain an Arc<dyn DynLlmBackend>.
+    /// let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("ipc-backend"));
+    /// let runtime = Runtime::builder()
+    ///     .with_dyn_llm_backend(backend)
+    ///     .build()
+    ///     .expect("dyn backend registered");
+    /// assert!(format!("{runtime:?}").contains("ipc-backend"));
+    /// ```
     pub fn with_dyn_llm_backend(mut self, backend: Arc<dyn DynLlmBackend>) -> Self {
         self.llm_backends.push(backend);
         self
@@ -744,6 +820,26 @@ impl RuntimeBuilder {
     /// [`with_dyn_llm_backend`] for the tool port.
     ///
     /// [`with_dyn_llm_backend`]: RuntimeBuilder::with_dyn_llm_backend
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tau_runtime::{Runtime, builder::DynTool};
+    /// use tau_ports::fixtures::{MockLlmBackend, MockTool, make_tool_spec};
+    /// use tau_domain::Value;
+    ///
+    /// let spec = make_tool_spec(
+    ///     "greet".into(), "greet tool".into(), Value::Object(Default::default()),
+    /// );
+    /// let tool: Arc<dyn DynTool> = Arc::new(MockTool::new("greet", spec));
+    /// let runtime = Runtime::builder()
+    ///     .with_llm_backend(MockLlmBackend::new("test-pkg"))
+    ///     .with_dyn_tool(tool)
+    ///     .build()
+    ///     .expect("dyn tool registered");
+    /// assert!(format!("{runtime:?}").contains("greet"));
+    /// ```
     pub fn with_dyn_tool(mut self, tool: Arc<dyn DynTool>) -> Self {
         self.tools.push(tool);
         self
@@ -753,6 +849,22 @@ impl RuntimeBuilder {
     /// [`with_dyn_llm_backend`] for the storage port.
     ///
     /// [`with_dyn_llm_backend`]: RuntimeBuilder::with_dyn_llm_backend
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tau_runtime::{Runtime, builder::DynStorage};
+    /// use tau_ports::fixtures::{MockLlmBackend, MockStorage};
+    ///
+    /// let storage: Arc<dyn DynStorage> = Arc::new(MockStorage::new("mem"));
+    /// let runtime = Runtime::builder()
+    ///     .with_llm_backend(MockLlmBackend::new("test-pkg"))
+    ///     .with_dyn_storage(storage)
+    ///     .build()
+    ///     .expect("dyn storage registered");
+    /// assert!(format!("{runtime:?}").contains("mem"));
+    /// ```
     pub fn with_dyn_storage(mut self, storage: Arc<dyn DynStorage>) -> Self {
         self.storages.push(storage);
         self
@@ -765,6 +877,24 @@ impl RuntimeBuilder {
     ///   ([`BuildError::NoLlmBackend`] otherwise).
     /// - No name collisions within a kind
     ///   ([`BuildError::NameCollision`] otherwise).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::{Runtime, BuildError};
+    /// use tau_ports::fixtures::MockLlmBackend;
+    ///
+    /// // Success path.
+    /// let runtime = Runtime::builder()
+    ///     .with_llm_backend(MockLlmBackend::new("test-pkg"))
+    ///     .build()
+    ///     .expect("build with one backend succeeds");
+    /// assert!(format!("{runtime:?}").contains("test-pkg"));
+    ///
+    /// // Failure path — no backends.
+    /// let err = Runtime::builder().build().unwrap_err();
+    /// assert!(matches!(err, BuildError::NoLlmBackend));
+    /// ```
     pub fn build(self) -> Result<Runtime, BuildError> {
         if self.llm_backends.is_empty() {
             return Err(BuildError::NoLlmBackend);
@@ -789,6 +919,18 @@ impl RuntimeBuilder {
     /// agents are registered, which is correct behaviour).
     ///
     /// Name collisions within a kind are still rejected.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::Runtime;
+    ///
+    /// // Succeeds even with zero backends (serve-mode use case).
+    /// let runtime = Runtime::builder()
+    ///     .build_allow_empty()
+    ///     .expect("empty runtime is valid in serve mode");
+    /// assert!(format!("{runtime:?}").contains("llm_backends"));
+    /// ```
     pub fn build_allow_empty(self) -> Result<Runtime, BuildError> {
         let llm_backends = collect_llm_backends_by_name(self.llm_backends)?;
         let (tools, tool_validators) = collect_tools_by_name(self.tools)?;

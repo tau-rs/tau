@@ -81,6 +81,16 @@ impl std::fmt::Debug for SandboxAdapter {
 
 impl SandboxAdapter {
     /// Returns the adapter's name.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
+    /// use tau_runtime::sandbox::resolver::SandboxAdapter;
+    ///
+    /// let adapter = SandboxAdapter::Passthrough(PassthroughSandbox::new());
+    /// assert_eq!(adapter.name(), "passthrough");
+    /// ```
     pub fn name(&self) -> &str {
         match self {
             SandboxAdapter::Native(a) => a.name(),

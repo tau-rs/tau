@@ -76,7 +76,7 @@ pub mod __internals {
     pub use super::recording::{Recorder, RecorderHandle};
 }
 
-pub use recording::{Recorder, RecorderHandle};
+pub use recording::{Direction, Recorder, RecorderHandle};
 
 /// Spawn a plugin, drive the handshake, and immediately shut it down,
 /// returning the validated [`tau_plugin_protocol::HandshakeResponse`].
@@ -183,6 +183,18 @@ async fn build_recorder(
 ///
 /// `#[non_exhaustive]`: future sinks (e.g. an in-memory ring buffer
 /// for tests, a UDS-streamed sink for live inspection) are additive.
+///
+/// # Example
+///
+/// ```
+/// use std::path::PathBuf;
+/// use tau_runtime::plugin_host::RecordingSink;
+///
+/// let sink = RecordingSink::JsonlFile {
+///     path: PathBuf::from("/tmp/protocol.jsonl"),
+/// };
+/// assert!(matches!(sink, RecordingSink::JsonlFile { .. }));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum RecordingSink {
@@ -204,14 +216,15 @@ pub enum RecordingSink {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// // `PluginHostOptions` is `#[non_exhaustive]`; doctests can't
-/// // construct via struct-literal syntax. Use `default()` and mutate.
+/// ```
 /// use std::time::Duration;
 /// use tau_runtime::plugin_host::PluginHostOptions;
 ///
 /// let mut opts = PluginHostOptions::default();
 /// opts.handshake_timeout = Duration::from_secs(10);
+/// assert_eq!(opts.handshake_timeout, Duration::from_secs(10));
+/// assert!(opts.recording.is_none());
+/// assert!(!opts.force_passthrough);
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone)]

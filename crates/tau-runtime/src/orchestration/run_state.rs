@@ -12,6 +12,18 @@ use tau_ports::{RunBudget, RunId, RunStatus};
 use crate::orchestration::{TaskList, TraceStream};
 
 /// Per-run mutable state.
+///
+/// # Example
+///
+/// ```
+/// use chrono::Utc;
+/// use tau_runtime::orchestration::run_state::RunState;
+/// use tau_ports::{RunBudget, RunStatus};
+///
+/// let state = RunState::new("run-1".into(), "root-agent".into(), RunBudget::default(), Utc::now());
+/// assert_eq!(state.run_id.as_str(), "run-1");
+/// assert_eq!(state.status, RunStatus::Running);
+/// ```
 #[derive(Debug)]
 pub struct RunState {
     /// Run id.
@@ -40,6 +52,24 @@ pub struct RunState {
 
 impl RunState {
     /// New running RunState.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_ports::{RunBudget, RunStatus};
+    ///
+    /// let state = RunState::new(
+    ///     "run-42".into(),
+    ///     "supervisor".into(),
+    ///     RunBudget::default(),
+    ///     Utc::now(),
+    /// );
+    /// assert_eq!(state.root_agent_id.as_str(), "supervisor");
+    /// assert_eq!(state.status, RunStatus::Running);
+    /// assert!(state.plan.is_empty());
+    /// ```
     pub fn new(
         run_id: RunId,
         root_agent_id: tau_ports::AgentId,
@@ -62,6 +92,21 @@ impl RunState {
     }
 
     /// Append to the plan scratchpad with a trailing newline.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_ports::RunBudget;
+    ///
+    /// let mut state = RunState::new("r".into(), "a".into(), RunBudget::default(), Utc::now());
+    /// state.append_plan_note("step 1: gather data");
+    /// state.append_plan_note("step 2: analyse");
+    /// assert!(state.plan.contains("step 1"));
+    /// assert!(state.plan.contains("step 2"));
+    /// assert!(state.plan.ends_with('\n'));
+    /// ```
     pub fn append_plan_note(&mut self, text: &str) {
         if !self.plan.is_empty() && !self.plan.ends_with('\n') {
             self.plan.push('\n');
@@ -73,16 +118,59 @@ impl RunState {
     }
 
     /// Add tokens to the cumulative counter.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use std::sync::atomic::Ordering;
+    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_ports::RunBudget;
+    ///
+    /// let state = RunState::new("r".into(), "a".into(), RunBudget::default(), Utc::now());
+    /// state.add_tokens(300);
+    /// state.add_tokens(200);
+    /// assert_eq!(state.tokens_used.load(Ordering::Relaxed), 500);
+    /// ```
     pub fn add_tokens(&self, n: u64) {
         self.tokens_used.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Increment the agent-spawn counter.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use std::sync::atomic::Ordering;
+    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_ports::RunBudget;
+    ///
+    /// let state = RunState::new("r".into(), "a".into(), RunBudget::default(), Utc::now());
+    /// state.record_agent_spawn();
+    /// state.record_agent_spawn();
+    /// assert_eq!(state.agents_spawned.load(Ordering::Relaxed), 2);
+    /// ```
     pub fn record_agent_spawn(&self) {
         self.agents_spawned.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Read-only snapshot.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_ports::{RunBudget, RunStatus};
+    ///
+    /// let state = RunState::new("run-1".into(), "supervisor".into(), RunBudget::default(), Utc::now());
+    /// state.add_tokens(42);
+    /// let snap = state.snapshot(Utc::now());
+    /// assert_eq!(snap.tokens_used, 42);
+    /// assert_eq!(snap.status, RunStatus::Running);
+    /// assert_eq!(snap.root_agent_id.as_str(), "supervisor");
+    /// ```
     pub fn snapshot(&self, now: DateTime<Utc>) -> tau_ports::RunSnapshot {
         tau_ports::RunSnapshot {
             run_id: self.run_id.clone(),

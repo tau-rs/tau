@@ -17,6 +17,17 @@ use tau_ports::TraceEvent;
 pub type TraceSubscriber = mpsc::UnboundedSender<TraceEvent>;
 
 /// Multi-consumer fan-out. Each emit clones the event to every subscriber.
+///
+/// # Example
+///
+/// ```
+/// use tau_runtime::orchestration::trace::TraceStream;
+///
+/// let mut stream = TraceStream::new();
+/// assert_eq!(stream.subscriber_count(), 0);
+/// let _rx = stream.subscribe();
+/// assert_eq!(stream.subscriber_count(), 1);
+/// ```
 #[derive(Debug, Default)]
 pub struct TraceStream {
     subscribers: Vec<TraceSubscriber>,
@@ -24,12 +35,32 @@ pub struct TraceStream {
 
 impl TraceStream {
     /// Empty stream with no subscribers.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::orchestration::trace::TraceStream;
+    ///
+    /// let stream = TraceStream::new();
+    /// assert_eq!(stream.subscriber_count(), 0);
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Register a new subscriber. Returns the receiver side; caller is
     /// responsible for draining it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::orchestration::trace::TraceStream;
+    ///
+    /// let mut stream = TraceStream::new();
+    /// let _rx1 = stream.subscribe();
+    /// let _rx2 = stream.subscribe();
+    /// assert_eq!(stream.subscriber_count(), 2);
+    /// ```
     pub fn subscribe(&mut self) -> mpsc::UnboundedReceiver<TraceEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.subscribers.push(tx);
@@ -38,6 +69,32 @@ impl TraceStream {
 
     /// Fan out one event to every subscriber. Dropped subscribers (closed
     /// receivers) are silently removed from the next emit.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::trace::TraceStream;
+    /// use tau_ports::{TraceEvent, TraceEventKind};
+    ///
+    /// let mut stream = TraceStream::new();
+    /// let mut rx = stream.subscribe();
+    ///
+    /// let event = TraceEvent {
+    ///     id: "evt-1".into(),
+    ///     ts: Utc::now(),
+    ///     run_id: "run-1".into(),
+    ///     agent_id: Some("agent-1".into()),
+    ///     kind: TraceEventKind::Turn {
+    ///         agent_id: "agent-1".into(),
+    ///         turn_index: 0,
+    ///         duration_ms: 50,
+    ///     },
+    /// };
+    /// stream.emit(event);
+    /// let received = rx.try_recv().expect("event delivered");
+    /// assert_eq!(received.id, "evt-1");
+    /// ```
     pub fn emit(&mut self, event: TraceEvent) {
         self.subscribers.retain(|tx| tx.send(event.clone()).is_ok());
     }

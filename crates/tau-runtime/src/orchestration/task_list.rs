@@ -12,6 +12,24 @@ pub const DEFAULT_LEASE: Duration = Duration::minutes(5);
 
 /// In-memory task list. Lookups are O(1) by id; iteration is over tasks in
 /// insertion order.
+///
+/// # Example
+///
+/// ```
+/// use chrono::Utc;
+/// use tau_runtime::orchestration::task_list::TaskList;
+///
+/// let mut tl = TaskList::new();
+/// let id = tl.create(
+///     "analyse dataset".into(),
+///     "agent-1".into(),
+///     None,
+///     None,
+///     Utc::now(),
+/// ).expect("task created");
+/// assert_eq!(id, "01");
+/// assert_eq!(tl.get(&id).unwrap().description, "analyse dataset");
+/// ```
 #[derive(Debug, Default)]
 pub struct TaskList {
     by_id: HashMap<TaskId, Task>,
@@ -25,6 +43,16 @@ pub struct TaskList {
 
 impl TaskList {
     /// Empty list.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    ///
+    /// let tl = TaskList::new();
+    /// assert!(tl.all().is_empty());
+    /// assert!(tl.all_terminal()); // vacuously true for empty list
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
@@ -36,6 +64,21 @@ impl TaskList {
     /// - First top-level task → "01"
     /// - Second top-level task → "02"
     /// - First child of "01" → "01.01"
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let parent = tl.create("parent".into(), "a".into(), None, None, Utc::now()).unwrap();
+    /// let child = tl.create("child".into(), "a".into(), Some(parent.clone()), None, Utc::now()).unwrap();
+    /// assert_eq!(parent, "01");
+    /// assert_eq!(child, "01.01");
+    /// assert_eq!(tl.get(&parent).unwrap().status, TaskStatus::Pending);
+    /// ```
     pub fn create(
         &mut self,
         description: String,
@@ -91,6 +134,26 @@ impl TaskList {
     /// Atomic compare-and-set: claim the task IF unclaimed OR lease expired.
     /// On success: sets owner + extends lease by DEFAULT_LEASE.
     /// On failure: returns `TaskLocked { by, until }`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime::orchestration::error::OrchestrationError;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("work".into(), "supervisor".into(), None, None, Utc::now()).unwrap();
+    ///
+    /// // First claim succeeds.
+    /// tl.claim(&id, "worker-1".into(), Utc::now()).expect("unclaimed task claimed");
+    /// assert_eq!(tl.get(&id).unwrap().status, TaskStatus::Claimed);
+    ///
+    /// // Second claim from another agent fails while lease is live.
+    /// let err = tl.claim(&id, "worker-2".into(), Utc::now()).unwrap_err();
+    /// assert!(matches!(err, OrchestrationError::TaskLocked { .. }));
+    /// ```
     pub fn claim(
         &mut self,
         task_id: &TaskId,
@@ -139,6 +202,24 @@ impl TaskList {
     }
 
     /// Owner-only: extend the lease by DEFAULT_LEASE.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use std::sync::atomic::Ordering;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("work".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// tl.claim(&id, "worker".into(), Utc::now()).unwrap();
+    /// let old_expires = tl.get(&id).unwrap().lease_expires_at.unwrap();
+    ///
+    /// // Heartbeat from the future extends the lease.
+    /// tl.heartbeat(&id, &"worker".into(), Utc::now()).expect("heartbeat ok");
+    /// let new_expires = tl.get(&id).unwrap().lease_expires_at.unwrap();
+    /// assert!(new_expires >= old_expires);
+    /// ```
     pub fn heartbeat(
         &mut self,
         task_id: &TaskId,
@@ -170,6 +251,24 @@ impl TaskList {
     }
 
     /// Owner-only: release the lock without completing. Status → Pending.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("work".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// tl.claim(&id, "worker".into(), Utc::now()).unwrap();
+    /// assert_eq!(tl.get(&id).unwrap().status, TaskStatus::Claimed);
+    ///
+    /// tl.release(&id, &"worker".into(), Utc::now()).expect("release ok");
+    /// let t = tl.get(&id).unwrap();
+    /// assert_eq!(t.status, TaskStatus::Pending);
+    /// assert!(t.owner.is_none());
+    /// ```
     pub fn release(
         &mut self,
         task_id: &TaskId,
@@ -205,6 +304,27 @@ impl TaskList {
     /// Owner-only: set status + append optional notes.
     /// Only `TaskStatus::InProgress` is accepted as a manual status transition;
     /// terminal states go through `complete` / `fail` / `release`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("work".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// tl.claim(&id, "worker".into(), Utc::now()).unwrap();
+    ///
+    /// tl.update(
+    ///     &id,
+    ///     &"worker".into(),
+    ///     Some(TaskStatus::InProgress),
+    ///     Some("halfway done".into()),
+    ///     Utc::now(),
+    /// ).expect("update ok");
+    /// assert_eq!(tl.get(&id).unwrap().status, TaskStatus::InProgress);
+    /// ```
     pub fn update(
         &mut self,
         task_id: &TaskId,
@@ -248,6 +368,24 @@ impl TaskList {
     }
 
     /// Owner-only: finalize as Done with a result.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("analyse".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// tl.claim(&id, "worker".into(), Utc::now()).unwrap();
+    /// tl.complete(&id, &"worker".into(), "all done".into(), Utc::now()).unwrap();
+    ///
+    /// let t = tl.get(&id).unwrap();
+    /// assert_eq!(t.status, TaskStatus::Done);
+    /// assert_eq!(t.result_summary.as_deref(), Some("all done"));
+    /// assert!(t.owner.is_none());
+    /// ```
     pub fn complete(
         &mut self,
         task_id: &TaskId,
@@ -283,6 +421,24 @@ impl TaskList {
     }
 
     /// Owner-only: finalize as Failed with an error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("risky".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// tl.claim(&id, "worker".into(), Utc::now()).unwrap();
+    /// tl.fail(&id, &"worker".into(), "network timeout".into(), Utc::now()).unwrap();
+    ///
+    /// let t = tl.get(&id).unwrap();
+    /// assert_eq!(t.status, TaskStatus::Failed);
+    /// assert_eq!(t.error.as_deref(), Some("network timeout"));
+    /// assert!(t.owner.is_none());
+    /// ```
     pub fn fail(
         &mut self,
         task_id: &TaskId,
@@ -319,6 +475,20 @@ impl TaskList {
 
     /// Any agent (with proper cap): mark as Discarded (orphan acceptance).
     /// No owner check — the orchestrator can discard any task.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("abandoned".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// tl.discard(&id, &"orchestrator".into(), "no longer needed".into(), Utc::now()).unwrap();
+    ///
+    /// assert_eq!(tl.get(&id).unwrap().status, TaskStatus::Discarded);
+    /// ```
     pub fn discard(
         &mut self,
         task_id: &TaskId,
@@ -346,6 +516,27 @@ impl TaskList {
     }
 
     /// Read: filter tasks by criteria (AND-combined).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::{TaskListFilter, TaskStatus};
+    ///
+    /// let mut tl = TaskList::new();
+    /// let a = tl.create("task-a".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// let _b = tl.create("task-b".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// tl.claim(&a, "worker".into(), Utc::now()).unwrap();
+    /// tl.complete(&a, &"worker".into(), "done".into(), Utc::now()).unwrap();
+    ///
+    /// let done = tl.list(&TaskListFilter { status: Some(TaskStatus::Done), ..Default::default() });
+    /// assert_eq!(done.len(), 1);
+    /// assert_eq!(done[0].description, "task-a");
+    ///
+    /// let all = tl.list(&TaskListFilter::default());
+    /// assert_eq!(all.len(), 2);
+    /// ```
     pub fn list(&self, filter: &TaskListFilter) -> Vec<Task> {
         self.order
             .iter()
@@ -375,6 +566,25 @@ impl TaskList {
 
     /// Sweep: expire any lease whose `lease_expires_at < now`. Returns the
     /// ids whose owners were dropped.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_ports::TaskStatus;
+    ///
+    /// let t0 = chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap();
+    /// let mut tl = TaskList::new();
+    /// let id = tl.create("work".into(), "sup".into(), None, None, t0).unwrap();
+    /// tl.claim(&id, "worker".into(), t0).unwrap();
+    ///
+    /// // Default lease = 5 min = 300s; expire at 400s.
+    /// let expired = tl.expire_leases(chrono::DateTime::<Utc>::from_timestamp(400, 0).unwrap());
+    /// assert_eq!(expired, vec![id.clone()]);
+    /// assert_eq!(tl.get(&id).unwrap().status, TaskStatus::Pending);
+    /// assert!(tl.get(&id).unwrap().owner.is_none());
+    /// ```
     pub fn expire_leases(&mut self, now: DateTime<Utc>) -> Vec<TaskId> {
         let mut expired = Vec::new();
         for id in &self.order {
@@ -410,6 +620,23 @@ impl TaskList {
     }
 
     /// True iff every task is in a terminal state (Done | Failed | Discarded).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use tau_runtime::orchestration::task_list::TaskList;
+    ///
+    /// let mut tl = TaskList::new();
+    /// assert!(tl.all_terminal(), "empty list is vacuously terminal");
+    ///
+    /// let id = tl.create("task".into(), "sup".into(), None, None, Utc::now()).unwrap();
+    /// assert!(!tl.all_terminal(), "pending task is not terminal");
+    ///
+    /// tl.claim(&id, "worker".into(), Utc::now()).unwrap();
+    /// tl.complete(&id, &"worker".into(), "done".into(), Utc::now()).unwrap();
+    /// assert!(tl.all_terminal(), "done task makes list terminal");
+    /// ```
     pub fn all_terminal(&self) -> bool {
         self.by_id.values().all(|t| {
             matches!(
