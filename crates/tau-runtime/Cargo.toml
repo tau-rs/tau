@@ -101,6 +101,9 @@ toml               = { workspace = true }
 # integration test. Pinned at the same minor version other workspace
 # crates already pull in (e.g. tau-plugin-sdk dev-deps).
 futures-util       = "0.3"
+# Used by doctests for `Runtime::run_streaming` and
+# `Runtime::run_streaming_with_history` to drive async blocks inline.
+tokio-test         = "0.4"
 # Used by `plugin_host_recording.rs` (and the recording-module unit
 # tests) to allocate a temp directory for the JSONL sink.
 tempfile           = { workspace = true }

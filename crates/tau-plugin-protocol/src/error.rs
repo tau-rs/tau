@@ -10,7 +10,7 @@ use thiserror::Error;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_plugin_protocol::ProtocolError;
 /// let err = ProtocolError::FrameTooLarge { len: 1, max: 0 };
 /// assert!(format!("{err}").contains("frame too large"));
@@ -80,13 +80,9 @@ pub enum ProtocolError {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_plugin_protocol::{RpcErrorEnvelope, METHOD_NOT_FOUND};
-/// let env = RpcErrorEnvelope {
-///     code: METHOD_NOT_FOUND,
-///     message: "method not found".into(),
-///     data: None,
-/// };
+/// let env = RpcErrorEnvelope::new(METHOD_NOT_FOUND, "method not found".into(), None);
 /// assert_eq!(env.code, -32601);
 /// ```
 #[non_exhaustive]

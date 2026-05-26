@@ -402,15 +402,29 @@ impl Runtime {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use tau_runtime::Runtime;
-    /// use futures_core::Stream;
-    ///
-    /// let runtime: Runtime = /* ... */;
-    /// let mut stream = runtime.run_streaming(agent_def, manifest, msg, opts).await?;
-    /// while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// # use tau_runtime::{Runtime, RunOptions};
+    /// # use tau_ports::fixtures::{MockLlmBackend, make_completion_response, make_token_usage};
+    /// # use tau_ports::StopReason;
+    /// # use tau_domain::fixtures::{any_agent_definition, any_package_manifest, any_message};
+    /// # use futures_util::{StreamExt, pin_mut};
+    /// # let resp = make_completion_response(
+    /// #     "hello".into(), Vec::new(), StopReason::EndTurn, Some(make_token_usage(1, 1))
+    /// # );
+    /// # // "test-pkg" matches the llm_backend field set by any_agent_definition().
+    /// # let llm = MockLlmBackend::new("test-pkg").with_response(resp);
+    /// # let runtime = Runtime::builder().with_llm_backend(llm).build().unwrap();
+    /// # let agent_def = any_agent_definition();
+    /// # let manifest = any_package_manifest();
+    /// # let msg = any_message();
+    /// # let opts: RunOptions = Default::default();
+    /// let stream = runtime.run_streaming(agent_def, manifest, msg, opts).await.unwrap();
+    /// pin_mut!(stream);
+    /// while let Some(_event) = stream.next().await {
     ///     // handle event
     /// }
+    /// # });
     /// ```
     pub async fn run_streaming(
         &self,
@@ -461,17 +475,33 @@ impl Runtime {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use tau_runtime::Runtime;
-    /// use futures_core::Stream;
-    ///
-    /// let runtime: Runtime = /* ... */;
-    /// let mut stream = runtime
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// # use tau_runtime::{Runtime, RunOptions};
+    /// # use tau_ports::fixtures::{MockLlmBackend, make_completion_response, make_token_usage};
+    /// # use tau_ports::StopReason;
+    /// # use tau_domain::{Message, fixtures::{any_agent_definition, any_package_manifest, any_message}};
+    /// # use futures_util::{StreamExt, pin_mut};
+    /// # let resp = make_completion_response(
+    /// #     "hello".into(), Vec::new(), StopReason::EndTurn, Some(make_token_usage(1, 1))
+    /// # );
+    /// # // "test-pkg" matches the llm_backend field set by any_agent_definition().
+    /// # let llm = MockLlmBackend::new("test-pkg").with_response(resp);
+    /// # let runtime = Runtime::builder().with_llm_backend(llm).build().unwrap();
+    /// # let agent_def = any_agent_definition();
+    /// # let manifest = any_package_manifest();
+    /// # let history: Vec<Message> = Vec::new();
+    /// # let msg = any_message();
+    /// # let opts: RunOptions = Default::default();
+    /// let stream = runtime
     ///     .run_streaming_with_history(agent_def, manifest, history, msg, opts)
-    ///     .await?;
-    /// while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
+    ///     .await
+    ///     .unwrap();
+    /// pin_mut!(stream);
+    /// while let Some(_event) = stream.next().await {
     ///     // handle event
     /// }
+    /// # });
     /// ```
     pub async fn run_streaming_with_history(
         &self,

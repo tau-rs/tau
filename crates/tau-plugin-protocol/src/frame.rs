@@ -24,11 +24,11 @@ use crate::error::{ProtocolError, RpcErrorEnvelope};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tau_plugin_protocol::Frame;
 /// let frame = Frame::Notification {
 ///     method: "stream.chunk".into(),
-///     params: vec![],
+///     params: vec![0x90], // empty MessagePack array
 /// };
 /// let bytes = frame.clone().encode().unwrap();
 /// let decoded = Frame::decode(&bytes).unwrap();

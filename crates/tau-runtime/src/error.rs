@@ -55,9 +55,10 @@ impl std::fmt::Display for PluginKind {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // `BuildError` is `#[non_exhaustive]`; constructed by `build()`.
-/// // Construction example deferred to Task 7 when the builder lands.
+/// ```
+/// use tau_runtime::{Runtime, BuildError};
+/// let err = Runtime::builder().build().unwrap_err();
+/// assert!(matches!(err, BuildError::NoLlmBackend));
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

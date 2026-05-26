@@ -73,7 +73,7 @@ pub enum ConfigError {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use serde::Deserialize;
 /// use tau_plugin_sdk::{ConfigError, Configure};
 ///
