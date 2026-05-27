@@ -24,7 +24,7 @@ thiserror          = { workspace = true }
 # `opentelemetry-otlp 0.14`.
 opentelemetry         = { version = "0.21", optional = true }
 opentelemetry_sdk     = { version = "0.21", features = ["rt-tokio"], optional = true }
-opentelemetry-otlp    = { version = "0.14", features = ["grpc-tonic"], optional = true }
+opentelemetry-otlp    = { version = "0.32", features = ["grpc-tonic"], optional = true }
 tracing-opentelemetry = { version = "0.22", optional = true }
 # `tonic` is a transitive dep of `opentelemetry-otlp`; declared explicitly
 # here so `tonic::metadata::MetadataMap` is reachable from this crate.
