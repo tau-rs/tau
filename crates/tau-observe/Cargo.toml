@@ -28,7 +28,7 @@ opentelemetry-otlp    = { version = "0.14", features = ["grpc-tonic"], optional 
 tracing-opentelemetry = { version = "0.22", optional = true }
 # `tonic` is a transitive dep of `opentelemetry-otlp`; declared explicitly
 # here so `tonic::metadata::MetadataMap` is reachable from this crate.
-tonic                 = { version = "0.9", default-features = false, optional = true }
+tonic                 = { version = "0.14", default-features = false, optional = true }
 
 [dev-dependencies]
 # Offline OTLP exporter used by feature-gated smoke tests; matches the
