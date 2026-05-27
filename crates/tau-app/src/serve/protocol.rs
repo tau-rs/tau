@@ -9,6 +9,24 @@ use serde_json::Value;
 /// JSON-RPC 2.0 request id. Per spec, may be integer, string, or null.
 /// We accept integer or string; null is treated as a notification
 /// (handled separately).
+///
+/// ```
+/// use tau_app::serve::RequestId;
+///
+/// let int_id = RequestId::Int(42);
+/// let str_id = RequestId::Str("uuid-abc".into());
+///
+/// // Hash + Eq allow use as map keys.
+/// let mut map = std::collections::HashMap::new();
+/// map.insert(int_id.clone(), "request-42");
+/// assert_eq!(map[&RequestId::Int(42)], "request-42");
+///
+/// // Serde round-trip (untagged: integer → JSON number, string → JSON string).
+/// let json_int = serde_json::to_string(&int_id).expect("serialize int id");
+/// assert_eq!(json_int, "42");
+/// let json_str = serde_json::to_string(&str_id).expect("serialize str id");
+/// assert_eq!(json_str, "\"uuid-abc\"");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RequestId {
@@ -79,6 +97,9 @@ pub struct ErrorObject {
 }
 
 /// Wire-level outbound message (request response, error response, or notification).
+///
+/// Serializes without a wrapper tag so each variant maps directly to a
+/// JSON-RPC 2.0 object on the wire.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Outbound {

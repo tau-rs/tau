@@ -8,6 +8,19 @@ use std::sync::Arc;
 
 /// Server's view of handshake state. Single atomic so any task can
 /// check/transition without locks.
+///
+/// ```
+/// use tau_app::serve::HandshakeState;
+///
+/// let state = HandshakeState::default();
+/// assert!(!state.is_handshaken());
+/// state.mark_handshaken();
+/// assert!(state.is_handshaken());
+///
+/// // Clones share the same underlying atomic.
+/// let clone = state.clone();
+/// assert!(clone.is_handshaken());
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct HandshakeState {
     state: Arc<AtomicU8>,
@@ -48,11 +61,30 @@ impl HandshakeState {
 
     /// Mark the handshake as complete. Idempotent — calling after
     /// already-handshaken is a no-op (caller should check first).
+    ///
+    /// ```
+    /// use tau_app::serve::HandshakeState;
+    ///
+    /// let state = HandshakeState::default();
+    /// state.mark_handshaken();
+    /// // Idempotent: a second call is harmless.
+    /// state.mark_handshaken();
+    /// assert!(state.is_handshaken());
+    /// ```
     pub fn mark_handshaken(&self) {
         self.state.store(STATE_HANDSHAKEN, Ordering::Release);
     }
 
     /// Whether the handshake has completed.
+    ///
+    /// ```
+    /// use tau_app::serve::HandshakeState;
+    ///
+    /// let state = HandshakeState::default();
+    /// assert!(!state.is_handshaken());
+    /// state.mark_handshaken();
+    /// assert!(state.is_handshaken());
+    /// ```
     pub fn is_handshaken(&self) -> bool {
         self.state.load(Ordering::Acquire) == STATE_HANDSHAKEN
     }
