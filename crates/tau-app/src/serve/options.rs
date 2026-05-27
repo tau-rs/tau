@@ -7,6 +7,22 @@ use std::time::Duration;
 ///
 /// All fields have safe defaults so callers can construct
 /// `ServeOptions::default()` and override only what they need.
+///
+/// ```
+/// use tau_app::serve::ServeOptions;
+/// use std::time::Duration;
+///
+/// let opts = ServeOptions {
+///     max_concurrent: 4,
+///     ready_on_stderr: true,
+///     shutdown_grace: Duration::from_secs(10),
+///     ..ServeOptions::default()
+/// };
+/// assert_eq!(opts.max_concurrent, 4);
+/// assert!(opts.ready_on_stderr);
+/// assert_eq!(opts.shutdown_grace, Duration::from_secs(10));
+/// assert!(opts.idle_timeout.is_none());
+/// ```
 #[derive(Debug, Clone)]
 pub struct ServeOptions {
     /// Absolute path to the tau project directory. Defaults to cwd

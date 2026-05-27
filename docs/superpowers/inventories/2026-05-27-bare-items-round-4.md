@@ -16,6 +16,7 @@
 - **skip-reexport**: `pub use`.
 - **skip-feature-gated**: behind a cargo feature; doctest would need `--features <flag>`.
 - **skip-needs-fixture**: requires non-trivial test fixtures (real sandbox, env injection, multi-thread) that exceed reasonable doctest scope.
+- **skip-binary-internal**: item is `pub` for the binary's integration-test reachability, but not a stable library API for embedders.
 - **done**: already had a fence before round 4 began.
 
 ## tau-workflow
@@ -52,6 +53,60 @@
 
 **Total:** 27 items — 14 include, 11 skip-*, 2 skip-trivial-struct (rows 21/25), 0 done.
 
+## tau-app
+
+tau-app is a binary crate. Its internal modules (`mod cancel`, `mod dispatch`, …) are all private — only items explicitly re-exported from `tau_app::serve` are reachable from doctests. Items in private modules are classified `skip-binary-internal` even when they carry `pub` inside the module.
+
+| # | File:line | Item | Classification | Strategy |
+|---|---|---|---|---|
+| 1 | `lib.rs:20` | `pub mod serve` | skip-reexport | Module declaration. |
+| 2 | `serve/cancel.rs:10` | `pub struct CancelRegistry` | include | Construct via `Default`; exercise `register`, `cancel`, `forget`, `cancel_all`, `len`, `is_empty`. Five fences (struct + 4 methods). |
+| 3 | `serve/dispatch.rs:25` | `pub struct Dispatcher` | skip-binary-internal | `#[doc(hidden)]` re-export; requires `Arc<Runtime>` + channel setup; binary dispatch loop machinery. |
+| 4 | `serve/dispatch_run.rs:19` | `pub async fn execute` | skip-binary-internal | Private module (`mod dispatch_run`); binary per-request executor; not accessible from doctests. |
+| 5 | `serve/error_codes.rs:14` | `pub const PARSE_ERROR` | skip-binary-internal | Private module (`mod error_codes`); constants not accessible from doctests. |
+| 6 | `serve/error_codes.rs:16` | `pub const INVALID_REQUEST` | skip-binary-internal | Private module. |
+| 7 | `serve/error_codes.rs:18` | `pub const METHOD_NOT_FOUND` | skip-binary-internal | Private module. |
+| 8 | `serve/error_codes.rs:20` | `pub const INVALID_PARAMS` | skip-binary-internal | Private module. |
+| 9 | `serve/error_codes.rs:22` | `pub const INTERNAL_ERROR` | skip-binary-internal | Private module. |
+| 10 | `serve/error_codes.rs:26` | `pub const HANDSHAKE_MISMATCH` | skip-binary-internal | Private module. |
+| 11 | `serve/error_codes.rs:28` | `pub const CANCELLED` | skip-binary-internal | Private module. |
+| 12 | `serve/error_codes.rs:30` | `pub const HANDSHAKE_REQUIRED` | skip-binary-internal | Private module. |
+| 13 | `serve/error_codes.rs:32` | `pub const ALREADY_HANDSHAKEN` | skip-binary-internal | Private module. |
+| 14 | `serve/error_codes.rs:34` | `pub const SERVER_BUSY` | skip-binary-internal | Private module. |
+| 15 | `serve/error_codes.rs:36` | `pub const PROJECT_ERROR` | skip-binary-internal | Private module. |
+| 16 | `serve/error_codes.rs:38` | `pub const RUNTIME_ERROR` | skip-binary-internal | Private module. |
+| 17 | `serve/error_codes.rs:40` | `pub const CAPABILITY_DENIED` | skip-binary-internal | Private module. |
+| 18 | `serve/error_codes.rs:42` | `pub const TOOL_ERROR` | skip-binary-internal | Private module. |
+| 19 | `serve/error_codes.rs:44` | `pub const LLM_ERROR` | skip-binary-internal | Private module. |
+| 20 | `serve/error_codes.rs:46` | `pub const UNKNOWN_AGENT` | skip-binary-internal | Private module. |
+| 21 | `serve/error_map.rs:13` | `pub fn from_runtime_error` | skip-binary-internal | Private module (`mod error_map`); not accessible from doctests. |
+| 22 | `serve/framing.rs:11` | `pub enum Inbound` | skip-binary-internal | `#[doc(hidden)]` re-export; framing impl detail; variants (`Json`, `ParseError`, `Eof`) have no meaningful standalone construction outside the reader task. |
+| 23 | `serve/framing.rs:22` | `pub async fn reader_task` | skip-binary-internal | Private module; reads real stdin — cannot be meaningfully tested in a doctest. |
+| 24 | `serve/framing.rs:56` | `pub async fn writer_task` | skip-binary-internal | Private module; writes real stdout — cannot be meaningfully tested in a doctest. |
+| 25 | `serve/handshake.rs:12` | `pub struct HandshakeState` | include | Demonstrate `Default`, `mark_handshaken`, `is_handshaken`, and clone-shares-state. Three fences (struct + 2 methods). |
+| 26 | `serve/handshake.rs:20` | `pub enum Check` | skip-binary-internal | Private module (`mod handshake`); not re-exported; returned by `HandshakeState::check()` but inaccessible to name in a doctest. |
+| 27 | `serve/lifecycle.rs:16` | `pub async fn run` | skip-binary-internal | Private module; full serve loop entry point — starts real runtime and I/O tasks. |
+| 28 | `serve/methods.rs:6` | `pub const META_HANDSHAKE` | skip-binary-internal | Private module (`mod methods`); not accessible from doctests. |
+| 29 | `serve/methods.rs:9` | `pub const META_PING` | skip-binary-internal | Private module. |
+| 30 | `serve/methods.rs:12` | `pub const RUNTIME_RUN` | skip-binary-internal | Private module. |
+| 31 | `serve/methods.rs:15` | `pub const RUNTIME_RUN_STREAMING` | skip-binary-internal | Private module. |
+| 32 | `serve/methods.rs:18` | `pub const RUNTIME_CANCEL` | skip-binary-internal | Private module. |
+| 33 | `serve/methods.rs:21` | `pub const RUNTIME_EVENT` | skip-binary-internal | Private module. |
+| 34 | `serve/mod.rs:45` | `pub async fn run` | skip-binary-internal | Accessible as `tau_app::serve::run` but starts the full async serve loop; doctest would need a real project + runtime, exceeding doctest scope. |
+| 35 | `serve/options.rs:11` | `pub struct ServeOptions` | include | Construct with struct-update from `Default`; assert custom field values and that `idle_timeout` defaults to `None`. One fence. |
+| 36 | `serve/project.rs:34` | `pub struct Project` | skip-binary-internal | `#[doc(hidden)]` re-export; `Project::load` requires a real tau project directory on disk (tau.toml + lockfile); exceeds doctest scope. |
+| 37 | `serve/protocol.rs:14` | `pub enum RequestId` | include | Demonstrate `Int` and `Str` variants; use as `HashMap` key (via `Hash + Eq`); assert serde untagged round-trip. One fence. |
+| 38 | `serve/protocol.rs:23` | `pub struct Request` | skip-binary-internal | Private module (`mod protocol`); not re-exported; not accessible from doctests. |
+| 39 | `serve/protocol.rs:37` | `pub struct Response` | skip-binary-internal | Private module; not re-exported. |
+| 40 | `serve/protocol.rs:48` | `pub struct ErrorResponse` | skip-binary-internal | Private module; not re-exported. |
+| 41 | `serve/protocol.rs:59` | `pub struct Notification` | skip-binary-internal | Private module; not re-exported. |
+| 42 | `serve/protocol.rs:71` | `pub struct ErrorObject` | skip-binary-internal | Private module; not re-exported. |
+| 43 | `serve/protocol.rs:84` | `pub enum Outbound` | skip-binary-internal | Re-exported as `tau_app::serve::Outbound` but variants wrap `Response`/`ErrorResponse`/`Notification` which are in a private module and cannot be named or constructed from doctests. |
+| 44 | `serve/tracing_init.rs:10` | `pub fn install` | skip-binary-internal | Private module; installs a global tracing subscriber — a global side effect with no meaningful return value to assert. |
+
+**Total:** 44 items — 4 include, 1 skip-reexport, 39 skip-binary-internal.
+
 ## Status log
 
 - 2026-05-27 — tau-workflow classifications + 14 includes (PR-A). `cargo test --doc -p tau-workflow` → 19 passed, 0 failed.
+- 2026-05-27 — tau-app classifications + 4 includes (PR-B). `cargo test --doc -p tau-app` → 10 passed, 0 failed. Introduced skip-binary-internal category: tau-app's private serve submodules expose pub items unreachable from doctests; all such items use this classification.
