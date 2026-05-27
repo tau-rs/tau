@@ -192,9 +192,7 @@ where
         }
         exporter_builder = exporter_builder.with_metadata(metadata);
     }
-    let exporter = exporter_builder
-        .build()
-        .expect("build OTLP span exporter");
+    let exporter = exporter_builder.build().expect("build OTLP span exporter");
 
     let resource = opentelemetry_sdk::Resource::builder()
         .with_attributes([
