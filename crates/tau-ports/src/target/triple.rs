@@ -44,6 +44,38 @@ impl TargetTriple {
             }
         )
     }
+
+    /// Returns the `native-<host-os>-strict` triple for the platform this
+    /// binary runs on. Used by callers (e.g. `tau build`) that need a
+    /// sensible default target when no `--target` flag is supplied.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a platform tau doesn't have a `native` adapter for
+    /// (currently anything other than Linux / Darwin / Windows). The
+    /// resolver's Available registry intentionally has no entry for such
+    /// platforms, so panicking here is the correct fail-loud behavior —
+    /// adding a new host requires explicit ADR work, not silent fallback.
+    pub fn host() -> TargetTriple {
+        let platform = if cfg!(target_os = "linux") {
+            crate::target::platform::Platform::Linux
+        } else if cfg!(target_os = "macos") {
+            crate::target::platform::Platform::Darwin
+        } else if cfg!(target_os = "windows") {
+            crate::target::platform::Platform::Windows
+        } else {
+            panic!(
+                "tau has no native adapter for target_os={}; \
+                 add an entry to the target registry first",
+                std::env::consts::OS,
+            );
+        };
+        TargetTriple {
+            platform,
+            adapter_family: crate::target::adapter_family::AdapterFamily::Native,
+            tier: crate::sandbox::SandboxTier::Strict,
+        }
+    }
 }
 
 impl fmt::Display for TargetTriple {
@@ -224,5 +256,22 @@ mod tests {
         assert_eq!(json, "\"linux-container-strict\"");
         let parsed: TargetTriple = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, t);
+    }
+
+    #[test]
+    fn host_returns_native_strict_for_current_platform() {
+        let h = TargetTriple::host();
+        assert_eq!(h.adapter_family.as_str(), "native");
+        assert_eq!(h.tier, crate::sandbox::SandboxTier::Strict);
+        let expected_platform = if cfg!(target_os = "linux") {
+            "linux"
+        } else if cfg!(target_os = "macos") {
+            "darwin"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            panic!("unsupported host platform — extend host() before testing");
+        };
+        assert_eq!(h.platform.as_str(), expected_platform);
     }
 }
