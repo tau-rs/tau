@@ -10,7 +10,8 @@ use tau_ports::target::TargetTriple;
 
 use crate::bundle::build_error::BuildError;
 use crate::bundle::manifest::{
-    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundlePackage,
+    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
+    BundlePackage, ProjectInfo,
 };
 use crate::project::project::{PromptEntry, UncheckedProjectConfig};
 
@@ -224,11 +225,95 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     // resort guards against future refactors swapping the container.
     agents.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
 
-    unimplemented!(
-        "steps 6-7 in subsequent tasks; packages={} agents={}",
-        packages.len(),
-        agents.len()
-    )
+    // Step 6: Assemble the manifest.
+    //
+    // The `tau.toml` schema does not currently carry a `[project]
+    // version` field — `UncheckedProject` only has `name` and
+    // `description`. The bundle manifest requires `project.version` as a
+    // `semver::Version`, so we look for an optional `[project].version`
+    // value in the raw TOML and fall back to `0.0.0` when absent. This
+    // is intentional: the bundle records what's there; project authors
+    // who want a meaningful version can add the field and it round-trips
+    // through serde's unknown-field-tolerant deserialization.
+    let project_version = extract_project_version(tau_toml_str)?;
+
+    let tau_toml_sha256 = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&tau_toml_bytes);
+        crate::tree_hash::to_hex_lower(h.finalize().as_slice())
+    };
+
+    let mut manifest = BundleManifest {
+        schema_version: 1,
+        bundle: BundleMeta {
+            // Placeholder — filled below after self-hash compute.
+            sha256: String::new(),
+            created_at: humantime::format_rfc3339_seconds(std::time::SystemTime::now())
+                .to_string(),
+            tau_version: env!("CARGO_PKG_VERSION").to_string(),
+            target: opts.target,
+        },
+        project: ProjectInfo {
+            name: project_config.project_name.clone(),
+            version: project_version,
+            tau_toml_sha256,
+        },
+        packages,
+        agents,
+    };
+
+    // Compute and fill the self-hash. `compute_self_hash` zeros out
+    // both `bundle.sha256` and `bundle.created_at` in its canonical
+    // serialization, so two builds of the same sources produce the
+    // same hash (see T1 / spec §3.1).
+    manifest.bundle.sha256 = crate::bundle::hash::compute_self_hash(&manifest);
+
+    // Step 7: Canonical-TOML emit + write.
+    let canonical = manifest.to_canonical_toml();
+    let output_path = opts.output_path.unwrap_or_else(|| {
+        opts.project_root.join(format!(
+            "{}-{}.tau",
+            manifest.project.name, manifest.project.version,
+        ))
+    });
+    std::fs::write(&output_path, canonical.as_bytes()).map_err(|source| {
+        BuildError::WriteFailed {
+            path: output_path.clone(),
+            source,
+        }
+    })?;
+    let size_bytes = std::fs::metadata(&output_path)
+        .map_err(|source| BuildError::WriteFailed {
+            path: output_path.clone(),
+            source,
+        })?
+        .len();
+    Ok(BundleArtifact {
+        path: output_path,
+        sha256: manifest.bundle.sha256,
+        size_bytes,
+    })
+}
+
+/// Pull a `[project].version` string out of the raw tau.toml, parse as
+/// semver, and fall back to `0.0.0` when absent.
+///
+/// The validated `ProjectConfig` doesn't carry a version — see comment
+/// in [`build`] step 6.
+fn extract_project_version(tau_toml: &str) -> Result<semver::Version, BuildError> {
+    let value: toml::Value = toml::from_str(tau_toml)
+        .map_err(|e| BuildError::ProjectConfig(format!("re-parse tau.toml: {e}")))?;
+    let version_str = value
+        .get("project")
+        .and_then(|v| v.get("version"))
+        .and_then(|v| v.as_str());
+    match version_str {
+        Some(s) => semver::Version::parse(s).map_err(|e| {
+            BuildError::ManifestInvalid(format!("project.version {s:?} is not valid semver: {e}"))
+        }),
+        None => Ok(semver::Version::new(0, 0, 0)),
+    }
 }
 
 /// Collect the union of package-manifest capability grants for the
@@ -390,45 +475,16 @@ installed_at = "2024-01-01T00:00:00Z"
 "#;
         std::fs::write(tmp.path().join("tau.lock"), lockfile_toml).unwrap();
 
-        // Build still returns `unimplemented!` at step 5 — that's a
-        // panic, not an Err. Catch it and assert on its payload so
-        // the test is meaningful before steps 5-7 land.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build(opts(tmp.path()))
-        }));
-        match result {
-            Ok(Ok(_)) => panic!("build should not have succeeded yet (steps 5-7 unimplemented)"),
-            Ok(Err(err)) => {
-                // If build returned an Err it means step 4 (or
-                // earlier) failed — that's a regression.
-                panic!(
-                    "expected build to progress past step 4 to the \
-                     unimplemented panic, got Err({err:?})"
-                );
-            }
-            Err(payload) => {
-                // The unimplemented panic message embeds the gathered
-                // package count; assert step 4 actually built a
-                // 2-element vector.
-                let msg = panic_message(&payload);
-                assert!(
-                    msg.contains("packages=2"),
-                    "expected panic message to record packages=2, got {msg:?}",
-                );
-            }
-        }
-    }
-
-    /// Extract a panic payload's string message, handling both
-    /// `&'static str` (most macros) and `String` (formatted panics).
-    fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-        if let Some(s) = payload.downcast_ref::<&'static str>() {
-            (*s).to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "<non-string panic payload>".to_string()
-        }
+        // With steps 6+7 implemented, build now succeeds. Read the
+        // bundle back and confirm step 4 sorted the packages
+        // alphabetically (alpha before zeta).
+        let artifact = build(opts(tmp.path())).expect("build succeeds");
+        let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
+        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
+            .expect("bundle parses");
+        assert_eq!(m.packages.len(), 2);
+        assert_eq!(m.packages[0].name, "alpha");
+        assert_eq!(m.packages[1].name, "zeta");
     }
 
     #[test]
@@ -471,34 +527,16 @@ generated_at = "2024-01-01T00:00:00Z"
         )
         .unwrap();
 
-        // Step 5 should succeed; step 6/7 still hits unimplemented.
-        // Assert the panic message records agents=2 AND the error is
-        // NOT a step-5 failure variant.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build(opts(tmp.path()))
-        }));
-        match result {
-            Ok(Err(e)) => {
-                assert!(
-                    !matches!(
-                        e,
-                        BuildError::PromptResolveFailed { .. }
-                            | BuildError::CapabilityOverrideFailed { .. }
-                            | BuildError::ManifestInvalid(_)
-                    ),
-                    "step 5 failed unexpectedly with {e:?}",
-                );
-                panic!("expected unimplemented panic from steps 6-7, got Err({e:?})");
-            }
-            Ok(Ok(_)) => panic!("build should not have succeeded yet (steps 6-7 unimplemented)"),
-            Err(payload) => {
-                let msg = panic_message(&payload);
-                assert!(
-                    msg.contains("agents=2"),
-                    "expected panic message to record agents=2, got {msg:?}",
-                );
-            }
-        }
+        // With steps 6+7 implemented, build now succeeds. Read the
+        // bundle back and confirm step 5 sorted the agents
+        // alphabetically (alpha before zeta).
+        let artifact = build(opts(tmp.path())).expect("build succeeds");
+        let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
+        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
+            .expect("bundle parses");
+        assert_eq!(m.agents.len(), 2);
+        assert_eq!(m.agents[0].id.as_str(), "alpha");
+        assert_eq!(m.agents[1].id.as_str(), "zeta");
     }
 
     #[test]
@@ -535,20 +573,106 @@ generated_at = "2024-01-01T00:00:00Z"
         )
         .unwrap();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build(opts(tmp.path()))
-        }));
-        match result {
-            Err(payload) => {
-                let msg = panic_message(&payload);
-                assert!(
-                    msg.contains("agents=1"),
-                    "expected agents=1 in panic, got {msg:?}",
-                );
-            }
-            Ok(Err(e)) => panic!("step 5 failed unexpectedly with {e:?}"),
-            Ok(Ok(_)) => panic!("build should not have succeeded yet"),
-        }
+        // With steps 6+7 implemented, build succeeds. Confirm the
+        // file-resolved system prompt was hashed (not the empty hash)
+        // and that step 5 produced one agent.
+        let artifact = build(opts(tmp.path())).expect("build succeeds");
+        let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
+        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
+            .expect("bundle parses");
+        assert_eq!(m.agents.len(), 1);
+        // SHA-256 of "file prompt body" — deterministic check that
+        // step 5 actually read the file and hashed its bytes.
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"file prompt body");
+        let want = crate::tree_hash::to_hex_lower(h.finalize().as_slice());
+        assert_eq!(m.agents[0].system_prompt_sha256, want);
+    }
+
+    /// Canonical project + lockfile pair: one agent, no packages.
+    /// Used by the step-6/7 tests.
+    fn happy_path_project(tmp: &std::path::Path) {
+        std::fs::write(
+            tmp.join("tau.toml"),
+            r#"
+[project]
+name = "test-project"
+version = "1.2.3"
+
+[agents.alpha]
+display_name = "Alpha"
+package      = "p@^0.1"
+llm_backend  = "anthropic"
+
+[agents.alpha.prompt]
+system = "you are alpha"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("tau.lock"),
+            r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn build_writes_bundle_and_self_hash_verifies() {
+        let tmp = tempdir().unwrap();
+        happy_path_project(tmp.path());
+
+        let artifact = build(opts(tmp.path())).expect("build succeeded");
+        assert!(artifact.path.exists(), "bundle file written");
+        assert_eq!(artifact.sha256.len(), 64, "sha256 is 64 hex chars");
+        assert!(artifact.size_bytes > 0, "bundle is non-empty");
+
+        // Parse the bundle back and verify the self-hash.
+        let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
+        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
+            .expect("bundle parses");
+        crate::bundle::hash::verify_self_hash(&m).expect("self-hash verifies");
+
+        // Default output path is `<name>-<version>.tau` at project root.
+        assert_eq!(
+            artifact.path,
+            tmp.path().join("test-project-1.2.3.tau"),
+        );
+    }
+
+    #[test]
+    fn build_excludes_created_at_from_bundle_self_hash() {
+        let tmp = tempdir().unwrap();
+        happy_path_project(tmp.path());
+
+        let a = build(opts(tmp.path())).expect("build 1");
+        // Sleep so that any naive `created_at`-inclusive hash differs
+        // between the two runs.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let b = build(opts(tmp.path())).expect("build 2");
+        assert_eq!(
+            a.sha256, b.sha256,
+            "self-hash must be stable across builds (created_at is excluded)"
+        );
+    }
+
+    #[test]
+    fn build_writes_to_explicit_output_path_when_set() {
+        let tmp = tempdir().unwrap();
+        happy_path_project(tmp.path());
+
+        let explicit = tmp.path().join("custom.tau");
+        let o = BuildOptions {
+            project_root: tmp.path().to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: Some(explicit.clone()),
+        };
+        let artifact = build(o).expect("build");
+        assert_eq!(artifact.path, explicit);
+        assert!(explicit.exists());
     }
 
     #[test]

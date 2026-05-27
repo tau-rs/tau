@@ -20,6 +20,9 @@ sha2            = { workspace = true }
 walkdir         = { workspace = true }
 fs4             = { workspace = true }
 humantime-serde = { workspace = true }
+# RFC 3339 timestamp formatting for `bundle.created_at` (excluded from
+# self-hash; informational only). Same crate tau-cli already uses.
+humantime       = "2"
 semver          = { workspace = true }
 tempfile        = { workspace = true }
 tracing         = { workspace = true }
