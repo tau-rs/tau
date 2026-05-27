@@ -4,10 +4,15 @@
 //! See spec `2026-05-27-tau-build-design.md` and ADR-0035.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use tau_ports::target::TargetTriple;
 
 use crate::bundle::build_error::BuildError;
+use crate::bundle::manifest::{
+    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundlePackage,
+};
+use crate::project::project::{PromptEntry, UncheckedProjectConfig};
 
 /// Inputs to [`build`].
 #[derive(Debug, Clone)]
@@ -39,15 +44,20 @@ pub struct BundleArtifact {
 /// [`BuildError::PackageNotInstalled`] if the project isn't fully
 /// installed. The function does NOT attempt to install anything.
 pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
-    // Step 1: Load tau.toml.
+    // Step 1: Load tau.toml. Parse via the typed UncheckedProjectConfig
+    // and then validate — this is the same pipeline `tau run` uses, so
+    // the bundle records exactly what the project config layer would
+    // surface to the runtime.
     let tau_toml_path = opts.project_root.join("tau.toml");
     let tau_toml_bytes = std::fs::read(&tau_toml_path)
         .map_err(|e| BuildError::ProjectConfig(format!("read {tau_toml_path:?}: {e}")))?;
-    let _project_toml: toml::Value = toml::from_str(
-        std::str::from_utf8(&tau_toml_bytes)
-            .map_err(|e| BuildError::ProjectConfig(format!("tau.toml is not utf-8: {e}")))?,
-    )
-    .map_err(|e| BuildError::ProjectConfig(format!("parse {tau_toml_path:?}: {e}")))?;
+    let tau_toml_str = std::str::from_utf8(&tau_toml_bytes)
+        .map_err(|e| BuildError::ProjectConfig(format!("tau.toml is not utf-8: {e}")))?;
+    let unchecked: UncheckedProjectConfig = toml::from_str(tau_toml_str)
+        .map_err(|e| BuildError::ProjectConfig(format!("parse {tau_toml_path:?}: {e}")))?;
+    let project_config = unchecked
+        .validate()
+        .map_err(|e| BuildError::ProjectConfig(format!("validate {tau_toml_path:?}: {e}")))?;
 
     // Step 2: Load tau.lock. Distinguish missing (run `tau install`)
     // from present-but-invalid (config error).
@@ -127,7 +137,128 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     }
     packages.sort_by(|a, b| a.name.cmp(&b.name));
 
-    unimplemented!("steps 5-7 in subsequent tasks; packages={}", packages.len())
+    // Step 5: Gather agent facts. One entry per validated AgentEntry in
+    // the project's `[agents.<id>]` table. For each agent:
+    //
+    // - Resolve `[agents.<id>.prompt]` to bytes (inline string or file
+    //   contents from `prompt.system_file` relative to project_root)
+    //   and hash to SHA-256.
+    // - Carry `requires.tools` as a sorted list of tool names — these
+    //   are the typed deps the project config layer already resolved.
+    // - When the agent has project-level capability overrides, compute
+    //   the effective grant set by intersecting against the package's
+    //   manifest grants. v1 happy path has no overrides, so the
+    //   `package_caps` union is a stub. See `collect_package_caps`.
+    let mut agents: Vec<BundleAgent> = Vec::new();
+    for (id, entry) in &project_config.agents {
+        let agent_id = tau_domain::AgentId::from_str(id).map_err(|e| {
+            BuildError::ManifestInvalid(format!("agent `{id}` has invalid id: {e}"))
+        })?;
+
+        // Resolve the system prompt to bytes.
+        let prompt_bytes: Vec<u8> = match &entry.prompt {
+            PromptEntry::Inline(s) => s.clone().into_bytes(),
+            PromptEntry::File(rel) => {
+                let abs = if rel.is_absolute() {
+                    rel.clone()
+                } else {
+                    opts.project_root.join(rel)
+                };
+                std::fs::read(&abs).map_err(|source| BuildError::PromptResolveFailed {
+                    id: id.clone(),
+                    source,
+                })?
+            }
+            PromptEntry::None => Vec::new(),
+        };
+        let system_prompt_sha256 = crate::tree_hash::to_hex_lower(&{
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(&prompt_bytes);
+            h.finalize()
+        });
+
+        // List required tool names. BTreeMap iteration above is sorted
+        // by agent id; sort tool names here for stable output.
+        let mut required_tools: Vec<String> = entry
+            .requires
+            .tools
+            .iter()
+            .map(|t| t.name.as_str().to_owned())
+            .collect();
+        required_tools.sort();
+
+        // Compute effective capabilities. v1 happy path: no overrides ⇒
+        // skip entirely (leaves BundleEffectiveCapabilities::default()).
+        // When an override IS present, collect the package-manifest
+        // grant union (currently a stub — see collect_package_caps) and
+        // call compute_effective.
+        let effective_capabilities = if entry.capability_overrides.is_empty() {
+            BundleEffectiveCapabilities::default()
+        } else {
+            let package_caps = collect_package_caps(&packages, &required_tools)?;
+            let eff = crate::capability_override::compute_effective(
+                &package_caps,
+                &entry.capability_overrides,
+            )
+            .map_err(|source| BuildError::CapabilityOverrideFailed {
+                id: id.clone(),
+                source,
+            })?;
+            effective_to_bundle(&eff)
+        };
+
+        agents.push(BundleAgent {
+            id: agent_id,
+            backend: BackendRef {
+                kind: entry.llm_backend.clone(),
+                model: None,
+                extra: std::collections::BTreeMap::new(),
+            },
+            system_prompt_sha256,
+            required_tools,
+            effective_capabilities,
+        });
+    }
+    // BTreeMap iteration above is already sorted by key; defensive
+    // resort guards against future refactors swapping the container.
+    agents.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+
+    unimplemented!(
+        "steps 6-7 in subsequent tasks; packages={} agents={}",
+        packages.len(),
+        agents.len()
+    )
+}
+
+/// Collect the union of package-manifest capability grants for the
+/// tools listed in `required_tools`.
+///
+/// MVP stub: returns an empty `Vec`. The v1 happy path has no per-agent
+/// `[[capabilities]]` overrides, so this path is unreachable in shipped
+/// configurations. A complete implementation should load each required
+/// tool's manifest from `.tau/packages/<name>/<version>/tau.toml` and
+/// union the `[plugin]`/`[tool]` capabilities. Flag in PR description
+/// as a known follow-up.
+fn collect_package_caps(
+    _packages: &[BundlePackage],
+    _required_tools: &[String],
+) -> Result<Vec<tau_domain::Capability>, BuildError> {
+    Ok(Vec::new())
+}
+
+/// Project [`crate::capability_override::EffectiveCapability`] entries
+/// into the per-shape allow/deny lists carried by `BundleEffectiveCapabilities`.
+///
+/// MVP stub: returns the default (empty) value — the override compute
+/// path is unreachable on v1's happy path, see `collect_package_caps`.
+/// A complete implementation will need to flatten each
+/// `EffectiveCapability` into the matching `BundleEffectiveCapabilities`
+/// allow/deny field for its kind. Flag in PR.
+fn effective_to_bundle(
+    _eff: &[crate::capability_override::EffectiveCapability],
+) -> BundleEffectiveCapabilities {
+    BundleEffectiveCapabilities::default()
 }
 
 #[cfg(test)]
@@ -297,6 +428,161 @@ installed_at = "2024-01-01T00:00:00Z"
             s.clone()
         } else {
             "<non-string panic payload>".to_string()
+        }
+    }
+
+    #[test]
+    fn build_progresses_past_agent_gather_with_sorted_agents() {
+        let tmp = tempdir().unwrap();
+        // Two agents in non-alphabetical order: "zeta" then "alpha".
+        // Step 5 must hash each prompt, carry the backend, and emit a
+        // sorted Vec. The lockfile is empty (no packages) — step 4
+        // builds an empty Vec, step 5 builds a 2-element Vec.
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "test-project"
+
+[agents.zeta]
+display_name = "Zeta"
+package      = "p@^0.1"
+llm_backend  = "anthropic"
+
+[agents.zeta.prompt]
+system = "you are zeta"
+
+[agents.alpha]
+display_name = "Alpha"
+package      = "p@^0.1"
+llm_backend  = "anthropic"
+
+[agents.alpha.prompt]
+system = "you are alpha"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("tau.lock"),
+            r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        // Step 5 should succeed; step 6/7 still hits unimplemented.
+        // Assert the panic message records agents=2 AND the error is
+        // NOT a step-5 failure variant.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build(opts(tmp.path()))
+        }));
+        match result {
+            Ok(Err(e)) => {
+                assert!(
+                    !matches!(
+                        e,
+                        BuildError::PromptResolveFailed { .. }
+                            | BuildError::CapabilityOverrideFailed { .. }
+                            | BuildError::ManifestInvalid(_)
+                    ),
+                    "step 5 failed unexpectedly with {e:?}",
+                );
+                panic!("expected unimplemented panic from steps 6-7, got Err({e:?})");
+            }
+            Ok(Ok(_)) => panic!("build should not have succeeded yet (steps 6-7 unimplemented)"),
+            Err(payload) => {
+                let msg = panic_message(&payload);
+                assert!(
+                    msg.contains("agents=2"),
+                    "expected panic message to record agents=2, got {msg:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_resolves_system_prompt_from_file() {
+        // Agent uses `prompt.system_file` — step 5 must read the file
+        // relative to project_root.
+        let tmp = tempdir().unwrap();
+        let prompts_dir = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(prompts_dir.join("r.md"), b"file prompt body").unwrap();
+
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "test-project"
+
+[agents.r]
+display_name = "R"
+package      = "p@^0.1"
+llm_backend  = "anthropic"
+
+[agents.r.prompt]
+system_file = "prompts/r.md"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("tau.lock"),
+            r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build(opts(tmp.path()))
+        }));
+        match result {
+            Err(payload) => {
+                let msg = panic_message(&payload);
+                assert!(
+                    msg.contains("agents=1"),
+                    "expected agents=1 in panic, got {msg:?}",
+                );
+            }
+            Ok(Err(e)) => panic!("step 5 failed unexpectedly with {e:?}"),
+            Ok(Ok(_)) => panic!("build should not have succeeded yet"),
+        }
+    }
+
+    #[test]
+    fn build_fails_when_system_prompt_file_missing() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "test-project"
+
+[agents.r]
+display_name = "R"
+package      = "p@^0.1"
+llm_backend  = "anthropic"
+
+[agents.r.prompt]
+system_file = "prompts/missing.md"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("tau.lock"),
+            r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let err = build(opts(tmp.path())).unwrap_err();
+        match err {
+            BuildError::PromptResolveFailed { id, .. } => assert_eq!(id, "r"),
+            other => panic!("expected PromptResolveFailed, got {other:?}"),
         }
     }
 }
