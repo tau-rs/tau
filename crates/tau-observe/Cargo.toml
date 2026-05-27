@@ -22,7 +22,7 @@ thiserror          = { workspace = true }
 # version family is anchored by `tracing-opentelemetry 0.22`, which
 # targets `opentelemetry 0.21` / `opentelemetry_sdk 0.21` /
 # `opentelemetry-otlp 0.14`.
-opentelemetry         = { version = "0.21", optional = true }
+opentelemetry         = { version = "0.32", optional = true }
 opentelemetry_sdk     = { version = "0.21", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp    = { version = "0.14", features = ["grpc-tonic"], optional = true }
 tracing-opentelemetry = { version = "0.22", optional = true }
