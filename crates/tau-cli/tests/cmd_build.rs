@@ -2,8 +2,8 @@
 //!
 //! Each test stands up an isolated scratch root: a project tempdir
 //! containing a minimal `tau.toml` (and, when relevant, a `tau.lock`
-//! + installed-package trees), plus a sibling `TAU_HOME` tempdir so
-//! global-scope writes never touch the developer's `~/.tau`. The
+//!   plus installed-package trees), plus a sibling `TAU_HOME` tempdir
+//! so global-scope writes never touch the developer's `~/.tau`. The
 //! `TAU_HOME` tempdir pre-creates `config.toml` to defeat the
 //! parallel-write race surfaced on Windows runners (see project
 //! memory `feedback_windows_tau_home_test_pattern`).

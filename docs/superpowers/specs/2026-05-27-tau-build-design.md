@@ -82,15 +82,9 @@ Pipeline (7 steps):
 6. **Assemble** — populate `BundleManifest` with `schema_version=1`, gathered data, `target = opts.target`, `bundle.sha256 = ""` (placeholder), `created_at = Utc::now()` (excluded from hash per §2).
 7. **Write** — canonical-TOML emit → compute self-hash → fill `bundle.sha256` → re-emit canonical TOML → atomic `std::fs::write` (bundle is ~few KB; no streaming needed). Return `BundleArtifact`.
 
-### 4.1 `compute_effective` layering — known plan-time decision
+### 4.1 `compute_effective` layering — resolved
 
-`compute_effective` and its `CapabilityOverrideError` currently live in `tau-runtime::capability_override`. Adding `tau-runtime` as a `tau-pkg` dep would invert the existing layering (tau-runtime → tau-pkg today). Resolution path at plan time, in order of preference:
-
-- **(a)** Lift `compute_effective` to `tau-domain`. It's pure logic over `Capability` (which is already in `tau-domain`), so no behavioral change.
-- **(b)** Lift to `tau-ports`. Less natural (it's not a port).
-- **(c)** Add `tau-pkg::capability_override` as a re-export shim that takes the inputs `compute_effective` needs without pulling tau-runtime. More indirection.
-
-(a) is the right answer; the planner confirms there's no hidden dep before writing the task.
+`compute_effective` was lifted from `tau-runtime` to `tau-pkg` on 2026-05-17 (before this spec was written; verified during plan-time audit). The build pipeline calls it directly as `tau_pkg::capability_override::compute_effective(...)`. No layering work needed.
 
 ### 4.2 Determinism guarantees
 

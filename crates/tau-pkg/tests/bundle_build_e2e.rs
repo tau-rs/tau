@@ -139,8 +139,7 @@ fn e2e_build_produces_parseable_bundle_with_correct_facts() {
 
     // Parse the bundle back and verify the self-hash.
     let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
-    let manifest =
-        tau_pkg::bundle::BundleManifest::parse_str(&bundle_str).expect("bundle parses");
+    let manifest = tau_pkg::bundle::BundleManifest::parse_str(&bundle_str).expect("bundle parses");
     tau_pkg::bundle::hash::verify_self_hash(&manifest).expect("self-hash verifies");
 
     // Schema-level facts.

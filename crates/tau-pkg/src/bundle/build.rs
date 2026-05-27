@@ -249,8 +249,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         bundle: BundleMeta {
             // Placeholder — filled below after self-hash compute.
             sha256: String::new(),
-            created_at: humantime::format_rfc3339_seconds(std::time::SystemTime::now())
-                .to_string(),
+            created_at: humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string(),
             tau_version: env!("CARGO_PKG_VERSION").to_string(),
             target: opts.target,
         },
@@ -380,7 +379,8 @@ mod tests {
 name = "test-project"
 version = "0.1.0"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let err = build(opts(tmp.path())).unwrap_err();
         assert!(
             matches!(err, BuildError::MissingLockfile),
@@ -398,7 +398,8 @@ version = "0.1.0"
 name = "test-project"
 version = "0.1.0"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         // Minimal lockfile (schema v6) naming one package whose
         // installed dir does not exist anywhere on disk.
         let lockfile_toml = r#"
@@ -480,8 +481,8 @@ installed_at = "2024-01-01T00:00:00Z"
         // alphabetically (alpha before zeta).
         let artifact = build(opts(tmp.path())).expect("build succeeds");
         let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
-        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
-            .expect("bundle parses");
+        let m =
+            crate::bundle::manifest::BundleManifest::parse_str(&bundle_str).expect("bundle parses");
         assert_eq!(m.packages.len(), 2);
         assert_eq!(m.packages[0].name, "alpha");
         assert_eq!(m.packages[1].name, "zeta");
@@ -532,8 +533,8 @@ generated_at = "2024-01-01T00:00:00Z"
         // alphabetically (alpha before zeta).
         let artifact = build(opts(tmp.path())).expect("build succeeds");
         let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
-        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
-            .expect("bundle parses");
+        let m =
+            crate::bundle::manifest::BundleManifest::parse_str(&bundle_str).expect("bundle parses");
         assert_eq!(m.agents.len(), 2);
         assert_eq!(m.agents[0].id.as_str(), "alpha");
         assert_eq!(m.agents[1].id.as_str(), "zeta");
@@ -578,8 +579,8 @@ generated_at = "2024-01-01T00:00:00Z"
         // and that step 5 produced one agent.
         let artifact = build(opts(tmp.path())).expect("build succeeds");
         let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
-        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
-            .expect("bundle parses");
+        let m =
+            crate::bundle::manifest::BundleManifest::parse_str(&bundle_str).expect("bundle parses");
         assert_eq!(m.agents.len(), 1);
         // SHA-256 of "file prompt body" — deterministic check that
         // step 5 actually read the file and hashed its bytes.
@@ -632,15 +633,12 @@ generated_at = "2024-01-01T00:00:00Z"
 
         // Parse the bundle back and verify the self-hash.
         let bundle_str = std::fs::read_to_string(&artifact.path).unwrap();
-        let m = crate::bundle::manifest::BundleManifest::parse_str(&bundle_str)
-            .expect("bundle parses");
+        let m =
+            crate::bundle::manifest::BundleManifest::parse_str(&bundle_str).expect("bundle parses");
         crate::bundle::hash::verify_self_hash(&m).expect("self-hash verifies");
 
         // Default output path is `<name>-<version>.tau` at project root.
-        assert_eq!(
-            artifact.path,
-            tmp.path().join("test-project-1.2.3.tau"),
-        );
+        assert_eq!(artifact.path, tmp.path().join("test-project-1.2.3.tau"),);
     }
 
     #[test]
