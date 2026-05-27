@@ -77,6 +77,9 @@ impl Runner {
     ///
     /// # Examples
     ///
+    /// (`no_run` because `Runtime::builder().build()` requires a registered
+    /// LLM backend and project config that are only available at runtime.)
+    ///
     /// ```no_run
     /// use tau_workflow::Runner;
     /// use tau_runtime::Runtime;
