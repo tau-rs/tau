@@ -3,6 +3,38 @@
 use std::path::PathBuf;
 
 /// Errors raised by parsing, validating, running, or persisting a workflow.
+///
+/// # Examples
+///
+/// Construct a `ParseFailed` variant and check its `Display` output:
+///
+/// ```
+/// use tau_workflow::WorkflowError;
+/// use std::path::PathBuf;
+///
+/// let err = WorkflowError::ParseFailed {
+///     path: PathBuf::from("workflows/bad.toml"),
+///     message: "toml parse: unexpected EOF".into(),
+/// };
+/// let msg = err.to_string();
+/// assert!(msg.contains("bad.toml"), "path should appear in display: {msg}");
+/// assert!(msg.contains("unexpected EOF"), "message should appear: {msg}");
+/// ```
+///
+/// Construct a `DriftDetected` variant and check that `Display` names both
+/// sets of step ids:
+///
+/// ```
+/// use tau_workflow::WorkflowError;
+///
+/// let err = WorkflowError::DriftDetected {
+///     logged: vec!["step-a".into(), "step-b".into()],
+///     current: vec!["step-a".into(), "step-c".into()],
+/// };
+/// let msg = err.to_string();
+/// assert!(msg.contains("step-b"), "logged ids should appear: {msg}");
+/// assert!(msg.contains("step-c"), "current ids should appear: {msg}");
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum WorkflowError {

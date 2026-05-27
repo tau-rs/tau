@@ -26,6 +26,25 @@ pub struct Runner {
 }
 
 /// Per-run options.
+///
+/// # Examples
+///
+/// Build a fresh `RunOpts` for a first run with no prior completed steps:
+///
+/// ```
+/// use tau_workflow::RunOpts;
+///
+/// let opts = RunOpts {
+///     input: "analyse the Q3 report".into(),
+///     run_id: None,
+///     completed: vec![],
+///     agents: std::collections::BTreeMap::new(),
+/// };
+///
+/// assert_eq!(opts.input, "analyse the Q3 report");
+/// assert!(opts.run_id.is_none());
+/// assert!(opts.completed.is_empty());
+/// ```
 #[derive(Debug, Clone)]
 pub struct RunOpts {
     /// Caller-supplied input string available as `${input}`.
@@ -55,6 +74,26 @@ pub struct RunOutcome {
 
 impl Runner {
     /// Construct a runner.
+    ///
+    /// # Examples
+    ///
+    /// (`no_run` because `Runtime::builder().build()` requires a registered
+    /// LLM backend and project config that are only available at runtime.)
+    ///
+    /// ```no_run
+    /// use tau_workflow::Runner;
+    /// use tau_runtime::Runtime;
+    /// use std::sync::Arc;
+    /// use std::path::PathBuf;
+    ///
+    /// # tokio_test::block_on(async {
+    /// let runtime = Arc::new(
+    ///     Runtime::builder().build().expect("runtime should build"),
+    /// );
+    /// let runner = Runner::new(runtime, PathBuf::from("/workspace"));
+    /// // runner is ready to execute workflows against the given scope root.
+    /// # });
+    /// ```
     pub fn new(runtime: Arc<Runtime>, scope_root: PathBuf) -> Self {
         Self {
             runtime,
@@ -351,6 +390,61 @@ fn resolve_args(
 /// matches the corresponding step in `workflow.steps`. Trailing steps in
 /// the workflow that aren't yet in the log are fine (that's the work
 /// the resume will do).
+///
+/// # Examples
+///
+/// A partial log (prefix match) is accepted for `--resume`:
+///
+/// ```
+/// use tau_workflow::{check_drift, Workflow, WorkflowError};
+/// use tau_workflow::{StepRecord, StepStatus};
+/// use std::path::Path;
+/// use chrono::Utc;
+///
+/// let src = r#"
+/// [[steps]]
+/// id = "step-a"
+/// kind = "agent.run"
+/// agent = "helper"
+/// input = "${input}"
+///
+/// [[steps]]
+/// id = "step-b"
+/// kind = "agent.run"
+/// agent = "helper"
+/// input = "${steps.step-a.output}"
+/// "#;
+/// let workflow = Workflow::from_str(src, Path::new("workflows/demo.toml"))
+///     .expect("workflow TOML should parse");
+///
+/// // Only step-a has been logged so far; step-b is still pending.
+/// let now = Utc::now();
+/// let logged = vec![StepRecord {
+///     ts: now,
+///     run_id: "01HKZTEST".into(),
+///     step_id: "step-a".into(),
+///     step_index: 0,
+///     kind: "agent.run".into(),
+///     input: "hello".into(),
+///     output: "world".into(),
+///     started_at: now,
+///     ended_at: now,
+///     duration_ms: 10,
+///     status: StepStatus::Ok,
+///     error: None,
+///     detail: None,
+/// }];
+///
+/// assert!(check_drift(&workflow, &logged).is_ok(), "prefix match should be accepted");
+///
+/// // A mismatched step id triggers DriftDetected.
+/// let mut drifted = logged.clone();
+/// drifted[0].step_id = "WRONG".into();
+/// assert!(matches!(
+///     check_drift(&workflow, &drifted),
+///     Err(WorkflowError::DriftDetected { .. })
+/// ));
+/// ```
 pub fn check_drift(
     workflow: &Workflow,
     logged_records: &[StepRecord],

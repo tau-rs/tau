@@ -19,6 +19,62 @@ use crate::error::WorkflowError;
 /// them here).
 ///
 /// Escape sequence: `$${` resolves to a literal `${`.
+///
+/// # Examples
+///
+/// Substitute `${input}`:
+///
+/// ```
+/// use tau_workflow::resolve_template;
+/// use std::collections::BTreeMap;
+///
+/// let result = resolve_template(
+///     "Hello, ${input}!",
+///     "world",
+///     &BTreeMap::new(),
+///     "my-workflow",
+///     "greeting-step",
+/// ).expect("template should resolve");
+///
+/// assert_eq!(result, "Hello, world!");
+/// ```
+///
+/// Chain prior step outputs using `${steps.<id>.output}`:
+///
+/// ```
+/// use tau_workflow::resolve_template;
+/// use std::collections::BTreeMap;
+///
+/// let mut prior = BTreeMap::new();
+/// prior.insert("gather".to_string(), "market analysis".to_string());
+///
+/// let result = resolve_template(
+///     "Summarise: ${steps.gather.output}",
+///     "",
+///     &prior,
+///     "pipeline",
+///     "summarise-step",
+/// ).expect("template should resolve");
+///
+/// assert_eq!(result, "Summarise: market analysis");
+/// ```
+///
+/// An unknown reference returns `WorkflowError::TemplateUnresolved`:
+///
+/// ```
+/// use tau_workflow::{resolve_template, WorkflowError};
+/// use std::collections::BTreeMap;
+///
+/// let err = resolve_template(
+///     "${steps.missing.output}",
+///     "x",
+///     &BTreeMap::new(),
+///     "pipeline",
+///     "step-b",
+/// ).expect_err("unknown reference should fail");
+///
+/// assert!(matches!(err, WorkflowError::TemplateUnresolved { .. }));
+/// ```
 pub fn resolve(
     template: &str,
     input: &str,

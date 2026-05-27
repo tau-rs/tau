@@ -11,6 +11,38 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// One step's completion record, serialized as a single JSONL line.
+///
+/// # Examples
+///
+/// Build a `StepRecord` directly and check round-trip JSON serialization:
+///
+/// ```
+/// use tau_workflow::{StepRecord, StepStatus};
+/// use chrono::Utc;
+///
+/// let now = Utc::now();
+/// let record = StepRecord {
+///     ts: now,
+///     run_id: "01HTEST00000000000000000000".into(),
+///     step_id: "gather".into(),
+///     step_index: 0,
+///     kind: "agent.run".into(),
+///     input: "analyse the market".into(),
+///     output: "analysis complete".into(),
+///     started_at: now,
+///     ended_at: now,
+///     duration_ms: 42,
+///     status: StepStatus::Ok,
+///     error: None,
+///     detail: None,
+/// };
+///
+/// let json = serde_json::to_string(&record).expect("serialisation should succeed");
+/// let decoded: StepRecord = serde_json::from_str(&json).expect("deserialisation should succeed");
+/// assert_eq!(decoded.step_id, "gather");
+/// assert_eq!(decoded.status, StepStatus::Ok);
+/// assert_eq!(decoded.duration_ms, 42);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StepRecord {
     /// Log-line timestamp (record-emit time).
@@ -46,6 +78,21 @@ pub struct StepRecord {
 }
 
 /// Status of a step in a run log.
+///
+/// # Examples
+///
+/// `as_str_lowercase` matches the JSON wire form used in persisted JSONL:
+///
+/// ```
+/// use tau_workflow::StepStatus;
+///
+/// assert_eq!(StepStatus::Ok.as_str_lowercase(), "ok");
+/// assert_eq!(StepStatus::Failed.as_str_lowercase(), "failed");
+///
+/// // The serde JSON encoding is the same as the wire form.
+/// let json = serde_json::to_string(&StepStatus::Ok).expect("should serialise");
+/// assert_eq!(json, r#""ok""#);
+/// ```
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum StepStatus {
@@ -61,6 +108,15 @@ impl StepStatus {
     /// `tracing::event!` so the on-disk JSONL produced by
     /// `WorkflowRunLogLayer` is byte-identical to the legacy direct
     /// writer in `RunLog::write_direct`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tau_workflow::StepStatus;
+    ///
+    /// assert_eq!(StepStatus::Ok.as_str_lowercase(), "ok");
+    /// assert_eq!(StepStatus::Failed.as_str_lowercase(), "failed");
+    /// ```
     pub fn as_str_lowercase(&self) -> &'static str {
         match self {
             StepStatus::Ok => "ok",
@@ -71,6 +127,24 @@ impl StepStatus {
 
 /// Builds the canonical run-log path:
 /// `<scope_root>/.tau/workflow-runs/<workflow_name>-<run_id>.jsonl`.
+///
+/// # Examples
+///
+/// ```
+/// use tau_workflow::run_log_path;
+/// use std::path::Path;
+///
+/// let path = run_log_path(
+///     Path::new("/workspace"),
+///     "research-pipeline",
+///     "01HKZTEST00000000000000000",
+/// );
+///
+/// assert!(path.ends_with(
+///     "research-pipeline-01HKZTEST00000000000000000.jsonl"
+/// ));
+/// assert!(path.to_string_lossy().contains(".tau/workflow-runs"));
+/// ```
 pub fn run_log_path(scope_root: &std::path::Path, workflow_name: &str, run_id: &str) -> PathBuf {
     scope_root
         .join(".tau")
@@ -108,6 +182,23 @@ impl RunLog {
     /// directory if missing so the layer's first write doesn't race
     /// against a non-existent ancestor. The file itself is opened
     /// lazily by `WorkflowRunLogLayer` on the first matching event.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use tau_workflow::RunLog;
+    /// use tempfile::tempdir;
+    ///
+    /// let dir = tempdir().expect("tempdir should be created");
+    /// // Nested path — open_for_write creates the parent directory.
+    /// let log_path = dir.path().join(".tau").join("workflow-runs").join("run.jsonl");
+    ///
+    /// let log = RunLog::open_for_write(&log_path).await
+    ///     .expect("should create parent directories and return a RunLog");
+    /// assert_eq!(log.path(), log_path.as_path());
+    /// # });
+    /// ```
     pub async fn open_for_write(path: &Path) -> Result<Self, crate::WorkflowError> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
@@ -161,6 +252,30 @@ impl RunLog {
 
 /// Replay a JSONL log into a vector of records. Tolerates a trailing
 /// partial line (truncated mid-write on crash) by skipping it.
+///
+/// # Examples
+///
+/// Replay a hand-crafted JSONL file with one complete record:
+///
+/// ```
+/// # tokio_test::block_on(async {
+/// use tau_workflow::replay;
+/// use tempfile::tempdir;
+///
+/// let dir = tempdir().expect("tempdir should be created");
+/// let path = dir.path().join("run.jsonl");
+///
+/// // Write a minimal valid StepRecord JSONL line.
+/// let line = r#"{"ts":"2024-01-01T00:00:00Z","run_id":"01HKZTEST","step_id":"gather","step_index":0,"kind":"agent.run","input":"hello","output":"world","started_at":"2024-01-01T00:00:00Z","ended_at":"2024-01-01T00:00:00Z","duration_ms":1,"status":"ok"}
+/// "#;
+/// tokio::fs::write(&path, line).await.expect("write should succeed");
+///
+/// let records = replay(&path).await.expect("replay should succeed");
+/// assert_eq!(records.len(), 1);
+/// assert_eq!(records[0].step_id, "gather");
+/// assert_eq!(records[0].output, "world");
+/// # });
+/// ```
 pub async fn replay(path: &Path) -> Result<Vec<StepRecord>, crate::WorkflowError> {
     let file = File::open(path)
         .await
