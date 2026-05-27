@@ -190,5 +190,6 @@ async fn dispatch(cli: cli::Cli, workflow_run_id: Option<String>) -> anyhow::Res
         }
         cli::Command::Serve(args) => cmd::serve::run(&args).await,
         cli::Command::Check(args) => cmd::check::run(args).await,
+        cli::Command::Build => cmd::build::run().await,
     }
 }

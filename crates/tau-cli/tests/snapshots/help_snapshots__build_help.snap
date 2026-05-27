@@ -2,30 +2,9 @@
 source: crates/tau-cli/tests/help_snapshots.rs
 expression: s
 ---
-tau runtime CLI
+Build a deployment bundle from this project (Phase 2 §C.2)
 
-Usage: tau [OPTIONS] <COMMAND>
-
-Commands:
-  init       Scaffold a project `tau.toml`
-  install    Install a package from a Git URL
-  list       List installed packages or available agents
-  run        Invoke an agent one-shot
-  chat       Open a REPL chat session with an agent
-  resolve    Install missing requires.tools dependencies for all agents in the project tau.toml. Project-wide form of the lazy resolve that `tau run` and `tau chat` perform per-agent
-  uninstall  Uninstall a package and remove its lockfile entry
-  verify     Verify installed packages against the lockfile (spec §3)
-  update     Update an installed package to a newer or specific version (spec §2)
-  plugin     Plugin debugging utilities (spec §9 debug tier)
-  session    Session management (list, show, delete, export)
-  sandbox    Sandbox configuration and diagnostics
-  workflow   Workflow subcommand group (list, run, log, resume)
-  skill      Inspect installed skill packages (list, show)
-  target     Inspect the deployment-target registry (list, show)
-  serve      Start serve mode: accept JSON-RPC requests over stdio
-  check      Run pre-flight validation against the project (config, lockfile, packages, sandbox, plugins, skills). Aggregates existing validators into one CI/IDE-friendly verb
-  build      Build a deployment bundle from this project (Phase 2 §C.2)
-  help       Print this message or the help of the given subcommand(s)
+Usage: tau build [OPTIONS]
 
 Options:
   -v, --verbose...
@@ -94,6 +73,3 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
-
-  -V, --version
-          Print version

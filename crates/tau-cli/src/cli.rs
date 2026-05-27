@@ -184,6 +184,8 @@ pub enum Command {
     /// packages, sandbox, plugins, skills). Aggregates existing validators
     /// into one CI/IDE-friendly verb.
     Check(CheckArgs),
+    /// Build a deployment bundle from this project (Phase 2 §C.2).
+    Build,
 }
 
 /// `tau plugin <action>` — debug-tier helpers per spec §9.
