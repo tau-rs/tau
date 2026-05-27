@@ -12,6 +12,15 @@ use tracing_subscriber::filter::EnvFilter;
 /// `RUST_LOG` is parsed verbatim. The fallback is *not* a default for a
 /// missing var key — it is the entire filter, used only when `RUST_LOG`
 /// is unset.
+///
+/// ```
+/// use tau_observe::filter::env_or_directive;
+///
+/// // When RUST_LOG is unset, the fallback directive is used.
+/// std::env::remove_var("RUST_LOG");
+/// let filter = env_or_directive("tau=info");
+/// assert!(filter.to_string().contains("tau=info"));
+/// ```
 pub fn env_or_directive(fallback: &str) -> EnvFilter {
     if let Ok(env) = std::env::var("RUST_LOG") {
         return EnvFilter::new(env);

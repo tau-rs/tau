@@ -106,7 +106,87 @@ tau-app is a binary crate. Its internal modules (`mod cancel`, `mod dispatch`, �
 
 **Total:** 44 items — 4 include, 1 skip-reexport, 39 skip-binary-internal.
 
+## tau-observe
+
+The `pub mod capture` and `pub mod otlp` are behind `cfg(any(feature = "test-fixtures", test))` and `cfg(feature = "otlp")` respectively; all items inside those modules are `skip-feature-gated`. The `git grep` enumeration command used in the task (using `\s` in ERE with `git grep`) missed impl-block `pub fn` methods; 9 additional methods were enumerated with a plain `grep -nE '^\s+pub '` pass and appear as rows 60–68.
+
+| # | File:line | Item | Classification | Strategy |
+|---|---|---|---|---|
+| 1 | `capture.rs:32` | `pub struct CapturedEvent` | skip-feature-gated | Behind `cfg(any(feature = "test-fixtures", test))`; not reachable from default doctests. |
+| 2 | `capture.rs:47` | `pub struct Captor` | skip-feature-gated | Same gate as `CapturedEvent`. |
+| 3 | `filter.rs:15` | `pub fn env_or_directive` | include | Free fn with verifiable behavior: RUST_LOG-unset path returns filter matching fallback directive. |
+| 4 | `install.rs:13` | `pub enum Format` | include | Two variants (`Human`, `Json`); assert `Copy` semantics and inequality. |
+| 5 | `install.rs:22` | `pub enum Writer` | include | Two variants (`Stderr`, `Stdout`); assert `Copy` semantics and inequality. |
+| 6 | `install.rs:31` | `pub enum Rotation` | include | Three variants; assert `Default` yields `Never`; assert all variants distinct. |
+| 7 | `install.rs:42` | `pub struct InstallOptions` | include | Construct via `cli_default()`; assert `format`, `writer`, `non_blocking`, `file_path`, `rotation`, `extra_layers`. |
+| 8 | `install.rs:132` | `pub enum InstallError` | include | Single `AlreadyInstalled` variant; assert `Display` contains `"already installed"`. |
+| 9 | `install.rs:147` | `pub struct InstallGuard` | skip-trivial | Opaque RAII guard; no public constructor; held by caller for its `Drop`. |
+| 10 | `install.rs:216` | `pub fn install` | include | `no_run` fence — installs process-global tracing subscriber; parallel doctests would race on global init. Shows constructor call shape with `.expect()`. |
+| 11 | `layers/mod.rs:5` | `pub mod plugin_recording` | skip-reexport | Module declaration. |
+| 12 | `layers/mod.rs:6` | `pub mod workflow_run_log` | skip-reexport | Module declaration. |
+| 13 | `layers/plugin_recording.rs:36` | `pub const TARGET` | skip-trivial | String constant (`"tau::plugin::frame"`); documented by docstring; asserted inside layer struct fences. |
+| 14 | `layers/plugin_recording.rs:47` | `pub struct PluginRecordingLayer` | include | Struct fence: construct via `new(PathBuf)`, verify `Clone` is cheap, assert `TARGET` value. |
+| 15 | `layers/workflow_run_log.rs:33` | `pub const TARGET` | skip-trivial | String constant (`"tau::workflow::step"`); documented by docstring; asserted inside layer struct fence. |
+| 16 | `layers/workflow_run_log.rs:37` | `pub struct WorkflowRunLogLayer` | include | Struct fence: construct via `new(PathBuf)`, verify `Clone` is cheap, assert `TARGET` value. |
+| 17 | `lib.rs:9` | `pub mod capture` | skip-feature-gated | Gated by `cfg(any(feature = "test-fixtures", test))`; not a stable module path in production. |
+| 18 | `lib.rs:10` | `pub mod filter` | skip-reexport | Module declaration. |
+| 19 | `lib.rs:11` | `pub mod install` | skip-reexport | Module declaration. |
+| 20 | `lib.rs:12` | `pub mod layers` | skip-reexport | Module declaration. |
+| 21 | `lib.rs:14` | `pub mod otlp` | skip-feature-gated | Gated by `cfg(feature = "otlp")`; not reachable from default doctests. |
+| 22 | `lib.rs:15` | `pub mod preview` | skip-reexport | Module declaration. |
+| 23 | `lib.rs:16` | `pub mod vocabulary` | skip-reexport | Module declaration. |
+| 24 | `otlp.rs:10` | `pub struct OtlpEndpoint` | skip-feature-gated | Behind `feature = "otlp"`. |
+| 25 | `preview.rs:22` | `pub fn preview` | include | Free fn; assert short string passes through; assert 300-byte string truncated with `'…'` ellipsis. |
+| 26 | `preview.rs:49` | `pub fn preview_json` | include | Free fn; assert small JSON renders as compact JSON; assert large JSON truncated with ellipsis. |
+| 27 | `preview.rs:68` | `pub fn full` | include | Free fn; assert 1000-byte string returned in full (no truncation). |
+| 28 | `preview.rs:83` | `pub fn full_json` | include | Free fn; assert full JSON contains original data and does not end with `'…'`. |
+| 29 | `vocabulary.rs:10` | `pub const SPAN_RUNTIME_AGENT_RUN` | skip-trivial | Documented `&str` constant; value asserted by in-module unit tests. |
+| 30 | `vocabulary.rs:12` | `pub const SPAN_RUNTIME_TURN` | skip-trivial | Documented `&str` constant. |
+| 31 | `vocabulary.rs:14` | `pub const SPAN_LLM_COMPLETE` | skip-trivial | Documented `&str` constant. |
+| 32 | `vocabulary.rs:16` | `pub const SPAN_DISPATCH_TOOL` | skip-trivial | Documented `&str` constant. |
+| 33 | `vocabulary.rs:18` | `pub const SPAN_CAPABILITY_CHECK` | skip-trivial | Documented `&str` constant. |
+| 34 | `vocabulary.rs:20` | `pub const SPAN_TOOL_SESSION_OPEN` | skip-trivial | Documented `&str` constant. |
+| 35 | `vocabulary.rs:22` | `pub const SPAN_TOOL_INVOKE` | skip-trivial | Documented `&str` constant. |
+| 36 | `vocabulary.rs:24` | `pub const SPAN_TOOL_SESSION_CLOSE` | skip-trivial | Documented `&str` constant. |
+| 37 | `vocabulary.rs:29` | `pub const EV_RUNTIME_RUN_STARTED` | skip-trivial | Documented `&str` constant. |
+| 38 | `vocabulary.rs:31` | `pub const EV_RUNTIME_COMPLETED` | skip-trivial | Documented `&str` constant. |
+| 39 | `vocabulary.rs:33` | `pub const EV_RUNTIME_FAILED` | skip-trivial | Documented `&str` constant. |
+| 40 | `vocabulary.rs:35` | `pub const EV_RUNTIME_LOOP_TERMINATED` | skip-trivial | Documented `&str` constant. |
+| 41 | `vocabulary.rs:37` | `pub const EV_RUNTIME_MAX_TURNS_REACHED` | skip-trivial | Documented `&str` constant. |
+| 42 | `vocabulary.rs:39` | `pub const EV_RUNTIME_TURN_STARTED` | skip-trivial | Documented `&str` constant. |
+| 43 | `vocabulary.rs:44` | `pub const EV_LLM_REQUEST_BUILT` | skip-trivial | Documented `&str` constant. |
+| 44 | `vocabulary.rs:46` | `pub const EV_LLM_RESPONSE_RECEIVED` | skip-trivial | Documented `&str` constant. |
+| 45 | `vocabulary.rs:48` | `pub const EV_LLM_TOKEN_USAGE` | skip-trivial | Documented `&str` constant. |
+| 46 | `vocabulary.rs:50` | `pub const EV_LLM_STOP_REASON` | skip-trivial | Documented `&str` constant. |
+| 47 | `vocabulary.rs:52` | `pub const EV_LLM_TOOL_USE_EMITTED` | skip-trivial | Documented `&str` constant. |
+| 48 | `vocabulary.rs:57` | `pub const EV_DISPATCH_TOOL_RESOLVED` | skip-trivial | Documented `&str` constant. |
+| 49 | `vocabulary.rs:62` | `pub const EV_CAPABILITY_REQUIRED_LOADED` | skip-trivial | Documented `&str` constant. |
+| 50 | `vocabulary.rs:64` | `pub const EV_CAPABILITY_GRANTED_LOADED` | skip-trivial | Documented `&str` constant. |
+| 51 | `vocabulary.rs:66` | `pub const EV_CAPABILITY_SATISFIES_CHECK` | skip-trivial | Documented `&str` constant. |
+| 52 | `vocabulary.rs:68` | `pub const EV_CAPABILITY_ALLOW` | skip-trivial | Documented `&str` constant. |
+| 53 | `vocabulary.rs:70` | `pub const EV_CAPABILITY_DENY` | skip-trivial | Documented `&str` constant. |
+| 54 | `vocabulary.rs:75` | `pub const EV_TOOL_ARGS_RECEIVED` | skip-trivial | Documented `&str` constant. |
+| 55 | `vocabulary.rs:77` | `pub const EV_TOOL_RESULT_RECEIVED` | skip-trivial | Documented `&str` constant. |
+| 56 | `vocabulary.rs:79` | `pub const EV_TOOL_INVOKE_FAILED` | skip-trivial | Documented `&str` constant. |
+| 57 | `vocabulary.rs:81` | `pub const EV_TOOL_SESSION_OPEN_FAILED` | skip-trivial | Documented `&str` constant. |
+| 58 | `vocabulary.rs:83` | `pub const EV_TOOL_SESSION_CLOSE_FAILED` | skip-trivial | Documented `&str` constant. |
+| 59 | `vocabulary.rs:88` | `pub const EV_MESSAGE_ADDED` | skip-trivial | Documented `&str` constant. |
+| 60 | `capture.rs:53` | `Captor::new` | skip-feature-gated | Behind `test-fixtures` feature; not reachable from default doctests. |
+| 61 | `capture.rs:59` | `Captor::subscriber` | skip-feature-gated | Behind `test-fixtures` feature. |
+| 62 | `capture.rs:67` | `Captor::events` | skip-feature-gated | Behind `test-fixtures` feature. |
+| 63 | `install.rs:153` | `InstallOptions::cli_default` | include | Constructor fence: assert `format == Human`, `writer == Stderr`. |
+| 64 | `install.rs:177` | `InstallOptions::plugin_sdk` | include | Constructor fence: assert `format == Json`, `writer == Stderr`. |
+| 65 | `layers/workflow_run_log.rs:74` | `WorkflowRunLogLayer::new` | include | Constructor fence: `new(PathBuf)` + verify `Clone`. |
+| 66 | `layers/plugin_recording.rs:91` | `PluginRecordingLayer::new` | include | Constructor fence: `new(PathBuf)` + verify `Clone`. |
+| 67 | `layers/plugin_recording.rs:120` | `PluginRecordingLayer::flush` | include | `no_run` fence — async method requiring active tokio runtime and live write cycle; shows call shape inside `#[tokio::main]`. |
+| 68 | `otlp.rs:22` | `OtlpEndpoint::from_env` | skip-feature-gated | Behind `feature = "otlp"`. |
+
+**Total:** 68 items — 18 include (16 runnable + 2 no_run), 34 skip-trivial, 7 skip-reexport, 9 skip-feature-gated.
+
+Note: rows 60–68 cover impl-block `pub fn` methods missed by the `git grep` enumeration (git grep's ERE does not support `\s`; methods indented inside `impl` blocks require a plain `grep -nE '^\s+pub '` pass).
+
 ## Status log
 
 - 2026-05-27 — tau-workflow classifications + 14 includes (PR-A). `cargo test --doc -p tau-workflow` → 19 passed, 0 failed.
 - 2026-05-27 — tau-app classifications + 4 includes (PR-B). `cargo test --doc -p tau-app` → 10 passed, 0 failed. Introduced skip-binary-internal category: tau-app's private serve submodules expose pub items unreachable from doctests; all such items use this classification.
+- 2026-05-27 — tau-observe classifications + 18 includes (PR-C). `cargo test --doc -p tau-observe` → 18 passed, 0 failed. Closes round 4 — all 3 in-scope tier-2 crates (tau-workflow, tau-app, tau-observe) now have load-bearing doctest coverage. Note: git grep ERE does not support `\s`; 9 impl-block pub methods were enumerated separately and added as rows 60–68.
