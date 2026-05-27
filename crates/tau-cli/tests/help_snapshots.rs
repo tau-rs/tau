@@ -65,6 +65,12 @@ fn snapshot_check_help() {
 }
 
 #[test]
+fn snapshot_build_help() {
+    let s = capture_help(&["build", "--help"]);
+    insta::assert_snapshot!("build_help", s);
+}
+
+#[test]
 fn snapshot_resolve_help() {
     let s = capture_help(&["resolve", "--help"]);
     insta::assert_snapshot!("resolve_help", s);

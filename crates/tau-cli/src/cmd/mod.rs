@@ -5,6 +5,7 @@
 //! Tasks 10-14 implement each handler. At Task 4 they are stubs
 //! returning an "unimplemented" error.
 
+pub mod build;
 pub mod chat;
 pub mod check;
 pub mod error_render;
