@@ -14,12 +14,12 @@
 #[test]
 fn span_tree_emits_to_stdout_exporter() {
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_sdk::trace::TracerProvider;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::Registry;
 
     let exporter = opentelemetry_stdout::SpanExporter::default();
-    let provider = TracerProvider::builder()
+    let provider = SdkTracerProvider::builder()
         .with_simple_exporter(exporter)
         .build();
     let tracer = provider.tracer("test");

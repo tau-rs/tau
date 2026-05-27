@@ -174,9 +174,11 @@ fn build_otel_layer<S>(
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {
-    use opentelemetry_otlp::WithExportConfig as _;
-    let mut exporter = opentelemetry_otlp::new_exporter()
-        .tonic()
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
+
+    let mut exporter_builder = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
         .with_endpoint(&otlp_ep.endpoint);
     if !otlp_ep.headers.is_empty() {
         let mut metadata = tonic::metadata::MetadataMap::new();
@@ -188,19 +190,23 @@ where
                 metadata.insert(name, val);
             }
         }
-        exporter = exporter.with_metadata(metadata);
+        exporter_builder = exporter_builder.with_metadata(metadata);
     }
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(exporter)
-        .with_trace_config(opentelemetry_sdk::trace::config().with_resource(
-            opentelemetry_sdk::Resource::default().merge(&opentelemetry_sdk::Resource::new([
-                opentelemetry::KeyValue::new("service.name", "tau"),
-                opentelemetry::KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-            ])),
-        ))
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .expect("install OTLP pipeline");
+    let exporter = exporter_builder.build().expect("build OTLP span exporter");
+
+    let resource = opentelemetry_sdk::Resource::builder()
+        .with_attributes([
+            opentelemetry::KeyValue::new("service.name", "tau"),
+            opentelemetry::KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+        ])
+        .build();
+
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(resource)
+        .build();
+
+    let tracer = provider.tracer("tau");
     tracing_opentelemetry::layer().with_tracer(tracer)
 }
 
