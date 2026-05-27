@@ -33,6 +33,19 @@ use tracing_subscriber::layer::{Context, Layer};
 pub const TARGET: &str = "tau::workflow::step";
 
 /// Layer that appends each matching event to a JSONL file.
+///
+/// ```
+/// use std::path::PathBuf;
+/// use tau_observe::layers::workflow_run_log::WorkflowRunLogLayer;
+///
+/// // Construct a layer targeting a workflow run-log file.
+/// let path = PathBuf::from("/tmp/tau-workflow-run.jsonl");
+/// let layer = WorkflowRunLogLayer::new(path);
+/// // Clone is cheap (Arc-backed).
+/// let _layer2 = layer.clone();
+/// // TARGET must match the expected string to route events correctly.
+/// assert_eq!(tau_observe::layers::workflow_run_log::TARGET, "tau::workflow::step");
+/// ```
 #[derive(Clone)]
 pub struct WorkflowRunLogLayer {
     inner: Arc<Mutex<Inner>>,
@@ -48,6 +61,16 @@ impl WorkflowRunLogLayer {
     ///
     /// The file is not opened until the first matching event arrives,
     /// to keep the layer cheap when no workflow run is in progress.
+    ///
+    /// ```
+    /// use std::path::PathBuf;
+    /// use tau_observe::layers::workflow_run_log::WorkflowRunLogLayer;
+    ///
+    /// let path = PathBuf::from("/tmp/run-log.jsonl");
+    /// let layer = WorkflowRunLogLayer::new(path);
+    /// // Layer is Clone — cheap Arc-backed copy.
+    /// let _layer2 = layer.clone();
+    /// ```
     pub fn new(path: PathBuf) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner { path, file: None })),

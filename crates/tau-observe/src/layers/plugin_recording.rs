@@ -43,6 +43,19 @@ pub const TARGET: &str = "tau::plugin::frame";
 /// exit (see `PluginRecordingLayer::flush`); the layer also locks +
 /// `flush`/`sync_all`s the underlying file at that point so a
 /// subsequent synchronous read observes every recorded line.
+///
+/// ```
+/// use std::path::PathBuf;
+/// use tau_observe::layers::plugin_recording::PluginRecordingLayer;
+///
+/// // Construct a layer targeting a recording file.
+/// let path = PathBuf::from("/tmp/tau-plugin-recording.jsonl");
+/// let layer = PluginRecordingLayer::new(path.clone());
+/// // Clone is cheap (Arc-backed).
+/// let layer2 = layer.clone();
+/// // TARGET must match the expected string to route events correctly.
+/// assert_eq!(tau_observe::layers::plugin_recording::TARGET, "tau::plugin::frame");
+/// ```
 #[derive(Clone)]
 pub struct PluginRecordingLayer {
     inner: Arc<Mutex<Inner>>,
@@ -65,6 +78,16 @@ impl PluginRecordingLayer {
     ///
     /// The file is not opened until the first matching event arrives,
     /// to keep the layer cheap when no plugin recording is active.
+    ///
+    /// ```
+    /// use std::path::PathBuf;
+    /// use tau_observe::layers::plugin_recording::PluginRecordingLayer;
+    ///
+    /// let path = PathBuf::from("/tmp/recording.jsonl");
+    /// let layer = PluginRecordingLayer::new(path);
+    /// // Layer is Clone — cheap Arc-backed copy.
+    /// let _layer2 = layer.clone();
+    /// ```
     pub fn new(path: PathBuf) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner { path, file: None })),
@@ -80,6 +103,20 @@ impl PluginRecordingLayer {
     /// Called by the CLI's `cmd::run` / `cmd::chat` / `cmd::plugin
     /// describe` on exit when `--record-protocol` is set. Best-effort:
     /// IO errors are logged at WARN, never propagated.
+    ///
+    /// `no_run`: requires an active tokio runtime (`tokio::spawn` must be
+    /// reachable) and a live file write cycle to exercise meaningfully;
+    /// doctest execution would block without a runtime context.
+    /// ```no_run
+    /// # use std::path::PathBuf;
+    /// # use tau_observe::layers::plugin_recording::PluginRecordingLayer;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let layer = PluginRecordingLayer::new(PathBuf::from("/tmp/rec.jsonl"));
+    /// // Call flush before process exit to ensure durability.
+    /// layer.flush().await;
+    /// # }
+    /// ```
     pub async fn flush(&self) {
         // Wait for pending writes to drain. Each finishing task
         // notifies all waiters; we re-check after each wake. The
