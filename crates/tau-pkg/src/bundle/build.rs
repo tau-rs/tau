@@ -83,7 +83,51 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         }
     }
 
-    unimplemented!("steps 4-7 in subsequent tasks")
+    // Step 4: Gather package facts. One entry per LockedPackage.
+    // Recompute `tree_sha256` from the installed directory (the
+    // bundle's hash, not the install-time hash recorded in the
+    // lockfile — they should agree, but `tau verify` is the gate that
+    // enforces that; here we record the on-disk truth). Pull
+    // `binary_sha256` + `required_shapes` from the optional
+    // `LockedPackage.plugin` sub-struct; skill-only and data-only
+    // packages get `None` / empty.
+    let mut packages: Vec<crate::bundle::manifest::BundlePackage> = Vec::new();
+    for pkg in &_lockfile.packages {
+        let pkg_dir = packages_root
+            .join(pkg.name.as_str())
+            .join(pkg.active_version.to_string());
+        let tree_sha256 =
+            crate::tree_hash::tree_hash(&pkg_dir).map_err(|e| BuildError::TreeHashFailed {
+                name: pkg.name.as_str().to_owned(),
+                source: e,
+            })?;
+        // `LockedPlugin.binary_sha256` is a `String` (empty for v2
+        // leftovers). `BundlePackage.binary_sha256` is `Option<String>`
+        // — translate empty → None so the bundle JSON skips the field
+        // for skill-only / unverified entries.
+        let (binary_sha256, required_shapes) = match &pkg.plugin {
+            Some(p) => {
+                let bin = if p.binary_sha256.is_empty() {
+                    None
+                } else {
+                    Some(p.binary_sha256.clone())
+                };
+                (bin, p.required_shapes.clone())
+            }
+            None => (None, Vec::new()),
+        };
+        packages.push(crate::bundle::manifest::BundlePackage {
+            name: pkg.name.as_str().to_owned(),
+            version: pkg.active_version.clone(),
+            source: pkg.source.clone(),
+            tree_sha256,
+            binary_sha256,
+            required_shapes,
+        });
+    }
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+
+    unimplemented!("steps 5-7 in subsequent tasks; packages={}", packages.len())
 }
 
 #[cfg(test)]
@@ -163,6 +207,96 @@ installed_at = "2024-01-01T00:00:00Z"
                 assert_eq!(name, "ghost-plugin");
             }
             other => panic!("expected PackageNotInstalled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_progresses_past_install_verification_with_sorted_packages() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "test-project"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        // Two packages in non-alphabetical order: "zeta" then "alpha".
+        // Both directories exist (empty trees → tree_hash returns a
+        // known constant).
+        let pkg_dir_zeta = tmp.path().join(".tau/packages/zeta/0.1.0");
+        let pkg_dir_alpha = tmp.path().join(".tau/packages/alpha/0.1.0");
+        std::fs::create_dir_all(&pkg_dir_zeta).unwrap();
+        std::fs::create_dir_all(&pkg_dir_alpha).unwrap();
+
+        // Write a v6 lockfile with both packages, "zeta" first then
+        // "alpha", to prove that step 4 sorts them alphabetically.
+        let lockfile_toml = r#"
+schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "zeta"
+active_version = "0.1.0"
+source = "https://example.com/zeta.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "0000000000000000000000000000000000000002"
+installed_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "alpha"
+active_version = "0.1.0"
+source = "https://example.com/alpha.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "0000000000000000000000000000000000000001"
+installed_at = "2024-01-01T00:00:00Z"
+"#;
+        std::fs::write(tmp.path().join("tau.lock"), lockfile_toml).unwrap();
+
+        // Build still returns `unimplemented!` at step 5 — that's a
+        // panic, not an Err. Catch it and assert on its payload so
+        // the test is meaningful before steps 5-7 land.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build(opts(tmp.path()))
+        }));
+        match result {
+            Ok(Ok(_)) => panic!("build should not have succeeded yet (steps 5-7 unimplemented)"),
+            Ok(Err(err)) => {
+                // If build returned an Err it means step 4 (or
+                // earlier) failed — that's a regression.
+                panic!(
+                    "expected build to progress past step 4 to the \
+                     unimplemented panic, got Err({err:?})"
+                );
+            }
+            Err(payload) => {
+                // The unimplemented panic message embeds the gathered
+                // package count; assert step 4 actually built a
+                // 2-element vector.
+                let msg = panic_message(&payload);
+                assert!(
+                    msg.contains("packages=2"),
+                    "expected panic message to record packages=2, got {msg:?}",
+                );
+            }
+        }
+    }
+
+    /// Extract a panic payload's string message, handling both
+    /// `&'static str` (most macros) and `String` (formatted panics).
+    fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = payload.downcast_ref::<&'static str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_string()
         }
     }
 }
