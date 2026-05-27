@@ -8,6 +8,41 @@ use serde::Deserialize;
 use crate::error::WorkflowError;
 
 /// A parsed-and-validated workflow definition.
+///
+/// # Examples
+///
+/// Parse a minimal workflow from TOML source and inspect its structure:
+///
+/// ```
+/// use tau_workflow::Workflow;
+/// use tau_workflow::StepKind;
+/// use std::path::Path;
+///
+/// let src = r#"
+/// [workflow]
+/// description = "summarise research"
+///
+/// [[steps]]
+/// id = "gather"
+/// kind = "agent.run"
+/// agent = "researcher"
+/// input = "${input}"
+///
+/// [[steps]]
+/// id = "summarise"
+/// kind = "agent.run"
+/// agent = "summariser"
+/// input = "${steps.gather.output}"
+/// "#;
+///
+/// let wf = Workflow::from_str(src, Path::new("workflows/research.toml"))
+///     .expect("valid workflow TOML should parse");
+///
+/// assert_eq!(wf.name, "research");
+/// assert_eq!(wf.description.as_deref(), Some("summarise research"));
+/// assert_eq!(wf.steps.len(), 2);
+/// assert_eq!(wf.steps[0].id, "gather");
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Workflow {
     /// Workflow name derived from the file stem (e.g. `research-pipeline`
@@ -34,6 +69,34 @@ pub struct Step {
 }
 
 /// What a step does.
+///
+/// # Examples
+///
+/// Pattern-match on a parsed `StepKind` to inspect its fields:
+///
+/// ```
+/// use tau_workflow::{StepKind, Workflow};
+/// use std::path::Path;
+///
+/// let src = r#"
+/// [[steps]]
+/// id = "run-agent"
+/// kind = "agent.run"
+/// agent = "researcher"
+/// input = "${input}"
+/// "#;
+///
+/// let wf = Workflow::from_str(src, Path::new("workflows/example.toml"))
+///     .expect("valid TOML should parse");
+///
+/// match &wf.steps[0].kind {
+///     StepKind::AgentRun { agent, input } => {
+///         assert_eq!(agent, "researcher");
+///         assert_eq!(input, "${input}");
+///     }
+///     other => panic!("expected AgentRun, got {other:?}"),
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepKind {
     /// Run an agent declared in tau.toml.
@@ -80,6 +143,28 @@ impl Workflow {
     /// Parse a workflow from a TOML file. Validates step-id uniqueness,
     /// kind-specific required fields, and `default-agent` requirement
     /// when `tool.call` steps are present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tempfile::tempdir;
+    /// # use std::fs;
+    /// use tau_workflow::Workflow;
+    ///
+    /// let dir = tempdir().expect("tempdir should be created");
+    /// let path = dir.path().join("my-pipeline.toml");
+    /// fs::write(&path, r#"
+    /// [[steps]]
+    /// id = "step1"
+    /// kind = "agent.run"
+    /// agent = "helper"
+    /// input = "${input}"
+    /// "#).expect("write should succeed");
+    ///
+    /// let wf = Workflow::from_path(&path).expect("file should parse");
+    /// assert_eq!(wf.name, "my-pipeline");
+    /// assert_eq!(wf.steps.len(), 1);
+    /// ```
     pub fn from_path(path: &Path) -> Result<Self, WorkflowError> {
         let bytes = std::fs::read_to_string(path).map_err(|e| WorkflowError::ParseFailed {
             path: path.to_path_buf(),
@@ -90,6 +175,48 @@ impl Workflow {
 
     /// Parse from a string + a synthetic source path (for tests + in-memory
     /// callers).
+    ///
+    /// # Examples
+    ///
+    /// Parse a valid two-step workflow:
+    ///
+    /// ```
+    /// use tau_workflow::Workflow;
+    /// use std::path::Path;
+    ///
+    /// let src = r#"
+    /// [workflow]
+    /// description = "two-step pipeline"
+    ///
+    /// [[steps]]
+    /// id = "a"
+    /// kind = "agent.run"
+    /// agent = "researcher"
+    /// input = "${input}"
+    ///
+    /// [[steps]]
+    /// id = "b"
+    /// kind = "agent.run"
+    /// agent = "summariser"
+    /// input = "${steps.a.output}"
+    /// "#;
+    ///
+    /// let wf = Workflow::from_str(src, Path::new("workflows/two-step.toml"))
+    ///     .expect("valid TOML should parse");
+    /// assert_eq!(wf.name, "two-step");
+    /// assert_eq!(wf.steps.len(), 2);
+    /// ```
+    ///
+    /// Invalid TOML returns a `ParseFailed` error:
+    ///
+    /// ```
+    /// use tau_workflow::{Workflow, WorkflowError};
+    /// use std::path::Path;
+    ///
+    /// let err = Workflow::from_str("[[[[invalid", Path::new("workflows/bad.toml"))
+    ///     .expect_err("invalid TOML should fail");
+    /// assert!(matches!(err, WorkflowError::ParseFailed { .. }));
+    /// ```
     pub fn from_str(toml_src: &str, source_path: &Path) -> Result<Self, WorkflowError> {
         let raw: RawWorkflow =
             toml::from_str(toml_src).map_err(|e| WorkflowError::ParseFailed {
