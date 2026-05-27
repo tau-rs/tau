@@ -9,11 +9,15 @@
 //! - Canonical TOML serialization (canonical module, Task 2).
 //! - Self-hash compute + verify (hash module, Task 3).
 
+pub mod build;
+pub mod build_error;
 pub mod canonical;
 pub mod error;
 pub mod hash;
 pub mod manifest;
 
+pub use build::{build, BuildOptions, BundleArtifact};
+pub use build_error::BuildError;
 pub use canonical::to_canonical_toml;
 pub use error::{BundleIntegrityError, BundleIoError, BundleParseError};
 pub use hash::{compute_self_hash, verify_self_hash};
