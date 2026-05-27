@@ -38,6 +38,68 @@ pub struct BundleArtifact {
 /// Strict mode: returns [`BuildError::MissingLockfile`] or
 /// [`BuildError::PackageNotInstalled`] if the project isn't fully
 /// installed. The function does NOT attempt to install anything.
-pub fn build(_opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
-    unimplemented!("filled in by subsequent tasks")
+pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
+    // Step 1: Load tau.toml.
+    let tau_toml_path = opts.project_root.join("tau.toml");
+    let tau_toml_bytes = std::fs::read(&tau_toml_path)
+        .map_err(|e| BuildError::ProjectConfig(format!("read {tau_toml_path:?}: {e}")))?;
+    let _project_toml: toml::Value = toml::from_str(
+        std::str::from_utf8(&tau_toml_bytes)
+            .map_err(|e| BuildError::ProjectConfig(format!("tau.toml is not utf-8: {e}")))?,
+    )
+    .map_err(|e| BuildError::ProjectConfig(format!("parse {tau_toml_path:?}: {e}")))?;
+
+    // Step 2: Load tau.lock. Distinguish missing (run `tau install`)
+    // from present-but-invalid (config error).
+    let lockfile_path = opts.project_root.join("tau.lock");
+    if !lockfile_path.exists() {
+        return Err(BuildError::MissingLockfile);
+    }
+    let _lockfile = crate::lockfile::LockFile::load(&lockfile_path)
+        .map_err(|e| BuildError::LockfileLoad(e.to_string()))?;
+
+    unimplemented!("steps 3-7 in subsequent tasks")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tau_ports::target::TargetTriple;
+    use tempfile::tempdir;
+
+    fn opts(root: &std::path::Path) -> BuildOptions {
+        BuildOptions {
+            project_root: root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+        }
+    }
+
+    #[test]
+    fn build_fails_on_missing_project_toml() {
+        let tmp = tempdir().unwrap();
+        let err = build(opts(tmp.path())).unwrap_err();
+        assert!(
+            matches!(err, BuildError::ProjectConfig(_)),
+            "expected ProjectConfig, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn build_fails_on_missing_lockfile() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "test-project"
+version = "0.1.0"
+"#,
+        ).unwrap();
+        let err = build(opts(tmp.path())).unwrap_err();
+        assert!(
+            matches!(err, BuildError::MissingLockfile),
+            "expected MissingLockfile, got {err:?}",
+        );
+    }
 }
