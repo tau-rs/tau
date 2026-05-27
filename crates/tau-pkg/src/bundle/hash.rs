@@ -6,11 +6,23 @@ use crate::bundle::canonical::to_canonical_toml;
 use crate::bundle::error::BundleIntegrityError;
 use crate::bundle::manifest::BundleManifest;
 
+/// Canonical sentinel timestamp (RFC 3339 formatted UNIX_EPOCH) used by
+/// `compute_self_hash` to zero the `bundle.created_at` field before
+/// canonicalizing. This sentinel ensures reproducibility across builds
+/// of identical source.
+const ZEROED_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
+
 /// Compute the canonical SHA-256 of a manifest with the `bundle.sha256`
-/// field forced to the empty string. Does NOT mutate the input.
+/// and `bundle.created_at` fields zeroed. Does NOT mutate the input.
+///
+/// `created_at` is excluded from the hash domain so two builds of identical
+/// source produce identical hashes (per spec §2 stable-bundles decision).
+/// The field is preserved in the final on-disk manifest — only the
+/// *hash domain* excludes it.
 pub fn compute_self_hash(manifest: &BundleManifest) -> String {
     let mut clone = manifest.clone();
     clone.bundle.sha256 = String::new();
+    clone.bundle.created_at = ZEROED_TIMESTAMP.into();
     let canonical = to_canonical_toml(&clone);
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_bytes());
@@ -117,5 +129,17 @@ mod tests {
             Err(BundleIntegrityError::HashFieldEmpty) => {}
             other => panic!("expected HashFieldEmpty, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn compute_self_hash_zeros_created_at() {
+        let mut a = sample_manifest();
+        let mut b = sample_manifest();
+        // Same content, different `created_at` — must hash identically.
+        a.bundle.created_at = "2026-01-01T00:00:00Z".into();
+        b.bundle.created_at = "2026-12-31T23:59:59Z".into();
+        let ha = compute_self_hash(&a);
+        let hb = compute_self_hash(&b);
+        assert_eq!(ha, hb, "hashes must be independent of created_at");
     }
 }
