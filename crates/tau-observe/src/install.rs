@@ -9,6 +9,16 @@ use thiserror::Error;
 use tracing_subscriber::filter::EnvFilter;
 
 /// Output format for the fmt layer.
+///
+/// ```
+/// use tau_observe::install::Format;
+///
+/// assert_ne!(Format::Human, Format::Json);
+/// // Format is Copy, so it can be stored and passed cheaply.
+/// let fmt: Format = Format::Json;
+/// let fmt2 = fmt; // copy
+/// assert_eq!(fmt, fmt2);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     /// Human-readable (timestamp + level + target + fields + message).
@@ -18,6 +28,16 @@ pub enum Format {
 }
 
 /// Where the subscriber writes serialized events.
+///
+/// ```
+/// use tau_observe::install::Writer;
+///
+/// assert_ne!(Writer::Stderr, Writer::Stdout);
+/// // Writer is Copy, so it can be stored and passed cheaply.
+/// let w: Writer = Writer::Stderr;
+/// let w2 = w; // copy
+/// assert_eq!(w, w2);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Writer {
     /// Standard error.
@@ -27,6 +47,16 @@ pub enum Writer {
 }
 
 /// File rotation policy when writing to a file sink.
+///
+/// ```
+/// use tau_observe::install::Rotation;
+///
+/// // `Never` is the default.
+/// assert_eq!(Rotation::default(), Rotation::Never);
+/// // All three variants are distinct.
+/// assert_ne!(Rotation::Never, Rotation::Daily);
+/// assert_ne!(Rotation::Daily, Rotation::Hourly);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Rotation {
     /// No rotation — append forever to a single file.
@@ -39,6 +69,22 @@ pub enum Rotation {
 }
 
 /// All knobs the canonical installer accepts.
+///
+/// Construct via [`InstallOptions::cli_default`] or
+/// [`InstallOptions::plugin_sdk`], then override individual fields as
+/// needed.
+///
+/// ```
+/// use tau_observe::install::{InstallOptions, Format, Writer, Rotation};
+///
+/// let opts = InstallOptions::cli_default();
+/// assert_eq!(opts.format, Format::Human);
+/// assert_eq!(opts.writer, Writer::Stderr);
+/// assert!(!opts.non_blocking);
+/// assert!(opts.file_path.is_none());
+/// assert_eq!(opts.rotation, Rotation::Never);
+/// assert!(opts.extra_layers.is_empty());
+/// ```
 pub struct InstallOptions {
     /// Filter to apply. Build via `tau_observe::filter::env_or_directive`.
     pub filter: EnvFilter,
@@ -96,6 +142,14 @@ impl std::fmt::Debug for InstallOptions {
 impl InstallOptions {
     /// Default options for the `tau` CLI: human format on stderr,
     /// `tau=info` fallback filter.
+    ///
+    /// ```
+    /// use tau_observe::install::{InstallOptions, Format, Writer};
+    ///
+    /// let opts = InstallOptions::cli_default();
+    /// assert_eq!(opts.format, Format::Human);
+    /// assert_eq!(opts.writer, Writer::Stderr);
+    /// ```
     pub fn cli_default() -> Self {
         Self {
             filter: crate::filter::env_or_directive("tau=info"),
@@ -112,6 +166,14 @@ impl InstallOptions {
 
     /// Default options for plugins authored against `tau-plugin-sdk`:
     /// JSON to stderr (read by the host), `info` fallback filter.
+    ///
+    /// ```
+    /// use tau_observe::install::{InstallOptions, Format, Writer};
+    ///
+    /// let opts = InstallOptions::plugin_sdk();
+    /// assert_eq!(opts.format, Format::Json);
+    /// assert_eq!(opts.writer, Writer::Stderr);
+    /// ```
     pub fn plugin_sdk() -> Self {
         Self {
             filter: crate::filter::env_or_directive("info"),
@@ -128,6 +190,14 @@ impl InstallOptions {
 }
 
 /// Errors from [`install`].
+///
+/// ```
+/// use tau_observe::install::InstallError;
+///
+/// // The Display message matches the `thiserror` annotation.
+/// let err = InstallError::AlreadyInstalled;
+/// assert!(err.to_string().contains("already installed"));
+/// ```
 #[derive(Debug, Error)]
 pub enum InstallError {
     /// A subscriber is already installed in this process and the global
@@ -213,6 +283,17 @@ where
 /// Install the global tracing subscriber. Idempotent: subsequent calls
 /// after a successful install are no-ops that return a fresh guard
 /// without re-installing.
+///
+/// `no_run`: installs a process-global tracing subscriber. Running this
+/// in a parallel doctest context would race with other tests that also
+/// install a subscriber; the call shape is demonstrated without execution.
+/// ```no_run
+/// use tau_observe::install::{install, InstallOptions};
+///
+/// // Install once at process start; the guard must stay alive.
+/// let _guard = install(InstallOptions::cli_default())
+///     .expect("tracing subscriber install failed");
+/// ```
 pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
     let cell = INSTALL_ONCE.get_or_init(|| Mutex::new(false));
     let mut installed = cell.lock().unwrap_or_else(|p| p.into_inner());

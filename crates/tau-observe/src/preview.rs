@@ -19,6 +19,19 @@ const PREVIEW_LIMIT_BYTES: usize = 256;
 ///
 /// Use at `DEBUG` (and below) call sites for argument / payload /
 /// message content.
+///
+/// ```
+/// use tau_observe::preview::preview;
+///
+/// // Short strings pass through unchanged.
+/// assert_eq!(format!("{}", preview("hello")), "hello");
+///
+/// // Strings longer than 256 bytes are truncated with an ellipsis.
+/// let long = "x".repeat(300);
+/// let out = format!("{}", preview(&long));
+/// assert!(out.ends_with('…'), "expected ellipsis suffix");
+/// assert!(out.len() <= 256 + '…'.len_utf8());
+/// ```
 pub fn preview(value: &str) -> impl Display + '_ {
     Preview(value)
 }
@@ -46,6 +59,19 @@ impl Display for Preview<'_> {
 /// truncation occurred.
 ///
 /// Use at `DEBUG` (and below) call sites for JSON-shaped payloads.
+///
+/// ```
+/// use tau_observe::preview::preview_json;
+///
+/// // Small values render as compact JSON without truncation.
+/// let v = serde_json::json!({"name": "ada"});
+/// assert_eq!(format!("{}", preview_json(&v)), r#"{"name":"ada"}"#);
+///
+/// // Large values are truncated with an ellipsis.
+/// let big = serde_json::json!({"data": "y".repeat(500)});
+/// let out = format!("{}", preview_json(&big));
+/// assert!(out.ends_with('…'), "expected ellipsis for large payload");
+/// ```
 pub fn preview_json(value: &serde_json::Value) -> impl Display + '_ {
     PreviewJson(value)
 }
@@ -65,6 +91,14 @@ impl Display for PreviewJson<'_> {
 /// higher level, the macros emit the event unconditionally (subject to
 /// the filter) and the full content gets persisted. Use [`preview`]
 /// instead for DEBUG and above.
+///
+/// ```
+/// use tau_observe::preview::full;
+///
+/// // Returns the entire string regardless of length.
+/// let s = "x".repeat(1000);
+/// assert_eq!(format!("{}", full(&s)), s);
+/// ```
 pub fn full(value: &str) -> impl Display + '_ {
     Full(value)
 }
@@ -80,6 +114,16 @@ impl Display for Full<'_> {
 /// Render a `serde_json::Value` as compact JSON in full.
 ///
 /// Same rule as [`full`]: TRACE-only call sites.
+///
+/// ```
+/// use tau_observe::preview::full_json;
+///
+/// // Returns the compact JSON representation in full, without truncation.
+/// let v = serde_json::json!({"data": "x".repeat(1000)});
+/// let out = format!("{}", full_json(&v));
+/// assert!(out.contains(&"x".repeat(1000)));
+/// assert!(!out.ends_with('…'), "full_json must not truncate");
+/// ```
 pub fn full_json(value: &serde_json::Value) -> impl Display + '_ {
     FullJson(value)
 }
