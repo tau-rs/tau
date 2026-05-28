@@ -250,10 +250,24 @@ pub fn setup_project() -> TempDir {
 // ---- bare-repo `file://` git fixtures (install / list) ----------------------
 
 /// Run `git` with `args` in `cwd`, panicking with stderr/stdout on failure.
+///
+/// Strips inherited `GIT_*` discovery variables. Git sets `GIT_DIR` (and
+/// friends) for the processes it spawns to run hooks; when the test suite
+/// runs under such a hook (e.g. `git commit` triggering a pre-commit
+/// `cargo nextest run`), those vars override `current_dir` and make every
+/// fixture `git` invocation operate on the HOST repo instead of `cwd` —
+/// `symbolic-ref HEAD` and `commit` below then rewrite the developer's
+/// real branch. Clearing the vars keeps the fixture hermetic regardless
+/// of how the test binary was launched.
 pub fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
-        .args(args)
-        .current_dir(cwd)
+    let mut cmd = StdCommand::new("git");
+    cmd.args(args).current_dir(cwd);
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GIT_") {
+            cmd.env_remove(key);
+        }
+    }
+    let output = cmd
         .output()
         .unwrap_or_else(|e| panic!("git {args:?} spawn failure: {e}"));
     assert!(
