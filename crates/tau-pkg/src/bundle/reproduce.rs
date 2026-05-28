@@ -107,8 +107,43 @@ pub enum ManifestDiff {
 }
 
 /// Rebuild from `opts.project_root` and compare to the shipped bundle.
-pub fn verify_reproducible(_opts: ReproOptions) -> Result<ReproReport, ReproError> {
-    unimplemented!("Task 3")
+pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError> {
+    // 1. Read + parse the shipped bundle.
+    let shipped_str = std::fs::read_to_string(&opts.bundle_path)
+        .map_err(|e| ReproError::BundleRead { path: opts.bundle_path.clone(), source: e })?;
+    let shipped = BundleManifest::parse_str(&shipped_str)
+        .map_err(|e| ReproError::BundleParse { source: e })?;
+
+    // 2. The shipped bundle must be valid before we compare to it.
+    crate::bundle::hash::verify_self_hash(&shipped)
+        .map_err(|e| ReproError::ShippedSelfHashInvalid { detail: e.to_string() })?;
+
+    // 3. Rebuild from the local tree using the shipped target, to a temp path.
+    let tmp = tempfile::TempDir::new().map_err(|e| ReproError::TempDir { source: e })?;
+    let rebuilt_path = tmp.path().join("rebuilt.tau");
+    let artifact = crate::bundle::build(crate::bundle::BuildOptions {
+        project_root: opts.project_root.clone(),
+        target: shipped.bundle.target,
+        output_path: Some(rebuilt_path.clone()),
+    })
+    .map_err(|e| ReproError::Rebuild { source: e })?;
+
+    // 4. Parse the rebuilt bundle.
+    let rebuilt_str = std::fs::read_to_string(&artifact.path)
+        .map_err(|e| ReproError::RebuiltRead { path: artifact.path.clone(), source: e })?;
+    let rebuilt = BundleManifest::parse_str(&rebuilt_str)
+        .map_err(|e| ReproError::RebuiltParse { source: e })?;
+
+    // 5. Verdict + diff.
+    let reproducible = shipped.bundle.sha256 == rebuilt.bundle.sha256;
+    let diffs = if reproducible { Vec::new() } else { diff_manifests(&shipped, &rebuilt) };
+
+    Ok(ReproReport {
+        reproducible,
+        shipped_sha256: shipped.bundle.sha256.clone(),
+        rebuilt_sha256: rebuilt.bundle.sha256.clone(),
+        diffs,
+    })
 }
 
 /// Field-level diff between two manifests (Task 2).
@@ -411,5 +446,95 @@ system = "hi"
             diffs.iter().any(|d| matches!(d, ManifestDiff::AgentMissing { id, side } if id == "solo" && *side == Side::ShippedOnly)),
             "got {diffs:?}",
         );
+    }
+
+    fn build_minimal_bundle(root: &std::path::Path) -> std::path::PathBuf {
+        std::fs::write(
+            root.join("tau.toml"),
+            r#"
+[project]
+name = "repro-fixture"
+version = "0.1.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "you are solo"
+"#,
+        ).unwrap();
+        std::fs::write(
+            root.join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+        ).unwrap();
+        let artifact = build(BuildOptions {
+            project_root: root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+        }).unwrap();
+        artifact.path
+    }
+
+    fn ropts(bundle: std::path::PathBuf, root: &std::path::Path) -> ReproOptions {
+        ReproOptions { bundle_path: bundle, project_root: root.to_path_buf() }
+    }
+
+    #[test]
+    fn reproducible_when_tree_unchanged() {
+        let tmp = tempdir().unwrap();
+        let bundle = build_minimal_bundle(tmp.path());
+        let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro check ran");
+        assert!(report.reproducible, "clean rebuild must reproduce; diffs={:?}", report.diffs);
+        assert_eq!(report.shipped_sha256, report.rebuilt_sha256);
+        assert!(report.diffs.is_empty());
+    }
+
+    #[test]
+    fn not_reproducible_when_tau_toml_changes() {
+        let tmp = tempdir().unwrap();
+        let bundle = build_minimal_bundle(tmp.path());
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "repro-fixture"
+version = "0.2.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "you are solo"
+"#,
+        ).unwrap();
+        let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro check ran");
+        assert!(!report.reproducible);
+        assert!(
+            report.diffs.iter().any(|d| matches!(d, ManifestDiff::ProjectField { field, .. } if field == "tau_toml_sha256")),
+            "expected tau_toml_sha256 diff; got {:?}", report.diffs,
+        );
+    }
+
+    #[test]
+    fn repro_error_when_bundle_missing() {
+        let tmp = tempdir().unwrap();
+        let err = verify_reproducible(ropts(tmp.path().join("nope.tau"), tmp.path())).unwrap_err();
+        assert!(matches!(err, ReproError::BundleRead { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn repro_error_when_shipped_bundle_corrupt() {
+        let tmp = tempdir().unwrap();
+        let bundle = build_minimal_bundle(tmp.path());
+        let body = std::fs::read_to_string(&bundle).unwrap();
+        let tampered = body.replacen("repro-fixture", "tampered-name", 1);
+        assert_ne!(body, tampered);
+        std::fs::write(&bundle, tampered).unwrap();
+        let err = verify_reproducible(ropts(bundle, tmp.path())).unwrap_err();
+        assert!(matches!(err, ReproError::ShippedSelfHashInvalid { .. }), "got {err:?}");
     }
 }
