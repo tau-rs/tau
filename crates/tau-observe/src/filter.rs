@@ -16,10 +16,13 @@ use tracing_subscriber::filter::EnvFilter;
 /// ```
 /// use tau_observe::filter::env_or_directive;
 ///
-/// // When RUST_LOG is unset, the fallback directive is used.
-/// std::env::remove_var("RUST_LOG");
+/// // Resolves to `RUST_LOG` when set, otherwise to the fallback
+/// // directive. Either way the result is a usable, non-empty filter.
+/// // (The exact RUST_LOG-vs-fallback branch is covered hermetically by
+/// // the unit tests, which guard the shared env var with a mutex; a
+/// // doctest must not mutate process-global `RUST_LOG`.)
 /// let filter = env_or_directive("tau=info");
-/// assert!(filter.to_string().contains("tau=info"));
+/// assert!(!filter.to_string().is_empty());
 /// ```
 pub fn env_or_directive(fallback: &str) -> EnvFilter {
     if let Ok(env) = std::env::var("RUST_LOG") {
