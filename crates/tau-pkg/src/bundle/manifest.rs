@@ -42,6 +42,14 @@ pub struct BundleMeta {
     pub tau_version: String,
     /// Deployment target.
     pub target: TargetTriple,
+    /// Agent ids this bundle was sliced to (sorted), or absent for a
+    /// full build. Drives `tau verify --bundle` reproduction: a sliced
+    /// bundle records its `--agent` set here so the rebuild replays the
+    /// same slice. Covered by the self-hash (deterministic build input);
+    /// omitted from canonical TOML when `None`, so existing full bundles
+    /// serialize identically and their self-hashes are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_agents: Option<Vec<String>>,
 }
 
 /// Project identity.
@@ -329,6 +337,7 @@ pub(crate) mod tests_helpers {
                 created_at: "2026-05-19T13:42:11Z".into(),
                 tau_version: "0.1.0".into(),
                 target: "linux-native-strict".parse().unwrap(),
+                selected_agents: None,
             },
             project: ProjectInfo {
                 name: "support-bot".into(),
@@ -429,6 +438,31 @@ tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         assert_eq!(
             parsed.agents[0].effective_capabilities,
             BundleEffectiveCapabilities::default()
+        );
+    }
+
+    #[test]
+    fn selected_agents_omitted_when_none() {
+        let mut m = sample_manifest();
+        m.bundle.selected_agents = None;
+        let toml_str = toml::to_string(&m).expect("serialize");
+        assert!(
+            !toml_str.contains("selected_agents"),
+            "selected_agents should be omitted when None: {toml_str}"
+        );
+        let parsed = BundleManifest::parse_str(&toml_str).expect("parse");
+        assert_eq!(parsed.bundle.selected_agents, None);
+    }
+
+    #[test]
+    fn selected_agents_round_trips_when_some() {
+        let mut m = sample_manifest();
+        m.bundle.selected_agents = Some(vec!["alpha".to_string(), "beta".to_string()]);
+        let toml_str = toml::to_string(&m).expect("serialize");
+        let parsed = BundleManifest::parse_str(&toml_str).expect("parse");
+        assert_eq!(
+            parsed.bundle.selected_agents,
+            Some(vec!["alpha".to_string(), "beta".to_string()])
         );
     }
 

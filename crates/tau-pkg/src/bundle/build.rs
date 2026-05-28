@@ -235,6 +235,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
             created_at: humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string(),
             tau_version: env!("CARGO_PKG_VERSION").to_string(),
             target: opts.target,
+            selected_agents: None,
         },
         project: ProjectInfo {
             name: project_config.project_name.clone(),
