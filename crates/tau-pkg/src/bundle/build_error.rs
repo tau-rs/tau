@@ -65,6 +65,15 @@ pub enum BuildError {
     #[error("manifest assembly failed: {0}")]
     ManifestInvalid(String),
 
+    /// `--agent <id>` named an agent not present in the project config.
+    #[error("unknown agent `{id}`; available agents: {}", available.join(", "))]
+    UnknownAgent {
+        /// The requested agent id that does not exist.
+        id: String,
+        /// All agent ids declared in the project (sorted), for the hint.
+        available: Vec<String>,
+    },
+
     /// Writing the bundle artifact to disk failed.
     #[error("bundle write failed at {path:?}: {source}")]
     WriteFailed {
