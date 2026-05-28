@@ -15,6 +15,8 @@ pub mod canonical;
 pub mod error;
 pub mod hash;
 pub mod manifest;
+pub mod verify;
+pub mod verify_error;
 
 pub use build::{build, BuildOptions, BundleArtifact};
 pub use build_error::BuildError;
@@ -25,3 +27,5 @@ pub use manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
     BundlePackage, ProjectInfo,
 };
+pub use verify::{verify_bundle, ResolvedAgent, VerifyOptions, VerifyReport};
+pub use verify_error::VerifyError;

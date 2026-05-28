@@ -488,6 +488,12 @@ pub struct RunArgs {
     /// `RunStatus::Aborted`. Unset = no limit.
     #[arg(long, value_name = "N")]
     pub max_total_agents: Option<u32>,
+    /// Run from a pre-built bundle, verifying the cwd matches it first.
+    /// The bundle must target this host triple and the project must be
+    /// installed at the exact tree hashes recorded in the bundle, or
+    /// the run is refused (Phase 2 §C.3).
+    #[arg(long, value_name = "PATH")]
+    pub bundle: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `tau chat`.

@@ -35,6 +35,9 @@ Options:
       --max-total-agents <N>
           Maximum number of agents that may be spawned across the run (root + descendants). When exceeded, the run aborts with `RunStatus::Aborted`. Unset = no limit
 
+      --bundle <PATH>
+          Run from a pre-built bundle, verifying the cwd matches it first. The bundle must target this host triple and the project must be installed at the exact tree hashes recorded in the bundle, or the run is refused (Phase 2 §C.3)
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

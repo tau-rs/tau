@@ -63,6 +63,21 @@ pub async fn run(
     output: &mut Output,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
+
+    // §C.3: when --bundle is set, verify the cwd matches the sealed
+    // bundle before doing anything else. On success the cwd's tau.toml
+    // is provably the bundle's source, so the rest of `run` proceeds
+    // unchanged.
+    if let Some(bundle_path) = &args.bundle {
+        if let Err(e) = tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
+            bundle_path: bundle_path.clone(),
+            project_root: cwd.clone(),
+        }) {
+            eprintln!("error: {e}");
+            std::process::exit(bundle_verify_exit_code(&e));
+        }
+    }
+
     let project_path = cwd.join("tau.toml");
     let project = ProjectConfig::from_path(&project_path)
         .with_context(|| format!("project tau.toml required at {project_path:?}"))?;
@@ -473,6 +488,27 @@ async fn run_streaming_path(
             Err(AgentFailed.into())
         }
         _ => Err(anyhow::anyhow!("unknown RunOutcome variant")),
+    }
+}
+
+/// Maps a [`tau_pkg::bundle::VerifyError`] to its CLI exit code per
+/// spec §C.3: bad-input/config/parse → 2, integrity/install-state → 3,
+/// internal/IO → 70.
+fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
+    use tau_pkg::bundle::VerifyError as V;
+    match e {
+        V::BundleRead { .. }
+        | V::BundleParse { .. }
+        | V::ProjectTomlRead { .. }
+        | V::UnsupportedSchemaVersion { .. } => 2,
+        V::SelfHashMismatch { .. }
+        | V::TargetMismatch { .. }
+        | V::TauTomlDrift { .. }
+        | V::PackageMissing { .. }
+        | V::PackageDrift { .. }
+        | V::AgentPromptDrift { .. }
+        | V::AgentSetMismatch { .. } => 3,
+        V::PackageTreeHash { .. } | V::AgentPromptResolve { .. } => 70,
     }
 }
 
