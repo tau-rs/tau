@@ -28,6 +28,11 @@ pub struct BundleManifest {
 }
 
 /// Bundle-level metadata.
+///
+/// NOTE: `to_canonical_toml` (bundle/canonical.rs) hand-rolls the TOML
+/// emission and bypasses serde. Any field added here that should be
+/// covered by the self-hash MUST also be emitted there, or it will be
+/// silently excluded from the hash. See `canonical_emits_all_bundle_meta_fields`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleMeta {
     /// Self-hash. SHA-256 of the canonical TOML serialization with

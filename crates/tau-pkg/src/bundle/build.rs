@@ -235,7 +235,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
                 if !project_config.agents.contains_key(id.as_str()) {
                     return Err(BuildError::UnknownAgent {
                         id: id.as_str().to_owned(),
-                        available: available.clone(),
+                        available,
                     });
                 }
             }
@@ -268,7 +268,9 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
             }
             packages.retain(|p| keep.contains(&p.name));
 
-            // Record the requested ids (sorted) as the slice marker.
+            // Record the requested ids as the slice marker, sorted +
+            // deduped so a caller passing `--agent a --agent a` yields a
+            // stable, canonical marker (and thus a stable self-hash).
             let mut sel: Vec<String> = wanted.iter().map(|a| a.as_str().to_owned()).collect();
             sel.sort();
             sel.dedup();
