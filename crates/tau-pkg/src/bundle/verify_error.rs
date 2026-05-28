@@ -76,7 +76,9 @@ pub enum VerifyError {
     },
 
     /// A locked package isn't installed on disk.
-    #[error("locked package `{name}` missing from {expected_path:?}; run `tau install` in this project")]
+    #[error(
+        "locked package `{name}` missing from {expected_path:?}; run `tau install` in this project"
+    )]
     PackageMissing {
         /// Package name.
         name: String,

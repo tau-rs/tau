@@ -149,5 +149,8 @@ fn e2e_verify_catches_post_build_package_mutation() {
         project_root: tmp.path().to_path_buf(),
     })
     .unwrap_err();
-    assert!(matches!(err, VerifyError::PackageDrift { .. }), "got {err:?}");
+    assert!(
+        matches!(err, VerifyError::PackageDrift { .. }),
+        "got {err:?}"
+    );
 }

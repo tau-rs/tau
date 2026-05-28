@@ -200,7 +200,10 @@ fn run_bundle_self_hash_stale_exits_three() {
     // so verify step 3 (self-hash) rejects it → exit 3.
     let body = std::fs::read_to_string(&bundle).unwrap();
     let tampered = body.replacen("selfhash", "selfhasX", 1);
-    assert_ne!(body, tampered, "expected the bundle body to contain the project name");
+    assert_ne!(
+        body, tampered,
+        "expected the bundle body to contain the project name"
+    );
     std::fs::write(&bundle, tampered).unwrap();
 
     Command::cargo_bin("tau")

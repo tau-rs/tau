@@ -1,6 +1,6 @@
 # `tau run --bundle` — Phase 2 §C.3 design
 
-**Status:** Draft
+**Status:** Accepted
 **Date:** 2026-05-27
 **Authors:** titouanlebocq
 **Depends on:** ADR-0035 (bundle format §C.1, merged 2026-05-19), §C.2 (`tau build` MVP producer, PR #242)

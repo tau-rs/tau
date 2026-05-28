@@ -51,8 +51,8 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
             source: e,
         })?;
     // Step 2: parse.
-    let manifest =
-        BundleManifest::parse_str(&bundle_str).map_err(|e| VerifyError::BundleParse { source: e })?;
+    let manifest = BundleManifest::parse_str(&bundle_str)
+        .map_err(|e| VerifyError::BundleParse { source: e })?;
     // Step 3: self-hash.
     verify_self_hash_step(&manifest)?;
     // Step 4: schema version.
@@ -103,8 +103,8 @@ fn verify_agent_prompts(
         path: path.clone(),
         source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
     };
-    let tau_toml_str = std::str::from_utf8(&bytes)
-        .map_err(|e| to_io(format!("tau.toml is not utf-8: {e}")))?;
+    let tau_toml_str =
+        std::str::from_utf8(&bytes).map_err(|e| to_io(format!("tau.toml is not utf-8: {e}")))?;
     let unchecked: UncheckedProjectConfig =
         toml::from_str(tau_toml_str).map_err(|e| to_io(format!("parse {path:?}: {e}")))?;
     let project_config = unchecked
@@ -119,11 +119,12 @@ fn verify_agent_prompts(
             .get(&id)
             .ok_or_else(|| VerifyError::AgentSetMismatch { id: id.clone() })?;
         let prompt_bytes =
-            crate::bundle::build::resolve_agent_prompt_bytes(&entry.prompt, project_root)
-                .map_err(|source| VerifyError::AgentPromptResolve {
+            crate::bundle::build::resolve_agent_prompt_bytes(&entry.prompt, project_root).map_err(
+                |source| VerifyError::AgentPromptResolve {
                     id: id.clone(),
                     source,
-                })?;
+                },
+            )?;
         let computed = crate::bundle::build::sha256_hex(&prompt_bytes);
         if computed != agent.system_prompt_sha256 {
             return Err(VerifyError::AgentPromptDrift {
@@ -162,12 +163,11 @@ fn verify_packages_installed_and_hashed(
                 expected_path: dir,
             });
         }
-        let computed = crate::tree_hash::tree_hash(&dir).map_err(|e| {
-            VerifyError::PackageTreeHash {
+        let computed =
+            crate::tree_hash::tree_hash(&dir).map_err(|e| VerifyError::PackageTreeHash {
                 name: pkg.name.clone(),
                 source: e,
-            }
-        })?;
+            })?;
         if computed != pkg.tree_sha256 {
             return Err(VerifyError::PackageDrift {
                 name: pkg.name.clone(),
@@ -311,7 +311,10 @@ system = "you are solo"
         let bad = tmp.path().join("bad.tau");
         std::fs::write(&bad, "this is not valid bundle toml @@@").unwrap();
         let err = verify_bundle(vopts(bad, tmp.path())).unwrap_err();
-        assert!(matches!(err, VerifyError::BundleParse { .. }), "got {err:?}");
+        assert!(
+            matches!(err, VerifyError::BundleParse { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -357,7 +360,10 @@ system = "you are solo"
         let mut m = BundleManifest::parse_str(&s).unwrap();
         m.bundle.target = TargetTriple::PASSTHROUGH; // never equals a native host
         let err = verify_target_matches_host(&m).unwrap_err();
-        assert!(matches!(err, VerifyError::TargetMismatch { .. }), "got {err:?}");
+        assert!(
+            matches!(err, VerifyError::TargetMismatch { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -395,7 +401,10 @@ system = "you are solo"
         let s = std::fs::read_to_string(&path).unwrap();
         let m = BundleManifest::parse_str(&s).unwrap();
         let err = verify_tau_toml_sha256(&m, tmp.path()).unwrap_err();
-        assert!(matches!(err, VerifyError::TauTomlDrift { .. }), "got {err:?}");
+        assert!(
+            matches!(err, VerifyError::TauTomlDrift { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -468,7 +477,10 @@ installed_at = "2024-01-01T00:00:00Z"
         let s = std::fs::read_to_string(&path).unwrap();
         let m = BundleManifest::parse_str(&s).unwrap();
         let err = verify_packages_installed_and_hashed(&m, tmp.path()).unwrap_err();
-        assert!(matches!(err, VerifyError::PackageMissing { .. }), "got {err:?}");
+        assert!(
+            matches!(err, VerifyError::PackageMissing { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -479,7 +491,10 @@ installed_at = "2024-01-01T00:00:00Z"
         let s = std::fs::read_to_string(&path).unwrap();
         let m = BundleManifest::parse_str(&s).unwrap();
         let err = verify_packages_installed_and_hashed(&m, tmp.path()).unwrap_err();
-        assert!(matches!(err, VerifyError::PackageDrift { .. }), "got {err:?}");
+        assert!(
+            matches!(err, VerifyError::PackageDrift { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

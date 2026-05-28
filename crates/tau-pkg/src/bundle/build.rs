@@ -162,9 +162,9 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         // fails on a prompt.
         let prompt_bytes: Vec<u8> = resolve_agent_prompt_bytes(&entry.prompt, &opts.project_root)
             .map_err(|source| BuildError::PromptResolveFailed {
-                id: id.clone(),
-                source,
-            })?;
+            id: id.clone(),
+            source,
+        })?;
         let system_prompt_sha256 = sha256_hex(&prompt_bytes);
 
         // List required tool names. BTreeMap iteration above is sorted
