@@ -248,19 +248,21 @@ fn build_with_invalid_target_exits_two() {
 }
 
 #[test]
-fn build_with_host_target_succeeds() {
+fn build_with_available_target_succeeds() {
     let scratch = tempfile::tempdir().unwrap();
     let project = scratch.path().join("proj");
     std::fs::create_dir(&project).unwrap();
-    write_minimal_project(&project, "hosttgt");
+    write_minimal_project(&project, "avtgt");
     std::fs::write(project.join("tau.lock"), EMPTY_V6_LOCK).unwrap();
 
     let tau_home = make_tau_home(scratch.path());
 
-    let host = tau_ports::target::TargetTriple::host().to_string();
+    // `passthrough` is Available on every host. (Don't use `host()`:
+    // on Windows it is `windows-native-strict`, which is Reserved and
+    // would be rejected by the --target Available gate.)
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--target", &host])
+        .args(["build", "--target", "passthrough"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()

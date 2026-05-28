@@ -145,10 +145,14 @@ mod tests {
 
     #[test]
     fn resolve_target_accepts_available_triple() {
-        let host_str = TargetTriple::host().to_string();
+        // Use `passthrough` — Available on every host. Don't use
+        // `host()`: on Windows `host()` is `windows-native-strict`,
+        // which the registry marks Reserved (scaffold-only), so it
+        // would (correctly) be rejected by the Available gate.
+        let available = TargetTriple::PASSTHROUGH;
         assert_eq!(
-            resolve_target(&args_with_target(Some(&host_str))).unwrap(),
-            TargetTriple::host()
+            resolve_target(&args_with_target(Some(&available.to_string()))).unwrap(),
+            available,
         );
     }
 
