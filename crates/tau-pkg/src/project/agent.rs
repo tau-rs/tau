@@ -283,7 +283,7 @@ pub fn build_agent_definition(
 
 /// Split `<name>@<semver-req>` into `(name, VersionReq)`. Bare `<name>`
 /// with no `@` defaults to `*`.
-fn parse_package_ref(package: &str) -> Result<(String, semver::VersionReq), String> {
+pub(crate) fn parse_package_ref(package: &str) -> Result<(String, semver::VersionReq), String> {
     let (name, req_str) = match package.split_once('@') {
         Some((n, r)) => (n.trim().to_string(), r.trim().to_string()),
         None => (package.trim().to_string(), "*".to_string()),
