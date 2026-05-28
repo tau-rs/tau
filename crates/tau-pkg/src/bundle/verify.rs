@@ -124,7 +124,7 @@ fn verify_agent_prompts(
                     id: id.clone(),
                     source,
                 })?;
-        let computed = sha256_hex(&prompt_bytes);
+        let computed = crate::bundle::build::sha256_hex(&prompt_bytes);
         if computed != agent.system_prompt_sha256 {
             return Err(VerifyError::AgentPromptDrift {
                 id,
@@ -190,7 +190,7 @@ fn verify_tau_toml_sha256(
         path: path.clone(),
         source: e,
     })?;
-    let computed = sha256_hex(&bytes);
+    let computed = crate::bundle::build::sha256_hex(&bytes);
     if computed != m.project.tau_toml_sha256 {
         return Err(VerifyError::TauTomlDrift {
             claimed: m.project.tau_toml_sha256.clone(),
@@ -198,16 +198,6 @@ fn verify_tau_toml_sha256(
         });
     }
     Ok(())
-}
-
-/// SHA-256 of `bytes` as lowercase hex. MUST match the hashing
-/// `build.rs` uses for `project.tau_toml_sha256` (see build.rs ~line
-/// 241): raw `std::fs::read(tau.toml)` bytes, no normalization.
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(bytes);
-    crate::tree_hash::to_hex_lower(h.finalize().as_slice())
 }
 
 /// Step 5: confirm the bundle was built for the running host. A bundle

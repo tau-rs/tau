@@ -165,12 +165,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
                 id: id.clone(),
                 source,
             })?;
-        let system_prompt_sha256 = crate::tree_hash::to_hex_lower(&{
-            use sha2::{Digest, Sha256};
-            let mut h = Sha256::new();
-            h.update(&prompt_bytes);
-            h.finalize()
-        });
+        let system_prompt_sha256 = sha256_hex(&prompt_bytes);
 
         // List required tool names. BTreeMap iteration above is sorted
         // by agent id; sort tool names here for stable output.
@@ -230,12 +225,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     // through serde's unknown-field-tolerant deserialization.
     let project_version = extract_project_version(tau_toml_str)?;
 
-    let tau_toml_sha256 = {
-        use sha2::{Digest, Sha256};
-        let mut h = Sha256::new();
-        h.update(&tau_toml_bytes);
-        crate::tree_hash::to_hex_lower(h.finalize().as_slice())
-    };
+    let tau_toml_sha256 = sha256_hex(&tau_toml_bytes);
 
     let mut manifest = BundleManifest {
         schema_version: 1,
@@ -366,6 +356,17 @@ pub(crate) fn resolve_agent_prompt_bytes(
         }
         PromptEntry::None => Ok(Vec::new()),
     }
+}
+
+/// SHA-256 of `bytes` as lowercase hex. The single source of truth for
+/// every bundle hash (tau_toml_sha256, system_prompt_sha256, and the
+/// verify-side recomputations). Build and verify MUST use this same fn
+/// so their hashes can never drift.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    crate::tree_hash::to_hex_lower(h.finalize().as_slice())
 }
 
 #[cfg(test)]
