@@ -37,6 +37,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         project_root,
         target,
         output_path: args.output.clone(),
+        agent_filter: None,
     };
 
     let _ = output.status("Building bundle…");
@@ -119,6 +120,7 @@ fn exit_code_for(err: &BuildError) -> u8 {
         | BuildError::PromptResolveFailed { .. }
         | BuildError::CapabilityOverrideFailed { .. }
         | BuildError::WriteFailed { .. } => 70,
+        BuildError::UnknownAgent { .. } => 2,
     }
 }
 

@@ -131,6 +131,7 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
         project_root: opts.project_root.clone(),
         target: shipped.bundle.target,
         output_path: Some(rebuilt_path.clone()),
+        agent_filter: None,
     })
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
@@ -389,6 +390,7 @@ system = "hi"
             project_root: tmp.path().to_path_buf(),
             target: TargetTriple::host(),
             output_path: None,
+            agent_filter: None,
         })
         .unwrap();
         let s = std::fs::read_to_string(&artifact.path).unwrap();
@@ -493,6 +495,7 @@ system = "you are solo"
             project_root: root.to_path_buf(),
             target: TargetTriple::host(),
             output_path: None,
+            agent_filter: None,
         })
         .unwrap();
         artifact.path

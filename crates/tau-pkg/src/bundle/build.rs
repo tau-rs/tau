@@ -26,6 +26,10 @@ pub struct BuildOptions {
     /// Optional explicit output path. When `None`, defaults to
     /// `<project_root>/<project-name>-<project-version>.tau`.
     pub output_path: Option<PathBuf>,
+    /// Restrict the bundle to these agents and prune packages they don't
+    /// reference. `None` builds every agent and keeps every package (the
+    /// §C.2 behavior). The CLI maps an empty `--agent` set to `None`.
+    pub agent_filter: Option<Vec<tau_domain::AgentId>>,
 }
 
 /// Result of a successful build.
@@ -381,6 +385,7 @@ mod tests {
             project_root: root.to_path_buf(),
             target: TargetTriple::host(),
             output_path: None,
+            agent_filter: None,
         }
     }
 
@@ -692,6 +697,7 @@ generated_at = "2024-01-01T00:00:00Z"
             project_root: tmp.path().to_path_buf(),
             target: TargetTriple::host(),
             output_path: Some(explicit.clone()),
+            agent_filter: None,
         };
         let artifact = build(o).expect("build");
         assert_eq!(artifact.path, explicit);

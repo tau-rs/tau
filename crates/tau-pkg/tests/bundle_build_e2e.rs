@@ -129,6 +129,7 @@ fn e2e_build_produces_parseable_bundle_with_correct_facts() {
         project_root: tmp.path().to_path_buf(),
         target: TargetTriple::host(),
         output_path: None,
+        agent_filter: None,
     })
     .expect("build");
 
@@ -200,6 +201,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         project_root: tmp.path().to_path_buf(),
         target: TargetTriple::host(),
         output_path: Some(tmp.path().join("a.tau")),
+        agent_filter: None,
     })
     .expect("first build");
 
@@ -211,6 +213,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         project_root: tmp.path().to_path_buf(),
         target: TargetTriple::host(),
         output_path: Some(tmp.path().join("b.tau")),
+        agent_filter: None,
     })
     .expect("second build");
 

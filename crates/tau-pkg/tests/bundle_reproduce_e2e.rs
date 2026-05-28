@@ -104,6 +104,7 @@ fn e2e_clean_rebuild_is_reproducible() {
         project_root: tmp.path().to_path_buf(),
         target: TargetTriple::host(),
         output_path: None,
+        agent_filter: None,
     })
     .unwrap();
     let report = verify_reproducible(ReproOptions {
@@ -122,6 +123,7 @@ fn e2e_mutated_package_breaks_reproducibility() {
         project_root: tmp.path().to_path_buf(),
         target: TargetTriple::host(),
         output_path: None,
+        agent_filter: None,
     })
     .unwrap();
     // Mutate a file inside an installed package. `fs-read/0.1.0/src/lib.rs`
