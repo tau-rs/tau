@@ -361,7 +361,15 @@ fn build_agent_flag_repeatable() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--agent", "alpha", "--agent", "beta", "-o", out.to_str().unwrap()])
+        .args([
+            "build",
+            "--agent",
+            "alpha",
+            "--agent",
+            "beta",
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -370,5 +378,8 @@ fn build_agent_flag_repeatable() {
     let body = std::fs::read_to_string(&out).unwrap();
     let m = tau_pkg::bundle::manifest::BundleManifest::parse_str(&body).unwrap();
     assert_eq!(m.agents.len(), 2);
-    assert_eq!(m.bundle.selected_agents, Some(vec!["alpha".to_string(), "beta".to_string()]));
+    assert_eq!(
+        m.bundle.selected_agents,
+        Some(vec!["alpha".to_string(), "beta".to_string()])
+    );
 }

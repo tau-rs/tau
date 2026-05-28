@@ -278,14 +278,20 @@ mod tests {
         // Appears in the [bundle] section, after target, before [project].
         let bundle_start = out.find("[bundle]").expect("[bundle] header");
         let project_start = out.find("[project]").expect("[project] header");
-        let sel = out.find("selected_agents").expect("selected_agents emitted");
+        let sel = out
+            .find("selected_agents")
+            .expect("selected_agents emitted");
         let target = out.find("target =").expect("target emitted");
-        assert!(bundle_start < target && target < sel && sel < project_start,
-            "selected_agents must sit in [bundle] after target:\n{out}");
+        assert!(
+            bundle_start < target && target < sel && sel < project_start,
+            "selected_agents must sit in [bundle] after target:\n{out}"
+        );
         // And omitted entirely when None.
         m.bundle.selected_agents = None;
         let out_none = to_canonical_toml(&m);
-        assert!(!out_none.contains("selected_agents"),
-            "selected_agents must be omitted when None:\n{out_none}");
+        assert!(
+            !out_none.contains("selected_agents"),
+            "selected_agents must be omitted when None:\n{out_none}"
+        );
     }
 }

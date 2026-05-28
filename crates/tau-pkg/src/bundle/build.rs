@@ -250,8 +250,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
             // (parsed from `[agents.<id>].package`) ∪ its required tools.
             // The flat lockfile has no inter-package deps, so direct
             // reference closure is complete (spec §4.2 assumption).
-            let mut keep: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
+            let mut keep: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
             for a in &agents {
                 if let Some(entry) = project_config.agents.get(a.id.as_str()) {
                     // Empty / unparseable package field contributes
@@ -804,18 +803,31 @@ installed_at = "2024-01-01T00:00:00Z"
         let names: Vec<&str> = m.packages.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"pkg-a"), "got {names:?}");
         assert!(names.contains(&"pkg-home"), "got {names:?}");
-        assert!(!names.contains(&"pkg-b"), "pkg-b must be pruned; got {names:?}");
+        assert!(
+            !names.contains(&"pkg-b"),
+            "pkg-b must be pruned; got {names:?}"
+        );
     }
 
     #[test]
     fn build_agent_filter_multiple_agents_unions_packages() {
         let tmp = tempdir().unwrap();
         two_agent_project(tmp.path());
-        let m = read_bundle(&build(opts_filtered(tmp.path(), &["alpha", "beta"])).unwrap().path);
+        let m = read_bundle(
+            &build(opts_filtered(tmp.path(), &["alpha", "beta"]))
+                .unwrap()
+                .path,
+        );
         assert_eq!(m.agents.len(), 2);
         let names: Vec<&str> = m.packages.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"pkg-a") && names.contains(&"pkg-b") && names.contains(&"pkg-home"), "got {names:?}");
-        assert_eq!(m.bundle.selected_agents, Some(vec!["alpha".to_string(), "beta".to_string()]));
+        assert!(
+            names.contains(&"pkg-a") && names.contains(&"pkg-b") && names.contains(&"pkg-home"),
+            "got {names:?}"
+        );
+        assert_eq!(
+            m.bundle.selected_agents,
+            Some(vec!["alpha".to_string(), "beta".to_string()])
+        );
     }
 
     #[test]

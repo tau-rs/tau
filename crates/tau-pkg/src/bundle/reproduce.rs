@@ -131,8 +131,10 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
     let agent_filter: Option<Vec<tau_domain::AgentId>> = match &shipped.bundle.selected_agents {
         None => None,
         Some(ids) => {
-            let parsed: Result<Vec<_>, _> =
-                ids.iter().map(|s| s.parse::<tau_domain::AgentId>()).collect();
+            let parsed: Result<Vec<_>, _> = ids
+                .iter()
+                .map(|s| s.parse::<tau_domain::AgentId>())
+                .collect();
             Some(parsed.map_err(|e| ReproError::ShippedSelfHashInvalid {
                 detail: format!("selected_agents contains an invalid agent id: {e}"),
             })?)
@@ -634,11 +636,18 @@ system = "you are extra"
         let tmp = tempdir().unwrap();
         let bundle = build_sliced_solo(tmp.path());
         let shipped = BundleManifest::from_path(&bundle).unwrap();
-        assert_eq!(shipped.bundle.selected_agents, Some(vec!["solo".to_string()]));
+        assert_eq!(
+            shipped.bundle.selected_agents,
+            Some(vec!["solo".to_string()])
+        );
         assert_eq!(shipped.agents.len(), 1);
 
         let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro ran");
-        assert!(report.reproducible, "sliced bundle must reproduce; diffs={:?}", report.diffs);
+        assert!(
+            report.reproducible,
+            "sliced bundle must reproduce; diffs={:?}",
+            report.diffs
+        );
         assert!(report.diffs.is_empty());
     }
 
@@ -649,7 +658,11 @@ system = "you are extra"
         let shipped = BundleManifest::from_path(&bundle).unwrap();
         assert_eq!(shipped.bundle.selected_agents, None);
         let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro ran");
-        assert!(report.reproducible, "full bundle must still reproduce; diffs={:?}", report.diffs);
+        assert!(
+            report.reproducible,
+            "full bundle must still reproduce; diffs={:?}",
+            report.diffs
+        );
     }
 
     #[test]
