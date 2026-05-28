@@ -143,7 +143,10 @@ fn default_respect_retry_after() -> bool {
 /// missing env var, `InvalidValue` for malformed key shape).
 ///
 /// Wired into `Configure::from_config` in Task 9.
-pub(crate) fn resolve_api_key(cfg: &AnthropicConfig) -> Result<String, ConfigError> {
+pub(crate) fn resolve_api_key(
+    cfg: &AnthropicConfig,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<String, ConfigError> {
     let key = if let Some(direct) = cfg.api_key.as_ref() {
         tracing::warn!(
             target: "anthropic_plugin::config",
@@ -151,7 +154,7 @@ pub(crate) fn resolve_api_key(cfg: &AnthropicConfig) -> Result<String, ConfigErr
         );
         direct.clone()
     } else {
-        std::env::var(&cfg.api_key_env).map_err(|_| ConfigError::InvalidEnvVar {
+        lookup(&cfg.api_key_env).ok_or_else(|| ConfigError::InvalidEnvVar {
             name: cfg.api_key_env.clone(),
             detail: "env var is not set; set it or use config.api_key (test-only)".into(),
         })?
@@ -215,22 +218,19 @@ mod tests {
             api_key: Some("sk-ant-test123".into()),
             ..AnthropicConfig::default()
         };
-        let key = resolve_api_key(&cfg).unwrap();
+        // Direct field wins; lookup must not be consulted.
+        let key = resolve_api_key(&cfg, |_| panic!("lookup should not be called")).unwrap();
         assert_eq!(key, "sk-ant-test123");
     }
 
     #[test]
     fn resolve_api_key_reads_env_var() {
-        // Set a unique env var name to avoid clobbering across tests
-        let env_name = "TEST_RESOLVE_KEY_FROM_ENV";
-        std::env::set_var(env_name, "sk-ant-fromenv");
         let cfg = AnthropicConfig {
-            api_key_env: env_name.into(),
+            api_key_env: "ANY_NAME".into(),
             ..AnthropicConfig::default()
         };
-        let key = resolve_api_key(&cfg).unwrap();
+        let key = resolve_api_key(&cfg, |_| Some("sk-ant-fromenv".into())).unwrap();
         assert_eq!(key, "sk-ant-fromenv");
-        std::env::remove_var(env_name);
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
             api_key_env: "DEFINITELY_NOT_SET_OPDIQWXZ".into(),
             ..AnthropicConfig::default()
         };
-        let err = resolve_api_key(&cfg).unwrap_err();
+        let err = resolve_api_key(&cfg, |_| None).unwrap_err();
         assert!(matches!(
             err,
             ConfigError::InvalidEnvVar { ref name, .. }
@@ -253,7 +253,7 @@ mod tests {
             api_key: Some("nope-not-a-real-key".into()),
             ..AnthropicConfig::default()
         };
-        let err = resolve_api_key(&cfg).unwrap_err();
+        let err = resolve_api_key(&cfg, |_| None).unwrap_err();
         assert!(matches!(
             err,
             ConfigError::InvalidValue {
