@@ -15,6 +15,8 @@ pub mod canonical;
 pub mod error;
 pub mod hash;
 pub mod manifest;
+pub mod reproduce;
+pub mod reproduce_error;
 pub mod verify;
 pub mod verify_error;
 
@@ -27,5 +29,7 @@ pub use manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
     BundlePackage, ProjectInfo,
 };
+pub use reproduce::{verify_reproducible, ManifestDiff, ReproOptions, ReproReport, Side};
+pub use reproduce_error::ReproError;
 pub use verify::{verify_bundle, ResolvedAgent, VerifyOptions, VerifyReport};
 pub use verify_error::VerifyError;
