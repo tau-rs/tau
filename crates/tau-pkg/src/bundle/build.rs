@@ -810,6 +810,20 @@ installed_at = "2024-01-01T00:00:00Z"
     }
 
     #[test]
+    fn build_agent_filter_keeps_home_package() {
+        // An agent's home package (from `[agents.<id>].package`) is kept
+        // even though it is not a required tool. Spec §7.
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let m = read_bundle(&build(opts_filtered(tmp.path(), &["alpha"])).unwrap().path);
+        let names: Vec<&str> = m.packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            names.contains(&"pkg-home"),
+            "home package must be retained even without a required-tool reference; got {names:?}"
+        );
+    }
+
+    #[test]
     fn build_agent_filter_multiple_agents_unions_packages() {
         let tmp = tempdir().unwrap();
         two_agent_project(tmp.path());

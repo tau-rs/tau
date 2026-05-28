@@ -347,7 +347,8 @@ fn build_agent_flag_unknown_exits_two() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("ghost"))
-        .stderr(predicate::str::contains("alpha"));
+        .stderr(predicate::str::contains("alpha"))
+        .stderr(predicate::str::contains("beta"));
 }
 
 #[test]
