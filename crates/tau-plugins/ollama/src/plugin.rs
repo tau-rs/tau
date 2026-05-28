@@ -40,7 +40,7 @@ impl Configure for OllamaPlugin {
     type Config = OllamaConfig;
 
     fn from_config(cfg: Self::Config) -> Result<Self, ConfigError> {
-        let bearer_token = resolve_bearer_token(&cfg)?;
+        let bearer_token = resolve_bearer_token(&cfg, |n| std::env::var(n).ok())?;
         validate_retry(&cfg.retry)?;
 
         let inner = reqwest::Client::builder()
