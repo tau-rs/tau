@@ -31,6 +31,12 @@ use crate::output::Output;
 
 /// Run `tau verify`.
 pub async fn run(args: &VerifyArgs, output: &mut Output) -> anyhow::Result<()> {
+    // 0. Reproducibility branch (Phase 2 §E). Mutually exclusive with
+    //    the package positional (enforced by clap `conflicts_with`).
+    if let Some(bundle_path) = args.bundle.clone() {
+        return run_reproducibility_check(&bundle_path, output);
+    }
+
     // 1. Resolve scope.
     let scope = if args.global {
         Scope::global()?
@@ -351,5 +357,182 @@ fn emit_human_line(report: &VerifyReport, output: &mut Output) -> anyhow::Result
             output.human(&format!("{}(unverified \u{2014} unknown status)", prefix))?;
         }
     }
+    Ok(())
+}
+
+/// `tau verify --bundle <PATH>` — rebuild the bundle from the local tree
+/// and compare to the shipped `.tau` file (Phase 2 §E).
+///
+/// Exit codes:
+/// - 0: reproducible (rebuilt self-hash matches shipped).
+/// - 2: not reproducible, or the shipped bundle is unreadable/corrupt.
+/// - 3: rebuild blocked by install state (missing lockfile or an
+///   uninstalled package).
+/// - 70: internal/IO failure during the rebuild.
+fn run_reproducibility_check(
+    bundle_path: &std::path::Path,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir()?;
+    let report = match tau_pkg::bundle::verify_reproducible(tau_pkg::bundle::ReproOptions {
+        bundle_path: bundle_path.to_path_buf(),
+        project_root: cwd,
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            output.error(&e)?;
+            std::process::exit(repro_error_exit_code(&e));
+        }
+    };
+
+    if output.is_json() {
+        render_repro_json(&report, output)?;
+    } else {
+        render_repro_human(&report, output)?;
+    }
+
+    if report.reproducible {
+        Ok(())
+    } else {
+        std::process::exit(2);
+    }
+}
+
+/// Map a [`ReproError`] to a CLI exit code.
+fn repro_error_exit_code(e: &tau_pkg::bundle::ReproError) -> i32 {
+    use tau_pkg::bundle::ReproError as E;
+    match e {
+        E::BundleRead { .. } | E::BundleParse { .. } | E::ShippedSelfHashInvalid { .. } => 2,
+        E::Rebuild { source } if is_install_state_error(source) => 3,
+        E::TempDir { .. } | E::RebuiltRead { .. } | E::RebuiltParse { .. } | E::Rebuild { .. } => {
+            70
+        }
+    }
+}
+
+/// True for [`BuildError`] variants that indicate the local install state
+/// is incomplete (exit 3) rather than an internal failure (exit 70).
+fn is_install_state_error(e: &tau_pkg::bundle::BuildError) -> bool {
+    use tau_pkg::bundle::BuildError as B;
+    matches!(e, B::MissingLockfile | B::PackageNotInstalled { .. })
+}
+
+/// Abbreviate a long hex hash for human display.
+fn abbrev(h: &str) -> String {
+    if h.len() <= 12 {
+        h.to_string()
+    } else {
+        format!("{}\u{2026}{}", &h[..6], &h[h.len() - 6..])
+    }
+}
+
+/// Human-readable reproducibility report.
+fn render_repro_human(
+    report: &tau_pkg::bundle::ReproReport,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    if report.reproducible {
+        output.human(&format!(
+            "\u{2713} Reproducible \u{2014} rebuilt bundle matches (sha256: {})",
+            abbrev(&report.shipped_sha256)
+        ))?;
+    } else {
+        // Diagnosis lines go to stderr (plain, no `error:` prefix) so the
+        // multi-line report reads cleanly; exit code 2 carries the result.
+        output.status("\u{2717} NOT reproducible")?;
+        output.status(format!("  shipped: {}", abbrev(&report.shipped_sha256)))?;
+        output.status(format!("  rebuilt: {}", abbrev(&report.rebuilt_sha256)))?;
+        output.status("  divergences:")?;
+        for d in &report.diffs {
+            output.status(format!("    - {}", format_diff(d)))?;
+        }
+    }
+    Ok(())
+}
+
+/// Format a single [`ManifestDiff`] as a one-line human description.
+fn format_diff(d: &tau_pkg::bundle::ManifestDiff) -> String {
+    use tau_pkg::bundle::ManifestDiff as D;
+    match d {
+        D::ProjectField {
+            field,
+            shipped,
+            rebuilt,
+        } => format!("project {field}: {shipped} \u{2192} {rebuilt}"),
+        D::PackageMissing { name, side } => format!("package `{name}` present only in {side:?}"),
+        D::PackageField {
+            name,
+            field,
+            shipped,
+            rebuilt,
+        } => format!("package `{name}` {field}: {shipped} \u{2192} {rebuilt}"),
+        D::AgentMissing { id, side } => format!("agent `{id}` present only in {side:?}"),
+        D::AgentField {
+            id,
+            field,
+            shipped,
+            rebuilt,
+        } => format!("agent `{id}` {field}: {shipped} \u{2192} {rebuilt}"),
+        D::BundleMetaField {
+            field,
+            shipped,
+            rebuilt,
+        } => format!("{field}: {shipped} \u{2192} {rebuilt}"),
+        D::SchemaVersionMismatch { shipped, rebuilt } => {
+            format!("schema_version: {shipped} \u{2192} {rebuilt}")
+        }
+    }
+}
+
+/// JSON reproducibility report (single object, emitted via [`Output::json`]).
+fn render_repro_json(
+    report: &tau_pkg::bundle::ReproReport,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    use tau_pkg::bundle::ManifestDiff as D;
+    let diffs: Vec<serde_json::Value> = report
+        .diffs
+        .iter()
+        .map(|d| match d {
+            D::ProjectField {
+                field,
+                shipped,
+                rebuilt,
+            } => serde_json::json!({"kind":"project_field","field":field,"shipped":shipped,"rebuilt":rebuilt}),
+            D::PackageMissing { name, side } => {
+                serde_json::json!({"kind":"package_missing","name":name,"side":format!("{side:?}")})
+            }
+            D::PackageField {
+                name,
+                field,
+                shipped,
+                rebuilt,
+            } => serde_json::json!({"kind":"package_field","name":name,"field":field,"shipped":shipped,"rebuilt":rebuilt}),
+            D::AgentMissing { id, side } => {
+                serde_json::json!({"kind":"agent_missing","id":id,"side":format!("{side:?}")})
+            }
+            D::AgentField {
+                id,
+                field,
+                shipped,
+                rebuilt,
+            } => serde_json::json!({"kind":"agent_field","id":id,"field":field,"shipped":shipped,"rebuilt":rebuilt}),
+            D::BundleMetaField {
+                field,
+                shipped,
+                rebuilt,
+            } => serde_json::json!({"kind":"bundle_meta_field","field":field,"shipped":shipped,"rebuilt":rebuilt}),
+            D::SchemaVersionMismatch { shipped, rebuilt } => {
+                serde_json::json!({"kind":"schema_version_mismatch","shipped":shipped,"rebuilt":rebuilt})
+            }
+        })
+        .collect();
+    let obj = serde_json::json!({
+        "reproducible": report.reproducible,
+        "shipped_sha256": report.shipped_sha256,
+        "rebuilt_sha256": report.rebuilt_sha256,
+        "diffs": diffs,
+    });
+    output.json(&obj)?;
     Ok(())
 }

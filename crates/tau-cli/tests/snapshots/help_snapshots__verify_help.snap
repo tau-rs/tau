@@ -20,6 +20,9 @@ Options:
       --anthropic-strict
           Skills-5: in addition to the standard drift check, validate each installed skill against the Anthropic Agent Skills spec (non-empty description, non-empty body, well-formed frontmatter)
 
+      --bundle <PATH>
+          Reproducibility check: rebuild a bundle from the local tree and compare to this `.tau` file. Mutually exclusive with the package positional. Exit 0 reproducible / 2 not / 3 not-installed (Phase 2 §E)
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 
