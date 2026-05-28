@@ -57,8 +57,23 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
     verify_self_hash_step(&manifest)?;
     // Step 4: schema version.
     verify_schema_version(&manifest)?;
+    // Step 5: target triple matches host.
+    verify_target_matches_host(&manifest)?;
 
-    unimplemented!("steps 5-8 in subsequent tasks")
+    unimplemented!("steps 6-8 in subsequent tasks")
+}
+
+/// Step 5: confirm the bundle was built for the running host. A bundle
+/// is host-specific; running one built for another target is rejected.
+fn verify_target_matches_host(m: &BundleManifest) -> Result<(), VerifyError> {
+    let host = tau_ports::target::TargetTriple::host();
+    if m.bundle.target != host {
+        return Err(VerifyError::TargetMismatch {
+            bundle: m.bundle.target,
+            host,
+        });
+    }
+    Ok(())
 }
 
 /// Step 3: confirm the bundle's recorded self-hash matches its
@@ -195,5 +210,26 @@ system = "you are solo"
             ),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn verify_target_rejects_foreign_triple() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path());
+        let s = std::fs::read_to_string(&path).unwrap();
+        let mut m = BundleManifest::parse_str(&s).unwrap();
+        m.bundle.target = TargetTriple::PASSTHROUGH; // never equals a native host
+        let err = verify_target_matches_host(&m).unwrap_err();
+        assert!(matches!(err, VerifyError::TargetMismatch { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn verify_target_accepts_host_triple() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path());
+        let s = std::fs::read_to_string(&path).unwrap();
+        let m = BundleManifest::parse_str(&s).unwrap();
+        // The fixture was built with TargetTriple::host(), so it matches.
+        verify_target_matches_host(&m).expect("host triple matches");
     }
 }
