@@ -147,7 +147,10 @@ fn default_respect_retry_after() -> bool {
 ///   prefixes).
 ///
 /// Wired into `Configure::from_config` in Task 11.
-pub(crate) fn resolve_api_key(cfg: &OpenAIConfig) -> Result<String, ConfigError> {
+pub(crate) fn resolve_api_key(
+    cfg: &OpenAIConfig,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<String, ConfigError> {
     let key = if let Some(direct) = cfg.api_key.as_ref() {
         tracing::warn!(
             target: "openai_plugin::config",
@@ -155,7 +158,7 @@ pub(crate) fn resolve_api_key(cfg: &OpenAIConfig) -> Result<String, ConfigError>
         );
         direct.clone()
     } else {
-        std::env::var(&cfg.api_key_env).map_err(|_| ConfigError::InvalidEnvVar {
+        lookup(&cfg.api_key_env).ok_or_else(|| ConfigError::InvalidEnvVar {
             name: cfg.api_key_env.clone(),
             detail: "env var is not set; set it or use config.api_key (test-only)".into(),
         })?
@@ -219,7 +222,7 @@ mod tests {
             api_key: Some("sk-test123".into()),
             ..OpenAIConfig::default()
         };
-        let key = resolve_api_key(&cfg).unwrap();
+        let key = resolve_api_key(&cfg, |_| None).unwrap();
         assert_eq!(key, "sk-test123");
     }
 
@@ -229,21 +232,18 @@ mod tests {
             api_key: Some("sk-proj-modernkey123".into()),
             ..OpenAIConfig::default()
         };
-        let key = resolve_api_key(&cfg).unwrap();
+        let key = resolve_api_key(&cfg, |_| None).unwrap();
         assert_eq!(key, "sk-proj-modernkey123");
     }
 
     #[test]
     fn resolve_api_key_reads_env_var() {
-        let env_name = "TEST_OPENAI_RESOLVE_KEY_FROM_ENV";
-        std::env::set_var(env_name, "sk-fromenv");
         let cfg = OpenAIConfig {
-            api_key_env: env_name.into(),
+            api_key_env: "ANY_NAME".into(),
             ..OpenAIConfig::default()
         };
-        let key = resolve_api_key(&cfg).unwrap();
+        let key = resolve_api_key(&cfg, |_| Some("sk-fromenv".into())).unwrap();
         assert_eq!(key, "sk-fromenv");
-        std::env::remove_var(env_name);
     }
 
     #[test]
@@ -252,7 +252,7 @@ mod tests {
             api_key_env: "DEFINITELY_NOT_SET_OPENAI_QXZ".into(),
             ..OpenAIConfig::default()
         };
-        let err = resolve_api_key(&cfg).unwrap_err();
+        let err = resolve_api_key(&cfg, |_| None).unwrap_err();
         assert!(matches!(
             err,
             ConfigError::InvalidEnvVar { ref name, .. }
@@ -266,7 +266,7 @@ mod tests {
             api_key: Some("not-a-real-key-prefix".into()),
             ..OpenAIConfig::default()
         };
-        let err = resolve_api_key(&cfg).unwrap_err();
+        let err = resolve_api_key(&cfg, |_| None).unwrap_err();
         assert!(matches!(
             err,
             ConfigError::InvalidValue {

@@ -44,7 +44,7 @@ impl Configure for OpenAIPlugin {
     type Config = OpenAIConfig;
 
     fn from_config(cfg: Self::Config) -> Result<Self, ConfigError> {
-        let api_key = resolve_api_key(&cfg)?;
+        let api_key = resolve_api_key(&cfg, |n| std::env::var(n).ok())?;
         validate_retry(&cfg.retry)?;
 
         let inner = reqwest::Client::builder()
@@ -125,23 +125,18 @@ mod tests {
 
     #[test]
     fn from_config_valid_api_key_constructs_plugin() {
-        let env_name = "TEST_OPENAI_FROM_CONFIG_OK";
-        std::env::set_var(env_name, "sk-proj-test-key-12345");
         let cfg = OpenAIConfig {
-            api_key_env: env_name.into(),
+            api_key: Some("sk-proj-test-key-12345".into()),
             ..OpenAIConfig::default()
         };
         let result = OpenAIPlugin::from_config(cfg);
         assert!(result.is_ok(), "from_config should succeed");
-        std::env::remove_var(env_name);
     }
 
     #[test]
     fn from_config_invalid_retry_max_attempts_zero_returns_invalid_value() {
-        let env_name = "TEST_OPENAI_INVALID_RETRY";
-        std::env::set_var(env_name, "sk-test");
         let mut cfg = OpenAIConfig {
-            api_key_env: env_name.into(),
+            api_key: Some("sk-test".into()),
             ..OpenAIConfig::default()
         };
         cfg.retry.max_attempts = 0;
@@ -156,19 +151,15 @@ mod tests {
                 ..
             }
         ));
-        std::env::remove_var(env_name);
     }
 
     #[test]
     fn name_returns_openai() {
-        let env_name = "TEST_OPENAI_NAME";
-        std::env::set_var(env_name, "sk-test");
         let cfg = OpenAIConfig {
-            api_key_env: env_name.into(),
+            api_key: Some("sk-test".into()),
             ..OpenAIConfig::default()
         };
         let plugin = OpenAIPlugin::from_config(cfg).unwrap();
         assert_eq!(plugin.name(), "openai");
-        std::env::remove_var(env_name);
     }
 }
