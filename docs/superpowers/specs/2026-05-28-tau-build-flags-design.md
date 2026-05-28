@@ -1,6 +1,6 @@
 # `tau build` flags (`--target` / `-o` / `--json`) — Phase 2 §C.2.1 design
 
-**Status:** Draft
+**Status:** Accepted
 **Date:** 2026-05-28
 **Authors:** titouanlebocq
 **Depends on:** §C.2 `tau build` MVP producer (PR #242, merged), ADR-0034 target triple registry
