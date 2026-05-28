@@ -61,8 +61,46 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
     verify_target_matches_host(&manifest)?;
     // Step 6: cwd tau.toml matches the bundle's recorded hash.
     verify_tau_toml_sha256(&manifest, &opts.project_root)?;
+    // Step 7: every bundled package is installed and its tree is intact.
+    verify_packages_installed_and_hashed(&manifest, &opts.project_root)?;
 
-    unimplemented!("steps 7-8 in subsequent tasks")
+    unimplemented!("step 8 in next task")
+}
+
+/// Step 7: confirm each package recorded in the bundle is installed at
+/// `<project_root>/.tau/packages/<name>/<version>/` and that its tree
+/// hash still matches the value the build recorded. Detects both a
+/// missing install and post-build tampering.
+fn verify_packages_installed_and_hashed(
+    m: &BundleManifest,
+    project_root: &std::path::Path,
+) -> Result<(), VerifyError> {
+    for pkg in &m.packages {
+        let dir = project_root
+            .join(".tau/packages")
+            .join(&pkg.name)
+            .join(pkg.version.to_string());
+        if !dir.exists() {
+            return Err(VerifyError::PackageMissing {
+                name: pkg.name.clone(),
+                expected_path: dir,
+            });
+        }
+        let computed = crate::tree_hash::tree_hash(&dir).map_err(|e| {
+            VerifyError::PackageTreeHash {
+                name: pkg.name.clone(),
+                source: e,
+            }
+        })?;
+        if computed != pkg.tree_sha256 {
+            return Err(VerifyError::PackageDrift {
+                name: pkg.name.clone(),
+                claimed: pkg.tree_sha256.clone(),
+                computed,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Step 6: confirm the cwd's `tau.toml` hashes to the value recorded in
@@ -301,5 +339,89 @@ system = "you are solo"
         let s = std::fs::read_to_string(&path).unwrap();
         let m = BundleManifest::parse_str(&s).unwrap();
         verify_tau_toml_sha256(&m, tmp.path()).expect("unchanged tau.toml verifies");
+    }
+
+    /// Writes a project + lockfile + one installed package dir, builds a
+    /// bundle, returns (bundle_path, package_dir).
+    fn build_bundle_with_one_package(
+        root: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        std::fs::write(
+            root.join("tau.toml"),
+            r#"
+[project]
+name = "pkg-fixture"
+version = "0.1.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "hi"
+"#,
+        )
+        .unwrap();
+        let pkg_dir = root.join(".tau/packages/demo/0.1.0");
+        std::fs::create_dir_all(pkg_dir.join("src")).unwrap();
+        std::fs::write(pkg_dir.join("Cargo.toml"), "[package]\nname=\"demo\"\n").unwrap();
+        std::fs::write(pkg_dir.join("src/lib.rs"), "// demo\n").unwrap();
+        std::fs::write(
+            root.join("tau.lock"),
+            r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "demo"
+active_version = "0.1.0"
+source = "https://example.com/demo.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "0000000000000000000000000000000000000001"
+installed_at = "2024-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let artifact = build(BuildOptions {
+            project_root: root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+        })
+        .expect("build bundle with package");
+        (artifact.path, pkg_dir)
+    }
+
+    #[test]
+    fn verify_package_missing_detected() {
+        let tmp = tempdir().unwrap();
+        let (path, pkg_dir) = build_bundle_with_one_package(tmp.path());
+        std::fs::remove_dir_all(&pkg_dir).unwrap(); // uninstall after build
+        let s = std::fs::read_to_string(&path).unwrap();
+        let m = BundleManifest::parse_str(&s).unwrap();
+        let err = verify_packages_installed_and_hashed(&m, tmp.path()).unwrap_err();
+        assert!(matches!(err, VerifyError::PackageMissing { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn verify_package_tree_drift_detected() {
+        let tmp = tempdir().unwrap();
+        let (path, pkg_dir) = build_bundle_with_one_package(tmp.path());
+        std::fs::write(pkg_dir.join("src/lib.rs"), "// tampered\n").unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        let m = BundleManifest::parse_str(&s).unwrap();
+        let err = verify_packages_installed_and_hashed(&m, tmp.path()).unwrap_err();
+        assert!(matches!(err, VerifyError::PackageDrift { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn verify_packages_clean_passes() {
+        let tmp = tempdir().unwrap();
+        let (path, _pkg_dir) = build_bundle_with_one_package(tmp.path());
+        let s = std::fs::read_to_string(&path).unwrap();
+        let m = BundleManifest::parse_str(&s).unwrap();
+        verify_packages_installed_and_hashed(&m, tmp.path()).expect("clean packages verify");
     }
 }
