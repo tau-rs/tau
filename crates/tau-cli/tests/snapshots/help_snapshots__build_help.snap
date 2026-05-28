@@ -7,6 +7,12 @@ Build a deployment bundle from this project (Phase 2 §C.2)
 Usage: tau build [OPTIONS]
 
 Options:
+      --target <TRIPLE>
+          Target triple to build for (default: host). Must be an Available triple in the ADR-0034 registry
+
+  -o, --output <PATH>
+          Output path (default: `<project>/<name>-<version>.tau`)
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

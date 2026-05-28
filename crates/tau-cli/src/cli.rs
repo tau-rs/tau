@@ -185,7 +185,19 @@ pub enum Command {
     /// into one CI/IDE-friendly verb.
     Check(CheckArgs),
     /// Build a deployment bundle from this project (Phase 2 §C.2).
-    Build,
+    Build(BuildArgs),
+}
+
+/// Arguments for `tau build`.
+#[derive(Args, Debug)]
+pub struct BuildArgs {
+    /// Target triple to build for (default: host). Must be an
+    /// Available triple in the ADR-0034 registry.
+    #[arg(long, value_name = "TRIPLE")]
+    pub target: Option<String>,
+    /// Output path (default: `<project>/<name>-<version>.tau`).
+    #[arg(long, short = 'o', value_name = "PATH")]
+    pub output: Option<std::path::PathBuf>,
 }
 
 /// `tau plugin <action>` — debug-tier helpers per spec §9.

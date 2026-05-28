@@ -8,48 +8,56 @@
 
 use anyhow::Result;
 
-use tau_pkg::bundle::{build, BuildError, BuildOptions};
+use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact};
 use tau_ports::target::TargetTriple;
+
+use crate::cli::BuildArgs;
+use crate::output::Output;
 
 /// CLI entry point for `tau build`. The function is async to match the
 /// dispatcher's signature, but the underlying builder is synchronous.
-pub async fn run() -> Result<()> {
+pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
     let project_root = match std::env::current_dir() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error: cannot determine current directory: {e}");
+            let _ = output.error(format!("cannot determine current directory: {e}"));
             std::process::exit(70);
         }
     };
+
+    let target = TargetTriple::host(); // Task 2 → resolve_target(args)
+
     let opts = BuildOptions {
         project_root,
-        target: TargetTriple::host(),
-        output_path: None,
+        target,
+        output_path: args.output.clone(),
     };
 
-    eprintln!("Building bundle…");
+    let _ = output.status("Building bundle…");
 
     match build(opts) {
         Ok(artifact) => {
-            let sha = &artifact.sha256;
-            let head = &sha[..sha.len().min(6)];
-            let tail_start = sha.len().saturating_sub(6);
-            let tail = &sha[tail_start..];
-            eprintln!(
-                "Wrote bundle: {} (sha256: {}…{}, {} bytes)",
-                artifact.path.display(),
-                head,
-                tail,
-                artifact.size_bytes,
-            );
-            println!("{}", artifact.path.display());
+            emit_artifact(&artifact, output);
             Ok(())
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            let _ = output.error(format!("{e}"));
             std::process::exit(exit_code_for(&e) as i32);
         }
     }
+}
+
+/// Human-mode artifact rendering. (JSON branch added in Task 3.)
+fn emit_artifact(artifact: &BundleArtifact, output: &mut Output) {
+    let sha = &artifact.sha256;
+    let head = &sha[..sha.len().min(6)];
+    let tail = &sha[sha.len().saturating_sub(6)..];
+    let _ = output.status(format!(
+        "Wrote bundle: {} (sha256: {head}…{tail}, {} bytes)",
+        artifact.path.display(),
+        artifact.size_bytes,
+    ));
+    let _ = output.human(&artifact.path.display().to_string());
 }
 
 /// Maps a [`BuildError`] to its CLI exit code per spec §6.
