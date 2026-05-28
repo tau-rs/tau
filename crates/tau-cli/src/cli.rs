@@ -431,6 +431,12 @@ pub struct VerifyArgs {
     /// frontmatter).
     #[arg(long)]
     pub anthropic_strict: bool,
+    /// Reproducibility check: rebuild a bundle from the local tree and
+    /// compare to this `.tau` file. Mutually exclusive with the package
+    /// positional. Exit 0 reproducible / 2 not / 3 not-installed
+    /// (Phase 2 §E).
+    #[arg(long, value_name = "PATH", conflicts_with = "package")]
+    pub bundle: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `tau update`.
