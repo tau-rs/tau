@@ -59,8 +59,41 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
     verify_schema_version(&manifest)?;
     // Step 5: target triple matches host.
     verify_target_matches_host(&manifest)?;
+    // Step 6: cwd tau.toml matches the bundle's recorded hash.
+    verify_tau_toml_sha256(&manifest, &opts.project_root)?;
 
-    unimplemented!("steps 6-8 in subsequent tasks")
+    unimplemented!("steps 7-8 in subsequent tasks")
+}
+
+/// Step 6: confirm the cwd's `tau.toml` hashes to the value recorded in
+/// the bundle, rejecting any drift since build time.
+fn verify_tau_toml_sha256(
+    m: &BundleManifest,
+    project_root: &std::path::Path,
+) -> Result<(), VerifyError> {
+    let path = project_root.join("tau.toml");
+    let bytes = std::fs::read(&path).map_err(|e| VerifyError::ProjectTomlRead {
+        path: path.clone(),
+        source: e,
+    })?;
+    let computed = sha256_hex(&bytes);
+    if computed != m.project.tau_toml_sha256 {
+        return Err(VerifyError::TauTomlDrift {
+            claimed: m.project.tau_toml_sha256.clone(),
+            computed,
+        });
+    }
+    Ok(())
+}
+
+/// SHA-256 of `bytes` as lowercase hex. MUST match the hashing
+/// `build.rs` uses for `project.tau_toml_sha256` (see build.rs ~line
+/// 241): raw `std::fs::read(tau.toml)` bytes, no normalization.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    crate::tree_hash::to_hex_lower(h.finalize().as_slice())
 }
 
 /// Step 5: confirm the bundle was built for the running host. A bundle
@@ -231,5 +264,42 @@ system = "you are solo"
         let m = BundleManifest::parse_str(&s).unwrap();
         // The fixture was built with TargetTriple::host(), so it matches.
         verify_target_matches_host(&m).expect("host triple matches");
+    }
+
+    #[test]
+    fn verify_tau_toml_drift_detected() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path());
+        // Mutate tau.toml after the build so its sha256 changes.
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "verify-fixture"
+version = "0.2.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "you are solo"
+"#,
+        )
+        .unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        let m = BundleManifest::parse_str(&s).unwrap();
+        let err = verify_tau_toml_sha256(&m, tmp.path()).unwrap_err();
+        assert!(matches!(err, VerifyError::TauTomlDrift { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn verify_tau_toml_clean_passes() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path());
+        let s = std::fs::read_to_string(&path).unwrap();
+        let m = BundleManifest::parse_str(&s).unwrap();
+        verify_tau_toml_sha256(&m, tmp.path()).expect("unchanged tau.toml verifies");
     }
 }
