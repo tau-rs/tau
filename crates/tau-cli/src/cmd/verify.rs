@@ -404,7 +404,9 @@ fn repro_error_exit_code(e: &tau_pkg::bundle::ReproError) -> i32 {
     match e {
         E::BundleRead { .. } | E::BundleParse { .. } | E::ShippedSelfHashInvalid { .. } => 2,
         E::Rebuild { source } if is_install_state_error(source) => 3,
-        E::TempDir { .. } | E::RebuiltRead { .. } | E::RebuiltParse { .. } | E::Rebuild { .. } => 70,
+        E::TempDir { .. } | E::RebuiltRead { .. } | E::RebuiltParse { .. } | E::Rebuild { .. } => {
+            70
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 # `tau verify --bundle` — Phase 2 §E design
 
-**Status:** Draft
+**Status:** Accepted
 **Date:** 2026-05-28
 **Authors:** titouanlebocq
 **Depends on:** §C.1 bundle format (ADR-0035, merged), §C.2 `tau build` producer (PR #242, merged)

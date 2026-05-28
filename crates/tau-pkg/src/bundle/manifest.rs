@@ -33,8 +33,10 @@ pub struct BundleMeta {
     /// Self-hash. SHA-256 of the canonical TOML serialization with
     /// this field set to the empty string. See spec §5.
     pub sha256: String,
-    /// RFC 3339 UTC timestamp. Informational; in the hash. Reproducibility
-    /// is §E's problem.
+    /// RFC 3339 UTC timestamp. Informational; **excluded** from the
+    /// self-hash (see `compute_self_hash`) so rebuilds at different
+    /// times reproduce the same hash. §E (`tau verify --bundle`) relies
+    /// on this.
     pub created_at: String,
     /// tau binary version that produced this bundle.
     pub tau_version: String,

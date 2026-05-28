@@ -109,14 +109,20 @@ pub enum ManifestDiff {
 /// Rebuild from `opts.project_root` and compare to the shipped bundle.
 pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError> {
     // 1. Read + parse the shipped bundle.
-    let shipped_str = std::fs::read_to_string(&opts.bundle_path)
-        .map_err(|e| ReproError::BundleRead { path: opts.bundle_path.clone(), source: e })?;
+    let shipped_str =
+        std::fs::read_to_string(&opts.bundle_path).map_err(|e| ReproError::BundleRead {
+            path: opts.bundle_path.clone(),
+            source: e,
+        })?;
     let shipped = BundleManifest::parse_str(&shipped_str)
         .map_err(|e| ReproError::BundleParse { source: e })?;
 
     // 2. The shipped bundle must be valid before we compare to it.
-    crate::bundle::hash::verify_self_hash(&shipped)
-        .map_err(|e| ReproError::ShippedSelfHashInvalid { detail: e.to_string() })?;
+    crate::bundle::hash::verify_self_hash(&shipped).map_err(|e| {
+        ReproError::ShippedSelfHashInvalid {
+            detail: e.to_string(),
+        }
+    })?;
 
     // 3. Rebuild from the local tree using the shipped target, to a temp path.
     let tmp = tempfile::TempDir::new().map_err(|e| ReproError::TempDir { source: e })?;
@@ -129,14 +135,21 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
     // 4. Parse the rebuilt bundle.
-    let rebuilt_str = std::fs::read_to_string(&artifact.path)
-        .map_err(|e| ReproError::RebuiltRead { path: artifact.path.clone(), source: e })?;
+    let rebuilt_str =
+        std::fs::read_to_string(&artifact.path).map_err(|e| ReproError::RebuiltRead {
+            path: artifact.path.clone(),
+            source: e,
+        })?;
     let rebuilt = BundleManifest::parse_str(&rebuilt_str)
         .map_err(|e| ReproError::RebuiltParse { source: e })?;
 
     // 5. Verdict + diff.
     let reproducible = shipped.bundle.sha256 == rebuilt.bundle.sha256;
-    let diffs = if reproducible { Vec::new() } else { diff_manifests(&shipped, &rebuilt) };
+    let diffs = if reproducible {
+        Vec::new()
+    } else {
+        diff_manifests(&shipped, &rebuilt)
+    };
 
     Ok(ReproReport {
         reproducible,
@@ -201,12 +214,17 @@ pub(crate) fn diff_manifests(
     }
 
     // packages — index by name, stable order.
-    let ship_pkgs: BTreeMap<&str, &_> =
-        shipped.packages.iter().map(|p| (p.name.as_str(), p)).collect();
-    let reb_pkgs: BTreeMap<&str, &_> =
-        rebuilt.packages.iter().map(|p| (p.name.as_str(), p)).collect();
-    let mut pkg_names: Vec<&str> =
-        ship_pkgs.keys().chain(reb_pkgs.keys()).copied().collect();
+    let ship_pkgs: BTreeMap<&str, &_> = shipped
+        .packages
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+    let reb_pkgs: BTreeMap<&str, &_> = rebuilt
+        .packages
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+    let mut pkg_names: Vec<&str> = ship_pkgs.keys().chain(reb_pkgs.keys()).copied().collect();
     pkg_names.sort_unstable();
     pkg_names.dedup();
     for name in pkg_names {
@@ -276,8 +294,11 @@ pub(crate) fn diff_manifests(
         .iter()
         .map(|a| (a.id.as_str().to_string(), a))
         .collect();
-    let mut agent_ids: Vec<String> =
-        ship_agents.keys().chain(reb_agents.keys()).cloned().collect();
+    let mut agent_ids: Vec<String> = ship_agents
+        .keys()
+        .chain(reb_agents.keys())
+        .cloned()
+        .collect();
     agent_ids.sort_unstable();
     agent_ids.dedup();
     for id in agent_ids {
@@ -420,10 +441,8 @@ system = "hi"
         let pkg = crate::bundle::manifest::BundlePackage {
             name: "newpkg".into(),
             version: semver::Version::new(0, 1, 0),
-            source: tau_domain::PackageSource::from_str(
-                "https://github.com/example/newpkg.git",
-            )
-            .unwrap(),
+            source: tau_domain::PackageSource::from_str("https://github.com/example/newpkg.git")
+                .unwrap(),
             tree_sha256: "0".repeat(64),
             binary_sha256: None,
             required_shapes: vec![],
@@ -464,7 +483,8 @@ llm_backend = "anthropic"
 [agents.solo.prompt]
 system = "you are solo"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             root.join("tau.lock"),
             "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
@@ -473,12 +493,16 @@ system = "you are solo"
             project_root: root.to_path_buf(),
             target: TargetTriple::host(),
             output_path: None,
-        }).unwrap();
+        })
+        .unwrap();
         artifact.path
     }
 
     fn ropts(bundle: std::path::PathBuf, root: &std::path::Path) -> ReproOptions {
-        ReproOptions { bundle_path: bundle, project_root: root.to_path_buf() }
+        ReproOptions {
+            bundle_path: bundle,
+            project_root: root.to_path_buf(),
+        }
     }
 
     #[test]
@@ -486,7 +510,11 @@ system = "you are solo"
         let tmp = tempdir().unwrap();
         let bundle = build_minimal_bundle(tmp.path());
         let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro check ran");
-        assert!(report.reproducible, "clean rebuild must reproduce; diffs={:?}", report.diffs);
+        assert!(
+            report.reproducible,
+            "clean rebuild must reproduce; diffs={:?}",
+            report.diffs
+        );
         assert_eq!(report.shipped_sha256, report.rebuilt_sha256);
         assert!(report.diffs.is_empty());
     }
@@ -510,7 +538,8 @@ llm_backend = "anthropic"
 [agents.solo.prompt]
 system = "you are solo"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro check ran");
         assert!(!report.reproducible);
         assert!(
@@ -535,6 +564,9 @@ system = "you are solo"
         assert_ne!(body, tampered);
         std::fs::write(&bundle, tampered).unwrap();
         let err = verify_reproducible(ropts(bundle, tmp.path())).unwrap_err();
-        assert!(matches!(err, ReproError::ShippedSelfHashInvalid { .. }), "got {err:?}");
+        assert!(
+            matches!(err, ReproError::ShippedSelfHashInvalid { .. }),
+            "got {err:?}"
+        );
     }
 }
