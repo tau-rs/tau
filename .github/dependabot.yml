@@ -45,7 +45,9 @@ updates:
       - rust
     groups:
       # Bundle patch + minor lockfile bumps of the same crate family.
-      # Major bumps still open one PR each (the default).
+      # Major bumps still open one PR each (the default) — except for
+      # the `opentelemetry` group below, where the crates pin to each
+      # other's exact minors and MUST move together.
       tokio:
         patterns:
           - "tokio*"
@@ -55,3 +57,25 @@ updates:
       tracing:
         patterns:
           - "tracing*"
+        # tracing-opentelemetry's release cadence is tied to the
+        # OpenTelemetry SDK, not the tracing crates — it lives in the
+        # `opentelemetry` group below.
+        exclude-patterns:
+          - "tracing-opentelemetry"
+      # The OpenTelemetry crates pin to each other's exact minors
+      # (`opentelemetry-otlp 0.32` requires `opentelemetry_sdk = "0.32"`,
+      # etc.), and `tonic` is the gRPC transport that `opentelemetry-otlp`
+      # locks to a single major. Bumping any of them in isolation
+      # produces an incompatible version graph (verified PR #240 — the
+      # original 6 single-crate Dependabot PRs #233-#238 were all red).
+      # `update-types: [major, minor, patch]` forces grouping even for
+      # the 0.X -> 0.(X+1) bumps that Cargo treats as breaking.
+      opentelemetry:
+        patterns:
+          - "opentelemetry*"
+          - "tracing-opentelemetry"
+          - "tonic*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
