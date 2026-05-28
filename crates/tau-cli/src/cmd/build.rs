@@ -85,17 +85,27 @@ fn available_triples_joined() -> String {
     v.join(", ")
 }
 
-/// Human-mode artifact rendering. (JSON branch added in Task 3.)
+/// Artifact rendering with JSON support. Emits JSON under --json,
+/// human-readable text otherwise.
 fn emit_artifact(artifact: &BundleArtifact, output: &mut Output) {
-    let sha = &artifact.sha256;
-    let head = &sha[..sha.len().min(6)];
-    let tail = &sha[sha.len().saturating_sub(6)..];
-    let _ = output.status(format!(
-        "Wrote bundle: {} (sha256: {head}…{tail}, {} bytes)",
-        artifact.path.display(),
-        artifact.size_bytes,
-    ));
-    let _ = output.human(&artifact.path.display().to_string());
+    if output.is_json() {
+        let obj = serde_json::json!({
+            "path": artifact.path.display().to_string(),
+            "sha256": artifact.sha256,
+            "size_bytes": artifact.size_bytes,
+        });
+        let _ = output.json(&obj);
+    } else {
+        let sha = &artifact.sha256;
+        let head = &sha[..sha.len().min(6)];
+        let tail = &sha[sha.len().saturating_sub(6)..];
+        let _ = output.status(format!(
+            "Wrote bundle: {} (sha256: {head}…{tail}, {} bytes)",
+            artifact.path.display(),
+            artifact.size_bytes,
+        ));
+        let _ = output.human(&artifact.path.display().to_string());
+    }
 }
 
 /// Maps a [`BuildError`] to its CLI exit code per spec §6.
