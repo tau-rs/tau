@@ -26,6 +26,10 @@ pub struct BuildOptions {
     /// Optional explicit output path. When `None`, defaults to
     /// `<project_root>/<project-name>-<project-version>.tau`.
     pub output_path: Option<PathBuf>,
+    /// Restrict the bundle to these agents and prune packages they don't
+    /// reference. `None` builds every agent and keeps every package (the
+    /// §C.2 behavior). The CLI maps an empty `--agent` set to `None`.
+    pub agent_filter: Option<Vec<tau_domain::AgentId>>,
 }
 
 /// Result of a successful build.
@@ -213,6 +217,66 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     // resort guards against future refactors swapping the container.
     agents.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
 
+    // Step 5.5: per-agent slicing + package pruning (spec §C.2.2).
+    //
+    // When `agent_filter` is None this block is skipped entirely and the
+    // full agent + package sets pass through (the §C.2 behavior). When
+    // Some, keep only the named agents and prune packages to their
+    // direct reference closure, then record the slice so `tau verify
+    // --bundle` can replay it.
+    let selected_agents: Option<Vec<String>> = match &opts.agent_filter {
+        None => None,
+        Some(wanted) => {
+            // Validate every requested id against the project config so
+            // the error fires even for agents a later step would reject.
+            let mut available: Vec<String> = project_config.agents.keys().cloned().collect();
+            available.sort();
+            for id in wanted {
+                if !project_config.agents.contains_key(id.as_str()) {
+                    return Err(BuildError::UnknownAgent {
+                        id: id.as_str().to_owned(),
+                        available,
+                    });
+                }
+            }
+
+            let wanted_set: std::collections::BTreeSet<&str> =
+                wanted.iter().map(|a| a.as_str()).collect();
+
+            // Keep only the selected agents.
+            agents.retain(|a| wanted_set.contains(a.id.as_str()));
+
+            // Package keep-set: each kept agent's home package
+            // (parsed from `[agents.<id>].package`) ∪ its required tools.
+            // The flat lockfile has no inter-package deps, so direct
+            // reference closure is complete (spec §4.2 assumption).
+            let mut keep: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for a in &agents {
+                if let Some(entry) = project_config.agents.get(a.id.as_str()) {
+                    // Empty / unparseable package field contributes
+                    // nothing — never a new failure vs. the full build.
+                    if let Ok((name, _req)) =
+                        crate::project::agent::parse_package_ref(&entry.package)
+                    {
+                        keep.insert(name);
+                    }
+                }
+                for t in &a.required_tools {
+                    keep.insert(t.clone());
+                }
+            }
+            packages.retain(|p| keep.contains(&p.name));
+
+            // Record the requested ids as the slice marker, sorted +
+            // deduped so a caller passing `--agent a --agent a` yields a
+            // stable, canonical marker (and thus a stable self-hash).
+            let mut sel: Vec<String> = wanted.iter().map(|a| a.as_str().to_owned()).collect();
+            sel.sort();
+            sel.dedup();
+            Some(sel)
+        }
+    };
+
     // Step 6: Assemble the manifest.
     //
     // The `tau.toml` schema does not currently carry a `[project]
@@ -235,6 +299,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
             created_at: humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string(),
             tau_version: env!("CARGO_PKG_VERSION").to_string(),
             target: opts.target,
+            selected_agents,
         },
         project: ProjectInfo {
             name: project_config.project_name.clone(),
@@ -380,6 +445,7 @@ mod tests {
             project_root: root.to_path_buf(),
             target: TargetTriple::host(),
             output_path: None,
+            agent_filter: None,
         }
     }
 
@@ -615,6 +681,193 @@ generated_at = "2024-01-01T00:00:00Z"
         assert_eq!(m.agents[0].system_prompt_sha256, want);
     }
 
+    /// Two-agent project: alpha→requires pkg-a, beta→requires pkg-b,
+    /// both home package pkg-home. All three package dirs exist so
+    /// step-3 install verification passes.
+    fn two_agent_project(tmp: &std::path::Path) {
+        std::fs::write(
+            tmp.join("tau.toml"),
+            r#"
+[project]
+name = "multi"
+version = "0.1.0"
+
+[agents.alpha]
+display_name = "Alpha"
+package = "pkg-home@^0.1"
+llm_backend = "anthropic"
+
+[agents.alpha.prompt]
+system = "you are alpha"
+
+[[agents.alpha.requires.tools]]
+name = "pkg-a"
+source = "https://example.com/pkg-a.git"
+
+[agents.beta]
+display_name = "Beta"
+package = "pkg-home@^0.1"
+llm_backend = "anthropic"
+
+[agents.beta.prompt]
+system = "you are beta"
+
+[[agents.beta.requires.tools]]
+name = "pkg-b"
+source = "https://example.com/pkg-b.git"
+"#,
+        )
+        .unwrap();
+        for name in ["pkg-a", "pkg-b", "pkg-home"] {
+            std::fs::create_dir_all(tmp.join(format!(".tau/packages/{name}/0.1.0"))).unwrap();
+        }
+        std::fs::write(
+            tmp.join("tau.lock"),
+            r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "pkg-a"
+active_version = "0.1.0"
+source = "https://example.com/pkg-a.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "0000000000000000000000000000000000000001"
+installed_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "pkg-b"
+active_version = "0.1.0"
+source = "https://example.com/pkg-b.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "0000000000000000000000000000000000000002"
+installed_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "pkg-home"
+active_version = "0.1.0"
+source = "https://example.com/pkg-home.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "0000000000000000000000000000000000000003"
+installed_at = "2024-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+    }
+
+    fn opts_filtered(root: &std::path::Path, ids: &[&str]) -> BuildOptions {
+        BuildOptions {
+            project_root: root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+            agent_filter: Some(ids.iter().map(|s| s.parse().unwrap()).collect()),
+        }
+    }
+
+    fn read_bundle(path: &std::path::Path) -> crate::bundle::manifest::BundleManifest {
+        let s = std::fs::read_to_string(path).unwrap();
+        crate::bundle::manifest::BundleManifest::parse_str(&s).unwrap()
+    }
+
+    #[test]
+    fn build_agent_filter_none_keeps_all() {
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let m = read_bundle(&build(opts(tmp.path())).unwrap().path);
+        assert_eq!(m.agents.len(), 2);
+        assert_eq!(m.packages.len(), 3);
+        assert_eq!(m.bundle.selected_agents, None);
+    }
+
+    #[test]
+    fn build_agent_filter_selects_single_agent() {
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let m = read_bundle(&build(opts_filtered(tmp.path(), &["alpha"])).unwrap().path);
+        assert_eq!(m.agents.len(), 1);
+        assert_eq!(m.agents[0].id.as_str(), "alpha");
+        assert_eq!(m.bundle.selected_agents, Some(vec!["alpha".to_string()]));
+    }
+
+    #[test]
+    fn build_agent_filter_prunes_unreferenced_packages() {
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let m = read_bundle(&build(opts_filtered(tmp.path(), &["alpha"])).unwrap().path);
+        let names: Vec<&str> = m.packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"pkg-a"), "got {names:?}");
+        assert!(names.contains(&"pkg-home"), "got {names:?}");
+        assert!(
+            !names.contains(&"pkg-b"),
+            "pkg-b must be pruned; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn build_agent_filter_keeps_home_package() {
+        // An agent's home package (from `[agents.<id>].package`) is kept
+        // even though it is not a required tool. Spec §7.
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let m = read_bundle(&build(opts_filtered(tmp.path(), &["alpha"])).unwrap().path);
+        let names: Vec<&str> = m.packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            names.contains(&"pkg-home"),
+            "home package must be retained even without a required-tool reference; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn build_agent_filter_multiple_agents_unions_packages() {
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let m = read_bundle(
+            &build(opts_filtered(tmp.path(), &["alpha", "beta"]))
+                .unwrap()
+                .path,
+        );
+        assert_eq!(m.agents.len(), 2);
+        let names: Vec<&str> = m.packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            names.contains(&"pkg-a") && names.contains(&"pkg-b") && names.contains(&"pkg-home"),
+            "got {names:?}"
+        );
+        assert_eq!(
+            m.bundle.selected_agents,
+            Some(vec!["alpha".to_string(), "beta".to_string()])
+        );
+    }
+
+    #[test]
+    fn build_agent_filter_unknown_id_errors() {
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let err = build(opts_filtered(tmp.path(), &["ghost"])).unwrap_err();
+        match err {
+            BuildError::UnknownAgent { id, available } => {
+                assert_eq!(id, "ghost");
+                assert_eq!(available, vec!["alpha".to_string(), "beta".to_string()]);
+            }
+            other => panic!("expected UnknownAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_agent_filter_is_reproducible() {
+        let tmp = tempdir().unwrap();
+        two_agent_project(tmp.path());
+        let a = build(opts_filtered(tmp.path(), &["alpha"])).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let b = build(opts_filtered(tmp.path(), &["alpha"])).unwrap();
+        assert_eq!(a.sha256, b.sha256, "sliced build self-hash must be stable");
+    }
+
     /// Canonical project + lockfile pair: one agent, no packages.
     /// Used by the step-6/7 tests.
     fn happy_path_project(tmp: &std::path::Path) {
@@ -691,6 +944,7 @@ generated_at = "2024-01-01T00:00:00Z"
             project_root: tmp.path().to_path_buf(),
             target: TargetTriple::host(),
             output_path: Some(explicit.clone()),
+            agent_filter: None,
         };
         let artifact = build(o).expect("build");
         assert_eq!(artifact.path, explicit);

@@ -125,12 +125,28 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
     })?;
 
     // 3. Rebuild from the local tree using the shipped target, to a temp path.
+    //    Replay the shipped bundle's slice (if any) so a sliced bundle
+    //    rebuilds to the same agent + package set. A full bundle has
+    //    `selected_agents == None` and rebuilds whole.
+    let agent_filter: Option<Vec<tau_domain::AgentId>> = match &shipped.bundle.selected_agents {
+        None => None,
+        Some(ids) => {
+            let parsed: Result<Vec<_>, _> = ids
+                .iter()
+                .map(|s| s.parse::<tau_domain::AgentId>())
+                .collect();
+            Some(parsed.map_err(|e| ReproError::ShippedSelfHashInvalid {
+                detail: format!("selected_agents contains an invalid agent id: {e}"),
+            })?)
+        }
+    };
     let tmp = tempfile::TempDir::new().map_err(|e| ReproError::TempDir { source: e })?;
     let rebuilt_path = tmp.path().join("rebuilt.tau");
     let artifact = crate::bundle::build(crate::bundle::BuildOptions {
         project_root: opts.project_root.clone(),
         target: shipped.bundle.target,
         output_path: Some(rebuilt_path.clone()),
+        agent_filter,
     })
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
@@ -389,6 +405,7 @@ system = "hi"
             project_root: tmp.path().to_path_buf(),
             target: TargetTriple::host(),
             output_path: None,
+            agent_filter: None,
         })
         .unwrap();
         let s = std::fs::read_to_string(&artifact.path).unwrap();
@@ -493,6 +510,7 @@ system = "you are solo"
             project_root: root.to_path_buf(),
             target: TargetTriple::host(),
             output_path: None,
+            agent_filter: None,
         })
         .unwrap();
         artifact.path
@@ -567,6 +585,122 @@ system = "you are solo"
         assert!(
             matches!(err, ReproError::ShippedSelfHashInvalid { .. }),
             "got {err:?}"
+        );
+    }
+
+    /// Build a two-agent project (solo + extra) sliced to `solo`, and
+    /// return the written bundle path.
+    fn build_sliced_solo(root: &std::path::Path) -> std::path::PathBuf {
+        std::fs::write(
+            root.join("tau.toml"),
+            r#"
+[project]
+name = "sliced-fixture"
+version = "0.1.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "you are solo"
+
+[agents.extra]
+display_name = "Extra"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.extra.prompt]
+system = "you are extra"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let artifact = build(BuildOptions {
+            project_root: root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+            agent_filter: Some(vec!["solo".parse().unwrap()]),
+        })
+        .unwrap();
+        artifact.path
+    }
+
+    #[test]
+    fn verify_reproducible_sliced_bundle_roundtrips() {
+        let tmp = tempdir().unwrap();
+        let bundle = build_sliced_solo(tmp.path());
+        let shipped = BundleManifest::from_path(&bundle).unwrap();
+        assert_eq!(
+            shipped.bundle.selected_agents,
+            Some(vec!["solo".to_string()])
+        );
+        assert_eq!(shipped.agents.len(), 1);
+
+        let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro ran");
+        assert!(
+            report.reproducible,
+            "sliced bundle must reproduce; diffs={:?}",
+            report.diffs
+        );
+        assert!(report.diffs.is_empty());
+    }
+
+    #[test]
+    fn verify_reproducible_full_bundle_still_roundtrips() {
+        let tmp = tempdir().unwrap();
+        let bundle = build_minimal_bundle(tmp.path());
+        let shipped = BundleManifest::from_path(&bundle).unwrap();
+        assert_eq!(shipped.bundle.selected_agents, None);
+        let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro ran");
+        assert!(
+            report.reproducible,
+            "full bundle must still reproduce; diffs={:?}",
+            report.diffs
+        );
+    }
+
+    #[test]
+    fn verify_reproducible_sliced_bundle_detects_drift() {
+        let tmp = tempdir().unwrap();
+        let bundle = build_sliced_solo(tmp.path());
+        // Mutate solo's prompt → rebuild's solo prompt hash differs.
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "sliced-fixture"
+version = "0.1.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "you are MUTATED solo"
+
+[agents.extra]
+display_name = "Extra"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.extra.prompt]
+system = "you are extra"
+"#,
+        )
+        .unwrap();
+        let report = verify_reproducible(ropts(bundle, tmp.path())).expect("repro ran");
+        assert!(!report.reproducible, "prompt drift must break reproduction");
+        assert!(
+            report.diffs.iter().any(|d| matches!(d, ManifestDiff::AgentField { id, .. } if id == "solo"))
+                || report.diffs.iter().any(|d| matches!(d, ManifestDiff::ProjectField { field, .. } if field == "tau_toml_sha256")),
+            "expected a solo agent-field or tau_toml_sha256 diff; got {:?}", report.diffs,
         );
     }
 }

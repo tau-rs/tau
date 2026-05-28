@@ -26,6 +26,9 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
     write_str_kv(&mut out, "created_at", &manifest.bundle.created_at);
     write_str_kv(&mut out, "tau_version", &manifest.bundle.tau_version);
     write_str_kv(&mut out, "target", &manifest.bundle.target.to_string());
+    if let Some(sel) = &manifest.bundle.selected_agents {
+        write_string_array(&mut out, "selected_agents", sel.clone());
+    }
 
     // [project]
     out.push('\n');
@@ -260,6 +263,35 @@ mod tests {
         assert!(
             pos_sha < pos_created && pos_created < pos_version && pos_version < pos_target,
             "fields out of order: {toml_str}"
+        );
+    }
+
+    #[test]
+    fn canonical_emits_all_bundle_meta_fields() {
+        // Guard against the serde/canonical drift landmine: every
+        // BundleMeta field that feeds the self-hash must appear in the
+        // canonical `[bundle]` table. selected_agents is the newest such
+        // field; assert it is emitted (after target) when Some.
+        let mut m = sample_manifest();
+        m.bundle.selected_agents = Some(vec!["alpha".to_string(), "beta".to_string()]);
+        let out = to_canonical_toml(&m);
+        // Appears in the [bundle] section, after target, before [project].
+        let bundle_start = out.find("[bundle]").expect("[bundle] header");
+        let project_start = out.find("[project]").expect("[project] header");
+        let sel = out
+            .find("selected_agents")
+            .expect("selected_agents emitted");
+        let target = out.find("target =").expect("target emitted");
+        assert!(
+            bundle_start < target && target < sel && sel < project_start,
+            "selected_agents must sit in [bundle] after target:\n{out}"
+        );
+        // And omitted entirely when None.
+        m.bundle.selected_agents = None;
+        let out_none = to_canonical_toml(&m);
+        assert!(
+            !out_none.contains("selected_agents"),
+            "selected_agents must be omitted when None:\n{out_none}"
         );
     }
 }

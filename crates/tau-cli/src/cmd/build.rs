@@ -33,10 +33,30 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         }
     };
 
+    // Map the repeatable `--agent` flag to the builder's filter. Empty
+    // → None (build all). Parse each id to AgentId; a malformed id is a
+    // config-level input error (exit 2).
+    let agent_filter = if args.agents.is_empty() {
+        None
+    } else {
+        let mut parsed = Vec::with_capacity(args.agents.len());
+        for raw in &args.agents {
+            match raw.parse::<tau_domain::AgentId>() {
+                Ok(id) => parsed.push(id),
+                Err(e) => {
+                    let _ = output.error(format!("invalid agent id '{raw}': {e}"));
+                    std::process::exit(2);
+                }
+            }
+        }
+        Some(parsed)
+    };
+
     let opts = BuildOptions {
         project_root,
         target,
         output_path: args.output.clone(),
+        agent_filter,
     };
 
     let _ = output.status("Building bundle…");
@@ -119,6 +139,7 @@ fn exit_code_for(err: &BuildError) -> u8 {
         | BuildError::PromptResolveFailed { .. }
         | BuildError::CapabilityOverrideFailed { .. }
         | BuildError::WriteFailed { .. } => 70,
+        BuildError::UnknownAgent { .. } => 2,
     }
 }
 
@@ -132,6 +153,7 @@ mod tests {
         BuildArgs {
             target: t.map(|s| s.to_string()),
             output: None,
+            agents: vec![],
         }
     }
 
@@ -202,6 +224,15 @@ mod tests {
                 source: std::io::Error::other("x"),
             }),
             70,
+        );
+
+        // Unknown agent (bad --agent input) → 2.
+        assert_eq!(
+            exit_code_for(&BuildError::UnknownAgent {
+                id: "ghost".into(),
+                available: vec!["alpha".into()],
+            }),
+            2,
         );
     }
 }
