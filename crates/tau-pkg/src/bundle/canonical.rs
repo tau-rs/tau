@@ -26,6 +26,9 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
     write_str_kv(&mut out, "created_at", &manifest.bundle.created_at);
     write_str_kv(&mut out, "tau_version", &manifest.bundle.tau_version);
     write_str_kv(&mut out, "target", &manifest.bundle.target.to_string());
+    if let Some(sel) = &manifest.bundle.selected_agents {
+        write_string_array(&mut out, "selected_agents", sel.clone());
+    }
 
     // [project]
     out.push('\n');
