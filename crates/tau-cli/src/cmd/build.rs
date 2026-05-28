@@ -25,7 +25,13 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         }
     };
 
-    let target = TargetTriple::host(); // Task 2 → resolve_target(args)
+    let target = match resolve_target(args) {
+        Ok(t) => t,
+        Err(msg) => {
+            let _ = output.error(msg);
+            std::process::exit(2);
+        }
+    };
 
     let opts = BuildOptions {
         project_root,
@@ -45,6 +51,38 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
             std::process::exit(exit_code_for(&e) as i32);
         }
     }
+}
+
+/// Resolve the build target from CLI args. `None` → host; `Some(s)` →
+/// parse + validate it's an Available triple (ADR-0034). Returns a
+/// human-readable error string on invalid input.
+fn resolve_target(args: &BuildArgs) -> Result<TargetTriple, String> {
+    match &args.target {
+        None => Ok(TargetTriple::host()),
+        Some(s) => {
+            let triple: TargetTriple = s
+                .parse()
+                .map_err(|e| format!("invalid target triple '{s}': {e}"))?;
+            let available = tau_ports::target::lookup(&triple)
+                .is_some_and(|e| matches!(e.status, tau_ports::target::TripleStatus::Available));
+            if !available {
+                return Err(format!(
+                    "target '{triple}' is not an Available build target; available: {}",
+                    available_triples_joined(),
+                ));
+            }
+            Ok(triple)
+        }
+    }
+}
+
+/// Comma-joined Display list of Available registry triples (sorted).
+fn available_triples_joined() -> String {
+    let mut v: Vec<String> = tau_ports::target::list_available()
+        .map(|e| e.triple.to_string())
+        .collect();
+    v.sort();
+    v.join(", ")
 }
 
 /// Human-mode artifact rendering. (JSON branch added in Task 3.)
@@ -77,6 +115,47 @@ fn exit_code_for(err: &BuildError) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::BuildArgs;
+    use tau_ports::target::TargetTriple;
+
+    fn args_with_target(t: Option<&str>) -> BuildArgs {
+        BuildArgs {
+            target: t.map(|s| s.to_string()),
+            output: None,
+        }
+    }
+
+    #[test]
+    fn resolve_target_defaults_to_host() {
+        assert_eq!(
+            resolve_target(&args_with_target(None)).unwrap(),
+            TargetTriple::host()
+        );
+    }
+
+    #[test]
+    fn resolve_target_accepts_available_triple() {
+        let host_str = TargetTriple::host().to_string();
+        assert_eq!(
+            resolve_target(&args_with_target(Some(&host_str))).unwrap(),
+            TargetTriple::host()
+        );
+    }
+
+    #[test]
+    fn resolve_target_rejects_unparseable() {
+        let err = resolve_target(&args_with_target(Some("not a triple!!!"))).unwrap_err();
+        assert!(err.contains("invalid target triple"), "got {err}");
+    }
+
+    #[test]
+    fn resolve_target_rejects_reserved_or_unknown() {
+        // "windows-native-strict" parses the platform-adapter-tier grammar
+        // and IS in the registry, but with status Reserved (not Available)
+        // — exercises the lookup-Some(Reserved) branch of the Available check.
+        let err = resolve_target(&args_with_target(Some("windows-native-strict"))).unwrap_err();
+        assert!(err.contains("not an Available"), "got {err}");
+    }
 
     #[test]
     fn exit_code_mapping_per_spec() {
