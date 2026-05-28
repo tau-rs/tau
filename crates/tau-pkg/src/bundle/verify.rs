@@ -63,8 +63,84 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
     verify_tau_toml_sha256(&manifest, &opts.project_root)?;
     // Step 7: every bundled package is installed and its tree is intact.
     verify_packages_installed_and_hashed(&manifest, &opts.project_root)?;
+    // Step 8: agent prompts + build agent_lookup.
+    let agent_lookup = verify_agent_prompts(&manifest, &opts.project_root)?;
+    Ok(VerifyReport {
+        manifest,
+        agent_lookup,
+    })
+}
 
-    unimplemented!("step 8 in next task")
+/// Step 8: for every agent recorded in the bundle, re-resolve its system
+/// prompt from the cwd's project config and confirm the SHA-256 still
+/// matches the value the build recorded. Detects prompt drift (inline or
+/// file-based) since build time, and an agent set that no longer matches
+/// the bundle.
+///
+/// The cwd's `tau.toml` was already proven byte-clean in step 6, so we
+/// load it through the SAME pipeline `build.rs` step 1 used
+/// ([`UncheckedProjectConfig`] → `validate()`). Prompt bytes are
+/// resolved via the shared [`crate::bundle::build::resolve_agent_prompt_bytes`]
+/// helper that build's step 5 also calls — so a clean verify can never
+/// spuriously fail on a prompt hash.
+fn verify_agent_prompts(
+    m: &BundleManifest,
+    project_root: &std::path::Path,
+) -> Result<BTreeMap<String, ResolvedAgent>, VerifyError> {
+    use crate::project::project::UncheckedProjectConfig;
+
+    let path = project_root.join("tau.toml");
+    // Step 6 already confirmed these bytes match the bundle, so any read
+    // failure here is genuinely a missing/unreadable file.
+    let bytes = std::fs::read(&path).map_err(|source| VerifyError::ProjectTomlRead {
+        path: path.clone(),
+        source,
+    })?;
+    // Parse + validate failures map to ProjectTomlRead too — the cwd's
+    // config could not be loaded. (Step 6's clean hash means this is
+    // unexpected, but we surface it rather than panic.)
+    let to_io = |e: String| VerifyError::ProjectTomlRead {
+        path: path.clone(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+    };
+    let tau_toml_str = std::str::from_utf8(&bytes)
+        .map_err(|e| to_io(format!("tau.toml is not utf-8: {e}")))?;
+    let unchecked: UncheckedProjectConfig =
+        toml::from_str(tau_toml_str).map_err(|e| to_io(format!("parse {path:?}: {e}")))?;
+    let project_config = unchecked
+        .validate()
+        .map_err(|e| to_io(format!("validate {path:?}: {e}")))?;
+
+    let mut agent_lookup: BTreeMap<String, ResolvedAgent> = BTreeMap::new();
+    for agent in &m.agents {
+        let id = agent.id.as_str().to_string();
+        let entry = project_config
+            .agents
+            .get(&id)
+            .ok_or_else(|| VerifyError::AgentSetMismatch { id: id.clone() })?;
+        let prompt_bytes =
+            crate::bundle::build::resolve_agent_prompt_bytes(&entry.prompt, project_root)
+                .map_err(|source| VerifyError::AgentPromptResolve {
+                    id: id.clone(),
+                    source,
+                })?;
+        let computed = sha256_hex(&prompt_bytes);
+        if computed != agent.system_prompt_sha256 {
+            return Err(VerifyError::AgentPromptDrift {
+                id,
+                claimed: agent.system_prompt_sha256.clone(),
+                computed,
+            });
+        }
+        agent_lookup.insert(
+            id,
+            ResolvedAgent {
+                bundle_entry: agent.clone(),
+                system_prompt: prompt_bytes,
+            },
+        );
+    }
+    Ok(agent_lookup)
 }
 
 /// Step 7: confirm each package recorded in the bundle is installed at
@@ -423,5 +499,57 @@ installed_at = "2024-01-01T00:00:00Z"
         let s = std::fs::read_to_string(&path).unwrap();
         let m = BundleManifest::parse_str(&s).unwrap();
         verify_packages_installed_and_hashed(&m, tmp.path()).expect("clean packages verify");
+    }
+
+    #[test]
+    fn verify_happy_path_returns_report_with_agent_lookup() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path());
+        let report = verify_bundle(vopts(path, tmp.path())).expect("verify succeeds");
+        assert_eq!(report.manifest.project.name, "verify-fixture");
+        assert!(report.agent_lookup.contains_key("solo"));
+        assert_eq!(report.agent_lookup["solo"].system_prompt, b"you are solo");
+    }
+
+    #[test]
+    fn verify_agent_prompt_file_drift_detected() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "file-prompt"
+version = "0.1.0"
+
+[agents.writer]
+display_name = "Writer"
+package = "noop@^0.1"
+llm_backend = "anthropic"
+
+[agents.writer.prompt]
+system_file = "prompt.md"
+"#,
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("prompt.md"), "original prompt").unwrap();
+        std::fs::write(
+            tmp.path().join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let artifact = build(BuildOptions {
+            project_root: tmp.path().to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+        })
+        .unwrap();
+        // Mutate the prompt FILE after build (tau.toml unchanged, so step 6
+        // passes; step 8 must catch the prompt drift).
+        std::fs::write(tmp.path().join("prompt.md"), "tampered prompt").unwrap();
+        let err = verify_bundle(vopts(artifact.path, tmp.path())).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::AgentPromptDrift { .. }),
+            "got {err:?}"
+        );
     }
 }

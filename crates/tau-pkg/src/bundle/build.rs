@@ -156,22 +156,15 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
             BuildError::ManifestInvalid(format!("agent `{id}` has invalid id: {e}"))
         })?;
 
-        // Resolve the system prompt to bytes.
-        let prompt_bytes: Vec<u8> = match &entry.prompt {
-            PromptEntry::Inline(s) => s.clone().into_bytes(),
-            PromptEntry::File(rel) => {
-                let abs = if rel.is_absolute() {
-                    rel.clone()
-                } else {
-                    opts.project_root.join(rel)
-                };
-                std::fs::read(&abs).map_err(|source| BuildError::PromptResolveFailed {
-                    id: id.clone(),
-                    source,
-                })?
-            }
-            PromptEntry::None => Vec::new(),
-        };
+        // Resolve the system prompt to bytes via the shared helper that
+        // `tau verify` (bundle/verify.rs step 8) ALSO calls — keeping the
+        // two byte-for-byte identical so a clean verify never spuriously
+        // fails on a prompt.
+        let prompt_bytes: Vec<u8> = resolve_agent_prompt_bytes(&entry.prompt, &opts.project_root)
+            .map_err(|source| BuildError::PromptResolveFailed {
+                id: id.clone(),
+                source,
+            })?;
         let system_prompt_sha256 = crate::tree_hash::to_hex_lower(&{
             use sha2::{Digest, Sha256};
             let mut h = Sha256::new();
@@ -343,6 +336,36 @@ fn effective_to_bundle(
     _eff: &[crate::capability_override::EffectiveCapability],
 ) -> BundleEffectiveCapabilities {
     BundleEffectiveCapabilities::default()
+}
+
+/// Resolve an agent's `[agents.<id>.prompt]` entry to the exact bytes
+/// that get SHA-256-hashed into `BundleAgent.system_prompt_sha256`.
+///
+/// This is the SINGLE source of truth for prompt-byte resolution. Both
+/// the build pipeline (step 5 above) and `tau verify` (bundle/verify.rs
+/// step 8) call it, guaranteeing their hashes can never drift:
+///
+/// - [`PromptEntry::Inline`] → the inline string's UTF-8 bytes.
+/// - [`PromptEntry::File`] → the file's raw bytes, resolved relative to
+///   `project_root` when the path is relative.
+/// - [`PromptEntry::None`] → empty bytes (hashes to the SHA-256 of the
+///   empty string), matching §C.2's "no prompt ⇒ hash empty" rule.
+pub(crate) fn resolve_agent_prompt_bytes(
+    prompt: &PromptEntry,
+    project_root: &std::path::Path,
+) -> Result<Vec<u8>, std::io::Error> {
+    match prompt {
+        PromptEntry::Inline(s) => Ok(s.clone().into_bytes()),
+        PromptEntry::File(rel) => {
+            let abs = if rel.is_absolute() {
+                rel.clone()
+            } else {
+                project_root.join(rel)
+            };
+            std::fs::read(&abs)
+        }
+        PromptEntry::None => Ok(Vec::new()),
+    }
 }
 
 #[cfg(test)]
