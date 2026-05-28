@@ -48,7 +48,18 @@ pre-commit:
       # An inherited CARGO_TARGET_DIR breaks both. Unset the var and pass
       # --target-dir to nextest itself so only nextest's own output is
       # isolated; child cargo processes see no override and use defaults.
-      run: bash -c 'unset CARGO_TARGET_DIR && env CARGO_INCREMENTAL=0 cargo nextest run --workspace --all-targets --target-dir target/lefthook/test'
+      #
+      # unset GIT_* : git sets GIT_DIR (and friends) in the environment of
+      # the processes it spawns for hooks. nextest passes that environment
+      # through to every test binary, so test fixtures that shell out to
+      # `git` (init / symbolic-ref / commit / remote add — see
+      # crates/*/tests/**/run_git) operate on the HOST repo instead of
+      # their tmpdir, ignoring their own `current_dir`. This silently
+      # rewrote a worktree's HEAD onto refs/heads/main with bogus "initial"
+      # commits (diagnosed 2026-05-27). Stripping the discovery vars here
+      # restores a clean git environment for the whole test run. CI is
+      # unaffected (it never runs tests under a git hook) but harmless.
+      run: bash -c 'unset CARGO_TARGET_DIR GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE && env CARGO_INCREMENTAL=0 cargo nextest run --workspace --all-targets --target-dir target/lefthook/test'
     check-linux-x86:
       glob: "*.{rs,toml}"
       # Uses x86_64-unknown-linux-musl (not -gnu) because macOS lacks
