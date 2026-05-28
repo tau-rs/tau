@@ -198,6 +198,13 @@ pub struct BuildArgs {
     /// Output path (default: `<project>/<name>-<version>.tau`).
     #[arg(long, short = 'o', value_name = "PATH")]
     pub output: Option<std::path::PathBuf>,
+    /// Restrict the bundle to one or more agents (repeatable:
+    /// `--agent a --agent b`). When omitted, every agent is built.
+    /// Selecting agents also prunes packages they don't reference.
+    /// To avoid overwriting a full bundle at the default path, pass
+    /// `-o`/`--output`.
+    #[arg(long = "agent", value_name = "ID")]
+    pub agents: Vec<String>,
 }
 
 /// `tau plugin <action>` — debug-tier helpers per spec §9.
