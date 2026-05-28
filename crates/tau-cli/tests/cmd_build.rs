@@ -268,3 +268,107 @@ fn build_with_available_target_succeeds() {
         .assert()
         .success();
 }
+
+/// Two-agent project (alpha + beta), empty lockfile (no packages so the
+/// install-verify step is a no-op). Used by the `--agent` slice tests.
+fn write_two_agent_project(root: &std::path::Path) {
+    std::fs::write(
+        root.join("tau.toml"),
+        r#"
+[project]
+name = "multi"
+version = "0.1.0"
+
+[agents.alpha]
+display_name = "Alpha"
+package = "multi@^0.1"
+llm_backend = "anthropic"
+
+[agents.alpha.prompt]
+system = "you are alpha"
+
+[agents.beta]
+display_name = "Beta"
+package = "multi@^0.1"
+llm_backend = "anthropic"
+
+[agents.beta.prompt]
+system = "you are beta"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tau.lock"),
+        r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn build_agent_flag_slices_bundle() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_two_agent_project(&project);
+    let tau_home = make_tau_home(scratch.path());
+    let out = project.join("alpha.tau");
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--agent", "alpha", "-o", out.to_str().unwrap()])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+
+    let body = std::fs::read_to_string(&out).unwrap();
+    let m = tau_pkg::bundle::manifest::BundleManifest::parse_str(&body).unwrap();
+    assert_eq!(m.agents.len(), 1);
+    assert_eq!(m.agents[0].id.as_str(), "alpha");
+    assert_eq!(m.bundle.selected_agents, Some(vec!["alpha".to_string()]));
+}
+
+#[test]
+fn build_agent_flag_unknown_exits_two() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_two_agent_project(&project);
+    let tau_home = make_tau_home(scratch.path());
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--agent", "ghost"])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("ghost"))
+        .stderr(predicate::str::contains("alpha"));
+}
+
+#[test]
+fn build_agent_flag_repeatable() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_two_agent_project(&project);
+    let tau_home = make_tau_home(scratch.path());
+    let out = project.join("both.tau");
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--agent", "alpha", "--agent", "beta", "-o", out.to_str().unwrap()])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+
+    let body = std::fs::read_to_string(&out).unwrap();
+    let m = tau_pkg::bundle::manifest::BundleManifest::parse_str(&body).unwrap();
+    assert_eq!(m.agents.len(), 2);
+    assert_eq!(m.bundle.selected_agents, Some(vec!["alpha".to_string(), "beta".to_string()]));
+}

@@ -18,6 +18,7 @@ fn realistic_bundle_round_trips_through_disk() {
             created_at: "2026-05-19T13:42:11Z".into(),
             tau_version: "0.1.0".into(),
             target: "linux-native-strict".parse().unwrap(),
+            selected_agents: None,
         },
         project: ProjectInfo {
             name: "support-bot".into(),
@@ -97,6 +98,7 @@ fn tampered_bundle_on_disk_fails_verification() {
             created_at: "2026-05-19T13:42:11Z".into(),
             tau_version: "0.1.0".into(),
             target: "passthrough".parse().unwrap(),
+            selected_agents: None,
         },
         project: ProjectInfo {
             name: "tiny".into(),

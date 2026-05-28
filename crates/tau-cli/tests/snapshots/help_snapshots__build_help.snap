@@ -13,6 +13,9 @@ Options:
   -o, --output <PATH>
           Output path (default: `<project>/<name>-<version>.tau`)
 
+      --agent <ID>
+          Restrict the bundle to one or more agents (repeatable: `--agent a --agent b`). When omitted, every agent is built. Selecting agents also prunes packages they don't reference. To avoid overwriting a full bundle at the default path, pass `-o`/`--output`
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 
