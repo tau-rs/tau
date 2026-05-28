@@ -160,3 +160,111 @@ installed_at = "2024-01-01T00:00:00Z"
         .code(3)
         .stderr(predicate::str::contains("ghost"));
 }
+
+/// Empty schema-v6 lockfile body shared by the §C.2.1 flag tests: no
+/// packages, so the install-verify step is a no-op and the build runs
+/// through to writing a bundle.
+const EMPTY_V6_LOCK: &str = r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+"#;
+
+#[test]
+fn build_with_output_flag_writes_to_custom_path() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "ocustom");
+    std::fs::write(project.join("tau.lock"), EMPTY_V6_LOCK).unwrap();
+    let out_path = project.join("custom.tau");
+
+    let tau_home = make_tau_home(scratch.path());
+
+    let output = Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "-o", out_path.to_str().unwrap()])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    assert!(out_path.exists(), "bundle written to -o path");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        out_path.display().to_string(),
+    );
+}
+
+#[test]
+fn build_with_json_emits_artifact_object() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "jbuild");
+    std::fs::write(project.join("tau.lock"), EMPTY_V6_LOCK).unwrap();
+
+    let tau_home = make_tau_home(scratch.path());
+
+    let output = Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--json"])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert!(
+        v["path"].as_str().unwrap().ends_with("jbuild-0.1.0.tau"),
+        "path={:?}",
+        v["path"],
+    );
+    assert_eq!(v["sha256"].as_str().unwrap().len(), 64);
+    assert!(v["size_bytes"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn build_with_invalid_target_exits_two() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "badtgt");
+    std::fs::write(project.join("tau.lock"), EMPTY_V6_LOCK).unwrap();
+
+    let tau_home = make_tau_home(scratch.path());
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--target", "not-a-real-triple"])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("not-a-real-triple"));
+}
+
+#[test]
+fn build_with_available_target_succeeds() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "avtgt");
+    std::fs::write(project.join("tau.lock"), EMPTY_V6_LOCK).unwrap();
+
+    let tau_home = make_tau_home(scratch.path());
+
+    // `passthrough` is Available on every host. (Don't use `host()`:
+    // on Windows it is `windows-native-strict`, which is Reserved and
+    // would be rejected by the --target Available gate.)
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--target", "passthrough"])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+}
