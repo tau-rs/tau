@@ -142,6 +142,12 @@ fn write_effective_capabilities(out: &mut String, caps: &BundleEffectiveCapabili
     if !caps.deny_agent_spawn.is_empty() {
         write_string_array(out, "deny_agent_spawn", caps.deny_agent_spawn.clone());
     }
+    if !caps.allow_skill_spawn.is_empty() {
+        write_string_array(out, "allow_skill_spawn", caps.allow_skill_spawn.clone());
+    }
+    if !caps.deny_skill_spawn.is_empty() {
+        write_string_array(out, "deny_skill_spawn", caps.deny_skill_spawn.clone());
+    }
 }
 
 fn write_str_kv(out: &mut String, key: &str, value: &str) {
@@ -293,5 +299,20 @@ mod tests {
             !out_none.contains("selected_agents"),
             "selected_agents must be omitted when None:\n{out_none}"
         );
+    }
+
+    #[test]
+    fn canonical_emits_skill_spawn_when_present_and_omits_when_empty() {
+        use crate::bundle::manifest::BundleEffectiveCapabilities;
+        let mut caps = BundleEffectiveCapabilities::default();
+        caps.allow_skill_spawn.push("critic".to_string());
+        caps.deny_skill_spawn.push("evil".to_string());
+        let mut out = String::new();
+        write_effective_capabilities(&mut out, &caps);
+        assert!(out.contains("allow_skill_spawn"), "got: {out}");
+        assert!(out.contains("deny_skill_spawn"), "got: {out}");
+        let mut out2 = String::new();
+        write_effective_capabilities(&mut out2, &BundleEffectiveCapabilities::default());
+        assert!(!out2.contains("skill_spawn"), "got: {out2}");
     }
 }

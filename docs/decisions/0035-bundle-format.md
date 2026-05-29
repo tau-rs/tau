@@ -47,6 +47,10 @@ v2 is a **breaking change**. Consumers fail loudly
 (`BundleParseError::UnsupportedSchemaVersion`) when they meet a
 schema_version they don't support.
 
+The capability-vocabulary forward-compatibility rules (the additive
+discipline for adding new capability shapes to bundles) are codified in
+ADR-0036.
+
 ### Reference-only deferral
 
 Self-contained bundles (with embedded plugin binaries) are deferred
