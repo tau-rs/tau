@@ -539,7 +539,10 @@ some_future_field = "value"
         let mut caps = BundleEffectiveCapabilities::default();
         assert!(caps.is_empty());
         caps.allow_skill_spawn.push("critic".to_string());
-        assert!(!caps.is_empty(), "allow_skill_spawn must count toward non-empty");
+        assert!(
+            !caps.is_empty(),
+            "allow_skill_spawn must count toward non-empty"
+        );
     }
 
     /// A bundle emitted by a hypothetical future tau: unknown fields and
@@ -586,7 +589,10 @@ future_key = "tolerated"
         assert_eq!(m.packages[0].name, "p");
         assert_eq!(m.agents.len(), 1);
         assert_eq!(m.agents[0].id.as_str(), "r");
-        assert_eq!(m.agents[0].effective_capabilities.allow_fs_read, vec!["/data/**".to_string()]);
+        assert_eq!(
+            m.agents[0].effective_capabilities.allow_fs_read,
+            vec!["/data/**".to_string()]
+        );
         assert!(m.agents[0].backend.extra.contains_key("future_backend_key"));
     }
 
@@ -637,6 +643,9 @@ system_prompt_sha256 = "7"
 effective_capabilities = { allow_fs_read = ["/a/**"], allow_some_future_shape = ["/b/**"] }
 "#;
         let m = BundleManifest::parse_str(toml_str).expect("must parse");
-        assert_eq!(m.agents[0].effective_capabilities.allow_fs_read, vec!["/a/**".to_string()]);
+        assert_eq!(
+            m.agents[0].effective_capabilities.allow_fs_read,
+            vec!["/a/**".to_string()]
+        );
     }
 }

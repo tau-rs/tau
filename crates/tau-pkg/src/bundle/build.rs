@@ -417,7 +417,10 @@ fn agent_home_package_caps(
 fn effective_to_bundle(
     eff: &[crate::capability_override::EffectiveCapability],
 ) -> BundleEffectiveCapabilities {
-    use tau_domain::{AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability};
+    use tau_domain::{
+        AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability,
+        SkillCapability,
+    };
     let mut out = BundleEffectiveCapabilities::default();
     for e in eff {
         match &e.source {
@@ -455,8 +458,11 @@ fn effective_to_bundle(
                 out.deny_agent_spawn.extend(e.deny.clone());
             }
             Capability::Skill(SkillCapability::Spawn { allowed_skills, .. }) => {
-                out.allow_skill_spawn
-                    .extend(e.allow_override.clone().unwrap_or_else(|| allowed_skills.clone()));
+                out.allow_skill_spawn.extend(
+                    e.allow_override
+                        .clone()
+                        .unwrap_or_else(|| allowed_skills.clone()),
+                );
                 out.deny_skill_spawn.extend(e.deny.clone());
             }
             // task_list / plan / custom: no bundle field (still dropped).
