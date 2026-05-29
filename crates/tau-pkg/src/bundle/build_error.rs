@@ -65,6 +65,30 @@ pub enum BuildError {
     #[error("manifest assembly failed: {0}")]
     ManifestInvalid(String),
 
+    /// An agent declares capability overrides but its home package (the
+    /// `[agents.<id>].package` ref) is absent from the resolved package
+    /// set — the effective grant set cannot be computed.
+    #[error("agent `{id}` has capability overrides but its home package `{package}` is not in the bundle's package set; run `tau install`")]
+    AgentHomePackageMissing {
+        /// Agent id with the dangling home-package reference.
+        id: String,
+        /// The unresolved home-package name.
+        package: String,
+    },
+
+    /// An agent's home-package manifest could not be read or parsed while
+    /// computing its effective capabilities.
+    #[error("failed to read home-package manifest for agent `{id}` (package `{package}`): {source}")]
+    AgentHomePackageManifest {
+        /// Agent id whose home-package manifest failed to load.
+        id: String,
+        /// The home-package name.
+        package: String,
+        /// Underlying manifest read/parse error.
+        #[source]
+        source: crate::error::ManifestReadError,
+    },
+
     /// `--agent <id>` named an agent not present in the project config.
     #[error("unknown agent `{id}`; available agents: {}", available.join(", "))]
     UnknownAgent {
