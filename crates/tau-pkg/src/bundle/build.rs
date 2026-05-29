@@ -198,13 +198,15 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
                     id: id.clone(),
                     package: entry.package.clone(),
                 })?;
-            let package_caps =
-                agent_home_package_caps(&home_pkg, &packages, &packages_root, id)?;
+            let package_caps = agent_home_package_caps(&home_pkg, &packages, &packages_root, id)?;
             let eff = crate::capability_override::compute_effective(
                 &package_caps,
                 &entry.capability_overrides,
             )
-            .map_err(|source| BuildError::CapabilityOverrideFailed { id: id.clone(), source })?;
+            .map_err(|source| BuildError::CapabilityOverrideFailed {
+                id: id.clone(),
+                source,
+            })?;
             effective_to_bundle(&eff)
         };
 
@@ -382,12 +384,13 @@ fn agent_home_package_caps(
     packages_root: &std::path::Path,
     agent_id: &str,
 ) -> Result<Vec<tau_domain::Capability>, BuildError> {
-    let pkg = packages.iter().find(|p| p.name == home_package).ok_or_else(|| {
-        BuildError::AgentHomePackageMissing {
+    let pkg = packages
+        .iter()
+        .find(|p| p.name == home_package)
+        .ok_or_else(|| BuildError::AgentHomePackageMissing {
             id: agent_id.to_owned(),
             package: home_package.to_owned(),
-        }
-    })?;
+        })?;
     let manifest_path = packages_root
         .join(&pkg.name)
         .join(pkg.version.to_string())
@@ -443,8 +446,11 @@ fn effective_to_bundle(
                 out.deny_net_http.extend(e.deny.clone());
             }
             Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
-                out.allow_agent_spawn
-                    .extend(e.allow_override.clone().unwrap_or_else(|| allowed_kinds.clone()));
+                out.allow_agent_spawn.extend(
+                    e.allow_override
+                        .clone()
+                        .unwrap_or_else(|| allowed_kinds.clone()),
+                );
                 out.deny_agent_spawn.extend(e.deny.clone());
             }
             // skill.spawn / task_list / plan / custom: no bundle field.
@@ -1083,7 +1089,9 @@ generated_at = "2024-01-01T00:00:00Z"
     #[test]
     fn effective_to_bundle_falls_back_to_source_when_no_override() {
         let e = eff(
-            cap(serde_json::json!({"kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET"]})),
+            cap(
+                serde_json::json!({"kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET"]}),
+            ),
             None,
             &[],
         );
@@ -1094,16 +1102,35 @@ generated_at = "2024-01-01T00:00:00Z"
 
     #[test]
     fn effective_to_bundle_unions_fs_exec_and_process_spawn_into_exec() {
-        let a = eff(cap(serde_json::json!({"kind": "fs.exec", "paths": ["/usr/bin/git"]})), None, &[]);
-        let c = eff(cap(serde_json::json!({"kind": "process.spawn", "commands": ["ls"]})), None, &[]);
+        let a = eff(
+            cap(serde_json::json!({"kind": "fs.exec", "paths": ["/usr/bin/git"]})),
+            None,
+            &[],
+        );
+        let c = eff(
+            cap(serde_json::json!({"kind": "process.spawn", "commands": ["ls"]})),
+            None,
+            &[],
+        );
         let b = effective_to_bundle(&[a, c]);
-        assert_eq!(b.allow_exec, vec!["/usr/bin/git".to_string(), "ls".to_string()]);
+        assert_eq!(
+            b.allow_exec,
+            vec!["/usr/bin/git".to_string(), "ls".to_string()]
+        );
     }
 
     #[test]
     fn effective_to_bundle_maps_fs_write_and_agent_spawn() {
-        let w = eff(cap(serde_json::json!({"kind": "fs.write", "paths": ["/out/**"], "max_bytes": 1024})), None, &["/out/locked/**"]);
-        let s = eff(cap(serde_json::json!({"kind": "agent.spawn", "allowed_kinds": ["critic"]})), None, &[]);
+        let w = eff(
+            cap(serde_json::json!({"kind": "fs.write", "paths": ["/out/**"], "max_bytes": 1024})),
+            None,
+            &["/out/locked/**"],
+        );
+        let s = eff(
+            cap(serde_json::json!({"kind": "agent.spawn", "allowed_kinds": ["critic"]})),
+            None,
+            &[],
+        );
         let b = effective_to_bundle(&[w, s]);
         assert_eq!(b.allow_fs_write, vec!["/out/**".to_string()]);
         assert_eq!(b.deny_fs_write, vec!["/out/locked/**".to_string()]);
@@ -1112,7 +1139,11 @@ generated_at = "2024-01-01T00:00:00Z"
 
     #[test]
     fn effective_to_bundle_drops_unrepresentable_shapes() {
-        let e = eff(cap(serde_json::json!({"kind": "skill.spawn", "allowed_skills": ["fact-checker"]})), None, &[]);
+        let e = eff(
+            cap(serde_json::json!({"kind": "skill.spawn", "allowed_skills": ["fact-checker"]})),
+            None,
+            &[],
+        );
         let b = effective_to_bundle(&[e]);
         assert!(b.is_empty(), "skill.spawn must be dropped: {b:?}");
     }
@@ -1198,7 +1229,9 @@ allowed_skills = ["critic"]
         .unwrap();
     }
 
-    fn read_agent_caps(tmp: &std::path::Path) -> crate::bundle::manifest::BundleEffectiveCapabilities {
+    fn read_agent_caps(
+        tmp: &std::path::Path,
+    ) -> crate::bundle::manifest::BundleEffectiveCapabilities {
         let artifact = build(opts(tmp)).expect("build succeeds");
         let s = std::fs::read_to_string(&artifact.path).unwrap();
         let m = crate::bundle::manifest::BundleManifest::parse_str(&s).unwrap();
@@ -1227,10 +1260,23 @@ allowed_skills = ["critic"]
 
     #[test]
     fn build_drops_skill_spawn_from_bundle() {
+        // skill.spawn has no BundleEffectiveCapabilities field, so the
+        // home package's skill.spawn grant must not appear anywhere in
+        // the recorded caps. Assert via the parsed struct (robust against
+        // unrelated TOML keys) plus a targeted check on the skill-specific
+        // serialized key.
         let tmp = tempdir().unwrap();
         override_agent_project(tmp.path());
         let s = std::fs::read_to_string(&build(opts(tmp.path())).unwrap().path).unwrap();
-        assert!(!s.contains("skill"), "skill.spawn must not appear in the bundle: {s}");
+        // The skill grant's data ("critic" allowed_skill) must not leak,
+        // and no skill-spawn key should be emitted.
+        assert!(!s.contains("allowed_skills"), "skill.spawn key leaked: {s}");
+        assert!(!s.contains("skill_spawn"), "skill_spawn key leaked: {s}");
+        // The representable shapes ARE recorded (sanity that the agent
+        // block was actually produced).
+        let caps = read_agent_caps(tmp.path());
+        assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);
+        assert!(caps.allow_net_http.contains(&"api.example.com".to_string()));
     }
 
     #[test]
@@ -1238,9 +1284,12 @@ allowed_skills = ["critic"]
         let tmp = tempdir().unwrap();
         override_agent_project(tmp.path());
         let a = build(opts(tmp.path())).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
         let b = build(opts(tmp.path())).unwrap();
-        assert_eq!(a.sha256, b.sha256, "effective-caps build must be reproducible");
+        assert_eq!(
+            a.sha256, b.sha256,
+            "effective-caps build must be reproducible"
+        );
     }
 
     #[test]
