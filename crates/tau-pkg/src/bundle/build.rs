@@ -153,7 +153,8 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     // - When the agent has project-level capability overrides, compute
     //   the effective grant set by intersecting against the package's
     //   manifest grants. v1 happy path has no overrides, so the
-    //   `package_caps` union is a stub. See `collect_package_caps`.
+    //   the agent's effective grant is computed from its home-package
+    //   manifest — see `agent_home_package_caps`.
     let mut agents: Vec<BundleAgent> = Vec::new();
     for (id, entry) in &project_config.agents {
         let agent_id = tau_domain::AgentId::from_str(id).map_err(|e| {
@@ -184,12 +185,21 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         // Compute effective capabilities. v1 happy path: no overrides ⇒
         // skip entirely (leaves BundleEffectiveCapabilities::default()).
         // When an override IS present, collect the package-manifest
-        // grant union (currently a stub — see collect_package_caps) and
+        // home-package manifest grant set (see agent_home_package_caps) and
         // call compute_effective.
         let effective_capabilities = if entry.capability_overrides.is_empty() {
             BundleEffectiveCapabilities::default()
         } else {
-            let package_caps = collect_package_caps(&packages, &required_tools)?;
+            // Mirror the runtime (tau-runtime builder.rs): compute the
+            // agent's effective grant from its HOME-package manifest +
+            // the project overrides. Home package name = the `<name>`
+            // half of `[agents.<id>].package`.
+            let (home_pkg, _req) = crate::project::agent::parse_package_ref(&entry.package)
+                .map_err(|_| BuildError::AgentHomePackageMissing {
+                    id: id.clone(),
+                    package: entry.package.clone(),
+                })?;
+            let package_caps = agent_home_package_caps(&home_pkg, &packages, &packages_root, id)?;
             let eff = crate::capability_override::compute_effective(
                 &package_caps,
                 &entry.capability_overrides,
@@ -363,34 +373,92 @@ fn extract_project_version(tau_toml: &str) -> Result<semver::Version, BuildError
     }
 }
 
-/// Collect the union of package-manifest capability grants for the
-/// tools listed in `required_tools`.
-///
-/// MVP stub: returns an empty `Vec`. The v1 happy path has no per-agent
-/// `[[capabilities]]` overrides, so this path is unreachable in shipped
-/// configurations. A complete implementation should load each required
-/// tool's manifest from `.tau/packages/<name>/<version>/tau.toml` and
-/// union the `[plugin]`/`[tool]` capabilities. Flag in PR description
-/// as a known follow-up.
-fn collect_package_caps(
-    _packages: &[BundlePackage],
-    _required_tools: &[String],
+/// Load the agent's home-package manifest and return its declared
+/// capability grants — the same source the runtime feeds to
+/// `compute_effective` (see tau-runtime builder.rs). `home_package` is
+/// the `<name>` half of `[agents.<id>].package`; its resolved version
+/// comes from the gathered `packages` list. Fails loudly rather than
+/// returning empty so the bundle never silently under-records grants.
+fn agent_home_package_caps(
+    home_package: &str,
+    packages: &[BundlePackage],
+    packages_root: &std::path::Path,
+    agent_id: &str,
 ) -> Result<Vec<tau_domain::Capability>, BuildError> {
-    Ok(Vec::new())
+    let pkg = packages
+        .iter()
+        .find(|p| p.name == home_package)
+        .ok_or_else(|| BuildError::AgentHomePackageMissing {
+            id: agent_id.to_owned(),
+            package: home_package.to_owned(),
+        })?;
+    let manifest_path = packages_root
+        .join(&pkg.name)
+        .join(pkg.version.to_string())
+        .join("tau.toml");
+    let manifest = crate::read_manifest(&manifest_path).map_err(|source| {
+        BuildError::AgentHomePackageManifest {
+            id: agent_id.to_owned(),
+            package: home_package.to_owned(),
+            source,
+        }
+    })?;
+    Ok(manifest.capabilities().to_vec())
 }
 
-/// Project [`crate::capability_override::EffectiveCapability`] entries
-/// into the per-shape allow/deny lists carried by `BundleEffectiveCapabilities`.
+/// Flatten [`crate::capability_override::EffectiveCapability`] entries into
+/// the per-shape allow/deny lists of [`BundleEffectiveCapabilities`].
 ///
-/// MVP stub: returns the default (empty) value — the override compute
-/// path is unreachable on v1's happy path, see `collect_package_caps`.
-/// A complete implementation will need to flatten each
-/// `EffectiveCapability` into the matching `BundleEffectiveCapabilities`
-/// allow/deny field for its kind. Flag in PR.
+/// For each entry: the allow list is the narrowed `allow_override` if present,
+/// otherwise the source variant's own field. `deny` is always `e.deny`.
+/// `Filesystem(Exec)` and `Process(Spawn)` both map to `allow_exec`/`deny_exec`.
+/// Shapes with no bundle representation (skill.spawn, task_list, plan, custom)
+/// are silently dropped via the catch-all arm.
 fn effective_to_bundle(
-    _eff: &[crate::capability_override::EffectiveCapability],
+    eff: &[crate::capability_override::EffectiveCapability],
 ) -> BundleEffectiveCapabilities {
-    BundleEffectiveCapabilities::default()
+    use tau_domain::{AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability};
+    let mut out = BundleEffectiveCapabilities::default();
+    for e in eff {
+        match &e.source {
+            Capability::Filesystem(FsCapability::Read { paths, .. }) => {
+                out.allow_fs_read
+                    .extend(e.allow_override.clone().unwrap_or_else(|| paths.clone()));
+                out.deny_fs_read.extend(e.deny.clone());
+            }
+            Capability::Filesystem(FsCapability::Write { paths, .. }) => {
+                out.allow_fs_write
+                    .extend(e.allow_override.clone().unwrap_or_else(|| paths.clone()));
+                out.deny_fs_write.extend(e.deny.clone());
+            }
+            Capability::Filesystem(FsCapability::Exec { paths, .. }) => {
+                out.allow_exec
+                    .extend(e.allow_override.clone().unwrap_or_else(|| paths.clone()));
+                out.deny_exec.extend(e.deny.clone());
+            }
+            Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
+                out.allow_exec
+                    .extend(e.allow_override.clone().unwrap_or_else(|| commands.clone()));
+                out.deny_exec.extend(e.deny.clone());
+            }
+            Capability::Network(NetCapability::Http { hosts, .. }) => {
+                out.allow_net_http
+                    .extend(e.allow_override.clone().unwrap_or_else(|| hosts.clone()));
+                out.deny_net_http.extend(e.deny.clone());
+            }
+            Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
+                out.allow_agent_spawn.extend(
+                    e.allow_override
+                        .clone()
+                        .unwrap_or_else(|| allowed_kinds.clone()),
+                );
+                out.deny_agent_spawn.extend(e.deny.clone());
+            }
+            // skill.spawn / task_list / plan / custom: no bundle field.
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Resolve an agent's `[agents.<id>.prompt]` entry to the exact bytes
@@ -983,6 +1051,293 @@ generated_at = "2024-01-01T00:00:00Z"
         match err {
             BuildError::PromptResolveFailed { id, .. } => assert_eq!(id, "r"),
             other => panic!("expected PromptResolveFailed, got {other:?}"),
+        }
+    }
+
+    // Helper: parse a Capability from its serialized kind/field JSON
+    // (uses serde deserialization since Capability variants are #[non_exhaustive]
+    // in tau-domain and cannot be constructed via struct-literal from tau-pkg tests).
+    fn cap(json: serde_json::Value) -> tau_domain::Capability {
+        serde_json::from_value(json).expect("capability parse")
+    }
+
+    // Helper: construct an EffectiveCapability.
+    fn eff(
+        source: tau_domain::Capability,
+        allow_override: Option<Vec<&str>>,
+        deny: &[&str],
+    ) -> crate::capability_override::EffectiveCapability {
+        crate::capability_override::EffectiveCapability {
+            source,
+            allow_override: allow_override.map(|v| v.iter().map(|s| s.to_string()).collect()),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+            max_bytes_override: None,
+        }
+    }
+
+    #[test]
+    fn effective_to_bundle_uses_override_allow_and_deny() {
+        let e = eff(
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/data/**", "/tmp/**"]})),
+            Some(vec!["/data/**"]),
+            &["/data/secret/**"],
+        );
+        let b = effective_to_bundle(&[e]);
+        assert_eq!(b.allow_fs_read, vec!["/data/**".to_string()]);
+        assert_eq!(b.deny_fs_read, vec!["/data/secret/**".to_string()]);
+    }
+
+    #[test]
+    fn effective_to_bundle_falls_back_to_source_when_no_override() {
+        let e = eff(
+            cap(
+                serde_json::json!({"kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET"]}),
+            ),
+            None,
+            &[],
+        );
+        let b = effective_to_bundle(&[e]);
+        assert_eq!(b.allow_net_http, vec!["api.example.com".to_string()]);
+        assert!(b.deny_net_http.is_empty());
+    }
+
+    #[test]
+    fn effective_to_bundle_unions_fs_exec_and_process_spawn_into_exec() {
+        let a = eff(
+            cap(serde_json::json!({"kind": "fs.exec", "paths": ["/usr/bin/git"]})),
+            None,
+            &[],
+        );
+        let c = eff(
+            cap(serde_json::json!({"kind": "process.spawn", "commands": ["ls"]})),
+            None,
+            &[],
+        );
+        let b = effective_to_bundle(&[a, c]);
+        assert_eq!(
+            b.allow_exec,
+            vec!["/usr/bin/git".to_string(), "ls".to_string()]
+        );
+    }
+
+    #[test]
+    fn effective_to_bundle_maps_fs_write_and_agent_spawn() {
+        let w = eff(
+            cap(serde_json::json!({"kind": "fs.write", "paths": ["/out/**"], "max_bytes": 1024})),
+            None,
+            &["/out/locked/**"],
+        );
+        let s = eff(
+            cap(serde_json::json!({"kind": "agent.spawn", "allowed_kinds": ["critic"]})),
+            None,
+            &[],
+        );
+        let b = effective_to_bundle(&[w, s]);
+        assert_eq!(b.allow_fs_write, vec!["/out/**".to_string()]);
+        assert_eq!(b.deny_fs_write, vec!["/out/locked/**".to_string()]);
+        assert_eq!(b.allow_agent_spawn, vec!["critic".to_string()]);
+    }
+
+    #[test]
+    fn effective_to_bundle_drops_unrepresentable_shapes() {
+        let e = eff(
+            cap(serde_json::json!({"kind": "skill.spawn", "allowed_skills": ["fact-checker"]})),
+            None,
+            &[],
+        );
+        let b = effective_to_bundle(&[e]);
+        assert!(b.is_empty(), "skill.spawn must be dropped: {b:?}");
+    }
+
+    /// Project with override-agent `r` whose home package `homepkg` is
+    /// installed with a manifest granting fs.read + net.http + fs.exec +
+    /// process.spawn + skill.spawn. The agent narrows fs.read.
+    fn override_agent_project(tmp: &std::path::Path) {
+        std::fs::write(
+            tmp.join("tau.toml"),
+            r#"
+[project]
+name = "capproj"
+version = "0.1.0"
+
+[agents.r]
+display_name = "R"
+package = "homepkg@^0.1"
+llm_backend = "anthropic"
+
+[agents.r.prompt]
+system = "you are r"
+
+[[agents.r.capabilities]]
+kind = "fs.read"
+allow_paths = ["/data/**"]
+deny_paths = ["/data/secret/**"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("tau.lock"),
+            r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "homepkg"
+active_version = "0.1.0"
+source = "https://example.com/homepkg.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "0000000000000000000000000000000000000001"
+installed_at = "2024-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let pkg_dir = tmp.join(".tau/packages/homepkg/0.1.0");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("tau.toml"),
+            r#"name = "homepkg"
+version = "0.1.0"
+description = "home package"
+authors = ["a <a@example.com>"]
+source = "https://example.com/homepkg.git"
+kind = "tool"
+dependencies = []
+
+[[capabilities]]
+kind = "fs.read"
+paths = ["/data/**", "/tmp/**"]
+
+[[capabilities]]
+kind = "net.http"
+hosts = ["api.example.com"]
+methods = ["GET"]
+
+[[capabilities]]
+kind = "fs.exec"
+paths = ["/usr/bin/git"]
+
+[[capabilities]]
+kind = "process.spawn"
+commands = ["ls"]
+
+[[capabilities]]
+kind = "skill.spawn"
+allowed_skills = ["critic"]
+"#,
+        )
+        .unwrap();
+    }
+
+    fn read_agent_caps(
+        tmp: &std::path::Path,
+    ) -> crate::bundle::manifest::BundleEffectiveCapabilities {
+        let artifact = build(opts(tmp)).expect("build succeeds");
+        let s = std::fs::read_to_string(&artifact.path).unwrap();
+        let m = crate::bundle::manifest::BundleManifest::parse_str(&s).unwrap();
+        assert_eq!(m.agents.len(), 1);
+        m.agents[0].effective_capabilities.clone()
+    }
+
+    #[test]
+    fn build_records_narrowed_fs_read_for_override_agent() {
+        let tmp = tempdir().unwrap();
+        override_agent_project(tmp.path());
+        let caps = read_agent_caps(tmp.path());
+        assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);
+        assert_eq!(caps.deny_fs_read, vec!["/data/secret/**".to_string()]);
+    }
+
+    #[test]
+    fn build_records_unoverridden_source_caps() {
+        let tmp = tempdir().unwrap();
+        override_agent_project(tmp.path());
+        let caps = read_agent_caps(tmp.path());
+        assert_eq!(caps.allow_net_http, vec!["api.example.com".to_string()]);
+        assert!(caps.allow_exec.contains(&"/usr/bin/git".to_string()));
+        assert!(caps.allow_exec.contains(&"ls".to_string()));
+    }
+
+    #[test]
+    fn build_drops_skill_spawn_from_bundle() {
+        // skill.spawn has no BundleEffectiveCapabilities field, so the
+        // home package's skill.spawn grant must not appear anywhere in
+        // the recorded caps. Assert via the parsed struct (robust against
+        // unrelated TOML keys) plus a targeted check on the skill-specific
+        // serialized key.
+        let tmp = tempdir().unwrap();
+        override_agent_project(tmp.path());
+        let s = std::fs::read_to_string(&build(opts(tmp.path())).unwrap().path).unwrap();
+        // The skill grant's data ("critic" allowed_skill) must not leak,
+        // and no skill-spawn key should be emitted.
+        assert!(!s.contains("allowed_skills"), "skill.spawn key leaked: {s}");
+        assert!(!s.contains("skill_spawn"), "skill_spawn key leaked: {s}");
+        // The representable shapes ARE recorded (sanity that the agent
+        // block was actually produced).
+        let caps = read_agent_caps(tmp.path());
+        assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);
+        assert!(caps.allow_net_http.contains(&"api.example.com".to_string()));
+    }
+
+    #[test]
+    fn build_effective_caps_is_reproducible() {
+        let tmp = tempdir().unwrap();
+        override_agent_project(tmp.path());
+        let a = build(opts(tmp.path())).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let b = build(opts(tmp.path())).unwrap();
+        assert_eq!(
+            a.sha256, b.sha256,
+            "effective-caps build must be reproducible"
+        );
+    }
+
+    #[test]
+    fn build_errors_when_override_agent_home_package_missing() {
+        let tmp = tempdir().unwrap();
+        override_agent_project(tmp.path());
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "capproj"
+version = "0.1.0"
+
+[agents.r]
+display_name = "R"
+package = "ghost@^0.1"
+llm_backend = "anthropic"
+
+[agents.r.prompt]
+system = "you are r"
+
+[[agents.r.capabilities]]
+kind = "fs.read"
+allow_paths = ["/data/**"]
+"#,
+        )
+        .unwrap();
+        match build(opts(tmp.path())).unwrap_err() {
+            BuildError::AgentHomePackageMissing { id, package } => {
+                assert_eq!(id, "r");
+                assert_eq!(package, "ghost");
+            }
+            other => panic!("expected AgentHomePackageMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_errors_when_home_package_manifest_unreadable() {
+        let tmp = tempdir().unwrap();
+        override_agent_project(tmp.path());
+        std::fs::remove_file(tmp.path().join(".tau/packages/homepkg/0.1.0/tau.toml")).unwrap();
+        match build(opts(tmp.path())).unwrap_err() {
+            BuildError::AgentHomePackageManifest { id, package, .. } => {
+                assert_eq!(id, "r");
+                assert_eq!(package, "homepkg");
+            }
+            other => panic!("expected AgentHomePackageManifest, got {other:?}"),
         }
     }
 }

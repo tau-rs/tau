@@ -131,15 +131,18 @@ fn emit_artifact(artifact: &BundleArtifact, output: &mut Output) {
 /// Maps a [`BuildError`] to its CLI exit code per spec §6.
 fn exit_code_for(err: &BuildError) -> u8 {
     match err {
-        BuildError::MissingLockfile | BuildError::PackageNotInstalled { .. } => 3,
+        BuildError::MissingLockfile
+        | BuildError::PackageNotInstalled { .. }
+        | BuildError::AgentHomePackageMissing { .. } => 3,
         BuildError::ProjectConfig(_)
         | BuildError::LockfileLoad(_)
-        | BuildError::ManifestInvalid(_) => 2,
+        | BuildError::ManifestInvalid(_)
+        | BuildError::UnknownAgent { .. }
+        | BuildError::AgentHomePackageManifest { .. } => 2,
         BuildError::TreeHashFailed { .. }
         | BuildError::PromptResolveFailed { .. }
         | BuildError::CapabilityOverrideFailed { .. }
         | BuildError::WriteFailed { .. } => 70,
-        BuildError::UnknownAgent { .. } => 2,
     }
 }
 
@@ -231,6 +234,24 @@ mod tests {
             exit_code_for(&BuildError::UnknownAgent {
                 id: "ghost".into(),
                 available: vec!["alpha".into()],
+            }),
+            2,
+        );
+
+        // Override-agent home package missing -> install-state -> 3.
+        assert_eq!(
+            exit_code_for(&BuildError::AgentHomePackageMissing {
+                id: "r".into(),
+                package: "homepkg".into(),
+            }),
+            3,
+        );
+        // Home-package manifest unreadable -> config/parse -> 2.
+        assert_eq!(
+            exit_code_for(&BuildError::AgentHomePackageManifest {
+                id: "r".into(),
+                package: "homepkg".into(),
+                source: tau_pkg::error::ManifestReadError::NotFound { path: "x".into() },
             }),
             2,
         );

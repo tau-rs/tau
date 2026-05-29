@@ -666,6 +666,67 @@ system = "you are extra"
     }
 
     #[test]
+    fn verify_reproducible_with_effective_caps() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("tau.toml"),
+            r#"
+[project]
+name = "caprepro"
+version = "0.1.0"
+
+[agents.r]
+display_name = "R"
+package = "homepkg@^0.1"
+llm_backend = "anthropic"
+
+[agents.r.prompt]
+system = "you are r"
+
+[[agents.r.capabilities]]
+kind = "fs.read"
+allow_paths = ["/data/**"]
+deny_paths = ["/data/secret/**"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n\n[[package]]\nname = \"homepkg\"\nactive_version = \"0.1.0\"\nsource = \"https://example.com/homepkg.git\"\n\n[[package.versions]]\nversion = \"0.1.0\"\nresolved_commit = \"0000000000000000000000000000000000000001\"\ninstalled_at = \"2024-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let pkg_dir = root.join(".tau/packages/homepkg/0.1.0");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("tau.toml"),
+            "name = \"homepkg\"\nversion = \"0.1.0\"\ndescription = \"x\"\nauthors = [\"a <a@example.com>\"]\nsource = \"https://example.com/homepkg.git\"\nkind = \"tool\"\ndependencies = []\n\n[[capabilities]]\nkind = \"fs.read\"\npaths = [\"/data/**\", \"/tmp/**\"]\n",
+        )
+        .unwrap();
+
+        let artifact = build(BuildOptions {
+            project_root: root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+            agent_filter: None,
+        })
+        .unwrap();
+        // Sanity: the bundle actually recorded narrowed caps.
+        let m = BundleManifest::from_path(&artifact.path).unwrap();
+        assert_eq!(
+            m.agents[0].effective_capabilities.allow_fs_read,
+            vec!["/data/**".to_string()]
+        );
+
+        let report = verify_reproducible(ropts(artifact.path, root)).expect("repro ran");
+        assert!(
+            report.reproducible,
+            "effective-caps bundle must reproduce; diffs={:?}",
+            report.diffs
+        );
+    }
+
+    #[test]
     fn verify_reproducible_sliced_bundle_detects_drift() {
         let tmp = tempdir().unwrap();
         let bundle = build_sliced_solo(tmp.path());
