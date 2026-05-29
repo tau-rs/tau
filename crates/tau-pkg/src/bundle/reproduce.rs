@@ -713,10 +713,17 @@ deny_paths = ["/data/secret/**"]
         .unwrap();
         // Sanity: the bundle actually recorded narrowed caps.
         let m = BundleManifest::from_path(&artifact.path).unwrap();
-        assert_eq!(m.agents[0].effective_capabilities.allow_fs_read, vec!["/data/**".to_string()]);
+        assert_eq!(
+            m.agents[0].effective_capabilities.allow_fs_read,
+            vec!["/data/**".to_string()]
+        );
 
         let report = verify_reproducible(ropts(artifact.path, root)).expect("repro ran");
-        assert!(report.reproducible, "effective-caps bundle must reproduce; diffs={:?}", report.diffs);
+        assert!(
+            report.reproducible,
+            "effective-caps bundle must reproduce; diffs={:?}",
+            report.diffs
+        );
     }
 
     #[test]
