@@ -153,7 +153,8 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     // - When the agent has project-level capability overrides, compute
     //   the effective grant set by intersecting against the package's
     //   manifest grants. v1 happy path has no overrides, so the
-    //   `package_caps` union is a stub. See `collect_package_caps`.
+    //   the agent's effective grant is computed from its home-package
+    //   manifest — see `agent_home_package_caps`.
     let mut agents: Vec<BundleAgent> = Vec::new();
     for (id, entry) in &project_config.agents {
         let agent_id = tau_domain::AgentId::from_str(id).map_err(|e| {
@@ -184,7 +185,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         // Compute effective capabilities. v1 happy path: no overrides ⇒
         // skip entirely (leaves BundleEffectiveCapabilities::default()).
         // When an override IS present, collect the package-manifest
-        // grant union (currently a stub — see collect_package_caps) and
+        // home-package manifest grant set (see agent_home_package_caps) and
         // call compute_effective.
         let effective_capabilities = if entry.capability_overrides.is_empty() {
             BundleEffectiveCapabilities::default()
