@@ -78,7 +78,9 @@ pub enum BuildError {
 
     /// An agent's home-package manifest could not be read or parsed while
     /// computing its effective capabilities.
-    #[error("failed to read home-package manifest for agent `{id}` (package `{package}`): {source}")]
+    #[error(
+        "failed to read home-package manifest for agent `{id}` (package `{package}`): {source}"
+    )]
     AgentHomePackageManifest {
         /// Agent id whose home-package manifest failed to load.
         id: String,
