@@ -541,4 +541,102 @@ some_future_field = "value"
         caps.allow_skill_spawn.push("critic".to_string());
         assert!(!caps.is_empty(), "allow_skill_spawn must count toward non-empty");
     }
+
+    /// A bundle emitted by a hypothetical future tau: unknown fields and
+    /// tables at every level plus a future effective-cap shape. Today's
+    /// parser MUST accept it and read the known fields intact.
+    #[test]
+    fn future_bundle_parses_with_all_tolerance_points() {
+        let toml_str = r#"
+schema_version = 1
+
+[bundle]
+sha256 = "deadbeef"
+created_at = "2026-01-01T00:00:00Z"
+tau_version = "9.9.9"
+target = "passthrough"
+future_meta = "tolerated"
+
+[project]
+name = "fwd"
+version = "0.1.0"
+tau_toml_sha256 = "aaaa"
+
+[[packages]]
+name = "p"
+version = "0.1.0"
+source = "https://example.com/p.git"
+tree_sha256 = "1111"
+future_pkg_field = "tolerated"
+
+[[agents]]
+id = "r"
+backend = { kind = "anthropic", future_backend_key = "tolerated" }
+system_prompt_sha256 = "7777"
+effective_capabilities = { allow_fs_read = ["/data/**"], allow_future_shape = ["/x/**"] }
+future_agent_field = 1
+
+[future_section]
+future_key = "tolerated"
+"#;
+        let m = BundleManifest::parse_str(toml_str).expect("future bundle must parse");
+        assert_eq!(m.schema_version, 1);
+        assert_eq!(m.project.name, "fwd");
+        assert_eq!(m.packages.len(), 1);
+        assert_eq!(m.packages[0].name, "p");
+        assert_eq!(m.agents.len(), 1);
+        assert_eq!(m.agents[0].id.as_str(), "r");
+        assert_eq!(m.agents[0].effective_capabilities.allow_fs_read, vec!["/data/**".to_string()]);
+        assert!(m.agents[0].backend.extra.contains_key("future_backend_key"));
+    }
+
+    #[test]
+    fn schema_version_two_is_rejected() {
+        let toml_str = r#"
+schema_version = 2
+
+[bundle]
+sha256 = "x"
+created_at = "2026-01-01T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "x"
+"#;
+        match BundleManifest::parse_str(toml_str) {
+            Err(crate::bundle::error::BundleParseError::UnsupportedSchemaVersion { found }) => {
+                assert_eq!(found, 2);
+            }
+            other => panic!("expected UnsupportedSchemaVersion(2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn effective_capabilities_unknown_allow_field_is_ignored() {
+        let toml_str = r#"
+schema_version = 1
+
+[bundle]
+sha256 = "x"
+created_at = "2026-01-01T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "x"
+
+[[agents]]
+id = "r"
+backend = { kind = "anthropic" }
+system_prompt_sha256 = "7"
+effective_capabilities = { allow_fs_read = ["/a/**"], allow_some_future_shape = ["/b/**"] }
+"#;
+        let m = BundleManifest::parse_str(toml_str).expect("must parse");
+        assert_eq!(m.agents[0].effective_capabilities.allow_fs_read, vec!["/a/**".to_string()]);
+    }
 }

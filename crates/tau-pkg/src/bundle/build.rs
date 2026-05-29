@@ -1336,4 +1336,19 @@ allow_paths = ["/data/**"]
             other => panic!("expected AgentHomePackageManifest, got {other:?}"),
         }
     }
+
+    #[test]
+    fn build_tolerates_custom_capability_kind_in_home_package() {
+        // An OLD tau building against a package that grants a future
+        // (Custom) capability kind must not crash; the Custom shape is
+        // simply not represented in effective_capabilities.
+        let tmp = tempdir().unwrap();
+        override_agent_project(tmp.path());
+        let pkg_manifest = tmp.path().join(".tau/packages/homepkg/0.1.0/tau.toml");
+        let mut body = std::fs::read_to_string(&pkg_manifest).unwrap();
+        body.push_str("\n[[capabilities]]\nkind = \"mcp.tool.use\"\nendpoint = \"x\"\n");
+        std::fs::write(&pkg_manifest, body).unwrap();
+        let caps = read_agent_caps(tmp.path());
+        assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);
+    }
 }
