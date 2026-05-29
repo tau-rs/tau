@@ -379,18 +379,56 @@ fn collect_package_caps(
     Ok(Vec::new())
 }
 
-/// Project [`crate::capability_override::EffectiveCapability`] entries
-/// into the per-shape allow/deny lists carried by `BundleEffectiveCapabilities`.
+/// Flatten [`crate::capability_override::EffectiveCapability`] entries into
+/// the per-shape allow/deny lists of [`BundleEffectiveCapabilities`].
 ///
-/// MVP stub: returns the default (empty) value — the override compute
-/// path is unreachable on v1's happy path, see `collect_package_caps`.
-/// A complete implementation will need to flatten each
-/// `EffectiveCapability` into the matching `BundleEffectiveCapabilities`
-/// allow/deny field for its kind. Flag in PR.
+/// For each entry: the allow list is the narrowed `allow_override` if present,
+/// otherwise the source variant's own field. `deny` is always `e.deny`.
+/// `Filesystem(Exec)` and `Process(Spawn)` both map to `allow_exec`/`deny_exec`.
+/// Shapes with no bundle representation (skill.spawn, task_list, plan, custom)
+/// are silently dropped via the catch-all arm.
 fn effective_to_bundle(
-    _eff: &[crate::capability_override::EffectiveCapability],
+    eff: &[crate::capability_override::EffectiveCapability],
 ) -> BundleEffectiveCapabilities {
-    BundleEffectiveCapabilities::default()
+    use tau_domain::{AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability};
+    let mut out = BundleEffectiveCapabilities::default();
+    for e in eff {
+        match &e.source {
+            Capability::Filesystem(FsCapability::Read { paths, .. }) => {
+                out.allow_fs_read
+                    .extend(e.allow_override.clone().unwrap_or_else(|| paths.clone()));
+                out.deny_fs_read.extend(e.deny.clone());
+            }
+            Capability::Filesystem(FsCapability::Write { paths, .. }) => {
+                out.allow_fs_write
+                    .extend(e.allow_override.clone().unwrap_or_else(|| paths.clone()));
+                out.deny_fs_write.extend(e.deny.clone());
+            }
+            Capability::Filesystem(FsCapability::Exec { paths, .. }) => {
+                out.allow_exec
+                    .extend(e.allow_override.clone().unwrap_or_else(|| paths.clone()));
+                out.deny_exec.extend(e.deny.clone());
+            }
+            Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
+                out.allow_exec
+                    .extend(e.allow_override.clone().unwrap_or_else(|| commands.clone()));
+                out.deny_exec.extend(e.deny.clone());
+            }
+            Capability::Network(NetCapability::Http { hosts, .. }) => {
+                out.allow_net_http
+                    .extend(e.allow_override.clone().unwrap_or_else(|| hosts.clone()));
+                out.deny_net_http.extend(e.deny.clone());
+            }
+            Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
+                out.allow_agent_spawn
+                    .extend(e.allow_override.clone().unwrap_or_else(|| allowed_kinds.clone()));
+                out.deny_agent_spawn.extend(e.deny.clone());
+            }
+            // skill.spawn / task_list / plan / custom: no bundle field.
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Resolve an agent's `[agents.<id>.prompt]` entry to the exact bytes
@@ -984,5 +1022,75 @@ generated_at = "2024-01-01T00:00:00Z"
             BuildError::PromptResolveFailed { id, .. } => assert_eq!(id, "r"),
             other => panic!("expected PromptResolveFailed, got {other:?}"),
         }
+    }
+
+    // Helper: parse a Capability from its serialized kind/field JSON
+    // (uses serde deserialization since Capability variants are #[non_exhaustive]
+    // in tau-domain and cannot be constructed via struct-literal from tau-pkg tests).
+    fn cap(json: serde_json::Value) -> tau_domain::Capability {
+        serde_json::from_value(json).expect("capability parse")
+    }
+
+    // Helper: construct an EffectiveCapability.
+    fn eff(
+        source: tau_domain::Capability,
+        allow_override: Option<Vec<&str>>,
+        deny: &[&str],
+    ) -> crate::capability_override::EffectiveCapability {
+        crate::capability_override::EffectiveCapability {
+            source,
+            allow_override: allow_override.map(|v| v.iter().map(|s| s.to_string()).collect()),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+            max_bytes_override: None,
+        }
+    }
+
+    #[test]
+    fn effective_to_bundle_uses_override_allow_and_deny() {
+        let e = eff(
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/data/**", "/tmp/**"]})),
+            Some(vec!["/data/**"]),
+            &["/data/secret/**"],
+        );
+        let b = effective_to_bundle(&[e]);
+        assert_eq!(b.allow_fs_read, vec!["/data/**".to_string()]);
+        assert_eq!(b.deny_fs_read, vec!["/data/secret/**".to_string()]);
+    }
+
+    #[test]
+    fn effective_to_bundle_falls_back_to_source_when_no_override() {
+        let e = eff(
+            cap(serde_json::json!({"kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET"]})),
+            None,
+            &[],
+        );
+        let b = effective_to_bundle(&[e]);
+        assert_eq!(b.allow_net_http, vec!["api.example.com".to_string()]);
+        assert!(b.deny_net_http.is_empty());
+    }
+
+    #[test]
+    fn effective_to_bundle_unions_fs_exec_and_process_spawn_into_exec() {
+        let a = eff(cap(serde_json::json!({"kind": "fs.exec", "paths": ["/usr/bin/git"]})), None, &[]);
+        let c = eff(cap(serde_json::json!({"kind": "process.spawn", "commands": ["ls"]})), None, &[]);
+        let b = effective_to_bundle(&[a, c]);
+        assert_eq!(b.allow_exec, vec!["/usr/bin/git".to_string(), "ls".to_string()]);
+    }
+
+    #[test]
+    fn effective_to_bundle_maps_fs_write_and_agent_spawn() {
+        let w = eff(cap(serde_json::json!({"kind": "fs.write", "paths": ["/out/**"], "max_bytes": 1024})), None, &["/out/locked/**"]);
+        let s = eff(cap(serde_json::json!({"kind": "agent.spawn", "allowed_kinds": ["critic"]})), None, &[]);
+        let b = effective_to_bundle(&[w, s]);
+        assert_eq!(b.allow_fs_write, vec!["/out/**".to_string()]);
+        assert_eq!(b.deny_fs_write, vec!["/out/locked/**".to_string()]);
+        assert_eq!(b.allow_agent_spawn, vec!["critic".to_string()]);
+    }
+
+    #[test]
+    fn effective_to_bundle_drops_unrepresentable_shapes() {
+        let e = eff(cap(serde_json::json!({"kind": "skill.spawn", "allowed_skills": ["fact-checker"]})), None, &[]);
+        let b = effective_to_bundle(&[e]);
+        assert!(b.is_empty(), "skill.spawn must be dropped: {b:?}");
     }
 }
