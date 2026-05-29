@@ -39,7 +39,7 @@ impl Configure for AnthropicPlugin {
     type Config = AnthropicConfig;
 
     fn from_config(cfg: Self::Config) -> Result<Self, ConfigError> {
-        let api_key = resolve_api_key(&cfg)?;
+        let api_key = resolve_api_key(&cfg, |n| std::env::var(n).ok())?;
         validate_retry(&cfg.retry)?;
 
         let inner = reqwest::Client::builder()
@@ -122,15 +122,12 @@ mod tests {
 
     #[test]
     fn from_config_with_valid_config_constructs_plugin() {
-        let env_name = "TEST_PLUGIN_FROM_CONFIG_OK";
-        std::env::set_var(env_name, "sk-ant-test-key-123");
         let cfg = AnthropicConfig {
-            api_key_env: env_name.into(),
+            api_key: Some("sk-ant-test-key-123".into()),
             ..AnthropicConfig::default()
         };
         let result = AnthropicPlugin::from_config(cfg);
         assert!(result.is_ok());
-        std::env::remove_var(env_name);
     }
 
     #[test]
@@ -154,14 +151,11 @@ mod tests {
 
     #[test]
     fn name_returns_anthropic() {
-        let env_name = "TEST_PLUGIN_NAME";
-        std::env::set_var(env_name, "sk-ant-foo");
         let cfg = AnthropicConfig {
-            api_key_env: env_name.into(),
+            api_key: Some("sk-ant-foo".into()),
             ..AnthropicConfig::default()
         };
         let plugin = AnthropicPlugin::from_config(cfg).unwrap();
         assert_eq!(plugin.name(), "anthropic");
-        std::env::remove_var(env_name);
     }
 }

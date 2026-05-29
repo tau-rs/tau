@@ -143,7 +143,10 @@ fn default_respect_retry_after() -> bool {
 /// which errors on missing env var because Anthropic auth is required.**
 ///
 /// Wired into `Configure::from_config` in Task 8.
-pub(crate) fn resolve_bearer_token(cfg: &OllamaConfig) -> Result<Option<String>, ConfigError> {
+pub(crate) fn resolve_bearer_token(
+    cfg: &OllamaConfig,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<Option<String>, ConfigError> {
     if let Some(direct) = cfg.bearer_token.as_ref() {
         tracing::warn!(
             target: "ollama_plugin::config",
@@ -151,10 +154,10 @@ pub(crate) fn resolve_bearer_token(cfg: &OllamaConfig) -> Result<Option<String>,
         );
         return Ok(Some(direct.clone()));
     }
-    match std::env::var(&cfg.bearer_token_env) {
-        Ok(v) if v.is_empty() => Ok(None),
-        Ok(v) => Ok(Some(v)),
-        Err(_) => Ok(None),
+    match lookup(&cfg.bearer_token_env) {
+        Some(v) if v.is_empty() => Ok(None),
+        Some(v) => Ok(Some(v)),
+        None => Ok(None),
     }
 }
 
@@ -206,21 +209,18 @@ mod tests {
             bearer_token: Some("hosted-token-xyz".into()),
             ..OllamaConfig::default()
         };
-        let token = resolve_bearer_token(&cfg).unwrap();
+        let token = resolve_bearer_token(&cfg, |_| None).unwrap();
         assert_eq!(token.as_deref(), Some("hosted-token-xyz"));
     }
 
     #[test]
     fn resolve_bearer_token_reads_env_var() {
-        let env_name = "TEST_OLLAMA_RESOLVE_TOKEN_FROM_ENV";
-        std::env::set_var(env_name, "envtoken123");
         let cfg = OllamaConfig {
-            bearer_token_env: env_name.into(),
+            bearer_token_env: "ANY_NAME".into(),
             ..OllamaConfig::default()
         };
-        let token = resolve_bearer_token(&cfg).unwrap();
+        let token = resolve_bearer_token(&cfg, |_| Some("envtoken123".into())).unwrap();
         assert_eq!(token.as_deref(), Some("envtoken123"));
-        std::env::remove_var(env_name);
     }
 
     #[test]
@@ -231,7 +231,7 @@ mod tests {
             bearer_token_env: "DEFINITELY_NOT_SET_OLLAMA_TOK_QXZ".into(),
             ..OllamaConfig::default()
         };
-        let token = resolve_bearer_token(&cfg).unwrap();
+        let token = resolve_bearer_token(&cfg, |_| None).unwrap();
         assert!(token.is_none());
     }
 
@@ -239,15 +239,12 @@ mod tests {
     fn resolve_bearer_token_empty_env_treated_as_none() {
         // Defensive: an empty-string env var is treated the same as
         // unset. Avoids spurious `Authorization: Bearer ` headers.
-        let env_name = "TEST_OLLAMA_EMPTY_TOKEN";
-        std::env::set_var(env_name, "");
         let cfg = OllamaConfig {
-            bearer_token_env: env_name.into(),
+            bearer_token_env: "ANY_NAME".into(),
             ..OllamaConfig::default()
         };
-        let token = resolve_bearer_token(&cfg).unwrap();
+        let token = resolve_bearer_token(&cfg, |_| Some(String::new())).unwrap();
         assert!(token.is_none());
-        std::env::remove_var(env_name);
     }
 
     #[test]
