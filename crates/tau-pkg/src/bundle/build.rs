@@ -412,12 +412,12 @@ fn agent_home_package_caps(
 /// For each entry: the allow list is the narrowed `allow_override` if present,
 /// otherwise the source variant's own field. `deny` is always `e.deny`.
 /// `Filesystem(Exec)` and `Process(Spawn)` both map to `allow_exec`/`deny_exec`.
-/// Shapes with no bundle representation (skill.spawn, task_list, plan, custom)
+/// Shapes with no bundle representation (task_list, plan, custom)
 /// are silently dropped via the catch-all arm.
 fn effective_to_bundle(
     eff: &[crate::capability_override::EffectiveCapability],
 ) -> BundleEffectiveCapabilities {
-    use tau_domain::{AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability};
+    use tau_domain::{AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability};
     let mut out = BundleEffectiveCapabilities::default();
     for e in eff {
         match &e.source {
@@ -454,7 +454,12 @@ fn effective_to_bundle(
                 );
                 out.deny_agent_spawn.extend(e.deny.clone());
             }
-            // skill.spawn / task_list / plan / custom: no bundle field.
+            Capability::Skill(SkillCapability::Spawn { allowed_skills, .. }) => {
+                out.allow_skill_spawn
+                    .extend(e.allow_override.clone().unwrap_or_else(|| allowed_skills.clone()));
+                out.deny_skill_spawn.extend(e.deny.clone());
+            }
+            // task_list / plan / custom: no bundle field (still dropped).
             _ => {}
         }
     }
@@ -1140,13 +1145,14 @@ generated_at = "2024-01-01T00:00:00Z"
 
     #[test]
     fn effective_to_bundle_drops_unrepresentable_shapes() {
+        // task_list has no BundleEffectiveCapabilities field and must be dropped.
         let e = eff(
-            cap(serde_json::json!({"kind": "skill.spawn", "allowed_skills": ["fact-checker"]})),
+            cap(serde_json::json!({"kind": "task_list", "mode": "read"})),
             None,
             &[],
         );
         let b = effective_to_bundle(&[e]);
-        assert!(b.is_empty(), "skill.spawn must be dropped: {b:?}");
+        assert!(b.is_empty(), "task_list must be dropped: {b:?}");
     }
 
     /// Project with override-agent `r` whose home package `homepkg` is
@@ -1260,24 +1266,14 @@ allowed_skills = ["critic"]
     }
 
     #[test]
-    fn build_drops_skill_spawn_from_bundle() {
-        // skill.spawn has no BundleEffectiveCapabilities field, so the
-        // home package's skill.spawn grant must not appear anywhere in
-        // the recorded caps. Assert via the parsed struct (robust against
-        // unrelated TOML keys) plus a targeted check on the skill-specific
-        // serialized key.
+    fn build_records_skill_spawn_for_override_agent() {
+        // skill.spawn is now a represented shape: the home package's
+        // skill.spawn grant is recorded in the agent's effective caps.
         let tmp = tempdir().unwrap();
         override_agent_project(tmp.path());
-        let s = std::fs::read_to_string(&build(opts(tmp.path())).unwrap().path).unwrap();
-        // The skill grant's data ("critic" allowed_skill) must not leak,
-        // and no skill-spawn key should be emitted.
-        assert!(!s.contains("allowed_skills"), "skill.spawn key leaked: {s}");
-        assert!(!s.contains("skill_spawn"), "skill_spawn key leaked: {s}");
-        // The representable shapes ARE recorded (sanity that the agent
-        // block was actually produced).
         let caps = read_agent_caps(tmp.path());
+        assert_eq!(caps.allow_skill_spawn, vec!["critic".to_string()]);
         assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);
-        assert!(caps.allow_net_http.contains(&"api.example.com".to_string()));
     }
 
     #[test]

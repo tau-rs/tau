@@ -153,6 +153,12 @@ pub struct BundleEffectiveCapabilities {
     /// agent.spawn deny-list patterns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny_agent_spawn: Vec<String>,
+    /// skill.spawn allow-list patterns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_skill_spawn: Vec<String>,
+    /// skill.spawn deny-list patterns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_skill_spawn: Vec<String>,
 }
 
 impl BundleEffectiveCapabilities {
@@ -181,6 +187,8 @@ impl BundleEffectiveCapabilities {
             && self.deny_net_http.is_empty()
             && self.allow_agent_spawn.is_empty()
             && self.deny_agent_spawn.is_empty()
+            && self.allow_skill_spawn.is_empty()
+            && self.deny_skill_spawn.is_empty()
     }
 }
 
@@ -524,5 +532,13 @@ tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 some_future_field = "value"
 "#;
         BundleManifest::parse_str(toml_str).expect("future tables ignored");
+    }
+
+    #[test]
+    fn effective_caps_is_empty_includes_skill_spawn() {
+        let mut caps = BundleEffectiveCapabilities::default();
+        assert!(caps.is_empty());
+        caps.allow_skill_spawn.push("critic".to_string());
+        assert!(!caps.is_empty(), "allow_skill_spawn must count toward non-empty");
     }
 }
