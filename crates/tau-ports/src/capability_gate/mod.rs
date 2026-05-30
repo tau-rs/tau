@@ -203,6 +203,7 @@ pub trait CapabilityGate: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn nest_handle_drops_in_lifo_order() {

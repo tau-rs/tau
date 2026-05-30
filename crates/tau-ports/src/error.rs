@@ -9,6 +9,9 @@
 //! per-trait error types. `NamespaceError` and `KeyError` are the validation
 //! errors for the `Namespace` and `Key` newtypes.
 
+use alloc::format;
+use alloc::string::{String, ToString};
+
 use thiserror::Error;
 
 /// Errors returned by `crate::llm::LlmBackend` implementations.

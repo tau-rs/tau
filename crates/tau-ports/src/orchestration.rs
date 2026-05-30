@@ -9,6 +9,9 @@
 //! for the design and `docs/decisions/0023-multi-agent-orchestration.md`
 //! for the ADR.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use chrono::{DateTime, Utc};
 
 /// Hierarchical task id. Examples: `"01"`, `"01.02"`, `"01.02.01"`.

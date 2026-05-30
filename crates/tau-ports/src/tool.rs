@@ -6,6 +6,8 @@
 //! [`StatelessTool`] / [`StatelessAdapter`] pair for the common
 //! stateless case.
 
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use std::time::SystemTime;
 
 use tau_domain::{AgentInstanceId, Value};
@@ -363,6 +365,7 @@ impl<T: StatelessTool> Tool for StatelessAdapter<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use tau_domain::Value;
 
     struct EchoTool;

@@ -2,8 +2,10 @@
 //! tau deployment targets. See ADR-0034 + spec
 //! `2026-05-19-target-triple-registry-design.md`.
 
-use std::fmt;
-use std::str::FromStr;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use core::fmt;
+use core::str::FromStr;
 
 use crate::capability_gate::CapabilityTier;
 use crate::target::adapter_family::AdapterFamily;

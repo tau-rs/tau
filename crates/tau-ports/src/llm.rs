@@ -29,8 +29,12 @@
 //! [`AgentInstanceId`]: tau_domain::AgentInstanceId
 //! [`Address`]: tau_domain::Address
 
-use std::collections::BTreeMap;
-use std::pin::Pin;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::pin::Pin;
 
 use futures_core::Stream;
 use tau_domain::Value;
@@ -445,7 +449,7 @@ pub fn batch_to_stream(resp: CompletionResponse) -> CompletionStream {
 /// Adapter from a `Vec` of pre-computed items into a `Stream`. Used by
 /// [`batch_to_stream`] to avoid pulling in `futures` as a runtime dep.
 struct VecStream<T> {
-    items: std::vec::IntoIter<T>,
+    items: alloc::vec::IntoIter<T>,
 }
 
 impl<T> Stream for VecStream<T>
@@ -456,9 +460,9 @@ where
 
     fn poll_next(
         self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        std::task::Poll::Ready(self.get_mut().items.next())
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        core::task::Poll::Ready(self.get_mut().items.next())
     }
 }
 
@@ -489,7 +493,7 @@ pub async fn stream_to_batch(mut stream: CompletionStream) -> Result<CompletionR
     let mut finish: Option<(StopReason, Option<TokenUsage>)> = None;
 
     loop {
-        let next = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
+        let next = core::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
         match next {
             None => break,
             Some(Err(e)) => return Err(e),
@@ -599,8 +603,9 @@ impl ToolUseAccumulator {
 #[cfg(test)]
 mod helper_tests {
     use super::*;
+    use alloc::vec;
 
-    use std::pin::Pin;
+    use core::pin::Pin;
 
     use futures_core::Stream;
 
@@ -610,7 +615,7 @@ mod helper_tests {
         let mut out = Vec::new();
         loop {
             let next: Option<Result<CompletionChunk, LlmError>> =
-                std::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await;
+                core::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await;
             match next {
                 None => break,
                 Some(Ok(c)) => out.push(c),

@@ -17,7 +17,11 @@
 //! up real LLM providers or database backends. Production builds
 //! (without the feature) do not pull this code.
 
-use std::collections::BTreeMap;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -322,17 +326,17 @@ impl LlmBackend for MockLlmBackend {
 /// Adapter from a `Vec<CompletionChunk>` to a [`CompletionStream`]. Used
 /// by [`MockLlmBackend::stream`] when explicit chunks are configured.
 struct VecChunkStream {
-    items: std::vec::IntoIter<CompletionChunk>,
+    items: alloc::vec::IntoIter<CompletionChunk>,
 }
 
 impl futures_core::Stream for VecChunkStream {
     type Item = Result<CompletionChunk, LlmError>;
 
     fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        std::task::Poll::Ready(self.get_mut().items.next().map(Ok))
+        self: core::pin::Pin<&mut Self>,
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        core::task::Poll::Ready(self.get_mut().items.next().map(Ok))
     }
 }
 
@@ -654,6 +658,7 @@ pub fn resource_limits(
 #[cfg(test)]
 mod mock_llm_tests {
     use super::*;
+    use alloc::vec;
 
     #[tokio::test]
     async fn verify_invocation_count_passes_on_zero_when_unused() {
@@ -689,6 +694,7 @@ mod mock_llm_tests {
 #[cfg(test)]
 mod sandbox_v01_tests {
     use super::*;
+    use alloc::vec;
     use tau_domain::{Capability, CapabilityShape};
 
     fn read_cap() -> Capability {
@@ -803,6 +809,7 @@ mod sandbox_v01_tests {
 #[cfg(all(test, feature = "process"))]
 mod process_tests {
     use super::*;
+    use alloc::vec;
     use crate::ProcessCapabilityGate;
 
     #[tokio::test]

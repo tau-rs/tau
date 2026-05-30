@@ -1,5 +1,7 @@
 //! Parse errors for `TargetTriple` and its sub-enums.
 
+use alloc::string::String;
+
 /// Error returned when parsing a [`super::triple::TargetTriple`] or one of its
 /// sub-enum axes from a string.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]

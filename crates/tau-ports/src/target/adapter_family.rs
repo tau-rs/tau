@@ -1,7 +1,8 @@
 //! AdapterFamily axis of `TargetTriple`.
 
-use std::fmt;
-use std::str::FromStr;
+use alloc::string::ToString;
+use core::fmt;
+use core::str::FromStr;
 
 use crate::target::parse::ParseError;
 

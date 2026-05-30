@@ -4,14 +4,23 @@
 
 use tau_ports::{CapabilityGate, CapabilityPlan, CapabilityProbe, CapabilityShapeSet};
 
-fn _shape_check<T: CapabilityGate>() {
-    fn _accepts_universal(_t: &dyn CapabilityGate) {}
-    // CapabilityGate must NOT carry process-flavored methods.
-    // The four universal methods only:
-    //   fn name(&self) -> &str;
-    //   async fn probe(&self) -> CapabilityProbe;
-    //   fn supported_shapes(&self) -> CapabilityShapeSet;
-    //   fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), tau_ports::CapabilityError>;
+// CapabilityGate must NOT carry process-flavored methods.
+// The four universal methods only:
+//   fn name(&self) -> &str;
+//   async fn probe(&self) -> CapabilityProbe;
+//   fn supported_shapes(&self) -> CapabilityShapeSet;
+//   fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), tau_ports::CapabilityError>;
+//
+// NOTE: `async fn in trait` (native RPITIT) is not dyn-compatible in Rust < 2.0,
+// so the original `&dyn CapabilityGate` check is replaced with a generic-bound
+// form. The intent is to ensure wrap_spawn / apply_post_spawn are NOT on the
+// universal trait — they live on the ProcessCapabilityGate extension trait.
+fn _shape_check<T: CapabilityGate>(_t: &T) {
+    // Verify the four universal methods are callable via the bound.
+    let _: &str = _t.name();
+    let _: tau_ports::CapabilityShapeSet = _t.supported_shapes();
+    let _plan = CapabilityPlan::new(Vec::new(), None, None);
+    let _: Result<(), tau_ports::CapabilityError> = _t.validate_plan(&_plan);
 }
 
 #[test]

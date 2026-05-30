@@ -137,6 +137,7 @@ pub fn list_available() -> impl Iterator<Item = &'static TargetTripleEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn registry_has_six_entries() {
