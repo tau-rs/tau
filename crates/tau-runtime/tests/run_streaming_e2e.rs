@@ -22,7 +22,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, RunEvent, RunOptions, RunOutcome, Runtime};
+use tau_runtime::{builder::DynTool, RunEvent, RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -217,7 +217,7 @@ async fn text_only_run_streams_text_deltas() {
     let initial = common::user_message("say hi");
 
     let stream = runtime
-        .run_streaming(agent_def, manifest, initial, RunOptions::default())
+        .run_streaming(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run_streaming should not fail at construction time");
 
@@ -339,7 +339,7 @@ paths = ["{glob}"]
     let initial = common::user_message("read the file");
 
     let stream = runtime
-        .run_streaming(agent_def, manifest, initial, RunOptions::default())
+        .run_streaming(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run_streaming construction");
 
@@ -439,7 +439,7 @@ async fn schema_validation_failure_emits_tool_call_completed_with_err() {
     let initial = common::user_message("read a file");
 
     let stream = runtime
-        .run_streaming(agent_def, manifest, initial, RunOptions::default())
+        .run_streaming(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run_streaming construction");
 
@@ -538,7 +538,7 @@ async fn capability_denial_terminates_run() {
     let initial = common::user_message("read a file");
 
     let stream = runtime
-        .run_streaming(agent_def, manifest, initial, RunOptions::default())
+        .run_streaming(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run_streaming construction");
 
@@ -645,7 +645,7 @@ paths = ["{glob}"]
     let agent_def = common::agent_def("agent-5", "test-agent", "test-pkg@0.1.0", "test-llm");
     let initial = common::user_message("read the file repeatedly");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.max_turns = 2;
 
     let stream = runtime

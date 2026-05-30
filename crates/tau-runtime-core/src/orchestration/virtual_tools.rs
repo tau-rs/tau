@@ -4,7 +4,11 @@
 //! `agent.<kind>.spawn`, the runtime resolves it here instead of forwarding
 //! to a plugin host. Result is returned synchronously as a tool_result.
 
-use chrono::Utc;
+use alloc::collections::BTreeSet;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use tau_domain::Capability;
@@ -18,7 +22,7 @@ use crate::orchestration::run_state::RunState;
 /// # Example
 ///
 /// ```
-/// use tau_runtime::orchestration::virtual_tools::is_virtual;
+/// use tau_runtime_core::orchestration::virtual_tools::is_virtual;
 ///
 /// assert!(is_virtual("task.create"));
 /// assert!(is_virtual("task.list"));
@@ -57,7 +61,7 @@ pub fn is_virtual(tool_name: &str) -> bool {
 ///
 /// ```
 /// use tau_domain::Capability;
-/// use tau_runtime::orchestration::virtual_tools::required_capability;
+/// use tau_runtime_core::orchestration::virtual_tools::required_capability;
 ///
 /// let cap = required_capability("task.list");
 /// assert!(matches!(cap, Capability::TaskList { mode } if mode == "read"));
@@ -116,8 +120,12 @@ pub fn required_capability(tool_name: &str) -> Capability {
 /// Dispatch a virtual tool call. Returns the JSON result body (the caller
 /// wraps it in a normal tool_result envelope).
 ///
+/// `now` is the wall-clock timestamp to use for task mutations; callers
+/// should obtain it from `crate::ids::now_utc(clock)` so the kernel never
+/// calls `chrono::Utc::now()` directly.
+///
 /// Note: `agent.<kind>.spawn` is NOT dispatched here — it requires recursive
-/// Runtime::run invocation at the kernel layer (Task 12). Callers must use
+/// Runtime::run invocation at the kernel layer. Callers must use
 /// `validate_agent_spawn` instead for those tools.
 ///
 /// # Example
@@ -125,11 +133,12 @@ pub fn required_capability(tool_name: &str) -> Capability {
 /// ```
 /// use chrono::Utc;
 /// use serde_json::json;
-/// use tau_runtime::orchestration::run_state::RunState;
-/// use tau_runtime::orchestration::virtual_tools::dispatch;
+/// use tau_runtime_core::orchestration::run_state::RunState;
+/// use tau_runtime_core::orchestration::virtual_tools::dispatch;
 /// use tau_ports::RunBudget;
 ///
 /// let mut state = RunState::new("r".into(), "root".into(), RunBudget::default(), Utc::now());
+/// let now = Utc::now();
 ///
 /// // Create a task via virtual dispatch.
 /// let result = dispatch(
@@ -137,13 +146,14 @@ pub fn required_capability(tool_name: &str) -> Capability {
 ///     json!({"description": "analyse data"}),
 ///     &"root".into(),
 ///     &mut state,
+///     now,
 /// ).expect("dispatch ok");
 /// let task_id = result["task_id"].as_str().expect("task_id present");
 /// assert!(!task_id.is_empty());
 ///
 /// // Write a plan note.
-/// dispatch("run.note", json!({"text": "step 1"}), &"root".into(), &mut state).unwrap();
-/// let plan = dispatch("run.plan", serde_json::Value::Null, &"root".into(), &mut state).unwrap();
+/// dispatch("run.note", json!({"text": "step 1"}), &"root".into(), &mut state, now).unwrap();
+/// let plan = dispatch("run.plan", serde_json::Value::Null, &"root".into(), &mut state, now).unwrap();
 /// assert!(plan["plan"].as_str().unwrap().contains("step 1"));
 /// ```
 pub fn dispatch(
@@ -151,16 +161,17 @@ pub fn dispatch(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     match tool_name {
-        "task.create" => handle_task_create(args, agent_id, state),
-        "task.claim" => handle_task_claim(args, agent_id, state),
-        "task.heartbeat" => handle_task_heartbeat(args, agent_id, state),
-        "task.release" => handle_task_release(args, agent_id, state),
-        "task.update" => handle_task_update(args, agent_id, state),
-        "task.complete" => handle_task_complete(args, agent_id, state),
-        "task.fail" => handle_task_fail(args, agent_id, state),
-        "task.discard" => handle_task_discard(args, agent_id, state),
+        "task.create" => handle_task_create(args, agent_id, state, now),
+        "task.claim" => handle_task_claim(args, agent_id, state, now),
+        "task.heartbeat" => handle_task_heartbeat(args, agent_id, state, now),
+        "task.release" => handle_task_release(args, agent_id, state, now),
+        "task.update" => handle_task_update(args, agent_id, state, now),
+        "task.complete" => handle_task_complete(args, agent_id, state, now),
+        "task.fail" => handle_task_fail(args, agent_id, state, now),
+        "task.discard" => handle_task_discard(args, agent_id, state, now),
         "task.list" => handle_task_list(args, state),
         "task.get" => handle_task_get(args, state),
         "run.note" => handle_run_note(args, agent_id, state),
@@ -173,7 +184,7 @@ pub fn dispatch(
         }
         _ => Err(OrchestrationError::ArgError {
             tool: tool_name.into(),
-            detail: format!("unknown virtual tool: {tool_name}"),
+            detail: alloc::format!("unknown virtual tool: {tool_name}"),
         }),
     }
 }
@@ -193,18 +204,19 @@ fn handle_task_create(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskCreateArgs =
         serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
             tool: "task.create".into(),
-            detail: format!("arg parse error: {e}"),
+            detail: alloc::format!("arg parse error: {e}"),
         })?;
     let id = state.task_list.create(
         a.description,
         agent_id.clone(),
         a.parent_task_id,
         a.owner_id,
-        Utc::now(),
+        now,
     )?;
     Ok(serde_json::json!({"task_id": id}))
 }
@@ -218,14 +230,13 @@ fn handle_task_claim(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskIdArg = serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
         tool: "task.claim".into(),
-        detail: format!("arg parse error: {e}"),
+        detail: alloc::format!("arg parse error: {e}"),
     })?;
-    state
-        .task_list
-        .claim(&a.task_id, agent_id.clone(), Utc::now())?;
+    state.task_list.claim(&a.task_id, agent_id.clone(), now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -233,14 +244,13 @@ fn handle_task_heartbeat(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskIdArg = serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
         tool: "task.heartbeat".into(),
-        detail: format!("arg parse error: {e}"),
+        detail: alloc::format!("arg parse error: {e}"),
     })?;
-    state
-        .task_list
-        .heartbeat(&a.task_id, agent_id, Utc::now())?;
+    state.task_list.heartbeat(&a.task_id, agent_id, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -248,12 +258,13 @@ fn handle_task_release(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskIdArg = serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
         tool: "task.release".into(),
-        detail: format!("arg parse error: {e}"),
+        detail: alloc::format!("arg parse error: {e}"),
     })?;
-    state.task_list.release(&a.task_id, agent_id, Utc::now())?;
+    state.task_list.release(&a.task_id, agent_id, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -270,15 +281,16 @@ fn handle_task_update(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskUpdateArgs =
         serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
             tool: "task.update".into(),
-            detail: format!("arg parse error: {e}"),
+            detail: alloc::format!("arg parse error: {e}"),
         })?;
     state
         .task_list
-        .update(&a.task_id, agent_id, a.status, a.notes, Utc::now())?;
+        .update(&a.task_id, agent_id, a.status, a.notes, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -292,15 +304,16 @@ fn handle_task_complete(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskCompleteArgs =
         serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
             tool: "task.complete".into(),
-            detail: format!("arg parse error: {e}"),
+            detail: alloc::format!("arg parse error: {e}"),
         })?;
     state
         .task_list
-        .complete(&a.task_id, agent_id, a.result_summary, Utc::now())?;
+        .complete(&a.task_id, agent_id, a.result_summary, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -314,15 +327,14 @@ fn handle_task_fail(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskFailArgs =
         serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
             tool: "task.fail".into(),
-            detail: format!("arg parse error: {e}"),
+            detail: alloc::format!("arg parse error: {e}"),
         })?;
-    state
-        .task_list
-        .fail(&a.task_id, agent_id, a.error, Utc::now())?;
+    state.task_list.fail(&a.task_id, agent_id, a.error, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -336,15 +348,16 @@ fn handle_task_discard(
     args: Value,
     agent_id: &AgentId,
     state: &mut RunState,
+    now: DateTime<Utc>,
 ) -> Result<Value, OrchestrationError> {
     let a: TaskDiscardArgs =
         serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
             tool: "task.discard".into(),
-            detail: format!("arg parse error: {e}"),
+            detail: alloc::format!("arg parse error: {e}"),
         })?;
     state
         .task_list
-        .discard(&a.task_id, agent_id, a.reason, Utc::now())?;
+        .discard(&a.task_id, agent_id, a.reason, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -357,7 +370,7 @@ fn handle_task_list(args: Value, state: &mut RunState) -> Result<Value, Orchestr
 fn handle_task_get(args: Value, state: &mut RunState) -> Result<Value, OrchestrationError> {
     let a: TaskIdArg = serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
         tool: "task.get".into(),
-        detail: format!("arg parse error: {e}"),
+        detail: alloc::format!("arg parse error: {e}"),
     })?;
     let task = state.task_list.get(&a.task_id).cloned();
     Ok(serde_json::json!({"task": task}))
@@ -378,7 +391,7 @@ fn handle_run_note(
     let a: RunNoteArgs =
         serde_json::from_value(args).map_err(|e| OrchestrationError::ArgError {
             tool: "run.note".into(),
-            detail: format!("arg parse error: {e}"),
+            detail: alloc::format!("arg parse error: {e}"),
         })?;
     let _ = agent_id; // kept for future use (audit trail)
     state.append_plan_note(&a.text);
@@ -399,8 +412,8 @@ fn handle_run_plan(state: &mut RunState) -> Result<Value, OrchestrationError> {
 ///
 /// ```
 /// use tau_domain::Capability;
-/// use tau_runtime::orchestration::virtual_tools::check_capability_subset;
-/// use tau_runtime::orchestration::error::OrchestrationError;
+/// use tau_runtime_core::orchestration::virtual_tools::check_capability_subset;
+/// use tau_runtime_core::orchestration::error::OrchestrationError;
 ///
 /// let parent = vec![
 ///     Capability::TaskList { mode: "read".into() },
@@ -417,7 +430,7 @@ pub fn check_capability_subset(
     parent_grant: &[Capability],
     child_grant: &[Capability],
 ) -> Result<(), OrchestrationError> {
-    let parent_keys: std::collections::BTreeSet<String> = parent_grant
+    let parent_keys: BTreeSet<String> = parent_grant
         .iter()
         .map(|c| serde_json::to_string(c).unwrap_or_default())
         .collect();
@@ -442,8 +455,6 @@ struct AgentSpawnArgs {
     message: String,
     /// Optional system prompt for the child. When `None`, the child
     /// inherits the parent's system_prompt. When `Some`, replaces it.
-    /// This is the v1.2 foundation for per-kind agent definitions
-    /// (a "skill" = `(system_prompt, grant, optional tools)`).
     #[serde(default)]
     system_prompt: Option<String>,
     // `kind` is in the tool name, not here — ignore any `kind` field in args.
@@ -456,7 +467,7 @@ struct AgentSpawnArgs {
 ///
 /// ```
 /// use tau_domain::Capability;
-/// use tau_runtime::orchestration::virtual_tools::{AgentSpawnRequest, validate_agent_spawn};
+/// use tau_runtime_core::orchestration::virtual_tools::{AgentSpawnRequest, validate_agent_spawn};
 ///
 /// let parent_grant: Vec<Capability> = vec![
 ///     serde_json::from_value(serde_json::json!({
@@ -498,8 +509,8 @@ pub struct AgentSpawnRequest {
 ///
 /// ```
 /// use tau_domain::Capability;
-/// use tau_runtime::orchestration::virtual_tools::validate_agent_spawn;
-/// use tau_runtime::orchestration::error::OrchestrationError;
+/// use tau_runtime_core::orchestration::virtual_tools::validate_agent_spawn;
+/// use tau_runtime_core::orchestration::error::OrchestrationError;
 ///
 /// let parent_grant: Vec<Capability> = vec![
 ///     serde_json::from_value(serde_json::json!({
@@ -543,7 +554,7 @@ pub fn validate_agent_spawn(
     let a: AgentSpawnArgs =
         serde_json::from_value(args.clone()).map_err(|e| OrchestrationError::ArgError {
             tool: tool_name.into(),
-            detail: format!("arg parse error: {e}"),
+            detail: alloc::format!("arg parse error: {e}"),
         })?;
 
     // Spawn-authorization check: parent must have Agent(Spawn) granting `kind`.
@@ -586,6 +597,10 @@ pub fn validate_agent_spawn(
 ///
 /// Returns a fully validated [`crate::orchestration::SkillSpawnRequest`]
 /// the kernel uses to invoke a recursive `Runtime::run`.
+///
+/// Gated behind `host-fs` because it returns `SkillSpawnRequest` which
+/// contains a `std::path::PathBuf` install path.
+#[cfg(feature = "host-fs")]
 pub fn validate_skill_spawn(
     tool_name: &str,
     args: &Value,
@@ -612,7 +627,7 @@ pub fn validate_skill_spawn(
     let a: SkillSpawnArgsRaw =
         serde_json::from_value(args.clone()).map_err(|e| OrchestrationError::ArgError {
             tool: tool_name.into(),
-            detail: format!("skill.<name>.spawn args: {e}"),
+            detail: alloc::format!("skill.<name>.spawn args: {e}"),
         })?;
 
     // Spawn authorization: parent must have Skill(Spawn) granting `name`.
@@ -642,6 +657,8 @@ pub fn validate_skill_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
+    use alloc::vec;
     use assert_matches::assert_matches;
     use tau_ports::RunBudget;
 
@@ -669,12 +686,21 @@ mod tests {
     #[test]
     fn task_create_then_get_round_trip() {
         let mut state = new_state();
+        let now = Utc::now();
         let create_args = serde_json::json!({"description": "do thing"});
-        let result = dispatch("task.create", create_args, &"agent_x".into(), &mut state).unwrap();
+        let result = dispatch(
+            "task.create",
+            create_args,
+            &"agent_x".into(),
+            &mut state,
+            now,
+        )
+        .unwrap();
         let task_id = result["task_id"].as_str().unwrap().to_string();
 
         let get_args = serde_json::json!({"task_id": task_id});
-        let get_result = dispatch("task.get", get_args, &"agent_x".into(), &mut state).unwrap();
+        let get_result =
+            dispatch("task.get", get_args, &"agent_x".into(), &mut state, now).unwrap();
         assert!(get_result["task"].is_object());
         assert_eq!(get_result["task"]["description"], "do thing");
     }
@@ -682,11 +708,13 @@ mod tests {
     #[test]
     fn task_claim_then_complete_full_lifecycle() {
         let mut state = new_state();
+        let now = Utc::now();
         let res = dispatch(
             "task.create",
             serde_json::json!({"description": "x"}),
             &"agent_x".into(),
             &mut state,
+            now,
         )
         .unwrap();
         let id = res["task_id"].as_str().unwrap().to_string();
@@ -696,6 +724,7 @@ mod tests {
             serde_json::json!({"task_id": id}),
             &"agent_x".into(),
             &mut state,
+            now,
         )
         .unwrap();
         dispatch(
@@ -703,6 +732,7 @@ mod tests {
             serde_json::json!({"task_id": id, "result_summary": "done"}),
             &"agent_x".into(),
             &mut state,
+            now,
         )
         .unwrap();
 
@@ -711,6 +741,7 @@ mod tests {
             serde_json::json!({"task_id": id}),
             &"agent_x".into(),
             &mut state,
+            now,
         )
         .unwrap();
         assert_eq!(g["task"]["status"], "done");
@@ -737,11 +768,13 @@ mod tests {
     #[test]
     fn run_note_appends_to_plan() {
         let mut state = new_state();
+        let now = Utc::now();
         dispatch(
             "run.note",
             serde_json::json!({"text": "first thought"}),
             &"a".into(),
             &mut state,
+            now,
         )
         .unwrap();
         dispatch(
@@ -749,9 +782,10 @@ mod tests {
             serde_json::json!({"text": "second thought"}),
             &"a".into(),
             &mut state,
+            now,
         )
         .unwrap();
-        let plan = dispatch("run.plan", Value::Null, &"a".into(), &mut state).unwrap();
+        let plan = dispatch("run.plan", Value::Null, &"a".into(), &mut state, now).unwrap();
         let text = plan["plan"].as_str().unwrap();
         assert!(text.contains("first thought"));
         assert!(text.contains("second thought"));
@@ -775,7 +809,6 @@ mod tests {
 
     #[test]
     fn validate_agent_spawn_accepts_authorized_kind() {
-        // Use serde construction to avoid #[non_exhaustive] block on AgentCapability::Spawn
         let parent_grant: Vec<Capability> = vec![serde_json::from_value(serde_json::json!({
             "kind": "agent.spawn",
             "allowed_kinds": ["researcher"]
@@ -791,9 +824,6 @@ mod tests {
 
     #[test]
     fn validate_agent_spawn_passes_system_prompt_through() {
-        // v1.2: spawn args may carry an optional system_prompt override
-        // so the orchestrator can spawn semantically different children
-        // (the foundation for skills — see ROADMAP §"Skills as packages").
         let parent_grant: Vec<Capability> = vec![serde_json::from_value(serde_json::json!({
             "kind": "agent.spawn",
             "allowed_kinds": ["critic"]

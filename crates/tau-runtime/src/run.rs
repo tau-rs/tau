@@ -25,23 +25,59 @@
 //! travel above DEBUG; full content is TRACE-only and otherwise
 //! truncated to a 256-char preview.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 
 #[cfg(test)]
 use tau_domain::AgentInstanceId;
-use tau_domain::{
-    AgentDefinition, AgentStatus, Capability, FailureKind, Message, MessagePayload,
-    PackageManifest, Value,
-};
-use tau_observe::vocabulary::{EV_DISPATCH_TOOL_RESOLVED, SPAN_DISPATCH_TOOL};
-use tau_ports::{ContentBlock, LlmProviderMessage, ToolContent, ToolUse};
-use tracing::{debug, instrument};
+use tau_domain::{AgentDefinition, Capability, Message, PackageManifest};
+#[cfg(test)]
+use tau_domain::{AgentStatus, FailureKind, MessagePayload, Value};
+#[cfg(test)]
+use tau_ports::{ContentBlock, LlmProviderMessage, ToolUse};
+use tracing::instrument;
 
 use crate::builder::Runtime;
 use crate::capability_override::EffectiveCapability;
-use crate::error::{CapabilityDenial, RuntimeError};
-use crate::options::{RunOptions, TokenUsage};
+#[cfg(test)]
+use crate::error::CapabilityDenial;
+use crate::error::{CoreRuntimeError, RuntimeError};
+use crate::options::RunOptions;
+#[cfg(test)]
+use crate::options::TokenUsage;
 use crate::outcome::RunOutcome;
+
+// Re-export pure helpers from core so that stream.rs can still use
+// `crate::run::*` paths unchanged (Task 3.5 migration shim).
+pub(crate) use tau_runtime_core::run::{
+    agent_messages_to_provider_messages, build_policy_denied_outcome, content_to_value,
+    flatten_content_to_string,
+};
+// value_to_preview_string is pub in core but not used from tau-runtime directly.
+#[allow(unused_imports)]
+pub(crate) use tau_runtime_core::run::value_to_preview_string;
+
+/// Build a `RunOptions` with clock and random filled in.
+///
+/// Phase β.1.4 will replace `MockClock` with a real `TokioClock`.
+/// Until then, every production entry point that constructs `RunOptions`
+/// internally (i.e. does not receive one from the caller) MUST go through
+/// this helper so that `clock_ref` / `random_ref` in `stream.rs` don't panic.
+///
+/// Tests that need deterministic time or deterministic entropy should
+/// supply their own `MockClock` / `DeterministicRandom` via `RunOptions`
+/// fields directly.
+fn run_options_with_defaults() -> RunOptions {
+    use std::sync::Arc;
+    use tau_ports::{DeterministicRandom, MockClock};
+    // TODO(beta.1.4): replace MockClock with TokioClock once the tokio
+    // shell's `drive` entry exists and can inject a real wall-clock.
+    RunOptions {
+        clock: Some(Arc::new(MockClock::new())),
+        random: Some(Arc::new(DeterministicRandom::seeded(0))),
+        ..RunOptions::default()
+    }
+}
 
 impl Runtime {
     /// Run an agent with a pre-existing conversation history.
@@ -160,12 +196,14 @@ impl Runtime {
                                     Some((tn, reg))
                                 })
                                 .unwrap_or_else(|| (detail.clone(), vec![]));
-                            RuntimeError::ToolNotRegistered {
+                            RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
                                 tool_name,
                                 registered,
-                            }
+                            })
                         }
-                        "Llm" => RuntimeError::Llm(LlmError::Internal { message: detail }),
+                        "Llm" => RuntimeError::Core(CoreRuntimeError::Llm(LlmError::Internal {
+                            message: detail,
+                        })),
                         // Reconstruct the typed ToolError variant using
                         // `tool_error_variant` recorded by make_tool_fatal_error.
                         // This preserves the BadArgs/SessionDead/etc. variant
@@ -183,9 +221,9 @@ impl Runtime {
                                 // string carries the Display output.
                                 _ => ToolError::Internal { message: detail },
                             };
-                            RuntimeError::Tool(tool_err)
+                            RuntimeError::Core(CoreRuntimeError::Tool(tool_err))
                         }
-                        _ => RuntimeError::Internal { message: detail },
+                        _ => RuntimeError::Core(CoreRuntimeError::Internal { message: detail }),
                     });
                 }
                 Some(_) => continue,
@@ -221,7 +259,7 @@ impl Runtime {
         .await
     }
 
-    /// Convenience: [`Runtime::run`] with [`RunOptions::default`].
+    /// Convenience: [`Runtime::run`] with default options (clock + random injected).
     pub async fn run_default(
         &self,
         agent_def: AgentDefinition,
@@ -232,36 +270,21 @@ impl Runtime {
             agent_def,
             package_manifest,
             initial_message,
-            RunOptions::default(),
+            run_options_with_defaults(),
         )
         .await
     }
 
     /// Invoke a single tool by name without engaging the LLM loop.
     ///
-    /// Bypasses the multi-turn agent driver — useful for callers that
-    /// want to compose tools directly (e.g., `tau-workflow`'s
-    /// `tool.call` step kind). The tool's capability requirements are
-    /// still checked against the `agent_def`'s package grant set, so
-    /// the caller must pass the workflow's default-agent definition.
-    ///
-    /// Follows the same sequence as the run loop's tool-dispatch arm:
-    /// `resolve_tool → capability check → init → invoke → teardown`.
+    /// Backwards-compatible wrapper over the core [`tau_runtime_core::Runtime::invoke_tool`]
+    /// that forwards `None` for `clock` and `random` (uses test-fixture defaults).
+    /// Callers that need deterministic entropy or wall-clock control should
+    /// use the core method directly and supply port implementations.
     ///
     /// # Errors
     ///
-    /// - [`RuntimeError::ToolNotRegistered`] — the tool name is unknown.
-    /// - [`RuntimeError::Internal`] — the agent's package does not grant
-    ///   a capability required by the tool (capability-denied path; the
-    ///   run loop surfaces this as `Ok(RunOutcome::Failed)` instead, but
-    ///   the direct-dispatch caller has no `RunOutcome` envelope).
-    /// - [`RuntimeError::Tool`] — the tool's `init`, `invoke`, or
-    ///   `teardown` returned a [`tau_ports::ToolError`].
-    #[instrument(
-        name = SPAN_DISPATCH_TOOL,
-        skip_all,
-        fields(tool_name = %tool_name),
-    )]
+    /// See [`tau_runtime_core::Runtime::invoke_tool`].
     pub async fn invoke_tool(
         &self,
         agent_def: &AgentDefinition,
@@ -269,54 +292,12 @@ impl Runtime {
         tool_name: &str,
         args: tau_domain::Value,
     ) -> Result<tau_ports::ToolResult, RuntimeError> {
-        use tau_domain::AgentInstanceId;
-        use tau_ports::SessionContext;
-
-        let tool = self.resolve_tool(tool_name)?.clone();
-        debug!(
-            name = EV_DISPATCH_TOOL_RESOLVED,
-            tool_name = %tool_name,
-            plugin_id = %tool.name(),
-        );
-
-        // Capability check: mirror the run loop's structural check.
-        // If the agent's package grants are insufficient, surface as
-        // RuntimeError::Internal (no CapabilityDenied variant exists on
-        // RuntimeError; the run loop returns Ok(RunOutcome::Failed) in
-        // the same situation, but invoke_tool has no RunOutcome envelope).
-        let granted: Vec<tau_domain::Capability> = package_manifest.capabilities().to_vec();
-        let required: &[tau_domain::Capability] = tool.capabilities();
-        // ADR-0006 §3.9: `check_capabilities_for_tool` emits the
-        // `capability.check` span + 5 capability events. `invoke_tool`
-        // is itself `#[instrument]`'d (the macro enters its span for
-        // the body), so the wrapper's span nests naturally without an
-        // explicit `in_scope`.
-        if let Some(missing) =
-            crate::capability::check_capabilities_for_tool(tool_name, &granted, required)
-        {
-            let denial = crate::error::CapabilityDenial {
-                agent_id: agent_def.id.to_string(),
-                package_id: agent_def.package.name.to_string(),
-                tool_name: tool_name.to_owned(),
-                required_kind: crate::run::capability_kind_str(missing),
-                required_detail: format!("{missing:?}"),
-            };
-            return Err(RuntimeError::Internal {
-                message: format!("capability denied: {denial}"),
-            });
-        }
-
-        // Build a minimal SessionContext (no deadline, no deny entries).
-        // invoke_tool is a direct-dispatch path — callers that need
-        // capability narrowing or deny carve-outs should use run().
-        let ctx = SessionContext::new(AgentInstanceId::new(), uuid::Uuid::new_v4(), None)
-            .with_granted_capabilities(granted);
-
-        tool.init(ctx.clone()).await?;
-        let result = tool.invoke(&ctx, &mut (), args).await;
-        // teardown best-effort: don't mask invoke's error if both fail.
-        let _ = tool.teardown(()).await;
-        Ok(result?)
+        // Delegate to core impl; convert core RuntimeError → host RuntimeError
+        // via the From impl.
+        self.0
+            .invoke_tool(agent_def, package_manifest, tool_name, args, None, None)
+            .await
+            .map_err(RuntimeError::Core)
     }
 
     /// Multi-agent orchestrated run entry point (ROADMAP §9, v1).
@@ -361,17 +342,18 @@ impl Runtime {
             now,
         );
 
-        // Subscribe a JSONL writer before wrapping state in Arc<Mutex<>>.
+        // Subscribe a JSONL writer via the tokio mpsc subscriber.
         let log_path = crate::orchestration::persistence::run_log_path(&scope_root, &run_id);
-        let writer_rx = state.trace.subscribe();
-        let _writer_handle = crate::orchestration::persistence::spawn_writer(log_path, writer_rx);
+        let subscriber = crate::orchestration::trace_mpsc::channel_with_writer(log_path);
+        state.trace.add_subscriber(subscriber);
 
         let state_arc = Arc::new(Mutex::new(state));
 
-        let opts = crate::RunOptions {
-            orchestration_state: Some(state_arc.clone()),
-            orchestration_runtime: Some(self.clone()),
-            ..crate::RunOptions::default()
+        let opts = {
+            let mut o = run_options_with_defaults();
+            o.orchestration_state = Some(state_arc.clone());
+            o.orchestration_runtime = Some(self.clone());
+            o
         };
 
         let outcome = self
@@ -431,230 +413,12 @@ impl Runtime {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers (named per the plan; each has a unit test below)
+// Internal helpers (named per the plan; some are re-exported from core)
 // ---------------------------------------------------------------------------
 
-/// Build the `RunOutcome::Failed { kind: PolicyDenied, .. }` returned
-/// when [`check_capabilities`] rejects a tool invocation. Centralizes
-/// the construction so the run loop's denial branch reads cleanly.
-pub(crate) fn build_policy_denied_outcome(
-    denial: CapabilityDenial,
-    all_messages: Vec<Message>,
-    total_turns: u32,
-    token_usage: TokenUsage,
-) -> RunOutcome {
-    RunOutcome::Failed {
-        status: AgentStatus::failed(FailureKind::PolicyDenied, Some(format!("{denial}"))),
-        all_messages,
-        total_turns,
-        token_usage,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Translation helpers (also internal)
-// ---------------------------------------------------------------------------
-
-/// Project the agent's [`Message`] history onto the LLM-call shape.
-///
-/// Per `tau_ports::llm` module-level docs, `tau_domain::Message`
-/// (universal envelope) and [`LlmProviderMessage`] (provider call
-/// shape) are intentionally distinct. This function is the single
-/// projection point in the kernel.
-///
-/// v0.1 mapping:
-///
-/// | Sender / payload                 | Provider role | Block(s)                          |
-/// | -------------------------------- | ------------- | --------------------------------- |
-/// | `User` / `Text`                  | `User`        | `Text`                            |
-/// | `Agent` / `Text`                 | `Assistant`   | `Text`                            |
-/// | `Agent` / `ToolCall`             | `Assistant`   | `ToolUse` (id derived from name)  |
-/// | `Tool` / `ToolResult` or Error   | `ToolResult`  | `Text` (flattened body)           |
-/// | other                            | (skipped)     | —                                 |
-///
-/// Lifecycle/Custom payloads are skipped — they are not part of the
-/// agent↔LLM dialogue at v0.1.
-pub(crate) fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProviderMessage> {
-    let mut out = Vec::with_capacity(history.len());
-    for m in history {
-        match (&m.sender, &m.payload) {
-            (tau_domain::Address::User, MessagePayload::Text { content }) => {
-                out.push(LlmProviderMessage::user(vec![ContentBlock::Text(
-                    content.clone(),
-                )]));
-            }
-            (tau_domain::Address::Agent(_), MessagePayload::Text { content }) => {
-                out.push(LlmProviderMessage::assistant(vec![ContentBlock::Text(
-                    content.clone(),
-                )]));
-            }
-            (tau_domain::Address::Agent(_), MessagePayload::ToolCall { args }) => {
-                // `tool_use.id` round-trips into the provider's
-                // `tool_use_id`; v0.1 derives it from the message id so
-                // a follow-up `ToolResult` can be paired by the backend.
-                let tool_name = match &m.recipient {
-                    tau_domain::Address::Tool(name) => name.clone(),
-                    _ => String::new(),
-                };
-                out.push(LlmProviderMessage::assistant(vec![ContentBlock::ToolUse(
-                    ToolUse::new(format!("toolu_{}", m.id), tool_name, args.clone()),
-                )]));
-            }
-            (tau_domain::Address::Tool(_), MessagePayload::ToolResult { body }) => {
-                out.push(LlmProviderMessage::tool_result(
-                    format!("toolu_{}", m.id),
-                    vec![ContentBlock::Text(value_to_preview_string(body))],
-                    false,
-                ));
-            }
-            (
-                tau_domain::Address::Tool(_),
-                MessagePayload::ToolError {
-                    kind: _,
-                    message,
-                    details: _,
-                },
-            ) => {
-                out.push(LlmProviderMessage::tool_result(
-                    format!("toolu_{}", m.id),
-                    vec![ContentBlock::Text(message.clone())],
-                    true,
-                ));
-            }
-            // Lifecycle / Custom / cross-talk patterns: not part of the
-            // v0.1 agent↔LLM dialogue. Skip silently — the integration
-            // tests assert the projected shape, and additive semantics
-            // are non-breaking.
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Append the assistant's response (text + tool_uses) to the history.
-///
-/// Mints one `Message` per logical assistant action:
-///
-/// - One [`MessagePayload::Text`] message (only if `text` is non-empty).
-/// - The tool_uses themselves are NOT pushed here — they become
-///   `MessagePayload::ToolCall` messages later in the dispatch loop,
-///   one per `tool_use`. This keeps the history's cause-effect order
-///   consistent: text before any tool call, then the tool call paired
-///   immediately with its result.
-///
-/// Now only called from unit tests (the agent loop moved to stream.rs).
-#[cfg(test)]
-pub(crate) fn append_assistant_response(
-    history: &mut Vec<Message>,
-    text: &str,
-    tool_uses: &[ToolUse],
-    agent_id: &AgentInstanceId,
-) {
-    if !text.is_empty() {
-        history.push(Message::new(
-            tau_domain::Address::Agent(*agent_id),
-            tau_domain::Address::User,
-            MessagePayload::Text {
-                content: text.to_owned(),
-            },
-        ));
-    } else if tool_uses.is_empty() {
-        // Defensive: the LLM returned neither text nor tool_uses.
-        // Spec says this shouldn't happen, but we still need a
-        // recognisable assistant turn in the history so callers'
-        // `final_message` is the assistant's empty response (not the
-        // initial user prompt). Push an empty-text message rather than
-        // synthesising a richer placeholder.
-        history.push(Message::new(
-            tau_domain::Address::Agent(*agent_id),
-            tau_domain::Address::User,
-            MessagePayload::Text {
-                content: String::new(),
-            },
-        ));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Small format/utility helpers (file-private)
-// ---------------------------------------------------------------------------
-
-/// Truncate `s` to at most `n` characters (Unicode scalar values),
-/// preserving UTF-8 boundaries. Returns an owned `String`. Used for
-/// DEBUG-level previews.
-///
-/// Now only called from unit tests (the agent loop moved to stream.rs).
-#[cfg(test)]
-fn truncate_to_chars(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
-
-/// Flatten a tool's content blocks into a single human-readable string,
-/// for use as the `message` field of [`MessagePayload::ToolError`].
-pub(crate) fn flatten_content_to_string(blocks: &[ToolContent]) -> String {
-    let mut out = String::new();
-    for block in blocks {
-        match block {
-            ToolContent::Text { text } => {
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(text);
-            }
-            ToolContent::Json { data } => {
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(&value_to_preview_string(data));
-            }
-            // `ToolContent` is `#[non_exhaustive]`; future variants
-            // contribute nothing to the preview at v0.1.
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Build a [`Value`] from a tool's content blocks. v0.1 rule:
-///
-/// - exactly one [`ToolContent::Json { data }`] → return `data` directly;
-/// - everything else → wrap into an `Object { content: Array of strings/values }`.
-pub(crate) fn content_to_value(blocks: &[ToolContent]) -> Value {
-    if blocks.len() == 1 {
-        if let ToolContent::Json { data } = &blocks[0] {
-            return data.clone();
-        }
-    }
-    let arr: Vec<Value> = blocks
-        .iter()
-        .map(|b| match b {
-            ToolContent::Text { text } => Value::String(text.clone()),
-            ToolContent::Json { data } => data.clone(),
-            _ => Value::Null,
-        })
-        .collect();
-    let mut obj = BTreeMap::new();
-    obj.insert("content".to_string(), Value::Array(arr));
-    Value::Object(obj)
-}
-
-/// Compact preview string for a [`Value`]. Used for `LlmProviderMessage`
-/// projection of a tool result body (the LLM-call shape carries text,
-/// not structured Value, in v0.1's content-block surface).
-fn value_to_preview_string(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Null => "null".to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Integer(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Bytes(b) => format!("<{} bytes>", b.len()),
-        Value::Array(_) | Value::Object(_) => format!("{v:?}"),
-        // `Value` is `#[non_exhaustive]`; future variants degrade to a
-        // generic Debug-format string rather than mis-classifying.
-        _ => format!("{v:?}"),
-    }
-}
+// agent_messages_to_provider_messages, build_policy_denied_outcome,
+// flatten_content_to_string, content_to_value, value_to_preview_string
+// are re-exported at top of file from tau_runtime_core::run.
 
 /// Build the post-narrow `Capability` view that flows to plugins via
 /// `SessionContext.granted_capabilities`. Capability inner variants are
@@ -694,35 +458,47 @@ pub(crate) fn narrowed_capability_for_session(eff: &EffectiveCapability) -> Capa
     serde_json::from_value(Jv::Object(obj)).unwrap_or_else(|_| eff.source.clone())
 }
 
-/// Top-level capability kind string used in
-/// [`CapabilityDenial::required_kind`] and the `capability.deny` event.
-pub(crate) fn capability_kind_str(cap: &Capability) -> String {
-    use tau_domain::{
-        AgentCapability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
-    };
-    match cap {
-        Capability::Filesystem(FsCapability::Read { .. }) => "fs.read".into(),
-        Capability::Filesystem(FsCapability::Write { .. }) => "fs.write".into(),
-        Capability::Filesystem(FsCapability::Exec { .. }) => "fs.exec".into(),
-        Capability::Network(NetCapability::Http { .. }) => "net.http".into(),
-        Capability::Process(ProcessCapability::Spawn { .. }) => "process.spawn".into(),
-        Capability::Agent(AgentCapability::Spawn { .. }) => "agent.spawn".into(),
-        Capability::TaskList { .. } => "task_list".into(),
-        Capability::Plan { .. } => "plan".into(),
-        Capability::Skill(SkillCapability::Spawn { .. }) => "skill.spawn".into(),
-        Capability::Custom { name, .. } => name.clone(),
-        // `Capability` is `#[non_exhaustive]`; future variants degrade
-        // to a generic tag — additive evolution must not silently
-        // mis-classify them.
-        _ => "unknown".into(),
+// ---------------------------------------------------------------------------
+// Small format/utility helpers (test-only)
+// ---------------------------------------------------------------------------
+
+/// Append the assistant's response (text + tool_uses) to the history.
+///
+/// Now only called from unit tests (the agent loop moved to stream.rs).
+#[cfg(test)]
+pub(crate) fn append_assistant_response(
+    history: &mut Vec<Message>,
+    text: &str,
+    tool_uses: &[ToolUse],
+    agent_id: &AgentInstanceId,
+) {
+    if !text.is_empty() {
+        history.push(Message::new(
+            tau_domain::Address::Agent(*agent_id),
+            tau_domain::Address::User,
+            MessagePayload::Text {
+                content: text.to_owned(),
+            },
+        ));
+    } else if tool_uses.is_empty() {
+        history.push(Message::new(
+            tau_domain::Address::Agent(*agent_id),
+            tau_domain::Address::User,
+            MessagePayload::Text {
+                content: String::new(),
+            },
+        ));
     }
 }
 
+/// Truncate `s` to at most `n` characters (Unicode scalar values).
+#[cfg(test)]
+fn truncate_to_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
 // ---------------------------------------------------------------------------
-// Unit tests for the named helpers (per Task 10's plan).
-//
-// Integration tests for `Runtime::run` itself live in tests/ (Tasks
-// 11-16); they exercise the entire run loop and tracing emission.
+// Unit tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -745,13 +521,13 @@ mod tests {
 
     #[test]
     fn build_policy_denied_outcome_carries_denial_in_status() {
-        let denial = CapabilityDenial {
-            agent_id: "agent-x".into(),
-            package_id: "pkg-y".into(),
-            tool_name: "file_read".into(),
-            required_kind: "fs.read".into(),
-            required_detail: "Filesystem(Read { paths: [\"/etc/passwd\"] })".into(),
-        };
+        let denial = CapabilityDenial::new(
+            "agent-x",
+            "pkg-y",
+            "file_read",
+            "fs.read",
+            "Filesystem(Read { paths: [\"/etc/passwd\"] })",
+        );
         let out = build_policy_denied_outcome(denial, vec![], 3, TokenUsage::default());
 
         let RunOutcome::Failed {
@@ -823,9 +599,6 @@ mod tests {
 
     #[test]
     fn append_assistant_response_no_text_no_tool_uses_pushes_empty_assistant_message() {
-        // Defensive: an empty completion still produces an assistant
-        // turn so callers' `final_message` doesn't accidentally surface
-        // the user's prompt as the response.
         let mut history: Vec<Message> = vec![];
         let agent_id = AgentInstanceId::new();
         append_assistant_response(&mut history, "", &[], &agent_id);
@@ -841,8 +614,6 @@ mod tests {
 
     #[test]
     fn truncate_to_chars_respects_utf8_boundaries() {
-        // 3 bytes per "é" character in UTF-8; naïve byte-slicing would
-        // panic on a non-boundary cut.
         let s = "éééééé"; // 6 chars, 12 bytes
         assert_eq!(truncate_to_chars(s, 3), "ééé");
         assert_eq!(truncate_to_chars(s, 100), "éééééé");
@@ -851,12 +622,7 @@ mod tests {
 
     #[test]
     fn capability_kind_str_for_filesystem_read() {
-        // Round-trip an `fs.read` capability through the manifest wire
-        // form (variant-level `#[non_exhaustive]` blocks struct-literal
-        // construction from outside `tau-domain`) and assert the
-        // top-level kind projection matches the existing dot-namespaced
-        // taxonomy used by `CapabilityDenial::required_kind` and the
-        // `runtime.tool_filtered` event.
+        use crate::capability::capability_kind_str;
         #[derive(serde::Deserialize)]
         struct CapWrapper {
             cap: Capability,
@@ -874,14 +640,7 @@ paths = ["**"]
 
     #[test]
     fn capability_kind_str_for_custom_variant() {
-        // `Capability::Custom` is structural (no inner non_exhaustive
-        // variant), so we can construct it directly from outside
-        // tau-domain. The other top-level variants wrap variant-level
-        // `#[non_exhaustive]` enums (`FsCapability::Read { .. }` etc.)
-        // and aren't reachable here without TOML deserialization;
-        // their `kind_str` projection is exercised by the integration
-        // tests in Tasks 11-16, where `check_capabilities` provides
-        // them naturally.
+        use crate::capability::capability_kind_str;
         let mut params = BTreeMap::new();
         params.insert("servers".into(), Value::Null);
         let cap = Capability::Custom {
@@ -893,11 +652,7 @@ paths = ["**"]
 
     #[test]
     fn capability_kind_str_for_task_list() {
-        // Round-trip a `task_list` capability through the manifest wire
-        // form. Orchestration grants flow through `capability_kind_str`
-        // in `CapabilityDenial::required_kind`; this test pins the
-        // projection so future denial events tag the namespace
-        // correctly rather than landing in the `"unknown"` fallback.
+        use crate::capability::capability_kind_str;
         #[derive(serde::Deserialize)]
         struct CapWrapper {
             cap: Capability,
@@ -915,6 +670,7 @@ mode = "write"
 
     #[test]
     fn capability_kind_str_for_plan() {
+        use crate::capability::capability_kind_str;
         #[derive(serde::Deserialize)]
         struct CapWrapper {
             cap: Capability,
@@ -935,7 +691,7 @@ mode = "read"
     #[tokio::test]
     async fn invoke_tool_dispatches_to_registered_tool_and_returns_result() {
         use std::str::FromStr;
-        use tau_domain::{AgentId, PackageId, PackageName, UncheckedManifest, Version};
+        use tau_domain::{AgentId, PackageId, PackageName, Version};
         use tau_ports::fixtures::{make_tool_result, make_tool_spec, MockLlmBackend, MockTool};
         use tau_ports::ToolContent;
 
@@ -979,7 +735,7 @@ mode = "read"
             dependencies = []
             capabilities = []
         "#;
-        let unchecked: UncheckedManifest = toml::from_str(toml_str).unwrap();
+        let unchecked: tau_domain::UncheckedManifest = toml::from_str(toml_str).unwrap();
         let manifest = unchecked.validate().unwrap();
 
         let result = runtime
@@ -990,7 +746,7 @@ mode = "read"
         assert!(!result.is_error);
         assert_eq!(result.content.len(), 1);
         match &result.content[0] {
-            ToolContent::Text { text } => assert_eq!(text, "pong"),
+            tau_ports::ToolContent::Text { text } => assert_eq!(text, "pong"),
             other => panic!("expected Text content, got {other:?}"),
         }
     }
@@ -998,7 +754,7 @@ mode = "read"
     #[tokio::test]
     async fn invoke_tool_returns_err_for_unknown_tool() {
         use std::str::FromStr;
-        use tau_domain::{AgentId, PackageId, PackageName, UncheckedManifest, Version};
+        use tau_domain::{AgentId, PackageId, PackageName, Version};
         use tau_ports::fixtures::MockLlmBackend;
 
         let runtime = crate::builder::Runtime::builder()
@@ -1026,7 +782,7 @@ mode = "read"
             dependencies = []
             capabilities = []
         "#;
-        let unchecked: UncheckedManifest = toml::from_str(toml_str).unwrap();
+        let unchecked: tau_domain::UncheckedManifest = toml::from_str(toml_str).unwrap();
         let manifest = unchecked.validate().unwrap();
 
         let err = runtime
@@ -1035,7 +791,10 @@ mode = "read"
             .expect_err("should return ToolNotRegistered");
 
         assert!(
-            matches!(err, RuntimeError::ToolNotRegistered { .. }),
+            matches!(
+                err,
+                RuntimeError::Core(CoreRuntimeError::ToolNotRegistered { .. })
+            ),
             "expected ToolNotRegistered, got {err:?}"
         );
     }

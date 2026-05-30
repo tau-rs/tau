@@ -16,7 +16,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -141,7 +141,7 @@ async fn capability_denied_returns_policy_denied_failure() {
     let initial = common::user_message("read /etc/passwd");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("agent-level failures flow through Ok(RunOutcome::Failed)");
 

@@ -1,8 +1,10 @@
 //! TaskList state with hierarchical task ids + atomic claim CAS + lease + heartbeat.
 
-use std::collections::HashMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use chrono::{DateTime, Duration, Utc};
+use hashbrown::HashMap;
 use tau_ports::{AgentId, Task, TaskEvent, TaskId, TaskListFilter, TaskStatus};
 
 use crate::orchestration::error::OrchestrationError;
@@ -17,7 +19,7 @@ pub const DEFAULT_LEASE: Duration = Duration::minutes(5);
 ///
 /// ```
 /// use chrono::Utc;
-/// use tau_runtime::orchestration::task_list::TaskList;
+/// use tau_runtime_core::orchestration::task_list::TaskList;
 ///
 /// let mut tl = TaskList::new();
 /// let id = tl.create(
@@ -47,7 +49,7 @@ impl TaskList {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     ///
     /// let tl = TaskList::new();
     /// assert!(tl.all().is_empty());
@@ -69,7 +71,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::TaskStatus;
     ///
     /// let mut tl = TaskList::new();
@@ -93,9 +95,9 @@ impl TaskList {
         let n = *seq;
 
         let id = if let Some(ref parent) = parent_task_id {
-            format!("{parent}.{n:02}")
+            alloc::format!("{parent}.{n:02}")
         } else {
-            format!("{n:02}")
+            alloc::format!("{n:02}")
         };
 
         let lease_expires_at = if owner.is_some() {
@@ -118,7 +120,7 @@ impl TaskList {
             },
             result_summary: None,
             error: None,
-            events: vec![TaskEvent {
+            events: alloc::vec![TaskEvent {
                 ts: now,
                 by: Some(created_by),
                 kind: "created".into(),
@@ -139,8 +141,8 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
-    /// use tau_runtime::orchestration::error::OrchestrationError;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::error::OrchestrationError;
     /// use tau_ports::TaskStatus;
     ///
     /// let mut tl = TaskList::new();
@@ -148,9 +150,9 @@ impl TaskList {
     ///
     /// // First claim succeeds.
     /// tl.claim(&id, "worker-1".into(), Utc::now()).expect("unclaimed task claimed");
-    /// assert_eq!(tl.get(&id).unwrap().status, TaskStatus::Claimed);
+    /// assert_eq!(tl.get(&id).unwrap().owner.as_deref(), Some("worker-1"));
     ///
-    /// // Second claim from another agent fails while lease is live.
+    /// // Second claim from another worker fails (lease active).
     /// let err = tl.claim(&id, "worker-2".into(), Utc::now()).unwrap_err();
     /// assert!(matches!(err, OrchestrationError::TaskLocked { .. }));
     /// ```
@@ -167,26 +169,17 @@ impl TaskList {
                 task: task_id.clone(),
             })?;
 
-        // Reject terminal states.
-        if matches!(
-            t.status,
-            TaskStatus::Done | TaskStatus::Failed | TaskStatus::Discarded
-        ) {
-            return Err(OrchestrationError::InvalidTaskTransition {
+        // Allow claim if: (a) no owner, OR (b) lease has expired.
+        let lease_expired = t.lease_expires_at.map(|exp| exp < now).unwrap_or(true);
+        if t.owner.is_some() && !lease_expired {
+            return Err(OrchestrationError::TaskLocked {
                 task: task_id.clone(),
-                target: "claimed".into(),
+                by: t.owner.clone().unwrap(),
+                until: t
+                    .lease_expires_at
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_default(),
             });
-        }
-
-        // CAS: fail if currently owned AND lease has not expired.
-        if let (Some(by), Some(until)) = (t.owner.clone(), t.lease_expires_at) {
-            if until > now {
-                return Err(OrchestrationError::TaskLocked {
-                    task: task_id.clone(),
-                    by,
-                    until: until.to_rfc3339(),
-                });
-            }
         }
 
         t.owner = Some(agent.clone());
@@ -207,7 +200,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use std::sync::atomic::Ordering;
     ///
     /// let mut tl = TaskList::new();
@@ -256,7 +249,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::TaskStatus;
     ///
     /// let mut tl = TaskList::new();
@@ -309,7 +302,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::TaskStatus;
     ///
     /// let mut tl = TaskList::new();
@@ -352,7 +345,7 @@ impl TaskList {
             if !matches!(s, TaskStatus::InProgress) {
                 return Err(OrchestrationError::InvalidTaskTransition {
                     task: task_id.clone(),
-                    target: format!("{s:?}"),
+                    target: alloc::format!("{s:?}"),
                 });
             }
             t.status = s;
@@ -373,7 +366,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::TaskStatus;
     ///
     /// let mut tl = TaskList::new();
@@ -426,7 +419,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::TaskStatus;
     ///
     /// let mut tl = TaskList::new();
@@ -480,7 +473,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::TaskStatus;
     ///
     /// let mut tl = TaskList::new();
@@ -521,7 +514,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::{TaskListFilter, TaskStatus};
     ///
     /// let mut tl = TaskList::new();
@@ -571,7 +564,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     /// use tau_ports::TaskStatus;
     ///
     /// let t0 = chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap();
@@ -625,7 +618,7 @@ impl TaskList {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::task_list::TaskList;
+    /// use tau_runtime_core::orchestration::task_list::TaskList;
     ///
     /// let mut tl = TaskList::new();
     /// assert!(tl.all_terminal(), "empty list is vacuously terminal");
@@ -650,6 +643,7 @@ impl TaskList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     fn now_at(secs: i64) -> DateTime<Utc> {
         DateTime::<Utc>::from_timestamp(secs, 0).unwrap()

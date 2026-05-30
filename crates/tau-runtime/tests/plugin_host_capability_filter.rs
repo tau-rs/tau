@@ -25,7 +25,7 @@ use tau_ports::{
     CompletionRequest, SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
 use tau_runtime::plugin_host::__internals::{DynAsyncWriter, IpcLlmBackend, PluginProcess};
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 use tokio::io::DuplexStream;
 
 /// Build a [`PluginProcess`] paired with a [`FakeStdioPeer`].
@@ -158,7 +158,7 @@ async fn capability_filter_applies_when_llm_backend_is_ipc() {
     // receives one llm.complete request, asserts the wire-recorded
     // `CompletionRequest.tools` excludes `fs-read`, and replies with a
     // single-turn EndTurn so the loop terminates.
-    let run_fut = runtime.run(agent_def, manifest, initial, RunOptions::default());
+    let run_fut = runtime.run(agent_def, manifest, initial, common::run_options());
     let peer_fut = async {
         let (msgid, params_bytes) = peer.expect_request("llm.complete").await;
         let parsed: Vec<CompletionRequest> =

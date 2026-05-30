@@ -26,7 +26,7 @@ use tau_plugin_protocol::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::error::{HandshakeFailureReason, RuntimeError};
+use crate::error::{CoreRuntimeError, HandshakeFailureReason, RuntimeError};
 
 /// Msgid used for the handshake request. Subsequent calls (Task 15+)
 /// allocate from `PluginProcess::next_msgid` starting at 2.
@@ -99,10 +99,12 @@ where
     let read_outcome = tokio::time::timeout(handshake_timeout, reader.next_frame()).await;
     let response_body = match read_outcome {
         Err(_elapsed) => {
-            return Err(RuntimeError::PluginHandshakeFailed {
-                plugin: plugin_name.to_string(),
-                reason: HandshakeFailureReason::Timeout,
-            });
+            return Err(RuntimeError::Core(
+                CoreRuntimeError::PluginHandshakeFailed {
+                    plugin: plugin_name.to_string(),
+                    reason: HandshakeFailureReason::Timeout,
+                },
+            ));
         }
         Ok(Err(e)) => {
             return Err(handshake_malformed(
@@ -157,35 +159,41 @@ where
 
     // 4. Validate protocol_version.
     if response.protocol_version != PROTOCOL_VERSION {
-        return Err(RuntimeError::PluginHandshakeFailed {
-            plugin: plugin_name.to_string(),
-            reason: HandshakeFailureReason::ProtocolVersionMismatch {
-                host: PROTOCOL_VERSION.to_string(),
-                plugin: response.protocol_version,
+        return Err(RuntimeError::Core(
+            CoreRuntimeError::PluginHandshakeFailed {
+                plugin: plugin_name.to_string(),
+                reason: HandshakeFailureReason::ProtocolVersionMismatch {
+                    host: PROTOCOL_VERSION.to_string(),
+                    plugin: response.protocol_version,
+                },
             },
-        });
+        ));
     }
 
     // 5. Validate provides matches expected_port.
     if response.provides != expected_port {
-        return Err(RuntimeError::PluginHandshakeFailed {
-            plugin: plugin_name.to_string(),
-            reason: HandshakeFailureReason::ProvidesMismatch {
-                manifest: expected_port,
-                plugin_advertised: response.provides,
+        return Err(RuntimeError::Core(
+            CoreRuntimeError::PluginHandshakeFailed {
+                plugin: plugin_name.to_string(),
+                reason: HandshakeFailureReason::ProvidesMismatch {
+                    manifest: expected_port,
+                    plugin_advertised: response.provides,
+                },
             },
-        });
+        ));
     }
 
     // 6. Validate required methods.
     for required in required_methods {
         if !response.methods.iter().any(|m| m == required) {
-            return Err(RuntimeError::PluginHandshakeFailed {
-                plugin: plugin_name.to_string(),
-                reason: HandshakeFailureReason::MissingRequiredMethod {
-                    method: (*required).to_string(),
+            return Err(RuntimeError::Core(
+                CoreRuntimeError::PluginHandshakeFailed {
+                    plugin: plugin_name.to_string(),
+                    reason: HandshakeFailureReason::MissingRequiredMethod {
+                        method: (*required).to_string(),
+                    },
                 },
-            });
+            ));
         }
     }
 
@@ -201,8 +209,8 @@ where
 
 /// Helper: build a `PluginHandshakeFailed { reason: Malformed }`.
 fn handshake_malformed(plugin: &str, detail: String) -> RuntimeError {
-    RuntimeError::PluginHandshakeFailed {
+    RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
         plugin: plugin.to_string(),
         reason: HandshakeFailureReason::Malformed { detail },
-    }
+    })
 }

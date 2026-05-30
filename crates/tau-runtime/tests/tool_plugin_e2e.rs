@@ -43,7 +43,11 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, error::RuntimeError, RunOptions, RunOutcome, Runtime};
+use tau_runtime::{
+    builder::DynTool,
+    error::{CoreRuntimeError, RuntimeError},
+    RunOutcome, Runtime,
+};
 
 use assert_matches::assert_matches;
 
@@ -246,7 +250,7 @@ async fn gap_1_kernel_denies_when_agent_has_no_fs_read_capability() {
     let initial = common::user_message("read the file");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("agent-level failures flow through Ok(RunOutcome::Failed)");
 
@@ -315,13 +319,13 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
     let initial = common::user_message("read the file");
 
     let err = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect_err("plugin scope check must surface as Err(RuntimeError)");
 
     assert_matches!(
         err,
-        RuntimeError::Tool(ToolError::BadArgs { reason }) => {
+        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "Gap 2: plugin must reject with scope-violation message; got {reason:?}"
@@ -380,7 +384,7 @@ paths = ["{glob}"]
     let initial = common::user_message("read the file");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

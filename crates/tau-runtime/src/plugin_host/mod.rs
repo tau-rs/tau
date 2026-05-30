@@ -38,7 +38,7 @@ use tau_plugin_protocol::FramerOptions;
 use tau_ports::CapabilityPlan;
 
 use crate::builder::{DynLlmBackend, DynStorage, DynTool};
-use crate::error::RuntimeError;
+use crate::error::{CoreRuntimeError, RuntimeError};
 
 mod handshake;
 mod ipc_llm;
@@ -451,9 +451,11 @@ pub async fn load_tool(
     // RPC round-trip per turn for `CompletionRequest.tools`.
     let schema = ipc_tool::IpcTool::fetch_schema(&process)
         .await
-        .map_err(|e| RuntimeError::PluginContractViolation {
-            plugin: plugin_name.clone(),
-            detail: format!("tool.describe failed: {e}"),
+        .map_err(|e| {
+            RuntimeError::Core(CoreRuntimeError::PluginContractViolation {
+                plugin: plugin_name.clone(),
+                detail: format!("tool.describe failed: {e}"),
+            })
         })?;
 
     // Fetch declared capabilities. Tolerant — older plugins that

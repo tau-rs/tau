@@ -19,7 +19,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 
 /// Build an `fs.read` capability via the canonical TOML deserialization
 /// path. Variant-level `#[non_exhaustive]` blocks struct-literal
@@ -154,7 +154,7 @@ async fn filtered_tool_not_exposed_in_completion_request() {
     let initial = common::user_message("Hi");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

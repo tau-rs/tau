@@ -13,7 +13,7 @@ use tau_plugin_protocol::test_support::FakeStdioPeer;
 use tau_plugin_protocol::{
     HandshakeRequest, HandshakeResponse, MethodSchema, TraceContext, PROTOCOL_VERSION,
 };
-use tau_runtime::error::HandshakeFailureReason;
+use tau_runtime::error::{CoreRuntimeError, HandshakeFailureReason};
 use tau_runtime::plugin_host::__internals::drive_handshake;
 use tau_runtime::RuntimeError;
 
@@ -111,7 +111,7 @@ async fn protocol_version_mismatch_surfaces_typed_reason() {
     let err = result.expect_err("handshake should fail");
     assert_matches!(
         err,
-        RuntimeError::PluginHandshakeFailed { plugin, reason } => {
+        RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed { plugin, reason }) => {
             assert_eq!(plugin, "echo-llm");
             assert!(
                 matches!(
@@ -158,13 +158,13 @@ async fn provides_mismatch_surfaces_typed_reason() {
     let err = result.expect_err("handshake should fail");
     assert_matches!(
         err,
-        RuntimeError::PluginHandshakeFailed {
+        RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
             reason: HandshakeFailureReason::ProvidesMismatch {
                 manifest,
                 plugin_advertised,
             },
             ..
-        } => {
+        }) => {
             assert_eq!(manifest, PortKind::LlmBackend);
             assert_eq!(plugin_advertised, PortKind::Tool);
         }
@@ -205,10 +205,10 @@ async fn missing_required_method_surfaces_typed_reason() {
     let err = result.expect_err("handshake should fail");
     assert_matches!(
         err,
-        RuntimeError::PluginHandshakeFailed {
+        RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
             reason: HandshakeFailureReason::MissingRequiredMethod { method },
             ..
-        } => {
+        }) => {
             assert_eq!(method, "llm.stream");
         }
     );
@@ -243,7 +243,7 @@ async fn timeout_surfaces_typed_reason() {
     let err = result.expect_err("handshake should fail");
     assert_matches!(
         err,
-        RuntimeError::PluginHandshakeFailed { reason, .. } => {
+        RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed { reason, .. }) => {
             assert!(
                 matches!(reason, HandshakeFailureReason::Timeout),
                 "expected Timeout, got {reason:?}"
@@ -282,10 +282,10 @@ async fn eof_before_response_surfaces_malformed() {
     let err = result.expect_err("handshake should fail");
     assert_matches!(
         err,
-        RuntimeError::PluginHandshakeFailed {
+        RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
             reason: HandshakeFailureReason::Malformed { detail },
             ..
-        } => {
+        }) => {
             assert!(
                 detail.contains("EOF") || detail.contains("eof"),
                 "expected EOF detail, got: {detail}"
@@ -325,10 +325,10 @@ async fn plugin_error_envelope_surfaces_malformed() {
     let err = result.expect_err("handshake should fail");
     assert_matches!(
         err,
-        RuntimeError::PluginHandshakeFailed {
+        RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
             reason: HandshakeFailureReason::Malformed { detail },
             ..
-        } => {
+        }) => {
             assert!(
                 detail.contains("error envelope"),
                 "expected error-envelope detail, got: {detail}"

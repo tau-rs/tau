@@ -1,0 +1,61 @@
+[package]
+name = "tau-runtime-core"
+description = "Executor-agnostic kernel of tau. no_std + alloc. Host shells (tau-runtime-tokio, tau-runtime-embassy) drive this on their executor."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+tau-domain   = { workspace = true, default-features = false, features = ["serde"] }
+tau-ports    = { workspace = true, default-features = false, features = ["serde"] }
+tau-pkg      = { workspace = true }
+thiserror    = { workspace = true, default-features = false }
+serde        = { workspace = true, default-features = false, features = ["alloc", "derive"] }
+serde_json   = { workspace = true }
+chrono       = { workspace = true, default-features = false, features = ["alloc", "serde"] }
+hashbrown    = { workspace = true }
+foldhash     = { workspace = true }
+# `v4` for session-id minting in `ids::uuid_v4` — distinct from the `v7`
+# feature in the workspace alias (used by id newtypes in tau-domain).
+uuid         = { workspace = true, features = ["v4"] }
+# ULID generation for run-ids and trace-event-ids via `ids::ulid`.
+ulid         = { workspace = true, default-features = false }
+futures-core = { workspace = true, default-features = false, features = ["alloc"] }
+tracing      = { workspace = true, default-features = false, features = ["attributes"] }
+# Glob matching for skill_resolve::apply_scope_paths (skill capability narrowing).
+globset      = { workspace = true }
+# Optional: used by the `tool-validation` feature (jsonschema-based tool
+# args pre-compilation). Both are std-only so they gate behind the feature.
+jsonschema   = { workspace = true, optional = true }
+
+[features]
+# `process` makes ProcessCapabilityGate wire-up available; pulled in via
+# tau-ports' `process` feature. Host shells (tau-runtime-tokio) keep this on.
+process            = ["tau-ports/process"]
+# `capability-override` enables the glob-narrowing module (globset is std-only).
+capability-override = []
+# `tool-validation` enables ADR-0010 jsonschema-based tool args validation
+# (jsonschema is std-only).
+tool-validation    = ["dep:jsonschema"]
+# `host-fs` enables code paths that consume std::path::PathBuf scope-roots
+# and read skill markdown via std::fs. Embassy ships without this feature.
+host-fs            = []
+
+default = ["process", "capability-override", "tool-validation", "host-fs"]
+# Activates DeterministicRandom fallback in invoke_tool for test paths.
+test-fixtures = ["tau-ports/test-fixtures"]
+
+[dev-dependencies]
+# toml + proptest: used by capability.rs unit/property tests (Task 3.3).
+toml           = { workspace = true }
+proptest       = { workspace = true }
+assert_matches = { workspace = true }
+tau-domain     = { workspace = true, features = ["test-fixtures"] }
+# test-fixtures enables MockLlmBackend, MockTool, MockStorage for builder tests.
+tau-ports      = { workspace = true, features = ["test-fixtures"] }
+serde_json     = { workspace = true }
+# futures-executor: Task 3.8 executor-agnostic smoke test.
+futures-executor = "0.3"

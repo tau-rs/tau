@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tau_domain::MessagePayload;
 use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend};
 use tau_ports::StopReason;
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -40,7 +40,7 @@ async fn run_completes_with_text_response() {
 
     // 4. Run.
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

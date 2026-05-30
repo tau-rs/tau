@@ -13,7 +13,7 @@ use tau_ports::fixtures::{make_completion_response, make_token_usage, make_tool_
 use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, StopReason,
 };
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -111,7 +111,7 @@ async fn run_with_tool_calls_across_two_turns() {
     let initial = common::user_message("Hi");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

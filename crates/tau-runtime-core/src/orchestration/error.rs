@@ -1,5 +1,8 @@
 //! Typed errors raised by multi-agent orchestration operations.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use tau_ports::{AgentId, TaskId};
 
 /// Errors surfaced by virtual-tool dispatch + TaskList state transitions.
@@ -7,7 +10,7 @@ use tau_ports::{AgentId, TaskId};
 /// # Example
 ///
 /// ```
-/// use tau_runtime::orchestration::error::OrchestrationError;
+/// use tau_runtime_core::orchestration::error::OrchestrationError;
 ///
 /// let not_found = OrchestrationError::TaskNotFound { task: "99".into() };
 /// assert!(not_found.to_string().contains("99"));
@@ -100,6 +103,9 @@ pub enum OrchestrationError {
     },
 
     /// Persistence I/O failed.
+    ///
+    /// Gated behind `host-fs` because `std::io::Error` is a std type.
+    #[cfg(feature = "host-fs")]
     #[error("orchestration persistence error: {0}")]
     PersistenceError(#[from] std::io::Error),
 
@@ -121,6 +127,9 @@ pub enum OrchestrationError {
 
     /// Skills-4: skill's lockfile entry exists but install path is
     /// missing on disk.
+    ///
+    /// Gated behind `host-fs` because `std::path::PathBuf` is a std type.
+    #[cfg(feature = "host-fs")]
     #[error("skill {name:?} install path missing at {expected_path:?}")]
     SkillInstallPathMissing {
         /// Skill name.

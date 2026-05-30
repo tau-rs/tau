@@ -33,7 +33,9 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, RunEvent, RunOptions, RunOutcome, Runtime, RuntimeError};
+use tau_runtime::{
+    builder::DynTool, error::CoreRuntimeError, RunEvent, RunOutcome, Runtime, RuntimeError,
+};
 
 use assert_matches::assert_matches;
 use futures_core::Stream;
@@ -72,15 +74,15 @@ async fn llm_backend_not_registered() {
     let initial = common::user_message("hello");
 
     let result = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await;
 
     let err = result.unwrap_err();
     assert_matches!(
         err,
-        RuntimeError::LlmBackendNotRegistered {
+        RuntimeError::Core(CoreRuntimeError::LlmBackendNotRegistered {
             agent_id, backend, ..
-        } => {
+        }) => {
             assert_eq!(agent_id, "agent-1");
             assert_eq!(backend, "missing-backend");
         }
@@ -116,17 +118,17 @@ async fn tool_not_registered() {
     let initial = common::user_message("call the missing tool");
 
     let result = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await;
 
     let err = result.unwrap_err();
     assert_matches!(
         err,
-        RuntimeError::ToolNotRegistered {
+        RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
             tool_name,
             registered,
             ..
-        } => {
+        }) => {
             assert_eq!(tool_name, "nonexistent");
             assert!(
                 registered.is_empty(),
@@ -281,7 +283,7 @@ async fn tool_args_validation_failure_yields_recoverable_tool_error() {
     let initial = common::user_message("call the strict tool");
 
     let stream = runtime
-        .run_streaming(agent_def, manifest, initial, RunOptions::default())
+        .run_streaming(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run_streaming should not fail at construction time");
 

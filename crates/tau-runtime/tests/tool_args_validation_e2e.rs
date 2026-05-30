@@ -39,7 +39,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, RunOptions, RunOutcome, Runtime};
+use tau_runtime::{builder::DynTool, RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -276,7 +276,7 @@ async fn bad_args_missing_required_field_surfaces_in_conversation() {
 
     // Cap turns low so the test finishes quickly even though the LLM
     // never stops emitting bad args.
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.max_turns = 2;
 
     let outcome = runtime
@@ -333,7 +333,7 @@ async fn bad_args_type_mismatch_surfaces_in_conversation() {
     let manifest = manifest_with_fs_read_global();
     let initial = common::user_message("read the file");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.max_turns = 2;
 
     let outcome = runtime
@@ -398,7 +398,7 @@ async fn scripted_llm_self_corrects_after_validation_error() {
     let initial = common::user_message("read the file");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("scripted scenario completes cleanly");
 

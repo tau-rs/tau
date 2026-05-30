@@ -42,7 +42,11 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, error::RuntimeError, CapabilityOverride, RunOptions, Runtime};
+use tau_runtime::{
+    builder::DynTool,
+    error::{CoreRuntimeError, RuntimeError},
+    CapabilityOverride, Runtime,
+};
 
 use assert_matches::assert_matches;
 
@@ -255,7 +259,7 @@ paths = ["{package_glob}"]
     ));
     let initial = common::user_message("read the file");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.project_override = vec![CapabilityOverride::new(
         "fs.read".to_string(),
         Some(vec![narrow_allow]),
@@ -270,7 +274,7 @@ paths = ["{package_glob}"]
 
     assert_matches!(
         err,
-        RuntimeError::Tool(ToolError::BadArgs { reason }) => {
+        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "narrowed allow must reject with scope-violation message; got {reason:?}"
@@ -326,7 +330,7 @@ paths = ["{package_glob}"]
     ));
     let initial = common::user_message("read the file");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.project_override = vec![CapabilityOverride::new(
         "fs.read".to_string(),
         None, // allow unchanged
@@ -341,7 +345,7 @@ paths = ["{package_glob}"]
 
     assert_matches!(
         err,
-        RuntimeError::Tool(ToolError::BadArgs { reason }) => {
+        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "deny carve-out must reject with scope-violation message; got {reason:?}"
@@ -387,7 +391,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
     );
     let initial = common::user_message("read the file");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.project_override = vec![CapabilityOverride::new(
         "fs.read".to_string(),
         Some(vec!["/etc/**".to_string()]), // not a subset of /var/...
@@ -402,7 +406,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
 
     assert_matches!(
         err,
-        RuntimeError::CapabilityOverrideExpands { kind, reason } => {
+        RuntimeError::Core(CoreRuntimeError::CapabilityOverrideExpands { kind, reason }) => {
             assert_eq!(kind, "fs.read");
             assert!(
                 reason.contains("not a subset"),

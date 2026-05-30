@@ -1,31 +1,12 @@
 //! Run-time options for `Runtime::run` (added in Task 10) and the
 //! token-usage report carried in `RunOutcome` (added in Task 6).
+//!
+//! `TokenUsage` is defined in `tau-runtime-core` and re-exported here.
+//! `RunOptions` is defined here (host-shell level) until builder.rs
+//! and run.rs migrate to core (Tasks 3.4/3.5); it adds the tokio/
+//! orchestration fields on top of the core-level fields.
 
-/// Token usage reported by the LLM backend, summed across the run.
-///
-/// Some backends report `total_tokens`; some report only input/output.
-/// `Default` returns all zeros (useful when no backend was called yet).
-///
-/// # Example
-///
-/// ```
-/// use tau_runtime::TokenUsage;
-///
-/// let usage = TokenUsage::default();
-/// assert_eq!(usage.input_tokens, 0);
-/// assert_eq!(usage.output_tokens, 0);
-/// assert_eq!(usage.total_tokens, None);
-/// ```
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TokenUsage {
-    /// Total input (prompt) tokens used across the run.
-    pub input_tokens: u64,
-    /// Total output (completion) tokens emitted across the run.
-    pub output_tokens: u64,
-    /// `Some(n)` when the backend reports a unified count; `None` otherwise.
-    pub total_tokens: Option<u64>,
-}
+pub use tau_runtime_core::options::TokenUsage;
 
 /// Options for `Runtime::run`.
 ///
@@ -86,6 +67,21 @@ pub struct RunOptions {
     /// authoritative gate before this is set, so the kernel trusts it as a
     /// pre-validated narrowing of the parent's grant.
     pub granted_capabilities_override: Option<Vec<tau_domain::Capability>>,
+
+    /// Clock used by the runtime to stamp wall-clock times on trace events,
+    /// run snapshots, and ULID/UUID minting. Host shells inject their impl
+    /// (TokioClock on tokio, EmbassyClock on embassy). If `None`, the
+    /// kernel uses a zero-valued internal default — meaningful only for
+    /// tests; production callers must supply one through their shell's
+    /// `drive` entry point.
+    pub clock: Option<std::sync::Arc<dyn tau_ports::Clock>>,
+
+    /// Random source used by the runtime to mint session IDs (UUID v4),
+    /// run IDs (ULID), trace event IDs (ULID), and other entropy consumers
+    /// in the kernel. Host shells inject their impl (OsRandom on std hosts,
+    /// HwRandom on MCU). If `None`, the kernel uses a deterministic
+    /// fixture — meaningful only for tests.
+    pub random: Option<std::sync::Arc<dyn tau_ports::RandomSource>>,
 }
 
 impl std::fmt::Debug for RunOptions {
@@ -106,6 +102,8 @@ impl std::fmt::Debug for RunOptions {
                 "granted_capabilities_override",
                 &self.granted_capabilities_override,
             )
+            .field("clock", &self.clock.as_ref().map(|_| "<Clock>"))
+            .field("random", &self.random.as_ref().map(|_| "<RandomSource>"))
             .finish()
     }
 }
@@ -119,6 +117,8 @@ impl Default for RunOptions {
             orchestration_state: None,
             orchestration_runtime: None,
             granted_capabilities_override: None,
+            clock: None,
+            random: None,
         }
     }
 }
@@ -163,12 +163,24 @@ mod tests {
 
     #[test]
     fn token_usage_is_copy() {
-        let a = TokenUsage {
-            input_tokens: 1,
-            output_tokens: 2,
-            total_tokens: Some(3),
-        };
-        let b = a; // requires Copy
-        assert_eq!(a, b);
+        // TokenUsage is defined in tau-runtime-core; #[non_exhaustive]
+        // blocks struct-literal construction from outside that crate.
+        // Use Default to get a value, mutate via field access (which
+        // non-exhaustive does NOT block), then verify Copy semantics.
+        let mut a = TokenUsage::default();
+        a.input_tokens = 1;
+        a.output_tokens = 2;
+        a.total_tokens = Some(3);
+        let b = a; // Copy
+        assert_eq!(a.input_tokens, b.input_tokens);
+        assert_eq!(a.output_tokens, b.output_tokens);
+        assert_eq!(a.total_tokens, b.total_tokens);
+    }
+
+    #[test]
+    fn run_options_clock_and_random_default_to_none() {
+        let opts = RunOptions::default();
+        assert!(opts.clock.is_none());
+        assert!(opts.random.is_none());
     }
 }
