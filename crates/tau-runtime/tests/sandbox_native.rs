@@ -27,7 +27,7 @@ use std::time::Duration;
 use tau_domain::{fixtures as domain_fixtures, Capability, PluginKind, PluginManifest, PortKind};
 use tau_pkg::LockedPlugin;
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_ports::{SandboxPlan, SandboxProbe};
+use tau_ports::{CapabilityPlan, CapabilityProbe};
 use tau_runtime::error::RuntimeError;
 use tau_runtime::plugin_host::{self, PluginHostOptions};
 use tau_runtime::sandbox::registry::RegistryKind;
@@ -119,7 +119,7 @@ async fn adapter_threads_through_to_plugin_spawn() {
     };
 
     // Extra-belt-and-suspenders: double-check the probe.
-    if matches!(adapter.probe().await, SandboxProbe::Unavailable { .. }) {
+    if matches!(adapter.probe().await, CapabilityProbe::Unavailable { .. }) {
         eprintln!("skipping: native adapter probe returned Unavailable");
         return;
     }
@@ -134,7 +134,7 @@ async fn adapter_threads_through_to_plugin_spawn() {
         .to_string_lossy()
         .into_owned();
     let read_cap: Capability = domain_fixtures::cap_fs_read(&["/tmp/**", &bin_parent]);
-    let plan = SandboxPlan::new(vec![read_cap], None, None);
+    let plan = CapabilityPlan::new(vec![read_cap], None, None);
 
     // 3. Synthesise a LockedPlugin pointing at the controlled-env binary.
     let plugin = synthetic_locked_plugin("tau-controlled-env");
@@ -199,7 +199,7 @@ async fn sandbox_plan_validation_runs_pre_spawn() {
         }
     };
 
-    if matches!(adapter.probe().await, SandboxProbe::Unavailable { .. }) {
+    if matches!(adapter.probe().await, CapabilityProbe::Unavailable { .. }) {
         eprintln!("skipping: native adapter probe returned Unavailable");
         return;
     }
@@ -207,7 +207,7 @@ async fn sandbox_plan_validation_runs_pre_spawn() {
     // 2. Build a SandboxPlan with a Capability::Custom that the native adapter
     //    does NOT support (native only supports standard FS/network shapes).
     let custom_cap: Capability = domain_fixtures::cap_custom("mcp.tool.use");
-    let plan = SandboxPlan::new(vec![custom_cap], None, None);
+    let plan = CapabilityPlan::new(vec![custom_cap], None, None);
 
     // 3. Synthesise a LockedPlugin (binary path doesn't matter — spawn must
     //    never be reached).

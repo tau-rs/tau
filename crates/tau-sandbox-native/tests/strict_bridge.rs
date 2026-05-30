@@ -40,7 +40,9 @@ use std::time::Duration;
 
 use tau_domain::fixtures::{cap_fs_exec, cap_fs_read, cap_net_http};
 use tau_ports::fixtures::plan_from_capabilities;
-use tau_ports::{Sandbox, SandboxPlan, SandboxProbe, SandboxTier};
+use tau_ports::{
+    CapabilityGate, CapabilityPlan, CapabilityProbe, CapabilityTier, ProcessCapabilityGate,
+};
 use tau_sandbox_native::NativeSandbox;
 
 /// Set TAU_NET_BRIDGE_PATH to the bin target's compile-time path so the
@@ -76,7 +78,7 @@ fn bridge_parent_str() -> String {
 /// canonicalize step in `collect_landlock_paths` errors on missing
 /// paths, and distros vary (e.g., Debian aarch64 has no `/lib64`,
 /// Alpine has no `/usr/lib64`).
-fn plan_with_bridge_and_cat() -> SandboxPlan {
+fn plan_with_bridge_and_cat() -> CapabilityPlan {
     let bridge_parent = bridge_parent_str();
     let candidate_read_paths = [
         "/bin",
@@ -119,10 +121,10 @@ async fn bridge_survives_strict_tier_filter() {
     // --run-ignored only are claiming the environment supports the
     // strict-tier filter. Surface mismatches loudly rather than
     // silently passing the test on a degraded host.
-    let adapter = NativeSandbox::new("test-strict-bridge", SandboxTier::Strict);
+    let adapter = NativeSandbox::new("test-strict-bridge", CapabilityTier::Strict);
     let probe = adapter.probe().await;
     assert!(
-        matches!(probe, SandboxProbe::Available { .. }),
+        matches!(probe, CapabilityProbe::Available { .. }),
         "native adapter probe returned {probe:?}; \
          this test is opt-in via --run-ignored only and the caller's \
          environment must support landlock + seccomp + user namespaces"

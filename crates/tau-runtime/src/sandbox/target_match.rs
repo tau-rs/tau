@@ -109,7 +109,7 @@ pub fn registration_for_triple(triple: &TargetTriple) -> Option<&'static Adapter
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tau_ports::SandboxTier;
+    use tau_ports::CapabilityTier;
 
     fn parse(s: &str) -> TargetTriple {
         s.parse().expect("test triple parses")
@@ -120,7 +120,7 @@ mod tests {
         let t = parse("linux-native-strict");
         let r = registration_for_triple(&t).expect("adapter found");
         assert_eq!(r.kind, RegistryKind::Native);
-        assert!(r.tiers_supported.contains(&SandboxTier::Strict));
+        assert!(r.tiers_supported.contains(&CapabilityTier::Strict));
     }
 
     #[test]
@@ -128,7 +128,7 @@ mod tests {
         let t = parse("linux-native-light");
         let r = registration_for_triple(&t).expect("adapter found");
         assert_eq!(r.kind, RegistryKind::Native);
-        assert!(r.tiers_supported.contains(&SandboxTier::Light));
+        assert!(r.tiers_supported.contains(&CapabilityTier::Light));
     }
 
     #[test]

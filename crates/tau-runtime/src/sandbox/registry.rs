@@ -20,7 +20,7 @@
 
 use tau_domain::CapabilityShape;
 use tau_domain::CapabilityShapeSet;
-use tau_ports::SandboxTier;
+use tau_ports::CapabilityTier;
 
 /// Set of platforms an adapter applies to.
 #[non_exhaustive]
@@ -152,7 +152,7 @@ pub struct AdapterRegistration {
     /// Which platforms this adapter applies to.
     pub platforms: PlatformSet,
     /// Tiers this adapter can deliver.
-    pub tiers_supported: &'static [SandboxTier],
+    pub tiers_supported: &'static [CapabilityTier],
     /// Returns the set of shapes this adapter can enforce.
     pub shapes_supported_fn: fn() -> CapabilityShapeSet,
     /// Priority for tie-breaking (higher = preferred when multiple
@@ -216,28 +216,28 @@ pub static REGISTRY: &[AdapterRegistration] = &[
     AdapterRegistration {
         kind: RegistryKind::Native,
         platforms: PlatformSet::LinuxAndDarwin,
-        tiers_supported: &[SandboxTier::Light, SandboxTier::Strict],
+        tiers_supported: &[CapabilityTier::Light, CapabilityTier::Strict],
         shapes_supported_fn: fs_and_exec_and_net,
         priority: 100,
     },
     AdapterRegistration {
         kind: RegistryKind::Container,
         platforms: PlatformSet::Multi,
-        tiers_supported: &[SandboxTier::Strict],
+        tiers_supported: &[CapabilityTier::Strict],
         shapes_supported_fn: fs_and_exec_and_net,
         priority: 50,
     },
     AdapterRegistration {
         kind: RegistryKind::Remote,
         platforms: PlatformSet::Any,
-        tiers_supported: &[SandboxTier::Strict],
+        tiers_supported: &[CapabilityTier::Strict],
         shapes_supported_fn: fs_and_exec_and_net,
         priority: 25,
     },
     AdapterRegistration {
         kind: RegistryKind::Passthrough,
         platforms: PlatformSet::Any,
-        tiers_supported: &[SandboxTier::None],
+        tiers_supported: &[CapabilityTier::None],
         shapes_supported_fn: all_shapes,
         priority: 0,
     },
@@ -318,7 +318,7 @@ mod tests {
             .iter()
             .find(|r| r.kind == RegistryKind::Passthrough)
             .unwrap();
-        assert_eq!(p.tiers_supported, &[SandboxTier::None]);
+        assert_eq!(p.tiers_supported, &[CapabilityTier::None]);
     }
 
     #[test]

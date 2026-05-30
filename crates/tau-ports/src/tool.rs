@@ -6,6 +6,11 @@
 //! [`StatelessTool`] / [`StatelessAdapter`] pair for the common
 //! stateless case.
 
+use alloc::string::String;
+#[cfg(test)]
+use alloc::string::ToString;
+use alloc::vec::Vec;
+#[cfg(feature = "process")]
 use std::time::SystemTime;
 
 use tau_domain::{AgentInstanceId, Value};
@@ -47,7 +52,10 @@ pub struct SessionContext {
     /// concurrent sessions against the same tool.
     pub session_id: Uuid,
     /// Optional wall-clock deadline by which the session should
-    /// complete. `None` defers to runtime defaults.
+    /// complete. `None` defers to runtime defaults. Only present
+    /// when the `process` feature is enabled (no_std hosts have no
+    /// `SystemTime`).
+    #[cfg(feature = "process")]
     pub deadline: Option<SystemTime>,
     /// Capabilities the calling agent has been granted by its package
     /// manifest. Plugins use this to perform finer-grained scope
@@ -78,6 +86,7 @@ impl SessionContext {
     /// Provided so external callers — notably tau-runtime, which
     /// mints one per tool dispatch in `Runtime::run` — can build one
     /// without struct-literal syntax (the type is `#[non_exhaustive]`).
+    #[cfg(feature = "process")]
     pub fn new(
         agent_instance_id: AgentInstanceId,
         session_id: Uuid,
@@ -87,6 +96,18 @@ impl SessionContext {
             agent_instance_id,
             session_id,
             deadline,
+            granted_capabilities: Vec::new(),
+            deny_entries: Vec::new(),
+        }
+    }
+
+    /// Construct a [`SessionContext`] with no granted capabilities,
+    /// no_std variant (no `deadline` field on this build).
+    #[cfg(not(feature = "process"))]
+    pub fn new(agent_instance_id: AgentInstanceId, session_id: Uuid) -> Self {
+        Self {
+            agent_instance_id,
+            session_id,
             granted_capabilities: Vec::new(),
             deny_entries: Vec::new(),
         }
@@ -363,6 +384,7 @@ impl<T: StatelessTool> Tool for StatelessAdapter<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use tau_domain::Value;
 
     struct EchoTool;

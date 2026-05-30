@@ -280,7 +280,7 @@ pub enum RuntimeError {
     /// Sandbox adapter returned an error. Reserved for future use;
     /// v0.1 in-tree adapters (`tau-sandbox-native`, etc.) populate this.
     #[error("sandbox: {0}")]
-    Sandbox(#[from] tau_ports::SandboxError),
+    Sandbox(#[from] tau_ports::CapabilityError),
 
     /// Sandbox plan validation failed before plugin spawn.
     ///
@@ -306,9 +306,9 @@ pub enum RuntimeError {
     SandboxWrapFailed {
         /// Plugin name (from `LockedPlugin::manifest.bin`).
         plugin: String,
-        /// Underlying [`tau_ports::SandboxError`].
+        /// Underlying [`tau_ports::CapabilityError`].
         #[source]
-        source: tau_ports::SandboxError,
+        source: tau_ports::CapabilityError,
     },
 
     /// Manifest validation failed (caller-supplied manifest invalid).
@@ -632,14 +632,14 @@ mod tests {
 
     #[test]
     fn runtime_error_composes_sandbox_via_from() {
-        use tau_ports::SandboxError;
-        let sandbox_err = SandboxError::Internal {
+        use tau_ports::CapabilityError;
+        let sandbox_err = CapabilityError::Internal {
             message: "x".into(),
         };
         let runtime_err: RuntimeError = sandbox_err.into();
         assert!(matches!(
             runtime_err,
-            RuntimeError::Sandbox(SandboxError::Internal { .. })
+            RuntimeError::Sandbox(CapabilityError::Internal { .. })
         ));
     }
 

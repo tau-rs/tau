@@ -1,12 +1,12 @@
 //! Layer 3 pre-flight plan validation.
 //!
 //! [`validate_plan_against_adapter`] cross-checks every capability in a
-//! [`tau_ports::SandboxPlan`] against the adapter's declared
+//! [`tau_ports::CapabilityPlan`] against the adapter's declared
 //! `supported_shapes`. All validation errors are collected and returned at
 //! once so callers see the complete picture in a single pass.
 
 use tau_domain::Capability;
-use tau_ports::{Sandbox, SandboxPlan};
+use tau_ports::{CapabilityGate, CapabilityPlan};
 
 /// A single capability-shape rejection produced by
 /// [`validate_plan_against_adapter`].
@@ -76,9 +76,9 @@ impl std::error::Error for SandboxValidationError {}
 /// * `plan_id` — free-form identifier carried into each [`SandboxValidationError`]
 ///   so callers can format messages like `"plugin foo: capability fs.read shape
 ///   unsupported by adapter X"`. Typically a plugin id.
-/// * `plan` — the [`SandboxPlan`] to validate.
-/// * `adapter` — any [`Sandbox`] implementor (e.g. `SandboxAdapter` from the
-///   chain, `MockSandbox` from fixtures, or another test double).
+/// * `plan` — the [`CapabilityPlan`] to validate.
+/// * `adapter` — any [`CapabilityGate`] implementor (e.g. `SandboxAdapter` from the
+///   chain, `MockCapabilityGate` from fixtures, or another test double).
 ///
 /// # Returns
 ///
@@ -89,25 +89,25 @@ impl std::error::Error for SandboxValidationError {}
 ///
 /// ```
 /// use tau_domain::Capability;
-/// use tau_ports::{SandboxPlan, fixtures::MockSandbox};
+/// use tau_ports::{CapabilityPlan, fixtures::MockCapabilityGate};
 /// use tau_runtime::sandbox::validate_plan_against_adapter;
 ///
-/// let adapter = MockSandbox::new("mock");
+/// let adapter = MockCapabilityGate::new("mock");
 ///
-/// // A standard fs.read capability is supported by MockSandbox.
+/// // A standard fs.read capability is supported by MockCapabilityGate.
 /// let cap: Capability = serde_json::from_value(
 ///     serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})
 /// ).unwrap();
-/// let plan = SandboxPlan::new(vec![cap], None, None);
+/// let plan = CapabilityPlan::new(vec![cap], None, None);
 /// assert!(validate_plan_against_adapter("my-plugin", &plan, &adapter).is_ok());
 ///
 /// // An empty plan always passes.
-/// let empty = SandboxPlan::new(vec![], None, None);
+/// let empty = CapabilityPlan::new(vec![], None, None);
 /// assert!(validate_plan_against_adapter("my-plugin", &empty, &adapter).is_ok());
 /// ```
-pub fn validate_plan_against_adapter<S: Sandbox>(
+pub fn validate_plan_against_adapter<S: CapabilityGate>(
     plan_id: &str,
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     adapter: &S,
 ) -> Result<(), Vec<SandboxValidationError>> {
     let supported = adapter.supported_shapes();
@@ -140,31 +140,31 @@ pub fn validate_plan_against_adapter<S: Sandbox>(
 mod tests {
     use super::*;
     use tau_domain::CapabilityShape;
-    use tau_ports::fixtures::MockSandbox;
+    use tau_ports::fixtures::MockCapabilityGate;
 
     fn cap(json: &str) -> Capability {
         serde_json::from_str(json).expect("test capability JSON must be valid")
     }
 
-    fn plan_with(caps: Vec<Capability>) -> SandboxPlan {
-        SandboxPlan::new(caps, None, None)
+    fn plan_with(caps: Vec<Capability>) -> CapabilityPlan {
+        CapabilityPlan::new(caps, None, None)
     }
 
     #[test]
     fn validation_passes_when_all_shapes_supported() {
-        // MockSandbox supports the 5 standard shapes (not Custom).
-        let adapter = MockSandbox::new("mock");
+        // MockCapabilityGate supports the 5 standard shapes (not Custom).
+        let adapter = MockCapabilityGate::new("mock");
         let plan = plan_with(vec![cap(r#"{"kind":"fs.read","paths":["/tmp/**"]}"#)]);
         assert!(
             validate_plan_against_adapter("test-plugin", &plan, &adapter).is_ok(),
-            "expected Ok for fs.read on MockSandbox"
+            "expected Ok for fs.read on MockCapabilityGate"
         );
     }
 
     #[test]
     fn validation_returns_all_errors_not_just_first() {
-        // Two Custom capabilities — MockSandbox does not support CapabilityShape::Custom.
-        let adapter = MockSandbox::new("mock");
+        // Two Custom capabilities — MockCapabilityGate does not support CapabilityShape::Custom.
+        let adapter = MockCapabilityGate::new("mock");
         let plan = plan_with(vec![
             cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#),
             cap(r#"{"kind":"mcp.tool.other","tool":"y"}"#),
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn validation_includes_plan_id_in_each_error() {
-        let adapter = MockSandbox::new("mock");
+        let adapter = MockCapabilityGate::new("mock");
         let plan = plan_with(vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)]);
         let errors = validate_plan_against_adapter("test-plugin", &plan, &adapter)
             .expect_err("expected error for Custom capability");
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn validation_empty_plan_is_ok() {
-        let adapter = MockSandbox::new("mock");
+        let adapter = MockCapabilityGate::new("mock");
         let plan = plan_with(vec![]);
         assert!(
             validate_plan_against_adapter("test-plugin", &plan, &adapter).is_ok(),

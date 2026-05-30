@@ -4,7 +4,7 @@
 //!
 //! 1. **Platform filter** — only consider adapters that apply to the current OS.
 //! 2. **Probe filter** — instantiate the adapter and call `probe()`. Adapters
-//!    returning [`tau_ports::SandboxProbe::Unavailable`] are rejected.
+//!    returning [`tau_ports::CapabilityProbe::Unavailable`] are rejected.
 //! 3. **Tier filter** — the adapter's delivered tier must be ≥ the effective
 //!    required tier (max of project tier and plugin-floor tier).
 //! 4. **Shape filter** — every shape in `requirements.required_shapes` must be
@@ -21,7 +21,10 @@ use std::cmp::Reverse;
 use std::process::Command;
 
 use tau_domain::CapabilityShapeSet;
-use tau_ports::{Sandbox, SandboxError, SandboxHandle, SandboxPlan, SandboxProbe, SandboxTier};
+use tau_ports::{
+    CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
+    CapabilityTier, ProcessCapabilityGate,
+};
 use tau_sandbox_container::{ContainerRuntime, ContainerSandbox};
 #[cfg(target_os = "macos")]
 use tau_sandbox_darwin::DarwinSandbox;
@@ -56,10 +59,10 @@ pub enum SandboxAdapter {
     Windows(WindowsSandbox),
     /// `tau-sandbox-container` docker/podman adapter.
     Container(ContainerSandbox),
-    /// `tau_ports::fixtures::MockSandbox` — available in all builds but only
+    /// `tau_ports::fixtures::MockCapabilityGate` — available in all builds but only
     /// instantiable during `cargo test`, when the `test-fixtures` feature is
     /// enabled, or when `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` is set.
-    Mock(tau_ports::fixtures::MockSandbox),
+    Mock(tau_ports::fixtures::MockCapabilityGate),
     /// No isolation; explicit opt-out path.
     Passthrough(PassthroughSandbox),
 }
@@ -105,7 +108,7 @@ impl SandboxAdapter {
     }
 
     /// Probe the adapter for availability.
-    pub async fn probe(&self) -> SandboxProbe {
+    pub async fn probe(&self) -> CapabilityProbe {
         match self {
             SandboxAdapter::Native(a) => a.probe().await,
             #[cfg(target_os = "macos")]
@@ -133,7 +136,7 @@ impl SandboxAdapter {
     }
 
     /// Validate that the given plan can be executed by this adapter.
-    pub fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError> {
+    pub fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError> {
         match self {
             SandboxAdapter::Native(a) => a.validate_plan(plan),
             #[cfg(target_os = "macos")]
@@ -149,9 +152,9 @@ impl SandboxAdapter {
     /// Apply sandbox enforcement to a [`Command`] in preparation for spawn.
     pub async fn wrap_spawn(
         &self,
-        plan: &SandboxPlan,
+        plan: &CapabilityPlan,
         cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
+    ) -> Result<CapabilityHandle, CapabilityError> {
         match self {
             SandboxAdapter::Native(a) => a.wrap_spawn(plan, cmd).await,
             #[cfg(target_os = "macos")]
@@ -169,10 +172,10 @@ impl SandboxAdapter {
     /// on the sync-pipe. Default: no-op.
     pub async fn apply_post_spawn(
         &self,
-        plan: &SandboxPlan,
+        plan: &CapabilityPlan,
         child_pid: i32,
-        handle: &mut SandboxHandle,
-    ) -> Result<(), SandboxError> {
+        handle: &mut CapabilityHandle,
+    ) -> Result<(), CapabilityError> {
         match self {
             SandboxAdapter::Native(a) => a.apply_post_spawn(plan, child_pid, handle).await,
             #[cfg(target_os = "macos")]
@@ -186,7 +189,7 @@ impl SandboxAdapter {
     }
 }
 
-impl Sandbox for SandboxAdapter {
+impl CapabilityGate for SandboxAdapter {
     fn name(&self) -> &str {
         match self {
             SandboxAdapter::Native(s) => s.name(),
@@ -200,7 +203,7 @@ impl Sandbox for SandboxAdapter {
         }
     }
 
-    async fn probe(&self) -> SandboxProbe {
+    async fn probe(&self) -> CapabilityProbe {
         match self {
             SandboxAdapter::Native(s) => s.probe().await,
             #[cfg(target_os = "macos")]
@@ -226,7 +229,7 @@ impl Sandbox for SandboxAdapter {
         }
     }
 
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError> {
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError> {
         match self {
             SandboxAdapter::Native(s) => s.validate_plan(plan),
             #[cfg(target_os = "macos")]
@@ -238,12 +241,14 @@ impl Sandbox for SandboxAdapter {
             SandboxAdapter::Passthrough(s) => s.validate_plan(plan),
         }
     }
+}
 
+impl ProcessCapabilityGate for SandboxAdapter {
     async fn wrap_spawn(
         &self,
-        plan: &SandboxPlan,
+        plan: &CapabilityPlan,
         cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
+    ) -> Result<CapabilityHandle, CapabilityError> {
         match self {
             SandboxAdapter::Native(s) => s.wrap_spawn(plan, cmd).await,
             #[cfg(target_os = "macos")]
@@ -258,10 +263,10 @@ impl Sandbox for SandboxAdapter {
 
     async fn apply_post_spawn(
         &self,
-        plan: &SandboxPlan,
+        plan: &CapabilityPlan,
         child_pid: i32,
-        handle: &mut SandboxHandle,
-    ) -> Result<(), SandboxError> {
+        handle: &mut CapabilityHandle,
+    ) -> Result<(), CapabilityError> {
         match self {
             SandboxAdapter::Native(s) => s.apply_post_spawn(plan, child_pid, handle).await,
             #[cfg(target_os = "macos")]
@@ -299,7 +304,7 @@ fn instantiate(kind: RegistryKind) -> Result<SandboxAdapter, String> {
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         RegistryKind::Native => Ok(SandboxAdapter::Native(NativeSandbox::new(
             "native",
-            SandboxTier::Strict,
+            CapabilityTier::Strict,
         ))),
         RegistryKind::Container => Ok(SandboxAdapter::Container(ContainerSandbox::new(
             "container",
@@ -340,18 +345,18 @@ pub async fn resolve_adapter(
         .map(|v| v == "1")
         .unwrap_or(false)
     {
-        return Ok(SandboxAdapter::Mock(tau_ports::fixtures::MockSandbox::new(
-            "mock",
-        )));
+        return Ok(SandboxAdapter::Mock(
+            tau_ports::fixtures::MockCapabilityGate::new("mock"),
+        ));
     }
 
     let platform = detect_platform();
 
-    // Map config-side tier types to tau_ports::SandboxTier
-    let project_tier: SandboxTier = match requirements.required_tier {
-        SandboxRequiredTier::None => SandboxTier::None,
-        SandboxRequiredTier::Light => SandboxTier::Light,
-        SandboxRequiredTier::Strict => SandboxTier::Strict,
+    // Map config-side tier types to tau_ports::CapabilityTier
+    let project_tier: CapabilityTier = match requirements.required_tier {
+        SandboxRequiredTier::None => CapabilityTier::None,
+        SandboxRequiredTier::Light => CapabilityTier::Light,
+        SandboxRequiredTier::Strict => CapabilityTier::Strict,
         // catch-all for #[non_exhaustive] forward-compat
         other => {
             return Err(ResolutionError::ConfigError {
@@ -361,17 +366,17 @@ pub async fn resolve_adapter(
     };
 
     // Plugin floor: highest required_tier across all plugins.
-    let plugin_floor: SandboxTier = plugins
+    let plugin_floor: CapabilityTier = plugins
         .iter()
         .filter_map(|p| p.required_tier.as_ref())
         .map(|t| match t {
-            tau_domain::PluginRequiredTier::None => SandboxTier::None,
-            tau_domain::PluginRequiredTier::Light => SandboxTier::Light,
-            tau_domain::PluginRequiredTier::Strict => SandboxTier::Strict,
-            _ => SandboxTier::None,
+            tau_domain::PluginRequiredTier::None => CapabilityTier::None,
+            tau_domain::PluginRequiredTier::Light => CapabilityTier::Light,
+            tau_domain::PluginRequiredTier::Strict => CapabilityTier::Strict,
+            _ => CapabilityTier::None,
         })
         .max()
-        .unwrap_or(SandboxTier::None);
+        .unwrap_or(CapabilityTier::None);
 
     let effective_required_tier = std::cmp::max(project_tier, plugin_floor);
 
@@ -411,8 +416,8 @@ pub async fn resolve_adapter(
             }
         };
         let delivered = match adapter.probe().await {
-            tau_ports::SandboxProbe::Available { tier, .. } => tier,
-            tau_ports::SandboxProbe::Unavailable { reason } => {
+            tau_ports::CapabilityProbe::Available { tier, .. } => tier,
+            tau_ports::CapabilityProbe::Unavailable { reason } => {
                 tried.push((name.clone(), ResolutionRejection::ProbeUnavailable(reason)));
                 continue;
             }
@@ -458,10 +463,10 @@ pub async fn resolve_adapter(
         for (idx, plugin) in plugins.iter().enumerate() {
             if let Some(p_tier) = &plugin.required_tier {
                 let p_tier_mapped = match p_tier {
-                    tau_domain::PluginRequiredTier::None => SandboxTier::None,
-                    tau_domain::PluginRequiredTier::Light => SandboxTier::Light,
-                    tau_domain::PluginRequiredTier::Strict => SandboxTier::Strict,
-                    _ => SandboxTier::None,
+                    tau_domain::PluginRequiredTier::None => CapabilityTier::None,
+                    tau_domain::PluginRequiredTier::Light => CapabilityTier::Light,
+                    tau_domain::PluginRequiredTier::Strict => CapabilityTier::Strict,
+                    _ => CapabilityTier::None,
                 };
                 if p_tier_mapped > delivered {
                     // We don't know plugin name in this context — use index
@@ -523,9 +528,9 @@ pub async fn resolve_strict_for_validation() -> Result<SandboxAdapter, Resolutio
         .map(|v| v == "1")
         .unwrap_or(false)
     {
-        return Ok(SandboxAdapter::Mock(tau_ports::fixtures::MockSandbox::new(
-            "mock",
-        )));
+        return Ok(SandboxAdapter::Mock(
+            tau_ports::fixtures::MockCapabilityGate::new("mock"),
+        ));
     }
 
     let platform = detect_platform();
@@ -555,8 +560,8 @@ pub async fn resolve_strict_for_validation() -> Result<SandboxAdapter, Resolutio
         };
 
         match adapter.probe().await {
-            tau_ports::SandboxProbe::Available { .. } => return Ok(adapter),
-            tau_ports::SandboxProbe::Unavailable { reason } => {
+            tau_ports::CapabilityProbe::Available { .. } => return Ok(adapter),
+            tau_ports::CapabilityProbe::Unavailable { reason } => {
                 tried.push((name, ResolutionRejection::ProbeUnavailable(reason)));
             }
             other => {
@@ -571,7 +576,7 @@ pub async fn resolve_strict_for_validation() -> Result<SandboxAdapter, Resolutio
     Err(ResolutionError::NoAdapterMatches {
         tried,
         platform: platform.to_owned(),
-        required_tier: SandboxTier::None,
+        required_tier: CapabilityTier::None,
     })
 }
 
@@ -582,7 +587,7 @@ pub async fn resolve_strict_for_validation() -> Result<SandboxAdapter, Resolutio
 /// Force-instantiate a specific adapter kind, bypassing the registry filter.
 ///
 /// Probes the named adapter; returns `Ok(adapter)` iff
-/// [`tau_ports::SandboxProbe::Available`], otherwise
+/// [`tau_ports::CapabilityProbe::Available`], otherwise
 /// [`ResolutionError::ConfigError`] with a guided message (e.g.
 /// `"--sandbox native is not applicable on macOS"`).
 pub async fn resolve_adapter_forced(kind: RegistryKind) -> Result<SandboxAdapter, ResolutionError> {
@@ -590,8 +595,8 @@ pub async fn resolve_adapter_forced(kind: RegistryKind) -> Result<SandboxAdapter
         message: format!("--sandbox {kind:?}: {m}"),
     })?;
     match adapter.probe().await {
-        tau_ports::SandboxProbe::Available { .. } => Ok(adapter),
-        tau_ports::SandboxProbe::Unavailable { reason } => Err(ResolutionError::ConfigError {
+        tau_ports::CapabilityProbe::Available { .. } => Ok(adapter),
+        tau_ports::CapabilityProbe::Unavailable { reason } => Err(ResolutionError::ConfigError {
             message: format!("--sandbox {kind:?} not applicable: {reason}"),
         }),
         other => Err(ResolutionError::ConfigError {

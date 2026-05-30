@@ -85,11 +85,11 @@ pub(crate) fn shape_display(s: &tau_domain::CapabilityShape) -> &'static str {
 }
 
 /// Lowercase string for a `SandboxTier`.
-pub(crate) fn tier_str(t: tau_ports::SandboxTier) -> &'static str {
+pub(crate) fn tier_str(t: tau_ports::CapabilityTier) -> &'static str {
     match t {
-        tau_ports::SandboxTier::None => "none",
-        tau_ports::SandboxTier::Light => "light",
-        tau_ports::SandboxTier::Strict => "strict",
+        tau_ports::CapabilityTier::None => "none",
+        tau_ports::CapabilityTier::Light => "light",
+        tau_ports::CapabilityTier::Strict => "strict",
         _ => "unknown",
     }
 }

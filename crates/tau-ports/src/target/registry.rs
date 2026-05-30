@@ -2,7 +2,7 @@
 
 use tau_domain::{CapabilityShape, CapabilityShapeSet};
 
-use crate::sandbox::SandboxTier;
+use crate::capability_gate::CapabilityTier;
 use crate::target::adapter_family::AdapterFamily;
 use crate::target::platform::Platform;
 use crate::target::profile::{TargetCapabilityProfile, TripleStatus};
@@ -67,7 +67,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
         triple: TargetTriple {
             platform: Platform::Linux,
             adapter_family: AdapterFamily::Native,
-            tier: SandboxTier::Strict,
+            tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
         status: TripleStatus::Available,
@@ -76,7 +76,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
         triple: TargetTriple {
             platform: Platform::Linux,
             adapter_family: AdapterFamily::Native,
-            tier: SandboxTier::Light,
+            tier: CapabilityTier::Light,
         },
         shapes_fn: fs_rw_exec_net,
         status: TripleStatus::Available,
@@ -85,7 +85,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
         triple: TargetTriple {
             platform: Platform::Linux,
             adapter_family: AdapterFamily::Container,
-            tier: SandboxTier::Strict,
+            tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
         status: TripleStatus::Available,
@@ -94,7 +94,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
         triple: TargetTriple {
             platform: Platform::Darwin,
             adapter_family: AdapterFamily::Native,
-            tier: SandboxTier::Strict,
+            tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
         status: TripleStatus::Available,
@@ -108,7 +108,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
         triple: TargetTriple {
             platform: Platform::Windows,
             adapter_family: AdapterFamily::Native,
-            tier: SandboxTier::Strict,
+            tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
         status: TripleStatus::Reserved {
@@ -137,6 +137,7 @@ pub fn list_available() -> impl Iterator<Item = &'static TargetTripleEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn registry_has_six_entries() {

@@ -2,12 +2,12 @@
 //!
 //! Shells out to `docker --version` or `podman --version` with a 2-second
 //! timeout. Failures (binary not on PATH, daemon hung, non-zero exit) map to
-//! [`SandboxProbe::Unavailable`].
+//! [`CapabilityProbe::Unavailable`].
 
 use std::process::Stdio;
 use std::time::Duration;
 
-use tau_ports::{SandboxProbe, SandboxTier};
+use tau_ports::{CapabilityProbe, CapabilityTier};
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -53,8 +53,8 @@ impl ResolvedRuntime {
 ///
 /// **Note:** When the probe returns `Unavailable`, the `ResolvedRuntime`
 /// placeholder (`Podman`) must not be used — callers MUST check the
-/// `SandboxProbe` branch first.
-pub(crate) async fn run_probe(runtime: ContainerRuntime) -> (SandboxProbe, ResolvedRuntime) {
+/// `CapabilityProbe` branch first.
+pub(crate) async fn run_probe(runtime: ContainerRuntime) -> (CapabilityProbe, ResolvedRuntime) {
     let effective = match runtime {
         ContainerRuntime::Auto => match std::env::var("TAU_CONTAINER_RUNTIME").ok().as_deref() {
             Some("docker") => ContainerRuntime::Docker,
@@ -67,7 +67,7 @@ pub(crate) async fn run_probe(runtime: ContainerRuntime) -> (SandboxProbe, Resol
         ContainerRuntime::Docker => (probe_one("docker").await, ResolvedRuntime::Docker),
         ContainerRuntime::Podman => (probe_one("podman").await, ResolvedRuntime::Podman),
         ContainerRuntime::Auto => match probe_one("podman").await {
-            ok @ SandboxProbe::Available { .. } => (ok, ResolvedRuntime::Podman),
+            ok @ CapabilityProbe::Available { .. } => (ok, ResolvedRuntime::Podman),
             _ => {
                 let docker_probe = probe_one("docker").await;
                 (docker_probe, ResolvedRuntime::Docker)
@@ -78,7 +78,7 @@ pub(crate) async fn run_probe(runtime: ContainerRuntime) -> (SandboxProbe, Resol
 
 /// Probe a single binary by running `<binary> --version` with a 2-second
 /// timeout. Returns `Available` on success, `Unavailable` otherwise.
-async fn probe_one(binary: &'static str) -> SandboxProbe {
+async fn probe_one(binary: &'static str) -> CapabilityProbe {
     let probe_fut = async {
         let output = Command::new(binary)
             .arg("--version")
@@ -95,11 +95,11 @@ async fn probe_one(binary: &'static str) -> SandboxProbe {
         }
     };
     match timeout(Duration::from_secs(2), probe_fut).await {
-        Ok(Some(version)) => SandboxProbe::Available {
-            tier: SandboxTier::Strict,
+        Ok(Some(version)) => CapabilityProbe::Available {
+            tier: CapabilityTier::Strict,
             details: format!("{binary}: {version}"),
         },
-        _ => SandboxProbe::Unavailable {
+        _ => CapabilityProbe::Unavailable {
             reason: format!("{binary} not on PATH or unresponsive"),
         },
     }
@@ -115,7 +115,7 @@ mod tests {
         // within the 2-second timeout.
         let probe = probe_one("definitely-not-a-real-binary-7zX9").await;
         assert!(
-            matches!(probe, SandboxProbe::Unavailable { .. }),
+            matches!(probe, CapabilityProbe::Unavailable { .. }),
             "expected Unavailable, got {probe:?}"
         );
     }
@@ -130,7 +130,7 @@ mod tests {
         assert!(
             matches!(
                 probe,
-                SandboxProbe::Available { .. } | SandboxProbe::Unavailable { .. }
+                CapabilityProbe::Available { .. } | CapabilityProbe::Unavailable { .. }
             ),
             "unexpected probe result: {probe:?}"
         );

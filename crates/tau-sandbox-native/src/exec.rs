@@ -42,7 +42,7 @@ use std::path::PathBuf;
 
 use seccompiler::SeccompRule;
 use tau_domain::{Capability, FsCapability, ProcessCapability};
-use tau_ports::SandboxPlan;
+use tau_ports::CapabilityPlan;
 
 /// Collect the paths that should receive `AccessFs::Execute`-only landlock
 /// rules from the plan's exec-related capabilities.
@@ -57,7 +57,7 @@ use tau_ports::SandboxPlan;
 ///
 /// The caller (`light.rs::install_landlock`) is responsible for adding each
 /// returned path to the landlock ruleset with `AccessFs::Execute` access.
-pub(crate) fn collect_exec_paths(plan: &SandboxPlan) -> Vec<PathBuf> {
+pub(crate) fn collect_exec_paths(plan: &CapabilityPlan) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = Vec::new();
 
     for cap in &plan.capabilities {
@@ -135,7 +135,7 @@ fn resolve_command_in_path(cmd: &str) -> Option<PathBuf> {
 #[allow(unused_variables)]
 pub(crate) fn extend_with_exec_rules(
     rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
 ) {
     // No-op: exec path gating is enforced by landlock (collect_exec_paths +
     // install_landlock), not by seccomp arg matching. See function doc.
@@ -147,7 +147,7 @@ mod tests {
     use tau_domain::fixtures::{cap_fs_exec, cap_process_spawn};
     use tau_ports::fixtures::plan_from_capabilities;
 
-    fn plan_with_caps(capabilities: Vec<tau_domain::Capability>) -> SandboxPlan {
+    fn plan_with_caps(capabilities: Vec<tau_domain::Capability>) -> CapabilityPlan {
         plan_from_capabilities(capabilities)
     }
 
@@ -235,7 +235,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let paths = collect_exec_paths(&plan);
         assert!(
             paths.is_empty(),

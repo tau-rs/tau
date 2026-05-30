@@ -1,17 +1,17 @@
 //! Layer 3 pre-flight plan construction.
 //!
-//! [`build_plan`] assembles a [`tau_ports::SandboxPlan`] from per-plugin
+//! [`build_plan`] assembles a [`tau_ports::CapabilityPlan`] from per-plugin
 //! manifest capabilities, project-level overrides, and execution-context
 //! hints. The returned plan is ready to be cross-checked against an
 //! adapter's `supported_shapes` via
 //! [`crate::sandbox::validate_plan_against_adapter`].
 
 use tau_domain::Capability;
-use tau_ports::{ResourceLimits, SandboxPlan, WorkingContext};
+use tau_ports::{CapabilityPlan, ResourceLimits, WorkingContext};
 
 use crate::capability_override::{CapabilityOverride, OverrideExpandError};
 
-/// Assemble a [`SandboxPlan`] from manifest capabilities + project overrides.
+/// Assemble a [`CapabilityPlan`] from manifest capabilities + project overrides.
 ///
 /// Steps:
 /// 1. Calls [`crate::capability_override::compute_effective`] to intersect
@@ -20,7 +20,7 @@ use crate::capability_override::{CapabilityOverride, OverrideExpandError};
 /// 2. Maps each [`crate::capability_override::EffectiveCapability`] to its `source` [`Capability`] (the
 ///    package-declared shape — override narrowing is enforcement-side, not
 ///    shape-relevant).
-/// 3. Constructs and returns a [`SandboxPlan`] with the resulting capability
+/// 3. Constructs and returns a [`CapabilityPlan`] with the resulting capability
 ///    list, `working_context`, and `limits` threaded through unchanged.
 ///
 /// # Example
@@ -41,12 +41,12 @@ pub fn build_plan(
     project_override: &[CapabilityOverride],
     working_context: Option<WorkingContext>,
     limits: Option<ResourceLimits>,
-) -> Result<SandboxPlan, OverrideExpandError> {
+) -> Result<CapabilityPlan, OverrideExpandError> {
     let effective = crate::capability_override::compute_effective(package_caps, project_override)?;
 
     let capabilities: Vec<Capability> = effective.into_iter().map(|ec| ec.source).collect();
 
-    Ok(SandboxPlan::new(capabilities, working_context, limits))
+    Ok(CapabilityPlan::new(capabilities, working_context, limits))
 }
 
 #[cfg(test)]

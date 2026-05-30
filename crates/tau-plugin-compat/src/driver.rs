@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use tau_pkg::LockedPlugin;
-use tau_ports::SandboxPlan;
+use tau_ports::CapabilityPlan;
 use tau_runtime::builder::{DynLlmBackend, DynStorage, DynTool};
 use tau_runtime::plugin_host::{self, PluginHostOptions};
 use tau_runtime::sandbox::SandboxAdapter;
@@ -93,7 +93,7 @@ pub async fn spawn_tool_under_sandbox(
     plugin: &LockedPlugin,
     config: serde_json::Value,
     adapter: Option<Arc<SandboxAdapter>>,
-    sandbox_plan: Option<&SandboxPlan>,
+    sandbox_plan: Option<&CapabilityPlan>,
 ) -> Result<Arc<dyn DynTool>, DriveError> {
     let trace = test_trace_context();
     let options = test_plugin_host_options(adapter);
@@ -108,7 +108,7 @@ pub async fn spawn_llm_under_sandbox(
     plugin: &LockedPlugin,
     config: serde_json::Value,
     adapter: Option<Arc<SandboxAdapter>>,
-    sandbox_plan: Option<&SandboxPlan>,
+    sandbox_plan: Option<&CapabilityPlan>,
 ) -> Result<Arc<dyn DynLlmBackend>, DriveError> {
     let trace = test_trace_context();
     let options = test_plugin_host_options(adapter);
@@ -123,7 +123,7 @@ pub async fn spawn_storage_under_sandbox(
     plugin: &LockedPlugin,
     config: serde_json::Value,
     adapter: Option<Arc<SandboxAdapter>>,
-    sandbox_plan: Option<&SandboxPlan>,
+    sandbox_plan: Option<&CapabilityPlan>,
 ) -> Result<Arc<dyn DynStorage>, DriveError> {
     let trace = test_trace_context();
     let options = test_plugin_host_options(adapter);

@@ -35,7 +35,7 @@ use tau_domain::PortKind;
 use tau_pkg::LockedPlugin;
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_plugin_protocol::FramerOptions;
-use tau_ports::SandboxPlan;
+use tau_ports::CapabilityPlan;
 
 use crate::builder::{DynLlmBackend, DynStorage, DynTool};
 use crate::error::RuntimeError;
@@ -268,7 +268,7 @@ pub struct PluginHostOptions {
     /// Populated by `tau-cli::cmd::plugin_loader::load_plugins` from
     /// the scope's `[sandbox]` config + `resolve_adapter`.
     ///
-    /// At spawn time, this is zipped with the per-call `Option<&SandboxPlan>`
+    /// At spawn time, this is zipped with the per-call `Option<&CapabilityPlan>`
     /// supplied to each `load_*` function. Both must be `Some` for sandbox
     /// enforcement to take effect — allowing callers to opt-out per plugin
     /// by passing `None` for the plan.
@@ -328,7 +328,7 @@ pub async fn load_llm_backend(
     config: serde_json::Value,
     trace_context: TraceContext,
     options: PluginHostOptions,
-    sandbox_plan: Option<&SandboxPlan>,
+    sandbox_plan: Option<&CapabilityPlan>,
 ) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
     let plugin_name = plugin.manifest.bin.clone();
     let run_id = trace_context.run_id.clone();
@@ -404,7 +404,7 @@ pub async fn load_tool(
     config: serde_json::Value,
     trace_context: TraceContext,
     options: PluginHostOptions,
-    sandbox_plan: Option<&SandboxPlan>,
+    sandbox_plan: Option<&CapabilityPlan>,
 ) -> Result<Arc<dyn DynTool>, RuntimeError> {
     let plugin_name = plugin.manifest.bin.clone();
     let run_id = trace_context.run_id.clone();
@@ -500,7 +500,7 @@ pub async fn load_storage(
     config: serde_json::Value,
     trace_context: TraceContext,
     options: PluginHostOptions,
-    sandbox_plan: Option<&SandboxPlan>,
+    sandbox_plan: Option<&CapabilityPlan>,
 ) -> Result<Arc<dyn DynStorage>, RuntimeError> {
     let plugin_name = plugin.manifest.bin.clone();
     let run_id = trace_context.run_id.clone();

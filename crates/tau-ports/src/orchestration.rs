@@ -9,6 +9,9 @@
 //! for the design and `docs/decisions/0023-multi-agent-orchestration.md`
 //! for the ADR.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use chrono::{DateTime, Utc};
 
 /// Hierarchical task id. Examples: `"01"`, `"01.02"`, `"01.02.01"`.
@@ -251,6 +254,7 @@ pub struct RunSnapshot {
 #[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn task_status_roundtrips_snake_case() {

@@ -42,7 +42,7 @@ use crate::sandbox::{validate_plan_against_adapter, SandboxAdapter, SandboxValid
 /// kernel's tokio scheduler hop.
 pub type DynAsyncWriter = Box<dyn AsyncWrite + Send + Unpin>;
 
-use tau_ports::{SandboxHandle, SandboxPlan};
+use tau_ports::{CapabilityHandle, CapabilityPlan};
 
 use crate::error::RuntimeError;
 
@@ -123,15 +123,15 @@ pub struct PluginProcess {
     _stderr_task: JoinHandle<()>,
     /// Holds adapter-side sandbox resources (e.g., container ID).
     /// Dropped after the child exits, running adapter cleanup via
-    /// `SandboxHandle::drop`. `Option` because test/no-sandbox paths
+    /// `CapabilityHandle::drop`. `Option` because test/no-sandbox paths
     /// construct without one (via `new_for_test`).
     ///
-    /// Wrapped in `Mutex` because `SandboxHandle` contains a
+    /// Wrapped in `Mutex` because `CapabilityHandle` contains a
     /// `Box<dyn FnOnce()>` which is `!Sync`; the `Mutex` adds the
     /// `Sync` bound required by `Arc<PluginProcess>` (the `Dyn*`
     /// port traits are `Send + Sync`).
     #[allow(dead_code)] // keeps the handle alive; cleanup runs on Mutex drop
-    _sandbox_handle: std::sync::Mutex<Option<SandboxHandle>>,
+    _sandbox_handle: std::sync::Mutex<Option<CapabilityHandle>>,
 }
 
 impl PluginProcess {
@@ -176,11 +176,11 @@ impl PluginProcess {
         // Optional sandbox plan + adapter pair. When `Some((plan, adapter))`:
         // 1. `validate_plan_against_adapter` is called (Layer 3 cross-check).
         // 2. `adapter.wrap_spawn(plan, &mut command)` is called to apply
-        //    enforcement. The resulting `SandboxHandle` is stored on the
+        //    enforcement. The resulting `CapabilityHandle` is stored on the
         //    `PluginProcess` so its `Drop` runs adapter cleanup on plugin
         //    exit. When `None`, the spawn proceeds without sandboxing (test
         //    paths; use `MockSandbox` for behavioral tests instead).
-        sandbox: Option<(&SandboxPlan, &SandboxAdapter)>,
+        sandbox: Option<(&CapabilityPlan, &SandboxAdapter)>,
         pre_handshake: F,
     ) -> Result<(Arc<PluginProcess>, T), RuntimeError>
     where
@@ -226,7 +226,7 @@ impl PluginProcess {
         // Order is deliberate: validate_plan_against_adapter (Layer 3)
         // runs BEFORE wrap_spawn (Layer 4) so a bad plan never reaches
         // the adapter.
-        let sandbox_handle: Option<SandboxHandle> = if let Some((plan, adapter)) = sandbox {
+        let sandbox_handle: Option<CapabilityHandle> = if let Some((plan, adapter)) = sandbox {
             // Layer 3: cross-check plan capabilities against adapter shapes.
             validate_plan_against_adapter(&plugin_name, plan, adapter).map_err(
                 |errors: Vec<SandboxValidationError>| RuntimeError::SandboxValidationFailed {
@@ -762,16 +762,16 @@ mod tests {
     #[tokio::test]
     async fn spawn_fails_on_validation_error() {
         use tau_domain::fixtures as domain_fixtures;
-        use tau_ports::SandboxPlan;
+        use tau_ports::CapabilityPlan;
 
         use crate::sandbox::SandboxAdapter;
 
         // A plan with a Custom capability that MockSandbox cannot handle.
         let custom_cap = domain_fixtures::cap_custom("mcp.tool.use");
-        let plan = SandboxPlan::new(vec![custom_cap], None, None);
+        let plan = CapabilityPlan::new(vec![custom_cap], None, None);
 
         // MockSandbox validates correctly — rejects Custom shapes.
-        let adapter = SandboxAdapter::Mock(tau_ports::fixtures::MockSandbox::new("mock"));
+        let adapter = SandboxAdapter::Mock(tau_ports::fixtures::MockCapabilityGate::new("mock"));
 
         let result = PluginProcess::spawn_and_handshake(
             // A binary path that doesn't exist — if we reach spawn, we'd
@@ -804,13 +804,13 @@ mod tests {
     /// without error, and the error came at the actual spawn step).
     #[tokio::test]
     async fn spawn_calls_validate_plan_then_wrap_spawn() {
-        use tau_ports::SandboxPlan;
+        use tau_ports::CapabilityPlan;
 
         use crate::sandbox::SandboxAdapter;
 
         // Empty plan — MockSandbox accepts this unconditionally.
-        let plan = SandboxPlan::new(vec![], None, None);
-        let adapter = SandboxAdapter::Mock(tau_ports::fixtures::MockSandbox::new("mock"));
+        let plan = CapabilityPlan::new(vec![], None, None);
+        let adapter = SandboxAdapter::Mock(tau_ports::fixtures::MockCapabilityGate::new("mock"));
 
         let result = PluginProcess::spawn_and_handshake(
             // Non-existent binary so spawn fails AFTER sandbox succeeds.

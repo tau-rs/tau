@@ -5,9 +5,16 @@
 //! free-form `String` fields use `matches!()` to avoid brittle wording
 //! comparisons.
 //!
-//! `LlmError`, `ToolError`, `StorageError`, and `SandboxError` are the
+//! `LlmError`, `ToolError`, `StorageError`, and `CapabilityError` are the
 //! per-trait error types. `NamespaceError` and `KeyError` are the validation
 //! errors for the `Namespace` and `Key` newtypes.
+
+use alloc::string::String;
+
+#[cfg(test)]
+use alloc::format;
+#[cfg(test)]
+use alloc::string::ToString;
 
 use thiserror::Error;
 
@@ -146,7 +153,7 @@ impl StorageError {
     }
 }
 
-/// Errors returned by [`crate::sandbox::Sandbox`] implementations.
+/// Errors returned by [`crate::capability_gate::CapabilityGate`] implementations.
 ///
 /// Stable as of v0.1 of the sandboxing sub-project. Variant evolution
 /// is handled by `#[non_exhaustive]` at the enum level and on each
@@ -154,11 +161,11 @@ impl StorageError {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SandboxError {
+pub enum CapabilityError {
     /// The adapter is not usable on this host (probe returned Unavailable).
     #[error("sandbox unavailable: {reason}")]
     Unavailable {
-        /// Reason from [`crate::sandbox::SandboxProbe::Unavailable`].
+        /// Reason from [`crate::capability_gate::CapabilityProbe::Unavailable`].
         reason: String,
     },
     /// The plan requires a capability shape this adapter does not support.
@@ -465,7 +472,7 @@ mod tests {
 
     #[test]
     fn sandbox_error_proxy_renders() {
-        let e = SandboxError::Proxy {
+        let e = CapabilityError::Proxy {
             message: "proxy task spawn failed".to_string(),
         };
         assert_eq!(format!("{e}"), "sandbox proxy: proxy task spawn failed");

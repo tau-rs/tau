@@ -7,22 +7,25 @@
 use std::process::Command;
 
 use tau_domain::{CapabilityShape, CapabilityShapeSet};
-use tau_ports::{Sandbox, SandboxError, SandboxHandle, SandboxPlan, SandboxProbe, SandboxTier};
+use tau_ports::{
+    CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
+    CapabilityTier, ProcessCapabilityGate,
+};
 
 /// Passthrough sandbox adapter (no isolation).
 ///
-/// Implements [`tau_ports::Sandbox`]:
+/// Implements [`tau_ports::CapabilityGate`] + [`tau_ports::ProcessCapabilityGate`]:
 /// - `probe()` returns `Available { tier: None, details: "passthrough (no isolation)" }`.
 /// - `supported_shapes()` returns the union of all known shapes (so any
 ///   Layer-3 shape check passes).
 /// - `validate_plan(_)` always returns `Ok(())`.
-/// - `wrap_spawn(_, _)` is a no-op; returns `SandboxHandle::noop()`.
+/// - `wrap_spawn(_, _)` is a no-op; returns `CapabilityHandle::noop()`.
 ///
 /// # Example
 ///
 /// ```
 /// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
-/// use tau_ports::Sandbox;
+/// use tau_ports::CapabilityGate;
 ///
 /// let p = PassthroughSandbox::new();
 /// assert_eq!(p.name(), "passthrough");
@@ -38,10 +41,10 @@ impl PassthroughSandbox {
     ///
     /// ```
     /// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
-    /// use tau_ports::{Sandbox, SandboxPlan};
+    /// use tau_ports::{CapabilityGate, CapabilityPlan};
     ///
     /// let p = PassthroughSandbox::new();
-    /// let plan = SandboxPlan::new(vec![], None, None);
+    /// let plan = CapabilityPlan::new(vec![], None, None);
     /// assert!(p.validate_plan(&plan).is_ok());
     /// ```
     pub fn new() -> Self {
@@ -49,14 +52,14 @@ impl PassthroughSandbox {
     }
 }
 
-impl Sandbox for PassthroughSandbox {
+impl CapabilityGate for PassthroughSandbox {
     fn name(&self) -> &str {
         "passthrough"
     }
 
-    async fn probe(&self) -> SandboxProbe {
-        SandboxProbe::Available {
-            tier: SandboxTier::None,
+    async fn probe(&self) -> CapabilityProbe {
+        CapabilityProbe::Available {
+            tier: CapabilityTier::None,
             details: "passthrough (no isolation)".to_owned(),
         }
     }
@@ -71,16 +74,18 @@ impl Sandbox for PassthroughSandbox {
         set
     }
 
-    fn validate_plan(&self, _plan: &SandboxPlan) -> Result<(), SandboxError> {
+    fn validate_plan(&self, _plan: &CapabilityPlan) -> Result<(), CapabilityError> {
         Ok(())
     }
+}
 
+impl ProcessCapabilityGate for PassthroughSandbox {
     async fn wrap_spawn(
         &self,
-        _plan: &SandboxPlan,
+        _plan: &CapabilityPlan,
         _cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
-        Ok(SandboxHandle::noop())
+    ) -> Result<CapabilityHandle, CapabilityError> {
+        Ok(CapabilityHandle::noop())
     }
 }
 
@@ -93,8 +98,8 @@ mod tests {
         let p = PassthroughSandbox::new();
         let probe = p.probe().await;
         match probe {
-            SandboxProbe::Available { tier, details } => {
-                assert_eq!(tier, SandboxTier::None);
+            CapabilityProbe::Available { tier, details } => {
+                assert_eq!(tier, CapabilityTier::None);
                 assert!(details.contains("passthrough"));
             }
             other => panic!("expected Available, got {other:?}"),
@@ -115,14 +120,14 @@ mod tests {
     #[test]
     fn validate_plan_always_ok() {
         let p = PassthroughSandbox::new();
-        let plan = SandboxPlan::new(vec![], None, None);
+        let plan = CapabilityPlan::new(vec![], None, None);
         assert!(p.validate_plan(&plan).is_ok());
     }
 
     #[tokio::test]
     async fn wrap_spawn_returns_noop_handle() {
         let p = PassthroughSandbox::new();
-        let plan = SandboxPlan::new(vec![], None, None);
+        let plan = CapabilityPlan::new(vec![], None, None);
         let mut cmd = Command::new("/bin/true");
         let _h = p.wrap_spawn(&plan, &mut cmd).await.expect("wrap_spawn");
         // No assertion on the handle itself — Drop is what matters; the

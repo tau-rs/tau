@@ -330,9 +330,9 @@ fn skipped(reason: &str) -> CheckResult {
     }
 }
 
-fn tier_le(a: tau_pkg::scope::SandboxRequiredTier, b: tau_ports::SandboxTier) -> bool {
+fn tier_le(a: tau_pkg::scope::SandboxRequiredTier, b: tau_ports::CapabilityTier) -> bool {
     use tau_pkg::scope::SandboxRequiredTier as Req;
-    use tau_ports::SandboxTier as Tier;
+    use tau_ports::CapabilityTier as Tier;
     // SandboxTier is #[non_exhaustive]; catch-all is required for external match.
     #[allow(unreachable_patterns)]
     let to_rank = |t: Tier| match t {

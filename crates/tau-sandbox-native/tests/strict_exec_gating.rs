@@ -16,7 +16,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use tau_domain::fixtures::{cap_fs_exec, cap_fs_read, cap_process_spawn};
-use tau_ports::{fixtures::plan_from_capabilities, Sandbox, SandboxPlan, SandboxTier};
+use tau_ports::{
+    fixtures::plan_from_capabilities, CapabilityGate, CapabilityPlan, CapabilityTier,
+    ProcessCapabilityGate,
+};
 use tau_sandbox_native::NativeSandbox;
 
 fn locate_controlled_env_bin() -> PathBuf {
@@ -45,7 +48,7 @@ fn bin_parent_str() -> String {
 /// A plan that grants `fs.exec` on the controlled-env binary's parent dir
 /// (allowing exec of the binary) AND `fs.read` on the same dir (required
 /// by landlock to read the binary file during exec).
-fn plan_with_fs_exec() -> SandboxPlan {
+fn plan_with_fs_exec() -> CapabilityPlan {
     let bin_parent = bin_parent_str();
     plan_from_capabilities(vec![
         // Read access so landlock can load the binary into memory.
@@ -57,7 +60,7 @@ fn plan_with_fs_exec() -> SandboxPlan {
 
 /// A plan that grants `process.spawn` with the full binary path AND `fs.read`
 /// on the binary's parent so the binary can be loaded.
-fn plan_with_process_spawn() -> SandboxPlan {
+fn plan_with_process_spawn() -> CapabilityPlan {
     let bin = locate_controlled_env_bin();
     let bin_str = bin.to_string_lossy().into_owned();
     let bin_parent = bin_parent_str();
@@ -76,7 +79,7 @@ async fn exec_allowed_via_fs_exec_capability() {
     let plan = plan_with_fs_exec();
     let mut cmd = Command::new(locate_controlled_env_bin());
 
-    let sandbox = NativeSandbox::new("test-strict-exec-e", SandboxTier::Strict);
+    let sandbox = NativeSandbox::new("test-strict-exec-e", CapabilityTier::Strict);
     let _handle = sandbox
         .wrap_spawn(&plan, &mut cmd)
         .await
@@ -104,7 +107,7 @@ async fn exec_allowed_via_process_spawn_full_path() {
     let plan = plan_with_process_spawn();
     let mut cmd = Command::new(locate_controlled_env_bin());
 
-    let sandbox = NativeSandbox::new("test-strict-spawn-e", SandboxTier::Strict);
+    let sandbox = NativeSandbox::new("test-strict-spawn-e", CapabilityTier::Strict);
     let _handle = sandbox
         .wrap_spawn(&plan, &mut cmd)
         .await

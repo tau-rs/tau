@@ -10,7 +10,7 @@ description = "Windows AppContainer sandbox adapter for tau"
 
 [dependencies]
 tau-domain          = { workspace = true, features = ["serde"] }
-tau-ports           = { workspace = true, features = ["serde"] }
+tau-ports           = { workspace = true, features = ["serde", "process"] }
 tau-sandbox-proxy   = { workspace = true }
 tracing             = { workspace = true }
 tokio               = { workspace = true }

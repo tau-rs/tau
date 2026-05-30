@@ -15,7 +15,7 @@
 //! compile.
 //!
 //! tau-runtime resolves this by defining dyn-compatible wrapper
-//! traits ([`DynLlmBackend`], [`DynTool`], [`DynStorage`]) with
+//! traits ([`DynLlmBackend`], [`DynTool`], [`DynStorage`], [`DynProcessCapabilityGate`]) with
 //! [`Box`]-returning futures, and a blanket impl for any
 //! `T: LlmBackend + 'static` (etc.). Public `with_*` builder methods
 //! take generics; the registry stores `Arc<dyn Dyn*>`. This is the
@@ -32,9 +32,10 @@ use std::sync::Arc;
 
 use tau_domain::CapabilityShapeSet;
 use tau_ports::{
+    CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
     CompletionRequest, CompletionResponse, CompletionStream, Key, LlmBackend, LlmError, Namespace,
-    Sandbox, SandboxError, SandboxHandle, SandboxPlan, SandboxProbe, SessionContext, Storage,
-    StorageError, Tool, ToolError, ToolResult, ToolSpec,
+    ProcessCapabilityGate, SessionContext, Storage, StorageError, Tool, ToolError, ToolResult,
+    ToolSpec,
 };
 
 use crate::error::{BuildError, PluginKind};
@@ -233,58 +234,76 @@ impl<T: Storage + 'static> DynStorage for T {
     }
 }
 
-/// Object-safe wrapper for [`Sandbox`].
-///
-/// Mirrors the new v0.1 trait surface — `probe`, `supported_shapes`,
-/// `validate_plan`, `wrap_spawn` — using boxed futures where needed for
-/// dyn-compatibility. The `IpcSandbox` path is removed: `wrap_spawn`
-/// takes `&mut Command` (a local in-process concept) which cannot be
-/// transmitted over IPC. In-tree adapters (`tau-sandbox-native`,
-/// `tau-sandbox-container`) replace it (Tasks 3, 6).
-pub trait DynSandbox: Send + Sync {
-    /// Plugin-visible name (matches [`Sandbox::name`]).
+/// Object-safe wrapper of [`CapabilityGate`] (the universal four
+/// methods). Stored in registries that don't care about process
+/// extensions (wasm host, MCU, MCP facilitator).
+pub trait DynCapabilityGate: Send + Sync {
+    /// Plugin-visible name.
     fn name(&self) -> &str;
-
-    /// Boxed-future wrapper for [`Sandbox::probe`].
-    fn probe<'a>(&'a self) -> BoxFuture<'a, SandboxProbe>;
-
-    /// Delegate to [`Sandbox::supported_shapes`].
+    /// Boxed-future wrapper for [`CapabilityGate::probe`].
+    fn probe<'a>(&'a self) -> BoxFuture<'a, CapabilityProbe>;
+    /// Delegate to [`CapabilityGate::supported_shapes`].
     fn supported_shapes(&self) -> CapabilityShapeSet;
-
-    /// Delegate to [`Sandbox::validate_plan`].
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError>;
-
-    /// Boxed-future wrapper for [`Sandbox::wrap_spawn`].
-    fn wrap_spawn<'a>(
-        &'a self,
-        plan: &'a SandboxPlan,
-        cmd: &'a mut std::process::Command,
-    ) -> BoxFuture<'a, Result<SandboxHandle, SandboxError>>;
+    /// Delegate to [`CapabilityGate::validate_plan`].
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError>;
 }
 
-impl<T: Sandbox + 'static> DynSandbox for T {
+impl<T: CapabilityGate + 'static> DynCapabilityGate for T {
     fn name(&self) -> &str {
-        Sandbox::name(self)
+        CapabilityGate::name(self)
     }
 
-    fn probe<'a>(&'a self) -> BoxFuture<'a, SandboxProbe> {
-        Box::pin(Sandbox::probe(self))
+    fn probe<'a>(&'a self) -> BoxFuture<'a, CapabilityProbe> {
+        Box::pin(CapabilityGate::probe(self))
     }
 
     fn supported_shapes(&self) -> CapabilityShapeSet {
-        Sandbox::supported_shapes(self)
+        CapabilityGate::supported_shapes(self)
     }
 
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError> {
-        Sandbox::validate_plan(self, plan)
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError> {
+        CapabilityGate::validate_plan(self, plan)
     }
+}
 
+/// Object-safe wrapper of [`ProcessCapabilityGate`]. The process gate
+/// registry in `tau-runtime` (and post-Phase-4 in `tau-runtime-tokio`)
+/// stores `Arc<dyn DynProcessCapabilityGate>`.
+pub trait DynProcessCapabilityGate: DynCapabilityGate {
+    /// Boxed-future wrapper for [`ProcessCapabilityGate::wrap_spawn`].
     fn wrap_spawn<'a>(
         &'a self,
-        plan: &'a SandboxPlan,
+        plan: &'a CapabilityPlan,
         cmd: &'a mut std::process::Command,
-    ) -> BoxFuture<'a, Result<SandboxHandle, SandboxError>> {
-        Box::pin(Sandbox::wrap_spawn(self, plan, cmd))
+    ) -> BoxFuture<'a, Result<CapabilityHandle, CapabilityError>>;
+
+    /// Boxed-future wrapper for [`ProcessCapabilityGate::apply_post_spawn`].
+    fn apply_post_spawn<'a>(
+        &'a self,
+        plan: &'a CapabilityPlan,
+        child_pid: i32,
+        handle: &'a mut CapabilityHandle,
+    ) -> BoxFuture<'a, Result<(), CapabilityError>>;
+}
+
+impl<T: ProcessCapabilityGate + 'static> DynProcessCapabilityGate for T {
+    fn wrap_spawn<'a>(
+        &'a self,
+        plan: &'a CapabilityPlan,
+        cmd: &'a mut std::process::Command,
+    ) -> BoxFuture<'a, Result<CapabilityHandle, CapabilityError>> {
+        Box::pin(ProcessCapabilityGate::wrap_spawn(self, plan, cmd))
+    }
+
+    fn apply_post_spawn<'a>(
+        &'a self,
+        plan: &'a CapabilityPlan,
+        child_pid: i32,
+        handle: &'a mut CapabilityHandle,
+    ) -> BoxFuture<'a, Result<(), CapabilityError>> {
+        Box::pin(ProcessCapabilityGate::apply_post_spawn(
+            self, plan, child_pid, handle,
+        ))
     }
 }
 

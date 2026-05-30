@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use nix::sched::CloneFlags;
 use seccompiler::SeccompRule;
 use tau_domain::{Capability, NetCapability};
-use tau_ports::SandboxPlan;
+use tau_ports::CapabilityPlan;
 
 /// Returns the flags to pass to `unshare(2)` for the given plan.
 ///
@@ -44,7 +44,7 @@ use tau_ports::SandboxPlan;
 ///   F prerequisites are available; `apply_post_spawn` will configure the
 ///   netns with per-host nftables filtering before the child is released
 ///   from the sync-pipe.
-pub(crate) fn unshare_flags_for_plan(plan: &SandboxPlan) -> CloneFlags {
+pub(crate) fn unshare_flags_for_plan(plan: &CapabilityPlan) -> CloneFlags {
     let _ = plan;
     // F task 6.5: always include CLONE_NEWUSER | CLONE_NEWNET.
     // validate_plan rejects Network(Http) plans on F-unavailable hosts;
@@ -87,7 +87,7 @@ pub(crate) fn unshare_flags_for_plan(plan: &SandboxPlan) -> CloneFlags {
 /// - `plan` — the sandbox plan to inspect for network capabilities.
 pub(crate) fn extend_with_network_rules(
     rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
 ) {
     let has_http = plan
         .capabilities
@@ -152,7 +152,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let flags = unshare_flags_for_plan(&plan);
         assert!(
             flags.contains(CloneFlags::CLONE_NEWUSER),
@@ -179,7 +179,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let flags = unshare_flags_for_plan(&plan);
         assert!(
             flags.contains(CloneFlags::CLONE_NEWUSER),
@@ -201,7 +201,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let flags = unshare_flags_for_plan(&plan);
         assert!(
             flags.contains(CloneFlags::CLONE_NEWUSER),
@@ -229,7 +229,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
 
         let mut rules = baseline_syscall_map();
         // Baseline must NOT contain socket before extension (verified by Task 4 tests).
@@ -286,7 +286,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
 
         let mut rules = baseline_syscall_map();
         let snapshot_before: Vec<i64> = rules.keys().copied().collect();
@@ -318,7 +318,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let mut rules = baseline_syscall_map();
         super::extend_with_network_rules(&mut rules, &plan);
         for nr in [
@@ -342,7 +342,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let mut rules = baseline_syscall_map();
         super::extend_with_network_rules(&mut rules, &plan);
         for nr in [
@@ -374,7 +374,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let mut rules = baseline_syscall_map();
         super::extend_with_network_rules(&mut rules, &plan);
         for nr in [
@@ -403,7 +403,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let mut rules = baseline_syscall_map();
         super::extend_with_network_rules(&mut rules, &plan);
         // Client-side
