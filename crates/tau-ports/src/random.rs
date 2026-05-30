@@ -5,6 +5,7 @@
 //! Routing entropy through a port is what makes `tau-runtime-core`
 //! runnable on bare-metal targets with no `getrandom`.
 
+#[cfg(any(test, feature = "test-fixtures"))]
 use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Source of cryptographic-grade random bytes.
