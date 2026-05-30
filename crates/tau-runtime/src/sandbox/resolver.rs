@@ -345,9 +345,9 @@ pub async fn resolve_adapter(
         .map(|v| v == "1")
         .unwrap_or(false)
     {
-        return Ok(SandboxAdapter::Mock(tau_ports::fixtures::MockCapabilityGate::new(
-            "mock",
-        )));
+        return Ok(SandboxAdapter::Mock(
+            tau_ports::fixtures::MockCapabilityGate::new("mock"),
+        ));
     }
 
     let platform = detect_platform();
@@ -528,9 +528,9 @@ pub async fn resolve_strict_for_validation() -> Result<SandboxAdapter, Resolutio
         .map(|v| v == "1")
         .unwrap_or(false)
     {
-        return Ok(SandboxAdapter::Mock(tau_ports::fixtures::MockCapabilityGate::new(
-            "mock",
-        )));
+        return Ok(SandboxAdapter::Mock(
+            tau_ports::fixtures::MockCapabilityGate::new("mock"),
+        ));
     }
 
     let platform = detect_platform();

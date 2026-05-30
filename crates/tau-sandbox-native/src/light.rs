@@ -614,7 +614,8 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan =
+            serde_json::from_value(plan_json).expect("valid plan");
         let cmd = Command::new("/bin/true");
         let (read_paths, _write_paths) = collect_landlock_paths(&plan, &cmd).expect("collect");
         // Both the link path and the canonical target should appear.

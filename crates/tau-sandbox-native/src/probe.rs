@@ -111,7 +111,11 @@ mod tests {
 
     #[test]
     fn unavailable_when_landlock_missing_regardless_of_request() {
-        for tier in [CapabilityTier::None, CapabilityTier::Light, CapabilityTier::Strict] {
+        for tier in [
+            CapabilityTier::None,
+            CapabilityTier::Light,
+            CapabilityTier::Strict,
+        ] {
             let p = decide_probe(
                 tier, /* landlock_ok */ false, /* user_ns_ok */ true,
             );
@@ -216,7 +220,11 @@ mod tests {
         // effective tier (when Available) is ≤ requested.
         for landlock_ok in [true, false] {
             for user_ns_ok in [true, false] {
-                for requested in [CapabilityTier::None, CapabilityTier::Light, CapabilityTier::Strict] {
+                for requested in [
+                    CapabilityTier::None,
+                    CapabilityTier::Light,
+                    CapabilityTier::Strict,
+                ] {
                     let p = decide_probe(requested, landlock_ok, user_ns_ok);
                     if let CapabilityProbe::Available { tier, .. } = p {
                         assert!(

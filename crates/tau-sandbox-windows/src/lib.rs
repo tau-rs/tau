@@ -97,8 +97,10 @@ impl CapabilityGate for WindowsSandbox {
             }
         }
         if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
-                message: format!("host validation: {e}"),
+            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| {
+                CapabilityError::Proxy {
+                    message: format!("host validation: {e}"),
+                }
             })?;
         }
         Ok(())
@@ -163,10 +165,11 @@ async fn wrap_spawn_windows(
     // Generate a unique AppContainer profile name + SID per spawn.
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
     let profile_name = format!("tau-sandbox-{}-{}", std::process::id(), counter);
-    let app_sid =
-        acl::create_appcontainer_profile(&profile_name).map_err(|e| CapabilityError::WrapFailed {
+    let app_sid = acl::create_appcontainer_profile(&profile_name).map_err(|e| {
+        CapabilityError::WrapFailed {
             message: format!("create_appcontainer_profile: {e}"),
-        })?;
+        }
+    })?;
 
     // Grant ACLs on plan-specified paths to the AppContainer SID.
     let mut granted_paths: Vec<(String, acl::AccessKind)> = Vec::new();

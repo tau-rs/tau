@@ -7,7 +7,7 @@
 //! [`crate::sandbox::validate_plan_against_adapter`].
 
 use tau_domain::Capability;
-use tau_ports::{ResourceLimits, CapabilityPlan, WorkingContext};
+use tau_ports::{CapabilityPlan, ResourceLimits, WorkingContext};
 
 use crate::capability_override::{CapabilityOverride, OverrideExpandError};
 

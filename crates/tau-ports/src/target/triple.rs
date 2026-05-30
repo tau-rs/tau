@@ -2,9 +2,9 @@
 //! tau deployment targets. See ADR-0034 + spec
 //! `2026-05-19-target-triple-registry-design.md`.
 
-use alloc::string::ToString;
 #[cfg(feature = "serde")]
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
@@ -69,9 +69,8 @@ impl TargetTriple {
             crate::target::platform::Platform::Windows
         } else {
             panic!(
-                "tau has no native adapter for target_os={}; \
-                 add an entry to the target registry first",
-                std::env::consts::OS,
+                "tau has no native adapter for this host target_os; \
+                 add an entry to the target registry first"
             );
         };
         TargetTriple {

@@ -633,7 +633,8 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan =
+            serde_json::from_value(plan_json).expect("valid plan");
 
         let mut cmd = Command::new("/bin/true");
         let handle = apply_strict(&plan, &mut cmd)
@@ -712,7 +713,8 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan =
+            serde_json::from_value(plan_json).expect("valid plan");
 
         let mut cmd = Command::new("/bin/true");
         // Hard requirement under #[ignore]: callers that opt in via
@@ -746,7 +748,8 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan =
+            serde_json::from_value(plan_json).expect("valid plan");
 
         let mut cmd = Command::new("/bin/true");
         apply_strict(&plan, &mut cmd).expect("apply_strict on empty plan");

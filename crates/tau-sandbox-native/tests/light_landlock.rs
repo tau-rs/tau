@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use tau_domain::fixtures::cap_fs_read;
 use tau_ports::fixtures::plan_from_capabilities;
-use tau_ports::{Sandbox, SandboxPlan, SandboxTier};
+use tau_ports::{CapabilityGate, ProcessCapabilityGate, CapabilityPlan, CapabilityTier};
 use tau_sandbox_native::NativeSandbox;
 use tempfile::TempDir;
 
@@ -38,12 +38,12 @@ fn locate_controlled_env_bin() -> PathBuf {
     bin
 }
 
-/// Build a SandboxPlan with read access to the given paths PLUS the
+/// Build a CapabilityPlan with read access to the given paths PLUS the
 /// controlled-env binary's parent directory. Without the binary's
 /// parent in the read paths, landlock blocks exec of the binary itself
 /// (EACCES on spawn) since the standard system_read_paths in
 /// `tau-sandbox-native::light` only includes /bin, /usr/bin, /lib, etc.
-fn plan_with_read_paths(paths: Vec<&str>) -> SandboxPlan {
+fn plan_with_read_paths(paths: Vec<&str>) -> CapabilityPlan {
     let bin = locate_controlled_env_bin();
     let bin_parent = bin
         .parent()
@@ -69,7 +69,7 @@ async fn allowed_read_succeeds() {
     cmd.env("TAU_FIXTURE_MODE", "read")
         .env("TAU_FIXTURE_INPUT_PATH", &allowed);
 
-    let sandbox = NativeSandbox::new("test-light", SandboxTier::Light);
+    let sandbox = NativeSandbox::new("test-light", CapabilityTier::Light);
     let _handle = sandbox
         .wrap_spawn(&plan, &mut cmd)
         .await
@@ -105,7 +105,7 @@ async fn blocked_read_returns_eacces() {
     cmd.env("TAU_FIXTURE_MODE", "read")
         .env("TAU_FIXTURE_INPUT_PATH", &blocked_file);
 
-    let sandbox = NativeSandbox::new("test-light", SandboxTier::Light);
+    let sandbox = NativeSandbox::new("test-light", CapabilityTier::Light);
     let _handle = sandbox
         .wrap_spawn(&plan, &mut cmd)
         .await
@@ -145,7 +145,7 @@ async fn multiple_paths_all_landlocked() {
     cmd.env("TAU_FIXTURE_MODE", "read")
         .env("TAU_FIXTURE_INPUT_PATH", &file_b);
 
-    let sandbox = NativeSandbox::new("test-light", SandboxTier::Light);
+    let sandbox = NativeSandbox::new("test-light", CapabilityTier::Light);
     let _handle = sandbox
         .wrap_spawn(&plan, &mut cmd)
         .await

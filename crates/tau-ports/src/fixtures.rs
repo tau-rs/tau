@@ -754,7 +754,9 @@ mod sandbox_v01_tests {
         use std::sync::Arc;
         let flag = Arc::new(AtomicBool::new(false));
         let f = flag.clone();
-        drop(CapabilityHandle::new(move || f.store(true, Ordering::SeqCst)));
+        drop(CapabilityHandle::new(move || {
+            f.store(true, Ordering::SeqCst)
+        }));
         assert!(
             flag.load(Ordering::SeqCst),
             "cleanup closure must run on drop"
@@ -808,8 +810,8 @@ mod sandbox_v01_tests {
 #[cfg(all(test, feature = "process"))]
 mod process_tests {
     use super::*;
-    use alloc::vec;
     use crate::ProcessCapabilityGate;
+    use alloc::vec;
 
     #[tokio::test]
     async fn wrap_spawn_is_noop_when_plan_validates() {

@@ -38,7 +38,7 @@ use tau_domain::{
 use tau_pkg::LockedPlugin;
 use tau_ports::fixtures::scratch_dir;
 use tau_ports::{
-    CompletionRequest, ContentBlock, LlmProviderMessage, SandboxPlan, SandboxProbe, SessionContext,
+    CompletionRequest, ContentBlock, LlmProviderMessage, CapabilityPlan, CapabilityProbe, SessionContext,
 };
 use tau_runtime::sandbox::registry::RegistryKind;
 use tau_runtime::sandbox::resolve_adapter_forced;
@@ -98,7 +98,7 @@ fn locate_plugin_bin(bin_name: &str) -> PathBuf {
 ///
 /// `tau_sandbox_native::strict::wrap_spawn` rewrites
 /// `Command::new(plugin_bin)` to `Command::new(<bridge>)` whenever the
-/// `SandboxPlan` contains `Network(Http)`, where `<bridge>` is read from
+/// `CapabilityPlan` contains `Network(Http)`, where `<bridge>` is read from
 /// the `TAU_NET_BRIDGE_PATH` env var (with a bare `tau-net-bridge` PATH
 /// fallback). Cargo only auto-populates `CARGO_BIN_EXE_tau-net-bridge`
 /// for tests in the crate that owns the bin target
@@ -209,7 +209,7 @@ async fn resolve_native_adapter() -> tau_runtime::sandbox::SandboxAdapter {
         .await
         .expect("native adapter must resolve (requires Linux + landlock/seccomp)");
     assert!(
-        !matches!(adapter.probe().await, SandboxProbe::Unavailable { .. }),
+        !matches!(adapter.probe().await, CapabilityProbe::Unavailable { .. }),
         "native adapter probe returned Unavailable (requires Linux + landlock/seccomp)"
     );
     adapter
@@ -247,13 +247,13 @@ async fn shell_layer4_native_runs_echo_hello() {
     // 2. Resolve the native sandbox adapter (Linux + landlock/seccomp required).
     let adapter = resolve_native_adapter().await;
 
-    // 3. Build the SandboxPlan.  Shell plugin needs process.spawn capability
+    // 3. Build the CapabilityPlan.  Shell plugin needs process.spawn capability
     //    so the native adapter allows exec(echo). The tempdir itself doesn't
     //    need fs.read -- we're just executing a binary.
     //
     let spawn_cap: Capability = domain_fixtures::cap_process_spawn(&["echo"]);
 
-    let plan = SandboxPlan::new(vec![spawn_cap.clone()], None, None);
+    let plan = CapabilityPlan::new(vec![spawn_cap.clone()], None, None);
 
     // 4. Synthesise a LockedPlugin for the shell binary.
     let plugin = make_locked_plugin("shell-plugin", bin_path);
@@ -317,7 +317,7 @@ async fn shell_layer4_native_runs_echo_hello() {
 /// `fs_read.call({path: <data.txt>})`, and assert the content is read back.
 ///
 /// This exercises:
-/// - `resolve_adapter_forced(RegistryKind::Native)` + `SandboxPlan` with
+/// - `resolve_adapter_forced(RegistryKind::Native)` + `CapabilityPlan` with
 ///   `FsCapability::Read` allowing the tempdir.
 /// - The native adapter's landlock enforcement for file reads.
 /// - Task 3's symlink-resolution fix: `/tmp` may be a symlink on Ubuntu.
@@ -357,7 +357,7 @@ async fn fs_read_layer4_native_reads_data_file() {
     if !extras.is_empty() {
         caps.push(domain_fixtures::cap_fs_read(extras));
     }
-    let plan = SandboxPlan::new(caps, None, None);
+    let plan = CapabilityPlan::new(caps, None, None);
 
     // 4. Synthesise a LockedPlugin for the fs-read binary.
     let plugin = make_locked_plugin("fs-read-plugin", bin_path);
@@ -540,10 +540,10 @@ async fn anthropic_layer4_native_completes_via_cassette() {
     let cassette_server = tau_plugin_test_support::cassette::replay(&cassette_path).await;
     let api_base = cassette_server.uri().to_string();
 
-    // 4. Build the SandboxPlan with Network(Http) capability for localhost so
+    // 4. Build the CapabilityPlan with Network(Http) capability for localhost so
     //    the sandboxed plugin process can reach the cassette server.
     let net_cap = make_net_http_localhost_cap();
-    let plan = SandboxPlan::new(vec![net_cap], None, None);
+    let plan = CapabilityPlan::new(vec![net_cap], None, None);
 
     // 5. Synthesise a LockedPlugin for the anthropic binary (LlmBackend port).
     let plugin = make_llm_locked_plugin("anthropic-plugin", bin_path);
@@ -635,9 +635,9 @@ async fn ollama_layer4_native_completes_via_cassette() {
     let cassette_server = tau_plugin_test_support::cassette::replay(&cassette_path).await;
     let api_base = cassette_server.uri().to_string();
 
-    // 4. Build the SandboxPlan with Network(Http) for localhost.
+    // 4. Build the CapabilityPlan with Network(Http) for localhost.
     let net_cap = make_net_http_localhost_cap();
-    let plan = SandboxPlan::new(vec![net_cap], None, None);
+    let plan = CapabilityPlan::new(vec![net_cap], None, None);
 
     // 5. Synthesise the LockedPlugin (LlmBackend port).
     let plugin = make_llm_locked_plugin("ollama-plugin", bin_path);
@@ -725,9 +725,9 @@ async fn openai_layer4_native_completes_via_cassette() {
     let cassette_server = tau_plugin_test_support::cassette::replay(&cassette_path).await;
     let api_base = cassette_server.uri().to_string();
 
-    // 4. Build the SandboxPlan with Network(Http) for localhost.
+    // 4. Build the CapabilityPlan with Network(Http) for localhost.
     let net_cap = make_net_http_localhost_cap();
-    let plan = SandboxPlan::new(vec![net_cap], None, None);
+    let plan = CapabilityPlan::new(vec![net_cap], None, None);
 
     // 5. Synthesise the LockedPlugin (LlmBackend port).
     let plugin = make_llm_locked_plugin("openai-plugin", bin_path);

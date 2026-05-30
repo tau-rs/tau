@@ -89,8 +89,10 @@ impl CapabilityGate for DarwinSandbox {
             }
         }
         if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
-                message: format!("host validation: {e}"),
+            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| {
+                CapabilityError::Proxy {
+                    message: format!("host validation: {e}"),
+                }
             })?;
         }
         Ok(())

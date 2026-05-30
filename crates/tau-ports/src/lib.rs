@@ -21,18 +21,24 @@ extern crate alloc;
 #[cfg(any(test, feature = "test-fixtures", feature = "process"))]
 extern crate std;
 
+pub mod capability_gate;
 pub mod error;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
 pub mod llm;
 pub mod orchestration;
-pub mod capability_gate;
+pub mod random;
 pub mod storage;
 pub mod target;
-pub mod random;
 pub mod time;
 pub mod tool;
 
+#[cfg(feature = "process")]
+pub use capability_gate::process::ProcessCapabilityGate;
+pub use capability_gate::{
+    CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
+    ResourceLimits, WorkingContext,
+};
 pub use error::{CapabilityError, KeyError, LlmError, NamespaceError, StorageError, ToolError};
 pub use llm::{
     batch_to_stream, stream_to_batch, CompletionChunk, CompletionRequest, CompletionResponse,
@@ -43,21 +49,15 @@ pub use orchestration::{
     AgentId, RunBudget, RunId, RunSnapshot, RunStatus, Task, TaskEvent, TaskId, TaskListFilter,
     TaskStatus, TraceEvent, TraceEventKind,
 };
-pub use capability_gate::{
-    CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
-    ResourceLimits, WorkingContext,
-};
-#[cfg(feature = "process")]
-pub use capability_gate::process::ProcessCapabilityGate;
-pub use tau_domain::CapabilityShapeSet;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use random::DeterministicRandom;
+pub use random::RandomSource;
 pub use storage::{Key, Namespace, Storage};
 pub use target::{
     AdapterFamily, ParseError as TargetParseError, Platform, TargetCapabilityProfile, TargetTriple,
     TargetTripleEntry, TripleStatus,
 };
-pub use random::RandomSource;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use random::DeterministicRandom;
+pub use tau_domain::CapabilityShapeSet;
 pub use time::Clock;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use time::MockClock;

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use tau_domain::fixtures::cap_fs_read;
 use tau_ports::fixtures::plan_from_capabilities;
-use tau_ports::{Sandbox, SandboxPlan, SandboxTier};
+use tau_ports::{CapabilityGate, ProcessCapabilityGate, CapabilityPlan, CapabilityTier};
 use tau_sandbox_native::NativeSandbox;
 
 fn locate_controlled_env_bin() -> PathBuf {
@@ -33,7 +33,7 @@ fn bin_parent_str() -> String {
         .into_owned()
 }
 
-fn plan_strict_no_network() -> SandboxPlan {
+fn plan_strict_no_network() -> CapabilityPlan {
     let bin_parent = bin_parent_str();
     plan_from_capabilities(vec![cap_fs_read(&[&bin_parent])])
 }
@@ -45,7 +45,7 @@ async fn socket_blocked_without_network_capability() {
     let mut cmd = Command::new(locate_controlled_env_bin());
     cmd.env("TAU_FIXTURE_MODE", "open-socket");
 
-    let sandbox = NativeSandbox::new("test-strict", SandboxTier::Strict);
+    let sandbox = NativeSandbox::new("test-strict", CapabilityTier::Strict);
     let _handle = sandbox
         .wrap_spawn(&plan, &mut cmd)
         .await
@@ -80,7 +80,7 @@ async fn baseline_syscalls_allowed() {
 
     let mut cmd = Command::new(locate_controlled_env_bin());
 
-    let sandbox = NativeSandbox::new("test-strict", SandboxTier::Strict);
+    let sandbox = NativeSandbox::new("test-strict", CapabilityTier::Strict);
     let _handle = sandbox
         .wrap_spawn(&plan, &mut cmd)
         .await

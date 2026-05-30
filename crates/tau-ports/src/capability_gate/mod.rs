@@ -224,7 +224,10 @@ mod tests {
                 self.0.lock().unwrap().push(self.1);
             }
         }
-        handle.nest_handle(alloc::boxed::Box::new(Guard(Arc::clone(&order), "first_nested")));
+        handle.nest_handle(alloc::boxed::Box::new(Guard(
+            Arc::clone(&order),
+            "first_nested",
+        )));
         handle.nest_handle(alloc::boxed::Box::new(Guard(
             Arc::clone(&order),
             "second_nested",

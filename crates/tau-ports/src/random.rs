@@ -59,7 +59,10 @@ impl DeterministicRandom {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
-            match self.state.compare_exchange_weak(s, x, Ordering::Relaxed, Ordering::Relaxed) {
+            match self
+                .state
+                .compare_exchange_weak(s, x, Ordering::Relaxed, Ordering::Relaxed)
+            {
                 Ok(_) => return x.wrapping_mul(0x2545F4914F6CDD1D),
                 Err(actual) => s = actual,
             }

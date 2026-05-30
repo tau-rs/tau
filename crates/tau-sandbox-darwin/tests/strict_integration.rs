@@ -10,10 +10,10 @@ use std::process::{Command, Stdio};
 
 use serde_json::json;
 
-use tau_ports::{Sandbox, SandboxPlan, SandboxProbe};
+use tau_ports::{CapabilityGate, ProcessCapabilityGate, CapabilityPlan, CapabilityProbe};
 use tau_sandbox_darwin::DarwinSandbox;
 
-fn make_plan(value: serde_json::Value) -> SandboxPlan {
+fn make_plan(value: serde_json::Value) -> CapabilityPlan {
     let plan_json = json!({
         "capabilities": value,
         "context": null,
@@ -27,7 +27,7 @@ async fn probe_returns_available_on_macos() {
     let s = DarwinSandbox::new("darwin");
     let probe = s.probe().await;
     assert!(
-        matches!(probe, SandboxProbe::Available { .. }),
+        matches!(probe, CapabilityProbe::Available { .. }),
         "expected Available, got {probe:?}"
     );
 }
