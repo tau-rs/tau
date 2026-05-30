@@ -20,3 +20,15 @@ fn capability_gate_traits_exist() {
     let _ = core::any::TypeId::of::<CapabilityProbe>();
     let _ = core::any::TypeId::of::<CapabilityShapeSet>();
 }
+
+#[test]
+fn mock_clock_is_monotonic() {
+    use tau_ports::{Clock, MockClock};
+
+    let clock = MockClock::default();
+    let a = clock.now();
+    let b = clock.now();
+    let c = clock.now();
+    assert!(b > a);
+    assert!(c > b);
+}

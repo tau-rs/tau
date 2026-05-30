@@ -29,6 +29,7 @@ pub mod orchestration;
 pub mod capability_gate;
 pub mod storage;
 pub mod target;
+pub mod time;
 pub mod tool;
 
 pub use error::{CapabilityError, KeyError, LlmError, NamespaceError, StorageError, ToolError};
@@ -53,6 +54,9 @@ pub use target::{
     AdapterFamily, ParseError as TargetParseError, Platform, TargetCapabilityProfile, TargetTriple,
     TargetTripleEntry, TripleStatus,
 };
+pub use time::Clock;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use time::MockClock;
 pub use tool::{
     DenyEntry, SessionContext, StatelessAdapter, StatelessTool, Tool, ToolContent, ToolResult,
 };
