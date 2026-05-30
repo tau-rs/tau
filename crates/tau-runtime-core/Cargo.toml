@@ -1,0 +1,39 @@
+[package]
+name = "tau-runtime-core"
+description = "Executor-agnostic kernel of tau. no_std + alloc. Host shells (tau-runtime-tokio, tau-runtime-embassy) drive this on their executor."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+tau-domain   = { workspace = true, default-features = false, features = ["serde"] }
+tau-ports    = { workspace = true, default-features = false, features = ["serde"] }
+thiserror    = { workspace = true, default-features = false }
+serde        = { workspace = true, default-features = false, features = ["alloc", "derive"] }
+chrono       = { workspace = true, default-features = false, features = ["alloc", "serde"] }
+hashbrown    = { workspace = true }
+foldhash     = { workspace = true }
+futures-core = { workspace = true, default-features = false, features = ["alloc"] }
+tracing      = { workspace = true, default-features = false, features = ["attributes"] }
+
+[features]
+# `process` makes ProcessCapabilityGate wire-up available; pulled in via
+# tau-ports' `process` feature. Host shells (tau-runtime-tokio) keep this on.
+process            = ["tau-ports/process"]
+# `capability-override` enables the glob-narrowing module (globset is std-only).
+capability-override = []
+# `tool-validation` enables ADR-0010 jsonschema-based tool args validation
+# (jsonschema is std-only).
+tool-validation    = []
+# `host-fs` enables code paths that consume std::path::PathBuf scope-roots
+# and read skill markdown via std::fs. Embassy ships without this feature.
+host-fs            = []
+
+default = ["process", "capability-override", "tool-validation", "host-fs"]
+
+[dev-dependencies]
+# Empty for Task 3.1; Task 3.8 adds futures-executor + tau-domain test-fixtures
+# for the smoke test.

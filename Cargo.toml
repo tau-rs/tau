@@ -6,6 +6,7 @@ members = [
     "crates/tau-infra",
     "crates/tau-app",
     "crates/tau-pkg",
+    "crates/tau-runtime-core",
     "crates/tau-observe",
     "crates/tau-runtime",
     "crates/tau-cli",
@@ -78,7 +79,9 @@ rstest          = "0.26"
 walkdir         = "2"
 globset         = "0.4"
 jsonschema      = "0.46"
+foldhash     = { version = "0.1", default-features = false }
 futures-core    = "0.3"
+hashbrown    = { version = "0.15", default-features = false, features = ["default-hasher"] }
 toml            = "1.1"
 fs4             = "0.8"
 humantime-serde = "1"
