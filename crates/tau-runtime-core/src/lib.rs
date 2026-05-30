@@ -29,6 +29,7 @@ pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime
 pub mod capability;
 pub mod dispatch;
 pub mod options;
+pub mod orchestration;
 pub mod outcome;
 
 #[cfg(feature = "tool-validation")]

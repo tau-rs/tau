@@ -3528,15 +3528,18 @@ dependencies = [
 name = "tau-runtime-core"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "chrono",
  "foldhash 0.1.5",
  "futures-core",
+ "globset",
  "hashbrown 0.15.5",
  "jsonschema",
  "proptest",
  "serde",
  "serde_json",
  "tau-domain",
+ "tau-pkg",
  "tau-ports",
  "thiserror 2.0.18",
  "toml",

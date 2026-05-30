@@ -1079,12 +1079,14 @@ pub(crate) fn run_streaming_inner(
                             }
                         } else {
                             let dispatch_res = {
+                                let dispatch_now = chrono::Utc::now();
                                 let mut state = state_arc.lock().await;
                                 crate::orchestration::dispatch(
                                     &tool_use.name,
                                     args_json,
                                     &agent_id_str,
                                     &mut state,
+                                    dispatch_now,
                                 )
                             };
                             match dispatch_res {

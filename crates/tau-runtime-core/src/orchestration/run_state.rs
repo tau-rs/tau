@@ -4,7 +4,9 @@
 //! counters. Threaded through every virtual-tool call. One RunState
 //! exists per Run; the runtime kernel owns it for the run's lifetime.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use alloc::string::String;
 
 use chrono::{DateTime, Utc};
 use tau_ports::{RunBudget, RunId, RunStatus};
@@ -17,7 +19,7 @@ use crate::orchestration::{TaskList, TraceStream};
 ///
 /// ```
 /// use chrono::Utc;
-/// use tau_runtime::orchestration::run_state::RunState;
+/// use tau_runtime_core::orchestration::run_state::RunState;
 /// use tau_ports::{RunBudget, RunStatus};
 ///
 /// let state = RunState::new("run-1".into(), "root-agent".into(), RunBudget::default(), Utc::now());
@@ -57,7 +59,7 @@ impl RunState {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_runtime_core::orchestration::run_state::RunState;
     /// use tau_ports::{RunBudget, RunStatus};
     ///
     /// let state = RunState::new(
@@ -97,7 +99,7 @@ impl RunState {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_runtime_core::orchestration::run_state::RunState;
     /// use tau_ports::RunBudget;
     ///
     /// let mut state = RunState::new("r".into(), "a".into(), RunBudget::default(), Utc::now());
@@ -124,7 +126,7 @@ impl RunState {
     /// ```
     /// use chrono::Utc;
     /// use std::sync::atomic::Ordering;
-    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_runtime_core::orchestration::run_state::RunState;
     /// use tau_ports::RunBudget;
     ///
     /// let state = RunState::new("r".into(), "a".into(), RunBudget::default(), Utc::now());
@@ -143,7 +145,7 @@ impl RunState {
     /// ```
     /// use chrono::Utc;
     /// use std::sync::atomic::Ordering;
-    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_runtime_core::orchestration::run_state::RunState;
     /// use tau_ports::RunBudget;
     ///
     /// let state = RunState::new("r".into(), "a".into(), RunBudget::default(), Utc::now());
@@ -161,7 +163,7 @@ impl RunState {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::run_state::RunState;
+    /// use tau_runtime_core::orchestration::run_state::RunState;
     /// use tau_ports::{RunBudget, RunStatus};
     ///
     /// let state = RunState::new("run-1".into(), "supervisor".into(), RunBudget::default(), Utc::now());
@@ -185,6 +187,16 @@ impl RunState {
             started_at: self.started_at,
             ended_at: self.ended_at,
         }
+    }
+}
+
+// TraceStream doesn't impl Debug automatically because Arc<dyn TraceSubscriber>
+// doesn't implement Debug; provide a manual impl.
+impl core::fmt::Debug for TraceStream {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TraceStream")
+            .field("subscriber_count", &self.subscriber_count())
+            .finish()
     }
 }
 

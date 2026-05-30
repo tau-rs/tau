@@ -4,6 +4,8 @@
 //! boundary + after each tool result. On breach, returns
 //! `BudgetExceeded` — the caller is responsible for aborting agents.
 
+use core::sync::atomic::Ordering;
+
 use chrono::{DateTime, Utc};
 
 use crate::orchestration::error::OrchestrationError;
@@ -15,8 +17,8 @@ use crate::orchestration::run_state::RunState;
 ///
 /// ```
 /// use chrono::Utc;
-/// use tau_runtime::orchestration::budget::BudgetWatchdog;
-/// use tau_runtime::orchestration::run_state::RunState;
+/// use tau_runtime_core::orchestration::budget::BudgetWatchdog;
+/// use tau_runtime_core::orchestration::run_state::RunState;
 /// use tau_ports::RunBudget;
 ///
 /// let state = RunState::new("run-1".into(), "agent-1".into(), RunBudget::default(), Utc::now());
@@ -38,9 +40,9 @@ impl BudgetWatchdog {
     ///
     /// ```
     /// use chrono::Utc;
-    /// use tau_runtime::orchestration::budget::BudgetWatchdog;
-    /// use tau_runtime::orchestration::run_state::RunState;
-    /// use tau_runtime::orchestration::error::OrchestrationError;
+    /// use tau_runtime_core::orchestration::budget::BudgetWatchdog;
+    /// use tau_runtime_core::orchestration::run_state::RunState;
+    /// use tau_runtime_core::orchestration::error::OrchestrationError;
     /// use tau_ports::RunBudget;
     ///
     /// let state = RunState::new(
@@ -58,7 +60,7 @@ impl BudgetWatchdog {
     /// ```
     pub fn tick(&self, state: &RunState, now: DateTime<Utc>) -> Result<(), OrchestrationError> {
         if let Some(limit) = state.budget.max_total_tokens {
-            let used = state.tokens_used.load(std::sync::atomic::Ordering::Relaxed);
+            let used = state.tokens_used.load(Ordering::Relaxed);
             if used > limit {
                 return Err(OrchestrationError::BudgetExceeded {
                     budget: "max_total_tokens".into(),
@@ -78,9 +80,7 @@ impl BudgetWatchdog {
             }
         }
         if let Some(limit) = state.budget.max_total_agents {
-            let spawned = state
-                .agents_spawned
-                .load(std::sync::atomic::Ordering::Relaxed);
+            let spawned = state.agents_spawned.load(Ordering::Relaxed);
             if spawned > limit {
                 return Err(OrchestrationError::BudgetExceeded {
                     budget: "max_total_agents".into(),

@@ -1,40 +1,40 @@
 //! Multi-agent orchestration primitives.
 //!
-//! Implements the v1 primitive set defined in
-//! `docs/superpowers/specs/2026-05-12-multi-agent-orchestration-design.md`
-//! and ratified in `docs/decisions/0023-multi-agent-orchestration.md`:
-//!
-//! - [`task_list`] — `TaskList` state with atomic CAS lock + lease + heartbeat.
-//! - [`trace`] — `TraceStream` with mpsc fan-out subscribers.
-//! - [`run_state`] — per-run mutable state (`RunState`).
-//! - [`virtual_tools`] — resolver intercepting `task.*`, `run.*`, and
-//!   `agent.<kind>.spawn` before plugin dispatch.
-//! - [`budget`] — budget breach detection.
-//! - [`persistence`] — JSONL run-log writer.
-//! - [`error`] — typed errors.
-//!
-//! The kernel entry point is `Runtime::spawn_root_agent` (declared in
-//! `crate::run`).
+//! Core types live in `tau-runtime-core::orchestration` and are re-exported
+//! here. Tokio-shell-specific pieces (persistence, mpsc trace subscriber)
+//! remain local.
 
-pub mod budget;
-pub mod error;
-pub mod persistence;
-pub mod run_state;
-pub mod skill_resolve;
-pub mod task_list;
-pub mod trace;
-pub mod virtual_tools;
+// ── Re-exports from core ─────────────────────────────────────────────────────
+pub use tau_runtime_core::orchestration::budget;
+pub use tau_runtime_core::orchestration::error;
+pub use tau_runtime_core::orchestration::run_state;
+pub use tau_runtime_core::orchestration::skill_resolve;
+pub use tau_runtime_core::orchestration::task_list;
+pub use tau_runtime_core::orchestration::trace;
+pub use tau_runtime_core::orchestration::virtual_tools;
 
-pub use budget::BudgetWatchdog;
-pub use error::OrchestrationError;
-pub use run_state::RunState;
-pub use skill_resolve::{
-    apply_scope_paths, resolve_skill_for_spawn, substitute_skill_dir, SkillSpawnArgs,
-    SkillSpawnRequest,
+pub use tau_runtime_core::orchestration::BudgetWatchdog;
+pub use tau_runtime_core::orchestration::OrchestrationError;
+pub use tau_runtime_core::orchestration::RunState;
+pub use tau_runtime_core::orchestration::{
+    apply_scope_paths, substitute_skill_dir, SkillSpawnArgs, SkillSpawnRequest,
 };
-pub use task_list::TaskList;
-pub use trace::{TraceStream, TraceSubscriber};
-pub use virtual_tools::{
+pub use tau_runtime_core::orchestration::TaskList;
+pub use tau_runtime_core::orchestration::{NoopTraceSubscriber, TraceStream, TraceSubscriber};
+pub use tau_runtime_core::orchestration::{
     check_capability_subset, dispatch, is_virtual, required_capability, validate_agent_spawn,
     validate_skill_spawn, AgentSpawnRequest,
 };
+pub use tau_runtime_core::orchestration::resolve_skill_for_spawn;
+
+// ── Tokio-shell-specific ─────────────────────────────────────────────────────
+
+/// JSONL run-log writer (tokio::fs + tokio::spawn).
+/// Stays in tau-runtime — uses tokio::sync::mpsc::UnboundedReceiver, tokio::fs,
+/// and tokio::spawn which are not available in embassy/wasm shells.
+pub mod persistence;
+
+/// Tokio mpsc implementation of TraceSubscriber.
+/// Wraps tokio::sync::mpsc::UnboundedSender<TraceEvent> to implement the
+/// core TraceSubscriber trait.
+pub mod trace_mpsc;

@@ -11,8 +11,10 @@ authors.workspace      = true
 [dependencies]
 tau-domain   = { workspace = true, default-features = false, features = ["serde"] }
 tau-ports    = { workspace = true, default-features = false, features = ["serde"] }
+tau-pkg      = { workspace = true }
 thiserror    = { workspace = true, default-features = false }
 serde        = { workspace = true, default-features = false, features = ["alloc", "derive"] }
+serde_json   = { workspace = true }
 chrono       = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 hashbrown    = { workspace = true }
 foldhash     = { workspace = true }
@@ -23,10 +25,11 @@ uuid         = { workspace = true, features = ["v4"] }
 ulid         = { workspace = true, default-features = false }
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 tracing      = { workspace = true, default-features = false, features = ["attributes"] }
+# Glob matching for skill_resolve::apply_scope_paths (skill capability narrowing).
+globset      = { workspace = true }
 # Optional: used by the `tool-validation` feature (jsonschema-based tool
 # args pre-compilation). Both are std-only so they gate behind the feature.
 jsonschema   = { workspace = true, optional = true }
-serde_json   = { workspace = true, optional = true }
 
 [features]
 # `process` makes ProcessCapabilityGate wire-up available; pulled in via
@@ -36,7 +39,7 @@ process            = ["tau-ports/process"]
 capability-override = []
 # `tool-validation` enables ADR-0010 jsonschema-based tool args validation
 # (jsonschema is std-only).
-tool-validation    = ["dep:jsonschema", "dep:serde_json"]
+tool-validation    = ["dep:jsonschema"]
 # `host-fs` enables code paths that consume std::path::PathBuf scope-roots
 # and read skill markdown via std::fs. Embassy ships without this feature.
 host-fs            = []
@@ -48,9 +51,10 @@ test-fixtures = ["tau-ports/test-fixtures"]
 [dev-dependencies]
 # toml + proptest: used by capability.rs unit/property tests (Task 3.3).
 # futures-executor: added in Task 3.8 for the smoke test.
-toml       = { workspace = true }
-proptest   = { workspace = true }
-tau-domain = { workspace = true, features = ["test-fixtures"] }
+toml           = { workspace = true }
+proptest       = { workspace = true }
+assert_matches = { workspace = true }
+tau-domain     = { workspace = true, features = ["test-fixtures"] }
 # test-fixtures enables MockLlmBackend, MockTool, MockStorage for builder tests.
-tau-ports  = { workspace = true, features = ["test-fixtures"] }
-serde_json = { workspace = true }
+tau-ports      = { workspace = true, features = ["test-fixtures"] }
+serde_json     = { workspace = true }

@@ -324,10 +324,10 @@ impl Runtime {
             now,
         );
 
-        // Subscribe a JSONL writer before wrapping state in Arc<Mutex<>>.
+        // Subscribe a JSONL writer via the tokio mpsc subscriber.
         let log_path = crate::orchestration::persistence::run_log_path(&scope_root, &run_id);
-        let writer_rx = state.trace.subscribe();
-        let _writer_handle = crate::orchestration::persistence::spawn_writer(log_path, writer_rx);
+        let subscriber = crate::orchestration::trace_mpsc::channel_with_writer(log_path);
+        state.trace.add_subscriber(subscriber);
 
         let state_arc = Arc::new(Mutex::new(state));
 

@@ -9,6 +9,10 @@
 //! - [`resolve_skill_for_spawn`] — end-to-end: lookup + substitute +
 //!   scope + subset check. Returns a `SkillSpawnRequest` ready for
 //!   the existing v1.1 spawn machinery.
+//!   **Requires the `host-fs` feature** (reads SKILL.md via `std::fs`).
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use std::path::Path;
 
@@ -29,7 +33,7 @@ use crate::orchestration::virtual_tools::check_capability_subset;
 ///
 /// ```
 /// use std::path::PathBuf;
-/// use tau_runtime::orchestration::skill_resolve::SkillSpawnRequest;
+/// use tau_runtime_core::orchestration::skill_resolve::SkillSpawnRequest;
 ///
 /// // Demonstrate field access (in practice, SkillSpawnRequest is produced
 /// // by resolve_skill_for_spawn, not constructed directly).
@@ -63,7 +67,7 @@ pub struct SkillSpawnRequest {
 /// # Example
 ///
 /// ```
-/// use tau_runtime::orchestration::skill_resolve::SkillSpawnArgs;
+/// use tau_runtime_core::orchestration::skill_resolve::SkillSpawnArgs;
 ///
 /// let args = SkillSpawnArgs {
 ///     message: "Summarise this document.".into(),
@@ -93,7 +97,7 @@ pub struct SkillSpawnArgs {
 /// ```
 /// use std::path::Path;
 /// use tau_domain::{Capability, FsCapability, SKILL_DIR_VAR};
-/// use tau_runtime::orchestration::skill_resolve::substitute_skill_dir;
+/// use tau_runtime_core::orchestration::skill_resolve::substitute_skill_dir;
 ///
 /// let cap: Capability = serde_json::from_value(serde_json::json!({
 ///     "kind": "fs.read",
@@ -151,8 +155,6 @@ pub fn substitute_skill_dir(caps: &[Capability], install_path: &Path) -> Vec<Cap
 fn glob_covers(glob: &str, candidate: &str) -> bool {
     // Strip ${SKILL_DIR} prefix if both sides have it — globset's
     // `{` char would otherwise be parsed as alternation.
-    // (Caller passes substituted paths, but this helper is reused
-    // from skill_check's pattern in Skills-2 for safety.)
     match GlobBuilder::new(glob).literal_separator(false).build() {
         Ok(g) => g.compile_matcher().is_match(candidate),
         Err(_) => false,
@@ -171,7 +173,7 @@ fn glob_covers(glob: &str, candidate: &str) -> bool {
 ///
 /// ```
 /// use tau_domain::Capability;
-/// use tau_runtime::orchestration::skill_resolve::apply_scope_paths;
+/// use tau_runtime_core::orchestration::skill_resolve::apply_scope_paths;
 ///
 /// let cap: Capability = serde_json::from_value(serde_json::json!({
 ///     "kind": "fs.read", "paths": ["/workspace/**"]
@@ -279,6 +281,12 @@ pub fn apply_scope_paths(
 ///
 /// `parent_grant` is the parent agent's effective capability grant —
 /// used for the v1.1 capability subset law.
+///
+/// **Requires the `host-fs` feature**: reads SKILL.md from the
+/// filesystem via `std::fs::read_to_string`. Embassy callers (no fs)
+/// must always supply a `system_prompt` override in `args` and never
+/// reach this function, OR rely on a future no-fs variant.
+#[cfg(feature = "host-fs")]
 pub fn resolve_skill_for_spawn(
     skill_name: &str,
     args: &SkillSpawnArgs,
@@ -311,16 +319,17 @@ pub fn resolve_skill_for_spawn(
         sp.clone()
     } else {
         let skill_md_path = installed.install_path.join(&installed.skill.content);
+        // std::fs::read_to_string — gated by host-fs feature.
         let text = std::fs::read_to_string(&skill_md_path).map_err(|e| {
             OrchestrationError::SkillContentInvalid {
                 name: skill_name.to_string(),
-                detail: format!("reading SKILL.md at {skill_md_path:?}: {e}"),
+                detail: alloc::format!("reading SKILL.md at {skill_md_path:?}: {e}"),
             }
         })?;
         let parsed = tau_domain::parse_skill_md(&text).map_err(|e| {
             OrchestrationError::SkillContentInvalid {
                 name: skill_name.to_string(),
-                detail: format!("parsing SKILL.md: {e}"),
+                detail: alloc::format!("parsing SKILL.md: {e}"),
             }
         })?;
         parsed.body
@@ -351,6 +360,8 @@ pub fn resolve_skill_for_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
+    use alloc::vec;
     use tau_domain::NetCapability;
 
     fn fs_read(paths: Vec<&str>) -> Capability {

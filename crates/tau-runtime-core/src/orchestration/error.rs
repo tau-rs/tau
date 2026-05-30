@@ -1,5 +1,8 @@
 //! Typed errors raised by multi-agent orchestration operations.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use tau_ports::{AgentId, TaskId};
 
 /// Errors surfaced by virtual-tool dispatch + TaskList state transitions.
@@ -7,7 +10,7 @@ use tau_ports::{AgentId, TaskId};
 /// # Example
 ///
 /// ```
-/// use tau_runtime::orchestration::error::OrchestrationError;
+/// use tau_runtime_core::orchestration::error::OrchestrationError;
 ///
 /// let not_found = OrchestrationError::TaskNotFound { task: "99".into() };
 /// assert!(not_found.to_string().contains("99"));
