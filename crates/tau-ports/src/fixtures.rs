@@ -533,18 +533,18 @@ impl Storage for MockStorage {
 }
 
 // ---------------------------------------------------------------------------
-// MockSandbox
+// MockCapabilityGate
 // ---------------------------------------------------------------------------
 
 /// Mock [`CapabilityGate`] adapter for tests. Reports `Available` with `Tier::None`,
 /// supports every known [`CapabilityShape`] except [`CapabilityShape::Custom`],
 /// and enforces nothing (all plans pass validate_plan for known shapes).
-pub struct MockSandbox {
+pub struct MockCapabilityGate {
     name: String,
 }
 
-impl MockSandbox {
-    /// Create a fresh mock sandbox.
+impl MockCapabilityGate {
+    /// Create a fresh mock capability gate.
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -552,7 +552,7 @@ impl MockSandbox {
     }
 }
 
-impl CapabilityGate for MockSandbox {
+impl CapabilityGate for MockCapabilityGate {
     fn name(&self) -> &str {
         &self.name
     }
@@ -583,6 +583,18 @@ impl CapabilityGate for MockSandbox {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "process")]
+impl crate::ProcessCapabilityGate for MockCapabilityGate {
+    async fn wrap_spawn(
+        &self,
+        plan: &CapabilityPlan,
+        _cmd: &mut std::process::Command,
+    ) -> Result<CapabilityHandle, CapabilityError> {
+        self.validate_plan(plan)?;
+        Ok(CapabilityHandle::noop())
     }
 }
 
@@ -685,14 +697,14 @@ mod sandbox_v01_tests {
 
     #[tokio::test]
     async fn mock_probe_is_available() {
-        let mock = MockSandbox::new("mem");
+        let mock = MockCapabilityGate::new("mem");
         let probe = mock.probe().await;
         assert!(matches!(probe, CapabilityProbe::Available { .. }));
     }
 
     #[tokio::test]
     async fn mock_supports_all_known_shapes() {
-        let mock = MockSandbox::new("mem");
+        let mock = MockCapabilityGate::new("mem");
         let supported = mock.supported_shapes();
         assert!(supported.contains(&CapabilityShape::FilesystemRead));
         assert!(supported.contains(&CapabilityShape::FilesystemWrite));
@@ -703,7 +715,7 @@ mod sandbox_v01_tests {
 
     #[tokio::test]
     async fn mock_validate_plan_accepts_known_shape() {
-        let mock = MockSandbox::new("mem");
+        let mock = MockCapabilityGate::new("mem");
         let plan = CapabilityPlan {
             capabilities: vec![read_cap()],
             context: None,
@@ -714,7 +726,7 @@ mod sandbox_v01_tests {
 
     #[tokio::test]
     async fn mock_validate_plan_rejects_custom_shape() {
-        let mock = MockSandbox::new("mem");
+        let mock = MockCapabilityGate::new("mem");
         let plan = CapabilityPlan {
             capabilities: vec![Capability::Custom {
                 name: "weird".into(),
@@ -785,5 +797,20 @@ mod sandbox_v01_tests {
             "prefix not applied; got: {name}"
         );
         assert!(dir.path().exists(), "scratch dir should exist on disk");
+    }
+}
+
+#[cfg(all(test, feature = "process"))]
+mod process_tests {
+    use super::*;
+    use crate::ProcessCapabilityGate;
+
+    #[tokio::test]
+    async fn wrap_spawn_is_noop_when_plan_validates() {
+        let mock = MockCapabilityGate::new("mem");
+        let plan = plan_from_capabilities(vec![]);
+        let mut cmd = std::process::Command::new("/bin/true");
+        let handle = mock.wrap_spawn(&plan, &mut cmd).await;
+        assert!(handle.is_ok());
     }
 }
