@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::json;
 
-use tau_ports::{CapabilityGate, ProcessCapabilityGate, CapabilityPlan, CapabilityProbe};
+use tau_ports::{CapabilityGate, CapabilityPlan, CapabilityProbe, ProcessCapabilityGate};
 use tau_sandbox_darwin::DarwinSandbox;
 
 fn make_plan(value: serde_json::Value) -> CapabilityPlan {

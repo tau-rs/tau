@@ -40,7 +40,9 @@ use std::time::Duration;
 
 use tau_domain::fixtures::{cap_fs_exec, cap_fs_read, cap_net_http};
 use tau_ports::fixtures::plan_from_capabilities;
-use tau_ports::{CapabilityGate, ProcessCapabilityGate, CapabilityPlan, CapabilityProbe, CapabilityTier};
+use tau_ports::{
+    CapabilityGate, CapabilityPlan, CapabilityProbe, CapabilityTier, ProcessCapabilityGate,
+};
 use tau_sandbox_native::NativeSandbox;
 
 /// Set TAU_NET_BRIDGE_PATH to the bin target's compile-time path so the

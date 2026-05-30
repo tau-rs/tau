@@ -17,8 +17,8 @@ use std::process::Command;
 
 use tau_domain::fixtures::{cap_fs_exec, cap_fs_read, cap_process_spawn};
 use tau_ports::{
-    fixtures::plan_from_capabilities, CapabilityGate, ProcessCapabilityGate, CapabilityPlan,
-    CapabilityTier,
+    fixtures::plan_from_capabilities, CapabilityGate, CapabilityPlan, CapabilityTier,
+    ProcessCapabilityGate,
 };
 use tau_sandbox_native::NativeSandbox;
 

@@ -38,7 +38,8 @@ use tau_domain::{
 use tau_pkg::LockedPlugin;
 use tau_ports::fixtures::scratch_dir;
 use tau_ports::{
-    CompletionRequest, ContentBlock, LlmProviderMessage, CapabilityPlan, CapabilityProbe, SessionContext,
+    CapabilityPlan, CapabilityProbe, CompletionRequest, ContentBlock, LlmProviderMessage,
+    SessionContext,
 };
 use tau_runtime::sandbox::registry::RegistryKind;
 use tau_runtime::sandbox::resolve_adapter_forced;

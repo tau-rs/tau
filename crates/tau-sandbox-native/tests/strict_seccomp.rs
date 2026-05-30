@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use tau_domain::fixtures::cap_fs_read;
 use tau_ports::fixtures::plan_from_capabilities;
-use tau_ports::{CapabilityGate, ProcessCapabilityGate, CapabilityPlan, CapabilityTier};
+use tau_ports::{CapabilityGate, CapabilityPlan, CapabilityTier, ProcessCapabilityGate};
 use tau_sandbox_native::NativeSandbox;
 
 fn locate_controlled_env_bin() -> PathBuf {
