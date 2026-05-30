@@ -313,7 +313,7 @@ impl<T: CapabilityGate + 'static> DynCapabilityGate for T {
 /// ```rust,ignore
 /// // `Runtime` is `#[non_exhaustive]`; doctests can't construct via
 /// // struct-literal syntax, so this example is illustrative only.
-/// use tau_runtime::Runtime;
+/// use tau_runtime_core::Runtime;
 /// use tau_ports::fixtures::MockLlmBackend;
 ///
 /// let runtime = Runtime::builder()
@@ -359,7 +359,7 @@ impl Runtime {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::Runtime;
+    /// use tau_runtime_core::Runtime;
     /// use tau_ports::fixtures::MockLlmBackend;
     ///
     /// let runtime = Runtime::builder()
@@ -410,7 +410,7 @@ impl Runtime {
 /// // `RuntimeBuilder` is `#[non_exhaustive]`; doctests can't construct
 /// // it via struct-literal syntax. Use [`Runtime::builder`] in
 /// // production code.
-/// use tau_runtime::Runtime;
+/// use tau_runtime_core::Runtime;
 /// use tau_ports::fixtures::MockLlmBackend;
 ///
 /// let runtime = Runtime::builder()
@@ -440,7 +440,7 @@ impl RuntimeBuilder {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::Runtime;
+    /// use tau_runtime_core::Runtime;
     /// use tau_ports::fixtures::MockLlmBackend;
     ///
     /// let runtime = Runtime::builder()
@@ -467,7 +467,7 @@ impl RuntimeBuilder {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::Runtime;
+    /// use tau_runtime_core::Runtime;
     /// use tau_ports::fixtures::{MockLlmBackend, MockTool, make_tool_spec};
     /// use tau_domain::Value;
     ///
@@ -496,7 +496,7 @@ impl RuntimeBuilder {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::Runtime;
+    /// use tau_runtime_core::Runtime;
     /// use tau_ports::fixtures::{MockLlmBackend, MockStorage};
     ///
     /// let runtime = Runtime::builder()
@@ -530,7 +530,7 @@ impl RuntimeBuilder {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use tau_runtime::{Runtime, builder::DynLlmBackend};
+    /// use tau_runtime_core::{Runtime, builder::DynLlmBackend};
     /// use tau_ports::fixtures::MockLlmBackend;
     ///
     /// // Simulate the IPC path: obtain an Arc<dyn DynLlmBackend>.
@@ -555,7 +555,7 @@ impl RuntimeBuilder {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use tau_runtime::{Runtime, builder::DynTool};
+    /// use tau_runtime_core::{Runtime, builder::DynTool};
     /// use tau_ports::fixtures::{MockLlmBackend, MockTool, make_tool_spec};
     /// use tau_domain::Value;
     ///
@@ -584,7 +584,7 @@ impl RuntimeBuilder {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use tau_runtime::{Runtime, builder::DynStorage};
+    /// use tau_runtime_core::{Runtime, builder::DynStorage};
     /// use tau_ports::fixtures::{MockLlmBackend, MockStorage};
     ///
     /// let storage: Arc<dyn DynStorage> = Arc::new(MockStorage::new("mem"));
@@ -611,7 +611,7 @@ impl RuntimeBuilder {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::{Runtime, BuildError};
+    /// use tau_runtime_core::{Runtime, BuildError};
     /// use tau_ports::fixtures::MockLlmBackend;
     ///
     /// // Success path.
@@ -657,7 +657,7 @@ impl RuntimeBuilder {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::Runtime;
+    /// use tau_runtime_core::Runtime;
     ///
     /// // Succeeds even with zero backends (serve-mode use case).
     /// let runtime = Runtime::builder()

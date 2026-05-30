@@ -243,6 +243,7 @@ jobs:
         with:
           shared-key: linux-stable
           with-mold: true
+          with-nextest: true
       - name: no-std builds (default and no-default-features)
         run: |
           set -e

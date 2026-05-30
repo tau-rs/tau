@@ -148,7 +148,7 @@ impl Runtime {
         let result = tool.invoke(&ctx, &mut (), args).await;
         // teardown best-effort: don't mask invoke's error if both fail.
         let _ = tool.teardown(()).await;
-        Ok(result.map_err(RuntimeError::from)?)
+        result.map_err(RuntimeError::from)
     }
 }
 

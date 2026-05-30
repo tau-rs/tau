@@ -13,7 +13,7 @@ use tau_ports::fixtures::{make_completion_response, make_token_usage, make_tool_
 use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, StopReason,
 };
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 

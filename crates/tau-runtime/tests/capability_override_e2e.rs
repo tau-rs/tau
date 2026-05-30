@@ -45,7 +45,7 @@ use tau_ports::{
 use tau_runtime::{
     builder::DynTool,
     error::{CoreRuntimeError, RuntimeError},
-    CapabilityOverride, RunOptions, Runtime,
+    CapabilityOverride, Runtime,
 };
 
 use assert_matches::assert_matches;

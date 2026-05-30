@@ -19,7 +19,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 
 /// Build an `fs.read` capability via the canonical TOML deserialization
 /// path. Variant-level `#[non_exhaustive]` blocks struct-literal

@@ -746,7 +746,7 @@ pub(crate) fn run_streaming_inner(
                                         // Emit Spawn trace event before
                                         // recursing.
                                         {
-                                            let mut s = state_arc.lock().await;
+                                            let s = state_arc.lock().await;
                                             let run_id = s.run_id.clone();
                                             s.trace.emit(tau_ports::TraceEvent {
                                                 id: tau_runtime_core::ids::ulid(clock_ref(&options), random_ref(&options)),
@@ -1004,7 +1004,7 @@ pub(crate) fn run_streaming_inner(
                                             // recursing, so the printer / log
                                             // can pick it up.
                                             {
-                                                let mut s = state_arc.lock().await;
+                                                let s = state_arc.lock().await;
                                                 let run_id = s.run_id.clone();
                                                 s.trace.emit(
                                                     tau_ports::TraceEvent {
@@ -1756,10 +1756,11 @@ mod tests {
     /// and `DeterministicRandom` so port-routed id helpers don't panic.
     fn test_run_options() -> RunOptions {
         use tau_ports::{DeterministicRandom, MockClock};
-        let mut opts = RunOptions::default();
-        opts.clock = Some(Arc::new(MockClock::new()));
-        opts.random = Some(Arc::new(DeterministicRandom::seeded(42)));
-        opts
+        RunOptions {
+            clock: Some(Arc::new(MockClock::new())),
+            random: Some(Arc::new(DeterministicRandom::seeded(42))),
+            ..RunOptions::default()
+        }
     }
 
     async fn collect_events(

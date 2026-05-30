@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tau_domain::{Capability, Value};
 use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend, MockTool};
 use tau_ports::{SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec};
-use tau_runtime::{RunOptions, Runtime};
+use tau_runtime::Runtime;
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
 use tracing::{Event, Id, Subscriber};

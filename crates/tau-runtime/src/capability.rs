@@ -1,18 +1,5 @@
 // Re-export pure capability logic from the executor-agnostic kernel.
-// Only `check_capabilities` and `capability_kind_str` are used in
-// non-test production code; the per-namespace `*_satisfies` helpers
-// are consumed by tests only (via `use super::*`).
 pub(crate) use tau_runtime_core::capability::{capability_kind_str, check_capabilities};
-
-#[cfg(test)]
-pub(crate) use tau_runtime_core::capability::{
-    agent_satisfies, custom_params_satisfy, fs_satisfies, net_satisfies, plan_satisfies,
-    process_satisfies, skill_satisfies, task_list_satisfies,
-};
-
-// Re-export capability_satisfies for tests and builder use.
-#[cfg(test)]
-pub(crate) use tau_runtime_core::capability::capability_satisfies;
 
 use tau_domain::Capability;
 
@@ -86,8 +73,6 @@ pub(crate) fn check_capabilities_for_tool<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn capability_check_span_name_literal_matches_vocabulary_constant() {
         // `#[instrument(name = ...)]` on `check_capabilities_for_tool`

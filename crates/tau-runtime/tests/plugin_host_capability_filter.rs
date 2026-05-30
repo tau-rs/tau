@@ -25,7 +25,7 @@ use tau_ports::{
     CompletionRequest, SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
 use tau_runtime::plugin_host::__internals::{DynAsyncWriter, IpcLlmBackend, PluginProcess};
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 use tokio::io::DuplexStream;
 
 /// Build a [`PluginProcess`] paired with a [`FakeStdioPeer`].

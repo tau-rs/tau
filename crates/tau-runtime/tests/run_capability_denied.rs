@@ -16,7 +16,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{RunOptions, RunOutcome, Runtime};
+use tau_runtime::{RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 

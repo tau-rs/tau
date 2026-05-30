@@ -70,12 +70,13 @@ pub(crate) use tau_runtime_core::run::value_to_preview_string;
 fn run_options_with_defaults() -> RunOptions {
     use std::sync::Arc;
     use tau_ports::{DeterministicRandom, MockClock};
-    let mut opts = RunOptions::default();
     // TODO(beta.1.4): replace MockClock with TokioClock once the tokio
     // shell's `drive` entry exists and can inject a real wall-clock.
-    opts.clock = Some(Arc::new(MockClock::new()));
-    opts.random = Some(Arc::new(DeterministicRandom::seeded(0)));
-    opts
+    RunOptions {
+        clock: Some(Arc::new(MockClock::new())),
+        random: Some(Arc::new(DeterministicRandom::seeded(0))),
+        ..RunOptions::default()
+    }
 }
 
 impl Runtime {
@@ -690,7 +691,7 @@ mode = "read"
     #[tokio::test]
     async fn invoke_tool_dispatches_to_registered_tool_and_returns_result() {
         use std::str::FromStr;
-        use tau_domain::{AgentId, PackageId, PackageName, UncheckedManifest, Version};
+        use tau_domain::{AgentId, PackageId, PackageName, Version};
         use tau_ports::fixtures::{make_tool_result, make_tool_spec, MockLlmBackend, MockTool};
         use tau_ports::ToolContent;
 
@@ -753,7 +754,7 @@ mode = "read"
     #[tokio::test]
     async fn invoke_tool_returns_err_for_unknown_tool() {
         use std::str::FromStr;
-        use tau_domain::{AgentId, PackageId, PackageName, UncheckedManifest, Version};
+        use tau_domain::{AgentId, PackageId, PackageName, Version};
         use tau_ports::fixtures::MockLlmBackend;
 
         let runtime = crate::builder::Runtime::builder()
