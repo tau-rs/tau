@@ -39,7 +39,7 @@ use tracing::{debug, instrument};
 
 use crate::builder::Runtime;
 use crate::capability_override::EffectiveCapability;
-use crate::error::{CapabilityDenial, RuntimeError};
+use crate::error::{CapabilityDenial, CoreRuntimeError, RuntimeError};
 use crate::options::{RunOptions, TokenUsage};
 use crate::outcome::RunOutcome;
 
@@ -160,12 +160,14 @@ impl Runtime {
                                     Some((tn, reg))
                                 })
                                 .unwrap_or_else(|| (detail.clone(), vec![]));
-                            RuntimeError::ToolNotRegistered {
+                            RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
                                 tool_name,
                                 registered,
-                            }
+                            })
                         }
-                        "Llm" => RuntimeError::Llm(LlmError::Internal { message: detail }),
+                        "Llm" => RuntimeError::Core(CoreRuntimeError::Llm(
+                            LlmError::Internal { message: detail },
+                        )),
                         // Reconstruct the typed ToolError variant using
                         // `tool_error_variant` recorded by make_tool_fatal_error.
                         // This preserves the BadArgs/SessionDead/etc. variant
@@ -183,9 +185,9 @@ impl Runtime {
                                 // string carries the Display output.
                                 _ => ToolError::Internal { message: detail },
                             };
-                            RuntimeError::Tool(tool_err)
+                            RuntimeError::Core(CoreRuntimeError::Tool(tool_err))
                         }
-                        _ => RuntimeError::Internal { message: detail },
+                        _ => RuntimeError::Core(CoreRuntimeError::Internal { message: detail }),
                     });
                 }
                 Some(_) => continue,
@@ -294,16 +296,16 @@ impl Runtime {
         if let Some(missing) =
             crate::capability::check_capabilities_for_tool(tool_name, &granted, required)
         {
-            let denial = crate::error::CapabilityDenial {
-                agent_id: agent_def.id.to_string(),
-                package_id: agent_def.package.name.to_string(),
-                tool_name: tool_name.to_owned(),
-                required_kind: crate::run::capability_kind_str(missing),
-                required_detail: format!("{missing:?}"),
-            };
-            return Err(RuntimeError::Internal {
+            let denial = crate::error::CapabilityDenial::new(
+                agent_def.id.to_string(),
+                agent_def.package.name.to_string(),
+                tool_name.to_owned(),
+                crate::run::capability_kind_str(missing),
+                format!("{missing:?}"),
+            );
+            return Err(RuntimeError::Core(CoreRuntimeError::Internal {
                 message: format!("capability denied: {denial}"),
-            });
+            }));
         }
 
         // Build a minimal SessionContext (no deadline, no deny entries).
@@ -312,11 +314,13 @@ impl Runtime {
         let ctx = SessionContext::new(AgentInstanceId::new(), uuid::Uuid::new_v4(), None)
             .with_granted_capabilities(granted);
 
-        tool.init(ctx.clone()).await?;
+        tool.init(ctx.clone())
+            .await
+            .map_err(|e| RuntimeError::from(CoreRuntimeError::from(e)))?;
         let result = tool.invoke(&ctx, &mut (), args).await;
         // teardown best-effort: don't mask invoke's error if both fail.
         let _ = tool.teardown(()).await;
-        Ok(result?)
+        Ok(result.map_err(|e| RuntimeError::from(CoreRuntimeError::from(e)))?)
     }
 
     /// Multi-agent orchestrated run entry point (ROADMAP §9, v1).
@@ -745,13 +749,13 @@ mod tests {
 
     #[test]
     fn build_policy_denied_outcome_carries_denial_in_status() {
-        let denial = CapabilityDenial {
-            agent_id: "agent-x".into(),
-            package_id: "pkg-y".into(),
-            tool_name: "file_read".into(),
-            required_kind: "fs.read".into(),
-            required_detail: "Filesystem(Read { paths: [\"/etc/passwd\"] })".into(),
-        };
+        let denial = CapabilityDenial::new(
+            "agent-x",
+            "pkg-y",
+            "file_read",
+            "fs.read",
+            "Filesystem(Read { paths: [\"/etc/passwd\"] })",
+        );
         let out = build_policy_denied_outcome(denial, vec![], 3, TokenUsage::default());
 
         let RunOutcome::Failed {
@@ -1035,7 +1039,10 @@ mode = "read"
             .expect_err("should return ToolNotRegistered");
 
         assert!(
-            matches!(err, RuntimeError::ToolNotRegistered { .. }),
+            matches!(
+                err,
+                RuntimeError::Core(CoreRuntimeError::ToolNotRegistered { .. })
+            ),
             "expected ToolNotRegistered, got {err:?}"
         );
     }

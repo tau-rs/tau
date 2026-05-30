@@ -7,13 +7,17 @@
 use super::error_codes;
 use super::protocol::ErrorObject;
 use serde_json::json;
+use tau_runtime::error::CoreRuntimeError;
 use tau_runtime::RuntimeError;
 
 /// Map any `RuntimeError` to an `ErrorObject`.
 pub fn from_runtime_error(err: &RuntimeError) -> ErrorObject {
-    // Capability denials reach RuntimeError through the Tool(#[from] ToolError)
-    // wrapper. Match that path first.
-    if let RuntimeError::Tool(tau_ports::ToolError::CapabilityDenied { capability }) = err {
+    // Capability denials reach RuntimeError through the
+    // Core(Tool(#[from] ToolError)) wrapper. Match that path first.
+    if let RuntimeError::Core(CoreRuntimeError::Tool(
+        tau_ports::ToolError::CapabilityDenied { capability },
+    )) = err
+    {
         return ErrorObject {
             code: error_codes::CAPABILITY_DENIED,
             message: format!("Capability denied: {}", capability),
@@ -25,16 +29,17 @@ pub fn from_runtime_error(err: &RuntimeError) -> ErrorObject {
         };
     }
     match err {
-        RuntimeError::LlmBackendNotRegistered { .. } | RuntimeError::ToolNotRegistered { .. } => {
-            ErrorObject {
-                code: error_codes::UNKNOWN_AGENT,
-                message: err.to_string(),
-                data: Some(json!({"kind": "UnknownAgent"})),
-            }
-        }
-        RuntimeError::PluginContractViolation { .. }
+        RuntimeError::Core(
+            CoreRuntimeError::LlmBackendNotRegistered { .. }
+            | CoreRuntimeError::ToolNotRegistered { .. },
+        ) => ErrorObject {
+            code: error_codes::UNKNOWN_AGENT,
+            message: err.to_string(),
+            data: Some(json!({"kind": "UnknownAgent"})),
+        },
+        RuntimeError::Core(CoreRuntimeError::PluginContractViolation { .. })
+        | RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed { .. })
         | RuntimeError::PluginSpawnFailed { .. }
-        | RuntimeError::PluginHandshakeFailed { .. }
         | RuntimeError::PluginCrashed { .. } => ErrorObject {
             code: error_codes::TOOL_ERROR,
             message: err.to_string(),
@@ -47,17 +52,17 @@ pub fn from_runtime_error(err: &RuntimeError) -> ErrorObject {
                 data: Some(json!({"kind": "SandboxError"})),
             }
         }
-        RuntimeError::CapabilityOverrideExpands { .. } => ErrorObject {
+        RuntimeError::Core(CoreRuntimeError::CapabilityOverrideExpands { .. }) => ErrorObject {
             code: error_codes::RUNTIME_ERROR,
             message: err.to_string(),
             data: Some(json!({"kind": "CapabilityOverrideExpands"})),
         },
-        RuntimeError::Tool(_) => ErrorObject {
+        RuntimeError::Core(CoreRuntimeError::Tool(_)) => ErrorObject {
             code: error_codes::TOOL_ERROR,
             message: err.to_string(),
             data: Some(json!({"kind": "ToolError"})),
         },
-        RuntimeError::Llm(_) => ErrorObject {
+        RuntimeError::Core(CoreRuntimeError::Llm(_)) => ErrorObject {
             code: error_codes::LLM_ERROR,
             message: err.to_string(),
             data: Some(json!({"kind": "LlmError"})),
@@ -76,10 +81,10 @@ mod tests {
 
     #[test]
     fn unknown_tool_maps_to_unknown_agent() {
-        let err = RuntimeError::ToolNotRegistered {
+        let err = RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
             tool_name: "missing-tool".into(),
             registered: vec!["echo".into()],
-        };
+        });
         let obj = from_runtime_error(&err);
         assert_eq!(obj.code, error_codes::UNKNOWN_AGENT);
         assert!(obj.message.contains("missing-tool"));
@@ -87,9 +92,11 @@ mod tests {
 
     #[test]
     fn tool_capability_denied_maps_to_capability_denied() {
-        let err = RuntimeError::Tool(tau_ports::ToolError::CapabilityDenied {
-            capability: "fs.read".into(),
-        });
+        let err = RuntimeError::Core(CoreRuntimeError::Tool(
+            tau_ports::ToolError::CapabilityDenied {
+                capability: "fs.read".into(),
+            },
+        ));
         let obj = from_runtime_error(&err);
         assert_eq!(obj.code, error_codes::CAPABILITY_DENIED);
         assert!(obj.message.contains("fs.read"));

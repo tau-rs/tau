@@ -9,6 +9,7 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
+tau-runtime-core      = { workspace = true }
 tau-domain            = { workspace = true, features = ["serde"] }
 tau-observe           = { workspace = true }
 # TODO(future): tau-ports/test-fixtures is enabled in production deps to

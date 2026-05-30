@@ -596,10 +596,12 @@ impl Runtime {
                     kind = %e.kind,
                     reason = %e.reason,
                 );
-                crate::error::RuntimeError::CapabilityOverrideExpands {
-                    kind: e.kind,
-                    reason: e.reason,
-                }
+                crate::error::RuntimeError::Core(
+                    crate::error::CoreRuntimeError::CapabilityOverrideExpands {
+                        kind: e.kind,
+                        reason: e.reason,
+                    },
+                )
             })?;
 
             let granted_for_kernel: Vec<Capability> =

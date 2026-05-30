@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tau_domain::Address;
 
 use crate::builder::{DynLlmBackend, DynTool};
-use crate::error::RuntimeError;
+use crate::error::{CoreRuntimeError, RuntimeError};
 use crate::Runtime;
 
 impl Runtime {
@@ -33,10 +33,10 @@ impl Runtime {
     ) -> Result<&Arc<dyn DynLlmBackend>, RuntimeError> {
         self.llm_backends()
             .get(backend_name)
-            .ok_or_else(|| RuntimeError::LlmBackendNotRegistered {
+            .ok_or_else(|| RuntimeError::Core(CoreRuntimeError::LlmBackendNotRegistered {
                 agent_id: agent_id.to_owned(),
                 backend: backend_name.to_owned(),
-            })
+            }))
     }
 
     /// Resolve a tool by name. On miss, returns
@@ -46,10 +46,10 @@ impl Runtime {
         self.tools().get(tool_name).ok_or_else(|| {
             let mut registered: Vec<String> = self.tools().keys().cloned().collect();
             registered.sort();
-            RuntimeError::ToolNotRegistered {
+            RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
                 tool_name: tool_name.to_owned(),
                 registered,
-            }
+            })
         })
     }
 }
@@ -105,9 +105,9 @@ mod tests {
         let Err(err) = result else {
             panic!("expected LlmBackendNotRegistered, got Ok")
         };
-        let RuntimeError::LlmBackendNotRegistered {
+        let RuntimeError::Core(CoreRuntimeError::LlmBackendNotRegistered {
             agent_id, backend, ..
-        } = err
+        }) = err
         else {
             panic!("expected LlmBackendNotRegistered: {err:?}")
         };
@@ -143,11 +143,11 @@ mod tests {
         let Err(err) = result else {
             panic!("expected ToolNotRegistered, got Ok")
         };
-        let RuntimeError::ToolNotRegistered {
+        let RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
             tool_name,
             registered,
             ..
-        } = err
+        }) = err
         else {
             panic!("expected ToolNotRegistered: {err:?}")
         };

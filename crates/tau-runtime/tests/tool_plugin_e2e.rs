@@ -43,7 +43,11 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, error::RuntimeError, RunOptions, RunOutcome, Runtime};
+use tau_runtime::{
+    builder::DynTool,
+    error::{CoreRuntimeError, RuntimeError},
+    RunOptions, RunOutcome, Runtime,
+};
 
 use assert_matches::assert_matches;
 
@@ -321,7 +325,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
 
     assert_matches!(
         err,
-        RuntimeError::Tool(ToolError::BadArgs { reason }) => {
+        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "Gap 2: plugin must reject with scope-violation message; got {reason:?}"

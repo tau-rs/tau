@@ -499,13 +499,13 @@ pub(crate) fn run_streaming_inner(
                         });
                         if let Some(cap) = missing {
                             let kind = crate::run::capability_kind_str(cap);
-                            let denial = crate::error::CapabilityDenial {
-                                agent_id: agent_def.id.to_string(),
-                                package_id: agent_def.package.name.to_string(),
-                                tool_name: tool_use.name.clone(),
-                                required_kind: kind,
-                                required_detail: format!("{cap:?}"),
-                            };
+                            let denial = crate::error::CapabilityDenial::new(
+                                agent_def.id.to_string(),
+                                agent_def.package.name.to_string(),
+                                tool_use.name.clone(),
+                                kind,
+                                format!("{cap:?}"),
+                            );
                             let outcome = crate::run::build_policy_denied_outcome(
                                 denial,
                                 messages,
@@ -1185,13 +1185,13 @@ pub(crate) fn run_streaming_inner(
                 });
                 if let Some(cap) = missing {
                     let kind = crate::run::capability_kind_str(cap);
-                    let denial = crate::error::CapabilityDenial {
-                        agent_id: agent_def.id.to_string(),
-                        package_id: agent_def.package.name.to_string(),
-                        tool_name: tool_use.name.clone(),
-                        required_kind: kind,
-                        required_detail: format!("{cap:?}"),
-                    };
+                    let denial = crate::error::CapabilityDenial::new(
+                        agent_def.id.to_string(),
+                        agent_def.package.name.to_string(),
+                        tool_use.name.clone(),
+                        kind,
+                        format!("{cap:?}"),
+                    );
                     let outcome = crate::run::build_policy_denied_outcome(
                         denial,
                         messages,

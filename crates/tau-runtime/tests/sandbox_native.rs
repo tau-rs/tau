@@ -28,7 +28,7 @@ use tau_domain::{fixtures as domain_fixtures, Capability, PluginKind, PluginMani
 use tau_pkg::LockedPlugin;
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_ports::{CapabilityPlan, CapabilityProbe};
-use tau_runtime::error::RuntimeError;
+use tau_runtime::error::{CoreRuntimeError, RuntimeError};
 use tau_runtime::plugin_host::{self, PluginHostOptions};
 use tau_runtime::sandbox::registry::RegistryKind;
 use tau_runtime::sandbox::{resolve_adapter_forced, SandboxAdapter};
@@ -165,7 +165,7 @@ async fn adapter_threads_through_to_plugin_spawn() {
     assert!(
         matches!(
             &err,
-            RuntimeError::PluginHandshakeFailed { .. }
+            RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed { .. })
                 | RuntimeError::PluginSpawnFailed { .. }
                 | RuntimeError::SandboxWrapFailed { .. }
         ),

@@ -15,3 +15,8 @@ extern crate alloc;
 
 #[cfg(any(test, feature = "host-fs"))]
 extern crate std;
+
+pub mod error;
+pub use error::{
+    BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError,
+};
