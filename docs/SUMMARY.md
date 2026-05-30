@@ -16,6 +16,8 @@
 # Tutorials
 
 - [Overview](tutorials/README.md)
+- [Bootstrap a tau project](tutorials/bootstrap-a-tau-project.md)
+- [Build your first skill](tutorials/build-your-first-skill.md)
 
 # How-to
 
