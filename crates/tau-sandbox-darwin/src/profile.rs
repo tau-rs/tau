@@ -1,9 +1,9 @@
-//! SBPL profile generation from a [`SandboxPlan`].
+//! SBPL profile generation from a [`CapabilityPlan`].
 //!
 //! Pure functions — no I/O, no spawning. Tested on any platform.
 
 use tau_domain::{Capability, FsCapability, NetCapability};
-use tau_ports::SandboxPlan;
+use tau_ports::CapabilityPlan;
 
 use crate::baseline::SBPL_BASELINE;
 
@@ -22,7 +22,7 @@ pub(crate) const PROXY_PORT: u16 = 8443;
 /// 3. Per-capability rules (file-read*, file-write*, process-exec)
 /// 4. Network: outbound only to `localhost:PROXY_PORT` if any
 ///    `Network(Http)` capability is present
-pub fn build_sbpl_profile(plan: &SandboxPlan) -> String {
+pub fn build_sbpl_profile(plan: &CapabilityPlan) -> String {
     let mut sbpl = String::new();
     sbpl.push_str("(version 1)\n");
     sbpl.push_str("(deny default)\n");
@@ -111,7 +111,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn plan_from(capabilities: serde_json::Value) -> SandboxPlan {
+    fn plan_from(capabilities: serde_json::Value) -> CapabilityPlan {
         let plan_json = json!({
             "capabilities": capabilities,
             "context": null,

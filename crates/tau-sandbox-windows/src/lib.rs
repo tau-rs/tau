@@ -38,14 +38,17 @@ use std::sync::Arc;
 
 use tokio::sync::OnceCell;
 
-use tau_domain::{Capability, CapabilityShapeSet, NetCapability};
-use tau_ports::{Sandbox, SandboxError, SandboxHandle, SandboxPlan, SandboxProbe};
+use tau_domain::{Capability, NetCapability};
+use tau_ports::{
+    CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
+    CapabilityShapeSet, ProcessCapabilityGate,
+};
 
 /// Windows AppContainer adapter.
 pub struct WindowsSandbox {
     name: String,
     /// Probe is cached lazily on the first call.
-    probe_cache: Arc<OnceCell<SandboxProbe>>,
+    probe_cache: Arc<OnceCell<CapabilityProbe>>,
 }
 
 impl WindowsSandbox {
@@ -58,12 +61,12 @@ impl WindowsSandbox {
     }
 }
 
-impl Sandbox for WindowsSandbox {
+impl CapabilityGate for WindowsSandbox {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn probe(&self) -> SandboxProbe {
+    async fn probe(&self) -> CapabilityProbe {
         self.probe_cache
             .get_or_init(|| async { run_probe().await })
             .await
@@ -79,12 +82,12 @@ impl Sandbox for WindowsSandbox {
         set
     }
 
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError> {
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError> {
         let supported = self.supported_shapes();
         for cap in &plan.capabilities {
             let shape = cap.required_shape();
             if !supported.contains(&shape) {
-                return Err(SandboxError::ShapeUnsupported { shape });
+                return Err(CapabilityError::ShapeUnsupported { shape });
             }
         }
         let mut allowed_hosts: Vec<String> = Vec::new();
@@ -94,19 +97,21 @@ impl Sandbox for WindowsSandbox {
             }
         }
         if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| SandboxError::Proxy {
+            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
                 message: format!("host validation: {e}"),
             })?;
         }
         Ok(())
     }
+}
 
+impl ProcessCapabilityGate for WindowsSandbox {
     #[cfg(target_os = "windows")]
     async fn wrap_spawn(
         &self,
-        plan: &SandboxPlan,
+        plan: &CapabilityPlan,
         cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
+    ) -> Result<CapabilityHandle, CapabilityError> {
         self.validate_plan(plan)?;
         wrap_spawn_windows(plan, cmd).await
     }
@@ -114,10 +119,10 @@ impl Sandbox for WindowsSandbox {
     #[cfg(not(target_os = "windows"))]
     async fn wrap_spawn(
         &self,
-        _plan: &SandboxPlan,
+        _plan: &CapabilityPlan,
         _cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
-        Err(SandboxError::Unavailable {
+    ) -> Result<CapabilityHandle, CapabilityError> {
+        Err(CapabilityError::Unavailable {
             reason: "tau-sandbox-windows is Windows-only".to_string(),
         })
     }
@@ -132,13 +137,13 @@ impl Sandbox for WindowsSandbox {
 /// back to the next candidate (typically `PassthroughSandbox`). When
 /// Phase 2 lands the real Win32 implementation, this returns
 /// `Available { tier: Strict }` on Windows.
-async fn run_probe() -> SandboxProbe {
+async fn run_probe() -> CapabilityProbe {
     if !cfg!(target_os = "windows") {
-        return SandboxProbe::Unavailable {
+        return CapabilityProbe::Unavailable {
             reason: "not running on Windows".to_string(),
         };
     }
-    SandboxProbe::Unavailable {
+    CapabilityProbe::Unavailable {
         reason: "tau-sandbox-windows Phase 1 ships scaffold only; \
                  Win32 AppContainer calls land in Phase 2"
             .to_string(),
@@ -147,9 +152,9 @@ async fn run_probe() -> SandboxProbe {
 
 #[cfg(target_os = "windows")]
 async fn wrap_spawn_windows(
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     cmd: &mut Command,
-) -> Result<SandboxHandle, SandboxError> {
+) -> Result<CapabilityHandle, CapabilityError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -159,7 +164,7 @@ async fn wrap_spawn_windows(
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
     let profile_name = format!("tau-sandbox-{}-{}", std::process::id(), counter);
     let app_sid =
-        acl::create_appcontainer_profile(&profile_name).map_err(|e| SandboxError::WrapFailed {
+        acl::create_appcontainer_profile(&profile_name).map_err(|e| CapabilityError::WrapFailed {
             message: format!("create_appcontainer_profile: {e}"),
         })?;
 
@@ -167,7 +172,7 @@ async fn wrap_spawn_windows(
     let mut granted_paths: Vec<(String, acl::AccessKind)> = Vec::new();
     for path in &caps.fs_read_paths {
         acl::grant_access(&app_sid, path, acl::AccessKind::Read).map_err(|e| {
-            SandboxError::WrapFailed {
+            CapabilityError::WrapFailed {
                 message: format!("grant read on {path}: {e}"),
             }
         })?;
@@ -175,7 +180,7 @@ async fn wrap_spawn_windows(
     }
     for path in &caps.fs_write_paths {
         acl::grant_access(&app_sid, path, acl::AccessKind::Write).map_err(|e| {
-            SandboxError::WrapFailed {
+            CapabilityError::WrapFailed {
                 message: format!("grant write on {path}: {e}"),
             }
         })?;
@@ -198,7 +203,7 @@ async fn wrap_spawn_windows(
     // wiring lands in Phase 2 alongside the actual `CreateProcessAsUserW`
     // integration.
     if caps.has_http {
-        return Err(SandboxError::Unavailable {
+        return Err(CapabilityError::Unavailable {
             reason: "tau-sandbox-windows Phase 1 does not support Network(Http) plans; \
                      proxy support requires Phase 2 (UDS->TCP conversion in tau-sandbox-proxy)"
                 .to_string(),
@@ -216,7 +221,7 @@ async fn wrap_spawn_windows(
     // for the implementation.
     spawn::register_appcontainer_for_command(cmd, &app_sid, &caps);
 
-    // Build the SandboxHandle. On drop:
+    // Build the CapabilityHandle. On drop:
     // 1. revoke ACL grants in reverse order
     // 2. delete the AppContainer profile
     // 3. (Phase 2) drop the proxy guard via nest_handle
@@ -224,7 +229,7 @@ async fn wrap_spawn_windows(
     let cleanup_sid = app_sid.clone();
     let cleanup_profile = profile_name.clone();
     let cleanup_paths = granted_paths;
-    let handle = SandboxHandle::new(move || {
+    let handle = CapabilityHandle::new(move || {
         for (path, kind) in cleanup_paths.iter().rev() {
             let _ = acl::revoke_access(&cleanup_sid, path, *kind);
         }
@@ -263,12 +268,12 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         let err = s
             .validate_plan(&plan)
             .expect_err("must reject unknown shape");
         assert!(
-            matches!(err, SandboxError::ShapeUnsupported { .. }),
+            matches!(err, CapabilityError::ShapeUnsupported { .. }),
             "expected ShapeUnsupported, got {err:?}"
         );
     }
@@ -285,7 +290,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         s.validate_plan(&plan)
             .expect("known shapes must be accepted");
     }
@@ -300,12 +305,12 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         let err = s
             .validate_plan(&plan)
             .expect_err("wildcard must be rejected");
         assert!(
-            matches!(err, SandboxError::Proxy { .. }),
+            matches!(err, CapabilityError::Proxy { .. }),
             "expected Proxy error, got {err:?}"
         );
     }

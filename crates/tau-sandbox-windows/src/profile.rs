@@ -1,9 +1,9 @@
-//! AppContainer profile generation from a [`SandboxPlan`].
+//! AppContainer profile generation from a [`CapabilityPlan`].
 //!
 //! Pure functions — no I/O, no Win32 calls. Tested on any platform.
 
 use tau_domain::{Capability, FsCapability, NetCapability};
-use tau_ports::SandboxPlan;
+use tau_ports::CapabilityPlan;
 
 /// TCP port the host-side `tau-sandbox-proxy` task listens on. Plugins
 /// reach it via `HTTPS_PROXY=http://127.0.0.1:8443`.
@@ -39,9 +39,9 @@ pub struct AppContainerCaps {
     pub has_process_spawn: bool,
 }
 
-/// Translate a `SandboxPlan` into AppContainer-shape inputs for the spawn
+/// Translate a `CapabilityPlan` into AppContainer-shape inputs for the spawn
 /// layer. Pure; no Win32, no I/O.
-pub fn build_appcontainer_caps(plan: &SandboxPlan) -> AppContainerCaps {
+pub fn build_appcontainer_caps(plan: &CapabilityPlan) -> AppContainerCaps {
     let mut fs_read_paths = Vec::new();
     let mut fs_write_paths = Vec::new();
     let mut has_http = false;
@@ -92,7 +92,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn plan_from(capabilities: serde_json::Value) -> SandboxPlan {
+    fn plan_from(capabilities: serde_json::Value) -> CapabilityPlan {
         let plan_json = json!({
             "capabilities": capabilities,
             "context": null,

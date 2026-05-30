@@ -18,42 +18,42 @@
 //!   user namespaces are enabled by default. A future task can add a fork-based
 //!   probe for more precise detection.
 
-use tau_ports::{SandboxProbe, SandboxTier};
+use tau_ports::{CapabilityProbe, CapabilityTier};
 
 /// Probe the host kernel for sandbox features.
 ///
 /// Returns `Available { tier }` where `tier` is the strongest tier the
 /// adapter can support, capped at the caller's requested tier.
-pub(crate) async fn probe(requested: SandboxTier) -> SandboxProbe {
+pub(crate) async fn probe(requested: CapabilityTier) -> CapabilityProbe {
     decide_probe(requested, landlock_v1_supported(), user_ns_supported())
 }
 
 /// Pure tier-decision function: given a requested tier and the kernel feature
-/// flags, return the best available [`SandboxProbe`].
+/// flags, return the best available [`CapabilityProbe`].
 ///
 /// Extracted from [`probe`] so the decision matrix can be unit-tested without
 /// invoking real kernel syscalls. The two boolean inputs mirror the runtime
 /// probes: `landlock_ok` corresponds to [`landlock_v1_supported`], and
 /// `user_ns_ok` corresponds to [`user_ns_supported`].
-fn decide_probe(requested: SandboxTier, landlock_ok: bool, user_ns_ok: bool) -> SandboxProbe {
+fn decide_probe(requested: CapabilityTier, landlock_ok: bool, user_ns_ok: bool) -> CapabilityProbe {
     if !landlock_ok {
-        return SandboxProbe::Unavailable {
+        return CapabilityProbe::Unavailable {
             reason: "landlock V1 unsupported (kernel < 5.13)".into(),
         };
     }
     let effective = match requested {
-        SandboxTier::None => SandboxTier::None,
+        CapabilityTier::None => CapabilityTier::None,
         // Light needs landlock only — already verified above.
-        SandboxTier::Light => SandboxTier::Light,
+        CapabilityTier::Light => CapabilityTier::Light,
         // Strict needs landlock + seccomp + user namespaces.
         // seccomp is assumed available (Linux 3.5+, see module-level note).
         // User namespaces are checked via unprivileged_userns_clone sysctl.
-        SandboxTier::Strict => {
+        CapabilityTier::Strict => {
             if user_ns_ok {
-                SandboxTier::Strict
+                CapabilityTier::Strict
             } else {
                 tracing::info!("unprivileged user namespaces disabled; capping Strict -> Light");
-                SandboxTier::Light
+                CapabilityTier::Light
             }
         }
         // Non-exhaustive arm: unknown future tier — warn and report unavailable.
@@ -62,12 +62,12 @@ fn decide_probe(requested: SandboxTier, landlock_ok: bool, user_ns_ok: bool) -> 
                 ?other,
                 "unknown SandboxTier in probe — returning Unavailable"
             );
-            return SandboxProbe::Unavailable {
+            return CapabilityProbe::Unavailable {
                 reason: format!("tier {other:?} not implemented"),
             };
         }
     };
-    SandboxProbe::Available {
+    CapabilityProbe::Available {
         tier: effective,
         details: format!("landlock V1 ok, effective tier: {effective:?}"),
     }
@@ -111,12 +111,12 @@ mod tests {
 
     #[test]
     fn unavailable_when_landlock_missing_regardless_of_request() {
-        for tier in [SandboxTier::None, SandboxTier::Light, SandboxTier::Strict] {
+        for tier in [CapabilityTier::None, CapabilityTier::Light, CapabilityTier::Strict] {
             let p = decide_probe(
                 tier, /* landlock_ok */ false, /* user_ns_ok */ true,
             );
             assert!(
-                matches!(p, SandboxProbe::Unavailable { ref reason } if reason.contains("landlock V1")),
+                matches!(p, CapabilityProbe::Unavailable { ref reason } if reason.contains("landlock V1")),
                 "tier {tier:?} should report Unavailable when landlock is missing — got {p:?}"
             );
         }
@@ -124,26 +124,26 @@ mod tests {
 
     #[test]
     fn unavailable_when_landlock_missing_even_if_user_ns_present() {
-        let p = decide_probe(SandboxTier::Strict, false, true);
-        assert!(matches!(p, SandboxProbe::Unavailable { .. }));
+        let p = decide_probe(CapabilityTier::Strict, false, true);
+        assert!(matches!(p, CapabilityProbe::Unavailable { .. }));
     }
 
     // ---------- decide_probe: tier capping ----------
 
     #[test]
     fn none_request_returns_none_tier() {
-        let p = decide_probe(SandboxTier::None, true, true);
+        let p = decide_probe(CapabilityTier::None, true, true);
         match p {
-            SandboxProbe::Available { tier, .. } => assert_eq!(tier, SandboxTier::None),
+            CapabilityProbe::Available { tier, .. } => assert_eq!(tier, CapabilityTier::None),
             other => panic!("expected Available(None), got {other:?}"),
         }
     }
 
     #[test]
     fn light_request_returns_light_tier() {
-        let p = decide_probe(SandboxTier::Light, true, true);
+        let p = decide_probe(CapabilityTier::Light, true, true);
         match p {
-            SandboxProbe::Available { tier, .. } => assert_eq!(tier, SandboxTier::Light),
+            CapabilityProbe::Available { tier, .. } => assert_eq!(tier, CapabilityTier::Light),
             other => panic!("expected Available(Light), got {other:?}"),
         }
     }
@@ -152,19 +152,19 @@ mod tests {
     fn light_request_does_not_depend_on_user_ns() {
         // User namespaces aren't needed for Light tier; the decision must be
         // independent of `user_ns_ok`.
-        let with_uns = decide_probe(SandboxTier::Light, true, true);
-        let without_uns = decide_probe(SandboxTier::Light, true, false);
+        let with_uns = decide_probe(CapabilityTier::Light, true, true);
+        let without_uns = decide_probe(CapabilityTier::Light, true, false);
         assert!(matches!(
             with_uns,
-            SandboxProbe::Available {
-                tier: SandboxTier::Light,
+            CapabilityProbe::Available {
+                tier: CapabilityTier::Light,
                 ..
             }
         ));
         assert!(matches!(
             without_uns,
-            SandboxProbe::Available {
-                tier: SandboxTier::Light,
+            CapabilityProbe::Available {
+                tier: CapabilityTier::Light,
                 ..
             }
         ));
@@ -172,18 +172,18 @@ mod tests {
 
     #[test]
     fn strict_request_with_user_ns_returns_strict() {
-        let p = decide_probe(SandboxTier::Strict, true, true);
+        let p = decide_probe(CapabilityTier::Strict, true, true);
         match p {
-            SandboxProbe::Available { tier, .. } => assert_eq!(tier, SandboxTier::Strict),
+            CapabilityProbe::Available { tier, .. } => assert_eq!(tier, CapabilityTier::Strict),
             other => panic!("expected Available(Strict), got {other:?}"),
         }
     }
 
     #[test]
     fn strict_request_without_user_ns_caps_to_light() {
-        let p = decide_probe(SandboxTier::Strict, true, false);
+        let p = decide_probe(CapabilityTier::Strict, true, false);
         match p {
-            SandboxProbe::Available { tier, .. } => assert_eq!(tier, SandboxTier::Light),
+            CapabilityProbe::Available { tier, .. } => assert_eq!(tier, CapabilityTier::Light),
             other => panic!("expected cap to Light, got {other:?}"),
         }
     }
@@ -192,9 +192,9 @@ mod tests {
 
     #[test]
     fn available_details_string_mentions_landlock_and_tier() {
-        let p = decide_probe(SandboxTier::Light, true, true);
+        let p = decide_probe(CapabilityTier::Light, true, true);
         match p {
-            SandboxProbe::Available { details, .. } => {
+            CapabilityProbe::Available { details, .. } => {
                 assert!(
                     details.contains("landlock"),
                     "details should reference landlock; got {details:?}"
@@ -216,9 +216,9 @@ mod tests {
         // effective tier (when Available) is ≤ requested.
         for landlock_ok in [true, false] {
             for user_ns_ok in [true, false] {
-                for requested in [SandboxTier::None, SandboxTier::Light, SandboxTier::Strict] {
+                for requested in [CapabilityTier::None, CapabilityTier::Light, CapabilityTier::Strict] {
                     let p = decide_probe(requested, landlock_ok, user_ns_ok);
-                    if let SandboxProbe::Available { tier, .. } = p {
+                    if let CapabilityProbe::Available { tier, .. } = p {
                         assert!(
                             tier <= requested,
                             "effective tier {tier:?} exceeds requested {requested:?} \

@@ -1,4 +1,4 @@
-//! Build the `docker run` / `podman run` argv from a [`SandboxPlan`].
+//! Build the `docker run` / `podman run` argv from a [`CapabilityPlan`].
 //!
 //! The public-facing entry point is [`wrap_command`], which rewrites a
 //! [`std::process::Command`] in-place. [`build_run_args`] is extracted as a
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use tau_domain::{Capability, FsCapability, NetCapability};
-use tau_ports::{SandboxError, SandboxHandle, SandboxPlan};
+use tau_ports::{CapabilityError, CapabilityHandle, CapabilityPlan};
 
 use crate::probe::ResolvedRuntime;
 
@@ -51,10 +51,10 @@ pub(crate) struct ProxyConfig {
 /// - **cwd**: dropped — has no meaning inside a container with `--read-only`
 ///   root and `--tmpfs /tmp`.
 pub(crate) fn wrap_command(
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     cmd: &mut Command,
     runtime: ResolvedRuntime,
-) -> Result<SandboxHandle, SandboxError> {
+) -> Result<CapabilityHandle, CapabilityError> {
     let original_program = cmd.get_program().to_string_lossy().into_owned();
     let original_args: Vec<String> = cmd
         .get_args()
@@ -65,7 +65,7 @@ pub(crate) fn wrap_command(
     let bin_name = std::path::Path::new(&original_program)
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| SandboxError::WrapFailed {
+        .ok_or_else(|| CapabilityError::WrapFailed {
             message: format!("cannot derive plugin bin name from program path: {original_program}"),
         })?;
     let image = format!("tau-plugin-{bin_name}:dev");
@@ -102,11 +102,11 @@ pub(crate) fn wrap_command(
                 allowed_hosts.extend(hosts.iter().cloned());
             }
         }
-        tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| SandboxError::Proxy {
+        tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
             message: format!("host validation: {e}"),
         })?;
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| SandboxError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         let sock_path = handle.sock_path().to_path_buf();
@@ -118,7 +118,7 @@ pub(crate) fn wrap_command(
 
     #[cfg(not(unix))]
     let (proxy_handle, proxy_config): (Option<()>, Option<ProxyConfig>) = if has_network_http {
-        return Err(SandboxError::Proxy {
+        return Err(CapabilityError::Proxy {
             message: "Network(Http) capability is unix-only in this iteration; \
                       Windows container proxy is a future sub-project"
                 .to_string(),
@@ -148,9 +148,9 @@ pub(crate) fn wrap_command(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    // Nest the proxy guard inside the SandboxHandle so it is dropped (LIFO)
+    // Nest the proxy guard inside the CapabilityHandle so it is dropped (LIFO)
     // when the handle is dropped.
-    let mut handle = SandboxHandle::noop();
+    let mut handle = CapabilityHandle::noop();
     if let Some(p) = proxy_handle {
         handle.nest_handle(Box::new(p));
     }
@@ -175,7 +175,7 @@ pub(crate) fn wrap_command(
 ///
 /// Exposed for unit tests so argv shape can be verified without spawning.
 pub(crate) fn build_run_args(
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     runtime: ResolvedRuntime,
     image: &str,
     program: &str,
@@ -318,7 +318,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn plan_from(capabilities: serde_json::Value) -> SandboxPlan {
+    fn plan_from(capabilities: serde_json::Value) -> CapabilityPlan {
         let plan_json = json!({
             "capabilities": capabilities,
             "context": null,

@@ -9,7 +9,7 @@
 #![cfg(all(target_os = "linux", feature = "integration-tests"))]
 
 use std::process::Command;
-use tau_ports::{Sandbox, SandboxPlan, SandboxProbe};
+use tau_ports::{CapabilityGate, CapabilityPlan, CapabilityProbe, ProcessCapabilityGate};
 use tau_sandbox_container::{ContainerRuntime, ContainerSandbox};
 
 #[tokio::test]
@@ -17,7 +17,7 @@ use tau_sandbox_container::{ContainerRuntime, ContainerSandbox};
 async fn fs_read_works_inside_container() {
     let s = ContainerSandbox::new("container", ContainerRuntime::Auto);
     let probe = s.probe().await;
-    if matches!(probe, SandboxProbe::Unavailable { .. }) {
+    if matches!(probe, CapabilityProbe::Unavailable { .. }) {
         eprintln!("skipping: no docker/podman on PATH");
         return;
     }
@@ -27,7 +27,7 @@ async fn fs_read_works_inside_container() {
     // we just verify wrap_spawn replaces the cmd with a docker run
     // invocation; full e2e (actually pulling and running the image) is
     // covered by the unit tests.
-    let plan = SandboxPlan::new(vec![], None, None);
+    let plan = CapabilityPlan::new(vec![], None, None);
     let mut cmd = Command::new("/bin/echo");
     cmd.arg("hello");
     let _h = s.wrap_spawn(&plan, &mut cmd).await.unwrap();
@@ -47,11 +47,11 @@ async fn shell_plugin_runs_under_container() {
     // spawning (which would require a pre-pulled image).
     let s = ContainerSandbox::new("container", ContainerRuntime::Auto);
     let probe = s.probe().await;
-    if matches!(probe, SandboxProbe::Unavailable { .. }) {
+    if matches!(probe, CapabilityProbe::Unavailable { .. }) {
         eprintln!("skipping: no docker/podman on PATH");
         return;
     }
-    let plan = SandboxPlan::new(vec![], None, None);
+    let plan = CapabilityPlan::new(vec![], None, None);
     let mut cmd = Command::new("/bin/sh");
     cmd.args(["-c", "echo hello"]);
     let _h = s.wrap_spawn(&plan, &mut cmd).await.unwrap();

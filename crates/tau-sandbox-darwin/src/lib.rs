@@ -28,14 +28,17 @@ use std::sync::Arc;
 
 use tokio::sync::OnceCell;
 
-use tau_domain::{Capability, CapabilityShapeSet, NetCapability};
-use tau_ports::{Sandbox, SandboxError, SandboxHandle, SandboxPlan, SandboxProbe, SandboxTier};
+use tau_domain::{Capability, NetCapability};
+use tau_ports::{
+    CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
+    CapabilityShapeSet, CapabilityTier, ProcessCapabilityGate,
+};
 
 /// macOS sandbox-exec adapter.
 pub struct DarwinSandbox {
     name: String,
     /// Probe is cached lazily on the first call.
-    probe_cache: Arc<OnceCell<SandboxProbe>>,
+    probe_cache: Arc<OnceCell<CapabilityProbe>>,
 }
 
 impl DarwinSandbox {
@@ -48,12 +51,12 @@ impl DarwinSandbox {
     }
 }
 
-impl Sandbox for DarwinSandbox {
+impl CapabilityGate for DarwinSandbox {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn probe(&self) -> SandboxProbe {
+    async fn probe(&self) -> CapabilityProbe {
         self.probe_cache
             .get_or_init(|| async { run_probe().await })
             .await
@@ -69,12 +72,12 @@ impl Sandbox for DarwinSandbox {
         set
     }
 
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError> {
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError> {
         let supported = self.supported_shapes();
         for cap in &plan.capabilities {
             let shape = cap.required_shape();
             if !supported.contains(&shape) {
-                return Err(SandboxError::ShapeUnsupported { shape });
+                return Err(CapabilityError::ShapeUnsupported { shape });
             }
         }
         // Reject HTTP plans whose host allowlist contains forms the proxy
@@ -86,19 +89,21 @@ impl Sandbox for DarwinSandbox {
             }
         }
         if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| SandboxError::Proxy {
+            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
                 message: format!("host validation: {e}"),
             })?;
         }
         Ok(())
     }
+}
 
+impl ProcessCapabilityGate for DarwinSandbox {
     #[cfg(target_os = "macos")]
     async fn wrap_spawn(
         &self,
-        plan: &SandboxPlan,
+        plan: &CapabilityPlan,
         cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
+    ) -> Result<CapabilityHandle, CapabilityError> {
         self.validate_plan(plan)?;
         wrap_spawn_macos(plan, cmd).await
     }
@@ -106,10 +111,10 @@ impl Sandbox for DarwinSandbox {
     #[cfg(not(target_os = "macos"))]
     async fn wrap_spawn(
         &self,
-        _plan: &SandboxPlan,
+        _plan: &CapabilityPlan,
         _cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
-        Err(SandboxError::Unavailable {
+    ) -> Result<CapabilityHandle, CapabilityError> {
+        Err(CapabilityError::Unavailable {
             reason: "tau-sandbox-darwin is macOS-only".to_string(),
         })
     }
@@ -117,28 +122,28 @@ impl Sandbox for DarwinSandbox {
 
 /// Probe for sandbox-exec availability. Cached per `DarwinSandbox`
 /// instance via `OnceCell`.
-async fn run_probe() -> SandboxProbe {
+async fn run_probe() -> CapabilityProbe {
     if !cfg!(target_os = "macos") {
-        return SandboxProbe::Unavailable {
+        return CapabilityProbe::Unavailable {
             reason: "not running on macOS".to_string(),
         };
     }
     if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
-        return SandboxProbe::Unavailable {
+        return CapabilityProbe::Unavailable {
             reason: "/usr/bin/sandbox-exec missing".to_string(),
         };
     }
-    SandboxProbe::Available {
-        tier: SandboxTier::Strict,
+    CapabilityProbe::Available {
+        tier: CapabilityTier::Strict,
         details: "sandbox-exec; SBPL profile + tau-sandbox-proxy".to_string(),
     }
 }
 
 #[cfg(target_os = "macos")]
 async fn wrap_spawn_macos(
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     cmd: &mut Command,
-) -> Result<SandboxHandle, SandboxError> {
+) -> Result<CapabilityHandle, CapabilityError> {
     use std::os::unix::fs::PermissionsExt;
 
     // Capture the original program + args; we'll re-emit them after sandbox-exec.
@@ -162,7 +167,7 @@ async fn wrap_spawn_macos(
             }
         }
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| SandboxError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         Some(handle)
@@ -204,10 +209,10 @@ async fn wrap_spawn_macos(
         cmd.env("http_proxy", proxy_url);
     }
 
-    // Build the SandboxHandle: nest the proxy guard so it drops with the
+    // Build the CapabilityHandle: nest the proxy guard so it drops with the
     // handle, and a closure to remove the temp profile file.
     let cleanup_path = profile_path.clone();
-    let mut handle = SandboxHandle::new(move || {
+    let mut handle = CapabilityHandle::new(move || {
         let _ = std::fs::remove_file(&cleanup_path);
     });
     if let Some(p) = proxy_handle {
@@ -228,13 +233,13 @@ async fn wrap_spawn_macos(
 /// Write the generated SBPL profile to a unique tempfile in /tmp and
 /// return its absolute path. Caller must remove the file when done.
 #[cfg(target_os = "macos")]
-fn write_profile(sbpl: &str) -> Result<PathBuf, SandboxError> {
+fn write_profile(sbpl: &str) -> Result<PathBuf, CapabilityError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut path = std::env::temp_dir();
     path.push(format!("tau-darwin-{}-{}.sb", std::process::id(), n));
-    std::fs::write(&path, sbpl).map_err(|e| SandboxError::WrapFailed {
+    std::fs::write(&path, sbpl).map_err(|e| CapabilityError::WrapFailed {
         message: format!("write SBPL profile: {e}"),
     })?;
     Ok(path)
@@ -269,12 +274,12 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         let err = s
             .validate_plan(&plan)
             .expect_err("must reject unknown shape");
         assert!(
-            matches!(err, SandboxError::ShapeUnsupported { .. }),
+            matches!(err, CapabilityError::ShapeUnsupported { .. }),
             "expected ShapeUnsupported, got {err:?}"
         );
     }
@@ -291,7 +296,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         s.validate_plan(&plan)
             .expect("known shapes must be accepted");
     }
@@ -306,12 +311,12 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         let err = s
             .validate_plan(&plan)
             .expect_err("wildcard must be rejected");
         assert!(
-            matches!(err, SandboxError::Proxy { .. }),
+            matches!(err, CapabilityError::Proxy { .. }),
             "expected Proxy error, got {err:?}"
         );
     }

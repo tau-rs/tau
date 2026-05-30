@@ -10,7 +10,7 @@ description = "Linux native sandbox adapter (landlock + seccomp + namespaces) fo
 
 [dependencies]
 tau-domain          = { workspace = true, features = ["serde"] }
-tau-ports           = { workspace = true, features = ["serde"] }
+tau-ports           = { workspace = true, features = ["serde", "process"] }
 tau-sandbox-proxy   = { workspace = true }
 tracing             = { workspace = true }
 # `net` feature required by net_filter::resolve (tokio::net::lookup_host) —

@@ -20,8 +20,10 @@ use std::sync::Arc;
 
 use tokio::sync::OnceCell;
 
-use tau_domain::CapabilityShapeSet;
-use tau_ports::{Sandbox, SandboxError, SandboxHandle, SandboxPlan, SandboxProbe};
+use tau_ports::{
+    CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
+    CapabilityShapeSet, ProcessCapabilityGate,
+};
 
 /// Container runtime selection passed to [`ContainerSandbox::new`].
 #[non_exhaustive]
@@ -48,14 +50,14 @@ pub struct ContainerSandbox {
     name: String,
     runtime: ContainerRuntime,
     /// Cached `(probe result, resolved runtime)`. Populated lazily on the
-    /// first call to [`Sandbox::probe`] or [`Sandbox::wrap_spawn`].
-    probe_cache: Arc<OnceCell<(SandboxProbe, probe::ResolvedRuntime)>>,
+    /// first call to [`CapabilityGate::probe`] or [`ProcessCapabilityGate::wrap_spawn`].
+    probe_cache: Arc<OnceCell<(CapabilityProbe, probe::ResolvedRuntime)>>,
 }
 
 impl ContainerSandbox {
     /// Construct a container adapter using the given runtime selection.
     ///
-    /// The probe is deferred until the first call to [`Sandbox::probe`].
+    /// The probe is deferred until the first call to [`CapabilityGate::probe`].
     pub fn new(name: impl Into<String>, runtime: ContainerRuntime) -> Self {
         Self {
             name: name.into(),
@@ -65,12 +67,12 @@ impl ContainerSandbox {
     }
 }
 
-impl Sandbox for ContainerSandbox {
+impl CapabilityGate for ContainerSandbox {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn probe(&self) -> SandboxProbe {
+    async fn probe(&self) -> CapabilityProbe {
         self.probe_cache
             .get_or_init(|| async { probe::run_probe(self.runtime).await })
             .await
@@ -87,22 +89,24 @@ impl Sandbox for ContainerSandbox {
         set
     }
 
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError> {
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError> {
         let supported = self.supported_shapes();
         for cap in &plan.capabilities {
             let shape = cap.required_shape();
             if !supported.contains(&shape) {
-                return Err(SandboxError::ShapeUnsupported { shape });
+                return Err(CapabilityError::ShapeUnsupported { shape });
             }
         }
         Ok(())
     }
+}
 
+impl ProcessCapabilityGate for ContainerSandbox {
     async fn wrap_spawn(
         &self,
-        plan: &SandboxPlan,
+        plan: &CapabilityPlan,
         cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError> {
+    ) -> Result<CapabilityHandle, CapabilityError> {
         self.validate_plan(plan)?;
 
         let (probe_result, runtime_kind) = self
@@ -110,13 +114,13 @@ impl Sandbox for ContainerSandbox {
             .get_or_init(|| async { probe::run_probe(self.runtime).await })
             .await;
         match probe_result {
-            SandboxProbe::Available { .. } => runner::wrap_command(plan, cmd, *runtime_kind),
-            SandboxProbe::Unavailable { reason } => Err(SandboxError::Unavailable {
+            CapabilityProbe::Available { .. } => runner::wrap_command(plan, cmd, *runtime_kind),
+            CapabilityProbe::Unavailable { reason } => Err(CapabilityError::Unavailable {
                 reason: reason.clone(),
             }),
             // Non-exhaustive catch-all: treat any unknown future variant as an
             // internal error rather than silently proceeding.
-            other => Err(SandboxError::WrapFailed {
+            other => Err(CapabilityError::WrapFailed {
                 message: format!("unexpected probe result: {other:?}"),
             }),
         }
@@ -151,10 +155,10 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         let err = s.validate_plan(&plan).expect_err("must reject custom");
         assert!(
-            matches!(err, SandboxError::ShapeUnsupported { .. }),
+            matches!(err, CapabilityError::ShapeUnsupported { .. }),
             "expected ShapeUnsupported, got {err:?}"
         );
     }
@@ -171,7 +175,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: SandboxPlan = serde_json::from_value(plan_json).expect("decode");
+        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
         s.validate_plan(&plan)
             .expect("known shapes must be accepted");
     }

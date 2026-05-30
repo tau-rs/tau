@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use tau_domain::{Capability, FsCapability};
-use tau_ports::{SandboxError, SandboxHandle, SandboxPlan};
+use tau_ports::{CapabilityError, CapabilityHandle, CapabilityPlan};
 
 // Re-export so strict.rs can call collect_exec_paths without reaching into exec.rs directly.
 pub(crate) use crate::exec::collect_exec_paths;
@@ -65,9 +65,9 @@ pub(crate) const BASELINE_SYSTEM_READ_PATHS: &[&str] = &[
 /// Returns `(read_paths, write_paths)` as resolved `PathBuf` vectors.
 /// Shared by `apply_landlock` (Light tier) and `strict::apply_strict` (Strict tier).
 pub(crate) fn collect_landlock_paths(
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     cmd: &Command,
-) -> Result<(Vec<std::path::PathBuf>, Vec<std::path::PathBuf>), SandboxError> {
+) -> Result<(Vec<std::path::PathBuf>, Vec<std::path::PathBuf>), CapabilityError> {
     let read_strs = collect_paths(plan, |c| match c {
         Capability::Filesystem(FsCapability::Read { paths, .. }) => Some(paths.clone()),
         _ => None,
@@ -82,7 +82,7 @@ pub(crate) fn collect_landlock_paths(
         .map(std::path::Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)
-        .map_err(|e| SandboxError::WrapFailed {
+        .map_err(|e| CapabilityError::WrapFailed {
             message: format!("cwd: {e}"),
         })?;
 
@@ -149,13 +149,13 @@ pub(crate) fn install_landlock_from_plan(
 /// capabilities are accepted (they pass `validate_plan`) but not yet enforced
 /// at Light tier; Strict tier (Tasks 4-5) will add seccomp + namespaces.
 ///
-/// Returns [`SandboxHandle::noop`]: landlock state is per-thread inside the
+/// Returns [`CapabilityHandle::noop`]: landlock state is per-thread inside the
 /// child process and dies with the child on `_exit`; no parent-side
 /// cleanup is needed.
 pub(crate) fn apply_landlock(
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     cmd: &mut Command,
-) -> Result<SandboxHandle, SandboxError> {
+) -> Result<CapabilityHandle, CapabilityError> {
     // collect_landlock_paths now also auto-adds the spawned binary's parent
     // directory so the kernel can read+exec the binary regardless of where
     // it lives in the filesystem. See collect_landlock_paths for the comment.
@@ -192,10 +192,10 @@ pub(crate) fn apply_landlock(
                 .map_err(|e| std::io::Error::other(e.to_string()))
         });
     }
-    Ok(SandboxHandle::noop())
+    Ok(CapabilityHandle::noop())
 }
 
-fn collect_paths<F>(plan: &SandboxPlan, extract: F) -> Vec<String>
+fn collect_paths<F>(plan: &CapabilityPlan, extract: F) -> Vec<String>
 where
     F: Fn(&Capability) -> Option<Vec<String>>,
 {
@@ -229,12 +229,12 @@ fn resolve_anchors(paths: &[String], cwd: &std::path::Path) -> Vec<PathBuf> {
 ///
 /// Returns one path (the input verbatim) for non-symlinks, two paths
 /// (input + canonical target) for symlinks. Returns
-/// `SandboxError::WrapFailed` if `path` cannot be canonicalized
+/// `CapabilityError::WrapFailed` if `path` cannot be canonicalized
 /// (typically: doesn't exist, permission denied).
 fn resolve_symlinks_for_landlock(
     path: &std::path::Path,
-) -> Result<Vec<std::path::PathBuf>, SandboxError> {
-    let canonical = std::fs::canonicalize(path).map_err(|e| SandboxError::WrapFailed {
+) -> Result<Vec<std::path::PathBuf>, CapabilityError> {
+    let canonical = std::fs::canonicalize(path).map_err(|e| CapabilityError::WrapFailed {
         message: format!(
             "could not canonicalize path '{}' for landlock ruleset: {e}",
             path.display()
@@ -327,9 +327,9 @@ mod tests {
     use std::path::Path;
     use tau_ports::WorkingContext;
 
-    /// Build a minimal `SandboxPlan` from a JSON-ish capability list.
+    /// Build a minimal `CapabilityPlan` from a JSON-ish capability list.
     /// Centralized here so the various test cases stay short.
-    fn plan_from(caps: serde_json::Value) -> SandboxPlan {
+    fn plan_from(caps: serde_json::Value) -> CapabilityPlan {
         let plan_json = serde_json::json!({
             "capabilities": caps,
             "context": null,
@@ -523,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn apply_landlock_returns_noop_handle_for_valid_plan() {
         // Verifies the structural contract — apply_landlock returns Ok with a
-        // SandboxHandle that's a no-op (landlock state dies with the child;
+        // CapabilityHandle that's a no-op (landlock state dies with the child;
         // no parent-side cleanup). This does NOT verify landlock itself runs;
         // that's e2e territory (deferred to sub-project D).
         let plan = plan_from(serde_json::json!([
@@ -581,7 +581,7 @@ mod tests {
         let nonexistent = std::path::Path::new("/this/path/does/not/exist/12345");
         let result = resolve_symlinks_for_landlock(nonexistent);
         match result {
-            Err(SandboxError::WrapFailed { message }) => {
+            Err(CapabilityError::WrapFailed { message }) => {
                 assert!(
                     message.contains("canonicalize"),
                     "WrapFailed message should mention canonicalize, got: {message}"
@@ -605,7 +605,7 @@ mod tests {
         let link = tmp.path().join("link");
         symlink(&target, &link).expect("symlink");
 
-        // Build a SandboxPlan that asks for read access at the symlink path.
+        // Build a CapabilityPlan that asks for read access at the symlink path.
         let plan_json = serde_json::json!({
             "capabilities": [{
                 "kind": "fs.read",
@@ -614,7 +614,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
         let cmd = Command::new("/bin/true");
         let (read_paths, _write_paths) = collect_landlock_paths(&plan, &cmd).expect("collect");
         // Both the link path and the canonical target should appear.

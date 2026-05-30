@@ -31,7 +31,7 @@ use std::process::Command;
 
 use nix::sched::unshare;
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
-use tau_ports::{SandboxError, SandboxHandle, SandboxPlan};
+use tau_ports::{CapabilityError, CapabilityHandle, CapabilityPlan};
 
 use crate::light::install_landlock_from_plan;
 
@@ -272,7 +272,7 @@ pub(crate) fn baseline_syscall_map() -> std::collections::BTreeMap<i64, Vec<Secc
 /// Used by unit tests (verifying baseline filter compiles); production callers
 /// go through `baseline_syscall_map` + per-plan extensions + `compile_filter`.
 #[allow(dead_code)]
-pub(crate) fn build_baseline_filter() -> Result<BpfProgram, SandboxError> {
+pub(crate) fn build_baseline_filter() -> Result<BpfProgram, CapabilityError> {
     let rules = baseline_syscall_map();
     compile_filter(rules)
 }
@@ -283,11 +283,11 @@ pub(crate) fn build_baseline_filter() -> Result<BpfProgram, SandboxError> {
 /// `apply_strict` (which extends the baseline before compiling).
 fn compile_filter(
     rules: std::collections::BTreeMap<i64, Vec<SeccompRule>>,
-) -> Result<BpfProgram, SandboxError> {
+) -> Result<BpfProgram, CapabilityError> {
     let arch: seccompiler::TargetArch =
         std::env::consts::ARCH
             .try_into()
-            .map_err(|_| SandboxError::WrapFailed {
+            .map_err(|_| CapabilityError::WrapFailed {
                 message: format!(
                     "seccompiler does not support arch '{}'; cannot build strict filter",
                     std::env::consts::ARCH
@@ -302,13 +302,13 @@ fn compile_filter(
         SeccompAction::Allow,
         arch,
     )
-    .map_err(|e| SandboxError::WrapFailed {
+    .map_err(|e| CapabilityError::WrapFailed {
         message: format!("seccomp filter build error: {e}"),
     })?;
 
     filter
         .try_into()
-        .map_err(|e: seccompiler::BackendError| SandboxError::WrapFailed {
+        .map_err(|e: seccompiler::BackendError| CapabilityError::WrapFailed {
             message: format!("seccomp BPF compile error: {e}"),
         })
 }
@@ -332,11 +332,11 @@ fn compile_filter(
 ///
 /// For plans with `Network(Http)`: spawns a userspace proxy task (T3-T4) in the parent
 /// and wraps the child command with `tau-net-bridge` (T5). The proxy guard is nested
-/// inside the returned `SandboxHandle` for LIFO cleanup.
+/// inside the returned `CapabilityHandle` for LIFO cleanup.
 pub(crate) fn apply_strict(
-    plan: &SandboxPlan,
+    plan: &CapabilityPlan,
     cmd: &mut Command,
-) -> Result<SandboxHandle, SandboxError> {
+) -> Result<CapabilityHandle, CapabilityError> {
     // Collect landlock paths from the plan (same logic as light tier).
     // Made mutable so Network(Http) can append the proxy socket path.
     let (mut read_paths, mut write_paths) = crate::light::collect_landlock_paths(plan, cmd)?;
@@ -388,7 +388,7 @@ pub(crate) fn apply_strict(
 
     // For Network(Http): spawn the userspace proxy, extend landlock paths,
     // and wrap cmd with tau-net-bridge so the child dials through the proxy.
-    // The proxy guard is returned inside the SandboxHandle for LIFO cleanup.
+    // The proxy guard is returned inside the CapabilityHandle for LIFO cleanup.
     let proxy_handle = if has_network_http {
         // Collect allowed hosts from all Http capabilities.
         let mut allowed_hosts: Vec<String> = Vec::new();
@@ -402,13 +402,13 @@ pub(crate) fn apply_strict(
         }
 
         // Validate hosts: rejects wildcards + non-loopback IP literals.
-        tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| SandboxError::Proxy {
+        tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
             message: format!("host validation: {e}"),
         })?;
 
         // Spawn the proxy task in the parent's tokio runtime.
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| SandboxError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         let proxy_sock_path = handle.sock_path().to_path_buf();
@@ -547,9 +547,9 @@ pub(crate) fn apply_strict(
         });
     }
 
-    // Nest the proxy guard inside the SandboxHandle so it is dropped (LIFO)
+    // Nest the proxy guard inside the CapabilityHandle so it is dropped (LIFO)
     // when the handle is dropped.
-    let mut handle = SandboxHandle::noop();
+    let mut handle = CapabilityHandle::noop();
     if let Some(p) = proxy_handle {
         handle.nest_handle(Box::new(p));
     }
@@ -607,7 +607,7 @@ mod tests {
         );
     }
 
-    /// Asserts that `apply_strict` returns a `SandboxHandle` without panicking.
+    /// Asserts that `apply_strict` returns a `CapabilityHandle` without panicking.
     ///
     /// This does NOT spawn the command; it exercises BPF compilation + closure
     /// capture in the parent process only.
@@ -633,7 +633,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
 
         let mut cmd = Command::new("/bin/true");
         let handle = apply_strict(&plan, &mut cmd)
@@ -712,7 +712,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
 
         let mut cmd = Command::new("/bin/true");
         // Hard requirement under #[ignore]: callers that opt in via
@@ -746,7 +746,7 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: tau_ports::SandboxPlan = serde_json::from_value(plan_json).expect("valid plan");
+        let plan: tau_ports::CapabilityPlan = serde_json::from_value(plan_json).expect("valid plan");
 
         let mut cmd = Command::new("/bin/true");
         apply_strict(&plan, &mut cmd).expect("apply_strict on empty plan");
