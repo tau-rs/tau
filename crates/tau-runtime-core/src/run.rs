@@ -144,9 +144,7 @@ impl Runtime {
         let ctx = SessionContext::new(AgentInstanceId::new(), session_uuid, None)
             .with_granted_capabilities(granted);
 
-        tool.init(ctx.clone())
-            .await
-            .map_err(RuntimeError::from)?;
+        tool.init(ctx.clone()).await.map_err(RuntimeError::from)?;
         let result = tool.invoke(&ctx, &mut (), args).await;
         // teardown best-effort: don't mask invoke's error if both fail.
         let _ = tool.teardown(()).await;

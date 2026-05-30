@@ -40,11 +40,13 @@ fn ids_helpers_drive_under_futures_executor() {
     let clock: Arc<dyn Clock> = Arc::new(MockClock::new());
     let random: Arc<dyn RandomSource> = Arc::new(DeterministicRandom::seeded(0xDEADBEEF));
 
-    let ulid_str = futures_executor::block_on(async {
-        ids::ulid(&clock, &random)
-    });
+    let ulid_str = futures_executor::block_on(async { ids::ulid(&clock, &random) });
 
-    assert_eq!(ulid_str.len(), 26, "ULID canonical length is 26 chars under futures executor");
+    assert_eq!(
+        ulid_str.len(),
+        26,
+        "ULID canonical length is 26 chars under futures executor"
+    );
 }
 
 #[test]

@@ -2,10 +2,7 @@
 // Only `check_capabilities` and `capability_kind_str` are used in
 // non-test production code; the per-namespace `*_satisfies` helpers
 // are consumed by tests only (via `use super::*`).
-pub(crate) use tau_runtime_core::capability::{
-    capability_kind_str,
-    check_capabilities,
-};
+pub(crate) use tau_runtime_core::capability::{capability_kind_str, check_capabilities};
 
 #[cfg(test)]
 pub(crate) use tau_runtime_core::capability::{

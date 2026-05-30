@@ -11,9 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tau_ports::{
-    CapabilityError, CapabilityHandle, CapabilityPlan, ProcessCapabilityGate,
-};
+use tau_ports::{CapabilityError, CapabilityHandle, CapabilityPlan, ProcessCapabilityGate};
 
 pub use tau_runtime_core::builder::DynCapabilityGate;
 

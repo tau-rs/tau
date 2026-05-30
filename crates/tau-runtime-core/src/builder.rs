@@ -45,9 +45,9 @@ use core::pin::Pin;
 use hashbrown::HashMap;
 
 use tau_ports::{
-    CapabilityError, CapabilityGate, CapabilityPlan, CapabilityProbe,
-    CompletionRequest, CompletionResponse, CompletionStream, Key, LlmBackend, LlmError, Namespace,
-    SessionContext, Storage, StorageError, Tool, ToolError, ToolResult, ToolSpec,
+    CapabilityError, CapabilityGate, CapabilityPlan, CapabilityProbe, CompletionRequest,
+    CompletionResponse, CompletionStream, Key, LlmBackend, LlmError, Namespace, SessionContext,
+    Storage, StorageError, Tool, ToolError, ToolResult, ToolSpec,
 };
 
 use crate::error::{BuildError, PluginKind};
@@ -918,13 +918,8 @@ mod tests {
             _ctx: &'a tau_ports::SessionContext,
             _session: &'a mut (),
             _args: tau_domain::Value,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<tau_ports::ToolResult, tau_ports::ToolError>,
-                    > + 'a,
-            >,
-        > {
+        ) -> Pin<Box<dyn Future<Output = Result<tau_ports::ToolResult, tau_ports::ToolError>> + 'a>>
+        {
             Box::pin(async { Ok(tau_ports::fixtures::make_tool_result(vec![], false)) })
         }
 

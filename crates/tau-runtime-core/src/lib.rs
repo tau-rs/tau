@@ -17,9 +17,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod error;
-pub use error::{
-    BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError,
-};
+pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError};
 
 pub mod builder;
 pub mod ids;

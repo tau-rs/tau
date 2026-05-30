@@ -99,10 +99,12 @@ where
     let read_outcome = tokio::time::timeout(handshake_timeout, reader.next_frame()).await;
     let response_body = match read_outcome {
         Err(_elapsed) => {
-            return Err(RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
-                plugin: plugin_name.to_string(),
-                reason: HandshakeFailureReason::Timeout,
-            }));
+            return Err(RuntimeError::Core(
+                CoreRuntimeError::PluginHandshakeFailed {
+                    plugin: plugin_name.to_string(),
+                    reason: HandshakeFailureReason::Timeout,
+                },
+            ));
         }
         Ok(Err(e)) => {
             return Err(handshake_malformed(
@@ -157,35 +159,41 @@ where
 
     // 4. Validate protocol_version.
     if response.protocol_version != PROTOCOL_VERSION {
-        return Err(RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
-            plugin: plugin_name.to_string(),
-            reason: HandshakeFailureReason::ProtocolVersionMismatch {
-                host: PROTOCOL_VERSION.to_string(),
-                plugin: response.protocol_version,
+        return Err(RuntimeError::Core(
+            CoreRuntimeError::PluginHandshakeFailed {
+                plugin: plugin_name.to_string(),
+                reason: HandshakeFailureReason::ProtocolVersionMismatch {
+                    host: PROTOCOL_VERSION.to_string(),
+                    plugin: response.protocol_version,
+                },
             },
-        }));
+        ));
     }
 
     // 5. Validate provides matches expected_port.
     if response.provides != expected_port {
-        return Err(RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
-            plugin: plugin_name.to_string(),
-            reason: HandshakeFailureReason::ProvidesMismatch {
-                manifest: expected_port,
-                plugin_advertised: response.provides,
+        return Err(RuntimeError::Core(
+            CoreRuntimeError::PluginHandshakeFailed {
+                plugin: plugin_name.to_string(),
+                reason: HandshakeFailureReason::ProvidesMismatch {
+                    manifest: expected_port,
+                    plugin_advertised: response.provides,
+                },
             },
-        }));
+        ));
     }
 
     // 6. Validate required methods.
     for required in required_methods {
         if !response.methods.iter().any(|m| m == required) {
-            return Err(RuntimeError::Core(CoreRuntimeError::PluginHandshakeFailed {
-                plugin: plugin_name.to_string(),
-                reason: HandshakeFailureReason::MissingRequiredMethod {
-                    method: (*required).to_string(),
+            return Err(RuntimeError::Core(
+                CoreRuntimeError::PluginHandshakeFailed {
+                    plugin: plugin_name.to_string(),
+                    reason: HandshakeFailureReason::MissingRequiredMethod {
+                        method: (*required).to_string(),
+                    },
                 },
-            }));
+            ));
         }
     }
 

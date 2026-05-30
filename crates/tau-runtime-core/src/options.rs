@@ -93,7 +93,10 @@ impl core::fmt::Debug for RunOptions {
         f.debug_struct("RunOptions")
             .field("max_turns", &self.max_turns)
             .field("trace_label", &self.trace_label)
-            .field("granted_capabilities_override", &self.granted_capabilities_override)
+            .field(
+                "granted_capabilities_override",
+                &self.granted_capabilities_override,
+            )
             .field("clock", &self.clock.as_ref().map(|_| "<Clock>"))
             .field("random", &self.random.as_ref().map(|_| "<RandomSource>"))
             .finish()

@@ -3532,6 +3532,7 @@ dependencies = [
  "chrono",
  "foldhash 0.1.5",
  "futures-core",
+ "futures-executor",
  "globset",
  "hashbrown 0.15.5",
  "jsonschema",

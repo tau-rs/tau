@@ -236,9 +236,7 @@ fn handle_task_claim(
         tool: "task.claim".into(),
         detail: alloc::format!("arg parse error: {e}"),
     })?;
-    state
-        .task_list
-        .claim(&a.task_id, agent_id.clone(), now)?;
+    state.task_list.claim(&a.task_id, agent_id.clone(), now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -252,9 +250,7 @@ fn handle_task_heartbeat(
         tool: "task.heartbeat".into(),
         detail: alloc::format!("arg parse error: {e}"),
     })?;
-    state
-        .task_list
-        .heartbeat(&a.task_id, agent_id, now)?;
+    state.task_list.heartbeat(&a.task_id, agent_id, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -338,9 +334,7 @@ fn handle_task_fail(
             tool: "task.fail".into(),
             detail: alloc::format!("arg parse error: {e}"),
         })?;
-    state
-        .task_list
-        .fail(&a.task_id, agent_id, a.error, now)?;
+    state.task_list.fail(&a.task_id, agent_id, a.error, now)?;
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -694,11 +688,19 @@ mod tests {
         let mut state = new_state();
         let now = Utc::now();
         let create_args = serde_json::json!({"description": "do thing"});
-        let result = dispatch("task.create", create_args, &"agent_x".into(), &mut state, now).unwrap();
+        let result = dispatch(
+            "task.create",
+            create_args,
+            &"agent_x".into(),
+            &mut state,
+            now,
+        )
+        .unwrap();
         let task_id = result["task_id"].as_str().unwrap().to_string();
 
         let get_args = serde_json::json!({"task_id": task_id});
-        let get_result = dispatch("task.get", get_args, &"agent_x".into(), &mut state, now).unwrap();
+        let get_result =
+            dispatch("task.get", get_args, &"agent_x".into(), &mut state, now).unwrap();
         assert!(get_result["task"].is_object());
         assert_eq!(get_result["task"]["description"], "do thing");
     }

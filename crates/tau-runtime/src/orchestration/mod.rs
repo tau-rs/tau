@@ -13,19 +13,19 @@ pub use tau_runtime_core::orchestration::task_list;
 pub use tau_runtime_core::orchestration::trace;
 pub use tau_runtime_core::orchestration::virtual_tools;
 
+pub use tau_runtime_core::orchestration::resolve_skill_for_spawn;
 pub use tau_runtime_core::orchestration::BudgetWatchdog;
 pub use tau_runtime_core::orchestration::OrchestrationError;
 pub use tau_runtime_core::orchestration::RunState;
+pub use tau_runtime_core::orchestration::TaskList;
 pub use tau_runtime_core::orchestration::{
     apply_scope_paths, substitute_skill_dir, SkillSpawnArgs, SkillSpawnRequest,
 };
-pub use tau_runtime_core::orchestration::TaskList;
-pub use tau_runtime_core::orchestration::{NoopTraceSubscriber, TraceStream, TraceSubscriber};
 pub use tau_runtime_core::orchestration::{
     check_capability_subset, dispatch, is_virtual, required_capability, validate_agent_spawn,
     validate_skill_spawn, AgentSpawnRequest,
 };
-pub use tau_runtime_core::orchestration::resolve_skill_for_spawn;
+pub use tau_runtime_core::orchestration::{NoopTraceSubscriber, TraceStream, TraceSubscriber};
 
 // ── Tokio-shell-specific ─────────────────────────────────────────────────────
 

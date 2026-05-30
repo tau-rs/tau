@@ -67,8 +67,7 @@ impl Runtime {
     /// ```
     pub fn resolve_tool(&self, tool_name: &str) -> Result<&Arc<dyn DynTool>, RuntimeError> {
         self.tools().get(tool_name).ok_or_else(|| {
-            let mut registered: Vec<alloc::string::String> =
-                self.tools().keys().cloned().collect();
+            let mut registered: Vec<alloc::string::String> = self.tools().keys().cloned().collect();
             registered.sort();
             RuntimeError::ToolNotRegistered {
                 tool_name: tool_name.to_owned(),

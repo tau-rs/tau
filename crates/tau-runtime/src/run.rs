@@ -30,9 +30,7 @@ use std::collections::BTreeMap;
 
 #[cfg(test)]
 use tau_domain::AgentInstanceId;
-use tau_domain::{
-    AgentDefinition, Capability, Message, PackageManifest,
-};
+use tau_domain::{AgentDefinition, Capability, Message, PackageManifest};
 #[cfg(test)]
 use tau_domain::{AgentStatus, FailureKind, MessagePayload, Value};
 #[cfg(test)]
@@ -41,9 +39,9 @@ use tracing::instrument;
 
 use crate::builder::Runtime;
 use crate::capability_override::EffectiveCapability;
-use crate::error::{CoreRuntimeError, RuntimeError};
 #[cfg(test)]
 use crate::error::CapabilityDenial;
+use crate::error::{CoreRuntimeError, RuntimeError};
 use crate::options::RunOptions;
 #[cfg(test)]
 use crate::options::TokenUsage;
@@ -52,9 +50,7 @@ use crate::outcome::RunOutcome;
 // Re-export pure helpers from core so that stream.rs can still use
 // `crate::run::*` paths unchanged (Task 3.5 migration shim).
 pub(crate) use tau_runtime_core::run::{
-    agent_messages_to_provider_messages,
-    build_policy_denied_outcome,
-    content_to_value,
+    agent_messages_to_provider_messages, build_policy_denied_outcome, content_to_value,
     flatten_content_to_string,
 };
 // value_to_preview_string is pub in core but not used from tau-runtime directly.
@@ -204,9 +200,9 @@ impl Runtime {
                                 registered,
                             })
                         }
-                        "Llm" => RuntimeError::Core(CoreRuntimeError::Llm(
-                            LlmError::Internal { message: detail },
-                        )),
+                        "Llm" => RuntimeError::Core(CoreRuntimeError::Llm(LlmError::Internal {
+                            message: detail,
+                        })),
                         // Reconstruct the typed ToolError variant using
                         // `tool_error_variant` recorded by make_tool_fatal_error.
                         // This preserves the BadArgs/SessionDead/etc. variant

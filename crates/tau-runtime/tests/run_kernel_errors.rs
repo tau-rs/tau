@@ -34,9 +34,8 @@ use tau_ports::{
     StopReason, ToolError, ToolResult, ToolSpec,
 };
 use tau_runtime::{
-    builder::DynTool,
-    error::CoreRuntimeError,
-    RunEvent, RunOptions, RunOutcome, Runtime, RuntimeError,
+    builder::DynTool, error::CoreRuntimeError, RunEvent, RunOptions, RunOutcome, Runtime,
+    RuntimeError,
 };
 
 use assert_matches::assert_matches;

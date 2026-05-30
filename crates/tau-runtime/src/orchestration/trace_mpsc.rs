@@ -83,9 +83,7 @@ impl TraceSubscriber for MpscTraceSubscriber {
 ///
 /// This is a convenience wrapper around
 /// `MpscTraceSubscriber::channel` + `persistence::spawn_writer`.
-pub fn channel_with_writer(
-    log_path: std::path::PathBuf,
-) -> Arc<dyn TraceSubscriber> {
+pub fn channel_with_writer(log_path: std::path::PathBuf) -> Arc<dyn TraceSubscriber> {
     let (subscriber, rx) = MpscTraceSubscriber::channel();
     super::persistence::spawn_writer(log_path, rx);
     Arc::new(subscriber)

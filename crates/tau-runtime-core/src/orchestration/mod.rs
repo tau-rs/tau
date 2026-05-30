@@ -35,12 +35,12 @@ pub use skill_resolve::{apply_scope_paths, SkillSpawnArgs};
 pub use skill_resolve::{substitute_skill_dir, SkillSpawnRequest};
 pub use task_list::TaskList;
 pub use trace::{NoopTraceSubscriber, TraceStream, TraceSubscriber};
+#[cfg(feature = "host-fs")]
+pub use virtual_tools::validate_skill_spawn;
 pub use virtual_tools::{
     check_capability_subset, dispatch, is_virtual, required_capability, validate_agent_spawn,
     AgentSpawnRequest,
 };
-#[cfg(feature = "host-fs")]
-pub use virtual_tools::validate_skill_spawn;
 
 #[cfg(feature = "host-fs")]
 pub use skill_resolve::resolve_skill_for_spawn;

@@ -833,7 +833,8 @@ mod proptests {
     fn path_strategy() -> impl Strategy<Value = String> {
         prop_oneof![
             (SEG, SEG, "[a-z]{2,4}").prop_map(|(a, b, ext)| alloc::format!("/{a}/{b}.{ext}")),
-            (SEG, SEG, SEG, "[a-z]{2,4}").prop_map(|(a, b, c, ext)| alloc::format!("/{a}/{b}/{c}.{ext}")),
+            (SEG, SEG, SEG, "[a-z]{2,4}")
+                .prop_map(|(a, b, c, ext)| alloc::format!("/{a}/{b}/{c}.{ext}")),
         ]
     }
 

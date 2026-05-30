@@ -27,10 +27,10 @@ pub(crate) use tau_runtime_core::dispatch::address_to_tool_name;
 mod tests {
     use super::*;
 
-    use tau_domain::{AgentInstanceId, Value};
-    use tau_ports::fixtures::{make_tool_spec, MockLlmBackend, MockTool};
     use crate::builder::Runtime;
     use crate::error::CoreRuntimeError;
+    use tau_domain::{AgentInstanceId, Value};
+    use tau_ports::fixtures::{make_tool_spec, MockLlmBackend, MockTool};
 
     fn empty_tool_spec(name: &str) -> tau_ports::ToolSpec {
         make_tool_spec(

@@ -17,9 +17,9 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use globset::GlobBuilder;
-use tau_domain::{Capability, FsCapability};
 #[cfg(feature = "host-fs")]
 use tau_domain::SKILL_DIR_VAR;
+use tau_domain::{Capability, FsCapability};
 #[cfg(feature = "host-fs")]
 use tau_pkg::{find_installed_skill, Scope};
 
@@ -122,7 +122,10 @@ pub struct SkillSpawnArgs {
 /// # }
 /// ```
 #[cfg(feature = "host-fs")]
-pub fn substitute_skill_dir(caps: &[Capability], install_path: &std::path::Path) -> Vec<Capability> {
+pub fn substitute_skill_dir(
+    caps: &[Capability],
+    install_path: &std::path::Path,
+) -> Vec<Capability> {
     let install_str = install_path.display().to_string();
     let subst = |paths: &[String]| -> Vec<String> {
         paths

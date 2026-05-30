@@ -17,16 +17,16 @@
 //! The streaming entry points `run_streaming` / `run_streaming_with_history`
 //! require tokio-shell types and live in `impl Runtime` below.
 
+pub use crate::process_gate::DynProcessCapabilityGate;
 pub use tau_runtime_core::builder::{
     DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, RuntimeBuilder,
 };
-pub use crate::process_gate::DynProcessCapabilityGate;
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use tau_ports::ToolSpec;
 use tau_domain::Capability;
+use tau_ports::ToolSpec;
 use tracing::{debug, info, warn};
 
 use crate::capability::check_capabilities;
@@ -415,8 +415,10 @@ impl Runtime {
             .collect();
 
         // Step 8: Snapshot tool_validators registry.
-        let tool_validators: std::collections::HashMap<String, crate::tool_args::ToolArgsValidator> =
-            self.tool_validators().clone().into_iter().collect();
+        let tool_validators: std::collections::HashMap<
+            String,
+            crate::tool_args::ToolArgsValidator,
+        > = self.tool_validators().clone().into_iter().collect();
 
         // Step 9: Construct and return the stream.
         let stream = crate::stream::run_streaming_inner(

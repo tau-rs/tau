@@ -14,9 +14,9 @@ use tau_runtime::RuntimeError;
 pub fn from_runtime_error(err: &RuntimeError) -> ErrorObject {
     // Capability denials reach RuntimeError through the
     // Core(Tool(#[from] ToolError)) wrapper. Match that path first.
-    if let RuntimeError::Core(CoreRuntimeError::Tool(
-        tau_ports::ToolError::CapabilityDenied { capability },
-    )) = err
+    if let RuntimeError::Core(CoreRuntimeError::Tool(tau_ports::ToolError::CapabilityDenied {
+        capability,
+    })) = err
     {
         return ErrorObject {
             code: error_codes::CAPABILITY_DENIED,
