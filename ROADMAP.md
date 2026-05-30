@@ -1,432 +1,760 @@
 # Tau roadmap
 
-This document tracks current phase, near-term priorities, and
-explicit out-of-scope items. Updated at phase transitions per PG1 and
-PG4.
+This document tracks current direction, prior shipped work, and the
+forward phasing under the canonical philosophy
+[`docs/explanation/tau-philosophy.md`](docs/explanation/tau-philosophy.md).
 
-For per-issue tracking, see [GitHub
-Issues](https://github.com/LEBOCQTitouan/tau/issues).
+For per-issue tracking, see
+[GitHub Issues](https://github.com/LEBOCQTitouan/tau/issues).
+For the historical record of every Phase 0/1 sub-project, see
+`git log` and ADRs `0001`–`0034`.
 
-## Current phase: 2 — tau as a compiled language for agentic workflows
+---
 
-**Phase 1 complete** (2026-05-17). All Tier 1–4 priorities shipped,
-including serve mode (§15, ADR-0033). See [Phase 2](#phase-2--tau-as-a-compiled-language-for-agentic-workflows) for active work.
+## Where we are (2026-05-29)
 
-**Status:** Phase 1 priority 3 (first real Tool plugins: fs-read +
-shell) shipped 2026-04-30. Tier 1 fully complete: plugin loading
-mechanism (priority 1), three real LLM-backend plugins (priority 2),
-and two real Tool plugins (priority 3) with end-to-end capability
-enforcement. **Tier 2 fully complete** as of 2026-05-01: priorities
-4 (capability override), 5 (transitive dependency resolution), 6
-(tool-args schema validation), 7 (tau update/verify/uninstall), and
-8 (streaming LLM responses) all shipped, closing the ADR-0007 §4,
-§5, §1, ADR-0006 §3, and ADR-0006 §5 reservations. Tier 3 priority
-11 (REPL persistence) shipped 2026-05-02 — closing ADR-0006 §16 +
-ADR-0007 §11. Tier 3 priority 12 (sandboxing) shipped 2026-05-03 —
-closing ADR-0006 §13 + Constitution G12; ADR-0014 records the design.
-Sub-project A from the priority-12 followups (sandbox activation by
-default — declarative requirements + adapter registry + resolver)
-shipped 2026-05-04 — ADR-0015 records the design; sandboxing is
-now ON by default for every plugin spawn, with `--no-sandbox` /
-`[sandbox] required_tier = "none"` as the explicit opt-out.
-Sub-project B (plugin compatibility verification + Layer 2 install-time
-cross-check) shipped 2026-05-04 — ADR-0016 records the design; the 5
-real plugins now declare `[sandbox] required_tier = "strict"` in their
-manifests, install carries Layer 2 cross-check at step 8.7, and a new
-`tau-plugin-compat` crate hosts per-plugin Layer 3 verification (Layer 4
-e2e gated `#[ignore]` pending sub-project D). Sub-project D (end-to-end
-landlock CI integration + port-aware Layer 4 driver) shipped 2026-05-06
-— ADR-0017 records the design; 9 real-kernel e2e tests + 2 runtime e2e
-tests pass on Linux CI; two priority-12 native-adapter bugs caught and
-fixed (Execute access flag + binary-parent auto-add); GitHub Actions
-caching via `Swatinem/rust-cache` + composite action. The 10 Layer 4
-plugin-compat `#[ignore]`'s from sub-project B persist (plugin
-startup-IO cataloging deferred to a D-followup or sub-project F).
-Phase 2 (tau as a
-compiled language for agentic workflows) is now unblocked. Remaining
-Tier 3: priorities 9 (multi-agent orchestration) and 10 (workflow
-runner).
+### Phase 0/1 — runnable runtime (complete)
 
-| # | Sub-project | Produces | Merged |
+| Phase | What shipped |
+|---|---|
+| **0 — bootstrap** | empty workspace + governance + CI + 5 foundational crates (`tau-domain`, `tau-ports`, `tau-pkg`, `tau-runtime`, `tau-cli`). 2026-04-24 → 2026-04-28. |
+| **1 — runnable runtime** | plugin loading (process + MessagePack-RPC), 5 production plugins, capability override, transitive resolution, tool-args schema, streaming, `tau update`/`verify`/`uninstall`, REPL persistence, full sandbox stack (Linux landlock + seccomp + namespaces; macOS sandbox-exec; Windows AppContainer scaffold; container adapter; passthrough), multi-agent v1/v1.1, tau-workflow v1, Skills 1–6, lefthook deep-gate. 2026-04-30 → 2026-05-16. |
+
+### Phase 2 — compiled-language foundation (partial)
+
+| § | Sub-project | Status |
+|---|---|---|
+| A | `tau check` | shipped 2026-05-18 (PR #161) |
+| B | Target-triple registry (Bazel-inspired 3-axis; 5 Available + 1 Reserved) | shipped 2026-05-19 (PR #190); ADR-0034 |
+| C.2 | `tau build` (MVP producer) | shipped 2026-05-27 (PR #242) |
+| C.2.1 | `tau build` flags (`--target`/`-o`/`--json`) | shipped 2026-05-28 (PR #251) |
+| C.3 | `tau run --bundle` (MVP consumer) | shipped 2026-05-28 (PR #247) |
+| E | `tau verify --bundle` (reproducibility) | shipped 2026-05-28 (PR #250) |
+| D | Capability vocabulary forward-compatibility | shipped 2026-05-29 (PR #254) |
+| C.1 | **Declarative workflow IR** | **not yet started — the foundational research bet** |
+| F | Remote target backends | design-only |
+| G | WASM target backend | design-only — **promoted to primary** under the new philosophy (see Phase γ) |
+
+### Adjacent clusters
+
+- **Tau-serve mode v1** — shipped 2026-05-18 (PR #143); JSON-RPC 2.0 over
+  NDJSON stdio.
+- **Logging upgrades** (A precursor + B / C / D / E / F) — complete (PRs
+  #195, #196, #198, #221, #222, #224, #226); tracing layers + non-blocking
+  writer + OTLP export. **This stack is load-bearing for every phase
+  below**: spans + events are how the conformance gate (β.6) and the
+  scenario suite observe behavior, and OTLP export is how production
+  deployments will see what bundles do.
+- **Cap-forward-compat** (Phase 2 §D) — shipped 2026-05-29; capability
+  vocabulary now versioned-forward.
+
+### Load-bearing surface that must continue to work
+
+Every phase below is additive on top of this. **The forward plan does not
+break what works today.**
+
+| Surface | Status | What depends on it |
+|---|---|---|
+| 5 production plugins (anthropic, ollama, openai, fs-read, shell) on the bespoke MessagePack-RPC protocol | working | every integration test, every doctest, every fixture |
+| Sandbox: landlock+seccomp (Linux), sandbox-exec (macOS), AppContainer scaffold (Windows), container adapter, passthrough | working; 4 strict-tier adapters | 10+ layer4 e2e tests; every plugin spawn |
+| Lockfile v6 (flat `packages` vec with nested optional plugin/skill) | stable since 2026-05-16 | `tau install`/`resolve`/`verify`/`update`/`uninstall`, bundle producer/consumer |
+| CLI verbs: `install · resolve · run · chat · list · init · verify · update · uninstall · plugin · session · sandbox · workflow · skill · serve · check · build · run --bundle · verify --bundle · target list/show` | stable | user-facing contract; all docs reference these |
+| Multi-agent v1.1 (`task.*` + `run.*` virtual tools; `agent.<kind>.spawn` recursive) | working | tau-workflow v1; orchestration tests |
+| Tau-workflow v1 (`workflows/*.toml` linear pipelines, JSONL + `--resume`) | working | reference workflow patterns |
+| Skills (manifest extension + install pipeline + discovery + runtime invocation + Anthropic interop + 3 reference packages) | working since 2026-05-16 | the proto-distribution model Phase δ extends |
+| Target-triple registry (Bazel-inspired; 5 Available + 1 Reserved) | stable since 2026-05-19 | `tau build --target`, `tau check --target` |
+| Bundle format + `build` / `run --bundle` / `verify --bundle` | stable since 2026-05-28 | Phase β.2 lowers into this format |
+
+The 2026-05-29 strategic pivot, recorded in
+[`docs/explanation/tau-philosophy.md`](docs/explanation/tau-philosophy.md),
+reframes the **remaining** work around three convictions — tau is a
+*compiler*, a *harness everywhere*, *capability-safe by construction* —
+without invalidating any of the above. The forward phases (α → β → γ → δ)
+execute that reframing while preserving every shipped contract.
+
+---
+
+## What the philosophy pivot deliberately killed
+
+These were considered during the brainstorm and explicitly declined. They
+remain killed unless re-argued; surfaced here so the boundaries don't
+get redrawn implicitly.
+
+- **Competing with Vercel AI SDK for the easy server-agent SDK market.**
+  Crowded, not differentiated, and would dilute the wedge. tau is for
+  workflows that need to *be* a portable artifact.
+- **Authoring agents/workflows in Python or TypeScript as canonical
+  source.** Inverts the compiler thesis. TS sugar is supported (β.8 +
+  δ.2), but emits the IR; it does not become the source.
+- **A tau-operated package registry / marketplace.** Operationally
+  expensive, cold-start hostile, and unnecessary — git URLs +
+  content-hashed lockfile + capability audit (the Go-modules pattern,
+  extending Skills 1–6 distribution) cover it.
+- **A cross-ecosystem version solver** (unifying cargo + npm + MCP
+  semantics). Years of work; no immediate user value. Delegate to each
+  ecosystem's resolver. Framed in
+  [framing-g-polyglot-resolver](docs/superpowers/specs/2026-05-29-framing-g-polyglot-resolver.md).
+- **On-device LLM inference on MCU.** Even Espressif's ESP-Claw (the
+  one named precedent for agents on ESP32) delegates inference to a
+  cloud model. The harness can run on MCU; the model can't.
+- **WASM Component Model on microcontrollers as a Phase 1/2
+  commitment.** The runtime ecosystem isn't there (WAMR is still on
+  Preview 1). MCU ships via Preview-1 wasm OR native firmware until the
+  component-model runtime catches up. Framed in
+  [framing-c-prime-prime-mcu-strategy](docs/superpowers/specs/2026-05-29-framing-c-prime-prime-mcu-strategy.md).
+- **A bespoke wire protocol for external tools.** Replaced by MCP for
+  every new external tool from β.3 onward; the existing bespoke protocol
+  is preserved for in-tree plugins as legacy compat only (see migration
+  strategy below).
+- **A bundled vector database** for context-manager retrieval. Vector
+  stores are contracted MCP servers (γ.6), never built-in.
+- **Operating a tau cloud / hosted service.** `--remote` builds are
+  optional convenience, not a tau-operated infrastructure commitment.
+
+---
+
+## Migration strategy: wrap, don't replace
+
+The philosophy says external tools should go through MCP and native tools
+should be in-process. Today's runtime uses a bespoke process+stdio
+protocol for **all** plugins. We do not flag-day this.
+
+```
+COEXISTENCE — three lanes running simultaneously
+=====================================================================
+  LANE 1 — existing bespoke plugins (legacy compat layer; preserved)
+    5 in-tree plugins continue to load via the existing plugin_host.
+    The bespoke protocol becomes the LEGACY tier; no new plugins on it.
+
+  LANE 2 — MCP facilitator (new; β.3)
+    All NEW external tools go through MCP from day one. Capability
+    gating at the contract boundary.
+
+  LANE 3 — native tools (new; β.2 + β.3)
+    Compiled-in tools registered into the trait-object registry by
+    a per-target static builder. No process, no protocol, direct call.
+
+  MIGRATION PATH — per-plugin, deliberate, NEVER a hard cut
+    fs-read   → native tool                (eventually)
+    shell     → native tool                (eventually)
+    anthropic → first-class LlmBackend impl OR external MCP server
+    ollama    → first-class LlmBackend impl OR external MCP server
+    openai    → first-class LlmBackend impl OR external MCP server
+    Each moves when its replacement lands; bespoke protocol shrinks
+    by attrition. Deprecation notice when 0 in-tree plugins remain.
+=====================================================================
+```
+
+The Phase β sub-projects below each note which lane they target and what
+they preserve. The user-facing CLI verbs stay stable; what changes is
+behind them.
+
+### Wrapper crate + lifecycle
+
+The legacy bespoke loader lives at `crates/tau-plugin-legacy/` (renamed
+from / extracted out of `tau-runtime::plugin_host`), with a documented
+"this crate exists to keep in-tree plugins working during migration; do
+not add new code paths here" header. Its public surface is **frozen**
+at the migration start — no new features land in legacy; only bug fixes.
+
+### Per-plugin migration triggers
+
+A bespoke-protocol plugin migrates when its replacement is ready:
+
+| plugin | replacement | trigger |
+|---|---|---|
+| `fs-read` | native tool (compiled-in) | wasm-component build target stable (β.7) |
+| `shell` | native tool (compiled-in) | same as `fs-read` |
+| `anthropic` | first-class `LlmBackend` impl in `tau-runtime-core`, OR contracted MCP server if a maintained one ships | β.5 credential chain land + in-tree LlmBackend extraction |
+| `ollama` | same | same |
+| `openai` | same | same |
+
+### Exit criteria for Lane 1 (legacy bespoke compat)
+
+Lane 1 closes when **all five** of the following hold:
+
+1. Zero in-tree plugins remain on the bespoke protocol.
+2. No external user-reported workflow requires it (6-month observation
+   window from "0 in-tree plugins" milestone).
+3. `tau install` of an external bespoke plugin emits a deprecation
+   warning for two consecutive minor releases before refusal.
+4. `tau-plugin-legacy` is feature-gated `legacy` (off by default) for
+   one minor release before removal.
+5. A retrospective ADR records the closure with the final user-impact
+   audit.
+
+Expected timing: end of Phase γ at the earliest; possibly into Phase δ.
+**Not a Phase β concern.** Phase β only ensures the legacy lane keeps
+working unchanged; it does not depend on its closure.
+
+---
+
+## Phase α — Pre-engine framing (NOW)
+
+**Goal:** before any engine-core implementation begins, scope the three
+load-bearing risks the philosophy acknowledges. The engine cannot ship
+correctly if any of these are left implicit.
+
+**Status:** scoping documents written; downstream design specs are the
+deliverable shape.
+
+| # | Framing | Scoping doc | Required output |
 |---|---|---|---|
-| 1 | Plugin loading mechanism ✅ | Out-of-process IPC over MessagePack-RPC; tau-plugin-protocol + tau-plugin-sdk crates; plugin_host module in tau-runtime; tau-pkg build-on-install; debug-tier subcommands; echo-llm + echo-tool toy plugins | 2026-04-28 |
-| 2a | Anthropic LLM-backend plugin ✅ | First real LLM-backend plugin: Anthropic Claude Messages API client at `crates/tau-plugins/anthropic/`; day-1 streaming + tool-use; cassette-replay test harness + env-gated live smoke; in-plugin retry honoring Retry-After; ConfigError::InvalidEnvVar SDK amendment | 2026-04-29 |
-| 2b | Ollama LLM-backend plugin ✅ | Second real LLM-backend plugin: Ollama (local LLM runner) at `crates/tau-plugins/ollama/`; native `/api/chat` over NDJSON streaming (~50 LOC hand-rolled, no eventsource-stream); optional bearer-token auth; cassette-replay test harness duplicated from Anthropic; in-plugin retry honoring 503-on-model-load case; 404 errors include `ollama pull` remediation hint | 2026-04-29 |
-| 2c | OpenAI plugin + supporting infrastructure ✅ | Third real LLM-backend plugin: OpenAI Chat Completions client at `crates/tau-plugins/openai/`; SSE streaming, real `tool_call_id` round-trip, full `tool_choice` round-trip. Plus `crates/tau-plugin-test-support/` (rule-of-three refactor of cassette replayer) and `crates/tau-plugin-conformance/` (parameterized behavioral test suite, deferred from ADR-0008 §17). All 3 plugins migrated to typed `LlmError` variants. ADR-0009 Accepted. | 2026-04-29 |
-| 3 | First real Tool plugins (fs-read + shell) ✅ | Two minimal Tool plugins demonstrating the kernel's capability check end-to-end. `fs-read` enforces `FsCapability::Read.paths` globs; `shell` enforces `ProcessCapability::Spawn.commands` allow-list (wall-clock timeout, 1 MiB output cap, kill+drain on timeout, no env inheritance, no stdin). Closed two infrastructure gaps in the same sub-project: `tool.describe_capabilities` wire method (Gap 1: plugin-declared capabilities now surface to the kernel for IPC tools); `SessionContext.granted_capabilities` (Gap 2: agent grants flow to plugin processes for finer-grained scope checks). Trust model: unsandboxed v0.1; sandboxing deferred to Tier 3 priority 12. | 2026-04-30 |
-| 4 | Capability override implementation ✅ | Tier 2 priority 4 — realizes ADR-0007 §4 reservation. Project tau.toml `[[agents.<id>.capabilities]]` narrows but never expands package manifest grants. `tau-runtime::capability_override` module (semantic glob-subset analyzer + `compute_effective`); `RunOptions.project_override` flows from tau-cli through `Runtime::run`; `SessionContext.deny_entries` channel; `DenyEntry` type; fs-read + shell plugins honor deny-after-allow (deny wins per spec §9). Validation at parse time AND every runtime load (fail-closed both places). New `tau list agents --capabilities` audit surface. New typed errors `ProjectConfigError::CapabilityOverrideExpands` and `RuntimeError::CapabilityOverrideExpands`. Telemetry event `runtime.capability_override_rejected`. No new CI jobs (23 required checks unchanged). | 2026-04-30 |
-| 5 | Transitive dependency resolution ✅ | Tier 2 priority 5 — realizes ADR-0007 §5 reservation. New `tau-pkg::source_list` (git ls-remote tag enumeration + rev-pinned shallow read) and `tau-pkg::resolve` (three-phase resolver: group / conflict / pick highest-compatible). New `tau resolve` subcommand. Schema upgrade: `[[agents.<id>.requires.tools]]` typed entries with `name + source + version`; bare strings rejected at parse. Lazy resolve at `tau run`/`tau chat` with `--no-install` opt-out emitting copy-pasteable install hints. npm-style progress output (one line per phase, JSON event stream). New typed `ResolveError`, `SourceListError`, `RequiresToolsBareStringRejected`. Tests use `file://` git fixtures — no real network in CI. No new CI jobs (23 required checks unchanged). | 2026-04-30 |
-| 6 | Tool-args schema validation ✅ | Tier 2 priority 6 — realizes ADR-0006 §3 deferral closure. New `tau-runtime::tool_args` module with `ToolArgsValidator` (Draft 7 via `jsonschema` crate). Schemas pre-compile at `RuntimeBuilder::build()`; malformed → `BuildError::ToolSchemaInvalid` (terminates build before any LLM round-trip). Runtime arg-validation failures surface as `ToolError::BadArgs` with MANDATORY template (original args + full schema + specific issue) so the LLM self-corrects via the conversation. Loop survives validation errors; only real plugin invocation crashes still terminate. New ADR-0010. No new CI jobs (23 required checks unchanged). | 2026-04-30 |
-| 7 | tau update / verify / uninstall ✅ | Tier 2 priority 7 — closes ADR-0007 §1 deferral. New tau_pkg::tree_hash module (walkdir + sha2; excludes .git/, target/, *.tau-tmp/; symlinks contribute target bytes). New tau_pkg::verify module returning structured VerifyReport (Ok / TreeDrift / BinaryDrift / Missing / Unverified). New tau_pkg::update_package library function composing existing source_list + resolver + install + uninstall. Three CLI subcommands: tau update (default latest tag, --version pin, --prune), tau verify (exit 0/2, --json), tau uninstall (permissive + remediation hint). Lockfile schema v2 → v3 additive (LockedPlugin.binary_sha256 field; v2-leftover entries flagged unverified, not drift). Existing tau_pkg::uninstall library function reused unchanged. New ADR-0012. No new CI jobs (23 required checks unchanged). | 2026-05-01 |
-| 11 | REPL persistence ✅ | Tier 3 priority 11 — closes ADR-0006 §16 + ADR-0007 §11 deferrals. New tau-cli/src/session module: SessionId (UUID v7), SessionWriter / SessionReader (JSONL), list_sessions, render_session. Auto-save default with --ephemeral opt-out. tau chat --resume <id-or-prefix> with strict drift validation (agent_id + package.name + package.version + llm_backend match), --force overrides. New tau session subcommand group (list, show, delete, export with jsonl/md/json formats). /clear removed (incoherent with persistence); /info added. Schema v1 baseline. No tau-runtime changes. New ADR-0013. No new CI jobs (23 required checks unchanged). | 2026-05-02 |
-| 8 | Streaming LLM responses ✅ | Tier 2 priority 8 — realizes ADR-0006 §5 deferral closure. New `tau-runtime::stream` module with `RunEvent` enum + `run_streaming_inner` async generator (via `async-stream` crate). Kernel pump translates `CompletionChunk` into higher-level `RunEvent`s (`TextDelta`, `ToolCallStarted`, `ToolCallCompleted`, `TurnCompleted`, `RunCompleted`, `FatalError`). `Runtime::run_streaming` + `run_streaming_with_history` public entry points return `Result<impl Stream + 'static, RuntimeError>`. `Runtime::run`/`run_with_history` REFACTOR as thin stream-drainers (zero behavior change; 100+ existing tests pass unchanged). New `RunEvent::FatalError` variant (with `tool_error_variant` tag) preserves byte-identical batch-API error reconstruction for typed `RuntimeError::*` variants (plan-erratum revision documented in ADR-0011 decision 2). `tau chat` streams by default (`--no-stream` opt-out, two-pass termimad render); `tau run --stream` opt-in flag (human + JSON modes; canonical 5-event JSON shape per spec §4.6). New ADR-0011. No new CI jobs (23 required checks unchanged). | 2026-04-30 |
-| 12 | Sandboxing ✅ | Tier 3 priority 12 — closes ADR-0006 §13 + Constitution G12. New `tau_ports::Sandbox` port + typed `CapabilityShape` vocabulary in `tau-domain`. Two adapter crates: `tau-sandbox-native` (Linux landlock + seccomp + namespaces; Light + Strict tiers) and `tau-sandbox-container` (docker/podman shell-out, cross-platform). Adapter chain selection in `tau-runtime::sandbox` via probe-based first-Available-meeting-tier wins; `<scope>/config.toml [sandbox]` section configures the chain (schema v1 → v2, additive). Layer 3 pre-flight validation. Plugin host integration via `tokio::Command::as_std_mut()` bridge. Lockfile schema v3 → v4 (additive `required_shapes` field). New `tau resolve --check-sandbox` CLI advisory mode (human + JSON output). macOS / Windows / remote backends, per-command exec gating, per-host network filter, and default activation tracked as follow-ups in [the followups doc](docs/superpowers/specs/2026-05-03-sandboxing-followups.md). New ADR-0014. 25 required CI checks gating `main` (was 23). | 2026-05-03 |
-| 12-A | Sandbox activation by default ✅ | Sub-project A from the priority-12 followups — see [spec](docs/superpowers/specs/2026-05-04-sandbox-activation-design.md) and [ADR-0015](docs/decisions/0015-sandbox-activation.md). Sandboxing is now ON by default for every plugin spawn. Scope config schema migrates v2 (chain + minimum_tier) → v3 (declarative `required_tier` + `required_shapes`); v2 lockfiles auto-load with a `tracing::warn!`. Architectural pivot: chain-based selection replaced with Bazel-style `AdapterRegistration` registry + 5-stage `resolve_adapter` filter pipeline (platform → probe → tier → shape → plugin tier). New `passthrough` adapter (~30 LOC) replaces the `Option<None>` "no isolation" branch as a registered first-class adapter. Plugin manifest `[sandbox]` block (`PluginSandboxRequirements`) added to `tau-domain`. `PluginHostOptions` gains `sandbox_adapter` / `force_passthrough` / `force_adapter_kind` fields; CLI integration via `plugin_loader::load_plugins`. Global `--no-sandbox` and `--sandbox <kind>` flags. New subcommands: `tau sandbox status` (diagnostic), `tau sandbox setup` (interactive + `--non-interactive` modes). `tau resolve --check-sandbox` extended to surface plugin-tier mismatches. Hard refuse on resolution failure (exit 2) with guided multi-option diagnostic via `crates/tau-cli/src/cmd/error_render.rs` + insta snapshots. `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` env-var Mock injection preserved. No new CI jobs (25 required checks unchanged from priority 12). | 2026-05-04 |
-| 12-B | Plugin compatibility verification ✅ | Sub-project B from the priority-12 followups — see [spec](docs/superpowers/specs/2026-05-04-plugin-compat-design.md) and [ADR-0016](docs/decisions/0016-plugin-compat-verification.md). All 5 real plugins (anthropic, ollama, openai, fs-read, shell) declare `[sandbox] required_tier = "strict"`. New `tau-pkg::sandbox_check` public module: `cross_check_plugin_capabilities` spawns the plugin binary, performs `meta.handshake`, enumerates `tool.describe_capabilities` per method (tool plugins), and bidirectionally diffs against the manifest. `InstallError::CrossCheck { message: String }` (String not `#[from]` because Capability isn't Eq) propagates failure; `InstallOptions::skip_cross_check: bool` escape hatch for stub-binary tests. Wired into `install_with_options` step 8.7 between source SHA-256 and lockfile write. Native adapter symlink-resolution fix in `tau-sandbox-native::light::resolve_symlinks_for_landlock` (absorbs sub-project D's foundation). New workspace crate `tau-plugin-compat` (publish=false): per-plugin tau.toml fixtures, controlled-env-binary (statically linked, isolated from workspace), Layer 3 `tau resolve --check-sandbox` tests (5/5 pass). Layer 4 container + Layer 4 native tests scaffolded but `#[ignore]`'d (10 total) pending sub-project D's port-aware driver + cassette-replay-through-sandboxed-process infrastructure. New `render_cross_check_error` in tau-cli + 3 insta snapshots. CLAUDE.md tracked in git documenting per-agent `CARGO_TARGET_DIR` convention. 27 required CI checks gating `main` (was 25). | 2026-05-04 |
-| 12-D | End-to-end landlock CI integration + port-aware Layer 4 driver ✅ | Sub-project D from the priority-12 followups — see [spec](docs/superpowers/specs/2026-05-05-e2e-landlock-design.md) and [ADR-0017](docs/decisions/0017-e2e-landlock-and-driver.md). Re-introduces 5 e2e kernel-enforcement test files removed at priority-12 ship: `light_landlock.rs`, `strict_seccomp.rs`, `strict_net_filter.rs`, `strict_exec_gating.rs` (`#[ignore]`'d pending sub-project E), and `tau-runtime/tests/sandbox_native.rs` for runtime-level adapter integration. New `integration-tests` Cargo feature on `tau-sandbox-native` and `tau-runtime`. New port-aware test driver at `tau-plugin-compat/src/driver.rs` (~150 LOC, 5 unit tests) wrapping public `tau_runtime::plugin_host::load_{tool,llm_backend,storage}`. Two priority-12 native-adapter bugs caught and fixed: (1) `AccessFs::Execute` granted alongside `Read*` in landlock ruleset (without it, exec returns EACCES); (2) auto-add the spawned binary's parent dir to read_paths so plugins built outside system paths can load themselves. Controlled-env binary gains `TAU_FIXTURE_MODE` dispatch (read / open-socket / exec / default). New `docs/reference/sandbox-platform-support.md` documenting kernel features + tested distros. New CI infrastructure: `.github/actions/setup-rust` composite action wrapping `dtolnay/rust-toolchain` + `Swatinem/rust-cache@v2`; workflow-level `CARGO_INCREMENTAL=0` for sccache compatibility; `CLAUDE.md` Rule 4 added. 2 new Linux CI jobs (`test (tau-sandbox-native e2e / linux)` + `test (tau-runtime e2e / linux)`); 29 required CI checks gating `main` (was 27). The 10 Layer 4 plugin-compat `#[ignore]`'s from sub-project B persist — plugins exec under strict-tier landlock but EOF before handshake because their startup-IO surface (config dirs, /tmp, /proc) needs cataloging per plugin; deferred to a D-followup or sub-project F. |
-| 12-E | CI optimization ✅ | Sub-project E from the priority-12 followups — see [spec](docs/superpowers/specs/2026-05-06-ci-optimization-design.md), [plan](docs/superpowers/plans/2026-05-06-ci-optimization.md), and [ADR-0018](docs/decisions/0018-ci-optimization.md). Five-phase migration that reshaped CI from 23 required checks / ~33-min PR critical path to **14 required checks / ≤25-min path** without sacrificing coverage. Phase A: tooling — `Swatinem/rust-cache` `shared-key` for cross-job cache sharing; `cargo nextest run` for non-doctest invocations (3× faster on workspace with many test binaries); `mozilla-actions/sccache-action@v0.0.10` on test/check jobs (skipping release builds per spec); `mold` linker on Linux jobs via `rui314/setup-mold@v1`. Phase B: matrix `test:` split into `test-stable / {linux, macos, windows}` (full nextest + doctest) and `msrv-check / {linux, macos, windows}` (cargo check only); `-- --ignored` integration test block removed (dedicated e2e jobs cover that scope); **Windows promoted from `continue-on-error: true` advisory to hard gate** (W2 strictness upgrade) after a 4-of-4 Windows audit. Phase C: new `build-fixtures-linux` job builds 9 binaries once (5 plugins + 2 toy plugins + tau-cli + controlled-env), uploads as `linux-fixture-binaries`; 4 e2e/conformance jobs refactored to download the artifact; eliminates ~9 min of redundant compilation per PR. Phase D: dropped 6 redundant plugin release-build jobs absorbed by `build-fixtures`. Phase E: consolidated 7 `--no-default-features` jobs (5 explicit + 2 misnamed) into one `feature-flag-matrix / linux` shell loop with `::group::<crate>` markers; renamed `test (tau-ports test-fixtures only)` → `test-fixtures-ports / linux`. Real fixes shipped along the way: sccache-action v0.0.6 → v0.0.10 (legacy GHA cache v1 API sunset Feb 2025); `cargo nextest --no-tests=pass` for empty `--run-ignored` filter sets; `.config/nextest.toml` `retries = 2` for parallelism-exposed flakes; `_artifacts/` staging in build-fixtures (upload-artifact preserves directory tree); `chmod +x` after artifact download (upload-artifact strips x bits); restore `cargo build -p tau-cli --bin tau` (debug) in test-tau-plugin-compat (Layer 3 tests hardcode target/debug/tau path). New ADR-0018; CLAUDE.md Rule 6 documents `cargo nextest` for local dev. 14 required CI checks gating `main` (was 23). | 2026-05-06 |
-| 12-F | Per-host network filtering ✅ | Sub-project F + sub-project H. F (PR #35, commit d4438ae) shipped the initial veth+nft+CAP_NET_ADMIN design; F task 6.5 (PR #37, commit b14408c) wired apply_post_spawn integration. Sub-project H (PR <TBD>) replaced both with a userspace HTTP-CONNECT proxy + bridge per [ADR-0020](docs/decisions/0020-sandbox-proxy.md). Net result: zero kernel privileges, all 7 previously `#[ignore]`'d sandbox tests now runnable, CI no longer needs privileged Docker. 14 required CI checks (was 15). | 2026-05-06 | 2026-05-07 |
-| 12-G | Per-plugin Docker images ✅ | Sub-project I + inline closure of sub-project J from the priority-12 followups — see [spec](docs/superpowers/specs/2026-05-08-per-plugin-images-design.md) and [ADR-0021](docs/decisions/0021-per-plugin-images.md). PR #41 (commit ae8c21c) replaced the Container adapter's bind-mount-the-plugin-binary approach with per-plugin Docker images built on a shared `tau-plugin-base`. New `xtask build-plugin-images` workspace member; CI builds with GHA buildx cache. PR #43 (commit 1d03075) closed the 3 HTTP cassette tests by adding plain-HTTP forwarding to `tau-sandbox-proxy` (alongside the existing CONNECT path) and switching the container to `--user 0` for HTTP plans (Docker Desktop forces root:root 660 perms on bind-mounted Unix sockets — `--cap-drop=ALL` + `--read-only` + seccomp-default keep the security envelope equivalent to nobody). All 5 originally-`#[ignore]`'d Container-adapter integration tests in `layer4_container.rs` close. ADR-0021 documents the four-phase roadmap (Phase 1 ships now; Phases 2–4 deferred). | 2026-05-08 |
-| 12-H | Dev environment + pre-push test gate ✅ | Sub-project G (dev environment) + lefthook deep-gate. PR #42 (commit 9080bbb) shipped the lefthook pre-push gate running tests in a Linux Podman container with persistent named volumes (cargo-cache + target-cache). PR #44 (commit f341366) expanded the gate to cover all 10 Linux CI jobs sequentially in a single Podman container with `--security-opt label=disable` for SELinux compatibility, DooD via socket bind-mount, and BUILDX cache env vars. Cost: ~3–4 min warm, ~30–45 min cold. Eliminates ~5–10 min of CI feedback latency for cross-platform breakage that would otherwise only surface on `windows-latest` / `macos-latest` runners. No new CI jobs (gate runs locally before push). | 2026-05-08 |
-| 12-I | macOS sandbox-exec adapter ✅ | Sub-project J from the priority-12 followups — see [spec](docs/superpowers/specs/2026-05-09-sandbox-darwin-design.md) and [ADR-0022](docs/decisions/0022-sandbox-darwin.md). PR #45 (commit 597db89). New `tau-sandbox-darwin` crate parallel to `tau-sandbox-native` + `tau-sandbox-container`. Strict tier only via Apple's `sandbox-exec` + SBPL profile (S-expression dialect). `wrap_spawn` builds an SBPL profile from the `SandboxPlan`, writes it to `/tmp/tau-darwin-<pid>-<n>.sb`, then replaces the original command with `sandbox-exec -f <profile> <orig-cmd>`. Network plans validated through `tau-sandbox-proxy::validate_hosts`; profile permits outbound only to `127.0.0.1:8443` (the proxy port). `cfg(target_os = "macos")`-gated runtime; pure-logic `profile.rs` + `baseline.rs` modules compile on any platform (7 unit tests run everywhere; 4 macOS-only integration tests). Runtime registry: `instantiate(RegistryKind::Native)` returns `DarwinSandbox` on macOS. Closes the macOS gap from ADR-0014 §"out of scope" — macOS plugin spawns now run under a real OS-level sandbox with the same defense-in-depth as Linux strict. | 2026-05-09 |
-| 12-J | Windows AppContainer adapter — Phase 1 scaffold ✅ | Sub-project K from the priority-12 followups — see [spec](docs/superpowers/specs/2026-05-09-sandbox-windows-design.md) and [ADR-0023](docs/decisions/0023-sandbox-windows-scaffold.md). PR #46 (commit 6a58c53). New `tau-sandbox-windows` crate; **scaffold only** — pure-logic profile generation (`build_appcontainer_caps`) with 7 unit tests, Win32-shape API stubs (`acl.rs::{create_appcontainer_profile,delete_appcontainer_profile,grant_access,revoke_access}` returning `Ok(())` without calling Win32), and `WindowsSandbox` impl `Sandbox` whose probe returns `Unavailable` honestly. Runtime registry wired (`SandboxAdapter::Windows` cfg-gated to Windows). Phase 2 work deferred and tracked in ADR-0023: real Win32 calls via the `windows` crate, UDS→TCP variant of `tau-sandbox-proxy`, and `CreateProcessAsUserW` spawn integration (the three coupled changes that need a Windows dev environment to iterate on — UTM Windows 11 ARM VM is the future unlock). Resolver still falls back to `Passthrough` on Windows because the probe declines; behaviour is unchanged from today. | 2026-05-09 |
+| α.1 | **D — Workflow IR** | [framing-d-workflow-ir](docs/superpowers/specs/2026-05-29-framing-d-workflow-ir.md) | Design spec + ADR settling D-1 through D-7. Must show how the IR relates to today's `tau.toml` schema and `workflows/*.toml` v1 format (subsumes? superset? parallel?). |
+| α.2 | **G — Polyglot resolver** | [framing-g-polyglot-resolver](docs/superpowers/specs/2026-05-29-framing-g-polyglot-resolver.md) | Design spec + ADR. Builds on the Skills 1–6 distribution pattern (already proven for skill bundles) and extends it to tau-native units. |
+| α.3 | **C″ — MCU strategy** | [framing-c-prime-prime-mcu-strategy](docs/superpowers/specs/2026-05-29-framing-c-prime-prime-mcu-strategy.md) | Two MCU tiers added as `Reserved` in the existing target-triple registry (Phase 2 §B); `tau-runtime-core` extraction spec; ADR on the passthrough commitment. |
 
-## Phase 0 (complete) — bootstrap + foundational sub-projects
+**Definition of done:** each framing produces a committed design spec, an
+ADR where decisions warrant durability, and one concrete example
+(minimal IR with its relation to today's manifest; an example tau-native
+unit; two `Reserved` MCU triples in the registry).
 
-**Goal:** empty repo with green CI, full governance files, and the
-hexagonal workspace skeleton in place; then five foundational
-sub-projects (tau-domain, tau-ports, tau-pkg, tau-runtime, tau-cli)
-producing working, testable software on its own per the
-brainstorm→spec→plan→implementation cycle.
+### Phase α sizing — what each framing actually spawns
 
-**Outcome:** all sub-projects shipped on schedule (2026-04-24 →
-2026-04-28). 6 ADRs Accepted. 464 workspace tests passing. 12 required
-CI status checks gating `main`. Hexagonal architecture realized across
-the 5-crate runtime surface (`tau-domain`, `tau-ports`, `tau-pkg`,
-`tau-runtime`, `tau-cli`); 3 stub crates (`tau-app`, `tau-infra`,
-`tau-observe`) reserved for Phase 1+ work.
+The three framings are **not just three documents**; each spawns
+downstream artifacts whose count is part of the framing cost.
 
-**Material v0.1 limitation:** plugin loading is deferred to Phase 1+
-per ADR-0007 §18. `tau install` records source trees; the loader lands
-in Phase 1.
+| Framing | Spec | ADR | Other artifacts | Estimated |
+|---|---|---|---|---|
+| α.1 D | 1 design spec (`<date>-workflow-ir-design.md`) | 1 ADR (`0035-workflow-ir.md`) | minimal IR example in-tree (1 toml + 1 .ir snapshot); update `tau-as-language.md` "Status" section | ~2 weeks |
+| α.2 G | 1 design spec (`<date>-tau-native-units-design.md`) | 1 ADR (`0036-tau-native-units.md`); possibly 1 lockfile-schema-bump ADR if v7 is needed | 1 example tau-native unit + 1 reference template in-tree | ~1.5 weeks |
+| α.3 C″ | 1 design spec (`<date>-tau-runtime-core-design.md`) | 1 ADR (`0037-mcu-passthrough.md`); 1 target-registry update for the two new Reserved triples | extraction sketch (file-by-file plan for β.1); CARGO_TARGET_DIR additions if any | ~2 weeks |
 
-| # | Sub-project | Produces | Merged |
-|---|---|---|---|
-| 0 | Repo bootstrap | Empty workspace + governance + CI | 2026-04-24 |
-| 1 | `tau-domain` Message + Agent + Package types ✅ | Pure-types crate with `thiserror` errors, doc tests, proptest for parsers | 2026-04-25 |
-| 2 | `tau-ports` plugin traits ✅ | Trait definitions for LLM backend, tool, storage, sandbox | 2026-04-26 |
-| 3 | `tau-pkg` package manager ✅ | `tau install` from git URLs, capability declarations parsed (G14), scope resolution (G8) | 2026-04-27 |
-| 4 | `tau-runtime` agent lifecycle + message passing ✅ | Spawn an agent, deliver messages, observe via structured logs (solo path only) | 2026-04-28 |
-| 5 | `tau-cli` real subcommands ✅ | `tau install`, `tau run`, `tau ls`, `tau init`, `tau chat` | 2026-04-28 |
+**Total Phase α cost:** ~5–6 weeks of design work, 3 design specs, 3–5
+ADRs, ~4 in-tree examples. This is the real entry cost before Phase β
+implementation begins; the user-facing roadmap should be honest about it.
 
-Phase 0 retrospective: [`docs/retrospectives/phase-0.md`](docs/retrospectives/phase-0.md).
+### Phase α risks
 
-## Phase 1 priorities
+- **The IR design surfaces unknown-unknowns.** No prior art means the
+  first IR will iterate. Mitigation: minimal IR (Agent + Tool nodes only,
+  per D-1's recommended option); extend deliberately, not preemptively.
+- **The framing docs invite scope creep.** Users will ask "can we also
+  decide X in framing G?" — every "yes" delays β. Mitigation: each
+  framing doc has an explicit "out of scope" section; defer with a
+  pointer.
+- **The MCU framing locks in a passthrough commitment.** If WAMR ships
+  the component model on MCU during Phase γ, the commitment looks
+  conservative in hindsight. Acceptable; the ADR is reversible.
 
-Detailed motivation per priority is in
-[`docs/retrospectives/phase-0.md` §7](docs/retrospectives/phase-0.md).
-Tier ordering reflects criticality, not strict implementation order
-(some Tier 2/3 items can run in parallel with later Tier 1 items).
+**Until Phase α is complete, no Phase β code lands.**
 
-### Tier 1 — unblocks Phase 1 itself
+---
 
-1. **Plugin loading mechanism.** ✅ Shipped 2026-04-28 — see
-   [ADR-0008](docs/decisions/0008-plugin-loading.md). Out-of-process
-   IPC over MessagePack-RPC + tau-pkg/tau-runtime/tau-domain
-   amendments. 15 required CI checks gating `main` (was 12 in Phase
-   0).
-2. **First real LLM-backend plugin.** ✅ Tier 1 priority 2 fully
-   complete: Anthropic shipped 2026-04-29 as priority 2a; Ollama
-   shipped 2026-04-29 as priority 2b; OpenAI shipped 2026-04-29 as
-   priority 2c — closing out Tier 1 priority 2 with the rule-of-three
-   refactor (`tau-plugin-test-support`) and the deferred conformance
-   suite (`tau-plugin-conformance`). All three plugins migrated to
-   typed `LlmError` variants. ADR-0009 (typed-error migration policy
-   + conformance suite charter) Accepted. 21 required CI checks
-   gating `main` (was 17).
-3. **First real Tool plugins.** ✅ `fs-read` + `shell` shipped
-   2026-04-30 as priority 3 — exercises capability checks at runtime
-   end-to-end. Closed two IPC infrastructure gaps in the same sub-
-   project: kernel-side capability enforcement for IPC tools (Gap 1
-   via new `tool.describe_capabilities` wire method) and agent-grant
-   flow to plugin processes (Gap 2 via additive
-   `SessionContext.granted_capabilities`). 23 required CI checks
-   gating `main` (was 21).
+## Phase β — Engine core (PRIORITY)
 
-### Tier 2 — completes Phase 0 deferrals
+**Goal:** the portable, capability-safe agent + workflow engine. The
+wedge. Even though it follows framing chronologically, it is the priority
+*outcome*; framing exists to de-risk it, not to delay it. Every
+sub-project below names what it builds on, preserves, adds, and
+eventually supersedes.
 
-4. **Capability override implementation** ✅ Shipped 2026-04-30 — see
-   [spec](docs/superpowers/specs/2026-04-30-capability-override-design.md).
-   Realizes ADR-0007 §4 reservation. Project tau.toml
-   `[[agents.<id>.capabilities]]` narrows package grants via
-   semantic glob-subset on `allow_*` plus `deny_*` carve-outs (deny
-   wins). Validation at parse time + every runtime load (fail-closed
-   both places). Audit surface: `tau list agents --capabilities`.
-5. **Transitive dependency resolution** ✅ Shipped 2026-04-30 — see
-   [spec](docs/superpowers/specs/2026-04-30-transitive-deps-design.md).
-   Realizes ADR-0007 §5 reservation. Project tau.toml
-   `[[agents.<id>.requires.tools]]` declares typed dependencies
-   (`name + source + optional version constraint`); `tau run`/`tau chat`
-   auto-install missing entries via lazy resolve; new `tau resolve`
-   subcommand serves project-wide install. Cargo-style semver
-   intersection across declarations of the same tool. One level deep:
-   recursive package-level `dependencies` (ADR-0004 §10) stays
-   deferred. No new CI jobs (23 required checks unchanged).
-6. **Schema validation for tool args** ✅ Shipped 2026-04-30 — see
-   [spec](docs/superpowers/specs/2026-04-30-tool-args-schema-design.md)
-   and [ADR-0010](docs/decisions/0010-tool-args-schema-validation.md).
-   New `tau-runtime::tool_args` module validates every tool-call's
-   args against the tool's declared `ToolSpec.input_schema` (Draft 7
-   via `jsonschema` crate). Schemas pre-compile at
-   `RuntimeBuilder::build()`; malformed → `BuildError::ToolSchemaInvalid`
-   before any LLM round-trip. Runtime arg-validation failures surface
-   as `ToolError::BadArgs` with MANDATORY template (original args +
-   full schema + specific issue) so the LLM self-corrects via the
-   conversation. `RuntimeError::PluginContractViolation` stays
-   reserved for a future out-of-process plugin handshake-lying
-   trigger path. No new CI jobs (23 required checks unchanged).
-7. **`tau update` / `tau verify` / `tau uninstall` subcommands** ✅ Shipped 2026-05-01 — see
-   [spec](docs/superpowers/specs/2026-05-01-tau-lifecycle-design.md)
-   and [ADR-0012](docs/decisions/0012-tau-lifecycle-commands.md).
-   New `tau_pkg::tree_hash`, `verify`, `update_package` modules.
-   Whole-tree SHA-256 verify is source-agnostic (anticipates future
-   `PackageSource` variants). `tau update <pkg>` defaults to latest
-   tag; `--version` to pin; `--prune` opt-in. `tau uninstall` is
-   permissive with a remediation hint pointing to project tau.toml's
-   `[[requires.tools]]` entries. Lockfile schema v2 → v3 (additive:
-   `LockedPlugin.binary_sha256`). Existing `tau_pkg::uninstall`
-   library function reused unchanged. No new CI jobs (23 required
-   checks unchanged).
-8. **Streaming LLM responses** ✅ Shipped 2026-04-30 — see
-   [spec](docs/superpowers/specs/2026-04-30-streaming-design.md)
-   and [ADR-0011](docs/decisions/0011-streaming-llm-responses.md).
-   New `Runtime::run_streaming` and `run_streaming_with_history`
-   yield a `Stream<Item = RunEvent> + 'static` as the agent loop
-   progresses. Existing `run`/`run_with_history` REFACTOR as thin
-   stream-drainers (zero behavior change for batch callers; one
-   source of truth for the agent loop). New `RunEvent::FatalError`
-   variant preserves byte-identical batch-API error semantics
-   (LLM, Tool::*, ToolNotRegistered errors round-trip via
-   `tool_error_variant` tagging — see ADR-0011 decision 2). `tau
-   chat` streams by default with two-pass termimad rendering
-   (`--no-stream` opt-out); `tau run --stream` opt-in flag (human
-   + JSON modes; canonical 5-event JSON shape per spec §4.6). No
-   new CI jobs (23 required checks unchanged).
+### Phase β sequencing (the DAG)
 
-### Tier 3 — extends the runtime
+```
+β SEQUENCING — what gates what, what runs in parallel
+=====================================================================
 
-9. **Multi-agent orchestration** (G10's deferred half). 🚧 In progress —
-    primitive-set spec at
-    [`2026-05-12-multi-agent-orchestration-design.md`](docs/superpowers/specs/2026-05-12-multi-agent-orchestration-design.md).
-    Defines the 6 entities (Identity, Capability, Agent, Task, TraceEvent,
-    Run), 3 verb classes (think/call/complete, virtual tools, host-emitted),
-    and 3 channels (sync return, shared state, trace) that compose into
-    linear / hierarchical / supervisor / worker-pool / plan-revise patterns.
-    Coordination via shared TaskList with hierarchical task ids + locks
-    (owner + lease + heartbeat). No bus, no inbox, no push-into-LLM. CLI
-    output is npm/cargo-style line-feed.
-10. **Workflow / pipeline runner** (deterministic step-by-step
-    pipelines) ✅ Shipped 2026-05-12 — see
-    [spec](docs/superpowers/specs/2026-05-12-tau-workflow-design.md) and
-    [ADR-0022](docs/decisions/0022-tau-workflow.md). New `tau-workflow`
-    crate; `tau workflow {list, run, log, resume}`; JSONL persistence;
-    `--resume` with drift checking. v1 is linear pipelines; DAG and
-    parallel branches earmarked as a "workflow-DAG" sub-project (see
-    deferred follow-ups below).
-11. **REPL persistence** (`tau chat --resume <id>`) ✅ Shipped 2026-05-02 — see
-    [spec](docs/superpowers/specs/2026-05-01-repl-persistence-design.md)
-    and [ADR-0013](docs/decisions/0013-repl-persistence.md).
-    Sessions auto-save to JSONL files at `<scope>/.tau/sessions/<uuid>.jsonl`.
-    `--ephemeral` opts out. `tau chat <agent> --resume <id-or-prefix>`
-    with strict-mode drift validation (`--force` overrides). New
-    `tau session` subcommand group (list, show, delete, export). New
-    `/info` REPL slash command; `/clear` removed (replaced by `/exit`
-    + re-run). No tau-runtime changes (NG6 preserved). No new CI jobs
-    (23 required checks unchanged).
-12. **Sandboxing implementation** ✅ Shipped 2026-05-03 — see
-    [spec](docs/superpowers/specs/2026-05-02-sandboxing-design.md),
-    [vision](docs/explanation/tau-as-language.md), and
-    [ADR-0014](docs/decisions/0014-sandboxing.md). New
-    `tau_ports::Sandbox` port (probe / supported_shapes /
-    validate_plan / wrap_spawn) + typed `CapabilityShape` vocabulary
-    in `tau-domain`. Two adapter crates: `tau-sandbox-native` (Linux
-    landlock + seccomp + namespaces; Light + Strict tiers) and
-    `tau-sandbox-container` (docker/podman shell-out, cross-platform).
-    Adapter chain selection in `tau-runtime::sandbox` via probe-based
-    first-Available-meeting-tier wins; `<scope>/config.toml [sandbox]`
-    section configures the chain (schema v1 → v2, additive). Layer 3
-    pre-flight validation (`build_plan` + `validate_plan_against_adapter`,
-    returns ALL errors per pass). Plugin host integration via
-    `tokio::Command::as_std_mut()` bridge. Lockfile schema v3 → v4
-    (additive `required_shapes` field; v3 entries auto-upgrade with
-    once-per-process migration warning). New `tau resolve --check-sandbox`
-    CLI advisory mode (human + JSON output). macOS / Windows / remote
-    backends, per-command exec gating (landlock V2), per-host network
-    filter (nftables-in-netns), and default activation are tracked as
-    follow-ups in [the followups doc](docs/superpowers/specs/2026-05-03-sandboxing-followups.md).
-    25 required CI checks gating `main` (was 23).
-    - **Sub-project A: Sandbox activation by default** ✅ Shipped 2026-05-04 — see
-      [spec](docs/superpowers/specs/2026-05-04-sandbox-activation-design.md)
-      and [ADR-0015](docs/decisions/0015-sandbox-activation.md).
-      Sandboxing is now ON by default for every plugin spawn.
-      Architectural pivot: chain-based selection replaced with
-      Bazel-style declarative requirements + adapter registry +
-      5-stage resolver filter pipeline. Schema v2 → v3 migration
-      with auto-loading + `tracing::warn!`. New `passthrough`
-      adapter, plugin manifest `[sandbox]` block, global
-      `--no-sandbox` / `--sandbox <kind>` flags, `tau sandbox
-      status` / `tau sandbox setup` subcommands, hard-refuse on
-      resolution failure with guided multi-option diagnostic. The
-      9 remaining priority-12 follow-ups (B–K minus A) stay
-      tracked in the followups doc. No new CI jobs (25 required
-      checks unchanged).
-16. **Skills as first-class packages** (Constitution G10). Currently
-    *partial*: `kinds::SKILL = "skill"` is a recognized `PackageKind`
-    in tau-domain (per Constitution G10's commitment that "Skills and
-    MCP are first-class concepts in core"), and the v1.2 multi-agent
-    spawn arg `system_prompt: Option<String>` (PR #61, commit cb894cc's
-    follow-up) provides the runtime foundation. What's missing: the
-    end-to-end installation, discovery, and invocation pipeline. A
-    Skill package contains a `(system_prompt, capability declaration,
-    optional tools list)` triple — fundamentally what a spawn arg
-    encodes, but shipped as an installable artifact. Concretely:
-    - Manifest extension: `[skill]` table in tau.toml documenting the
-      skill's purpose, capability requirements, and default system
-      prompt (parallel to `[plugin]` and `[sandbox]` blocks).
-    - `tau install <skill-pkg>` resolves + installs to scope (reuses
-      tau-pkg).
-    - `tau skill list` enumerates installed skills (parallel to
-      `tau list agents`).
-    - Agent-side invocation: a spawned `agent.<skill-name>.spawn`
-      resolves to the installed skill's manifest, pulling system_prompt
-      + grant defaults from the package rather than requiring the
-      caller to supply them inline. Caller can override per spawn.
-    - Agent Skills spec compliance — interop with the broader 2026
-      ecosystem (the Anthropic Agent Skills spec, etc.).
-    - Reference skill packages shipped as test fixtures + docs.
+  β.1  tau-runtime-core extraction  ◀── gates everything below
+       (no_std + alloc, executor-agnostic, registries moved into core)
+        │
+        ├──────────────┬──────────────┬──────────────┐
+        ▼              ▼              ▼              ▼
+      β.2            β.3            β.4            β.5
+   Workflow IR    MCP facilitator  Context mgr   Credential chain
+   (per α.1 D)   (Lane 2: new MCP) (opt-in;     (independent;
+                                   default off) parallel-safe)
+        │              │              │              │
+        └──────┬───────┴──────┬───────┘              │
+               ▼              ▼                      │
+             β.7            β.8                      │
+       dev/release      TS minimal authoring         │
+       one engine       surface (sugar over IR)      │
+       (`tau dev`)         │                         │
+               │           │                         │
+               └─────┬─────┘                         │
+                     ▼                               │
+                   β.6                               │
+            cross-target conformance gate ◀──────────┘
+                     │
+                     ▼
+            Phase β success criterion
+            (the canonical vertical-slice scenario)
+=====================================================================
+  legend:  ─── strict dependency       ┄┄┄ parallel-safe
+  β.1 BLOCKS all others.
+  β.2/β.3/β.4/β.5 can fan out (4-way parallel) after β.1 lands.
+  β.7 needs β.1 + β.2 + β.3.   β.8 needs β.2 + β.7.
+  β.6 needs β.7 + β.8 (something to exercise).
+```
 
-    This closes Constitution G10's commitment ("Skills and MCP are
-    first-class concepts in core. Tau understands the Agent Skills
-    spec and the Model Context Protocol natively"). The v1.2 spawn
-    arg work is the necessary precondition; this is the layer that
-    makes skills installable and discoverable. ~3-4 weeks of work.
+**Critical-path serialization:** β.1 → β.2 → β.7 → β.6. Everything else
+is parallel-eligible. Right-sized for ~2 implementers: one on the
+critical path, one on the parallel work (β.3 then β.4 then β.5 then β.8).
 
-### Tier 4 — operational quality
+### β.1 — `tau-runtime-core` extraction
 
-13. **Performance budgets enforced in CI** (Constitution QG14, G16).
-14. **`cargo audit` + `cargo-deny` in CI** (Constitution QG16) ✅ Shipped
-    2026-05-11 (PR #57, commit f8ad58f). `cargo-deny / linux` is the
-    19th required CI check; gates RustSec advisories + license
-    allow-list + non-crates.io sources.
-15. **Serve mode** (JSON-RPC over stdio) ✅ Shipped 2026-05-17 — see
-    [spec](docs/superpowers/specs/2026-05-17-tau-serve-mode-design.md)
-    and [ADR-0033](docs/decisions/0033-tau-serve-mode.md).
-    `tau serve` exposes runtime.run + runtime.run_streaming as JSON-RPC
-    2.0 over NDJSON-framed stdio. 5 methods + 1 server-initiated
-    notification in v1. One `Runtime` per process, parallel concurrent
-    runs (cap 8 default). Graceful shutdown on SIGTERM/SIGINT/stdin-EOF/
-    parent-death. `tau-app` crate exits stub status. Sister refactor in
-    [ADR-0032](docs/decisions/0032-capability-override-relocation.md)
-    moved `CapabilityOverride` to tau-pkg to break a dependency cycle.
-    Phase 1 closes; Phase 2 (tau as a compiled language) is now the
-    active phase.
+- **Builds on:** existing `tau-runtime` (Phase 0 §4 + Phase 1 priorities
+  1–12 + sandbox sub-projects 12-A through 12-J).
+- **Preserves:** every existing `tau-runtime` test stays green; all 5
+  plugins continue to load via the existing tokio host shell; no
+  observable host-behavior change.
+- **Adds:** `tau-runtime-core` (`no_std` + `alloc`, executor-agnostic,
+  agent loop generic over `LlmBackend` / `Tool` / `Storage`). The three
+  trait-object registries move into core. `tau-ports::Sandbox::wrap_spawn`
+  and `apply_post_spawn` move behind a `std`/`process` feature so core
+  compiles without `std`.
+- **Supersedes:** nothing yet. The tokio shell (renamed
+  `tau-runtime-tokio` if needed) continues to exist as the host driver.
+  Future `tau-runtime-embassy` (Phase γ.5) is the MCU shell.
+- **DoD:** existing test suite green; `cargo build -p tau-runtime-core
+  --no-default-features` succeeds for `no_std`. Tracing spans + events
+  shipped in the logging cluster (PRs #195–#226) **continue to fire
+  unchanged** under the tokio shell; core preserves the `#[instrument]`
+  attribute usage on host-relevant fns and feature-gates only the
+  `tracing-subscriber` integration that std requires.
 
-### Deferred sub-projects (cross-tier)
+This is the prerequisite for every other β sub-project and for the MCU
+tiers in γ. Pure refactor; zero user-visible change. The hardest part
+is the `tau-ports` `no_std` sweep — every `std::collections::HashMap` →
+`hashbrown` or `alloc::BTreeMap`, every implicit `std` use audited.
 
-Tracked here as future extensions of v1 primitives. Each is a clean
-addition (not a re-architecture) when a concrete use case lands. See
-the "Considered and rejected" table in
-[`2026-05-12-multi-agent-orchestration-design.md`](docs/superpowers/specs/2026-05-12-multi-agent-orchestration-design.md)
-for design context.
+### β.2 — Workflow IR implementation (per Framing D)
 
-- **Background tools / monitors** — claude-code-style `Monitor` pattern:
-  a tool that runs in the background, emits events over time, delivered
-  to the agent's context at turn boundaries. Different primitive class
-  than v1's synchronous tools: needs a fourth channel (push-at-turn-
-  boundary) + `BackgroundTool` entity + `Tool::Background` capability.
-  Useful for watching CI runs, log files, file changes, webhooks. Not
-  in v1; tracked here for future implementation when a use case justifies
-  the design surface (sandbox lifecycle of long-running tools is the
-  load-bearing problem).
-- **Inter-agent message bus / inbox stacks** — rejected for v1 in favor
-  of shared TaskList. Would re-open if many-to-many coordination or
-  unsolicited interrupts become necessary.
-- **Pull-status tool** — `agent.<kind>_status()` virtual tool letting
-  parent's LLM check on a still-running child. v1 uses host-side
-  watchdog timeouts instead.
-- **Output schemas** — typed tool returns (Pydantic / JSON schema
-  constraints on results). Refinement of `Tool.result_schema`.
-- **Plan DAG with task dependencies** — `Task.depends_on: [TaskId]` +
-  topological scheduling. v1 uses linear hierarchy via
-  `parent_task_id`.
-- **Cross-run memory** — persistent state above `Run`. Currently each
-  run is independent; session persistence (Tier 3 §11) is per-session
-  not per-content.
-- **Workflow-DAG** — extension of tau-workflow v1 from linear pipelines
-  to a DAG with parallel branches + fan-out / fan-in. Tracked in
-  [ADR-0022](docs/decisions/0022-tau-workflow.md).
-- **Group chat / mediator agent** — many-to-many via a mediator. v1
-  uses TaskList as the coordination primitive instead.
+- **Builds on:** the existing `tau.toml` schema (project config + agent
+  declarations + capability overrides), the target-triple registry
+  (Phase 2 §B), the bundle format (Phase 2 §C.2/C.3/E), and the
+  cap-forward-compat machinery (Phase 2 §D).
+- **Preserves:** `tau.toml` and lockfile v6 stay the source-of-truth
+  for projects. The IR is what's *emitted from* the manifest by the
+  compiler, not a competing format. Existing `tau install` / `resolve`
+  / `run` paths unchanged. Existing bundles (Phase 2 §C.2/C.3) continue
+  to load.
+- **Adds:** a versioned IR (per α.1 decisions) + lowering pipeline. The
+  bundle format gains an "IR payload" section; the consumer
+  (`run --bundle`) gains an IR-execution path alongside the current
+  manifest-execution path.
+- **Supersedes:** the **tau-workflow v1** linear-pipeline format
+  (`workflows/*.toml`) graduates into the IR as a degenerate case. v1
+  stays available during transition; new workflows author via the IR.
+- **DoD:** round-trip determinism (`tau build` → re-`build` → identical
+  bytes, per the C3 contract); the existing Phase 2 §C.2/C.3 bundle
+  tests still pass; one minimal IR-authored workflow runs end-to-end.
 
-## Phase 2 — Tau as a compiled language for agentic workflows
+### β.3 — MCP facilitator (Lane 2)
 
-The sandboxing sub-project (Tier 3 priority 12, [ADR-0014](docs/decisions/0014-sandboxing.md))
-lays the foundation for tau as a compiled language. See
-[`docs/explanation/tau-as-language.md`](docs/explanation/tau-as-language.md)
-for the full vision: write a "tau program" (project tau.toml + plugin
-manifests + lockfile) once, compile it for a specific target triple
-(`linux-native-strict`, `container-podman`, `wasi-p2`, etc.), and the
-toolchain guarantees the resulting bundle runs anywhere a matching
-adapter exists. The same kind of "if it compiles, it runs" guarantee
-Rust gives developers and Docker gives operators, applied to the
-agent-workflow domain.
+- **Builds on:** existing `plugin_host` (Phase 1 §1), the sandbox stack
+  (Phase 1 §12 + 12-A through 12-J), the capability gate (Phase 1 §4 +
+  §12-B's `sandbox_check`).
+- **Preserves:** all 5 in-tree plugins continue to load via the existing
+  bespoke protocol (Lane 1). Their declared capabilities continue to
+  flow into the sandbox unchanged. Their integration tests stay green.
+- **Adds:** an MCP host runtime (built-in handlers for `tools/call`,
+  `resources/read`, `sampling` → routes to delegated inference, `roots`
+  → routes to capability gate, `elicitation`, `prompts/get`,
+  `notifications`, `cancellation`). Per-handler capability gating at the
+  contract boundary. New external tools (Lane 2) and native tools
+  (Lane 3) go through the new paths.
+- **Supersedes:** the bespoke protocol, **per-plugin**, only when each
+  plugin's replacement is in place. No hard cut. Deprecation notice goes
+  out when 0 in-tree plugins remain on the bespoke path.
+- **DoD:** an external MCP server (e.g. an off-the-shelf weather server)
+  is contracted by an agent and the call round-trips; its capability
+  declaration is enforced; the 5 in-tree plugins still load and run
+  unchanged.
 
-Phase 2 sub-projects build on the priority-12 foundation:
+### β.4 — Context manager primitive
 
-- **A. `tau check` standalone command** ✅ Shipped 2026-05-18 — see
-  [spec](docs/superpowers/specs/2026-05-18-tau-check-design.md). Aggregator
-  CLI verb wrapping every existing pre-flight validator (config, lockfile,
-  packages, sandbox, plugins, skills) with human / `--json` / `--sarif`
-  output and granular exit codes (0/2/3/64/70). Bare `tau check` runs all
-  6 categories; `tau check <category>` runs one. Pure orchestration in
-  tau-cli — no new tau-pkg/tau-runtime code. Suitable for CI gates,
-  pre-commit hooks, and IDE Problems-panel integration via SARIF.
-- **B. Tau target triple registry** ✅ Shipped 2026-05-19 — see
-  [ADR-0034](docs/decisions/0034-target-triple-registry.md), the
-  [reference page](docs/reference/target-triples.md), and the
-  [design spec](docs/superpowers/specs/2026-05-19-target-triple-registry-design.md).
-  Bazel-inspired 3-axis structural identifier (`Platform` × `AdapterFamily`
-  × `SandboxTier`) in `tau-ports::target`. 5 Available triples + 1 Reserved
-  (windows-native-strict); `remote-*` and `wasi-*` namespaces reserved.
-  CLI surface: `tau target list`/`show` and `tau check --target <triple>`.
-- **C. `tau build --target <triple>` + bundle format** (~6 weeks). The
-  deployment artifact: a content-hashed bundle pinning resolved
-  package versions + tree hashes (priority 7's `tree_hash`) + computed
-  capability-effective set per agent (priority 4's `compute_effective`)
-  + required capability shapes per plugin (priority 12) + target sandbox
-  triple. `tau run --bundle <file>` executes a bundle.
-- **D. Capability vocabulary forward-compatibility** (~2 weeks). A
-  bundle compiled against tau v1.2 must continue to run on tau v1.3+
-  with new shapes added. Stability discipline + ADR amendments.
-- **E. Cross-machine reproducibility verification** (~3 weeks). Extends
-  `tau verify` (priority 7) so a deployed bundle on a target machine
-  can be verified to match the bundle the project author built.
-- **F. Remote target backends** (~4-6 weeks per backend). Vercel
-  Sandbox, Sandcastle, generic remote-execution providers. Each is an
-  additional `Sandbox` impl. Major design concerns: authentication,
-  IPC channel networking, cold-start latency budgets.
-- **G. WASM target backend** (~12+ weeks). Most ambitious. Plugins
-  compile to `wasm32-wasip2`. The `tau-plugin-sdk` migrates to
-  support the new ABI. Plugin distribution becomes `.wasm` artifacts.
-  Plausibly a Phase 2 effort in its own right.
+- **Builds on:** existing message/turn types in `tau-domain` (Phase 0
+  §1); current ad-hoc context handling in `tau-runtime::stream`.
+- **Preserves:** existing `tau chat` / `tau run` / streaming behavior is
+  unchanged for agents that **don't** declare a context block.
+  Backward-compatible by absence.
+- **Adds:** opt-in `[agent.<id>.context]` block in `tau.toml`. Stateful
+  manager (Shape 1) + per-turn pipeline of pure transformers (Shape 2).
+  v1 transformers: `trim_old`, `compact_tool_outputs`,
+  `summarize_oldest` (uses any registered `LlmBackend`, typically a
+  cheap model), `fit_budget` (always last).
+- **Supersedes:** the implicit "throw the whole history at every turn"
+  default once the new context block is opt-in across in-tree fixtures.
+- **DoD:** an agent with a declared context block round-trips under
+  `tau dev` and inside a wasm bundle, hitting the budget; agents
+  without it behave identically to today.
 
-These Phase 2 sub-projects are independent of the **immediate
-follow-ups** that close gaps left by v0.1 of priority 12 (default
-activation, plugin compatibility, e2e CI infrastructure, per-command
-exec gating, per-host network filter, fork-server pattern, macOS /
-Windows adapters). Those follow-ups are tracked in
-[`docs/superpowers/specs/2026-05-03-sandboxing-followups.md`](docs/superpowers/specs/2026-05-03-sandboxing-followups.md).
+### β.5 — Credential provider chain
+
+- **Builds on:** existing env-var / config-file credential handling in
+  the 5 plugins (each implements its own loader today).
+- **Preserves:** today's `ANTHROPIC_API_KEY` / `OLLAMA_HOST` / `OPENAI_*`
+  paths continue to work as the default `Env` provider — no breakage
+  for existing users.
+- **Adds:** a Strategy + Chain port (`tau-ports::CredentialProvider`)
+  + standard providers (`Baked`, `Env`, `File`, `SecretManager` with
+  Vault / AWS / GCP / Azure adapters, `WorkloadIdentity` for SPIFFE /
+  IRSA, `DeviceIdentity` for per-device secure-element keys,
+  `TokenBroker` for OIDC / OAuth2 BFF). Deployment configures the order.
+- **Supersedes:** per-plugin ad-hoc credential code, eventually — each
+  plugin migrates to declaring "I need credentials of kind X" and letting
+  the chain resolve.
+- **DoD:** at least one provider beyond `Env` ships and is exercised by
+  CI (likely `File` mounted-secret); existing plugin credential paths
+  unchanged.
+
+### β.6 — Cross-target conformance gate
+
+- **Builds on:** existing test infrastructure — cassette replay
+  (Phase 1 §2c), fixtures (`tau-plugin-test-support`), the
+  `plugin_compat` driver (Phase 1 §12-D), Layer 4 tests, the
+  `verify --bundle` reproducibility check (Phase 2 §E), and the
+  tracing-layer test-recorder pattern from logging §D (PR #226).
+- **Preserves:** every existing test continues to gate.
+- **Adds:** a profile-agnostic scenario runner — `tau-conformance` crate
+  — that exercises both the interpreted dev profile and the compiled
+  wasm artifact against the same scenarios, demanding identical
+  observable behavior on the trace-event stream. This is the behavioral
+  sibling of `verify --bundle`'s byte-level check.
+- **Supersedes:** nothing — pure addition.
+- **DoD:** the **canonical scenario** (defined below) runs under both
+  profiles and produces a bit-identical sequence of `RunEvent`s — same
+  count, same ordering, same payload modulo timestamps + IDs. Diff a
+  single event → CI fails.
+
+#### The canonical β.6 scenario (the "fan-monitor")
+
+The one workflow every β change must keep green. Concrete enough to be
+executable; small enough to be auditable.
+
+```
+PROJECT
+  one agent     "fan-monitor"
+  one native    read_temp   (compiled-in mock; deterministic reading)
+  one native    set_fan     (compiled-in mock; records state)
+  one MCP       weather     (cassette-replayed external server)
+  one context   trim_old → compact_tool_outputs → fit_budget
+  one model     claude-haiku-4-5 via cassette replay (deterministic)
+
+PROMPT
+  "Read the temperature. If above 30°C, check weather; if hot outside,
+   keep fan on; otherwise off."
+
+EXPECTED EVENT STREAM  (bit-identical across both profiles)
+  RunStarted{run_id}
+  ToolCallStarted{name="read_temp"}
+  ToolCallCompleted{name="read_temp", result=32}
+  ContextStepRan{step="trim_old"}
+  ContextStepRan{step="compact_tool_outputs"}
+  ContextStepRan{step="fit_budget", tokens_in=…, tokens_out=…}
+  InferenceCallStarted
+  InferenceCallCompleted
+  ToolCallStarted{name="weather"}
+  ToolCallCompleted{name="weather", result=…}
+  …
+  ToolCallStarted{name="set_fan", args={"on": true}}
+  ToolCallCompleted{name="set_fan"}
+  RunCompleted{outcome=Success}
+```
+
+This scenario doubles as **the Phase β success criterion** (see below):
+shipping β means this scenario runs under `tau dev` and as a wasm
+component in wasmtime, and the conformance gate confirms agreement.
+
+### β.7 — Dev / release one-engine discipline
+
+- **Builds on:** existing `tau run` / `tau chat` / `tau serve` (dev-side
+  surface) and `tau build` / `tau run --bundle` (release-side surface).
+- **Preserves:** every existing CLI verb continues to do what it does
+  today. `tau dev` is **new**; nothing existing is renamed or removed.
+- **Adds:** `tau dev` — a hot-reload host shell driving
+  `tau-runtime-core` directly, with user tools as callbacks. The new
+  zero-toolchain on-ramp.
+- **Supersedes:** nothing.
+- **DoD:** `tau dev <project>` boots in under a second; editing a tool
+  hot-reloads; the same project lowers cleanly via `tau build wasm`.
+
+### β.8 — TypeScript minimal authoring surface
+
+The philosophy argues for Vercel-DX-like authoring, and deferring TS
+entirely to δ.2 would contradict that. β.8 lands the **minimal** TS
+surface needed for an authoring-quality experience; δ.2 polishes it
+into a publishable SDK.
+
+- **Builds on:** β.2 (the IR) + β.7 (`tau dev`).
+- **Preserves:** TOML manifest authoring stays first-class.
+- **Adds:** `@tau/sdk` package shape — `agent({...})`, `tool({...})`,
+  `mcp({...})`, `contextManager({...})` factory functions that produce
+  IR-emitting JS objects. `tau dev project.ts` reads the TS file via
+  a thin loader (esbuild-in-process) and emits the IR. **One way to
+  write a project** (TOML or TS, your choice), one IR underneath.
+- **Supersedes:** nothing.
+- **DoD:** the canonical β.6 scenario can be authored in either TOML
+  *or* TS and produces an identical IR (verified by the conformance
+  gate).
+
+Out of scope for β.8 (held for δ.2): npm publishing pipeline, TS type
+generation from skill schemas, browser-side runtime, full editor
+plugin polish.
+
+### Phase β success criterion
+
+**The canonical β.6 fan-monitor scenario (above) runs end-to-end under
+both profiles — `tau dev` and the wasm component in wasmtime — with
+identical event streams, identical capability enforcement, and the
+conformance gate green.**
+
+**Simultaneously:** every existing fixture, plugin, and integration test
+in the repository continues to pass — including all 5 plugins on the
+bespoke protocol, all sandbox e2e tests, all Phase 2 bundle tests, all
+Skills tests, all tau-workflow v1 tests.
+
+### Phase β risks
+
+- **Migration breakage.** The wrap-not-replace strategy assumes legacy
+  plugins keep working through β.1's extraction. If `tau-runtime-core`
+  changes a trait signature subtly, plugins built against the old
+  `tau-plugin-sdk` may break at the bespoke-protocol boundary.
+  Mitigation: `tau-plugin-sdk` is part of the legacy compat surface;
+  freeze its v1 ABI; SDK v2 is a separate, opt-in upgrade for plugins
+  that want to migrate.
+- **IR debt.** The minimal IR (Agent + Tool only) almost certainly
+  misses something the second-real-workflow needs. Mitigation: ship the
+  minimal IR; observe what's needed for the second scenario; extend
+  with an ADR rather than improvising.
+- **Conformance gate flakiness.** Wasm-execution timing nondeterminism
+  could make the "bit-identical event stream" claim flaky. Mitigation:
+  the event stream is normalized (timestamps stripped, IDs canonicalized)
+  before diff; only causal-order divergence fails.
+- **Performance cliff.** The wasm path may be substantially slower than
+  the dev path. Mitigation: this is acceptable at β; performance work is
+  a γ concern. Document the gap; don't hide it.
+
+---
+
+## Phase γ — Portability targets
+
+**Goal:** extend the engine across target triples beyond the wasm
+component baseline established at the end of β.
+
+Each target slots into the existing target-triple registry (Phase 2 §B)
+as `Reserved` first, then graduates to `Available` when its CI lane is
+green. The registry's stability discipline (ADR-0034) applies throughout.
+
+| # | Target | Builds on | Preserves | Adds |
+|---|---|---|---|---|
+| γ.1 | wasm component on **server / edge** (Spin / wasmtime) | β.6/β.7 baseline; existing `tau build wasm` target slot | existing bundle format; existing `run --bundle` | hardening for Spin / wasmtime hosts; CI matrix lane |
+| γ.2 | wasm component in **browser** (Angular/React via jco) | γ.1; β.5 `TokenBroker` provider | the BFF + AI Gateway credential pattern | jco / wasm-bindgen integration; browser-host scenarios |
+| γ.3 | **C-ABI library** (`libtauflow.a` + cbindgen header) | β.1 core; existing `tau-app` scaffold | nothing — net new artifact shape | passthrough-only enforcement (advisory) honestly labeled |
+| γ.4 | **`wasm-mcu-preview1-tau-managed`** | β.1 core; existing target registry | reserved-slot existence (per α.3) | WAMR Preview-1 host integration; ESP32-S3 reference board |
+| γ.5a | **`tau-runtime-embassy`** shell | β.1 core | n/a (new crate) | embassy executor shell; the MCU-side counterpart to `tau-runtime-tokio` |
+| γ.5b | **`bare-metal-xtensa-passthrough`** + siblings | γ.5a (`tau-runtime-embassy`); β.1 core | reserved-slot existence | static-tool builder; firmware-image artifact rule (a new `tau build` artifact shape); `reqwless` + `embedded-tls` `LlmBackend` impl |
+| γ.6 | Context-manager v2: **`retrieve_relevant`** | β.4 pipeline | v1 transformers unchanged | new transformer backed by a contracted vector-store MCP (e.g. pgvector / qdrant) |
+
+**γ.5 is two sub-projects, not one.** The embassy shell (γ.5a) is the
+expensive part — async runtime swap, `no_std` dependency tree audit,
+plumbing for `reqwless`/`embedded-tls`. It must land before any actual
+firmware target (γ.5b) can produce a real artifact. Sized realistically:
+γ.5a ~6–8 weeks (one implementer with embassy/HAL familiarity);
+γ.5b ~3–4 weeks per CPU triple after γ.5a.
+
+The `wasi-p2-component` target on MCU (the "wasm component on
+microcontroller") is **deferred** to a future phase until the runtime
+ecosystem catches up. Tracked via Framing C″.
+
+Phase 2 §F (remote target backends) folds into Phase γ as additional
+`Sandbox` + `LlmBackend` adapters as user demand surfaces (Vercel
+Sandbox, Sandcastle); no commitment date.
+
+### Phase γ risks
+
+- **Wasm-host fragmentation.** Spin / wasmtime / wasmCloud /
+  browser-jco implementations of WASI 0.2 diverge in capability-
+  enforcement details. A bundle that runs in one may behave differently
+  in another. Mitigation: the conformance gate (β.6) lists supported
+  hosts; we test against the listed ones; others are best-effort.
+- **WAMR Preview-1 obsolescence.** If WAMR ships the Component Model
+  during γ, γ.4 is partially redundant — we built a Preview-1 path that
+  we'd then want to graduate. Acceptable: the Component Model graduation
+  is additive; Preview-1 stays available for legacy boards.
+- **Embedded supply chain.** ESP32 toolchains and HAL crates change
+  faster than the Rust release cadence; bit-rot risk is real.
+  Mitigation: γ.5b targets pin specific HAL versions; renovate.
+- **Browser wasm size budget.** wasm components carry the runtime; size
+  matters for browser shipping. No commitment yet; γ.2 includes a
+  measurement task and a public number.
+
+---
+
+## Phase δ — Distribution + DX
+
+**Goal:** make tau pleasant to author against and to share work through,
+once the engine is solid. Sequenced last on purpose: the package
+manager is only as valuable as the engine people want to run.
+
+### δ.1 — Polyglot resolver Phase 1 (per Framing G)
+
+- **Builds on:** **Skills 1–6 distribution pattern** (already proven
+  for skill bundles: manifest extension → install pipeline → discovery
+  → runtime invocation → interop → reference packages). Phase δ.1
+  extends this proven pattern to other tau-native unit kinds.
+- **Preserves:** Skills distribution unchanged; lockfile v6 → v7 is
+  additive (new entry kind, not a rewrite).
+- **Adds:** `tau add <git-url>` for tau-native units (agent templates,
+  workflow templates, capability profiles, context-pipeline presets).
+  Git-pinned, content-hashed, capability-audited at install.
+- **No tau-operated registry.** Cross-ecosystem solving (cargo + npm
+  + MCP semantics) is *explicitly out of scope* per Framing G —
+  delegate to each ecosystem's resolver.
+
+### δ.2 — TypeScript sugar layer
+
+- **Builds on:** the IR shipped in β.2.
+- **Preserves:** TOML manifest authoring stays first-class. TS is sugar,
+  not a replacement.
+- **Adds:** `@tau/sdk` TS package emitting the IR. Type-checked
+  authoring, autocomplete, IDE integration. Sugar over the canonical IR,
+  not a parallel runtime. Same IR runs under `tau dev` and lowers via
+  `tau build`.
+
+### δ.3 — Progressive-disclosure polish
+
+- **Builds on:** β.7's `tau dev`; existing `tau build` (Phase 2 §C.2 +
+  §C.2.1).
+- **Adds:** `tau build` default for cross-target work is `--container`
+  (the Rust `cross` model; only podman required, no rustup-targets).
+  `--remote` deferred to later as a hosted convenience, **not** a Phase
+  δ commitment.
+
+### δ.4 — Reference templates
+
+- **Builds on:** the Skills-6 reference-packages pattern.
+- **Adds:** three to four tau-native units (analogue of the
+  `critic` / `fact-checker` / `pr-reviewer` skill triad)
+  demonstrating agent-template and workflow-template shapes,
+  distributable via git. Sets the pattern for community contribution
+  without operating infrastructure.
+
+### Phase δ risks
+
+- **Adoption funnel.** The TS sugar (δ.2) and reference templates (δ.4)
+  are the primary on-ramp for new users. If they ship rough, growth
+  stalls regardless of engine quality. Mitigation: δ.2/δ.4 land together
+  with a documentation pass; the canonical β.6 scenario is the first
+  reference template.
+- **Resolver scope creep.** Users will ask "can `tau add` resolve npm
+  too?" and so on. Saying yes inverts Framing G. Mitigation: point at
+  Framing G's explicit out-of-scope list; user-extension is "import a
+  package in your native-tool Rust code via cargo, declare the
+  capability in tau.toml."
+- **TS-sugar drift from IR.** δ.2 polish may add ergonomic shortcuts
+  that the TOML manifest can't express, fragmenting the source surface.
+  Mitigation: the conformance gate (β.6) is also a TOML↔TS round-trip
+  test (TS-emitted IR must equal TOML-emitted IR for shared scenarios).
+
+---
+
+## CI lanes added by phase
+
+Each phase grows the required-check matrix. Sized realistically so the
+checks land alongside the code, not deferred:
+
+| Phase | New CI lanes | Rationale |
+|---|---|---|
+| α | none (specs only) | framing is design work |
+| β.1 | `check (tau-runtime-core no-default-features / linux)` — proves `no_std` compiles | gate the extraction's contract |
+| β.2 | `test (tau-workflow-ir / linux)` — IR round-trip determinism | gates the IR commitment |
+| β.3 | `test (mcp-facilitator / linux)` — facilitator + capability gating | external MCP cassette tests |
+| β.5 | `test (credential-chain / linux)` — chain resolution + at least one non-Env provider | proves the chain isn't `Env`-only |
+| β.6 | `conformance (linux)` — the canonical β.6 scenario, both profiles, event-stream diff | THE gate that proves the philosophy holds |
+| β.7 | `test (tau-dev hot-reload / linux)` | smoke for the new dev shell |
+| β.8 | `test (ts-sugar emit-ir / linux)` | TS↔TOML round-trip |
+| γ.1 | `conformance (wasmtime / linux)` + `conformance (spin / linux)` | host-specific divergence detection |
+| γ.2 | `conformance (browser-jco / linux)` | browser host behavior |
+| γ.3 | `test (c-abi-lib / linux + macos)` | cbindgen header roundtrip |
+| γ.4 | `check (wasm32-wasip1 cross / linux)` (no hardware) | cross-compile drift |
+| γ.5a | `check (no_std embassy / linux)` + `check (xtensa-esp32-none-elf cross / linux)` | embassy shell + MCU cross |
+| γ.5b | manual hardware verification on canonical ESP32-S3 board before triple → `Available` | per Framing C″ §C″-7 |
+| γ.6 | `test (retrieve-relevant / linux)` w/ pgvector cassette | retrieval transformer |
+| δ.1 | `test (tau-native-units git-resolve / linux)` | resolver Phase 1 |
+| δ.2 | `test (ts-sugar full / linux)` + npm publish dry-run | SDK polish |
+
+**Phase end-state check counts (rough):**
+- end of α: 14 (unchanged from today)
+- end of β: ~20 required checks
+- end of γ: ~28 required checks (with manual hardware sign-off for γ.5b)
+- end of δ: ~30 required checks
+
+These additions follow the discipline established in Phase 1 §12-E
+(CI optimization, ADR-0018): each new lane runs from prebuilt
+fixture artifacts where possible; per-target dirs prevent
+lock contention; sccache caching is preserved.
+
+---
 
 ## Out of scope (forever)
 
-These are tau's explicit non-goals from
-[`CONSTITUTION.md` §2](CONSTITUTION.md). They will not be added to
-core regardless of demand:
+The constitutional non-goals from
+[`CONSTITUTION.md` §2](CONSTITUTION.md) remain in force. The philosophy
+sharpens, but does not relax, any of them.
 
-- **NG1.** Tau is not an LLM or an agent.
+- **NG1.** Tau is not an LLM or an agent. *(Inference is always
+  delegated.)*
 - **NG2.** Tau is not a coding-specific tool.
-- **NG3.** Tau is not a hosted service.
-- **NG4.** Tau is not a package marketplace.
-- **NG5.** Tau is not a general-purpose workflow engine.
+- **NG3.** Tau is not a hosted service. *(No tau cloud. `--remote` builds
+  are an option, not a dependency.)*
+- **NG4.** Tau is not a package marketplace. *(Polyglot resolver +
+  content-hashed lockfile; no walled registry; tau-native units via
+  git URLs.)*
+- **NG5.** Tau is not a general-purpose workflow engine. *(Clarification:
+  tau executes workflow IR with capability-safe portability as its
+  defining property; it does not compete with general orchestrators
+  like Temporal/n8n on their breadth.)*
 - **NG6.** Tau does not provide persistent agent memory in core.
+  *(Context-manager v2 retrieval is backed by a contracted vector-store
+  MCP — never built-in.)*
 - **NG7.** Tau does not evaluate agent quality.
 - **NG8.** Tau is not an AI safety harness.
-- **NG9.** Tau does not manage identity, authentication, or
-  credentials.
+- **NG9.** Tau does not manage identity, authentication, or credentials.
+  *(The provider chain delegates to Vault / SPIFFE / cloud / device
+  identity. tau resolves; operators choose the vault.)*
 - **NG10.** Tau does not collect telemetry or training data.
 - **NG11.** Tau is a developer tool, not an end-user tool.
-- **NG12.** Tau is a runtime, not a framework.
+- **NG12.** Tau is a runtime and a compiler, not a framework.
 
 Adjacent ideas may belong in plugins or downstream projects (such as
 `stature`, the opinionated coding pipeline planned as a separate
 project).
+
+---
+
+## Sequencing principle
+
+Engine (β) is the priority *outcome*. Framing (α) is the priority
+*activity right now* because the engine cannot ship correctly without
+it. Portability (γ) and distribution+DX (δ) ride β and are explicitly
+ordered after it. **Every phase preserves the load-bearing surface
+shipped through Phase 1 and the completed parts of Phase 2.** No
+flag-days; no rewrites of working subsystems; every new mechanism enters
+as a parallel lane and the old mechanism deprecates by attrition. The
+package manager is only as valuable as the engine people want to run;
+the engine is only as portable as its IR allows; the IR is only as
+honest as the framing makes it; the whole thing only works if it doesn't
+break what's already shipped.
+
+### One-page summary
+
+> tau is in **Phase α** (framing the three load-bearing risks D, G, C″)
+> as of 2026-05-29. The next deliverable phase is **Phase β** — the
+> engine: extract `tau-runtime-core` (β.1, gates everything), then
+> implement the workflow IR (β.2), MCP facilitator (β.3), context
+> manager (β.4), credential chain (β.5), `tau dev` (β.7), and the TS
+> authoring surface (β.8), validated by the cross-target conformance
+> gate (β.6) running the canonical fan-monitor scenario under both
+> profiles. **Phase γ** extends to wasm hosts (server / edge / browser),
+> C-ABI, and MCU tiers (the embassy shell is its own sub-project,
+> γ.5a). **Phase δ** lands the polyglot resolver, the polished TS SDK,
+> and reference templates. Throughout: legacy bespoke plugins keep
+> working in Lane 1, new external tools go through MCP (Lane 2), new
+> local tools compile in (Lane 3); Lane 1 closes by attrition no
+> earlier than Phase γ. Every shipped CLI verb, plugin, sandbox
+> adapter, lockfile version, bundle artifact, and skill stays working
+> throughout. **The philosophy holds only if it doesn't break what
+> shipped.**
