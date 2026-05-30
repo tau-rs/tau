@@ -16,45 +16,22 @@
 # Tutorials
 
 - [Overview](tutorials/README.md)
-- [Bootstrap a tau project](tutorials/bootstrap-a-tau-project.md)
-- [Build your first skill](tutorials/build-your-first-skill.md)
 
 # How-to
 
 - [Overview](how-to/README.md)
-- [Configure the sandbox tier](how-to/configure-sandbox-tier.md)
-- [Install a skill](how-to/install-a-skill.md)
-- [Author a skill](how-to/author-a-skill.md)
-- [Export a skill](how-to/export-a-skill.md)
-- [Write a tool plugin](how-to/write-a-tool-plugin.md)
-- [Propose an ADR](how-to/propose-an-adr.md)
 
 # Reference
 
 - [Overview](reference/README.md)
-- [Glossary](reference/glossary.md)
-- [Package manifest schema](reference/package-manifest-schema.md)
-- [Project manifest schema](reference/project-manifest-schema.md)
 - [Sandbox platform support](reference/sandbox-platform-support.md)
-- [Serve mode protocol](reference/serve-mode-protocol.md)
-- [Skill manifest schema](reference/skill-manifest-schema.md)
-- [Target triple registry](reference/target-triples.md)
 
 # Explanation
 
 - [Overview](explanation/README.md)
-- [Packages](explanation/packages.md)
-- [Capabilities and consent](explanation/capabilities-and-consent.md)
-- [Sandboxing](explanation/sandboxing.md)
-- [Multi-agent orchestration](explanation/multi-agent-orchestration.md)
-- [Workflows](explanation/workflows.md)
-- [Serve mode](explanation/serve-mode.md)
-- [Architecture overview](explanation/architecture-overview.md)
-- [Crate map](explanation/crate-map.md)
-- [Testing strategy](explanation/testing-strategy.md)
+- [Philosophy](explanation/tau-philosophy.md)
+- [tau as language (historical)](explanation/tau-as-language.md)
 - [Escape hatches](explanation/escape-hatches.md)
-- [tau as language](explanation/tau-as-language.md)
-- [Two-layer skills](explanation/two-layer-skills.md)
 
 # Architecture decisions
 
@@ -89,14 +66,6 @@
 - [ADR-0026 — Skills install pipeline](decisions/0026-skills-install-pipeline.md)
 - [ADR-0027 — Skills discovery](decisions/0027-skills-discovery.md)
 - [ADR-0028 — Docs deployment](decisions/0028-docs-deployment.md)
-- [ADR-0028 — Skills runtime invocation](decisions/0028-skills-runtime-invocation.md)
-- [ADR-0029 — Skills Anthropic interop](decisions/0029-skills-anthropic-interop.md)
-- [ADR-0030 — Skills reference packages](decisions/0030-skills-reference-packages.md)
-- [ADR-0031 — tau-observe consolidation](decisions/0031-tau-observe-consolidation.md)
-- [ADR-0032 — CapabilityOverride relocation](decisions/0032-capability-override-relocation.md)
-- [ADR-0033 — Tau serve mode v1](decisions/0033-tau-serve-mode.md)
-- [ADR-0034 — Target triple registry](decisions/0034-target-triple-registry.md)
-- [ADR-0035 — Bundle format](decisions/0035-bundle-format.md)
 
 # Project artifacts
 
