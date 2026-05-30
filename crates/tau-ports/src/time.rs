@@ -6,6 +6,7 @@
 //! makes `tau-runtime-core` portable to executors with no
 //! `std::time::SystemTime`.
 
+#[cfg(any(test, feature = "test-fixtures"))]
 use core::sync::atomic::{AtomicI64, Ordering};
 
 /// Wall-clock reading source.

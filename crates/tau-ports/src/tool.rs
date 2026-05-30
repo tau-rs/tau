@@ -6,7 +6,9 @@
 //! [`StatelessTool`] / [`StatelessAdapter`] pair for the common
 //! stateless case.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
+#[cfg(test)]
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use std::time::SystemTime;
 

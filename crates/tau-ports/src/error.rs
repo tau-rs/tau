@@ -9,8 +9,12 @@
 //! per-trait error types. `NamespaceError` and `KeyError` are the validation
 //! errors for the `Namespace` and `Key` newtypes.
 
+use alloc::string::String;
+
+#[cfg(test)]
 use alloc::format;
-use alloc::string::{String, ToString};
+#[cfg(test)]
+use alloc::string::ToString;
 
 use thiserror::Error;
 

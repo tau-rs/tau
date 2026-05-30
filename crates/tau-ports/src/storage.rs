@@ -6,7 +6,9 @@
 //! `Namespace`; storage plugins treat the namespace as opaque and never
 //! parse or interpret it.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
+#[cfg(test)]
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
 
