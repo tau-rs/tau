@@ -1,5 +1,18 @@
 # Tau as a compiled language for agentic workflows
 
+> **Superseded for canonical vision.** This document remains as the
+> historical lineage and is still referenced by ADRs 0014–0023. The
+> current canonical vision is
+> [`tau-philosophy.md`](tau-philosophy.md) (2026-05-29), which
+> retains the compiled-language framing introduced here and adds the
+> harness-everywhere principle, the MCP facilitator role, the two-tool
+> rule (native vs MCP contract), the context manager primitive, the
+> credential provider chain, the polyglot resolver posture, and the
+> dev/release one-engine discipline. The status table at the bottom of
+> this document is frozen at 2026-05-02 and does not reflect Phase 2
+> work shipped since (see [ROADMAP](../../ROADMAP.md) for current
+> state).
+
 **Status:** Vision document — not a SemVer-binding contract. This
 document describes the long-term design intent of the tau project.
 Individual elements may be realized incrementally over many sub-
@@ -41,20 +54,6 @@ deliberately recoverable through the `RunOutcome::Failed` and
 was never going to work" errors that surface mid-run today.
 
 ## What is a "tau program"?
-
-```mermaid
-flowchart LR
-    subgraph S["source"]
-        T["project tau.toml<br/>agent decls<br/>capability overrides"]
-        P["plugin packages<br/>each with tau.toml<br/>+ CAPABILITIES"]
-        L["lockfile<br/>resolved versions<br/>+ tree hashes"]
-    end
-    S --> C{{"<code>tau check</code> +<br/><code>tau build --target &lt;triple&gt;</code>"}}
-    C --> B["bundle.tau<br/>(content-hashed)<br/>pinned versions +<br/>effective capabilities +<br/>target triple"]
-    B --> R["<code>tau run --bundle</code><br/>on a host matching<br/>the pinned target"]
-    T -.-> P
-    P -.-> L
-```
 
 The tau-language **source** for a project is the union of:
 
@@ -162,11 +161,11 @@ extensions, pre-commit hooks. Estimated scope: ~3 weeks.
 
 ### Sub-project B — Tau target triple registry
 
-Shipped 2026-05-19 — see [ADR-0034](../decisions/0034-target-triple-registry.md)
-and [the target-triple reference](../reference/target-triples.md). Three-axis
-structural identifier (`Platform` × `AdapterFamily` × `SandboxTier`); v1 ships
-5 Available + 1 Reserved triple; CLI surface: `tau target list`/`show` and
-`tau check --target`.
+Formal naming convention + registry of supported targets, each
+with a documented capability matrix (which `CapabilityShape`
+variants the target enforces). New triples land via ADR amendments
+to a "target registry" ADR. Estimated scope: ~2 weeks (mostly
+documentation + naming).
 
 ### Sub-project C — `tau build --target <triple>` subcommand
 
@@ -240,7 +239,7 @@ in its own right. Estimated scope: ~12+ weeks.
 | Multi-agent orchestration | 📅 Tier 3 priority 9 (deferred) |
 | Workflow / pipeline runner | 📅 Tier 3 priority 10 (deferred) |
 | `tau check` | 📅 Phase 2 sub-project A |
-| Target triple registry | ✅ shipped 2026-05-19 |
+| Target triple registry | 📅 Phase 2 sub-project B |
 | `tau build --target` + bundle format | 📅 Phase 2 sub-project C |
 | Capability forward-compatibility | 📅 Phase 2 sub-project D |
 | Cross-machine bundle verification | 📅 Phase 2 sub-project E |
