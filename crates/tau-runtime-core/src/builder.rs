@@ -33,6 +33,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+#[cfg(feature = "tool-validation")]
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;

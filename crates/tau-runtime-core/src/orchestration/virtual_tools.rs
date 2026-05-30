@@ -603,6 +603,10 @@ pub fn validate_agent_spawn(
 ///
 /// Returns a fully validated [`crate::orchestration::SkillSpawnRequest`]
 /// the kernel uses to invoke a recursive `Runtime::run`.
+///
+/// Gated behind `host-fs` because it returns `SkillSpawnRequest` which
+/// contains a `std::path::PathBuf` install path.
+#[cfg(feature = "host-fs")]
 pub fn validate_skill_spawn(
     tool_name: &str,
     args: &Value,

@@ -30,15 +30,17 @@ pub mod virtual_tools;
 pub use budget::BudgetWatchdog;
 pub use error::OrchestrationError;
 pub use run_state::RunState;
-pub use skill_resolve::{
-    apply_scope_paths, substitute_skill_dir, SkillSpawnArgs, SkillSpawnRequest,
-};
+pub use skill_resolve::{apply_scope_paths, SkillSpawnArgs};
+#[cfg(feature = "host-fs")]
+pub use skill_resolve::{substitute_skill_dir, SkillSpawnRequest};
 pub use task_list::TaskList;
 pub use trace::{NoopTraceSubscriber, TraceStream, TraceSubscriber};
 pub use virtual_tools::{
     check_capability_subset, dispatch, is_virtual, required_capability, validate_agent_spawn,
-    validate_skill_spawn, AgentSpawnRequest,
+    AgentSpawnRequest,
 };
+#[cfg(feature = "host-fs")]
+pub use virtual_tools::validate_skill_spawn;
 
 #[cfg(feature = "host-fs")]
 pub use skill_resolve::resolve_skill_for_spawn;

@@ -18,10 +18,10 @@
 //!
 //! Gated behind `feature = "tool-validation"` (jsonschema is std-only).
 
-use std::format;
-use std::string::String;
-use std::sync::Arc;
-use std::vec::Vec;
+use alloc::format;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use jsonschema::{Draft, ValidationOptions, Validator};
 use tau_domain::Value;
@@ -166,7 +166,7 @@ pub fn validate_tool_args<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
 
     /// Build a tau_domain::Value JSON Schema from a `serde_json::json!` literal.
     fn schema(json: serde_json::Value) -> Value {

@@ -234,6 +234,37 @@ jobs:
             echo "::endgroup::"
           done
 
+  runtime-core-no-std:
+    name: runtime-core no-std build + no-forbidden-imports / linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-mold: true
+      - name: no-std builds (default and no-default-features)
+        run: |
+          set -e
+          cargo check -p tau-runtime-core
+          cargo check -p tau-runtime-core --no-default-features
+      - name: no forbidden executor imports in tau-runtime-core/src
+        run: |
+          # tau-runtime-core must be executor-agnostic. Top-level (column-0)
+          # `use` statements must not import tokio/embassy/smol/async_std/std::*.
+          # Imports inside #[cfg(test)] or feature-gated blocks are indented
+          # and therefore excluded from the `^use` anchor.
+          # std:: items may appear in fully-qualified inline paths (e.g.
+          # `std::path::Path`) inside cfg-gated function signatures;
+          # this gate only catches module-level `use` statements.
+          if grep -rE '^use\s+(tokio|embassy|smol|async_std|std::)' crates/tau-runtime-core/src/; then
+            echo "tau-runtime-core source must not import tokio/embassy/smol/async_std/std::* at module level" >&2
+            echo "(Use #[cfg(feature = \"..\")] gates if the path genuinely needs std under a feature)" >&2
+            exit 1
+          fi
+      - name: executor-agnostic smoke test
+        run: cargo nextest run -p tau-runtime-core --test executor_agnostic_smoke
+
   build-fixtures-linux:
     # Skip on tests-only PRs — downstream integration jobs that consume
     # these binaries are also gated below. fmt/clippy/msrv/test-stable

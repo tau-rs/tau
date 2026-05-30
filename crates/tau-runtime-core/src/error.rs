@@ -354,7 +354,6 @@ pub enum HandshakeFailureReason {
 mod tests {
     use alloc::format;
     use alloc::string::ToString;
-    use alloc::vec;
     use super::*;
 
     #[test]

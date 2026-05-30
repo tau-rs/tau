@@ -11,16 +11,20 @@
 //!   the existing v1.1 spawn machinery.
 //!   **Requires the `host-fs` feature** (reads SKILL.md via `std::fs`).
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
+#[cfg(feature = "host-fs")]
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use std::path::Path;
-
 use globset::GlobBuilder;
-use tau_domain::{Capability, FsCapability, SKILL_DIR_VAR};
+use tau_domain::{Capability, FsCapability};
+#[cfg(feature = "host-fs")]
+use tau_domain::SKILL_DIR_VAR;
+#[cfg(feature = "host-fs")]
 use tau_pkg::{find_installed_skill, Scope};
 
 use crate::orchestration::error::OrchestrationError;
+#[cfg(feature = "host-fs")]
 use crate::orchestration::virtual_tools::check_capability_subset;
 
 /// A validated, ready-to-spawn skill invocation.
@@ -28,6 +32,8 @@ use crate::orchestration::virtual_tools::check_capability_subset;
 /// Produced by [`resolve_skill_for_spawn`]; consumed by the kernel's
 /// `skill.<name>.spawn` virtual-tool handler. Fields carry the
 /// fully-resolved capability grant and initial message for the child run.
+///
+/// Gated behind `host-fs` because it contains `std::path::PathBuf`.
 ///
 /// # Example
 ///
@@ -48,6 +54,7 @@ use crate::orchestration::virtual_tools::check_capability_subset;
 /// assert_eq!(req.message, "Review this draft.");
 /// assert!(req.grant.is_empty());
 /// ```
+#[cfg(feature = "host-fs")]
 #[derive(Debug, Clone)]
 pub struct SkillSpawnRequest {
     /// Skill name (as referenced in `skill.<name>.spawn`).
@@ -92,9 +99,13 @@ pub struct SkillSpawnArgs {
 /// with `install_path.display()`. Non-path capabilities (net.http,
 /// task_list, plan, agent.spawn, skill.spawn, custom) pass through.
 ///
+/// Gated behind `host-fs` because it takes a `std::path::Path` argument.
+///
 /// # Example
 ///
 /// ```
+/// # #[cfg(feature = "host-fs")]
+/// # {
 /// use std::path::Path;
 /// use tau_domain::{Capability, FsCapability, SKILL_DIR_VAR};
 /// use tau_runtime_core::orchestration::skill_resolve::substitute_skill_dir;
@@ -108,8 +119,10 @@ pub struct SkillSpawnArgs {
 /// if let Capability::Filesystem(FsCapability::Read { paths, .. }) = &out[0] {
 ///     assert_eq!(paths[0], "/skills/critic/1.0.0/refs/**");
 /// }
+/// # }
 /// ```
-pub fn substitute_skill_dir(caps: &[Capability], install_path: &Path) -> Vec<Capability> {
+#[cfg(feature = "host-fs")]
+pub fn substitute_skill_dir(caps: &[Capability], install_path: &std::path::Path) -> Vec<Capability> {
     let install_str = install_path.display().to_string();
     let subst = |paths: &[String]| -> Vec<String> {
         paths

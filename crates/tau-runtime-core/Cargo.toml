@@ -50,7 +50,6 @@ test-fixtures = ["tau-ports/test-fixtures"]
 
 [dev-dependencies]
 # toml + proptest: used by capability.rs unit/property tests (Task 3.3).
-# futures-executor: added in Task 3.8 for the smoke test.
 toml           = { workspace = true }
 proptest       = { workspace = true }
 assert_matches = { workspace = true }
@@ -58,3 +57,5 @@ tau-domain     = { workspace = true, features = ["test-fixtures"] }
 # test-fixtures enables MockLlmBackend, MockTool, MockStorage for builder tests.
 tau-ports      = { workspace = true, features = ["test-fixtures"] }
 serde_json     = { workspace = true }
+# futures-executor: Task 3.8 executor-agnostic smoke test.
+futures-executor = "0.3"

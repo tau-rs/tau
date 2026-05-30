@@ -103,6 +103,9 @@ pub enum OrchestrationError {
     },
 
     /// Persistence I/O failed.
+    ///
+    /// Gated behind `host-fs` because `std::io::Error` is a std type.
+    #[cfg(feature = "host-fs")]
     #[error("orchestration persistence error: {0}")]
     PersistenceError(#[from] std::io::Error),
 
@@ -124,6 +127,9 @@ pub enum OrchestrationError {
 
     /// Skills-4: skill's lockfile entry exists but install path is
     /// missing on disk.
+    ///
+    /// Gated behind `host-fs` because `std::path::PathBuf` is a std type.
+    #[cfg(feature = "host-fs")]
     #[error("skill {name:?} install path missing at {expected_path:?}")]
     SkillInstallPathMissing {
         /// Skill name.
