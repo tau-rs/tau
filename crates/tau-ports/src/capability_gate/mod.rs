@@ -8,6 +8,9 @@
 //! Stable as of v0.1 of the sandboxing sub-project. Variant evolution is
 //! handled by `#[non_exhaustive]` on every public type.
 
+#[cfg(feature = "process")]
+pub mod process;
+
 use alloc::collections::BTreeMap;
 
 use tau_domain::{Capability, CapabilityShapeSet};

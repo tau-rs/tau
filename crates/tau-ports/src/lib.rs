@@ -45,6 +45,8 @@ pub use capability_gate::{
     CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
     ResourceLimits, WorkingContext,
 };
+#[cfg(feature = "process")]
+pub use capability_gate::process::ProcessCapabilityGate;
 pub use tau_domain::CapabilityShapeSet;
 pub use storage::{Key, Namespace, Storage};
 pub use target::{
