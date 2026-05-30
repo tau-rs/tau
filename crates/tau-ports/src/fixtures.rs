@@ -26,12 +26,14 @@ use uuid::Uuid;
 
 use tau_domain::{CapabilityShape, CapabilityShapeSet};
 
-use crate::error::{LlmError, SandboxError, StorageError, ToolError};
+use crate::capability_gate::{
+    CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
+};
+use crate::error::{CapabilityError, LlmError, StorageError, ToolError};
 use crate::llm::{
     batch_to_stream, CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream,
     LlmBackend, LlmProviderMessage, StopReason, TokenUsage, ToolChoice, ToolSpec, ToolUse,
 };
-use crate::sandbox::{Sandbox, SandboxHandle, SandboxPlan, SandboxProbe, SandboxTier};
 use crate::storage::{Key, Namespace, Storage};
 use crate::tool::{SessionContext, Tool, ToolContent, ToolResult};
 
@@ -534,9 +536,9 @@ impl Storage for MockStorage {
 // MockSandbox
 // ---------------------------------------------------------------------------
 
-/// Mock [`Sandbox`] adapter for tests. Reports `Available` with `Tier::None`,
+/// Mock [`CapabilityGate`] adapter for tests. Reports `Available` with `Tier::None`,
 /// supports every known [`CapabilityShape`] except [`CapabilityShape::Custom`],
-/// and `wrap_spawn` is a no-op.
+/// and enforces nothing (all plans pass validate_plan for known shapes).
 pub struct MockSandbox {
     name: String,
 }
@@ -550,14 +552,14 @@ impl MockSandbox {
     }
 }
 
-impl Sandbox for MockSandbox {
+impl CapabilityGate for MockSandbox {
     fn name(&self) -> &str {
         &self.name
     }
 
-    async fn probe(&self) -> SandboxProbe {
-        SandboxProbe::Available {
-            tier: SandboxTier::None,
+    async fn probe(&self) -> CapabilityProbe {
+        CapabilityProbe::Available {
+            tier: CapabilityTier::None,
             details: "mock — no enforcement".into(),
         }
     }
@@ -572,73 +574,64 @@ impl Sandbox for MockSandbox {
         set
     }
 
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError> {
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError> {
         let supported = self.supported_shapes();
         for cap in &plan.capabilities {
             let shape = cap.required_shape();
             if !supported.contains(&shape) {
-                return Err(SandboxError::ShapeUnsupported { shape });
+                return Err(CapabilityError::ShapeUnsupported { shape });
             }
         }
         Ok(())
     }
-
-    async fn wrap_spawn(
-        &self,
-        plan: &SandboxPlan,
-        _cmd: &mut std::process::Command,
-    ) -> Result<SandboxHandle, SandboxError> {
-        self.validate_plan(plan)?;
-        Ok(SandboxHandle::noop())
-    }
 }
 
 // ---------------------------------------------------------------------------
-// SandboxPlan / WorkingContext / ResourceLimits construction helpers
+// CapabilityPlan / WorkingContext / ResourceLimits construction helpers
 // ---------------------------------------------------------------------------
 //
-// `SandboxPlan`, `WorkingContext`, and `ResourceLimits` are all
+// `CapabilityPlan`, `WorkingContext`, and `ResourceLimits` are all
 // `#[non_exhaustive]`. External crates cannot use struct-literal syntax to
 // construct them. These helpers provide typed constructors so downstream test
 // crates can build canonical values without the
 // `serde_json::from_value(json!({...}))` round-trip workaround.
 
-/// Build a [`SandboxPlan`] from a capability list with no context or limits.
-pub fn plan_from_capabilities(caps: Vec<tau_domain::Capability>) -> SandboxPlan {
-    SandboxPlan::new(caps, None, None)
+/// Build a [`CapabilityPlan`] from a capability list with no context or limits.
+pub fn plan_from_capabilities(caps: Vec<tau_domain::Capability>) -> CapabilityPlan {
+    CapabilityPlan::new(caps, None, None)
 }
 
-/// Build a [`SandboxPlan`] from a capability list with a
-/// [`WorkingContext`](crate::sandbox::WorkingContext).
+/// Build a [`CapabilityPlan`] from a capability list with a
+/// [`WorkingContext`](crate::capability_gate::WorkingContext).
 pub fn plan_with_context(
     caps: Vec<tau_domain::Capability>,
-    ctx: crate::sandbox::WorkingContext,
-) -> SandboxPlan {
-    SandboxPlan::new(caps, Some(ctx), None)
+    ctx: crate::capability_gate::WorkingContext,
+) -> CapabilityPlan {
+    CapabilityPlan::new(caps, Some(ctx), None)
 }
 
-/// Build a [`WorkingContext`](crate::sandbox::WorkingContext) from a
+/// Build a [`WorkingContext`](crate::capability_gate::WorkingContext) from a
 /// working directory and environment map.
 pub fn working_context(
     working_dir: impl Into<std::path::PathBuf>,
     env: BTreeMap<String, String>,
-) -> crate::sandbox::WorkingContext {
-    crate::sandbox::WorkingContext {
+) -> crate::capability_gate::WorkingContext {
+    crate::capability_gate::WorkingContext {
         working_dir: Some(working_dir.into()),
         env,
     }
 }
 
-/// Build a [`ResourceLimits`](crate::sandbox::ResourceLimits) from
+/// Build a [`ResourceLimits`](crate::capability_gate::ResourceLimits) from
 /// optional memory and CPU-second limits.
 ///
 /// `cpu_seconds` is `Option<u32>` (matching the field type in
-/// [`crate::sandbox::ResourceLimits`]).
+/// [`crate::capability_gate::ResourceLimits`]).
 pub fn resource_limits(
     memory_bytes: Option<u64>,
     cpu_seconds: Option<u32>,
-) -> crate::sandbox::ResourceLimits {
-    crate::sandbox::ResourceLimits {
+) -> crate::capability_gate::ResourceLimits {
+    crate::capability_gate::ResourceLimits {
         memory_bytes,
         cpu_seconds,
         wall_clock_seconds: None,
@@ -694,7 +687,7 @@ mod sandbox_v01_tests {
     async fn mock_probe_is_available() {
         let mock = MockSandbox::new("mem");
         let probe = mock.probe().await;
-        assert!(matches!(probe, SandboxProbe::Available { .. }));
+        assert!(matches!(probe, CapabilityProbe::Available { .. }));
     }
 
     #[tokio::test]
@@ -711,7 +704,7 @@ mod sandbox_v01_tests {
     #[tokio::test]
     async fn mock_validate_plan_accepts_known_shape() {
         let mock = MockSandbox::new("mem");
-        let plan = SandboxPlan {
+        let plan = CapabilityPlan {
             capabilities: vec![read_cap()],
             context: None,
             limits: None,
@@ -722,7 +715,7 @@ mod sandbox_v01_tests {
     #[tokio::test]
     async fn mock_validate_plan_rejects_custom_shape() {
         let mock = MockSandbox::new("mem");
-        let plan = SandboxPlan {
+        let plan = CapabilityPlan {
             capabilities: vec![Capability::Custom {
                 name: "weird".into(),
                 params: Default::default(),
@@ -731,25 +724,11 @@ mod sandbox_v01_tests {
             limits: None,
         };
         match mock.validate_plan(&plan) {
-            Err(SandboxError::ShapeUnsupported { shape }) => {
+            Err(CapabilityError::ShapeUnsupported { shape }) => {
                 assert!(matches!(shape, CapabilityShape::Custom { .. }));
             }
             other => panic!("expected ShapeUnsupported, got {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    async fn mock_wrap_spawn_returns_handle() {
-        let mock = MockSandbox::new("mem");
-        let plan = SandboxPlan {
-            capabilities: vec![read_cap()],
-            context: None,
-            limits: None,
-        };
-        let mut cmd = std::process::Command::new("/bin/true");
-        let handle = mock.wrap_spawn(&plan, &mut cmd).await.unwrap();
-        // MockSandbox handle is unit; just check the type.
-        let _: SandboxHandle = handle;
     }
 
     #[test]
@@ -758,7 +737,7 @@ mod sandbox_v01_tests {
         use std::sync::Arc;
         let flag = Arc::new(AtomicBool::new(false));
         let f = flag.clone();
-        drop(SandboxHandle::new(move || f.store(true, Ordering::SeqCst)));
+        drop(CapabilityHandle::new(move || f.store(true, Ordering::SeqCst)));
         assert!(
             flag.load(Ordering::SeqCst),
             "cleanup closure must run on drop"
@@ -767,18 +746,18 @@ mod sandbox_v01_tests {
 
     #[test]
     fn sandbox_handle_noop_does_not_panic_on_drop() {
-        drop(SandboxHandle::noop());
+        drop(CapabilityHandle::noop());
     }
 
     #[tokio::test]
     async fn sandbox_tier_ordering() {
-        assert!(SandboxTier::Light < SandboxTier::Strict);
-        assert!(SandboxTier::None < SandboxTier::Light);
+        assert!(CapabilityTier::Light < CapabilityTier::Strict);
+        assert!(CapabilityTier::None < CapabilityTier::Light);
     }
 
     #[test]
     fn sandbox_error_unavailable_renders() {
-        let e = SandboxError::Unavailable {
+        let e = CapabilityError::Unavailable {
             reason: "no kernel".into(),
         };
         assert!(format!("{e}").contains("unavailable"));
@@ -786,7 +765,7 @@ mod sandbox_v01_tests {
 
     #[test]
     fn sandbox_error_shape_unsupported_renders() {
-        let e = SandboxError::ShapeUnsupported {
+        let e = CapabilityError::ShapeUnsupported {
             shape: CapabilityShape::FilesystemRead,
         };
         assert!(format!("{e}").contains("unsupported shape"));

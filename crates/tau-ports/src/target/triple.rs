@@ -5,7 +5,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::sandbox::SandboxTier;
+use crate::capability_gate::CapabilityTier;
 use crate::target::adapter_family::AdapterFamily;
 use crate::target::parse::ParseError;
 use crate::target::platform::Platform;
@@ -22,7 +22,7 @@ pub struct TargetTriple {
     /// Adapter family axis (Native, Container, Remote, Wasi, Passthrough).
     pub adapter_family: AdapterFamily,
     /// Sandbox tier axis (Strict, Light, None).
-    pub tier: SandboxTier,
+    pub tier: CapabilityTier,
 }
 
 impl TargetTriple {
@@ -30,7 +30,7 @@ impl TargetTriple {
     pub const PASSTHROUGH: TargetTriple = TargetTriple {
         platform: Platform::Any,
         adapter_family: AdapterFamily::Passthrough,
-        tier: SandboxTier::None,
+        tier: CapabilityTier::None,
     };
 
     /// Is this the `passthrough` special?
@@ -40,7 +40,7 @@ impl TargetTriple {
             TargetTriple {
                 platform: Platform::Any,
                 adapter_family: AdapterFamily::Passthrough,
-                tier: SandboxTier::None,
+                tier: CapabilityTier::None,
             }
         )
     }
@@ -73,7 +73,7 @@ impl TargetTriple {
         TargetTriple {
             platform,
             adapter_family: crate::target::adapter_family::AdapterFamily::Native,
-            tier: crate::sandbox::SandboxTier::Strict,
+            tier: crate::capability_gate::CapabilityTier::Strict,
         }
     }
 }
@@ -134,19 +134,19 @@ impl<'de> serde::Deserialize<'de> for TargetTriple {
     }
 }
 
-fn tier_as_str(t: SandboxTier) -> &'static str {
+fn tier_as_str(t: CapabilityTier) -> &'static str {
     match t {
-        SandboxTier::None => "none",
-        SandboxTier::Light => "light",
-        SandboxTier::Strict => "strict",
+        CapabilityTier::None => "none",
+        CapabilityTier::Light => "light",
+        CapabilityTier::Strict => "strict",
     }
 }
 
-fn tier_from_str(s: &str) -> Result<SandboxTier, ParseError> {
+fn tier_from_str(s: &str) -> Result<CapabilityTier, ParseError> {
     match s {
-        "none" => Ok(SandboxTier::None),
-        "light" => Ok(SandboxTier::Light),
-        "strict" => Ok(SandboxTier::Strict),
+        "none" => Ok(CapabilityTier::None),
+        "light" => Ok(CapabilityTier::Light),
+        "strict" => Ok(CapabilityTier::Strict),
         other => Err(ParseError::UnknownTier(other.to_string())),
     }
 }
@@ -160,7 +160,7 @@ mod tests {
         let t: TargetTriple = "linux-native-strict".parse().unwrap();
         assert_eq!(t.platform, Platform::Linux);
         assert_eq!(t.adapter_family, AdapterFamily::Native);
-        assert_eq!(t.tier, SandboxTier::Strict);
+        assert_eq!(t.tier, CapabilityTier::Strict);
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
         let t = TargetTriple {
             platform: Platform::Darwin,
             adapter_family: AdapterFamily::Native,
-            tier: SandboxTier::Strict,
+            tier: CapabilityTier::Strict,
         };
         assert_eq!(t.to_string(), "darwin-native-strict");
         assert_eq!(t.to_string().parse::<TargetTriple>().unwrap(), t);
@@ -250,7 +250,7 @@ mod tests {
         let t = TargetTriple {
             platform: Platform::Linux,
             adapter_family: AdapterFamily::Container,
-            tier: SandboxTier::Strict,
+            tier: CapabilityTier::Strict,
         };
         let json = serde_json::to_string(&t).unwrap();
         assert_eq!(json, "\"linux-container-strict\"");
@@ -262,7 +262,7 @@ mod tests {
     fn host_returns_native_strict_for_current_platform() {
         let h = TargetTriple::host();
         assert_eq!(h.adapter_family.as_str(), "native");
-        assert_eq!(h.tier, crate::sandbox::SandboxTier::Strict);
+        assert_eq!(h.tier, crate::capability_gate::CapabilityTier::Strict);
         let expected_platform = if cfg!(target_os = "linux") {
             "linux"
         } else if cfg!(target_os = "macos") {

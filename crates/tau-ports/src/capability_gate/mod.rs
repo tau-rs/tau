@@ -1,43 +1,41 @@
-//! Sandbox port — the `tau_ports::Sandbox` trait + supporting types.
+//! Capability gate port — the `tau_ports::CapabilityGate` trait + supporting types.
 //!
 //! Hexagonal port: `tau-runtime` consumes this trait; `tau-sandbox-native`,
-//! `tau-sandbox-container`, and `MockSandbox` (in [`crate::fixtures`])
+//! `tau-sandbox-container`, and `MockCapabilityGate` (in [`crate::fixtures`])
 //! implement it. The runtime selects an adapter via a probe-based chain
 //! configured in `<scope>/.tau/config.toml`.
 //!
 //! Stable as of v0.1 of the sandboxing sub-project. Variant evolution is
 //! handled by `#[non_exhaustive]` on every public type.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::process::Command;
+use alloc::collections::BTreeMap;
 
 use tau_domain::{Capability, CapabilityShapeSet};
 
-use crate::error::SandboxError;
+use crate::error::CapabilityError;
 
-/// Plan provided to [`Sandbox::wrap_spawn`].
+/// Plan provided to [`crate::ProcessCapabilityGate::wrap_spawn`].
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SandboxPlan {
+pub struct CapabilityPlan {
     /// Capabilities the sandboxed code is allowed to exercise. The runtime
     /// composes this from the package's `compute_effective` capability set
     /// before calling `wrap_spawn`.
-    pub capabilities: Vec<Capability>,
+    pub capabilities: alloc::vec::Vec<Capability>,
     /// Optional working-context hint (working dir + env).
     pub context: Option<WorkingContext>,
     /// Optional resource limits.
     pub limits: Option<ResourceLimits>,
 }
 
-impl SandboxPlan {
-    /// Construct a [`SandboxPlan`].
+impl CapabilityPlan {
+    /// Construct a [`CapabilityPlan`].
     ///
     /// `#[non_exhaustive]` blocks struct-literal construction outside
     /// `tau-ports`; use this constructor instead.
     pub fn new(
-        capabilities: Vec<Capability>,
+        capabilities: alloc::vec::Vec<Capability>,
         context: Option<WorkingContext>,
         limits: Option<ResourceLimits>,
     ) -> Self {
@@ -49,18 +47,20 @@ impl SandboxPlan {
     }
 }
 
-/// Working-context hint for the sandboxed execution.
+/// Working-context hint for the gated execution.
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WorkingContext {
-    /// Working directory hint.
-    pub working_dir: Option<PathBuf>,
-    /// Environment variables to seed the sandboxed context.
-    pub env: BTreeMap<String, String>,
+    /// Working directory hint. Only meaningful when the `process` feature
+    /// is enabled (no_std hosts have no filesystem path semantics).
+    #[cfg(feature = "process")]
+    pub working_dir: Option<std::path::PathBuf>,
+    /// Environment variables to seed the gated execution.
+    pub env: BTreeMap<alloc::string::String, alloc::string::String>,
 }
 
-/// Resource limits for the sandboxed execution.
+/// Resource limits for the gated execution.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -79,18 +79,18 @@ pub struct ResourceLimits {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SandboxProbe {
+pub enum CapabilityProbe {
     /// Adapter is usable on this host with the indicated tier.
     Available {
         /// Best tier the adapter can guarantee right now.
-        tier: SandboxTier,
+        tier: CapabilityTier,
         /// Free-form diagnostic ("landlock V1; seccomp BPF; user_ns ok").
-        details: String,
+        details: alloc::string::String,
     },
     /// Adapter is not usable on this host.
     Unavailable {
         /// Human-readable reason ("kernel < 5.13", "no docker on PATH").
-        reason: String,
+        reason: alloc::string::String,
     },
 }
 
@@ -100,7 +100,7 @@ pub enum SandboxProbe {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SandboxTier {
+pub enum CapabilityTier {
     /// No enforcement (only valid for the mock adapter).
     None,
     /// Filesystem isolation only (e.g. landlock without seccomp).
@@ -109,25 +109,25 @@ pub enum SandboxTier {
     Strict,
 }
 
-/// Opaque handle returned by [`Sandbox::wrap_spawn`]. Drops automatically
+/// Opaque handle returned by [`crate::ProcessCapabilityGate::wrap_spawn`]. Drops automatically
 /// release any resources the adapter holds (e.g. cgroup, namespace fd).
 ///
 /// `nested`: drop guards that run LIFO before the main cleanup closure.
 /// NativeSandbox uses this to nest a proxy task guard whose Drop signals
 /// the proxy to shut down.
 #[non_exhaustive]
-pub struct SandboxHandle {
-    cleanup: Option<Box<dyn FnOnce() + Send + 'static>>,
-    nested: Vec<Box<dyn Send>>,
+pub struct CapabilityHandle {
+    cleanup: Option<alloc::boxed::Box<dyn FnOnce() + Send + 'static>>,
+    nested: alloc::vec::Vec<alloc::boxed::Box<dyn Send>>,
 }
 
-impl SandboxHandle {
+impl CapabilityHandle {
     /// Construct a handle from an adapter-defined cleanup closure.
     /// The closure runs exactly once when the handle is dropped.
     pub fn new<F: FnOnce() + Send + 'static>(cleanup: F) -> Self {
         Self {
-            cleanup: Some(Box::new(cleanup)),
-            nested: Vec::new(),
+            cleanup: Some(alloc::boxed::Box::new(cleanup)),
+            nested: alloc::vec::Vec::new(),
         }
     }
 
@@ -135,7 +135,7 @@ impl SandboxHandle {
     pub fn noop() -> Self {
         Self {
             cleanup: None,
-            nested: Vec::new(),
+            nested: alloc::vec::Vec::new(),
         }
     }
 
@@ -144,12 +144,12 @@ impl SandboxHandle {
     /// Drop order: nested guards drop LIFO (latest-attached drops first)
     /// before the main cleanup closure. NativeSandbox uses this to nest
     /// a proxy task guard whose Drop signals the proxy to shut down.
-    pub fn nest_handle(&mut self, guard: Box<dyn Send>) {
+    pub fn nest_handle(&mut self, guard: alloc::boxed::Box<dyn Send>) {
         self.nested.push(guard);
     }
 }
 
-impl Drop for SandboxHandle {
+impl Drop for CapabilityHandle {
     fn drop(&mut self) {
         // Drop nested guards LIFO (latest-attached drops first).
         for guard in self.nested.drain(..).rev() {
@@ -163,26 +163,28 @@ impl Drop for SandboxHandle {
     }
 }
 
-impl std::fmt::Debug for SandboxHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SandboxHandle").finish_non_exhaustive()
+impl core::fmt::Debug for CapabilityHandle {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CapabilityHandle").finish_non_exhaustive()
     }
 }
 
-/// Trait implemented by sandbox adapters. The runtime calls these methods
-/// in this order:
+/// Trait implemented by capability gate adapters. The runtime calls these
+/// methods in this order:
 ///
-/// 1. [`Sandbox::probe`] at startup (cached) — discover what the adapter can do.
-/// 2. [`Sandbox::supported_shapes`] for static cross-checks.
-/// 3. [`Sandbox::validate_plan`] before spawning a plugin process.
-/// 4. [`Sandbox::wrap_spawn`] applies sandbox enforcement to a `Command`.
+/// 1. [`CapabilityGate::probe`] at startup (cached) — discover what the adapter can do.
+/// 2. [`CapabilityGate::supported_shapes`] for static cross-checks.
+/// 3. [`CapabilityGate::validate_plan`] before spawning a plugin process.
+///
+/// Process-flavored methods (`wrap_spawn`, `apply_post_spawn`) are on the
+/// `ProcessCapabilityGate` extension trait (Task 1.3).
 #[allow(async_fn_in_trait)]
-pub trait Sandbox: Send + Sync {
+pub trait CapabilityGate: Send + Sync {
     /// Plugin-visible name (matches the package name; for diagnostics).
     fn name(&self) -> &str;
 
     /// Probe the host for adapter availability. Cached by the runtime.
-    async fn probe(&self) -> SandboxProbe;
+    async fn probe(&self) -> CapabilityProbe;
 
     /// Capability shapes this adapter can enforce. Used at install time
     /// (Layer 2) and at `tau check` time (Layer 3) to refuse plans this
@@ -190,36 +192,9 @@ pub trait Sandbox: Send + Sync {
     fn supported_shapes(&self) -> CapabilityShapeSet;
 
     /// Validate that this plan can be executed by this adapter.
-    /// Returns `Err(SandboxError::ShapeUnsupported)` if any required shape
-    /// is not in [`Sandbox::supported_shapes`].
-    fn validate_plan(&self, plan: &SandboxPlan) -> Result<(), SandboxError>;
-
-    /// Apply sandbox enforcement to a [`Command`] in preparation for spawn.
-    /// On Linux native, this typically registers `pre_exec` hooks. The
-    /// returned [`SandboxHandle`] holds any ambient resources (cgroup,
-    /// namespace fd) and releases them on drop.
-    async fn wrap_spawn(
-        &self,
-        plan: &SandboxPlan,
-        cmd: &mut Command,
-    ) -> Result<SandboxHandle, SandboxError>;
-
-    /// Adapter-specific post-spawn setup. Called by the runtime after
-    /// `cmd.spawn()` succeeds and the child PID is known.
-    ///
-    /// Default: no-op. Mock + Container adapters use the default.
-    /// NativeSandbox (Linux) may use this to start a proxy task and nest
-    /// a proxy task guard into `handle` when the plan has
-    /// `Capability::Network(Http)`.
-    async fn apply_post_spawn(
-        &self,
-        plan: &SandboxPlan,
-        child_pid: i32,
-        handle: &mut SandboxHandle,
-    ) -> Result<(), SandboxError> {
-        let _ = (plan, child_pid, handle);
-        Ok(())
-    }
+    /// Returns `Err(CapabilityError::ShapeUnsupported)` if any required shape
+    /// is not in [`CapabilityGate::supported_shapes`].
+    fn validate_plan(&self, plan: &CapabilityPlan) -> Result<(), CapabilityError>;
 }
 
 #[cfg(test)]
@@ -230,22 +205,26 @@ mod tests {
     fn nest_handle_drops_in_lifo_order() {
         use std::sync::{Arc, Mutex};
 
-        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let order: Arc<Mutex<alloc::vec::Vec<&'static str>>> =
+            Arc::new(Mutex::new(alloc::vec::Vec::new()));
         let order_main = Arc::clone(&order);
 
-        let mut handle = SandboxHandle::new(move || {
+        let mut handle = CapabilityHandle::new(move || {
             order_main.lock().unwrap().push("main_cleanup");
         });
 
         // Add 2 nested guards. Each pushes its label on Drop.
-        struct Guard(Arc<Mutex<Vec<&'static str>>>, &'static str);
+        struct Guard(Arc<Mutex<alloc::vec::Vec<&'static str>>>, &'static str);
         impl Drop for Guard {
             fn drop(&mut self) {
                 self.0.lock().unwrap().push(self.1);
             }
         }
-        handle.nest_handle(Box::new(Guard(Arc::clone(&order), "first_nested")));
-        handle.nest_handle(Box::new(Guard(Arc::clone(&order), "second_nested")));
+        handle.nest_handle(alloc::boxed::Box::new(Guard(Arc::clone(&order), "first_nested")));
+        handle.nest_handle(alloc::boxed::Box::new(Guard(
+            Arc::clone(&order),
+            "second_nested",
+        )));
 
         drop(handle);
 

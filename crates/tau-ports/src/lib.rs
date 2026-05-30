@@ -11,14 +11,14 @@
 //! - [`llm::LlmBackend`] — LLM provider plugins (`kind = "llm-backend"`).
 //! - [`tool::Tool`] — tool plugins (`kind = "tool"`).
 //! - [`storage::Storage`] — storage plugins (`kind = "storage"`).
-//! - [`sandbox::Sandbox`] — sandbox adapters; probe-based adapter selection
-//!   for OS-native and container sandboxing.
+//! - [`capability_gate::CapabilityGate`] — universal capability gate
+//!   contract; concrete impls live in tau-sandbox-{native,container,darwin,windows}.
 //!
 //! See `docs/decisions/0003-tau-ports.md` for the design rationale.
 
 extern crate alloc;
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(any(test, feature = "test-fixtures", feature = "process"))]
 extern crate std;
 
 pub mod error;
@@ -26,12 +26,12 @@ pub mod error;
 pub mod fixtures;
 pub mod llm;
 pub mod orchestration;
-pub mod sandbox;
+pub mod capability_gate;
 pub mod storage;
 pub mod target;
 pub mod tool;
 
-pub use error::{KeyError, LlmError, NamespaceError, SandboxError, StorageError, ToolError};
+pub use error::{CapabilityError, KeyError, LlmError, NamespaceError, StorageError, ToolError};
 pub use llm::{
     batch_to_stream, stream_to_batch, CompletionChunk, CompletionRequest, CompletionResponse,
     CompletionStream, ContentBlock, LlmBackend, LlmProviderMessage, StopReason, TokenUsage,
@@ -41,9 +41,11 @@ pub use orchestration::{
     AgentId, RunBudget, RunId, RunSnapshot, RunStatus, Task, TaskEvent, TaskId, TaskListFilter,
     TaskStatus, TraceEvent, TraceEventKind,
 };
-pub use sandbox::{
-    ResourceLimits, Sandbox, SandboxHandle, SandboxPlan, SandboxProbe, SandboxTier, WorkingContext,
+pub use capability_gate::{
+    CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
+    ResourceLimits, WorkingContext,
 };
+pub use tau_domain::CapabilityShapeSet;
 pub use storage::{Key, Namespace, Storage};
 pub use target::{
     AdapterFamily, ParseError as TargetParseError, Platform, TargetCapabilityProfile, TargetTriple,
