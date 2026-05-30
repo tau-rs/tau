@@ -254,6 +254,7 @@ pub struct RunSnapshot {
 #[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn task_status_roundtrips_snake_case() {

@@ -2,7 +2,9 @@
 //! tau deployment targets. See ADR-0034 + spec
 //! `2026-05-19-target-triple-registry-design.md`.
 
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
+#[cfg(feature = "serde")]
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;

@@ -1,6 +1,13 @@
 //! Locks the shape of CapabilityGate / CapabilityPlan / CapabilityProbe so
 //! a future drift (e.g. re-adding wrap_spawn to the universal trait) fails
 //! at compile time.
+//!
+//! MockClock/DeterministicRandom assertions require the `test-fixtures`
+//! feature (since those types live behind that gate in `tau-ports`). The
+//! whole file is feature-gated so `cargo test --workspace` without
+//! `--features test-fixtures` skips this test cleanly.
+
+#![cfg(feature = "test-fixtures")]
 
 use tau_ports::{CapabilityGate, CapabilityPlan, CapabilityProbe, CapabilityShapeSet};
 

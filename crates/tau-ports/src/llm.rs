@@ -603,6 +603,8 @@ impl ToolUseAccumulator {
 #[cfg(test)]
 mod helper_tests {
     use super::*;
+    #[allow(unused_imports)]
+    use alloc::string::ToString;
     use alloc::vec;
 
     use core::pin::Pin;

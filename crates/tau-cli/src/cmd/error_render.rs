@@ -36,7 +36,7 @@ pub fn render_resolution_error(err: &ResolutionError) -> String {
 fn render_no_adapter_matches(
     tried: &[(String, ResolutionRejection)],
     platform: &str,
-    required_tier: tau_ports::SandboxTier,
+    required_tier: tau_ports::CapabilityTier,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "no sandbox adapter satisfies project requirements");
@@ -87,7 +87,7 @@ fn render_no_adapter_matches(
 pub fn render_plugin_tier_mismatch(
     plugin: &str,
     required: tau_domain::PluginRequiredTier,
-    delivered: tau_ports::SandboxTier,
+    delivered: tau_ports::CapabilityTier,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -410,13 +410,13 @@ mod tests {
                 (
                     "passthrough".into(),
                     ResolutionRejection::TierTooLow {
-                        delivered: tau_ports::SandboxTier::None,
-                        required: tau_ports::SandboxTier::Strict,
+                        delivered: tau_ports::CapabilityTier::None,
+                        required: tau_ports::CapabilityTier::Strict,
                     },
                 ),
             ],
             platform: "macos".into(),
-            required_tier: tau_ports::SandboxTier::Strict,
+            required_tier: tau_ports::CapabilityTier::Strict,
         };
         let rendered = render_resolution_error(&err);
         insta::assert_snapshot!(rendered);
@@ -427,7 +427,7 @@ mod tests {
         let err = ResolutionError::PluginTierMismatch {
             plugin: "credentials-store".into(),
             required: tau_domain::PluginRequiredTier::Strict,
-            delivered: tau_ports::SandboxTier::None,
+            delivered: tau_ports::CapabilityTier::None,
         };
         let rendered = render_resolution_error(&err);
         insta::assert_snapshot!(rendered);
@@ -448,7 +448,7 @@ mod tests {
         let rendered = render_plugin_tier_mismatch(
             "auth-store",
             tau_domain::PluginRequiredTier::Strict,
-            tau_ports::SandboxTier::None,
+            tau_ports::CapabilityTier::None,
         );
         insta::assert_snapshot!(rendered);
     }

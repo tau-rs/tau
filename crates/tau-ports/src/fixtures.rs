@@ -658,7 +658,6 @@ pub fn resource_limits(
 #[cfg(test)]
 mod mock_llm_tests {
     use super::*;
-    use alloc::vec;
 
     #[tokio::test]
     async fn verify_invocation_count_passes_on_zero_when_unused() {

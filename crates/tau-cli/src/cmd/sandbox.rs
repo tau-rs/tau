@@ -37,14 +37,14 @@ async fn run_status(output: &mut Output) -> anyhow::Result<()> {
         } else {
             match tau_runtime::sandbox::instantiate_for_probe(entry.kind) {
                 Ok(adapter) => match adapter.probe().await {
-                    tau_ports::SandboxProbe::Available { tier, details } => {
+                    tau_ports::CapabilityProbe::Available { tier, details } => {
                         if details.is_empty() {
                             format!("available, tier={tier:?}")
                         } else {
                             format!("available, tier={tier:?}; {details}")
                         }
                     }
-                    tau_ports::SandboxProbe::Unavailable { reason } => {
+                    tau_ports::CapabilityProbe::Unavailable { reason } => {
                         format!("unavailable: {reason}")
                     }
                     other => format!("probe returned: {other:?}"),
@@ -213,7 +213,7 @@ async fn run_interactive_prompt(
         } else {
             match tau_runtime::sandbox::instantiate_for_probe(entry.kind) {
                 Ok(adapter) => match adapter.probe().await {
-                    tau_ports::SandboxProbe::Available { .. } => "✓ available",
+                    tau_ports::CapabilityProbe::Available { .. } => "✓ available",
                     _ => "✗ unavailable",
                 },
                 Err(_) => "✗ unavailable",
