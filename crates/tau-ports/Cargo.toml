@@ -14,11 +14,13 @@ thiserror    = { workspace = true }
 futures-core = { workspace = true }
 uuid         = { workspace = true }
 serde        = { workspace = true, optional = true }
-chrono       = { workspace = true }
+chrono = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 tempfile     = { workspace = true, optional = true }
+tracing = { workspace = true, default-features = false, features = ["attributes"] }
 
 [features]
-default       = []
+default       = ["process"]
+process       = []
 serde         = ["dep:serde", "tau-domain/serde", "uuid/serde"]
 test-fixtures = ["dep:tempfile"]
 
