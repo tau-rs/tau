@@ -2,20 +2,17 @@
 //!
 //! `address_to_tool_name` is re-exported from the executor-agnostic
 //! kernel. The `impl Runtime` resolver methods (resolve_llm_backend,
-//! resolve_tool) are inherent methods on the tau-runtime `Runtime`
-//! newtype defined in `crate::builder`.
+//! resolve_tool) now live in `tau_runtime_core::dispatch` — tau-runtime
+//! reaches them via `Deref` on the newtype wrapper (Task 3.5).
 //!
 //! # Dead-code allow
 //!
 //! [`address_to_tool_name`] is reached only by the dispatcher (Task 10)
-//! and tests; the resolver methods on [`Runtime`] are exercised both by
-//! tests and the run loop. We keep the module-level `allow` so the
-//! v0.1 surface — small, with a few helpers that are used through
-//! transitive call sites — doesn't sprout one-off annotations.
+//! and tests; the resolver methods are exercised both by tests and the
+//! run loop. We keep the module-level `allow` so the v0.1 surface
+//! doesn't sprout one-off annotations.
 
 #![allow(dead_code)]
-
-use std::sync::Arc;
 
 #[cfg(test)]
 use tau_domain::Address;
@@ -23,40 +20,8 @@ use tau_domain::Address;
 #[cfg(test)]
 pub(crate) use tau_runtime_core::dispatch::address_to_tool_name;
 
-use crate::builder::{DynLlmBackend, DynTool, Runtime};
-use crate::error::{CoreRuntimeError, RuntimeError};
-
-impl Runtime {
-    /// Resolve an LLM backend by name. Returns
-    /// [`RuntimeError::LlmBackendNotRegistered`] if the agent's
-    /// requested backend is not in the registry.
-    pub(crate) fn resolve_llm_backend(
-        &self,
-        agent_id: &str,
-        backend_name: &str,
-    ) -> Result<&Arc<dyn DynLlmBackend>, RuntimeError> {
-        self.llm_backends()
-            .get(backend_name)
-            .ok_or_else(|| RuntimeError::Core(CoreRuntimeError::LlmBackendNotRegistered {
-                agent_id: agent_id.to_owned(),
-                backend: backend_name.to_owned(),
-            }))
-    }
-
-    /// Resolve a tool by name. On miss, returns
-    /// [`RuntimeError::ToolNotRegistered`] populated with the sorted
-    /// list of registered tool names for diagnostics.
-    pub(crate) fn resolve_tool(&self, tool_name: &str) -> Result<&Arc<dyn DynTool>, RuntimeError> {
-        self.tools().get(tool_name).ok_or_else(|| {
-            let mut registered: Vec<String> = self.tools().keys().cloned().collect();
-            registered.sort();
-            RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
-                tool_name: tool_name.to_owned(),
-                registered,
-            })
-        })
-    }
-}
+// resolve_llm_backend and resolve_tool are now inherent methods on
+// tau_runtime_core::Runtime, accessible via the newtype's Deref impl.
 
 #[cfg(test)]
 mod tests {
@@ -64,6 +29,8 @@ mod tests {
 
     use tau_domain::{AgentInstanceId, Value};
     use tau_ports::fixtures::{make_tool_spec, MockLlmBackend, MockTool};
+    use crate::builder::Runtime;
+    use crate::error::CoreRuntimeError;
 
     fn empty_tool_spec(name: &str) -> tau_ports::ToolSpec {
         make_tool_spec(
@@ -94,15 +61,13 @@ mod tests {
             .expect("build runtime");
 
         let result = runtime.resolve_llm_backend("agent-x", "missing-backend");
-        // `Ok` side is `&Arc<dyn DynLlmBackend>` which is not `Debug`,
-        // so we can't `{result:?}` the whole `Result` — discriminate
-        // first, then debug-format only the `Err`.
         let Err(err) = result else {
             panic!("expected LlmBackendNotRegistered, got Ok")
         };
-        let RuntimeError::Core(CoreRuntimeError::LlmBackendNotRegistered {
+        // resolve_llm_backend returns CoreRuntimeError (tau_runtime_core::error::RuntimeError).
+        let CoreRuntimeError::LlmBackendNotRegistered {
             agent_id, backend, ..
-        }) = err
+        } = err
         else {
             panic!("expected LlmBackendNotRegistered: {err:?}")
         };
@@ -132,17 +97,15 @@ mod tests {
             .expect("build runtime");
 
         let result = runtime.resolve_tool("missing");
-        // `Ok` side is `&Arc<dyn DynTool>` which is not `Debug`, so we
-        // can't `{result:?}` the whole `Result` — discriminate first,
-        // then debug-format only the `Err`.
         let Err(err) = result else {
             panic!("expected ToolNotRegistered, got Ok")
         };
-        let RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
+        // resolve_tool returns CoreRuntimeError (tau_runtime_core::error::RuntimeError).
+        let CoreRuntimeError::ToolNotRegistered {
             tool_name,
             registered,
             ..
-        }) = err
+        } = err
         else {
             panic!("expected ToolNotRegistered: {err:?}")
         };

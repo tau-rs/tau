@@ -22,6 +22,8 @@ pub use error::{
 };
 
 pub mod builder;
+pub mod ids;
+pub mod run;
 pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime, RuntimeBuilder};
 
 pub mod capability;

@@ -16,6 +16,11 @@ serde        = { workspace = true, default-features = false, features = ["alloc"
 chrono       = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 hashbrown    = { workspace = true }
 foldhash     = { workspace = true }
+# `v4` for session-id minting in `ids::uuid_v4` — distinct from the `v7`
+# feature in the workspace alias (used by id newtypes in tau-domain).
+uuid         = { workspace = true, features = ["v4"] }
+# ULID generation for run-ids and trace-event-ids via `ids::ulid`.
+ulid         = { workspace = true, default-features = false }
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 tracing      = { workspace = true, default-features = false, features = ["attributes"] }
 # Optional: used by the `tool-validation` feature (jsonschema-based tool
@@ -37,6 +42,8 @@ tool-validation    = ["dep:jsonschema", "dep:serde_json"]
 host-fs            = []
 
 default = ["process", "capability-override", "tool-validation", "host-fs"]
+# Activates DeterministicRandom fallback in invoke_tool for test paths.
+test-fixtures = ["tau-ports/test-fixtures"]
 
 [dev-dependencies]
 # toml + proptest: used by capability.rs unit/property tests (Task 3.3).

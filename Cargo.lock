@@ -3541,6 +3541,8 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "ulid",
+ "uuid",
 ]
 
 [[package]]
