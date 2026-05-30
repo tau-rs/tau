@@ -2,7 +2,7 @@
 //! tau deployment targets. See ADR-0034 + spec
 //! `2026-05-19-target-triple-registry-design.md`.
 
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;

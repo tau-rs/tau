@@ -19,7 +19,7 @@
 
 use tau_domain::CapabilityShapeSet;
 use tau_domain::PluginRequiredTier;
-use tau_ports::SandboxTier;
+use tau_ports::CapabilityTier;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -62,9 +62,9 @@ pub enum ResolutionRejection {
     #[error("adapter delivers tier {delivered:?}; need at least {required:?}")]
     TierTooLow {
         /// The highest tier this adapter can deliver.
-        delivered: SandboxTier,
+        delivered: CapabilityTier,
         /// The tier the project (or plugin) requires.
-        required: SandboxTier,
+        required: CapabilityTier,
     },
 
     /// Required capability shapes are not all in the adapter's supported set.
@@ -102,12 +102,12 @@ pub enum ResolutionRejection {
 ///
 /// ```
 /// use tau_runtime::sandbox::resolution_error::{ResolutionError, ResolutionRejection};
-/// use tau_ports::SandboxTier;
+/// use tau_ports::CapabilityTier;
 ///
 /// let e = ResolutionError::NoAdapterMatches {
 ///     tried: vec![("native".into(), ResolutionRejection::PlatformMismatch)],
 ///     platform: "linux".into(),
-///     required_tier: SandboxTier::Strict,
+///     required_tier: CapabilityTier::Strict,
 /// };
 /// let s = e.to_string();
 /// assert!(s.contains("1"));
@@ -133,7 +133,7 @@ pub enum ResolutionError {
         /// Platform string at resolution time (e.g., `"macos"`, `"linux"`).
         platform: String,
         /// The minimum tier the project required.
-        required_tier: SandboxTier,
+        required_tier: CapabilityTier,
     },
 
     /// A plugin's `required_tier` exceeds the selected adapter's delivered
@@ -149,7 +149,7 @@ pub enum ResolutionError {
         /// The tier the plugin requires.
         required: PluginRequiredTier,
         /// The tier the selected adapter actually delivers.
-        delivered: SandboxTier,
+        delivered: CapabilityTier,
     },
 
     /// Generic catch-all for malformed configuration not covered by the above.
@@ -168,7 +168,7 @@ pub enum ResolutionError {
 mod tests {
     use super::*;
     use tau_domain::PluginRequiredTier;
-    use tau_ports::SandboxTier;
+    use tau_ports::CapabilityTier;
 
     // 1. NoAdapterMatches display includes the count, platform, and required tier.
     #[test]
@@ -182,7 +182,7 @@ mod tests {
                 ),
             ],
             platform: "macos".into(),
-            required_tier: SandboxTier::Strict,
+            required_tier: CapabilityTier::Strict,
         };
         let s = format!("{e}");
         assert!(s.contains('2'), "expected count '2' in: {s}");
@@ -196,7 +196,7 @@ mod tests {
         let e = ResolutionError::PluginTierMismatch {
             plugin: "credentials".into(),
             required: PluginRequiredTier::Strict,
-            delivered: SandboxTier::None,
+            delivered: CapabilityTier::None,
         };
         let s = format!("{e}");
         assert!(s.contains("credentials"), "expected 'credentials' in: {s}");
@@ -244,8 +244,8 @@ mod tests {
 
         // TierTooLow
         let r = ResolutionRejection::TierTooLow {
-            delivered: SandboxTier::None,
-            required: SandboxTier::Strict,
+            delivered: CapabilityTier::None,
+            required: CapabilityTier::Strict,
         };
         let s = format!("{r}");
         assert!(s.contains("None"), "TierTooLow: expected 'None' in: {s}");
