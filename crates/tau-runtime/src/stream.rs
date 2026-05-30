@@ -498,7 +498,7 @@ pub(crate) fn run_streaming_inner(
                             )
                         });
                         if let Some(cap) = missing {
-                            let kind = crate::run::capability_kind_str(cap);
+                            let kind = crate::capability::capability_kind_str(cap);
                             let denial = crate::error::CapabilityDenial::new(
                                 agent_def.id.to_string(),
                                 agent_def.package.name.to_string(),
@@ -1184,7 +1184,7 @@ pub(crate) fn run_streaming_inner(
                     )
                 });
                 if let Some(cap) = missing {
-                    let kind = crate::run::capability_kind_str(cap);
+                    let kind = crate::capability::capability_kind_str(cap);
                     let denial = crate::error::CapabilityDenial::new(
                         agent_def.id.to_string(),
                         agent_def.package.name.to_string(),

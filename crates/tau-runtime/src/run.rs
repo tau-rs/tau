@@ -38,6 +38,7 @@ use tau_ports::{ContentBlock, LlmProviderMessage, ToolContent, ToolUse};
 use tracing::{debug, instrument};
 
 use crate::builder::Runtime;
+use crate::capability::capability_kind_str;
 use crate::capability_override::EffectiveCapability;
 use crate::error::{CapabilityDenial, CoreRuntimeError, RuntimeError};
 use crate::options::{RunOptions, TokenUsage};
@@ -300,7 +301,7 @@ impl Runtime {
                 agent_def.id.to_string(),
                 agent_def.package.name.to_string(),
                 tool_name.to_owned(),
-                crate::run::capability_kind_str(missing),
+                capability_kind_str(missing),
                 format!("{missing:?}"),
             );
             return Err(RuntimeError::Core(CoreRuntimeError::Internal {
@@ -696,30 +697,6 @@ pub(crate) fn narrowed_capability_for_session(eff: &EffectiveCapability) -> Capa
         obj.insert("max_bytes".to_string(), json!(mb));
     }
     serde_json::from_value(Jv::Object(obj)).unwrap_or_else(|_| eff.source.clone())
-}
-
-/// Top-level capability kind string used in
-/// [`CapabilityDenial::required_kind`] and the `capability.deny` event.
-pub(crate) fn capability_kind_str(cap: &Capability) -> String {
-    use tau_domain::{
-        AgentCapability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
-    };
-    match cap {
-        Capability::Filesystem(FsCapability::Read { .. }) => "fs.read".into(),
-        Capability::Filesystem(FsCapability::Write { .. }) => "fs.write".into(),
-        Capability::Filesystem(FsCapability::Exec { .. }) => "fs.exec".into(),
-        Capability::Network(NetCapability::Http { .. }) => "net.http".into(),
-        Capability::Process(ProcessCapability::Spawn { .. }) => "process.spawn".into(),
-        Capability::Agent(AgentCapability::Spawn { .. }) => "agent.spawn".into(),
-        Capability::TaskList { .. } => "task_list".into(),
-        Capability::Plan { .. } => "plan".into(),
-        Capability::Skill(SkillCapability::Spawn { .. }) => "skill.spawn".into(),
-        Capability::Custom { name, .. } => name.clone(),
-        // `Capability` is `#[non_exhaustive]`; future variants degrade
-        // to a generic tag — additive evolution must not silently
-        // mis-classify them.
-        _ => "unknown".into(),
-    }
 }
 
 // ---------------------------------------------------------------------------

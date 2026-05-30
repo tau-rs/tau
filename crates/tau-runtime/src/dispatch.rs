@@ -1,8 +1,8 @@
-//! Dispatch resolution helpers. Looks up plugin instances by name and
-//! converts [`tau_domain::Address`] to a tool name. Pure logic, no I/O.
+//! Dispatch resolution helpers.
 //!
-//! All helpers are kernel-internal (`pub(crate)`) — dispatch routing
-//! is not part of the public `tau-runtime` API surface.
+//! `address_to_tool_name` is re-exported from the executor-agnostic
+//! kernel. The `impl Runtime` resolver methods (resolve_llm_backend,
+//! resolve_tool) stay here until builder.rs migrates to core (Task 3.4).
 //!
 //! # Dead-code allow
 //!
@@ -16,7 +16,11 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
 use tau_domain::Address;
+
+#[cfg(test)]
+pub(crate) use tau_runtime_core::dispatch::address_to_tool_name;
 
 use crate::builder::{DynLlmBackend, DynTool};
 use crate::error::{CoreRuntimeError, RuntimeError};
@@ -51,15 +55,6 @@ impl Runtime {
                 registered,
             })
         })
-    }
-}
-
-/// Convert a recipient [`Address`] to a tool name. v0.1 only routes
-/// to tools (`Address::Tool`); other variants return `None`.
-pub(crate) fn address_to_tool_name(addr: &Address) -> Option<&str> {
-    match addr {
-        Address::Tool(name) => Some(name.as_str()),
-        _ => None,
     }
 }
 

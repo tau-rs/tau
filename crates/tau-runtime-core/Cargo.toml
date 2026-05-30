@@ -35,5 +35,8 @@ host-fs            = []
 default = ["process", "capability-override", "tool-validation", "host-fs"]
 
 [dev-dependencies]
-# Empty for Task 3.1; Task 3.8 adds futures-executor + tau-domain test-fixtures
-# for the smoke test.
+# toml + proptest: used by capability.rs unit/property tests (Task 3.3).
+# futures-executor: added in Task 3.8 for the smoke test.
+toml       = { workspace = true }
+proptest   = { workspace = true }
+tau-domain = { workspace = true, features = ["test-fixtures"] }

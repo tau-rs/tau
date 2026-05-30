@@ -20,3 +20,11 @@ pub mod error;
 pub use error::{
     BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError,
 };
+
+pub mod capability;
+pub mod dispatch;
+pub mod options;
+pub mod outcome;
+
+pub use options::{RunOptions, TokenUsage};
+pub use outcome::RunOutcome;
