@@ -3,11 +3,6 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-extern crate alloc;
-
-#[cfg(any(test, feature = "test-fixtures"))]
-extern crate std;
-
 //! Port (trait) definitions for tau's hexagonal architecture. Adapters in
 //! tau-infra implement these traits.
 //!
@@ -20,6 +15,11 @@ extern crate std;
 //!   for OS-native and container sandboxing.
 //!
 //! See `docs/decisions/0003-tau-ports.md` for the design rationale.
+
+extern crate alloc;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+extern crate std;
 
 pub mod error;
 #[cfg(any(test, feature = "test-fixtures"))]
