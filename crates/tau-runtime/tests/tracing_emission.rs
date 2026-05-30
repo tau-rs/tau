@@ -114,7 +114,7 @@ async fn run_emits_structural_tracing_vocabulary() {
     let initial = common::user_message("hi");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -192,7 +192,7 @@ async fn runtime_turn_span_fires_once_per_turn() {
     let initial = common::user_message("hi");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -255,7 +255,7 @@ async fn runtime_completed_event_fires_on_normal_terminate() {
     let initial = common::user_message("hi");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -300,7 +300,7 @@ async fn runtime_max_turns_event_fires_when_loop_exhausted() {
     let manifest = common::manifest_with_no_capabilities();
     let initial = common::user_message("loop");
 
-    let mut opts = RunOptions::default();
+    let mut opts = common::run_options();
     opts.max_turns = 2;
     // `Ok(RunOutcome::Failed { kind: OutOfResources })` is the
     // documented contract when max_turns is hit.
@@ -416,7 +416,7 @@ paths = [{paths_toml}]
     let initial = common::user_message("read /etc/passwd");
 
     let _outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("capability denial flows through Ok(RunOutcome::Failed)");
 
@@ -467,7 +467,7 @@ async fn llm_request_and_response_events_fire() {
     let initial = common::user_message("hi");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -525,7 +525,7 @@ async fn llm_tool_use_emitted_fires_per_tool_block() {
     let initial = common::user_message("call two tools");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -577,7 +577,7 @@ async fn dispatch_tool_resolved_fires_for_each_tool_call() {
     let initial = common::user_message("call echo");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -643,7 +643,7 @@ async fn capability_check_events_fire_on_allow() {
     let initial = common::user_message("call echo");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -752,7 +752,7 @@ paths = [{paths_toml}]
     let initial = common::user_message("read /etc/passwd");
 
     let _outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("capability denial flows through Ok(RunOutcome::Failed)");
 
@@ -817,7 +817,7 @@ async fn message_added_count_matches_pushed_messages() {
     let initial = common::user_message("call echo");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -877,7 +877,7 @@ async fn tool_session_spans_fire_for_full_lifecycle() {
     let initial = common::user_message("call echo");
 
     runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -968,7 +968,7 @@ async fn tool_ipc_args_and_result_events_fire_for_invoke() {
 
     // Drive runtime and peer concurrently — IpcTool blocks on the
     // peer's tool.call response.
-    let run_fut = runtime.run(agent_def, manifest, initial, RunOptions::default());
+    let run_fut = runtime.run(agent_def, manifest, initial, common::run_options());
     let peer_fut = async {
         let (msgid, _params) = peer.expect_request("tool.call").await;
         let result = make_tool_result(

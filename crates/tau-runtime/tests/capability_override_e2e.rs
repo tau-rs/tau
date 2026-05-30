@@ -259,7 +259,7 @@ paths = ["{package_glob}"]
     ));
     let initial = common::user_message("read the file");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.project_override = vec![CapabilityOverride::new(
         "fs.read".to_string(),
         Some(vec![narrow_allow]),
@@ -330,7 +330,7 @@ paths = ["{package_glob}"]
     ));
     let initial = common::user_message("read the file");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.project_override = vec![CapabilityOverride::new(
         "fs.read".to_string(),
         None, // allow unchanged
@@ -391,7 +391,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
     );
     let initial = common::user_message("read the file");
 
-    let mut options = RunOptions::default();
+    let mut options = common::run_options();
     options.project_override = vec![CapabilityOverride::new(
         "fs.read".to_string(),
         Some(vec!["/etc/**".to_string()]), // not a subset of /var/...

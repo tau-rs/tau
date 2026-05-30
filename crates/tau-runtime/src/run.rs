@@ -61,6 +61,27 @@ pub(crate) use tau_runtime_core::run::{
 #[allow(unused_imports)]
 pub(crate) use tau_runtime_core::run::value_to_preview_string;
 
+/// Build a `RunOptions` with clock and random filled in.
+///
+/// Phase β.1.4 will replace `MockClock` with a real `TokioClock`.
+/// Until then, every production entry point that constructs `RunOptions`
+/// internally (i.e. does not receive one from the caller) MUST go through
+/// this helper so that `clock_ref` / `random_ref` in `stream.rs` don't panic.
+///
+/// Tests that need deterministic time or deterministic entropy should
+/// supply their own `MockClock` / `DeterministicRandom` via `RunOptions`
+/// fields directly.
+fn run_options_with_defaults() -> RunOptions {
+    use std::sync::Arc;
+    use tau_ports::{DeterministicRandom, MockClock};
+    let mut opts = RunOptions::default();
+    // TODO(beta.1.4): replace MockClock with TokioClock once the tokio
+    // shell's `drive` entry exists and can inject a real wall-clock.
+    opts.clock = Some(Arc::new(MockClock::new()));
+    opts.random = Some(Arc::new(DeterministicRandom::seeded(0)));
+    opts
+}
+
 impl Runtime {
     /// Run an agent with a pre-existing conversation history.
     ///
@@ -241,7 +262,7 @@ impl Runtime {
         .await
     }
 
-    /// Convenience: [`Runtime::run`] with [`RunOptions::default`].
+    /// Convenience: [`Runtime::run`] with default options (clock + random injected).
     pub async fn run_default(
         &self,
         agent_def: AgentDefinition,
@@ -252,7 +273,7 @@ impl Runtime {
             agent_def,
             package_manifest,
             initial_message,
-            RunOptions::default(),
+            run_options_with_defaults(),
         )
         .await
     }
@@ -331,10 +352,11 @@ impl Runtime {
 
         let state_arc = Arc::new(Mutex::new(state));
 
-        let opts = crate::RunOptions {
-            orchestration_state: Some(state_arc.clone()),
-            orchestration_runtime: Some(self.clone()),
-            ..crate::RunOptions::default()
+        let opts = {
+            let mut o = run_options_with_defaults();
+            o.orchestration_state = Some(state_arc.clone());
+            o.orchestration_runtime = Some(self.clone());
+            o
         };
 
         let outcome = self

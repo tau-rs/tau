@@ -76,7 +76,7 @@ async fn llm_backend_not_registered() {
     let initial = common::user_message("hello");
 
     let result = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await;
 
     let err = result.unwrap_err();
@@ -120,7 +120,7 @@ async fn tool_not_registered() {
     let initial = common::user_message("call the missing tool");
 
     let result = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await;
 
     let err = result.unwrap_err();
@@ -285,7 +285,7 @@ async fn tool_args_validation_failure_yields_recoverable_tool_error() {
     let initial = common::user_message("call the strict tool");
 
     let stream = runtime
-        .run_streaming(agent_def, manifest, initial, RunOptions::default())
+        .run_streaming(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run_streaming should not fail at construction time");
 

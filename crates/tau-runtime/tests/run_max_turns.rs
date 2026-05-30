@@ -73,7 +73,7 @@ async fn max_turns_exceeded_returns_out_of_resources() {
     // Cap the loop at 3. `RunOptions` is `#[non_exhaustive]`, so we
     // build via Default + field mutation.
     let options = {
-        let mut o = RunOptions::default();
+        let mut o = common::run_options();
         o.max_turns = 3;
         o
     };

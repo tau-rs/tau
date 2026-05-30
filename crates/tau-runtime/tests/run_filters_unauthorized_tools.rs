@@ -154,7 +154,7 @@ async fn filtered_tool_not_exposed_in_completion_request() {
     let initial = common::user_message("Hi");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

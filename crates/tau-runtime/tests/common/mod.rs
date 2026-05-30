@@ -109,6 +109,21 @@ pub fn user_message(content: &str) -> Message {
     )
 }
 
+/// Build a `RunOptions` with `MockClock` and `DeterministicRandom` injected.
+///
+/// Integration tests must use this (or set `clock`/`random` manually)
+/// because `run_streaming_inner` panics when `RunOptions.clock` or
+/// `RunOptions.random` is `None` — that contract is enforced since Task
+/// 3.7 routed all id-minting through the port helpers.
+pub fn run_options() -> tau_runtime::RunOptions {
+    use std::sync::Arc;
+    use tau_ports::{DeterministicRandom, MockClock};
+    let mut opts = tau_runtime::RunOptions::default();
+    opts.clock = Some(Arc::new(MockClock::new()));
+    opts.random = Some(Arc::new(DeterministicRandom::seeded(42)));
+    opts
+}
+
 /// Build a minimal `ToolSpec` for a mock tool. `input_schema` is an
 /// empty object — the run loop's `deserialize_tool_args` is a
 /// passthrough at v0.1, so the schema is unused at runtime.

@@ -115,7 +115,7 @@ async fn run_with_history_threads_prior_messages() {
     let manifest = common::manifest_with_no_capabilities();
 
     let outcome = runtime
-        .run_with_history(agent_def, manifest, history, initial, RunOptions::default())
+        .run_with_history(agent_def, manifest, history, initial, common::run_options())
         .await
         .expect("run succeeded");
 
@@ -165,7 +165,7 @@ async fn run_calls_run_with_history_with_empty_history() {
     let initial = common::user_message("Hi");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

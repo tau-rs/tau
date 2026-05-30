@@ -40,7 +40,7 @@ async fn run_completes_with_text_response() {
 
     // 4. Run.
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

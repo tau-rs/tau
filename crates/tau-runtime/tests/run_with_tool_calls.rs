@@ -111,7 +111,7 @@ async fn run_with_tool_calls_across_two_turns() {
     let initial = common::user_message("Hi");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 

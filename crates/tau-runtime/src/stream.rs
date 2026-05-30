@@ -27,8 +27,8 @@ use tau_observe::vocabulary::{
     SPAN_RUNTIME_TURN, SPAN_TOOL_INVOKE, SPAN_TOOL_SESSION_CLOSE, SPAN_TOOL_SESSION_OPEN,
 };
 use tau_ports::{
-    CompletionChunk, CompletionRequest, DenyEntry, LlmError, SessionContext, StopReason,
-    TokenUsage, ToolError, ToolResult, ToolSpec,
+    Clock, CompletionChunk, CompletionRequest, DenyEntry, LlmError, RandomSource, SessionContext,
+    StopReason, TokenUsage, ToolError, ToolResult, ToolSpec,
 };
 use tracing::{debug, info, info_span, warn, Instrument as _};
 
@@ -36,6 +36,30 @@ use crate::builder::{DynLlmBackend, DynTool};
 use crate::options::RunOptions;
 use crate::outcome::RunOutcome;
 use crate::tool_args::ToolArgsValidator;
+
+/// Return the `Clock` from `RunOptions`, panicking if absent.
+///
+/// # Caller contract
+///
+/// Every host shell that drives `run_streaming_inner` MUST inject a
+/// `Clock` into `RunOptions.clock`.  Until the tokio shell's `drive`
+/// entry (Phase β.1.4) sets `TokioClock` automatically, callers are
+/// responsible for setting `opts.clock = Some(Arc::new(TokioClock))`.
+/// Failing to do so will panic here at the first trace event.
+fn clock_ref(opts: &RunOptions) -> &Arc<dyn Clock> {
+    opts.clock
+        .as_ref()
+        .expect("RunOptions.clock must be set by host shell before calling run_streaming_inner")
+}
+
+/// Return the `RandomSource` from `RunOptions`, panicking if absent.
+///
+/// See `clock_ref` for the caller contract.
+fn random_ref(opts: &RunOptions) -> &Arc<dyn RandomSource> {
+    opts.random
+        .as_ref()
+        .expect("RunOptions.random must be set by host shell before calling run_streaming_inner")
+}
 
 /// Streaming event from `Runtime::run_streaming`.
 ///
@@ -705,6 +729,8 @@ pub(crate) fn run_streaming_inner(
                                             granted_capabilities_override: Some(
                                                 skill_req.grant.clone(),
                                             ),
+                                            clock: options.clock.clone(),
+                                            random: options.random.clone(),
                                             ..crate::RunOptions::default()
                                         };
 
@@ -723,8 +749,8 @@ pub(crate) fn run_streaming_inner(
                                             let mut s = state_arc.lock().await;
                                             let run_id = s.run_id.clone();
                                             s.trace.emit(tau_ports::TraceEvent {
-                                                id: ulid::Ulid::new().to_string(),
-                                                ts: chrono::Utc::now(),
+                                                id: tau_runtime_core::ids::ulid(clock_ref(&options), random_ref(&options)),
+                                                ts: tau_runtime_core::ids::now_utc(clock_ref(&options)),
                                                 run_id,
                                                 agent_id: Some(agent_id_str.clone()),
                                                 kind: tau_ports::TraceEventKind::Spawn {
@@ -894,8 +920,7 @@ pub(crate) fn run_streaming_inner(
                                             // construction failure (defensive;
                                             // shouldn't happen for compliant
                                             // AgentIds).
-                                            let suffix = ulid::Ulid::new()
-                                                .to_string()
+                                            let suffix = tau_runtime_core::ids::ulid(clock_ref(&options), random_ref(&options))
                                                 .to_lowercase();
                                             let suffix_short: String = suffix
                                                 .chars()
@@ -961,6 +986,8 @@ pub(crate) fn run_streaming_inner(
                                                 granted_capabilities_override: Some(
                                                     req.grant.clone(),
                                                 ),
+                                                clock: options.clock.clone(),
+                                                random: options.random.clone(),
                                                 ..crate::RunOptions::default()
                                             };
 
@@ -981,9 +1008,8 @@ pub(crate) fn run_streaming_inner(
                                                 let run_id = s.run_id.clone();
                                                 s.trace.emit(
                                                     tau_ports::TraceEvent {
-                                                        id: ulid::Ulid::new()
-                                                            .to_string(),
-                                                        ts: chrono::Utc::now(),
+                                                        id: tau_runtime_core::ids::ulid(clock_ref(&options), random_ref(&options)),
+                                                        ts: tau_runtime_core::ids::now_utc(clock_ref(&options)),
                                                         run_id,
                                                         agent_id: Some(
                                                             agent_id_str.clone(),
@@ -1079,7 +1105,7 @@ pub(crate) fn run_streaming_inner(
                             }
                         } else {
                             let dispatch_res = {
-                                let dispatch_now = chrono::Utc::now();
+                                let dispatch_now = tau_runtime_core::ids::now_utc(clock_ref(&options));
                                 let mut state = state_arc.lock().await;
                                 crate::orchestration::dispatch(
                                     &tool_use.name,
@@ -1223,7 +1249,7 @@ pub(crate) fn run_streaming_inner(
                 messages.push(tool_call_msg);
 
                 // ----- Open a session ---------------------------------------
-                let ctx = SessionContext::new(agent_instance_id, uuid::Uuid::new_v4(), None)
+                let ctx = SessionContext::new(agent_instance_id, tau_runtime_core::ids::uuid_v4(random_ref(&options)), None)
                     .with_granted_capabilities(granted_for_session.clone())
                     .with_deny_entries(deny_entries.clone());
                 // ADR-0006 §3.9: `tool.session_open` span wraps the
@@ -1726,6 +1752,16 @@ mod tests {
         )
     }
 
+    /// Build a `RunOptions` suitable for unit tests: injects `MockClock`
+    /// and `DeterministicRandom` so port-routed id helpers don't panic.
+    fn test_run_options() -> RunOptions {
+        use tau_ports::{DeterministicRandom, MockClock};
+        let mut opts = RunOptions::default();
+        opts.clock = Some(Arc::new(MockClock::new()));
+        opts.random = Some(Arc::new(DeterministicRandom::seeded(42)));
+        opts
+    }
+
     async fn collect_events(
         mut stream: impl futures_core::Stream<Item = RunEvent> + Unpin,
     ) -> Vec<RunEvent> {
@@ -1770,7 +1806,7 @@ mod tests {
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             HashMap::new(),
             HashMap::new(),
             vec![],
@@ -1810,7 +1846,7 @@ mod tests {
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             HashMap::new(),
             HashMap::new(),
             vec![],
@@ -1856,7 +1892,7 @@ mod tests {
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             HashMap::new(),
             HashMap::new(),
             vec![],
@@ -1932,7 +1968,7 @@ mod tests {
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             tools,
             validators,
             vec![],
@@ -2071,7 +2107,7 @@ paths = ["/etc/**"]
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             tools,
             validators,
             vec![], // no granted capabilities → denial
@@ -2180,7 +2216,7 @@ paths = ["/etc/**"]
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             tools,
             validators,
             vec![],
@@ -2270,7 +2306,7 @@ paths = ["/etc/**"]
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             tools,
             validators,
             vec![],
@@ -2346,7 +2382,7 @@ paths = ["/etc/**"]
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             tools,
             validators,
             vec![],
@@ -2429,7 +2465,7 @@ paths = ["/etc/**"]
         // the loop falls through to make_max_turns_outcome.
         let options = RunOptions {
             max_turns: 1,
-            ..RunOptions::default()
+            ..test_run_options()
         };
 
         // Turn 1 only: LLM emits ToolUse + Finish(ToolUse).
@@ -2542,7 +2578,7 @@ paths = ["/etc/**"]
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             tools,
             validators,
             vec![],
@@ -2616,7 +2652,7 @@ paths = ["/etc/**"]
             manifest_with_no_capabilities(),
             vec![],
             user_msg("hi"),
-            RunOptions::default(),
+            test_run_options(),
             HashMap::new(),
             HashMap::new(),
             vec![],

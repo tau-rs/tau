@@ -250,7 +250,7 @@ async fn gap_1_kernel_denies_when_agent_has_no_fs_read_capability() {
     let initial = common::user_message("read the file");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("agent-level failures flow through Ok(RunOutcome::Failed)");
 
@@ -319,7 +319,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
     let initial = common::user_message("read the file");
 
     let err = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect_err("plugin scope check must surface as Err(RuntimeError)");
 
@@ -384,7 +384,7 @@ paths = ["{glob}"]
     let initial = common::user_message("read the file");
 
     let outcome = runtime
-        .run(agent_def, manifest, initial, RunOptions::default())
+        .run(agent_def, manifest, initial, common::run_options())
         .await
         .expect("run succeeded");
 
