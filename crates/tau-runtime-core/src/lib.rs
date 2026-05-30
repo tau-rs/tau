@@ -13,7 +13,7 @@
 
 extern crate alloc;
 
-#[cfg(any(test, feature = "host-fs"))]
+#[cfg(any(test, feature = "host-fs", feature = "tool-validation"))]
 extern crate std;
 
 pub mod error;
@@ -21,10 +21,16 @@ pub use error::{
     BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError,
 };
 
+pub mod builder;
+pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime, RuntimeBuilder};
+
 pub mod capability;
 pub mod dispatch;
 pub mod options;
 pub mod outcome;
+
+#[cfg(feature = "tool-validation")]
+pub mod tool_args;
 
 pub use options::{RunOptions, TokenUsage};
 pub use outcome::RunOutcome;

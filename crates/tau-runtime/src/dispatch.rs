@@ -2,7 +2,8 @@
 //!
 //! `address_to_tool_name` is re-exported from the executor-agnostic
 //! kernel. The `impl Runtime` resolver methods (resolve_llm_backend,
-//! resolve_tool) stay here until builder.rs migrates to core (Task 3.4).
+//! resolve_tool) are inherent methods on the tau-runtime `Runtime`
+//! newtype defined in `crate::builder`.
 //!
 //! # Dead-code allow
 //!
@@ -22,9 +23,8 @@ use tau_domain::Address;
 #[cfg(test)]
 pub(crate) use tau_runtime_core::dispatch::address_to_tool_name;
 
-use crate::builder::{DynLlmBackend, DynTool};
+use crate::builder::{DynLlmBackend, DynTool, Runtime};
 use crate::error::{CoreRuntimeError, RuntimeError};
-use crate::Runtime;
 
 impl Runtime {
     /// Resolve an LLM backend by name. Returns
