@@ -29,6 +29,7 @@ pub mod orchestration;
 pub mod capability_gate;
 pub mod storage;
 pub mod target;
+pub mod random;
 pub mod time;
 pub mod tool;
 
@@ -54,6 +55,9 @@ pub use target::{
     AdapterFamily, ParseError as TargetParseError, Platform, TargetCapabilityProfile, TargetTriple,
     TargetTripleEntry, TripleStatus,
 };
+pub use random::RandomSource;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use random::DeterministicRandom;
 pub use time::Clock;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use time::MockClock;

@@ -32,3 +32,23 @@ fn mock_clock_is_monotonic() {
     assert!(b > a);
     assert!(c > b);
 }
+
+#[test]
+fn deterministic_random_is_seeded_and_repeatable() {
+    use tau_ports::{DeterministicRandom, RandomSource};
+
+    let a = DeterministicRandom::seeded(0xC0FFEE);
+    let mut buf_a = [0u8; 16];
+    a.fill(&mut buf_a);
+
+    let b = DeterministicRandom::seeded(0xC0FFEE);
+    let mut buf_b = [0u8; 16];
+    b.fill(&mut buf_b);
+
+    assert_eq!(buf_a, buf_b, "same seed must produce same bytes");
+
+    let c = DeterministicRandom::seeded(0xDEADBEEF);
+    let mut buf_c = [0u8; 16];
+    c.fill(&mut buf_c);
+    assert_ne!(buf_a, buf_c, "different seeds must produce different bytes");
+}
