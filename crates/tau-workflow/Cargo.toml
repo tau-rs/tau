@@ -12,7 +12,7 @@ integration-tests = []
 [dependencies]
 tau-domain  = { workspace = true }
 tau-observe = { workspace = true }
-tau-runtime = { workspace = true }
+tau-runtime-tokio = { workspace = true }
 tau-ports   = { workspace = true }
 tau-pkg     = { workspace = true }
 serde       = { workspace = true, features = ["derive"] }

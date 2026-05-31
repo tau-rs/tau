@@ -78,7 +78,7 @@ pub(crate) fn build_agents_map(
     Ok(out)
 }
 
-/// Build a `tau_runtime::Runtime` for use by the workflow runner.
+/// Build a `tau_runtime_tokio::Runtime` for use by the workflow runner.
 ///
 /// Mirrors the plugin-loading sequence from `crates/tau-cli/src/cmd/run.rs`:
 ///
@@ -96,7 +96,7 @@ pub(crate) async fn build_runtime_for_workflow(
     _cwd: &Path,
     scope: &Scope,
     agents: &BTreeMap<String, (tau_domain::AgentDefinition, tau_domain::PackageManifest)>,
-) -> anyhow::Result<tau_runtime::Runtime> {
+) -> anyhow::Result<tau_runtime_tokio::Runtime> {
     // Pick the first agent entry so we can source plugin config.
     // In a typical workflow all agents share one LLM backend; even when they
     // differ, the runtime's kernel is agent-agnostic — the LLM backend plugin

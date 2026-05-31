@@ -3,7 +3,7 @@
 //!
 //! Per spec §3.1 / §11: `cmd::run` and `cmd::chat` both resolve the
 //! agent's required plugins from the per-scope lockfile, then call
-//! `tau_runtime::plugin_host::load_*` to spawn the plugin processes
+//! `tau_runtime_tokio::plugin_host::load_*` to spawn the plugin processes
 //! and produce kernel-ready `Arc<dyn Dyn*>` shims.
 //!
 //! At v0.1, only [`tau_domain::PortKind::LlmBackend`] and
@@ -22,9 +22,9 @@ use tau_observe::layers::plugin_recording::PluginRecordingLayer;
 use tau_pkg::scope::ScopeConfig;
 use tau_pkg::{LockFile, LockedPlugin, Scope};
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::plugin_host::{self, PluginHostOptions, RecordingSink};
-use tau_runtime::sandbox::{build_plan, resolve_adapter, resolve_adapter_forced};
-use tau_runtime::RuntimeBuilder;
+use tau_runtime_tokio::plugin_host::{self, PluginHostOptions, RecordingSink};
+use tau_runtime_tokio::process_gate::{build_plan, resolve_adapter, resolve_adapter_forced};
+use tau_runtime_tokio::RuntimeBuilder;
 
 use crate::config::AgentEntry;
 
@@ -72,7 +72,7 @@ pub(crate) fn set_plugin_recording_layer(layer: PluginRecordingLayer) {
 pub(crate) fn build_host_options(
     record_protocol: Option<&Path>,
     force_passthrough: bool,
-    force_adapter_kind: Option<tau_runtime::sandbox::registry::RegistryKind>,
+    force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
 ) -> PluginHostOptions {
     let mut options = PluginHostOptions::default();
     if let Some(path) = record_protocol {
@@ -128,8 +128,8 @@ pub(crate) async fn flush_recorders() {
 /// the caller wire in protocol recording (Task 20) without this helper
 /// growing CLI awareness.
 ///
-/// [`with_dyn_llm_backend`]: tau_runtime::RuntimeBuilder::with_dyn_llm_backend
-/// [`with_dyn_tool`]: tau_runtime::RuntimeBuilder::with_dyn_tool
+/// [`with_dyn_llm_backend`]: tau_runtime_tokio::RuntimeBuilder::with_dyn_llm_backend
+/// [`with_dyn_tool`]: tau_runtime_tokio::RuntimeBuilder::with_dyn_tool
 pub(crate) async fn load_plugins(
     entry: &AgentEntry,
     scope: &Scope,
@@ -250,7 +250,7 @@ pub(crate) async fn load_plugins(
     .await
     .with_context(|| format!("loading LLM backend plugin {:?}", entry.llm_backend))?;
 
-    let mut builder = tau_runtime::Runtime::builder().with_dyn_llm_backend(llm_backend);
+    let mut builder = tau_runtime_tokio::Runtime::builder().with_dyn_llm_backend(llm_backend);
 
     // ---- Tools ----
     for tool in &entry.requires.tools {

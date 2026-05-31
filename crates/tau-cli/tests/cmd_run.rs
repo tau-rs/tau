@@ -9,7 +9,7 @@
 //!   `echo-llm` (and optionally `echo-tool`) once per session and
 //!   synthesizes a project tau.toml + lockfile pointing at the
 //!   pre-built binaries. The CLI then drives a full `tau run` against
-//!   real plugin processes via `tau_runtime::plugin_host::load_*`.
+//!   real plugin processes via `tau_runtime_tokio::plugin_host::load_*`.
 //!
 //! Plugin-spawning tests are slower (~30 s for the binary's first
 //! invocation, sub-second after); the build cost is amortized via the

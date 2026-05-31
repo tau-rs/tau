@@ -135,7 +135,7 @@ fn prepare_workflow_run_layer(command: &cli::Command) -> Option<PreparedWorkflow
 
 async fn dispatch(cli: cli::Cli, workflow_run_id: Option<String>) -> anyhow::Result<()> {
     use cli::SandboxKindArg;
-    use tau_runtime::sandbox::registry::RegistryKind;
+    use tau_runtime_tokio::process_gate::registry::RegistryKind;
 
     let mut output = Output::from_cli(&cli);
     let record_protocol = cli.record_protocol.clone();

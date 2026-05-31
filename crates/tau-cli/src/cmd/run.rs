@@ -5,8 +5,8 @@
 //! Reads the project `tau.toml`, resolves the named agent to an
 //! `(AgentDefinition, PackageManifest)` pair, resolves the agent's
 //! LLM-backend + tool plugins from the per-scope lockfile, spawns
-//! each plugin process via `tau_runtime::plugin_host::load_*`, builds
-//! a [`tau_runtime::Runtime`] populated with the resulting `Arc<dyn Dyn*>` shims,
+//! each plugin process via `tau_runtime_tokio::plugin_host::load_*`, builds
+//! a [`tau_runtime_tokio::Runtime`] populated with the resulting `Arc<dyn Dyn*>` shims,
 //! then builds an initial [`Message`] from `--prompt` / stdin, runs the
 //! agent, and maps the resulting [`RunOutcome`] to stdout/stderr + an
 //! `ExitCode`.
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::{RunOptions, RunOutcome};
+use tau_runtime_tokio::{RunOptions, RunOutcome};
 
 use crate::cli::RunArgs;
 use crate::cmd::plugin_loader;
@@ -59,7 +59,7 @@ pub async fn run(
     args: &RunArgs,
     record_protocol: Option<PathBuf>,
     force_passthrough: bool,
-    force_adapter_kind: Option<tau_runtime::sandbox::registry::RegistryKind>,
+    force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
@@ -108,7 +108,7 @@ pub async fn run(
     }
     if !entry.capability_overrides.is_empty() {
         options.capability_resolver = Some(
-            tau_runtime::capability_resolver_impl::resolver_from_overrides(
+            tau_runtime_tokio::capability_resolver_impl::resolver_from_overrides(
                 entry.capability_overrides.clone(),
             ),
         );
@@ -214,7 +214,7 @@ pub async fn run(
             max_total_agents: args.max_total_agents,
         };
         let runtime_arc = std::sync::Arc::new(runtime);
-        let snapshot = tau_runtime::spawn_root_agent_with_scope(
+        let snapshot = tau_runtime_tokio::drive(
             runtime_arc.clone(),
             agent_def,
             manifest,
@@ -336,16 +336,16 @@ pub async fn run(
 /// `flush_recorders` after this function returns (streaming path or
 /// batch path — the drop + flush sequence is the same).
 async fn run_streaming_path(
-    runtime: &tau_runtime::Runtime,
+    runtime: &tau_runtime_tokio::Runtime,
     agent_def: tau_domain::AgentDefinition,
     manifest: tau_domain::PackageManifest,
     initial: tau_domain::Message,
-    options: tau_runtime::RunOptions,
+    options: tau_runtime_tokio::RunOptions,
     output: &mut Output,
 ) -> anyhow::Result<()> {
     use futures_core::stream::Stream as _;
     use std::io::Write as _;
-    use tau_runtime::{RunEvent, RunOutcome};
+    use tau_runtime_tokio::{RunEvent, RunOutcome};
 
     let stream = runtime
         .run_streaming(agent_def, manifest, initial, options)

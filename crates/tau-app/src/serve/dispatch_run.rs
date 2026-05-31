@@ -1,6 +1,6 @@
 //! Per-request executor for runtime.run and runtime.run_streaming.
 //!
-//! Wires JSON-RPC requests to tau_runtime::Runtime::run and
+//! Wires JSON-RPC requests to tau_runtime_tokio::Runtime::run and
 //! Runtime::run_streaming. Streaming emits one runtime.event
 //! notification per RunEvent, correlated by the request id, then
 //! a final result response.
@@ -13,7 +13,7 @@ use super::protocol::{Request, RequestId};
 use futures::StreamExt;
 use serde_json::{json, Value};
 use tau_domain::{Address, Message, MessagePayload};
-use tau_runtime::{RunEvent, RunOptions};
+use tau_runtime_tokio::{RunEvent, RunOptions};
 
 /// Execute a runtime.run or runtime.run_streaming request.
 pub async fn execute(disp: Dispatcher, req: Request, streaming: bool) {
@@ -100,7 +100,7 @@ pub async fn execute(disp: Dispatcher, req: Request, streaming: bool) {
     let opts = RunOptions::default();
     let cancel = disp.cancel_reg.register(req.id.clone());
 
-    let result: Result<(), tau_runtime::RuntimeError> = if streaming {
+    let result: Result<(), tau_runtime_tokio::RuntimeError> = if streaming {
         execute_streaming(
             &disp,
             req.id.clone(),
@@ -140,7 +140,7 @@ async fn execute_batch(
     initial: Message,
     opts: RunOptions,
     cancel: tokio_util::sync::CancellationToken,
-) -> Result<(), tau_runtime::RuntimeError> {
+) -> Result<(), tau_runtime_tokio::RuntimeError> {
     use tokio::select;
     // Runtime::run signature (verified in Task 11 reconciliation):
     //   pub async fn run(&self, agent_def, package_manifest, initial_message, options)
@@ -170,9 +170,9 @@ async fn execute_batch(
 /// `Serialize` under the `serde` feature of `tau-domain`/`tau-runtime`,
 /// which `tau-app` does not enable. We manually extract the fields we
 /// expose in the serve-mode protocol response.
-fn outcome_to_json(outcome: tau_runtime::RunOutcome) -> Value {
+fn outcome_to_json(outcome: tau_runtime_tokio::RunOutcome) -> Value {
     match outcome {
-        tau_runtime::RunOutcome::Completed {
+        tau_runtime_tokio::RunOutcome::Completed {
             final_message,
             total_turns,
             token_usage,
@@ -189,7 +189,7 @@ fn outcome_to_json(outcome: tau_runtime::RunOutcome) -> Value {
                 "token_usage": token_usage_to_json(token_usage),
             })
         }
-        tau_runtime::RunOutcome::Failed {
+        tau_runtime_tokio::RunOutcome::Failed {
             status,
             total_turns,
             token_usage,
@@ -207,7 +207,7 @@ fn outcome_to_json(outcome: tau_runtime::RunOutcome) -> Value {
     }
 }
 
-fn token_usage_to_json(usage: tau_runtime::TokenUsage) -> Value {
+fn token_usage_to_json(usage: tau_runtime_tokio::TokenUsage) -> Value {
     json!({
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
@@ -223,7 +223,7 @@ async fn execute_streaming(
     initial: Message,
     opts: RunOptions,
     cancel: tokio_util::sync::CancellationToken,
-) -> Result<(), tau_runtime::RuntimeError> {
+) -> Result<(), tau_runtime_tokio::RuntimeError> {
     use tokio::select;
     let stream = disp
         .runtime
@@ -351,10 +351,10 @@ async fn emit_event(
         RunEvent::RunCompleted { outcome } => {
             // Extract token_usage from the outcome for the final summary.
             let tu = match outcome {
-                tau_runtime::RunOutcome::Completed { token_usage, .. } => {
+                tau_runtime_tokio::RunOutcome::Completed { token_usage, .. } => {
                     token_usage_to_json(*token_usage)
                 }
-                tau_runtime::RunOutcome::Failed { token_usage, .. } => {
+                tau_runtime_tokio::RunOutcome::Failed { token_usage, .. } => {
                     token_usage_to_json(*token_usage)
                 }
                 _ => Value::Null,

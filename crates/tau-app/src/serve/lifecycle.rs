@@ -88,7 +88,7 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
 ///
 /// Iterates every agent in the project's `tau.toml`, reads the lockfile to
 /// locate the LLM-backend and tool plugin binaries, and spawns them via
-/// `tau_runtime::plugin_host`. Deduplicates by plugin name so that two
+/// `tau_runtime_tokio::plugin_host`. Deduplicates by plugin name so that two
 /// agents sharing the same backend/tool spawn only one subprocess.
 ///
 /// Serve mode v1 simplifications (deferred to future iterations):
@@ -98,16 +98,16 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
 ///   per plugin (no recorder ledger, no run-level trace propagation).
 /// - `[agents.<id>.config]` is forwarded to the LLM backend as JSON;
 ///   tools always receive `{}` (per-tool config selectors not yet landed).
-async fn build_runtime(project: &Project) -> Result<tau_runtime::Runtime> {
+async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> {
     use tau_pkg::LockFile;
     use tau_plugin_protocol::handshake::TraceContext;
-    use tau_runtime::plugin_host;
+    use tau_runtime_tokio::plugin_host;
 
     let lockfile_path = project.scope.lockfile_path();
     let lockfile = LockFile::load(&lockfile_path)
         .with_context(|| format!("load lockfile {}", lockfile_path.display()))?;
 
-    let mut builder = tau_runtime::Runtime::builder();
+    let mut builder = tau_runtime_tokio::Runtime::builder();
 
     // Dedup by plugin name — multiple agents may reference the same package.
     let mut seen_llm_backends: std::collections::HashSet<String> = Default::default();

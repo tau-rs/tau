@@ -11,7 +11,7 @@
 //! produce 0 or 2; bucket 1 is reserved for `tau run`'s graceful
 //! agent failures.
 
-use tau_runtime::RunOutcome;
+use tau_runtime_tokio::RunOutcome;
 
 /// Process exit code mapped from `RunOutcome` / errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

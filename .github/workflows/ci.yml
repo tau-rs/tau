@@ -228,7 +228,7 @@ jobs:
       - name: Check each crate with --no-default-features
         run: |
           set -e
-          for crate in tau-domain tau-ports tau-pkg tau-runtime tau-cli tau-plugin-protocol tau-plugin-sdk; do
+          for crate in tau-domain tau-ports tau-pkg tau-runtime-tokio tau-cli tau-plugin-protocol tau-plugin-sdk; do
             echo "::group::$crate"
             cargo check -p "$crate" --no-default-features
             echo "::endgroup::"
@@ -544,8 +544,8 @@ jobs:
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "tau-controlled-env"
-      - name: Test tau-runtime e2e
-        run: cargo nextest run --profile ci -p tau-runtime --features integration-tests --tests --verbose
+      - name: Test tau-runtime-tokio e2e
+        run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --tests --verbose
 
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's

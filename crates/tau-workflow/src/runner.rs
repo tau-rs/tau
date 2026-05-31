@@ -12,7 +12,7 @@ use chrono::Utc;
 use tau_domain::{
     Address, AgentDefinition, AgentInstanceId, Message, MessagePayload, PackageManifest,
 };
-use tau_runtime::Runtime;
+use tau_runtime_tokio::Runtime;
 
 use crate::error::WorkflowError;
 use crate::model::{StepKind, Workflow};
@@ -82,7 +82,7 @@ impl Runner {
     ///
     /// ```no_run
     /// use tau_workflow::Runner;
-    /// use tau_runtime::Runtime;
+    /// use tau_runtime_tokio::Runtime;
     /// use std::sync::Arc;
     /// use std::path::PathBuf;
     ///
@@ -157,7 +157,7 @@ impl Runner {
                             agent_def.clone(),
                             manifest.clone(),
                             initial_message,
-                            tau_runtime::RunOptions::default(),
+                            tau_runtime_tokio::RunOptions::default(),
                         )
                         .await;
                     (resolved_input, agent_outcome_to_string(result))
@@ -270,13 +270,13 @@ fn build_user_message(text: String) -> Message {
 /// For `RunOutcome::Failed`, returns an error tuple with kind `"agent_failed"`
 /// and the status debug string.
 fn agent_outcome_to_string(
-    result: Result<tau_runtime::RunOutcome, tau_runtime::error::CoreRuntimeError>,
+    result: Result<tau_runtime_tokio::RunOutcome, tau_runtime_tokio::error::CoreRuntimeError>,
 ) -> Result<String, (String, String)> {
     match result {
-        Ok(tau_runtime::RunOutcome::Completed { final_message, .. }) => {
+        Ok(tau_runtime_tokio::RunOutcome::Completed { final_message, .. }) => {
             Ok(extract_text_from_payload(&final_message.payload))
         }
-        Ok(tau_runtime::RunOutcome::Failed { status, .. }) => {
+        Ok(tau_runtime_tokio::RunOutcome::Failed { status, .. }) => {
             Err(("agent_failed".into(), format!("{status:?}")))
         }
         // #[non_exhaustive] forward-compat wildcard
@@ -303,7 +303,7 @@ fn extract_text_from_payload(payload: &MessagePayload) -> String {
 /// On `is_error = true`, the step is surfaced as failed so the run aborts.
 /// On success, the content blocks are serialized as a JSON string.
 fn tool_outcome_to_string(
-    result: Result<tau_ports::ToolResult, tau_runtime::error::CoreRuntimeError>,
+    result: Result<tau_ports::ToolResult, tau_runtime_tokio::error::CoreRuntimeError>,
 ) -> Result<String, (String, String)> {
     match result {
         Ok(tool_result) => {

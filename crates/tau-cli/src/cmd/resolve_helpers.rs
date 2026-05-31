@@ -14,7 +14,7 @@ use anyhow::Context as _;
 use crate::config::AgentEntry;
 use crate::output::Output;
 use tau_pkg::scope::{SandboxRequirements, ScopeConfig};
-use tau_runtime::sandbox::{
+use tau_runtime_tokio::process_gate::{
     build_plan, resolve_adapter, resolve_strict_for_validation, validate_plan_against_adapter,
     ResolutionError, SandboxAdapter, SandboxValidationError,
 };
@@ -314,7 +314,7 @@ mod check_sandbox_tests {
     /// fs.write, net.http, exec, env). It is reachable via
     /// `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` through `resolve_adapter`. We
     /// use it here directly to keep tests platform-independent.
-    fn mock_adapter() -> tau_runtime::sandbox::SandboxAdapter {
+    fn mock_adapter() -> tau_runtime_tokio::process_gate::SandboxAdapter {
         // Force the Mock branch of resolve_adapter via the env var so the
         // returned SandboxAdapter::Mock variant exists for the test.
         std::env::set_var("TAU_TESTING_ALLOW_MOCK_SANDBOX", "1");
@@ -323,7 +323,7 @@ mod check_sandbox_tests {
             .build()
             .expect("tokio runtime");
         let adapter = rt.block_on(async {
-            tau_runtime::sandbox::resolve_adapter(
+            tau_runtime_tokio::process_gate::resolve_adapter(
                 &tau_pkg::scope::SandboxRequirements::default(),
                 &[],
             )

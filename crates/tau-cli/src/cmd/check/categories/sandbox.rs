@@ -94,7 +94,7 @@ pub async fn run_sandbox(ctx: &CheckCtx) -> CheckResult {
         }
 
         // Adapter-availability check (Warning if no local adapter satisfies the triple).
-        if tau_runtime::sandbox::registration_for_triple(target).is_none() {
+        if tau_runtime_tokio::process_gate::registration_for_triple(target).is_none() {
             findings.push(CheckFinding {
                 category: CheckCategory::Sandbox,
                 severity: Severity::Warning,

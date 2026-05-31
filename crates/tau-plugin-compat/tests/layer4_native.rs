@@ -41,8 +41,8 @@ use tau_ports::{
     CapabilityPlan, CapabilityProbe, CompletionRequest, ContentBlock, LlmProviderMessage,
     SessionContext,
 };
-use tau_runtime::sandbox::registry::RegistryKind;
-use tau_runtime::sandbox::resolve_adapter_forced;
+use tau_runtime_tokio::process_gate::registry::RegistryKind;
+use tau_runtime_tokio::process_gate::resolve_adapter_forced;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -205,7 +205,7 @@ fn make_session_context_with_caps(caps: Vec<Capability>) -> SessionContext {
 /// only run in environments where the native adapter is expected to be
 /// available (Linux with landlock/seccomp). A probe failure is a real
 /// test failure when the test is explicitly run.
-async fn resolve_native_adapter() -> tau_runtime::sandbox::SandboxAdapter {
+async fn resolve_native_adapter() -> tau_runtime_tokio::process_gate::SandboxAdapter {
     let adapter = resolve_adapter_forced(RegistryKind::Native)
         .await
         .expect("native adapter must resolve (requires Linux + landlock/seccomp)");

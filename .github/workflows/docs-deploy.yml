@@ -210,15 +210,16 @@ jobs:
           set -euo pipefail
           mkdir -p docs/book/html/rustdoc
           cp -R target/doc/. docs/book/html/rustdoc/
-          # Add a redirect-style index at /rustdoc/ pointing at tau-runtime
-          # (the canonical kernel crate). Cargo doc --workspace doesn't
-          # emit a top-level index page on its own.
+          # Add a redirect-style index at /rustdoc/ pointing at
+          # tau-runtime-core (the canonical kernel crate after the β.1
+          # extraction). Cargo doc --workspace doesn't emit a top-level
+          # index page on its own.
           cat > docs/book/html/rustdoc/index.html <<'HTML'
           <!doctype html>
-          <meta http-equiv="refresh" content="0; url=./tau_runtime/index.html">
-          <link rel="canonical" href="./tau_runtime/index.html">
+          <meta http-equiv="refresh" content="0; url=./tau_runtime_core/index.html">
+          <link rel="canonical" href="./tau_runtime_core/index.html">
           <title>tau rustdoc</title>
-          <p>Redirecting to <a href="./tau_runtime/index.html">tau-runtime rustdoc</a>.</p>
+          <p>Redirecting to <a href="./tau_runtime_core/index.html">tau-runtime-core rustdoc</a>.</p>
           HTML
 
       - name: Write versions.json (release only)

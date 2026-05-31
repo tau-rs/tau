@@ -324,9 +324,11 @@ followups are addressed.
 - Plan: [`docs/superpowers/plans/2026-05-02-sandboxing.md`](../superpowers/plans/2026-05-02-sandboxing.md).
 - Vision: [`docs/explanation/tau-as-language.md`](../explanation/tau-as-language.md).
 - Followups: [`docs/superpowers/specs/2026-05-03-sandboxing-followups.md`](../superpowers/specs/2026-05-03-sandboxing-followups.md).
-- Trait: [`crates/tau-ports/src/sandbox.rs`](../../crates/tau-ports/src/sandbox.rs).
+- Trait: [`crates/tau-ports/src/capability_gate/mod.rs`](../../crates/tau-ports/src/capability_gate/mod.rs)
+  (renamed from `sandbox.rs` at Phase β.1.1, ADR-0035).
 - Adapters: [`crates/tau-sandbox-native/`](https://github.com/titouanlebocq/tau/tree/main/crates/tau-sandbox-native),
   [`crates/tau-sandbox-container/`](https://github.com/titouanlebocq/tau/tree/main/crates/tau-sandbox-container).
-- Runtime glue: [`crates/tau-runtime/src/sandbox/`](https://github.com/titouanlebocq/tau/tree/main/crates/tau-runtime/src/sandbox).
+- Runtime glue: [`crates/tau-runtime-tokio/src/process_gate/`](https://github.com/titouanlebocq/tau/tree/main/crates/tau-runtime-tokio/src/process_gate)
+  (renamed from `tau-runtime/src/sandbox/` at Phase β.1.4).
 - Layer 3 CLI: [`crates/tau-cli/src/cmd/resolve.rs`](../../crates/tau-cli/src/cmd/resolve.rs)
   (`--check-sandbox` flag).

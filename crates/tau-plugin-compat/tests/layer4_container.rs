@@ -45,8 +45,8 @@ use tau_ports::{
     CapabilityPlan, CapabilityProbe, CompletionRequest, ContentBlock, LlmProviderMessage,
     SessionContext,
 };
-use tau_runtime::sandbox::registry::RegistryKind;
-use tau_runtime::sandbox::resolve_adapter_forced;
+use tau_runtime_tokio::process_gate::registry::RegistryKind;
+use tau_runtime_tokio::process_gate::resolve_adapter_forced;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -157,7 +157,7 @@ fn make_session_context_with_caps(caps: Vec<Capability>) -> SessionContext {
 /// Tests using this helper are gated with `#[ignore = "..."]` so they
 /// only run in environments where Docker/Podman is expected to be
 /// available. A probe failure is a real test failure when explicitly run.
-async fn resolve_container_adapter() -> tau_runtime::sandbox::SandboxAdapter {
+async fn resolve_container_adapter() -> tau_runtime_tokio::process_gate::SandboxAdapter {
     let adapter = resolve_adapter_forced(RegistryKind::Container)
         .await
         .expect("container adapter must resolve (requires Docker or Podman)");

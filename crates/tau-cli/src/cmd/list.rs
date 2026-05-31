@@ -201,7 +201,7 @@ fn list_agents(args: &ListArgs, output: &mut Output) -> anyhow::Result<()> {
                     .expect("scope was resolved when --capabilities was set"),
             ) {
                 Ok((_def, manifest)) => {
-                    let effective = tau_runtime::capability_override::compute_effective(
+                    let effective = tau_runtime_tokio::capability_override::compute_effective(
                         manifest.capabilities(),
                         &agent.capability_overrides,
                     )
@@ -274,7 +274,7 @@ fn list_agents(args: &ListArgs, output: &mut Output) -> anyhow::Result<()> {
 /// runtime `EffectiveCapability`. Field selection is per-kind: paths
 /// for fs.*, hosts for net.http, commands for process.spawn.
 fn effective_capability_to_row(
-    eff: &tau_runtime::capability_override::EffectiveCapability,
+    eff: &tau_runtime_tokio::capability_override::EffectiveCapability,
 ) -> EffectiveCapabilityRow {
     use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
     let kind = match &eff.source {

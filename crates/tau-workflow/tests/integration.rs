@@ -91,7 +91,7 @@ async fn linear_workflow_runs_two_agent_steps_and_persists_jsonl() {
     let llm = MockLlmBackend::new("mock-echo").with_response(resp);
 
     let runtime = Arc::new(
-        tau_runtime::Runtime::builder()
+        tau_runtime_tokio::Runtime::builder()
             .with_llm_backend(llm)
             .build()
             .expect("build runtime"),

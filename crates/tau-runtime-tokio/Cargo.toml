@@ -1,0 +1,118 @@
+[package]
+name = "tau-runtime-tokio"
+description = "Tokio host shell for tau-runtime-core: process_gate adapters, plugin_host, persistence, and TokioClock/OsRandom defaults."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+tau-runtime-core      = { workspace = true }
+tau-domain            = { workspace = true, features = ["serde"] }
+tau-observe           = { workspace = true }
+# TODO(future): tau-ports/test-fixtures is enabled in production deps to
+# make MockSandbox reachable for the env-var-gated path
+# (TAU_TESTING_ALLOW_MOCK_SANDBOX=1) used by CLI integration tests via
+# cargo_bin("tau"). Future cleanup: move MockSandbox out of fixtures, or
+# build a dedicated test-only binary for the integration test harness.
+tau-ports             = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-pkg               = { workspace = true }
+tau-plugin-protocol   = { workspace = true }
+tau-sandbox-native    = { workspace = true }
+tau-sandbox-container = { workspace = true }
+# OS entropy for the tokio host's `OsRandom` impl of `tau_ports::RandomSource`.
+# Suitable for cryptographic use; tau-runtime-core mints UUID/ULID bytes
+# through this port.
+getrandom           = "0.3"
+thiserror           = { workspace = true }
+tracing             = { workspace = true }
+# `v4` for session-id minting in `Runtime::run` per spec §3.7; the
+# workspace alias only enables `v7` (used by id newtypes in tau-domain).
+uuid                = { workspace = true, features = ["v4"] }
+# Plugin host carries plugin config as JSON values across the IPC
+# boundary; surfaces in `plugin_host::load_*` signatures.
+serde               = { workspace = true }
+serde_json          = "1"
+# Plugin host spawns plugin binaries and reads their stdio streams.
+# `fs` is needed by `plugin_host::recording`, which uses
+# `tokio::fs::OpenOptions` + async append writes for the JSONL sink so
+# the read- and write-side tap points don't block the runtime on disk
+# IO. The other features come from the workspace alias.
+tokio               = { workspace = true, features = ["fs"] }
+# Plugin host encodes/decodes MessagePack payloads for the wire protocol.
+rmp-serde           = { workspace = true }
+# Plugin host streaming adapter (`stream_router`) implements the
+# `Stream` trait from `futures-core` so it can build a
+# `tau_ports::CompletionStream` (which is `Pin<Box<dyn Stream<...>>>`).
+futures-core        = { workspace = true }
+# Async generator for `Runtime::run_streaming` (Tier 2 priority 8 / ADR-0011).
+async-stream        = { workspace = true }
+# Plugin host protocol-recording sink (`plugin_host::recording`)
+# base64-encodes raw MessagePack frame bytes into the JSONL log so the
+# binary frame survives the JSON envelope losslessly.
+base64              = { workspace = true }
+# Used by capability_override::glob_subset for glob-subset analysis when
+# a project tau.toml narrows fs.* paths under a package manifest's grant.
+globset             = { workspace = true }
+# JSON Schema validation for tool args at the kernel boundary.
+# Realizes ADR-0010 (Tier 2 priority 6).
+jsonschema          = { workspace = true }
+# Multi-agent orchestration (ROADMAP §9): wall-clock timestamps on tasks,
+# leases, and trace events.
+chrono              = { workspace = true }
+# Multi-agent orchestration: ULID generation for run-ids, agent-ids,
+# trace-event-ids.
+ulid                = { workspace = true }
+
+# macOS-only: sandbox-exec adapter. Selected for RegistryKind::Native on
+# macOS hosts; the Linux NativeSandbox is selected on Linux.
+[target.'cfg(target_os = "macos")'.dependencies]
+tau-sandbox-darwin = { workspace = true }
+
+# Windows-only: AppContainer adapter. Selected for RegistryKind::Native on
+# Windows hosts.
+[target.'cfg(target_os = "windows")'.dependencies]
+tau-sandbox-windows = { workspace = true }
+
+[features]
+default = []
+# Exposes test-only constructors and re-exports under
+# `plugin_host::__internals` so integration tests in
+# `crates/tau-runtime/tests/plugin_host_ipc_*.rs` can build a
+# `PluginProcess` from a pre-paired reader+writer (no subprocess
+# spawn) and exercise the per-port IPC adapters end-to-end.
+test-support   = ["tau-plugin-protocol/test-support"]
+# Enables the MockSandbox adapter in `sandbox::chain`. Activated automatically
+# by the dev-dep on tau-ports with `test-fixtures`.
+test-fixtures  = ["tau-ports/test-fixtures"]
+# Enables integration tests that require real OS sandboxing primitives
+# (landlock, seccomp, namespaces). Linux-only at v0.1; CI flips this on
+# the ubuntu-latest test slot.
+integration-tests = []
+
+[dev-dependencies]
+tokio              = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tau-domain         = { workspace = true, features = ["test-fixtures"] }
+tau-observe        = { workspace = true, features = ["test-fixtures"] }
+tau-ports          = { workspace = true, features = ["test-fixtures", "serde"] }
+tau-plugin-protocol = { workspace = true, features = ["test-support"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+proptest           = { workspace = true }
+assert_matches     = { workspace = true }
+serde              = { workspace = true }
+toml               = { workspace = true }
+# `StreamExt` for the stream_router unit tests + the streaming
+# integration test. Pinned at the same minor version other workspace
+# crates already pull in (e.g. tau-plugin-sdk dev-deps).
+futures-util       = "0.3"
+# Used by doctests for `Runtime::run_streaming` and
+# `Runtime::run_streaming_with_history` to drive async blocks inline.
+tokio-test         = "0.4"
+# Used by `plugin_host_recording.rs` (and the recording-module unit
+# tests) to allocate a temp directory for the JSONL sink.
+tempfile           = { workspace = true }
+# Used by `tool_plugin_e2e.rs` to drive FsReadPlugin in-process.
+fs-read            = { path = "../tau-plugins/fs-read" }
+tau-plugin-sdk     = { workspace = true }

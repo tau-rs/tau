@@ -1,7 +1,7 @@
 //! Port-aware test driver for sub-project D's Layer 4 plugin compat
 //! tests.
 //!
-//! Wraps the public `tau_runtime::plugin_host::load_{tool,llm_backend,storage}`
+//! Wraps the public `tau_runtime_tokio::plugin_host::load_{tool,llm_backend,storage}`
 //! functions. Tests use this to spawn a real plugin under the resolved
 //! sandbox adapter and invoke the high-level `DynTool` / `DynLlmBackend` /
 //! `DynStorage` traits directly — no manual `Frame::Request` construction.
@@ -15,7 +15,7 @@
 //! function the test calls (`spawn_tool_under_sandbox` for tool plugins,
 //! etc.).
 //!
-//! Internally this calls into `tau_runtime::plugin_host::load_*`
+//! Internally this calls into `tau_runtime_tokio::plugin_host::load_*`
 //! which themselves call `PluginProcess::spawn_and_handshake` (private).
 //! Tests don't need raw `Frame::Request` access.
 
@@ -23,15 +23,15 @@ use std::sync::Arc;
 
 use tau_pkg::LockedPlugin;
 use tau_ports::CapabilityPlan;
-use tau_runtime::builder::{DynLlmBackend, DynStorage, DynTool};
-use tau_runtime::plugin_host::{self, PluginHostOptions};
-use tau_runtime::sandbox::SandboxAdapter;
+use tau_runtime_tokio::builder::{DynLlmBackend, DynStorage, DynTool};
+use tau_runtime_tokio::plugin_host::{self, PluginHostOptions};
+use tau_runtime_tokio::process_gate::SandboxAdapter;
 
 /// Errors raised by driver helpers.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum DriveError {
-    /// `tau_runtime::plugin_host::load_*` returned a `RuntimeError`.
+    /// `tau_runtime_tokio::plugin_host::load_*` returned a `RuntimeError`.
     #[error("plugin load failed: {0}")]
     LoadFailed(String),
     /// The plugin's port doesn't match what the caller expected.

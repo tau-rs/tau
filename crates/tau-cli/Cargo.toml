@@ -17,7 +17,7 @@ tau-domain          = { workspace = true, features = ["serde"] }
 tau-pkg             = { workspace = true }
 tau-ports           = { workspace = true }
 tau-plugin-protocol = { workspace = true }
-tau-runtime         = { workspace = true }
+tau-runtime-tokio   = { workspace = true }
 tau-workflow        = { workspace = true }
 tau-app             = { workspace = true }
 tau-observe         = { workspace = true, features = ["non_blocking"] }
