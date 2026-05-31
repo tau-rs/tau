@@ -153,7 +153,13 @@ pub async fn run(
     if let Some(n) = args.max_turns {
         options.max_turns = n;
     }
-    options.project_override = entry.capability_overrides.clone();
+    if !entry.capability_overrides.is_empty() {
+        options.capability_resolver = Some(
+            tau_runtime::capability_resolver_impl::resolver_from_overrides(
+                entry.capability_overrides.clone(),
+            ),
+        );
+    }
 
     if args.dry_run {
         // Dry-run skips plugin spawn entirely (per spec §3.9: no

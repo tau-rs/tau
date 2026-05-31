@@ -42,11 +42,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{
-    builder::DynTool,
-    error::{CoreRuntimeError, RuntimeError},
-    CapabilityOverride, Runtime,
-};
+use tau_runtime::{builder::DynTool, error::CoreRuntimeError, CapabilityOverride, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -260,12 +256,16 @@ paths = ["{package_glob}"]
     let initial = common::user_message("read the file");
 
     let mut options = common::run_options();
-    options.project_override = vec![CapabilityOverride::new(
-        "fs.read".to_string(),
-        Some(vec![narrow_allow]),
-        Vec::new(),
-        None,
-    )];
+    options.capability_resolver = Some(
+        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+            CapabilityOverride::new(
+                "fs.read".to_string(),
+                Some(vec![narrow_allow]),
+                Vec::new(),
+                None,
+            ),
+        ]),
+    );
 
     let err = runtime
         .run(agent_def, manifest, initial, options)
@@ -274,7 +274,7 @@ paths = ["{package_glob}"]
 
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
+        CoreRuntimeError::Tool(ToolError::BadArgs { reason }) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "narrowed allow must reject with scope-violation message; got {reason:?}"
@@ -331,12 +331,16 @@ paths = ["{package_glob}"]
     let initial = common::user_message("read the file");
 
     let mut options = common::run_options();
-    options.project_override = vec![CapabilityOverride::new(
-        "fs.read".to_string(),
-        None, // allow unchanged
-        vec![path.clone()],
-        None,
-    )];
+    options.capability_resolver = Some(
+        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+            CapabilityOverride::new(
+                "fs.read".to_string(),
+                None, // allow unchanged
+                vec![path.clone()],
+                None,
+            ),
+        ]),
+    );
 
     let err = runtime
         .run(agent_def, manifest, initial, options)
@@ -345,7 +349,7 @@ paths = ["{package_glob}"]
 
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
+        CoreRuntimeError::Tool(ToolError::BadArgs { reason }) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "deny carve-out must reject with scope-violation message; got {reason:?}"
@@ -392,12 +396,16 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
     let initial = common::user_message("read the file");
 
     let mut options = common::run_options();
-    options.project_override = vec![CapabilityOverride::new(
-        "fs.read".to_string(),
-        Some(vec!["/etc/**".to_string()]), // not a subset of /var/...
-        Vec::new(),
-        None,
-    )];
+    options.capability_resolver = Some(
+        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+            CapabilityOverride::new(
+                "fs.read".to_string(),
+                Some(vec!["/etc/**".to_string()]), // not a subset of /var/...
+                Vec::new(),
+                None,
+            ),
+        ]),
+    );
 
     let err = runtime
         .run(agent_def, manifest, initial, options)
@@ -406,7 +414,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
 
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::CapabilityOverrideExpands { kind, reason }) => {
+        CoreRuntimeError::CapabilityOverrideExpands { kind, reason } => {
             assert_eq!(kind, "fs.read");
             assert!(
                 reason.contains("not a subset"),

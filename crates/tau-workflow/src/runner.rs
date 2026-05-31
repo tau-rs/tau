@@ -182,6 +182,9 @@ impl Runner {
                         })?;
                     // Convert serde_json::Value → tau_domain::Value for invoke_tool.
                     let tau_args = json_to_tau_value(&resolved_args);
+                    // Inherent `invoke_tool` on the kernel Runtime — returns
+                    // tau_runtime_core::error::RuntimeError. We map below into
+                    // `tool_outcome_to_string` which accepts either flavor.
                     let result = self
                         .runtime
                         .invoke_tool(agent_def, manifest, tool, tau_args)
@@ -267,7 +270,7 @@ fn build_user_message(text: String) -> Message {
 /// For `RunOutcome::Failed`, returns an error tuple with kind `"agent_failed"`
 /// and the status debug string.
 fn agent_outcome_to_string(
-    result: Result<tau_runtime::RunOutcome, tau_runtime::RuntimeError>,
+    result: Result<tau_runtime::RunOutcome, tau_runtime::error::CoreRuntimeError>,
 ) -> Result<String, (String, String)> {
     match result {
         Ok(tau_runtime::RunOutcome::Completed { final_message, .. }) => {
@@ -300,7 +303,7 @@ fn extract_text_from_payload(payload: &MessagePayload) -> String {
 /// On `is_error = true`, the step is surfaced as failed so the run aborts.
 /// On success, the content blocks are serialized as a JSON string.
 fn tool_outcome_to_string(
-    result: Result<tau_ports::ToolResult, tau_runtime::RuntimeError>,
+    result: Result<tau_ports::ToolResult, tau_runtime::error::CoreRuntimeError>,
 ) -> Result<String, (String, String)> {
     match result {
         Ok(tool_result) => {

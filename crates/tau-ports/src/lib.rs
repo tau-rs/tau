@@ -22,6 +22,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod capability_gate;
+pub mod capability_resolver;
 pub mod error;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
@@ -39,6 +40,7 @@ pub use capability_gate::{
     CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
     ResourceLimits, WorkingContext,
 };
+pub use capability_resolver::{CapabilityResolver, CapabilityResolverError, ResolvedGrants};
 pub use error::{CapabilityError, KeyError, LlmError, NamespaceError, StorageError, ToolError};
 pub use llm::{
     batch_to_stream, stream_to_batch, CompletionChunk, CompletionRequest, CompletionResponse,

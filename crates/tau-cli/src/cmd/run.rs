@@ -106,7 +106,13 @@ pub async fn run(
     if let Some(n) = args.max_turns {
         options.max_turns = n;
     }
-    options.project_override = entry.capability_overrides.clone();
+    if !entry.capability_overrides.is_empty() {
+        options.capability_resolver = Some(
+            tau_runtime::capability_resolver_impl::resolver_from_overrides(
+                entry.capability_overrides.clone(),
+            ),
+        );
+    }
 
     if args.dry_run {
         emit_dry_run(
@@ -208,11 +214,16 @@ pub async fn run(
             max_total_agents: args.max_total_agents,
         };
         let runtime_arc = std::sync::Arc::new(runtime);
-        let snapshot = runtime_arc
-            .clone()
-            .spawn_root_agent(agent_def, manifest, initial, budget, scope_root)
-            .await
-            .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
+        let snapshot = tau_runtime::spawn_root_agent_with_scope(
+            runtime_arc.clone(),
+            agent_def,
+            manifest,
+            initial,
+            budget,
+            scope_root,
+        )
+        .await
+        .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
 
         drop(runtime_arc);
         plugin_loader::flush_recorders().await;

@@ -33,9 +33,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{
-    builder::DynTool, error::CoreRuntimeError, RunEvent, RunOutcome, Runtime, RuntimeError,
-};
+use tau_runtime::{builder::DynTool, error::CoreRuntimeError, RunEvent, RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 use futures_core::Stream;
@@ -80,9 +78,9 @@ async fn llm_backend_not_registered() {
     let err = result.unwrap_err();
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::LlmBackendNotRegistered {
+        CoreRuntimeError::LlmBackendNotRegistered {
             agent_id, backend, ..
-        }) => {
+        } => {
             assert_eq!(agent_id, "agent-1");
             assert_eq!(backend, "missing-backend");
         }
@@ -124,11 +122,11 @@ async fn tool_not_registered() {
     let err = result.unwrap_err();
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::ToolNotRegistered {
+        CoreRuntimeError::ToolNotRegistered {
             tool_name,
             registered,
             ..
-        }) => {
+        } => {
             assert_eq!(tool_name, "nonexistent");
             assert!(
                 registered.is_empty(),

@@ -19,6 +19,7 @@
 pub mod builder;
 pub(crate) mod capability;
 pub mod capability_override;
+pub mod capability_resolver_impl;
 pub mod process_gate;
 pub use process_gate::DynProcessCapabilityGate;
 pub(crate) mod dispatch;
@@ -28,14 +29,15 @@ pub mod orchestration;
 pub mod outcome;
 pub mod plugin_host;
 mod run;
-pub(crate) mod runtime_ext;
+pub mod runtime_ext;
 pub mod sandbox;
 pub mod stream;
 pub(crate) mod tool_args;
 
-pub use builder::{Runtime, TauRuntimeBuilder as RuntimeBuilder};
+pub use builder::{Runtime, RuntimeBuilder, TauRuntimeBuilder};
 pub use capability_override::{CapabilityOverride, EffectiveCapability, OverrideExpandError};
 pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError};
 pub use options::{RunOptions, TokenUsage};
 pub use outcome::RunOutcome;
+pub use runtime_ext::spawn_root_agent_with_scope;
 pub use stream::RunEvent;

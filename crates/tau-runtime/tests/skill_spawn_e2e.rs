@@ -237,16 +237,16 @@ async fn happy_path_parent_spawns_critic_and_receives_response() {
     let manifest = manifest_with_skill_spawn_cap("");
     let initial = common::user_message("please review my draft");
 
-    let snapshot = runtime
-        .spawn_root_agent(
-            agent_def,
-            manifest,
-            initial,
-            RunBudget::default(),
-            tmp.path().to_path_buf(),
-        )
-        .await
-        .expect("spawn_root_agent must succeed");
+    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    )
+    .await
+    .expect("spawn_root_agent must succeed");
 
     assert_eq!(
         snapshot.status,
@@ -314,16 +314,16 @@ async fn system_prompt_override_replaces_skill_default() {
     let manifest = manifest_with_skill_spawn_cap("");
     let initial = common::user_message("go");
 
-    runtime
-        .spawn_root_agent(
-            agent_def,
-            manifest,
-            initial,
-            RunBudget::default(),
-            tmp.path().to_path_buf(),
-        )
-        .await
-        .expect("spawn_root_agent must succeed");
+    tau_runtime::spawn_root_agent_with_scope(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    )
+    .await
+    .expect("spawn_root_agent must succeed");
 
     // The second request (index 1) is the child's first LLM call.
     let requests = backend.received_requests();
@@ -424,16 +424,16 @@ paths = ["/tmp/**"]
     let agent_def = common::agent_def("parent", "Parent Agent", "test-pkg@0.1.0", "test-llm");
     let initial = common::user_message("go");
 
-    let snapshot = runtime
-        .spawn_root_agent(
-            agent_def,
-            manifest,
-            initial,
-            RunBudget::default(),
-            tmp.path().to_path_buf(),
-        )
-        .await
-        .expect("spawn_root_agent must succeed");
+    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    )
+    .await
+    .expect("spawn_root_agent must succeed");
 
     // Narrowing must not cause an error — only success is required here.
     assert_eq!(
@@ -506,16 +506,16 @@ async fn spawn_denied_when_parent_lacks_skill_capability() {
 
     // spawn_root_agent must NOT error — PolicyDenied is RunOutcome::Failed,
     // not RuntimeError. The snapshot is returned normally.
-    let snapshot = runtime
-        .spawn_root_agent(
-            agent_def,
-            manifest,
-            initial,
-            RunBudget::default(),
-            tmp.path().to_path_buf(),
-        )
-        .await
-        .expect("spawn_root_agent must not return Err on capability denial");
+    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    )
+    .await
+    .expect("spawn_root_agent must not return Err on capability denial");
 
     // The run is DENIED (not completed) — PolicyDenied terminates the run.
     assert_eq!(
@@ -588,16 +588,16 @@ allowed_skills = ["missing"]
     let manifest = unchecked.validate().expect("manifest must be valid");
     let initial = common::user_message("go");
 
-    let snapshot = runtime
-        .spawn_root_agent(
-            agent_def,
-            manifest,
-            initial,
-            RunBudget::default(),
-            tmp.path().to_path_buf(),
-        )
-        .await
-        .expect("spawn_root_agent must not error (tool result error, not RuntimeError)");
+    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    )
+    .await
+    .expect("spawn_root_agent must not error (tool result error, not RuntimeError)");
 
     assert_eq!(
         snapshot.status,
@@ -654,16 +654,16 @@ async fn install_path_missing_returns_is_error() {
     let manifest = manifest_with_skill_spawn_cap("");
     let initial = common::user_message("go");
 
-    let snapshot = runtime
-        .spawn_root_agent(
-            agent_def,
-            manifest,
-            initial,
-            RunBudget::default(),
-            tmp.path().to_path_buf(),
-        )
-        .await
-        .expect("spawn_root_agent must not error (tool result error, not RuntimeError)");
+    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    )
+    .await
+    .expect("spawn_root_agent must not error (tool result error, not RuntimeError)");
 
     assert_eq!(
         snapshot.status,
