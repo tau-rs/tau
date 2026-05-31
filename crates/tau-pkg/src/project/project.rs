@@ -695,8 +695,32 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
 }
 
 fn validate_tool(name: String, raw: UncheckedTool) -> Result<ToolEntry, ProjectConfigError> {
-    // Currently no semantic validation beyond what serde already enforced.
-    // Placeholder: future validation (e.g. non-empty native fn_name) lives here.
+    match &raw.body {
+        ToolBody::Native(fn_name) => {
+            if fn_name.trim().is_empty() {
+                return Err(ProjectConfigError::ToolValidation {
+                    name,
+                    message: "native body must specify a non-empty fn name".into(),
+                });
+            }
+        }
+        ToolBody::Mcp(url) => {
+            if url.trim().is_empty() {
+                return Err(ProjectConfigError::ToolValidation {
+                    name,
+                    message: "mcp body must specify a non-empty url".into(),
+                });
+            }
+        }
+        ToolBody::Subflow(target) => {
+            if target.trim().is_empty() {
+                return Err(ProjectConfigError::ToolValidation {
+                    name,
+                    message: "subflow body must specify a non-empty target agent id".into(),
+                });
+            }
+        }
+    }
     Ok(ToolEntry {
         name,
         body: raw.body,
@@ -1268,6 +1292,60 @@ mod tests {
         assert!(
             matches!(result, Err(ProjectConfigError::StepValidation { .. })),
             "expected StepValidation error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_native_fn_name() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.bad]
+            native = ""
+        "#;
+        let result = parse(toml_str);
+        let Err(ProjectConfigError::ToolValidation { name, message }) = result else {
+            panic!("expected ToolValidation error, got: {result:?}")
+        };
+        assert_eq!(name, "bad");
+        assert!(message.contains("fn name"), "unexpected message: {message}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_mcp_url() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.bad]
+            mcp = ""
+        "#;
+        let result = parse(toml_str);
+        let Err(ProjectConfigError::ToolValidation { name, message }) = result else {
+            panic!("expected ToolValidation error, got: {result:?}")
+        };
+        assert_eq!(name, "bad");
+        assert!(message.contains("url"), "unexpected message: {message}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_subflow_target() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.bad]
+            subflow = ""
+        "#;
+        let result = parse(toml_str);
+        let Err(ProjectConfigError::ToolValidation { name, message }) = result else {
+            panic!("expected ToolValidation error, got: {result:?}")
+        };
+        assert_eq!(name, "bad");
+        assert!(
+            message.contains("target agent id"),
+            "unexpected message: {message}"
         );
     }
 

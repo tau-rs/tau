@@ -59,6 +59,16 @@ pub enum IrError {
         fn_name: String,
     },
 
+    /// A `ToolImpl::Native` reference's content hash could not be resolved
+    /// (the native tool registry did not know the symbolic name).
+    #[error("native tool {tool:?} references unknown fn `{fn_name}`")]
+    UnknownNativeTool {
+        /// The tool id that contains the unresolved native ref.
+        tool: ToolId,
+        /// The native fn name that was not resolved.
+        fn_name: String,
+    },
+
     /// Generic parse failure surfacing from the upstream TOML parser.
     #[error("tau.toml parse error: {0}")]
     Parse(String),

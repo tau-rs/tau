@@ -7,8 +7,8 @@
 //! filled with zero bytes (the `resolve` stage fills them).
 
 use alloc::collections::BTreeMap;
-use tau_pkg::project::project::{PromptEntry, ToolBody};
 use tau_pkg::project::ProjectConfig;
+use tau_pkg::{PromptEntry, ToolBody};
 
 use crate::capability::{CapabilityRequirements, CapabilityTable};
 use crate::error::IrError;
@@ -20,13 +20,13 @@ use crate::tool_impl::{Hash256, NativeFnRef, ToolImpl};
 use crate::AgentBudget;
 
 /// Output of the parse stage.
-pub struct Parsed {
+pub(super) struct Parsed {
     /// Partially-populated workflow (content hashes are zero pending `resolve`).
-    pub workflow: Workflow,
+    pub(super) workflow: Workflow,
 }
 
 /// Run the parse stage on a `ProjectConfig`.
-pub fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
+pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
     let mut agents: BTreeMap<AgentId, Agent> = BTreeMap::new();
     let mut tools: BTreeMap<ToolId, Tool> = BTreeMap::new();
     let mut steps: BTreeMap<StepId, Deterministic> = BTreeMap::new();

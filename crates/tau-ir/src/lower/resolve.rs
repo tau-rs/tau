@@ -7,7 +7,7 @@ use crate::tool_impl::ToolImpl;
 use super::parse::Parsed;
 
 /// Run the resolve stage on a `Parsed` value.
-pub fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed, IrError> {
+pub(super) fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed, IrError> {
     for (_id, tool) in parsed.workflow.tools.iter_mut() {
         match &mut tool.impl_ {
             ToolImpl::Native {

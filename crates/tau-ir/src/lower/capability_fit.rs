@@ -33,7 +33,7 @@ use super::parse::Parsed;
 /// If the target triple is not found in the registry, the check also
 /// fails with an empty `missing` list — the caller's diagnostic should
 /// handle this as "unknown target".
-pub fn check(parsed: &Parsed, target: &TargetTriple) -> Result<(), IrError> {
+pub(super) fn check(parsed: &Parsed, target: &TargetTriple) -> Result<(), IrError> {
     let entry = registry::lookup(target).ok_or_else(|| IrError::CapabilityFitFailed {
         missing: Vec::new(),
         tools: Vec::new(),

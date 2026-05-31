@@ -7,7 +7,7 @@ use crate::tool_impl::ToolImpl;
 use super::parse::Parsed;
 
 /// Run the typecheck stage on a `Parsed` value.
-pub fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
+pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
     // 1. Each Agent::tool_refs entry must exist in `tools`.
     for (agent_id, agent) in parsed.workflow.agents.iter() {
         for tool_ref in agent.tool_refs.iter() {
@@ -59,8 +59,8 @@ pub fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
         } = &tool.impl_
         {
             if content_hash == &[0u8; 32] {
-                return Err(IrError::UnknownDeterministicFn {
-                    step: crate::StepId(tool_id.0.clone()),
+                return Err(IrError::UnknownNativeTool {
+                    tool: tool_id.clone(),
                     fn_name: fn_ref.name.clone(),
                 });
             }

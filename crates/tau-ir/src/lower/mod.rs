@@ -78,6 +78,11 @@ pub struct Caches<'a> {
     /// Resolves an MCP URL to (contract hash, declared capabilities).
     pub mcp_contract: &'a dyn Fn(&str) -> Option<McpContractEntry>,
     /// Resolves a skill name to its content hash (from Skills-2 lockfile).
+    ///
+    /// **Reserved for a future `ToolImpl::Skill` variant.** No code path
+    /// in v0 calls this closure; callers may supply a `|_| None` stub.
+    /// The field stays in `Caches` to lock the resolver signature so
+    /// adding `ToolImpl::Skill` later is non-breaking.
     pub skill: &'a dyn Fn(&str) -> Option<[u8; 32]>,
 }
 
