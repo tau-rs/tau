@@ -21,7 +21,7 @@ use crate::orchestration::error::OrchestrationError;
 ///
 /// ```
 /// use std::path::Path;
-/// use tau_runtime::orchestration::persistence::run_log_path;
+/// use tau_runtime_tokio::orchestration::persistence::run_log_path;
 ///
 /// let path = run_log_path(Path::new("/workspace"), &"run-abc".into());
 /// assert!(path.ends_with("run-abc.jsonl"));
@@ -39,7 +39,7 @@ pub fn run_log_path(scope_root: &Path, run_id: &RunId) -> PathBuf {
 /// # Example
 ///
 /// ```
-/// use tau_runtime::orchestration::persistence::RunLogLine;
+/// use tau_runtime_tokio::orchestration::persistence::RunLogLine;
 ///
 /// // TaskMutation is a forward-compat placeholder; ensure it
 /// // round-trips through JSON.

@@ -34,7 +34,7 @@ use tau_runtime_core::orchestration::trace::TraceSubscriber;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use tau_runtime::orchestration::trace_mpsc::MpscTraceSubscriber;
+/// use tau_runtime_tokio::orchestration::trace_mpsc::MpscTraceSubscriber;
 /// use tau_runtime_core::orchestration::trace::TraceSubscriber;
 /// use tau_ports::{TraceEvent, TraceEventKind};
 /// use chrono::Utc;

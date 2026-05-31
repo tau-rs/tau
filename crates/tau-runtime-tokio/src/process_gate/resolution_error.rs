@@ -37,7 +37,7 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```
-/// use tau_runtime::sandbox::resolution_error::ResolutionRejection;
+/// use tau_runtime_tokio::process_gate::resolution_error::ResolutionRejection;
 ///
 /// let r = ResolutionRejection::PlatformMismatch;
 /// assert!(r.to_string().contains("platform"));
@@ -101,7 +101,7 @@ pub enum ResolutionRejection {
 /// # Example
 ///
 /// ```
-/// use tau_runtime::sandbox::resolution_error::{ResolutionError, ResolutionRejection};
+/// use tau_runtime_tokio::process_gate::resolution_error::{ResolutionError, ResolutionRejection};
 /// use tau_ports::CapabilityTier;
 ///
 /// let e = ResolutionError::NoAdapterMatches {

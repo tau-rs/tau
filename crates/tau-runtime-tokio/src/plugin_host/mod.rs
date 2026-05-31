@@ -201,7 +201,7 @@ async fn build_recorder(
 ///
 /// ```
 /// use std::path::PathBuf;
-/// use tau_runtime::plugin_host::RecordingSink;
+/// use tau_runtime_tokio::plugin_host::RecordingSink;
 ///
 /// let sink = RecordingSink::JsonlFile {
 ///     path: PathBuf::from("/tmp/protocol.jsonl"),
@@ -231,7 +231,7 @@ pub enum RecordingSink {
 ///
 /// ```
 /// use std::time::Duration;
-/// use tau_runtime::plugin_host::PluginHostOptions;
+/// use tau_runtime_tokio::plugin_host::PluginHostOptions;
 ///
 /// let mut opts = PluginHostOptions::default();
 /// opts.handshake_timeout = Duration::from_secs(10);
@@ -479,7 +479,7 @@ pub async fn load_tool(
         Ok(caps) => caps,
         Err(e) => {
             tracing::warn!(
-                target: "tau_runtime::plugin_host",
+                target: "tau_runtime_tokio::plugin_host",
                 plugin = %plugin_name,
                 error = %e,
                 "tool.describe_capabilities failed; defaulting to empty list (plugin will be admitted unrestricted)",

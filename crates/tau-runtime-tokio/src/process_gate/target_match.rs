@@ -16,8 +16,8 @@ use crate::process_gate::registry::{AdapterRegistration, RegistryKind, REGISTRY}
 ///
 /// ```
 /// use tau_ports::target::AdapterFamily;
-/// use tau_runtime::sandbox::registry::RegistryKind;
-/// use tau_runtime::sandbox::target_match::kind_to_family;
+/// use tau_runtime_tokio::process_gate::registry::RegistryKind;
+/// use tau_runtime_tokio::process_gate::target_match::kind_to_family;
 ///
 /// assert_eq!(kind_to_family(RegistryKind::Native), AdapterFamily::Native);
 /// assert_eq!(kind_to_family(RegistryKind::Container), AdapterFamily::Container);
@@ -48,15 +48,15 @@ pub fn kind_to_family(kind: RegistryKind) -> AdapterFamily {
 ///
 /// ```
 /// use tau_ports::target::TargetTriple;
-/// use tau_runtime::sandbox::registry::REGISTRY;
-/// use tau_runtime::sandbox::target_match::adapter_satisfies;
+/// use tau_runtime_tokio::process_gate::registry::REGISTRY;
+/// use tau_runtime_tokio::process_gate::target_match::adapter_satisfies;
 ///
 /// let passthrough = TargetTriple::PASSTHROUGH;
-/// let p_reg = REGISTRY.iter().find(|r| r.kind == tau_runtime::sandbox::registry::RegistryKind::Passthrough).unwrap();
+/// let p_reg = REGISTRY.iter().find(|r| r.kind == tau_runtime_tokio::process_gate::registry::RegistryKind::Passthrough).unwrap();
 /// assert!(adapter_satisfies(p_reg, &passthrough));
 ///
 /// let linux_strict: TargetTriple = "linux-native-strict".parse().unwrap();
-/// let native_reg = REGISTRY.iter().find(|r| r.kind == tau_runtime::sandbox::registry::RegistryKind::Native).unwrap();
+/// let native_reg = REGISTRY.iter().find(|r| r.kind == tau_runtime_tokio::process_gate::registry::RegistryKind::Native).unwrap();
 /// // Native adapter satisfies linux-native-strict on any host.
 /// // (platform check is against triple.platform, not host OS)
 /// assert!(adapter_satisfies(native_reg, &linux_strict));
@@ -91,8 +91,8 @@ pub fn adapter_satisfies(adapter: &AdapterRegistration, triple: &TargetTriple) -
 ///
 /// ```
 /// use tau_ports::target::TargetTriple;
-/// use tau_runtime::sandbox::target_match::registration_for_triple;
-/// use tau_runtime::sandbox::registry::RegistryKind;
+/// use tau_runtime_tokio::process_gate::target_match::registration_for_triple;
+/// use tau_runtime_tokio::process_gate::registry::RegistryKind;
 ///
 /// let triple = TargetTriple::PASSTHROUGH;
 /// let reg = registration_for_triple(&triple).expect("passthrough always has a registration");

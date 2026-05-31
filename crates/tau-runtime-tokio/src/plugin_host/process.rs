@@ -199,7 +199,7 @@ impl PluginProcess {
         >,
     {
         tracing::debug!(
-            target: "tau_runtime::plugin_host",
+            target: "tau_runtime_tokio::plugin_host",
             plugin = plugin_name.as_str(),
             binary_path = ?binary_path,
             "plugin.spawning"
@@ -272,7 +272,7 @@ impl PluginProcess {
 
         let pid = child.id();
         tracing::info!(
-            target: "tau_runtime::plugin_host",
+            target: "tau_runtime_tokio::plugin_host",
             plugin = plugin_name.as_str(),
             pid,
             "plugin.spawned"
@@ -386,7 +386,7 @@ impl PluginProcess {
             let mut writer = self.writer.lock().await;
             let _ = writer.write_frame(&body).await;
             tracing::debug!(
-                target: "tau_runtime::plugin_host",
+                target: "tau_runtime_tokio::plugin_host",
                 plugin = self.name.as_str(),
                 "plugin.shutdown_sent"
             );
@@ -426,7 +426,7 @@ impl PluginProcess {
 
         let exit_code = exit_status.code();
         tracing::info!(
-            target: "tau_runtime::plugin_host",
+            target: "tau_runtime_tokio::plugin_host",
             plugin = self.name.as_str(),
             exit_code = ?exit_code,
             clean,
@@ -540,7 +540,7 @@ async fn read_loop<R>(
             Ok(Some(b)) => b,
             Ok(None) => {
                 tracing::info!(
-                    target: "tau_runtime::plugin_host",
+                    target: "tau_runtime_tokio::plugin_host",
                     plugin = plugin_name.as_str(),
                     "plugin stdout EOF"
                 );
@@ -548,7 +548,7 @@ async fn read_loop<R>(
             }
             Err(err) => {
                 tracing::error!(
-                    target: "tau_runtime::plugin_host",
+                    target: "tau_runtime_tokio::plugin_host",
                     plugin = plugin_name.as_str(),
                     err = %err,
                     "plugin stdout frame read error"
@@ -568,7 +568,7 @@ async fn read_loop<R>(
             Ok(f) => f,
             Err(err) => {
                 tracing::warn!(
-                    target: "tau_runtime::plugin_host",
+                    target: "tau_runtime_tokio::plugin_host",
                     plugin = plugin_name.as_str(),
                     err = %err,
                     "plugin frame decode failed"
@@ -579,7 +579,7 @@ async fn read_loop<R>(
         match frame {
             Frame::Response { id, error, result } => {
                 tracing::trace!(
-                    target: "tau_runtime::plugin_host",
+                    target: "tau_runtime_tokio::plugin_host",
                     plugin = plugin_name.as_str(),
                     msgid = id,
                     error_code = error.as_ref().map(|e| e.code),
@@ -603,7 +603,7 @@ async fn read_loop<R>(
                     let _ = sender.send(value);
                 } else {
                     tracing::warn!(
-                        target: "tau_runtime::plugin_host",
+                        target: "tau_runtime_tokio::plugin_host",
                         plugin = plugin_name.as_str(),
                         msgid = id,
                         "response with no matching in-flight request"
@@ -618,7 +618,7 @@ async fn read_loop<R>(
                     Ok(p) => p,
                     Err(err) => {
                         tracing::warn!(
-                            target: "tau_runtime::plugin_host",
+                            target: "tau_runtime_tokio::plugin_host",
                             plugin = plugin_name.as_str(),
                             err = %err,
                             "stream.chunk params decode failed"
@@ -628,7 +628,7 @@ async fn read_loop<R>(
                 };
                 let (originating_id, chunk) = parsed;
                 tracing::trace!(
-                    target: "tau_runtime::plugin_host",
+                    target: "tau_runtime_tokio::plugin_host",
                     plugin = plugin_name.as_str(),
                     msgid = originating_id,
                     "plugin.stream_chunk"
@@ -677,7 +677,7 @@ async fn stderr_loop(stderr: ChildStderr, plugin_name: String) {
             Ok(None) => break,
             Err(err) => {
                 tracing::warn!(
-                    target: "tau_runtime::plugin_host",
+                    target: "tau_runtime_tokio::plugin_host",
                     plugin = plugin_name.as_str(),
                     err = %err,
                     "plugin stderr read error"

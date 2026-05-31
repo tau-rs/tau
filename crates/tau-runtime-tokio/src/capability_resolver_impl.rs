@@ -31,7 +31,7 @@ use crate::run::narrowed_capability_for_session;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use tau_runtime::capability_resolver_impl::TauPkgCapabilityResolver;
+/// use tau_runtime_tokio::capability_resolver_impl::TauPkgCapabilityResolver;
 /// use tau_ports::CapabilityResolver;
 ///
 /// // Empty override list — a passthrough resolver in practice.

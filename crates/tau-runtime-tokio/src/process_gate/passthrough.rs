@@ -24,7 +24,7 @@ use tau_ports::{
 /// # Example
 ///
 /// ```
-/// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
+/// use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
 /// use tau_ports::CapabilityGate;
 ///
 /// let p = PassthroughSandbox::new();
@@ -40,7 +40,7 @@ impl PassthroughSandbox {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
+    /// use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
     /// use tau_ports::{CapabilityGate, CapabilityPlan};
     ///
     /// let p = PassthroughSandbox::new();

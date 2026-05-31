@@ -27,7 +27,7 @@ use crate::capability_override::{CapabilityOverride, OverrideExpandError};
 ///
 /// ```
 /// use tau_domain::Capability;
-/// use tau_runtime::sandbox::build_plan;
+/// use tau_runtime_tokio::process_gate::build_plan;
 ///
 /// let cap: Capability = serde_json::from_str(r#"{"kind":"fs.read","paths":["/data/**"]}"#)
 ///     .expect("valid capability JSON");

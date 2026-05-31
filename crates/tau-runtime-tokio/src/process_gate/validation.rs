@@ -36,7 +36,7 @@ impl SandboxValidationError {
     ///
     /// ```
     /// use tau_domain::Capability;
-    /// use tau_runtime::sandbox::SandboxValidationError;
+    /// use tau_runtime_tokio::process_gate::SandboxValidationError;
     ///
     /// let cap: Capability = serde_json::from_value(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})).unwrap();
     /// let err = SandboxValidationError::new("my-plugin", cap, "shape not supported");
@@ -90,7 +90,7 @@ impl std::error::Error for SandboxValidationError {}
 /// ```
 /// use tau_domain::Capability;
 /// use tau_ports::{CapabilityPlan, fixtures::MockCapabilityGate};
-/// use tau_runtime::sandbox::validate_plan_against_adapter;
+/// use tau_runtime_tokio::process_gate::validate_plan_against_adapter;
 ///
 /// let adapter = MockCapabilityGate::new("mock");
 ///

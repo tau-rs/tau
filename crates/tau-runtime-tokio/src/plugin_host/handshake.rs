@@ -198,7 +198,7 @@ where
     }
 
     tracing::info!(
-        target: "tau_runtime::plugin_host",
+        target: "tau_runtime_tokio::plugin_host",
         plugin = plugin_name,
         methods = ?response.methods,
         "plugin.handshake.completed"

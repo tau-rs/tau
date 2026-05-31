@@ -88,8 +88,8 @@ impl SandboxAdapter {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::sandbox::passthrough::PassthroughSandbox;
-    /// use tau_runtime::sandbox::resolver::SandboxAdapter;
+    /// use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
+    /// use tau_runtime_tokio::process_gate::resolver::SandboxAdapter;
     ///
     /// let adapter = SandboxAdapter::Passthrough(PassthroughSandbox::new());
     /// assert_eq!(adapter.name(), "passthrough");

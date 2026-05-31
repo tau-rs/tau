@@ -46,7 +46,7 @@ use tau_plugin_protocol::Frame;
 /// # Example
 ///
 /// ```
-/// use tau_runtime::plugin_host::Direction;
+/// use tau_runtime_tokio::plugin_host::Direction;
 ///
 /// let d = Direction::HostToPlugin;
 /// assert!(matches!(d, Direction::HostToPlugin));
@@ -99,7 +99,7 @@ impl Recorder {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::plugin_host::Recorder;
+    /// use tau_runtime_tokio::plugin_host::Recorder;
     ///
     /// let recorder = Recorder::new("echo-llm");
     /// assert!(format!("{recorder:?}").contains("echo-llm"));
