@@ -24,8 +24,12 @@ fn tau_ir_message_payload_mirrors_tau_domain() {
         DomainPayload::Text {
             content: "hello".into(),
         },
-        DomainPayload::ToolCall { args: json_v.clone() },
-        DomainPayload::ToolResult { body: json_v.clone() },
+        DomainPayload::ToolCall {
+            args: json_v.clone(),
+        },
+        DomainPayload::ToolResult {
+            body: json_v.clone(),
+        },
         DomainPayload::ToolError {
             kind: "not_found".into(),
             message: "file not found".into(),

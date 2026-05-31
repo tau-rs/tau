@@ -11,8 +11,8 @@
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use serde::{Deserialize, Serialize};
-use tau_domain::{Address, MessageId};
 use tau_domain::message::MessagePayload as DomainMessagePayload;
+use tau_domain::{Address, MessageId};
 
 /// The IR-owned message envelope.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -69,6 +69,8 @@ pub enum MessagePayload {
     /// Lifecycle broadcast.
     Lifecycle(tau_domain::AgentStatus),
     /// Plugin-custom payload (escape hatch).
+    ///
+    /// See: [escape-hatches.md#messagepayload-custom](../../docs/explanation/escape-hatches.md#messagepayload-custom).
     Custom {
         /// Kind tag.
         kind: String,
@@ -110,7 +112,11 @@ impl From<DomainMessagePayload> for MessagePayload {
             DomainMessagePayload::ToolResult { body } => Self::ToolResult {
                 body: domain_value_to_json(body),
             },
-            DomainMessagePayload::ToolError { kind, message, details } => Self::ToolError {
+            DomainMessagePayload::ToolError {
+                kind,
+                message,
+                details,
+            } => Self::ToolError {
                 kind,
                 message,
                 details: domain_value_opt_to_json(details),
@@ -137,7 +143,11 @@ impl From<MessagePayload> for DomainMessagePayload {
             MessagePayload::ToolResult { body } => Self::ToolResult {
                 body: json_to_domain_value(body),
             },
-            MessagePayload::ToolError { kind, message, details } => Self::ToolError {
+            MessagePayload::ToolError {
+                kind,
+                message,
+                details,
+            } => Self::ToolError {
                 kind,
                 message,
                 details: json_opt_to_domain_value(details),
@@ -180,8 +190,7 @@ impl From<Message> for tau_domain::Message {
         m.id = i.id;
         m.parent_id = i.parent_id;
         m.created_at = if i.created_at_ms >= 0 {
-            std::time::UNIX_EPOCH
-                + core::time::Duration::from_millis(i.created_at_ms as u64)
+            std::time::UNIX_EPOCH + core::time::Duration::from_millis(i.created_at_ms as u64)
         } else {
             std::time::UNIX_EPOCH
         };
