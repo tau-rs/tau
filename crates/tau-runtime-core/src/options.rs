@@ -86,6 +86,18 @@ pub struct RunOptions {
     /// HwRandom on MCU). If `None`, the kernel uses a deterministic
     /// fixture — meaningful only for tests.
     pub random: Option<Arc<dyn tau_ports::RandomSource>>,
+
+    /// Capability resolver used to apply project-level overrides to a
+    /// package manifest's declared capabilities. Host shells supply
+    /// their impl — tau-runtime ships `TauPkgCapabilityResolver` over
+    /// `tau_pkg::capability_override::compute_effective`; Embassy/wasm
+    /// shells either ship a passthrough impl or leave this `None`.
+    ///
+    /// When `None` AND [`Self::granted_capabilities_override`] is also
+    /// `None`, the kernel uses the manifest capabilities unchanged
+    /// (no narrowing, no deny entries). This is the right default for
+    /// shells with no override system.
+    pub capability_resolver: Option<Arc<dyn tau_ports::CapabilityResolver>>,
 }
 
 impl core::fmt::Debug for RunOptions {
@@ -99,6 +111,13 @@ impl core::fmt::Debug for RunOptions {
             )
             .field("clock", &self.clock.as_ref().map(|_| "<Clock>"))
             .field("random", &self.random.as_ref().map(|_| "<RandomSource>"))
+            .field(
+                "capability_resolver",
+                &self
+                    .capability_resolver
+                    .as_ref()
+                    .map(|_| "<CapabilityResolver>"),
+            )
             .finish()
     }
 }
@@ -111,6 +130,7 @@ impl Default for RunOptions {
             granted_capabilities_override: None,
             clock: None,
             random: None,
+            capability_resolver: None,
         }
     }
 }

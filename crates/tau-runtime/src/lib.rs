@@ -19,6 +19,7 @@
 pub mod builder;
 pub(crate) mod capability;
 pub mod capability_override;
+pub mod capability_resolver_impl;
 pub mod process_gate;
 pub use process_gate::DynProcessCapabilityGate;
 pub(crate) mod dispatch;
