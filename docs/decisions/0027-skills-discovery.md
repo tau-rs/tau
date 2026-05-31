@@ -1,5 +1,9 @@
 # ADR-0027 — Skills discovery (Skills-3)
 
+> **Updated 2026-05-31 (β.1.4):** runtime references below are split
+> between `tau-runtime-core` (no_std + alloc kernel) and
+> `tau-runtime-tokio` (host shell).
+
 **Status:** Accepted 2026-05-13.
 **Branch / PR:** `feat/skills-3-discovery` (PR pending).
 **Spec:** `docs/superpowers/specs/2026-05-13-skills-3-discovery-design.md`.

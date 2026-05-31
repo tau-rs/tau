@@ -111,14 +111,15 @@ impl Recorder {
     }
 
     /// Record a frame. Emits a `tracing::event!` at INFO level on the
-    /// `tau::plugin::frame` target; if no [`PluginRecordingLayer`] is
+    /// `tau::plugin::frame` target; if no
+    /// [`tau_observe::layers::plugin_recording::PluginRecordingLayer`] is
     /// installed, this is a cheap no-op (tracing's event-emission cost
     /// degrades to a target-string compare when no layer matches).
     ///
     /// INFO (rather than TRACE) is chosen so the default
     /// `tau=info` filter doesn't short-circuit recording events via
     /// `Subscriber::max_level_hint` before the per-layer filter on
-    /// `PluginRecordingLayer` has a chance to evaluate them.
+    /// the recording layer has a chance to evaluate them.
     /// Recording is opt-in via `--record-protocol`; the level is an
     /// implementation detail of routing through the tracing
     /// infrastructure.

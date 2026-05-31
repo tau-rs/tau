@@ -8,9 +8,11 @@
 //!
 //! - [`Runtime::invoke_tool`] — single-tool direct dispatch; no LLM loop.
 //! - [`build_policy_denied_outcome`], [`agent_messages_to_provider_messages`],
-//!   [`flatten_content_to_string`], [`content_to_value`],
-//!   [`narrowed_capability_for_session`] — pure helpers used by the
-//!   streaming pump.
+//!   [`flatten_content_to_string`], [`content_to_value`] — pure helpers used
+//!   by the streaming pump.
+//! - `narrowed_capability_for_session` — stays in `tau-runtime-tokio::run`
+//!   until `capability_override` migrates to core (it consumes a
+//!   `tau-pkg::EffectiveCapability`, which tau-pkg owns).
 //!
 //! - `run`, `run_with_history`, `run_default`, `spawn_root_agent` —
 //!   **stay in the host shell** until `stream.rs` and the orchestration
@@ -617,8 +619,8 @@ impl Runtime {
 // ---------------------------------------------------------------------------
 
 /// Build the `RunOutcome::Failed { kind: PolicyDenied, .. }` returned
-/// when [`check_capabilities`] rejects a tool invocation. Centralizes
-/// the construction so the run loop's denial branch reads cleanly.
+/// when [`crate::capability::check_capabilities`] rejects a tool invocation.
+/// Centralizes the construction so the run loop's denial branch reads cleanly.
 pub fn build_policy_denied_outcome(
     denial: CapabilityDenial,
     all_messages: Vec<Message>,

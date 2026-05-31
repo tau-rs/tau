@@ -1,5 +1,10 @@
 # ADR-0034: Tau target triple registry
 
+> **Updated 2026-05-31 (β.1.4):** the triple registry on `tau-ports`
+> is unchanged; only the runtime crate split (`tau-runtime` →
+> `tau-runtime-core` + `tau-runtime-tokio`) affected the downstream
+> targets table.
+
 **Status:** Accepted
 **Date:** 2026-05-19
 **Deciders:** titouanlebocq

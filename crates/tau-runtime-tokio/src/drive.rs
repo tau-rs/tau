@@ -1,5 +1,6 @@
 //! Tokio-shell zero-config entry: drive a [`Runtime`] with the production
-//! [`TokioClock`] + [`OsRandom`] defaults wired into [`RunOptions`].
+//! [`TokioClock`] + [`OsRandom`] defaults wired into
+//! [`tau_runtime_core::options::RunOptions`].
 //!
 //! This is the canonical production entry point for the tokio host shell.
 //! [`crate::runtime_ext::spawn_root_agent_with_scope`] retains

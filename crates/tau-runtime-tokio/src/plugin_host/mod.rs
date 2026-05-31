@@ -244,7 +244,7 @@ pub enum RecordingSink {
 pub struct PluginHostOptions {
     /// How long the host waits for the plugin's `meta.handshake`
     /// response before declaring the plugin unresponsive (surfaces as
-    /// [`RuntimeError::PluginHandshakeFailed`] with reason
+    /// [`CoreRuntimeError::PluginHandshakeFailed`] with reason
     /// [`crate::error::HandshakeFailureReason::Timeout`]). Default
     /// `30s` — sized for the realistic worst-case process spawn +
     /// `dyld` resolution + tokio-runtime init under CI saturation
@@ -332,9 +332,9 @@ impl Default for PluginHostOptions {
 /// 4. Spawn the per-process read loop and stderr re-emit task.
 /// 5. Return an `IpcLlmBackend` wrapped in `Arc<dyn DynLlmBackend>`.
 ///
-/// On any of those steps failing, [`RuntimeError::PluginSpawnFailed`],
-/// [`RuntimeError::PluginHandshakeFailed`], or
-/// [`RuntimeError::PluginContractViolation`] is returned and the
+/// On any of those steps failing, [`crate::error::RuntimeError::PluginSpawnFailed`],
+/// [`CoreRuntimeError::PluginHandshakeFailed`], or
+/// [`CoreRuntimeError::PluginContractViolation`] is returned and the
 /// child process is reaped.
 pub async fn load_llm_backend(
     plugin: &LockedPlugin,
@@ -410,8 +410,8 @@ pub async fn load_llm_backend(
 /// 2. Issue a `tool.describe` RPC over the running process to capture
 ///    the [`tau_ports::ToolSpec`] eagerly (the kernel embeds it in
 ///    each `CompletionRequest.tools`).
-/// 3. Wrap the process + cached schema in
-///    [`ipc_tool::IpcTool`] and erase to `Arc<dyn DynTool>`.
+/// 3. Wrap the process + cached schema in `ipc_tool::IpcTool` (private)
+///    and erase to `Arc<dyn DynTool>`.
 pub async fn load_tool(
     plugin: &LockedPlugin,
     config: serde_json::Value,
@@ -508,7 +508,7 @@ pub async fn load_tool(
 /// Spawn + handshake against [`tau_domain::PortKind::Storage`]; the
 /// host doesn't require any specific methods at handshake time
 /// because the kernel doesn't route through `Storage` in v0.1 (per
-/// spec §1.1). The returned [`ipc_storage::IpcStorage`] dispatches
+/// spec §1.1). The returned `ipc_storage::IpcStorage` (private) dispatches
 /// `storage.{get,put,list,delete}` per call.
 pub async fn load_storage(
     plugin: &LockedPlugin,

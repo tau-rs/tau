@@ -1,5 +1,9 @@
 # ADR-0032: Relocate CapabilityOverride from tau-runtime to tau-pkg
 
+> **Updated 2026-05-31 (β.1.4):** `tau-runtime` has since split into
+> `tau-runtime-core` (kernel) + `tau-runtime-tokio` (host shell). The
+> `tau-pkg` location for `CapabilityOverride` is unchanged.
+
 **Status:** Accepted
 **Date:** 2026-05-17
 **Deciders:** titouanlebocq

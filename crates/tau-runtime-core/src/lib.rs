@@ -31,7 +31,8 @@ pub mod orchestration;
 pub mod outcome;
 #[cfg(feature = "tool-validation")]
 pub mod stream;
-pub(crate) mod vocabulary;
+#[doc(hidden)]
+pub mod vocabulary;
 
 #[cfg(feature = "tool-validation")]
 pub mod tool_args;

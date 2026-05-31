@@ -2,10 +2,11 @@
 //!
 //! Pre-β.1.3.5b, `Runtime` was a host-shell newtype wrapping
 //! `tau_runtime_core::Runtime` so inherent methods like `run_streaming`,
-//! `run_with_history`, `spawn_root_agent` could be defined here. As of
-//! β.1.3.5b those methods live on a [`crate::runtime_ext::RuntimeShellExt`]
-//! extension trait so the kernel `Runtime` type can be the canonical type
-//! shared with `no_std` host shells.
+//! `run_with_history`, `spawn_root_agent` could be defined here. Those
+//! methods now live as inherent methods on the kernel `Runtime` itself
+//! (β.1.3.5c); only the JSONL-persistence wiring of `spawn_root_agent`
+//! remained tokio-shell-specific and lives as a free function on
+//! [`crate::runtime_ext::spawn_root_agent_with_scope`].
 
 pub use crate::process_gate::DynProcessCapabilityGate;
 pub use tau_runtime_core::builder::{
