@@ -71,7 +71,7 @@ pub enum RuntimeError {
     /// Sandbox plan validation failed before plugin spawn.
     ///
     /// Raised by [`crate::plugin_host`] when
-    /// [`crate::sandbox::validate_plan_against_adapter`] returns one or
+    /// [`crate::process_gate::validate_plan_against_adapter`] returns one or
     /// more errors (Layer 3 enforcement at spawn time).
     #[non_exhaustive]
     #[error("plugin {plugin}: sandbox validation failed:\n{}",
@@ -80,13 +80,13 @@ pub enum RuntimeError {
         /// Plugin name (from `LockedPlugin::manifest.bin`).
         plugin: String,
         /// All validation errors collected in a single pass.
-        errors: Vec<crate::sandbox::SandboxValidationError>,
+        errors: Vec<crate::process_gate::SandboxValidationError>,
     },
 
     /// Sandbox adapter failed to wrap the spawn command.
     ///
     /// Raised by [`crate::plugin_host`] when
-    /// [`crate::sandbox::SandboxAdapter::wrap_spawn`] returns `Err`.
+    /// [`crate::process_gate::SandboxAdapter::wrap_spawn`] returns `Err`.
     #[non_exhaustive]
     #[error("plugin {plugin}: sandbox wrap-spawn failed: {source}")]
     SandboxWrapFailed {
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn sandbox_validation_failed_display_includes_all_errors() {
-        use crate::sandbox::SandboxValidationError;
+        use crate::process_gate::SandboxValidationError;
 
         let plan_json = serde_json::json!({
             "kind": "fs.read",

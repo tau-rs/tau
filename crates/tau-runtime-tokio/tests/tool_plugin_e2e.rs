@@ -43,7 +43,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, error::CoreRuntimeError, RunOutcome, Runtime};
+use tau_runtime_tokio::{builder::DynTool, error::CoreRuntimeError, RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -76,7 +76,7 @@ impl InProcessFsRead {
     }
 }
 
-// Mirror the `BoxFuture` alias from `tau_runtime::builder` — the DynTool
+// Mirror the `BoxFuture` alias from `tau_runtime_tokio::builder` — the DynTool
 // methods do NOT carry a `Send` bound (see the module-level comment in
 // builder.rs: "Boxed futures are deliberately *not* `Send`-bound").
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;

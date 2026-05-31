@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tau_domain::{Capability, Value};
 use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend, MockTool};
 use tau_ports::{SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec};
-use tau_runtime::Runtime;
+use tau_runtime_tokio::Runtime;
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
 use tracing::{Event, Id, Subscriber};
@@ -917,7 +917,7 @@ async fn tool_ipc_args_and_result_events_fire_for_invoke() {
     use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
     use tau_ports::fixtures::{make_tool_result, make_tool_spec};
     use tau_ports::ToolContent;
-    use tau_runtime::plugin_host::__internals::{DynAsyncWriter, IpcTool, PluginProcess};
+    use tau_runtime_tokio::plugin_host::__internals::{DynAsyncWriter, IpcTool, PluginProcess};
 
     let captured = CapturedEvents::default();
     let _guard = tracing_subscriber::registry()
@@ -947,7 +947,7 @@ async fn tool_ipc_args_and_result_events_fire_for_invoke() {
         "echo".into(),
         Value::Object(Default::default()),
     );
-    let ipc_tool: Arc<dyn tau_runtime::builder::DynTool> =
+    let ipc_tool: Arc<dyn tau_runtime_tokio::builder::DynTool> =
         Arc::new(IpcTool::new("echo".to_string(), spec, Vec::new(), process));
 
     // Turn 1: one tool_use (forces a 2nd turn).

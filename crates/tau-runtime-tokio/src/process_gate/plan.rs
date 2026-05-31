@@ -4,7 +4,7 @@
 //! manifest capabilities, project-level overrides, and execution-context
 //! hints. The returned plan is ready to be cross-checked against an
 //! adapter's `supported_shapes` via
-//! [`crate::sandbox::validate_plan_against_adapter`].
+//! [`crate::process_gate::validate_plan_against_adapter`].
 
 use tau_domain::Capability;
 use tau_ports::{CapabilityPlan, ResourceLimits, WorkingContext};

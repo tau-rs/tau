@@ -23,7 +23,7 @@ use tau_ports::fixtures::make_completion_response;
 use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, StopReason,
 };
-use tau_runtime::{RunOutcome, Runtime};
+use tau_runtime_tokio::{RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 

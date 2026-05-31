@@ -1,14 +1,14 @@
 //! Error types for sandbox adapter resolution.
 //!
 //! [`ResolutionError`] is the failure type returned by the resolver
-//! ([`crate::sandbox::resolver`]) when no adapter can satisfy the project's
+//! ([`crate::process_gate::resolver`]) when no adapter can satisfy the project's
 //! requirements.  [`ResolutionRejection`] records the per-adapter rejection
 //! reason collected during the resolver's filtering pass so that callers can
 //! render guided multi-option error messages (Task 8).
 //!
 //! # Usage
 //!
-//! The resolver walks [`crate::sandbox::registry::REGISTRY`], filters each
+//! The resolver walks [`crate::process_gate::registry::REGISTRY`], filters each
 //! adapter by platform / probe / tier / shape / plugin-tier-floor, and
 //! accumulates `(adapter_name, ResolutionRejection)` pairs for every adapter
 //! that does *not* pass.  When no adapter survives all filters the resolver

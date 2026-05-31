@@ -30,7 +30,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::task::JoinHandle;
 
 use super::recording::{Direction, RecorderHandle};
-use crate::sandbox::{validate_plan_against_adapter, SandboxAdapter, SandboxValidationError};
+use crate::process_gate::{validate_plan_against_adapter, SandboxAdapter, SandboxValidationError};
 
 /// Type-erased async writer used by [`PluginProcess`] for outbound
 /// frames. Boxing here lets the same struct wrap a real
@@ -764,7 +764,7 @@ mod tests {
         use tau_domain::fixtures as domain_fixtures;
         use tau_ports::CapabilityPlan;
 
-        use crate::sandbox::SandboxAdapter;
+        use crate::process_gate::SandboxAdapter;
 
         // A plan with a Custom capability that MockSandbox cannot handle.
         let custom_cap = domain_fixtures::cap_custom("mcp.tool.use");
@@ -806,7 +806,7 @@ mod tests {
     async fn spawn_calls_validate_plan_then_wrap_spawn() {
         use tau_ports::CapabilityPlan;
 
-        use crate::sandbox::SandboxAdapter;
+        use crate::process_gate::SandboxAdapter;
 
         // Empty plan — MockSandbox accepts this unconditionally.
         let plan = CapabilityPlan::new(vec![], None, None);

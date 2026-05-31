@@ -1,11 +1,11 @@
 //! Adapter ↔ target-triple satisfaction logic.
 //!
-//! Joins the static adapter registry (`crate::sandbox::registry::REGISTRY`)
+//! Joins the static adapter registry (`crate::process_gate::registry::REGISTRY`)
 //! with a `TargetTriple`. Pure-data; no async, no probe.
 
 use tau_ports::target::{AdapterFamily, TargetTriple};
 
-use crate::sandbox::registry::{AdapterRegistration, RegistryKind, REGISTRY};
+use crate::process_gate::registry::{AdapterRegistration, RegistryKind, REGISTRY};
 
 /// Map an internal `RegistryKind` to the user-facing `AdapterFamily`.
 ///

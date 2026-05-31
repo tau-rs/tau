@@ -1,6 +1,6 @@
 //! Integration tests for `tau-runtime`'s host-side handshake driver.
 //!
-//! Drives [`tau_runtime::plugin_host::__internals::drive_handshake`]
+//! Drives [`tau_runtime_tokio::plugin_host::__internals::drive_handshake`]
 //! against a [`FakeStdioPeer`] for each
 //! [`HandshakeFailureReason`] variant plus the happy path.
 
@@ -13,9 +13,9 @@ use tau_plugin_protocol::test_support::FakeStdioPeer;
 use tau_plugin_protocol::{
     HandshakeRequest, HandshakeResponse, MethodSchema, TraceContext, PROTOCOL_VERSION,
 };
-use tau_runtime::error::{CoreRuntimeError, HandshakeFailureReason};
-use tau_runtime::plugin_host::__internals::drive_handshake;
-use tau_runtime::RuntimeError;
+use tau_runtime_tokio::error::{CoreRuntimeError, HandshakeFailureReason};
+use tau_runtime_tokio::plugin_host::__internals::drive_handshake;
+use tau_runtime_tokio::RuntimeError;
 
 use assert_matches::assert_matches;
 

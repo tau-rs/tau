@@ -33,7 +33,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, error::CoreRuntimeError, RunEvent, RunOutcome, Runtime};
+use tau_runtime_tokio::{builder::DynTool, error::CoreRuntimeError, RunEvent, RunOutcome, Runtime};
 
 use assert_matches::assert_matches;
 use futures_core::Stream;

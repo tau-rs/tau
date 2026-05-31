@@ -28,10 +28,10 @@ use tau_domain::{fixtures as domain_fixtures, Capability, PluginKind, PluginMani
 use tau_pkg::LockedPlugin;
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_ports::{CapabilityPlan, CapabilityProbe};
-use tau_runtime::error::{CoreRuntimeError, RuntimeError};
-use tau_runtime::plugin_host::{self, PluginHostOptions};
-use tau_runtime::sandbox::registry::RegistryKind;
-use tau_runtime::sandbox::{resolve_adapter_forced, SandboxAdapter};
+use tau_runtime_tokio::error::{CoreRuntimeError, RuntimeError};
+use tau_runtime_tokio::plugin_host::{self, PluginHostOptions};
+use tau_runtime_tokio::process_gate::registry::RegistryKind;
+use tau_runtime_tokio::process_gate::{resolve_adapter_forced, SandboxAdapter};
 
 // ---------------------------------------------------------------------------
 // Fixtures

@@ -22,8 +22,8 @@ use tau_plugin_protocol::test_support::FakeStdioPeer;
 use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
 use tau_ports::fixtures::make_completion_response;
 use tau_ports::{CompletionRequest, StopReason};
-use tau_runtime::builder::DynLlmBackend;
-use tau_runtime::plugin_host::__internals::{
+use tau_runtime_tokio::builder::DynLlmBackend;
+use tau_runtime_tokio::plugin_host::__internals::{
     DynAsyncWriter, IpcLlmBackend, PluginProcess, Recorder,
 };
 use tokio::io::DuplexStream;

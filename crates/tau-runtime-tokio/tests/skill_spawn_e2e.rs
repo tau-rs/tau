@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use tau_pkg::lockfile::LockFile;
 use tau_ports::RunBudget;
-use tau_runtime::Runtime;
+use tau_runtime_tokio::Runtime;
 
 // ---------------------------------------------------------------------------
 // Process-global mutex to serialise cwd changes across tests.
@@ -237,7 +237,7 @@ async fn happy_path_parent_spawns_critic_and_receives_response() {
     let manifest = manifest_with_skill_spawn_cap("");
     let initial = common::user_message("please review my draft");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -314,7 +314,7 @@ async fn system_prompt_override_replaces_skill_default() {
     let manifest = manifest_with_skill_spawn_cap("");
     let initial = common::user_message("go");
 
-    tau_runtime::spawn_root_agent_with_scope(
+    tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -424,7 +424,7 @@ paths = ["/tmp/**"]
     let agent_def = common::agent_def("parent", "Parent Agent", "test-pkg@0.1.0", "test-llm");
     let initial = common::user_message("go");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -506,7 +506,7 @@ async fn spawn_denied_when_parent_lacks_skill_capability() {
 
     // spawn_root_agent must NOT error — PolicyDenied is RunOutcome::Failed,
     // not RuntimeError. The snapshot is returned normally.
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -588,7 +588,7 @@ allowed_skills = ["missing"]
     let manifest = unchecked.validate().expect("manifest must be valid");
     let initial = common::user_message("go");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -654,7 +654,7 @@ async fn install_path_missing_returns_is_error() {
     let manifest = manifest_with_skill_spawn_cap("");
     let initial = common::user_message("go");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,

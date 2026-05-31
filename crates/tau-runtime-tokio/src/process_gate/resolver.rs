@@ -32,9 +32,9 @@ use tau_sandbox_native::NativeSandbox;
 #[cfg(target_os = "windows")]
 use tau_sandbox_windows::WindowsSandbox;
 
-use crate::sandbox::passthrough::PassthroughSandbox;
-use crate::sandbox::registry::{detect_platform, AdapterRegistration, RegistryKind, REGISTRY};
-use crate::sandbox::resolution_error::{ResolutionError, ResolutionRejection};
+use crate::process_gate::passthrough::PassthroughSandbox;
+use crate::process_gate::registry::{detect_platform, AdapterRegistration, RegistryKind, REGISTRY};
+use crate::process_gate::resolution_error::{ResolutionError, ResolutionRejection};
 
 // ---------------------------------------------------------------------------
 // SandboxAdapter enum

@@ -8,7 +8,7 @@ use chrono::Utc;
 use proptest::prelude::*;
 use tau_domain::Capability;
 use tau_ports::{AgentId, RunBudget};
-use tau_runtime::orchestration::{
+use tau_runtime_tokio::orchestration::{
     check_capability_subset, BudgetWatchdog, OrchestrationError, TaskList,
 };
 
@@ -171,7 +171,7 @@ proptest! {
         limit in 1u64..1_000_000,
         overshoot in 1u64..1_000,
     ) {
-        let state = tau_runtime::orchestration::run_state::RunState::new(
+        let state = tau_runtime_tokio::orchestration::run_state::RunState::new(
             "r".into(),
             "a".into(),
             RunBudget { max_total_tokens: Some(limit), ..Default::default() },

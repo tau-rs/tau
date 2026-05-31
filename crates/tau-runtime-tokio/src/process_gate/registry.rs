@@ -2,7 +2,7 @@
 //!
 //! Each registered adapter declares: kind, supported platforms, supported
 //! tiers, supported shapes, priority, and a constructor function. The
-//! resolver ([`crate::sandbox::resolver::resolve_adapter`]) walks the
+//! resolver ([`crate::process_gate::resolver::resolve_adapter`]) walks the
 //! registry, filters by detected platform / probe / tier / shape /
 //! plugin-tier-floor, and picks the highest-priority survivor.
 //!

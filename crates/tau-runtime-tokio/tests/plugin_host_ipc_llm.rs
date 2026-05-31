@@ -1,5 +1,5 @@
 //! Integration tests for the host-side IPC adapters in
-//! [`tau_runtime::plugin_host::__internals`].
+//! [`tau_runtime_tokio::plugin_host::__internals`].
 //!
 //! These tests pair an [`IpcLlmBackend`] / [`IpcTool`] / [`IpcStorage`]
 //! with a [`FakeStdioPeer`] (test-driven plugin side)
@@ -35,8 +35,8 @@ use tau_plugin_protocol::test_support::FakeStdioPeer;
 use tau_plugin_protocol::{FramedReader, FramedWriter, FramerOptions};
 use tau_ports::fixtures::{make_completion_response, make_tool_result, make_tool_spec};
 use tau_ports::{CompletionChunk, CompletionRequest, Key, Namespace, StopReason, ToolContent};
-use tau_runtime::builder::{DynLlmBackend, DynStorage, DynTool};
-use tau_runtime::plugin_host::__internals::{
+use tau_runtime_tokio::builder::{DynLlmBackend, DynStorage, DynTool};
+use tau_runtime_tokio::plugin_host::__internals::{
     DynAsyncWriter, IpcLlmBackend, IpcStorage, IpcTool, PluginProcess,
 };
 use tokio::io::DuplexStream;

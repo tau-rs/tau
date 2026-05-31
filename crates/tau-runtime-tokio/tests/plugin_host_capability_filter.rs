@@ -24,8 +24,8 @@ use tau_ports::fixtures::{make_completion_response, make_tool_spec, MockTool};
 use tau_ports::{
     CompletionRequest, SessionContext, StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::plugin_host::__internals::{DynAsyncWriter, IpcLlmBackend, PluginProcess};
-use tau_runtime::{RunOutcome, Runtime};
+use tau_runtime_tokio::plugin_host::__internals::{DynAsyncWriter, IpcLlmBackend, PluginProcess};
+use tau_runtime_tokio::{RunOutcome, Runtime};
 use tokio::io::DuplexStream;
 
 /// Build a [`PluginProcess`] paired with a [`FakeStdioPeer`].
@@ -134,7 +134,7 @@ async fn capability_filter_applies_when_llm_backend_is_ipc() {
     // - `fs-read` (requires `fs.read /tmp/**` — filtered out because
     //   the agent's package declares no capabilities)
     let (process, mut peer) = paired_process("gpt-4");
-    let backend: Arc<dyn tau_runtime::builder::DynLlmBackend> =
+    let backend: Arc<dyn tau_runtime_tokio::builder::DynLlmBackend> =
         Arc::new(IpcLlmBackend::new("gpt-4".to_string(), process));
 
     let echo_spec = make_tool_spec(

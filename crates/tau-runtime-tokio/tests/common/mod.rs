@@ -115,10 +115,10 @@ pub fn user_message(content: &str) -> Message {
 /// because `run_streaming_inner` panics when `RunOptions.clock` or
 /// `RunOptions.random` is `None` — that contract is enforced since Task
 /// 3.7 routed all id-minting through the port helpers.
-pub fn run_options() -> tau_runtime::RunOptions {
+pub fn run_options() -> tau_runtime_tokio::RunOptions {
     use std::sync::Arc;
     use tau_ports::{DeterministicRandom, MockClock};
-    let mut opts = tau_runtime::RunOptions::default();
+    let mut opts = tau_runtime_tokio::RunOptions::default();
     opts.clock = Some(Arc::new(MockClock::new()));
     opts.random = Some(Arc::new(DeterministicRandom::seeded(42)));
     opts

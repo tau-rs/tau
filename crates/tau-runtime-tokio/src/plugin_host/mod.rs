@@ -272,7 +272,7 @@ pub struct PluginHostOptions {
     /// supplied to each `load_*` function. Both must be `Some` for sandbox
     /// enforcement to take effect — allowing callers to opt-out per plugin
     /// by passing `None` for the plan.
-    pub sandbox_adapter: Option<Arc<crate::sandbox::SandboxAdapter>>,
+    pub sandbox_adapter: Option<Arc<crate::process_gate::SandboxAdapter>>,
 
     /// CLI override: force passthrough adapter (no isolation). Set by
     /// `--no-sandbox` or `--sandbox passthrough`. When `true`, the resolver
@@ -282,7 +282,7 @@ pub struct PluginHostOptions {
     /// CLI override: force a specific adapter kind. Set by `--sandbox <kind>`
     /// (other than passthrough). When `Some`, the resolver instantiates and
     /// probes ONLY that kind. `None` = normal multi-adapter resolution.
-    pub force_adapter_kind: Option<crate::sandbox::registry::RegistryKind>,
+    pub force_adapter_kind: Option<crate::process_gate::registry::RegistryKind>,
 }
 
 impl Default for PluginHostOptions {

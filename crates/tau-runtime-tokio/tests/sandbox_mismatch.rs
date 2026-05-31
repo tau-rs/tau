@@ -5,7 +5,7 @@
 
 use tau_domain::Capability;
 use tau_ports::fixtures::MockCapabilityGate;
-use tau_runtime::sandbox::{build_plan, validate_plan_against_adapter};
+use tau_runtime_tokio::process_gate::{build_plan, validate_plan_against_adapter};
 
 fn plan_with_custom_capability() -> tau_ports::CapabilityPlan {
     let plan_json = serde_json::json!({

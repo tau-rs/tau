@@ -42,7 +42,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{builder::DynTool, error::CoreRuntimeError, CapabilityOverride, Runtime};
+use tau_runtime_tokio::{builder::DynTool, error::CoreRuntimeError, CapabilityOverride, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -257,7 +257,7 @@ paths = ["{package_glob}"]
 
     let mut options = common::run_options();
     options.capability_resolver = Some(
-        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+        tau_runtime_tokio::capability_resolver_impl::resolver_from_overrides(vec![
             CapabilityOverride::new(
                 "fs.read".to_string(),
                 Some(vec![narrow_allow]),
@@ -332,7 +332,7 @@ paths = ["{package_glob}"]
 
     let mut options = common::run_options();
     options.capability_resolver = Some(
-        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+        tau_runtime_tokio::capability_resolver_impl::resolver_from_overrides(vec![
             CapabilityOverride::new(
                 "fs.read".to_string(),
                 None, // allow unchanged
@@ -397,7 +397,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
 
     let mut options = common::run_options();
     options.capability_resolver = Some(
-        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+        tau_runtime_tokio::capability_resolver_impl::resolver_from_overrides(vec![
             CapabilityOverride::new(
                 "fs.read".to_string(),
                 Some(vec!["/etc/**".to_string()]), // not a subset of /var/...
