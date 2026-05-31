@@ -21,8 +21,11 @@ use crate::ids::ToolId;
 /// pre-hash, etc.) lands here.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CapabilityRequirements {
-    /// Declared capabilities; order is whatever the source provides
-    /// (canonicalization sorts during hashing — see D-6).
+    /// Declared capabilities; order is taken from the source TOML verbatim
+    /// (capability list order is taken from the source TOML verbatim; two
+    /// permuted capability arrays produce different canonical bytes. If
+    /// order-independent hashing becomes required, sort in the lowering
+    /// parse stage — `Capability` needs `Ord` first.)
     pub declared: Vec<Capability>,
 }
 
