@@ -214,7 +214,7 @@ pub async fn run(
             max_total_agents: args.max_total_agents,
         };
         let runtime_arc = std::sync::Arc::new(runtime);
-        let snapshot = tau_runtime::spawn_root_agent_with_scope(
+        let snapshot = tau_runtime::drive(
             runtime_arc.clone(),
             agent_def,
             manifest,
