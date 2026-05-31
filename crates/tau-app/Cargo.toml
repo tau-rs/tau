@@ -10,7 +10,7 @@ authors.workspace = true
 
 [dependencies]
 # Workspace crates
-tau-runtime = { workspace = true }
+tau-runtime-tokio = { workspace = true }
 tau-domain = { workspace = true }
 tau-pkg = { workspace = true }
 tau-plugin-protocol = { workspace = true }
@@ -36,5 +36,5 @@ libc = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true, features = ["json"] }
 tau-ports = { workspace = true, features = ["test-fixtures"] }
-tau-runtime = { workspace = true }
+tau-runtime-tokio = { workspace = true }
 tempfile = { workspace = true }

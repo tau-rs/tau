@@ -3264,7 +3264,7 @@ dependencies = [
  "tau-pkg",
  "tau-plugin-protocol",
  "tau-ports",
- "tau-runtime",
+ "tau-runtime-tokio",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3303,7 +3303,7 @@ dependencies = [
  "tau-pkg",
  "tau-plugin-protocol",
  "tau-ports",
- "tau-runtime",
+ "tau-runtime-tokio",
  "tau-workflow",
  "tempfile",
  "termimad",
@@ -3399,7 +3399,7 @@ dependencies = [
  "tau-plugin-protocol",
  "tau-plugin-test-support",
  "tau-ports",
- "tau-runtime",
+ "tau-runtime-tokio",
  "tau-sandbox-container",
  "tau-sandbox-native",
  "tempfile",
@@ -3486,7 +3486,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "tau-runtime"
+name = "tau-runtime-core"
+version = "0.0.0"
+dependencies = [
+ "assert_matches",
+ "async-stream",
+ "chrono",
+ "foldhash 0.1.5",
+ "futures-core",
+ "futures-executor",
+ "globset",
+ "hashbrown 0.15.5",
+ "jsonschema",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tau-domain",
+ "tau-pkg",
+ "tau-ports",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+ "ulid",
+ "uuid",
+]
+
+[[package]]
+name = "tau-runtime-tokio"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
@@ -3520,33 +3547,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "ulid",
- "uuid",
-]
-
-[[package]]
-name = "tau-runtime-core"
-version = "0.0.0"
-dependencies = [
- "assert_matches",
- "async-stream",
- "chrono",
- "foldhash 0.1.5",
- "futures-core",
- "futures-executor",
- "globset",
- "hashbrown 0.15.5",
- "jsonschema",
- "proptest",
- "serde",
- "serde_json",
- "tau-domain",
- "tau-pkg",
- "tau-ports",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tracing",
  "ulid",
  "uuid",
 ]
@@ -3633,7 +3633,7 @@ dependencies = [
  "tau-observe",
  "tau-pkg",
  "tau-ports",
- "tau-runtime",
+ "tau-runtime-tokio",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

@@ -19,7 +19,7 @@ tau-domain = { path = "../tau-domain", features = ["serde"] }
 tau-pkg = { path = "../tau-pkg" }
 tau-plugin-protocol = { path = "../tau-plugin-protocol" }
 tau-ports = { path = "../tau-ports" }
-tau-runtime = { path = "../tau-runtime" }
+tau-runtime-tokio = { path = "../tau-runtime-tokio" }
 tau-sandbox-container = { path = "../tau-sandbox-container" }
 serde_json = "1"
 thiserror = { workspace = true }

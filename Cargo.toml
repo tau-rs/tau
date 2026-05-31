@@ -8,7 +8,7 @@ members = [
     "crates/tau-pkg",
     "crates/tau-runtime-core",
     "crates/tau-observe",
-    "crates/tau-runtime",
+    "crates/tau-runtime-tokio",
     "crates/tau-cli",
     "crates/tau-plugin-protocol",
     "crates/tau-plugin-sdk",
@@ -53,7 +53,7 @@ tau-domain          = { path = "crates/tau-domain", version = "0.0.0" }
 tau-ports           = { path = "crates/tau-ports",  version = "0.0.0" }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
 tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0" }
-tau-runtime         = { path = "crates/tau-runtime", version = "0.0.0" }
+tau-runtime-tokio   = { path = "crates/tau-runtime-tokio", version = "0.0.0" }
 tau-plugin-protocol = { path = "crates/tau-plugin-protocol", version = "0.0.0" }
 tau-plugin-sdk      = { path = "crates/tau-plugin-sdk", version = "0.0.0" }
 tau-plugin-test-support = { path = "crates/tau-plugin-test-support", version = "0.0.0" }

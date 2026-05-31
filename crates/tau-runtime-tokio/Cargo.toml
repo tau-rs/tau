@@ -1,6 +1,6 @@
 [package]
-name = "tau-runtime"
-description = "Public Rust API surface for embedding tau as a library."
+name = "tau-runtime-tokio"
+description = "Tokio host shell for tau-runtime-core: process_gate adapters, plugin_host, persistence, and TokioClock/OsRandom defaults."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
