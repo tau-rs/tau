@@ -140,16 +140,15 @@ fn make_tool_spec(name: &str, description: &str, input_schema: &serde_json::Valu
         "description": description,
         "input_schema": input_schema_domain,
     });
-    serde_json::from_value(json)
-        .unwrap_or_else(|_| {
-            // Absolute fallback: empty-schema spec so the tool still registers.
-            let fallback = serde_json::json!({
-                "name": name,
-                "description": description,
-                "input_schema": tau_domain::Value::Object(Default::default()),
-            });
-            serde_json::from_value(fallback).expect("fallback ToolSpec must deserialize")
-        })
+    serde_json::from_value(json).unwrap_or_else(|_| {
+        // Absolute fallback: empty-schema spec so the tool still registers.
+        let fallback = serde_json::json!({
+            "name": name,
+            "description": description,
+            "input_schema": tau_domain::Value::Object(Default::default()),
+        });
+        serde_json::from_value(fallback).expect("fallback ToolSpec must deserialize")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -213,15 +212,17 @@ where
 
     // 3. Register each tool in agent.tool_refs as a dispatcher-delegating wrapper.
     for tool_id in &agent.tool_refs {
-        let ir_tool = module.workflow.tools.get(tool_id).ok_or_else(|| {
-            RuntimeError::Internal {
+        let ir_tool = module
+            .workflow
+            .tools
+            .get(tool_id)
+            .ok_or_else(|| RuntimeError::Internal {
                 message: alloc::format!(
                     "agent {:?} references tool {:?} not in workflow.tools",
                     agent.id.0,
                     tool_id.0,
                 ),
-            }
-        })?;
+            })?;
 
         let spec = make_tool_spec(
             &ir_tool.spec.name,

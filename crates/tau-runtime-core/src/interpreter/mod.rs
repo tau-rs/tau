@@ -40,12 +40,13 @@ pub async fn run_ir<D>(
 where
     D: tool_dispatch::ToolDispatcher + Send + Sync + 'static,
 {
-    let agent_node = module
-        .workflow
-        .agents
-        .get(entry)
-        .ok_or_else(|| RuntimeError::AgentNotFound {
-            agent: entry.0.clone(),
-        })?;
+    let agent_node =
+        module
+            .workflow
+            .agents
+            .get(entry)
+            .ok_or_else(|| RuntimeError::AgentNotFound {
+                agent: entry.0.clone(),
+            })?;
     agent_loop::run_agent(module, agent_node, dispatcher, initial_messages).await
 }

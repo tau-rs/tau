@@ -10,13 +10,13 @@ use tau_ir::{
     Agent, AgentBudget, AgentId, CapabilityRequirements, CapabilityTable, IrFormatVersion,
     IrModule, NativeFnRef, Tool, ToolId, ToolImpl, Workflow,
 };
-use tau_ports::target::registry as target_registry;
-use tau_runtime_core::error::RuntimeError;
-use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
-use tau_runtime_core::interpreter::run_ir;
-use tau_runtime_core::outcome::RunOutcome;
-use tau_runtime_core::builder::DynLlmBackend;
 use tau_ports::fixtures::MockLlmBackend;
+use tau_ports::target::registry as target_registry;
+use tau_runtime_core::builder::DynLlmBackend;
+use tau_runtime_core::error::RuntimeError;
+use tau_runtime_core::interpreter::run_ir;
+use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
+use tau_runtime_core::outcome::RunOutcome;
 
 struct StubDispatcher {
     backend: Arc<dyn DynLlmBackend>,
@@ -35,7 +35,13 @@ impl ToolDispatcher for StubDispatcher {
         &'a self,
         _tool_id: &'a ToolId,
         _args: &'a serde_json::Value,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<ToolInvocationResult, RuntimeError>>
+                + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
             Ok(ToolInvocationResult {
                 body: Some(serde_json::json!({"ok": true})),
