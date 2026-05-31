@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tau_domain::{PluginKind, PluginManifest, PortKind};
 use tau_pkg::LockedPlugin;
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::plugin_host::{self, PluginHostOptions};
+use tau_runtime_tokio::plugin_host::{self, PluginHostOptions};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handshake_completes_under_one_second_in_release() {

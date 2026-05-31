@@ -8,7 +8,7 @@
 //! never installs the plugin into a lockfile; the binary path is the
 //! only contract.
 //!
-//! Wire protocol details mirror [`tau_runtime::plugin_host`] but the
+//! Wire protocol details mirror [`tau_runtime_tokio::plugin_host`] but the
 //! implementation is intentionally standalone: this command exists to
 //! probe arbitrary binaries that aren't necessarily wired into a
 //! project, so we don't reach for the `LockedPlugin`-keyed loader.

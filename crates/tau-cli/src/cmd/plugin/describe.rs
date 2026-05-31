@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use tau_pkg::{LockFile, Scope};
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::plugin_host::{self, PluginHostOptions, RecordingSink};
+use tau_runtime_tokio::plugin_host::{self, PluginHostOptions, RecordingSink};
 
 use crate::cli::PluginDescribeArgs;
 use crate::output::Output;

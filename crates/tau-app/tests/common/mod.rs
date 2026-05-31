@@ -54,7 +54,7 @@ impl Harness {
         // wire in a mock backend that is never actually called in handshake tests.
         let backend = MockLlmBackend::new("mock-llm");
         let runtime = Arc::new(
-            tau_runtime::Runtime::builder()
+            tau_runtime_tokio::Runtime::builder()
                 .with_llm_backend(backend)
                 .build()
                 .expect("build runtime"),

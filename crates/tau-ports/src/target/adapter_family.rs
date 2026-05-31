@@ -8,7 +8,7 @@ use crate::target::parse::ParseError;
 
 /// Sandbox adapter family identified in a `TargetTriple`.
 ///
-/// Mirrors `tau_runtime::sandbox::registry::RegistryKind` plus a `Wasi`
+/// Mirrors `tau_runtime_tokio::process_gate::registry::RegistryKind` plus a `Wasi`
 /// variant reserved for future WASI sandbox adapters (no impl in v1).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

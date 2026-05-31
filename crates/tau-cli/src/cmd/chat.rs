@@ -4,8 +4,8 @@
 //!
 //! Mirrors `cmd::run`'s setup (project tau.toml → resolved
 //! `(AgentDefinition, PackageManifest)` → spawned plugin processes →
-//! [`tau_runtime::Runtime`]), then enters a rustyline-driven REPL. Each user prompt
-//! is sent through [`tau_runtime::Runtime::run_with_history`] so the conversation
+//! [`tau_runtime_tokio::Runtime`]), then enters a rustyline-driven REPL. Each user prompt
+//! is sent through [`tau_runtime_tokio::Runtime::run_with_history`] so the conversation
 //! accumulates across turns; tool dispatch and capability filtering
 //! are inherited from the kernel, not re-implemented here.
 //!
@@ -13,7 +13,7 @@
 //!
 //! Per spec §11: plugin processes spawn once at REPL entry and stay
 //! alive for the duration of the session (multiplexed long-lived
-//! lifecycle). On `/exit` (or EOF / Ctrl-D), the [`tau_runtime::Runtime`] is
+//! lifecycle). On `/exit` (or EOF / Ctrl-D), the [`tau_runtime_tokio::Runtime`] is
 //! dropped, which drops the `Arc<dyn DynLlmBackend>` and per-tool
 //! `Arc<dyn DynTool>`, which drops the underlying `PluginProcess` —
 //! and `kill_on_drop` ensures the plugin subprocess exits cleanly.
@@ -51,8 +51,8 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::stream::RunEvent;
-use tau_runtime::{RunOptions, RunOutcome, TokenUsage};
+use tau_runtime_tokio::stream::RunEvent;
+use tau_runtime_tokio::{RunOptions, RunOutcome, TokenUsage};
 
 use crate::cli::ChatArgs;
 use crate::cmd::plugin_loader;
@@ -117,7 +117,7 @@ pub async fn run(
     args: &ChatArgs,
     record_protocol: Option<PathBuf>,
     force_passthrough: bool,
-    force_adapter_kind: Option<tau_runtime::sandbox::registry::RegistryKind>,
+    force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
     if output.is_json() {
@@ -155,7 +155,7 @@ pub async fn run(
     }
     if !entry.capability_overrides.is_empty() {
         options.capability_resolver = Some(
-            tau_runtime::capability_resolver_impl::resolver_from_overrides(
+            tau_runtime_tokio::capability_resolver_impl::resolver_from_overrides(
                 entry.capability_overrides.clone(),
             ),
         );
@@ -323,7 +323,7 @@ async fn run_repl(
     session_writer_arg: Option<crate::session::SessionWriter>,
     initial_history: Vec<Message>,
     initial_turn_counter: u32,
-    runtime: &tau_runtime::Runtime,
+    runtime: &tau_runtime_tokio::Runtime,
     output: &mut Output,
 ) -> anyhow::Result<()> {
     let is_resumed = !initial_history.is_empty();

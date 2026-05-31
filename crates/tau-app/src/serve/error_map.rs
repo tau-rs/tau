@@ -1,4 +1,4 @@
-//! Map [`tau_runtime::RuntimeError`] variants to JSON-RPC error
+//! Map [`tau_runtime_tokio::RuntimeError`] variants to JSON-RPC error
 //! objects with structured `data` payloads.
 //!
 //! Per spec §6. Each `RuntimeError` variant maps to one custom code
@@ -7,8 +7,8 @@
 use super::error_codes;
 use super::protocol::ErrorObject;
 use serde_json::json;
-use tau_runtime::error::CoreRuntimeError;
-use tau_runtime::RuntimeError;
+use tau_runtime_tokio::error::CoreRuntimeError;
+use tau_runtime_tokio::RuntimeError;
 
 /// Map any `RuntimeError` to an `ErrorObject`.
 pub fn from_runtime_error(err: &RuntimeError) -> ErrorObject {

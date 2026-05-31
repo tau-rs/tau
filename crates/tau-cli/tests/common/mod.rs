@@ -365,7 +365,7 @@ fn toml_path_string(p: &Path) -> String {
 /// [`setup_project_with_installed_agent`]: the lockfile entries it
 /// writes carry a `[package.plugin]` table that matches the schema
 /// `tau-pkg::install` writes during a real install, so
-/// `tau_runtime::plugin_host::load_*` can spawn the binaries
+/// `tau_runtime_tokio::plugin_host::load_*` can spawn the binaries
 /// straight from the recorded paths.
 ///
 /// The project tau.toml is written to `<root>/tau.toml` with the

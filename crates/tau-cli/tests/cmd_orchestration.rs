@@ -34,7 +34,7 @@ mod common;
 use std::sync::Arc;
 
 use tau_ports::RunBudget;
-use tau_runtime::Runtime;
+use tau_runtime_tokio::Runtime;
 
 // ---------------------------------------------------------------------------
 // Shared manifest helpers
@@ -116,7 +116,7 @@ async fn pattern_a_linear_pipeline() {
     );
     let initial = common::user_message("start the research pipeline");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -217,7 +217,7 @@ async fn pattern_b_worker_pool() {
     let agent_def = common::agent_def("planner", "Planner", "orchestrator@0.1.0", "test-llm");
     let initial = common::user_message("spin up the worker pool");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -301,7 +301,7 @@ async fn pattern_c_supervisor_critic() {
     let agent_def = common::agent_def("supervisor", "Supervisor", "orchestrator@0.1.0", "test-llm");
     let initial = common::user_message("start the supervisor-critic loop");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -416,7 +416,7 @@ async fn pattern_d_hierarchical_team_lead() {
     let agent_def = common::agent_def("pm", "Program Manager", "orchestrator@0.1.0", "test-llm");
     let initial = common::user_message("deliver the feature");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -498,7 +498,7 @@ async fn pattern_e_plan_revise_loop() {
     );
     let initial = common::user_message("start the plan-revise loop");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -610,7 +610,7 @@ async fn task_list_create_claim_complete_flow() {
     );
     let initial = common::user_message("create, claim, and complete one task");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,
@@ -703,7 +703,7 @@ async fn run_note_write_flow() {
     );
     let initial = common::user_message("jot down some notes");
 
-    let snapshot = tau_runtime::spawn_root_agent_with_scope(
+    let snapshot = tau_runtime_tokio::spawn_root_agent_with_scope(
         runtime,
         agent_def,
         manifest,

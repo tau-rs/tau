@@ -48,7 +48,7 @@ impl PlatformSet {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::sandbox::registry::PlatformSet;
+    /// use tau_runtime_tokio::process_gate::registry::PlatformSet;
     ///
     /// assert!(PlatformSet::Any.includes("linux"));
     /// assert!(PlatformSet::Any.includes("windows"));
@@ -76,7 +76,7 @@ impl PlatformSet {
 /// # Example
 ///
 /// ```
-/// use tau_runtime::sandbox::registry::detect_platform;
+/// use tau_runtime_tokio::process_gate::registry::detect_platform;
 ///
 /// let p = detect_platform();
 /// assert!(matches!(p, "linux" | "macos" | "windows" | "unknown"));
@@ -122,7 +122,7 @@ impl RegistryKind {
     /// # Example
     ///
     /// ```
-    /// use tau_runtime::sandbox::registry::RegistryKind;
+    /// use tau_runtime_tokio::process_gate::registry::RegistryKind;
     ///
     /// assert_eq!(RegistryKind::Native.name(), "native");
     /// assert_eq!(RegistryKind::Container.name(), "container");

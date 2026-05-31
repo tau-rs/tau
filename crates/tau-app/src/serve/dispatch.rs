@@ -26,7 +26,7 @@ pub struct Dispatcher {
     /// Loaded project. Shared, read-only.
     pub project: Arc<Project>,
     /// The tau runtime. Shared, used by run executors.
-    pub runtime: Arc<tau_runtime::Runtime>,
+    pub runtime: Arc<tau_runtime_tokio::Runtime>,
     /// Atomic handshake state.
     pub handshake: HandshakeState,
     /// Cancel-token registry indexed by RequestId.

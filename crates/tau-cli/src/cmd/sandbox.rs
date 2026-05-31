@@ -13,7 +13,7 @@ pub async fn run(args: &SandboxArgs, output: &mut Output) -> anyhow::Result<()> 
 
 async fn run_status(output: &mut Output) -> anyhow::Result<()> {
     use tau_pkg::scope::{SandboxRequirements, ScopeConfig};
-    use tau_runtime::sandbox::registry::{detect_platform, REGISTRY};
+    use tau_runtime_tokio::process_gate::registry::{detect_platform, REGISTRY};
 
     let platform = detect_platform();
 
@@ -35,7 +35,7 @@ async fn run_status(output: &mut Output) -> anyhow::Result<()> {
         let status = if !entry.platforms.includes(platform) {
             "not applicable on this platform".to_string()
         } else {
-            match tau_runtime::sandbox::instantiate_for_probe(entry.kind) {
+            match tau_runtime_tokio::process_gate::instantiate_for_probe(entry.kind) {
                 Ok(adapter) => match adapter.probe().await {
                     tau_ports::CapabilityProbe::Available { tier, details } => {
                         if details.is_empty() {
@@ -100,7 +100,7 @@ async fn run_status(output: &mut Output) -> anyhow::Result<()> {
             output.human("resolution:")?;
             let plugin_reqs: Vec<tau_domain::PluginSandboxRequirements> = vec![];
             let resolution =
-                tau_runtime::sandbox::resolve_adapter(&cfg.sandbox, &plugin_reqs).await;
+                tau_runtime_tokio::process_gate::resolve_adapter(&cfg.sandbox, &plugin_reqs).await;
             match resolution {
                 Ok(adapter) => {
                     output.human(&format!("  selected adapter: {}", adapter.name()))?;
@@ -116,7 +116,7 @@ async fn run_status(output: &mut Output) -> anyhow::Result<()> {
             output.human("")?;
             output.human("resolution:")?;
             let plugin_reqs: Vec<tau_domain::PluginSandboxRequirements> = vec![];
-            let resolution = tau_runtime::sandbox::resolve_adapter(
+            let resolution = tau_runtime_tokio::process_gate::resolve_adapter(
                 &SandboxRequirements::default(),
                 &plugin_reqs,
             )
@@ -200,7 +200,7 @@ async fn run_interactive_prompt(
 ) -> anyhow::Result<tau_pkg::scope::SandboxRequiredTier> {
     use std::io::{BufRead, Write};
     use tau_pkg::scope::SandboxRequiredTier;
-    use tau_runtime::sandbox::registry::{detect_platform, REGISTRY};
+    use tau_runtime_tokio::process_gate::registry::{detect_platform, REGISTRY};
 
     let platform = detect_platform();
     let mut intro = String::new();
@@ -211,7 +211,7 @@ async fn run_interactive_prompt(
         let mark = if !entry.platforms.includes(platform) {
             "✗ (not applicable)"
         } else {
-            match tau_runtime::sandbox::instantiate_for_probe(entry.kind) {
+            match tau_runtime_tokio::process_gate::instantiate_for_probe(entry.kind) {
                 Ok(adapter) => match adapter.probe().await {
                     tau_ports::CapabilityProbe::Available { .. } => "✓ available",
                     _ => "✗ unavailable",

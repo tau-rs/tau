@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 
 use tau_pkg::sandbox_check::CrossCheckError;
 use tau_pkg::InstallError;
-use tau_runtime::sandbox::{ResolutionError, ResolutionRejection};
+use tau_runtime_tokio::process_gate::{ResolutionError, ResolutionRejection};
 
 /// Render a [`ResolutionError`] as a guided multi-option error message.
 ///
