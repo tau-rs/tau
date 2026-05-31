@@ -11,8 +11,7 @@ fn sample_module() -> IrModule {
         target: registry::list_available()
             .next()
             .expect("at least one available target")
-            .triple
-            .clone(),
+            .triple,
         workflow: Workflow::default(),
     }
 }
