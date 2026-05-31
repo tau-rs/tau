@@ -273,6 +273,19 @@ pub enum RuntimeError {
         reason: String,
     },
 
+    /// An `IrModule` entry agent was requested but no agent with that id
+    /// exists in the workflow's `agents` map.
+    #[error("agent `{agent}` not found in IrModule workflow")]
+    AgentNotFound {
+        /// The requested agent id.
+        agent: String,
+    },
+
+    /// A `Node::Subflow` edge with `SubflowKind::Compose` was encountered.
+    /// v0 supports only `SubflowKind::Spawn`; compose is deferred to β.7.
+    #[error("SubflowKind::Compose is not supported in the v0 interpreter")]
+    UnsupportedSubflowCompose,
+
     /// Catch-all for invariant violations / unexpected states.
     /// See: [escape-hatches.md#runtimeerror-internal](../docs/explanation/escape-hatches.md#runtimeerror-internal).
     #[error("internal: {message}")]
