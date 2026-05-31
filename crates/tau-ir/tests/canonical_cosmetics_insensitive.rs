@@ -21,11 +21,7 @@ fn lower(toml: &str, target: &tau_ports::target::TargetTriple) -> tau_ir::IrModu
 
 #[test]
 fn cosmetic_permutations_produce_same_bytes() {
-    let target = registry::list_available()
-        .next()
-        .expect("target")
-        .triple
-        .clone();
+    let target = registry::list_available().next().expect("target").triple;
 
     let a = r#"
         [project]
