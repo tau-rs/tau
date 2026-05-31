@@ -23,6 +23,8 @@ pub mod capability;
 pub mod context;
 pub mod error;
 pub mod ids;
+#[cfg(feature = "with-std-adapters")]
+pub mod lower;
 pub mod message;
 pub mod module;
 pub mod node;
