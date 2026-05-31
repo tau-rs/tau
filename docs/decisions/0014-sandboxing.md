@@ -1,5 +1,14 @@
 # ADR-0014: Sandboxing — hexagonal port + Linux native and container adapters
 
+> **Updated 2026-05-31 (β.1.4):** the `Sandbox*` trait family on
+> `tau-ports` renamed to `CapabilityGate*` (β.1.1, ADR-0035) and the
+> `tau-runtime/src/sandbox/` module renamed to
+> `tau-runtime-tokio/src/process_gate/` (β.1.4). Concrete adapter
+> crates (`tau-sandbox-{native,container,darwin,windows}`) keep their
+> names. The runtime kernel itself split into `tau-runtime-core` +
+> `tau-runtime-tokio`; the sandbox/process-gate machinery lives in the
+> tokio host shell.
+
 **Status:** Accepted
 **Date:** 2026-05-03
 **Deciders:** Titouan Lebocq

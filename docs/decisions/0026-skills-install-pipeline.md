@@ -1,5 +1,9 @@
 # ADR-0026 — Skills install pipeline (Skills-2)
 
+> **Updated 2026-05-31 (β.1.4):** runtime references below are split
+> between `tau-runtime-core` (no_std + alloc kernel) and
+> `tau-runtime-tokio` (host shell).
+
 **Status:** Accepted 2026-05-13.
 **Branch / PR:** `feat/skills-2-install-pipeline` (PR pending).
 **Spec:** `docs/superpowers/specs/2026-05-12-skills-2-install-pipeline-design.md`.

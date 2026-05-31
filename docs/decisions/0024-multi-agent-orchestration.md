@@ -1,5 +1,11 @@
 # ADR-0024 — Multi-agent orchestration primitives
 
+> **Updated 2026-05-31 (β.1.4):** the kernel split into `tau-runtime-core`
+> (no_std + alloc) + `tau-runtime-tokio` (host shell). Orchestration
+> primitives described below now live in
+> `tau_runtime_core::orchestration`; the tokio mpsc `TraceSubscriber`
+> impl lives in `tau_runtime_tokio::orchestration::trace_mpsc`.
+
 **Status:** Accepted 2026-05-12.
 **Branch / PR:** `feat/multi-agent-orchestration` (PR pending).
 **Spec:** `docs/superpowers/specs/2026-05-12-multi-agent-orchestration-design.md`.

@@ -1,5 +1,9 @@
 # ADR-0030 — Skills reference packages + user docs (Skills-6)
 
+> **Updated 2026-05-31 (β.1.4):** runtime references below are split
+> between `tau-runtime-core` (no_std + alloc kernel) and
+> `tau-runtime-tokio` (host shell).
+
 **Status:** Accepted 2026-05-16.
 **Branch / PR:** `feat/skills-6-reference-packages` (PR #115).
 **Spec:** `docs/superpowers/specs/2026-05-16-skills-6-reference-packages-design.md`.

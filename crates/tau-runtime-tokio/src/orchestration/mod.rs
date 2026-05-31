@@ -34,7 +34,8 @@ pub use tau_runtime_core::orchestration::{NoopTraceSubscriber, TraceStream, Trac
 /// and tokio::spawn which are not available in embassy/wasm shells.
 pub mod persistence;
 
-/// Tokio mpsc implementation of TraceSubscriber.
-/// Wraps tokio::sync::mpsc::UnboundedSender<TraceEvent> to implement the
-/// core TraceSubscriber trait.
+/// Tokio mpsc implementation of `TraceSubscriber`.
+///
+/// Wraps `tokio::sync::mpsc::UnboundedSender<TraceEvent>` to implement
+/// the core `TraceSubscriber` trait.
 pub mod trace_mpsc;

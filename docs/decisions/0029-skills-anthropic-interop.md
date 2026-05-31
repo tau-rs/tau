@@ -1,5 +1,9 @@
 # ADR-0029 — Skills Anthropic interop (Skills-5)
 
+> **Updated 2026-05-31 (β.1.4):** runtime references below are split
+> between `tau-runtime-core` (no_std + alloc kernel) and
+> `tau-runtime-tokio` (host shell).
+
 **Status:** Accepted 2026-05-16.
 **Branch / PR:** `feat/skills-5-anthropic-interop-design` (PR #102).
 **Spec:** `docs/superpowers/specs/2026-05-15-skills-5-anthropic-interop-design.md`.

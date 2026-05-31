@@ -268,8 +268,8 @@ impl<T: Storage + 'static> DynStorage for T {
 /// methods). Stored in registries that don't care about process
 /// extensions (wasm host, MCU, MCP facilitator).
 ///
-/// The process-spawn extension ([`DynProcessCapabilityGate`]) lives in
-/// `tau-runtime::process_gate` and depends on `std::process::Command`.
+/// The process-spawn extension (`DynProcessCapabilityGate`) lives in
+/// `tau_runtime_tokio::process_gate` and depends on `std::process::Command`.
 pub trait DynCapabilityGate: Send + Sync {
     /// Plugin-visible name.
     fn name(&self) -> &str;
@@ -514,7 +514,7 @@ impl RuntimeBuilder {
     /// Register a pre-boxed [`Arc<dyn DynLlmBackend>`] instance.
     ///
     /// This is the entry point used by the plugin host: the
-    /// [`tau_runtime::plugin_host::load_llm_backend`] return type is
+    /// `tau_runtime_tokio::plugin_host::load_llm_backend` return type is
     /// exactly `Arc<dyn DynLlmBackend>` because the IPC adapter
     /// (`IpcLlmBackend`) only implements [`DynLlmBackend`]'s
     /// dyn-compatible signature, not the native [`LlmBackend`] trait.

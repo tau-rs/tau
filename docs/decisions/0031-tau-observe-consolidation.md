@@ -1,5 +1,11 @@
 # ADR-0031: `tau-observe` as the canonical tracing-subscriber init crate
 
+> **Updated 2026-05-31 (β.1.4):** `tau-observe` remains the canonical
+> tracing-subscriber init crate for the tokio host shell. The
+> executor-agnostic kernel (`tau-runtime-core`, β.1) keeps a
+> `#[doc(hidden)]` mirror of the §3.9 vocabulary; a drift test in
+> `tau-runtime-tokio` cross-checks both lists.
+
 ## Status
 
 Accepted. Implemented in PR <number-to-fill-at-merge-time>.

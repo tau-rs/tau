@@ -1,5 +1,9 @@
 # ADR-0033: Tau serve mode v1 — JSON-RPC 2.0 over NDJSON-framed stdio
 
+> **Updated 2026-05-31 (β.1.4):** runtime references below are split
+> between `tau-runtime-core` (no_std + alloc kernel) and
+> `tau-runtime-tokio` (host shell, where serve-mode lives).
+
 **Status:** Accepted
 **Date:** 2026-05-17
 **Deciders:** titouanlebocq

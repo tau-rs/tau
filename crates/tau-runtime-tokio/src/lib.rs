@@ -6,10 +6,13 @@
 //! tau's two stable surfaces (G6, QG12); the other is the serve-mode
 //! protocol (sub-project 5+).
 //!
-//! tau-runtime is the kernel: it loads pre-constructed plugin
-//! instances (LlmBackend, Tool, Storage), runs an agent through a
-//! multi-turn batch loop, dispatches messages to tools with typed-
-//! capability enforcement (G14), and emits structured logs (G9).
+//! `tau-runtime-tokio` is the tokio host shell for the executor-agnostic
+//! kernel in [`tau_runtime_core`]: it provides the tokio-bound default
+//! ports ([`TokioClock`], [`OsRandom`]), the process-spawn capability
+//! gate (`process_gate/`), the plugin host (`plugin_host/`, deprecated
+//! pending β.3 MCP), and JSONL run-log persistence. The kernel runs the
+//! agent loop, dispatches tool calls with typed-capability enforcement
+//! (G14), and emits structured logs (G9).
 //!
 //! Solo path only at v0.1 — orchestration of multiple agents is
 //! sub-project 5+ (G10).

@@ -7,56 +7,130 @@
 //! Mirror of `tau_observe::vocabulary` — kept in `tau-runtime-core` so the
 //! executor-agnostic kernel does not depend on `tau-observe` (which uses
 //! tokio + tracing-subscriber and is std-only). The host shell's
-//! `tau_observe::vocabulary` remains the canonical source of truth; this
-//! mirror is `pub(crate)` and tested only for value-drift at the
-//! integration level (a snapshot test in `tau-runtime` asserts both
-//! tables agree).
+//! `tau_observe::vocabulary` remains the canonical source of truth.
+//!
+//! These constants are `#[doc(hidden)] pub` (not the usual `pub(crate)`) so
+//! the cross-crate drift test in `tau-runtime-tokio` can cross-reference
+//! every name + value. Treat them as crate-private for normal use.
 
 // --- Spans (§3.9) ---
 
-pub(crate) const SPAN_RUNTIME_AGENT_RUN: &str = "runtime.agent_run";
-pub(crate) const SPAN_RUNTIME_TURN: &str = "runtime.turn";
-pub(crate) const SPAN_DISPATCH_TOOL: &str = "dispatch.tool";
-pub(crate) const SPAN_CAPABILITY_CHECK: &str = "capability.check";
-pub(crate) const SPAN_TOOL_SESSION_OPEN: &str = "tool.session_open";
-pub(crate) const SPAN_TOOL_INVOKE: &str = "tool.invoke";
-pub(crate) const SPAN_TOOL_SESSION_CLOSE: &str = "tool.session_close";
+#[doc(hidden)]
+pub const SPAN_RUNTIME_AGENT_RUN: &str = "runtime.agent_run";
+#[doc(hidden)]
+pub const SPAN_RUNTIME_TURN: &str = "runtime.turn";
+#[doc(hidden)]
+pub const SPAN_DISPATCH_TOOL: &str = "dispatch.tool";
+#[doc(hidden)]
+pub const SPAN_CAPABILITY_CHECK: &str = "capability.check";
+#[doc(hidden)]
+pub const SPAN_TOOL_SESSION_OPEN: &str = "tool.session_open";
+#[doc(hidden)]
+pub const SPAN_TOOL_INVOKE: &str = "tool.invoke";
+#[doc(hidden)]
+pub const SPAN_TOOL_SESSION_CLOSE: &str = "tool.session_close";
 
 // --- Runtime events ---
 
-pub(crate) const EV_RUNTIME_RUN_STARTED: &str = "runtime.run_started";
-pub(crate) const EV_RUNTIME_COMPLETED: &str = "runtime.completed";
-pub(crate) const EV_RUNTIME_FAILED: &str = "runtime.failed";
-pub(crate) const EV_RUNTIME_LOOP_TERMINATED: &str = "runtime.loop_terminated";
-pub(crate) const EV_RUNTIME_MAX_TURNS_REACHED: &str = "runtime.max_turns_reached";
-pub(crate) const EV_RUNTIME_TURN_STARTED: &str = "runtime.turn_started";
+#[doc(hidden)]
+pub const EV_RUNTIME_RUN_STARTED: &str = "runtime.run_started";
+#[doc(hidden)]
+pub const EV_RUNTIME_COMPLETED: &str = "runtime.completed";
+#[doc(hidden)]
+pub const EV_RUNTIME_FAILED: &str = "runtime.failed";
+#[doc(hidden)]
+pub const EV_RUNTIME_LOOP_TERMINATED: &str = "runtime.loop_terminated";
+#[doc(hidden)]
+pub const EV_RUNTIME_MAX_TURNS_REACHED: &str = "runtime.max_turns_reached";
+#[doc(hidden)]
+pub const EV_RUNTIME_TURN_STARTED: &str = "runtime.turn_started";
 
 // --- LLM events ---
 
-pub(crate) const EV_LLM_REQUEST_BUILT: &str = "llm.request_built";
-pub(crate) const EV_LLM_RESPONSE_RECEIVED: &str = "llm.response_received";
-pub(crate) const EV_LLM_TOKEN_USAGE: &str = "llm.token_usage";
-pub(crate) const EV_LLM_STOP_REASON: &str = "llm.stop_reason";
-pub(crate) const EV_LLM_TOOL_USE_EMITTED: &str = "llm.tool_use_emitted";
+#[doc(hidden)]
+pub const EV_LLM_REQUEST_BUILT: &str = "llm.request_built";
+#[doc(hidden)]
+pub const EV_LLM_RESPONSE_RECEIVED: &str = "llm.response_received";
+#[doc(hidden)]
+pub const EV_LLM_TOKEN_USAGE: &str = "llm.token_usage";
+#[doc(hidden)]
+pub const EV_LLM_STOP_REASON: &str = "llm.stop_reason";
+#[doc(hidden)]
+pub const EV_LLM_TOOL_USE_EMITTED: &str = "llm.tool_use_emitted";
 
 // --- Dispatch events ---
 
-pub(crate) const EV_DISPATCH_TOOL_RESOLVED: &str = "dispatch.tool_resolved";
+#[doc(hidden)]
+pub const EV_DISPATCH_TOOL_RESOLVED: &str = "dispatch.tool_resolved";
 
 // --- Capability events ---
 
-pub(crate) const EV_CAPABILITY_REQUIRED_LOADED: &str = "capability.required_loaded";
-pub(crate) const EV_CAPABILITY_GRANTED_LOADED: &str = "capability.granted_loaded";
-pub(crate) const EV_CAPABILITY_SATISFIES_CHECK: &str = "capability.satisfies_check";
-pub(crate) const EV_CAPABILITY_ALLOW: &str = "capability.allow";
-pub(crate) const EV_CAPABILITY_DENY: &str = "capability.deny";
+#[doc(hidden)]
+pub const EV_CAPABILITY_REQUIRED_LOADED: &str = "capability.required_loaded";
+#[doc(hidden)]
+pub const EV_CAPABILITY_GRANTED_LOADED: &str = "capability.granted_loaded";
+#[doc(hidden)]
+pub const EV_CAPABILITY_SATISFIES_CHECK: &str = "capability.satisfies_check";
+#[doc(hidden)]
+pub const EV_CAPABILITY_ALLOW: &str = "capability.allow";
+#[doc(hidden)]
+pub const EV_CAPABILITY_DENY: &str = "capability.deny";
 
 // --- Tool events ---
 
-pub(crate) const EV_TOOL_INVOKE_FAILED: &str = "tool.invoke_failed";
-pub(crate) const EV_TOOL_SESSION_OPEN_FAILED: &str = "tool.session_open_failed";
-pub(crate) const EV_TOOL_SESSION_CLOSE_FAILED: &str = "tool.session_close_failed";
+#[doc(hidden)]
+pub const EV_TOOL_INVOKE_FAILED: &str = "tool.invoke_failed";
+#[doc(hidden)]
+pub const EV_TOOL_SESSION_OPEN_FAILED: &str = "tool.session_open_failed";
+#[doc(hidden)]
+pub const EV_TOOL_SESSION_CLOSE_FAILED: &str = "tool.session_close_failed";
 
 // --- Message events ---
 
-pub(crate) const EV_MESSAGE_ADDED: &str = "message.added";
+#[doc(hidden)]
+pub const EV_MESSAGE_ADDED: &str = "message.added";
+
+/// All `(identifier, value)` pairs in this mirror, in declaration order.
+///
+/// Consumed by the cross-crate drift test in `tau-runtime-tokio`. The
+/// identifier strings are the Rust constant names (used to look up the
+/// matching constant in `tau_observe::vocabulary`); the value strings are
+/// the runtime span/event names. Doc-hidden because this is an internal
+/// integration-test surface, not a stability commitment.
+#[doc(hidden)]
+pub const PAIRS: &[(&str, &str)] = &[
+    ("SPAN_RUNTIME_AGENT_RUN", SPAN_RUNTIME_AGENT_RUN),
+    ("SPAN_RUNTIME_TURN", SPAN_RUNTIME_TURN),
+    ("SPAN_DISPATCH_TOOL", SPAN_DISPATCH_TOOL),
+    ("SPAN_CAPABILITY_CHECK", SPAN_CAPABILITY_CHECK),
+    ("SPAN_TOOL_SESSION_OPEN", SPAN_TOOL_SESSION_OPEN),
+    ("SPAN_TOOL_INVOKE", SPAN_TOOL_INVOKE),
+    ("SPAN_TOOL_SESSION_CLOSE", SPAN_TOOL_SESSION_CLOSE),
+    ("EV_RUNTIME_RUN_STARTED", EV_RUNTIME_RUN_STARTED),
+    ("EV_RUNTIME_COMPLETED", EV_RUNTIME_COMPLETED),
+    ("EV_RUNTIME_FAILED", EV_RUNTIME_FAILED),
+    ("EV_RUNTIME_LOOP_TERMINATED", EV_RUNTIME_LOOP_TERMINATED),
+    ("EV_RUNTIME_MAX_TURNS_REACHED", EV_RUNTIME_MAX_TURNS_REACHED),
+    ("EV_RUNTIME_TURN_STARTED", EV_RUNTIME_TURN_STARTED),
+    ("EV_LLM_REQUEST_BUILT", EV_LLM_REQUEST_BUILT),
+    ("EV_LLM_RESPONSE_RECEIVED", EV_LLM_RESPONSE_RECEIVED),
+    ("EV_LLM_TOKEN_USAGE", EV_LLM_TOKEN_USAGE),
+    ("EV_LLM_STOP_REASON", EV_LLM_STOP_REASON),
+    ("EV_LLM_TOOL_USE_EMITTED", EV_LLM_TOOL_USE_EMITTED),
+    ("EV_DISPATCH_TOOL_RESOLVED", EV_DISPATCH_TOOL_RESOLVED),
+    (
+        "EV_CAPABILITY_REQUIRED_LOADED",
+        EV_CAPABILITY_REQUIRED_LOADED,
+    ),
+    ("EV_CAPABILITY_GRANTED_LOADED", EV_CAPABILITY_GRANTED_LOADED),
+    (
+        "EV_CAPABILITY_SATISFIES_CHECK",
+        EV_CAPABILITY_SATISFIES_CHECK,
+    ),
+    ("EV_CAPABILITY_ALLOW", EV_CAPABILITY_ALLOW),
+    ("EV_CAPABILITY_DENY", EV_CAPABILITY_DENY),
+    ("EV_TOOL_INVOKE_FAILED", EV_TOOL_INVOKE_FAILED),
+    ("EV_TOOL_SESSION_OPEN_FAILED", EV_TOOL_SESSION_OPEN_FAILED),
+    ("EV_TOOL_SESSION_CLOSE_FAILED", EV_TOOL_SESSION_CLOSE_FAILED),
+    ("EV_MESSAGE_ADDED", EV_MESSAGE_ADDED),
+];

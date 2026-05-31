@@ -1,5 +1,10 @@
 # ADR-0006: tau-runtime kernel + Tool capabilities amendment
 
+> **Updated 2026-05-31 (β.1.4):** kernel now lives in `tau-runtime-core`
+> (no_std + alloc, executor-agnostic); the tokio host shell is
+> `tau-runtime-tokio`. References below to `tau-runtime` should be read
+> as the union of the two crates unless otherwise noted.
+
 **Status:** Accepted
 **Date:** 2026-04-28
 **Supersedes:** —

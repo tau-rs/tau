@@ -1,5 +1,10 @@
 # ADR-0028 — Skills runtime invocation (Skills-4)
 
+> **Updated 2026-05-31 (β.1.4):** `tau_runtime::*` paths below now read
+> as `tau_runtime_core::*` for kernel-side symbols and
+> `tau_runtime_tokio::*` for host-shell symbols. `skill.<name>.spawn`
+> dispatch lives in `tau_runtime_core::orchestration`.
+
 **Status:** Accepted 2026-05-14.
 **Branch / PR:** `feat/skills-4-runtime-invocation` (PR pending).
 **Spec:** `docs/superpowers/specs/2026-05-14-skills-4-runtime-invocation-design.md` (merged at PR #69).

@@ -48,7 +48,7 @@ flowchart TB
 |---|---|---|---|
 | **L1 — Manifest** | Does the `.toml` parse + validate? | `crates/tau-domain/src/package/{manifest,capability,sandbox}.rs::tests` and `crates/tau-pkg/tests/manifest.rs` | Cheap. Add a test for every new field, every validation rule. |
 | **L2 — Install-time cross-check** | Does the plugin binary's claimed capability set match the manifest? | `crates/tau-plugin-compat/tests/cross_check_*.rs` | Spawns the plugin binary, runs `meta.handshake` + `tool.describe_capabilities`, compares against the manifest bidirectionally. |
-| **L3 — Pre-flight resolution** | Does the resolver pick an adapter that can satisfy the plan? | `crates/tau-runtime/src/sandbox/resolver.rs::tests` | Mock adapters with explicit advertisements. Fast unit-level. |
+| **L3 — Pre-flight resolution** | Does the resolver pick an adapter that can satisfy the plan? | `crates/tau-runtime-tokio/src/process_gate/resolver.rs::tests` | Mock adapters with explicit advertisements. Fast unit-level. |
 | **L4 — Kernel enforcement** | Does the OS actually deny disallowed accesses? | `crates/tau-plugin-compat/tests/layer4_*.rs` (Container + Native variants) and `crates/tau-sandbox-native/tests/strict_*.rs` | Real kernel, real plugin spawn, real syscall. Slow. CI gates this on Linux. |
 
 The four-layer model is the design contract; this page reflects

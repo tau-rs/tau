@@ -33,8 +33,8 @@ pub fn address_to_tool_name(addr: &Address) -> Option<&str> {
 
 impl Runtime {
     /// Resolve an LLM backend by name. Returns
-    /// [`RuntimeError::Core(CoreRuntimeError::LlmBackendNotRegistered)`] if the agent's
-    /// requested backend is not in the registry.
+    /// [`crate::error::RuntimeError::LlmBackendNotRegistered`] if the
+    /// agent's requested backend is not in the registry.
     ///
     /// # Example
     ///

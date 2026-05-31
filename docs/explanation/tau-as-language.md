@@ -261,5 +261,5 @@ in its own right. Estimated scope: ~12+ weeks.
   (verify foundation).
 - `crates/tau-pkg/src/verify.rs` — verify primitive (bundle
   verification foundation).
-- `crates/tau-runtime/src/stream.rs` — streaming pump (bundle
+- `crates/tau-runtime-core/src/stream.rs` — streaming pump (bundle
   execution foundation).
