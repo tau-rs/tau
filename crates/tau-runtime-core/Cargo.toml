@@ -12,6 +12,7 @@ authors.workspace      = true
 tau-domain   = { workspace = true, default-features = false, features = ["serde"] }
 tau-ports    = { workspace = true, default-features = false, features = ["serde"] }
 tau-pkg      = { workspace = true }
+tau-ir       = { workspace = true, default-features = false }
 thiserror    = { workspace = true, default-features = false }
 serde        = { workspace = true, default-features = false, features = ["alloc", "derive"] }
 serde_json   = { workspace = true }

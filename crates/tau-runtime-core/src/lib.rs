@@ -21,6 +21,8 @@ pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind
 
 pub mod builder;
 pub mod ids;
+pub mod interpreter;
+pub use interpreter::run_ir;
 pub mod run;
 pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime, RuntimeBuilder};
 
