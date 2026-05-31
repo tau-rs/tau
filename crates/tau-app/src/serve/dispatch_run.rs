@@ -13,7 +13,7 @@ use super::protocol::{Request, RequestId};
 use futures::StreamExt;
 use serde_json::{json, Value};
 use tau_domain::{Address, Message, MessagePayload};
-use tau_runtime::{RunEvent, RunOptions, RuntimeShellExt};
+use tau_runtime::{RunEvent, RunOptions};
 
 /// Execute a runtime.run or runtime.run_streaming request.
 pub async fn execute(disp: Dispatcher, req: Request, streaming: bool) {

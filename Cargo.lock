@@ -3529,6 +3529,7 @@ name = "tau-runtime-core"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
+ "async-stream",
  "chrono",
  "foldhash 0.1.5",
  "futures-core",
@@ -3543,6 +3544,7 @@ dependencies = [
  "tau-pkg",
  "tau-ports",
  "thiserror 2.0.18",
+ "tokio",
  "toml",
  "tracing",
  "ulid",

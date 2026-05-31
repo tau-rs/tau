@@ -33,7 +33,6 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use tau_runtime::RuntimeShellExt;
 
 use fs_read_plugin_lib::plugin::{FsReadPlugin, FsReadSession};
 use tau_domain::Value;
@@ -43,11 +42,7 @@ use tau_ports::{
     CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, SessionContext,
     StopReason, Tool, ToolError, ToolResult, ToolSpec,
 };
-use tau_runtime::{
-    builder::DynTool,
-    error::{CoreRuntimeError, RuntimeError},
-    CapabilityOverride, Runtime,
-};
+use tau_runtime::{builder::DynTool, error::CoreRuntimeError, CapabilityOverride, Runtime};
 
 use assert_matches::assert_matches;
 
@@ -279,7 +274,7 @@ paths = ["{package_glob}"]
 
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
+        CoreRuntimeError::Tool(ToolError::BadArgs { reason }) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "narrowed allow must reject with scope-violation message; got {reason:?}"
@@ -354,7 +349,7 @@ paths = ["{package_glob}"]
 
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::Tool(ToolError::BadArgs { reason })) => {
+        CoreRuntimeError::Tool(ToolError::BadArgs { reason }) => {
             assert!(
                 reason.contains("not in capability scope"),
                 "deny carve-out must reject with scope-violation message; got {reason:?}"
@@ -419,7 +414,7 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
 
     assert_matches!(
         err,
-        RuntimeError::Core(CoreRuntimeError::CapabilityOverrideExpands { kind, reason }) => {
+        CoreRuntimeError::CapabilityOverrideExpands { kind, reason } => {
             assert_eq!(kind, "fs.read");
             assert!(
                 reason.contains("not a subset"),

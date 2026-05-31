@@ -12,7 +12,7 @@ use chrono::Utc;
 use tau_domain::{
     Address, AgentDefinition, AgentInstanceId, Message, MessagePayload, PackageManifest,
 };
-use tau_runtime::{Runtime, RuntimeShellExt};
+use tau_runtime::Runtime;
 
 use crate::error::WorkflowError;
 use crate::model::{StepKind, Workflow};
@@ -182,19 +182,13 @@ impl Runner {
                         })?;
                     // Convert serde_json::Value → tau_domain::Value for invoke_tool.
                     let tau_args = json_to_tau_value(&resolved_args);
-                    // Disambiguate: tau_runtime_core::Runtime has an inherent
-                    // `invoke_tool` (with clock/random params) AND the
-                    // RuntimeShellExt trait adds one (without). Fully qualify
-                    // so we call the host-shell variant that returns
-                    // tau_runtime::RuntimeError.
-                    let result = <tau_runtime::Runtime as RuntimeShellExt>::invoke_tool(
-                        &self.runtime,
-                        agent_def,
-                        manifest,
-                        tool,
-                        tau_args,
-                    )
-                    .await;
+                    // Inherent `invoke_tool` on the kernel Runtime — returns
+                    // tau_runtime_core::error::RuntimeError. We map below into
+                    // `tool_outcome_to_string` which accepts either flavor.
+                    let result = self
+                        .runtime
+                        .invoke_tool(agent_def, manifest, tool, tau_args)
+                        .await;
                     let input_repr = serde_json::to_string(&resolved_args).unwrap_or_default();
                     (input_repr, tool_outcome_to_string(result))
                 }
@@ -276,7 +270,7 @@ fn build_user_message(text: String) -> Message {
 /// For `RunOutcome::Failed`, returns an error tuple with kind `"agent_failed"`
 /// and the status debug string.
 fn agent_outcome_to_string(
-    result: Result<tau_runtime::RunOutcome, tau_runtime::RuntimeError>,
+    result: Result<tau_runtime::RunOutcome, tau_runtime::error::CoreRuntimeError>,
 ) -> Result<String, (String, String)> {
     match result {
         Ok(tau_runtime::RunOutcome::Completed { final_message, .. }) => {
@@ -309,7 +303,7 @@ fn extract_text_from_payload(payload: &MessagePayload) -> String {
 /// On `is_error = true`, the step is surfaced as failed so the run aborts.
 /// On success, the content blocks are serialized as a JSON string.
 fn tool_outcome_to_string(
-    result: Result<tau_ports::ToolResult, tau_runtime::RuntimeError>,
+    result: Result<tau_ports::ToolResult, tau_runtime::error::CoreRuntimeError>,
 ) -> Result<String, (String, String)> {
     match result {
         Ok(tool_result) => {

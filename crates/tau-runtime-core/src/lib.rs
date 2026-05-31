@@ -29,6 +29,9 @@ pub mod dispatch;
 pub mod options;
 pub mod orchestration;
 pub mod outcome;
+#[cfg(feature = "tool-validation")]
+pub mod stream;
+pub(crate) mod vocabulary;
 
 #[cfg(feature = "tool-validation")]
 pub mod tool_args;

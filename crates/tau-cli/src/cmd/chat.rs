@@ -52,7 +52,7 @@ use rustyline::DefaultEditor;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_runtime::stream::RunEvent;
-use tau_runtime::{RunOptions, RunOutcome, RuntimeShellExt, TokenUsage};
+use tau_runtime::{RunOptions, RunOutcome, TokenUsage};
 
 use crate::cli::ChatArgs;
 use crate::cmd::plugin_loader;

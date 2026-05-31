@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::{RunOptions, RunOutcome, RuntimeShellExt};
+use tau_runtime::{RunOptions, RunOutcome};
 
 use crate::cli::RunArgs;
 use crate::cmd::plugin_loader;
@@ -214,11 +214,16 @@ pub async fn run(
             max_total_agents: args.max_total_agents,
         };
         let runtime_arc = std::sync::Arc::new(runtime);
-        let snapshot = runtime_arc
-            .clone()
-            .spawn_root_agent(agent_def, manifest, initial, budget, scope_root)
-            .await
-            .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
+        let snapshot = tau_runtime::spawn_root_agent_with_scope(
+            runtime_arc.clone(),
+            agent_def,
+            manifest,
+            initial,
+            budget,
+            scope_root,
+        )
+        .await
+        .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
 
         drop(runtime_arc);
         plugin_loader::flush_recorders().await;

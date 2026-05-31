@@ -12,7 +12,6 @@
 mod common;
 
 use std::sync::{Arc, Mutex};
-use tau_runtime::RuntimeShellExt;
 
 use tau_domain::{Capability, Value};
 use tau_ports::fixtures::{make_completion_response, make_tool_spec, MockTool};

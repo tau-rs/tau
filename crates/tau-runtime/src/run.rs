@@ -46,23 +46,14 @@ use crate::options::TokenUsage;
 #[cfg(test)]
 use crate::outcome::RunOutcome;
 
-// Re-export pure helpers from core so that stream.rs can still use
-// `crate::run::*` paths unchanged (Task 3.5 migration shim).
+// ---------------------------------------------------------------------------
+// Internal helpers (only narrowed_capability_for_session lives here at v0.1)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
 pub(crate) use tau_runtime_core::run::{
-    agent_messages_to_provider_messages, build_policy_denied_outcome, content_to_value,
-    flatten_content_to_string,
+    agent_messages_to_provider_messages, build_policy_denied_outcome,
 };
-// value_to_preview_string is pub in core but not used from tau-runtime directly.
-#[allow(unused_imports)]
-pub(crate) use tau_runtime_core::run::value_to_preview_string;
-
-// ---------------------------------------------------------------------------
-// Internal helpers (named per the plan; some are re-exported from core)
-// ---------------------------------------------------------------------------
-
-// agent_messages_to_provider_messages, build_policy_denied_outcome,
-// flatten_content_to_string, content_to_value, value_to_preview_string
-// are re-exported at top of file from tau_runtime_core::run.
 
 /// Build the post-narrow `Capability` view that flows to plugins via
 /// `SessionContext.granted_capabilities`. Capability inner variants are
@@ -334,7 +325,6 @@ mode = "read"
 
     #[tokio::test]
     async fn invoke_tool_dispatches_to_registered_tool_and_returns_result() {
-        use crate::runtime_ext::RuntimeShellExt;
         use std::str::FromStr;
         use tau_domain::{AgentId, PackageId, PackageName, Version};
         use tau_ports::fixtures::{make_tool_result, make_tool_spec, MockLlmBackend, MockTool};
@@ -383,10 +373,10 @@ mode = "read"
         let unchecked: tau_domain::UncheckedManifest = toml::from_str(toml_str).unwrap();
         let manifest = unchecked.validate().unwrap();
 
-        let result =
-            RuntimeShellExt::invoke_tool(&runtime, &agent_def, &manifest, "echo", Value::Null)
-                .await
-                .expect("invoke_tool must succeed");
+        let result = runtime
+            .invoke_tool(&agent_def, &manifest, "echo", Value::Null)
+            .await
+            .expect("invoke_tool must succeed");
 
         assert!(!result.is_error);
         assert_eq!(result.content.len(), 1);
@@ -398,8 +388,7 @@ mode = "read"
 
     #[tokio::test]
     async fn invoke_tool_returns_err_for_unknown_tool() {
-        use crate::error::{CoreRuntimeError, RuntimeError};
-        use crate::runtime_ext::RuntimeShellExt;
+        use crate::error::CoreRuntimeError;
         use std::str::FromStr;
         use tau_domain::{AgentId, PackageId, PackageName, Version};
         use tau_ports::fixtures::MockLlmBackend;
@@ -432,21 +421,13 @@ mode = "read"
         let unchecked: tau_domain::UncheckedManifest = toml::from_str(toml_str).unwrap();
         let manifest = unchecked.validate().unwrap();
 
-        let err = RuntimeShellExt::invoke_tool(
-            &runtime,
-            &agent_def,
-            &manifest,
-            "no-such-tool",
-            Value::Null,
-        )
-        .await
-        .expect_err("should return ToolNotRegistered");
+        let err = runtime
+            .invoke_tool(&agent_def, &manifest, "no-such-tool", Value::Null)
+            .await
+            .expect_err("should return ToolNotRegistered");
 
         assert!(
-            matches!(
-                err,
-                RuntimeError::Core(CoreRuntimeError::ToolNotRegistered { .. })
-            ),
+            matches!(err, CoreRuntimeError::ToolNotRegistered { .. }),
             "expected ToolNotRegistered, got {err:?}"
         );
     }

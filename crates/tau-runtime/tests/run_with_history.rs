@@ -17,7 +17,6 @@
 mod common;
 
 use std::sync::{Arc, Mutex};
-use tau_runtime::RuntimeShellExt;
 
 use tau_domain::{Address, Message, MessagePayload};
 use tau_ports::fixtures::make_completion_response;

@@ -39,5 +39,5 @@ pub use capability_override::{CapabilityOverride, EffectiveCapability, OverrideE
 pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError};
 pub use options::{RunOptions, TokenUsage};
 pub use outcome::RunOutcome;
-pub use runtime_ext::RuntimeShellExt;
+pub use runtime_ext::spawn_root_agent_with_scope;
 pub use stream::RunEvent;

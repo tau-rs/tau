@@ -78,6 +78,59 @@ pub fn check_capabilities<'a>(
         .find(|req| !granted.iter().any(|g| capability_satisfies(g, req)))
 }
 
+/// Tool-dispatch wrapper around [`check_capabilities`] that owns the
+/// ADR-0006 §3.9 `capability.check` span and the five capability
+/// lifecycle events.
+///
+/// Lives in core (vs. the host shell's identical helper, pre-β.1.3.5c)
+/// because `stream.rs` — also now in core — needs to call it during
+/// per-tool dispatch. The pure `check_capabilities` is reachable from
+/// build-time tool-spec filtering; this wrapper is the dispatch-site
+/// wrapper that emits the per-tool tracing vocabulary.
+#[tracing::instrument(
+    name = "capability.check",
+    skip_all,
+    fields(tool_name = %tool_name),
+)]
+pub fn check_capabilities_for_tool<'a>(
+    tool_name: &str,
+    granted: &[Capability],
+    required: &'a [Capability],
+) -> Option<&'a Capability> {
+    use crate::vocabulary as v;
+    tracing::debug!(
+        name = v::EV_CAPABILITY_REQUIRED_LOADED,
+        required_count = required.len(),
+    );
+    tracing::debug!(
+        name = v::EV_CAPABILITY_GRANTED_LOADED,
+        granted_count = granted.len(),
+    );
+    let missing = check_capabilities(granted, required);
+    tracing::debug!(
+        name = v::EV_CAPABILITY_SATISFIES_CHECK,
+        satisfied = missing.is_none(),
+    );
+    match missing {
+        None => {
+            tracing::info!(
+                name = v::EV_CAPABILITY_ALLOW,
+                tool_name = %tool_name,
+            );
+            None
+        }
+        Some(cap) => {
+            let kind = capability_kind_str(cap);
+            tracing::warn!(
+                name = v::EV_CAPABILITY_DENY,
+                tool_name = %tool_name,
+                missing_kind = %kind,
+            );
+            Some(cap)
+        }
+    }
+}
+
 /// Top-level capability kind string used in
 /// `CapabilityDenial::required_kind` and the `capability.deny` event.
 pub fn capability_kind_str(cap: &Capability) -> String {
