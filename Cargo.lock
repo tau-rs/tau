@@ -3341,6 +3341,21 @@ name = "tau-infra"
 version = "0.0.0"
 
 [[package]]
+name = "tau-ir"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "foldhash 0.1.5",
+ "hashbrown 0.15.5",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tau-domain",
+ "tau-ports",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tau-observe"
 version = "0.0.0"
 dependencies = [
