@@ -64,7 +64,8 @@ jobs:
           - tau-domain
           - tau-pkg
           - tau-ports
-          - tau-runtime
+          - tau-runtime-core
+          - tau-runtime-tokio
           - tau-plugin-protocol
           - tau-cli
 
