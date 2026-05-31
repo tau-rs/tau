@@ -1,4 +1,17 @@
-//! Host-side plugin loader for `tau-runtime`.
+//! Host-side plugin loader for `tau-runtime-tokio`.
+//!
+//! # ⚠ Deprecated since β.1
+//!
+//! This module is preserved as-is for the tokio shell only. Phase β.3
+//! introduces the MCP facilitator which **replaces the bespoke
+//! subprocess plugin protocol** with a standard MCP contract surface.
+//! Embassy / wasm / MCU shells will never carry `plugin_host`.
+//!
+//! New plugin types should target the β.3 MCP facilitator rather than
+//! adding to `plugin_host`. The legacy entries here remain functional
+//! to keep existing fs-read / shell / Anthropic / OpenAI / Ollama
+//! plugins running through γ.0; expect removal once β.3 lands and the
+//! existing plugins are migrated.
 //!
 //! This module spawns plugin processes, drives the `meta.handshake`
 //! exchange, and produces `Arc<dyn DynLlmBackend>` (and friends) that
