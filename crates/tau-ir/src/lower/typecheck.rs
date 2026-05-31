@@ -53,7 +53,11 @@ pub fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
     //    (If it's still the resolve-stage sentinel, the native tool
     //    cache didn't know about it — this is the place to refuse.)
     for (tool_id, tool) in parsed.workflow.tools.iter() {
-        if let ToolImpl::Native { fn_ref, content_hash } = &tool.impl_ {
+        if let ToolImpl::Native {
+            fn_ref,
+            content_hash,
+        } = &tool.impl_
+        {
             if content_hash == &[0u8; 32] {
                 return Err(IrError::UnknownDeterministicFn {
                     step: crate::StepId(tool_id.0.clone()),

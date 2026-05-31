@@ -71,9 +71,7 @@ pub fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             // forwarded as a parse error so existing callers aren't
             // silently broken when a new variant lands.
             _ => {
-                return Err(IrError::Parse(
-                    "unsupported tool body variant".into(),
-                ));
+                return Err(IrError::Parse("unsupported tool body variant".into()));
             }
         };
         let spec = ToolSpec {

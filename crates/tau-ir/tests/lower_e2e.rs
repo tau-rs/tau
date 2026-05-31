@@ -20,19 +20,22 @@ fn hash_of(s: &str) -> [u8; 32] {
 ///
 /// `native_known` and `mcp_known` are cloned into boxed closures so there
 /// are no non-`'static` borrows in the `Fn` impls.
-fn caches_with(
-    native_known: Vec<String>,
-    mcp_known: Vec<String>,
-) -> Caches<'static> {
+fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'static> {
     Caches {
         native_tool: Box::leak(Box::new(move |name: &str| -> Option<[u8; 32]> {
-            native_known.iter().find(|n| n.as_str() == name).map(|n| hash_of(n))
+            native_known
+                .iter()
+                .find(|n| n.as_str() == name)
+                .map(|n| hash_of(n))
         })),
-        mcp_contract: Box::leak(Box::new(move |url: &str| -> Option<([u8; 32], tau_ir::CapabilityRequirements)> {
-            mcp_known.iter().find(|u| u.as_str() == url).map(|u| {
-                (hash_of(u), tau_ir::CapabilityRequirements::default())
-            })
-        })),
+        mcp_contract: Box::leak(Box::new(
+            move |url: &str| -> Option<([u8; 32], tau_ir::CapabilityRequirements)> {
+                mcp_known
+                    .iter()
+                    .find(|u| u.as_str() == url)
+                    .map(|u| (hash_of(u), tau_ir::CapabilityRequirements::default()))
+            },
+        )),
         skill: Box::leak(Box::new(|_name: &str| -> Option<[u8; 32]> { None })),
     }
 }
@@ -94,22 +97,28 @@ fn lowering_passes_minimal_workflow() {
     "#;
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
-    let caches = caches_with(
-        vec!["ReadTemp".into(), "SetFan".into()],
-        vec![],
-    );
+    let caches = caches_with(vec!["ReadTemp".into(), "SetFan".into()], vec![]);
     let module = lower_project(&config, &target, &caches).expect("lower");
     assert_eq!(module.ir_format.0, IrFormatVersion::CURRENT);
     assert!(
-        module.workflow.agents.contains_key(&tau_ir::AgentId("monitor".into())),
+        module
+            .workflow
+            .agents
+            .contains_key(&tau_ir::AgentId("monitor".into())),
         "expected agent 'monitor' in workflow"
     );
     assert!(
-        module.workflow.tools.contains_key(&tau_ir::ToolId("read_temp".into())),
+        module
+            .workflow
+            .tools
+            .contains_key(&tau_ir::ToolId("read_temp".into())),
         "expected tool 'read_temp' in workflow"
     );
     assert!(
-        module.workflow.tools.contains_key(&tau_ir::ToolId("set_fan".into())),
+        module
+            .workflow
+            .tools
+            .contains_key(&tau_ir::ToolId("set_fan".into())),
         "expected tool 'set_fan' in workflow"
     );
 }

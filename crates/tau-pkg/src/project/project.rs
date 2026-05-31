@@ -510,7 +510,6 @@ pub enum ProjectConfigError {
     },
 
     // --- IR lowering errors (β.2.2) ---
-
     /// In-memory TOML parse failure (for `parse_str`, as opposed to file-based `from_path`).
     #[error("failed to parse tau.toml from string: {source}")]
     ParseStr {
