@@ -19,6 +19,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod budget;
+pub mod canonical;
 pub mod capability;
 pub mod context;
 pub mod error;
@@ -33,6 +34,7 @@ pub mod tool_impl;
 
 // Re-exports of the canonical public API surface.
 pub use budget::AgentBudget;
+pub use canonical::{from_canonical_bytes, to_canonical_bytes};
 pub use capability::{CapabilityRequirements, CapabilityTable};
 pub use context::ContextConfig;
 pub use error::IrError;
