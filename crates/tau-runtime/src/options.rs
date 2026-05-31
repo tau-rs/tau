@@ -51,8 +51,14 @@ pub struct RunOptions {
     /// (`task.*`, `run.*`, `agent.<kind>.spawn`) are intercepted before
     /// plugin dispatch and routed through `crate::orchestration`.
     /// Callers using single-agent `Runtime::run` should leave this `None`.
+    ///
+    /// `Arc<RefCell<RunState>>` (not `Arc<tokio::sync::Mutex<…>>`) is the
+    /// honest representation: the kernel futures are non-Send by design
+    /// (see `tau_runtime_core::builder` BoxFuture alias), so the agent
+    /// loop is single-task already. `RefCell` makes that discipline
+    /// explicit and works in `no_std` shells.
     pub orchestration_state:
-        Option<std::sync::Arc<tokio::sync::Mutex<crate::orchestration::run_state::RunState>>>,
+        Option<std::sync::Arc<core::cell::RefCell<crate::orchestration::run_state::RunState>>>,
 
     /// Set by `Runtime::spawn_root_agent` (v1.1+). Carries the `Arc<Runtime>`
     /// so the in-stream `agent.<kind>.spawn` intercept can recursively

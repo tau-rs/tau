@@ -328,8 +328,8 @@ impl Runtime {
         budget: tau_ports::RunBudget,
         scope_root: std::path::PathBuf,
     ) -> Result<tau_ports::RunSnapshot, RuntimeError> {
+        use core::cell::RefCell;
         use std::sync::Arc;
-        use tokio::sync::Mutex;
 
         let run_id = ulid::Ulid::new().to_string();
         let root_agent_id = root_agent_def.id.to_string();
@@ -347,7 +347,10 @@ impl Runtime {
         let subscriber = crate::orchestration::trace_mpsc::channel_with_writer(log_path);
         state.trace.add_subscriber(subscriber);
 
-        let state_arc = Arc::new(Mutex::new(state));
+        // Arc<RefCell<RunState>>: single-task discipline matches the
+        // non-Send futures of the kernel. See `RunOptions.orchestration_state`
+        // doc for rationale.
+        let state_arc = Arc::new(RefCell::new(state));
 
         let opts = {
             let mut o = run_options_with_defaults();
@@ -368,7 +371,7 @@ impl Runtime {
 
         let now_end = chrono::Utc::now();
         {
-            let mut s = state_arc.lock().await;
+            let mut s = state_arc.borrow_mut();
             s.ended_at = Some(now_end);
             let success = matches!(outcome, crate::RunOutcome::Completed { .. });
             let orphans_present = !s.task_list.all_terminal();
@@ -405,7 +408,7 @@ impl Runtime {
         }
 
         let snapshot = {
-            let s = state_arc.lock().await;
+            let s = state_arc.borrow();
             s.snapshot(now_end)
         };
         Ok(snapshot)

@@ -674,7 +674,7 @@ pub(crate) fn run_streaming_inner(
                                         // Record the spawn in the shared
                                         // RunState's counter for budget.
                                         {
-                                            let s = state_arc.lock().await;
+                                            let s = state_arc.borrow();
                                             s.record_agent_spawn();
                                         }
 
@@ -746,7 +746,7 @@ pub(crate) fn run_streaming_inner(
                                         // Emit Spawn trace event before
                                         // recursing.
                                         {
-                                            let s = state_arc.lock().await;
+                                            let s = state_arc.borrow();
                                             let run_id = s.run_id.clone();
                                             s.trace.emit(tau_ports::TraceEvent {
                                                 id: tau_runtime_core::ids::ulid(clock_ref(&options), random_ref(&options)),
@@ -910,7 +910,7 @@ pub(crate) fn run_streaming_inner(
                                             // Record the spawn in the shared
                                             // RunState's counter for budget.
                                             {
-                                                let s = state_arc.lock().await;
+                                                let s = state_arc.borrow();
                                                 s.record_agent_spawn();
                                             }
 
@@ -1004,7 +1004,7 @@ pub(crate) fn run_streaming_inner(
                                             // recursing, so the printer / log
                                             // can pick it up.
                                             {
-                                                let s = state_arc.lock().await;
+                                                let s = state_arc.borrow();
                                                 let run_id = s.run_id.clone();
                                                 s.trace.emit(
                                                     tau_ports::TraceEvent {
@@ -1106,7 +1106,7 @@ pub(crate) fn run_streaming_inner(
                         } else {
                             let dispatch_res = {
                                 let dispatch_now = tau_runtime_core::ids::now_utc(clock_ref(&options));
-                                let mut state = state_arc.lock().await;
+                                let mut state = state_arc.borrow_mut();
                                 crate::orchestration::dispatch(
                                     &tool_use.name,
                                     args_json,
