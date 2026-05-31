@@ -3351,6 +3351,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tau-domain",
+ "tau-pkg",
  "tau-ports",
  "thiserror 2.0.18",
 ]

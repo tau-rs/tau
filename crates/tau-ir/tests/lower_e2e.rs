@@ -29,7 +29,7 @@ fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'sta
                 .map(|n| hash_of(n))
         })),
         mcp_contract: Box::leak(Box::new(
-            move |url: &str| -> Option<([u8; 32], tau_ir::CapabilityRequirements)> {
+            move |url: &str| -> Option<tau_ir::lower::McpContractEntry> {
                 mcp_known
                     .iter()
                     .find(|u| u.as_str() == url)

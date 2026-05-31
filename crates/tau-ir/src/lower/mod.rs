@@ -18,8 +18,14 @@ pub mod typecheck;
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;
 
+use crate::capability::CapabilityRequirements;
 use crate::error::IrError;
 use crate::module::IrModule;
+
+/// Return type of the MCP-contract cache closure.
+///
+/// Extracted into a type alias to satisfy `clippy::type_complexity`.
+pub type McpContractEntry = ([u8; 32], CapabilityRequirements);
 
 /// Lower a parsed `ProjectConfig` into an `IrModule` for the given target.
 ///
@@ -43,7 +49,7 @@ use crate::module::IrModule;
 ///     name = "demo"
 /// "#;
 /// let config = ProjectConfig::parse_str(toml).unwrap();
-/// let target = registry::list_available().next().unwrap().triple().clone();
+/// let target = registry::list_available().next().unwrap().triple;
 /// let caches = Caches {
 ///     native_tool: &|_| None,
 ///     mcp_contract: &|_| None,
@@ -70,8 +76,7 @@ pub struct Caches<'a> {
     /// Resolves a native tool symbolic name to its content hash.
     pub native_tool: &'a dyn Fn(&str) -> Option<[u8; 32]>,
     /// Resolves an MCP URL to (contract hash, declared capabilities).
-    pub mcp_contract:
-        &'a dyn Fn(&str) -> Option<([u8; 32], crate::capability::CapabilityRequirements)>,
+    pub mcp_contract: &'a dyn Fn(&str) -> Option<McpContractEntry>,
     /// Resolves a skill name to its content hash (from Skills-2 lockfile).
     pub skill: &'a dyn Fn(&str) -> Option<[u8; 32]>,
 }
