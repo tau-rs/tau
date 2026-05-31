@@ -22,6 +22,10 @@ tau-pkg               = { workspace = true }
 tau-plugin-protocol   = { workspace = true }
 tau-sandbox-native    = { workspace = true }
 tau-sandbox-container = { workspace = true }
+# OS entropy for the tokio host's `OsRandom` impl of `tau_ports::RandomSource`.
+# Suitable for cryptographic use; tau-runtime-core mints UUID/ULID bytes
+# through this port.
+getrandom           = "0.3"
 thiserror           = { workspace = true }
 tracing             = { workspace = true }
 # `v4` for session-id minting in `Runtime::run` per spec §3.7; the
