@@ -116,3 +116,6 @@ tempfile           = { workspace = true }
 # Used by `tool_plugin_e2e.rs` to drive FsReadPlugin in-process.
 fs-read            = { path = "../tau-plugins/fs-read" }
 tau-plugin-sdk     = { workspace = true }
+# Used by ir_smoke.rs integration test.
+tau-ir             = { workspace = true }
+tau-runtime-core   = { workspace = true }
