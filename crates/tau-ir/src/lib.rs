@@ -15,6 +15,8 @@
 //!   in the hash. See `canonical` and `hash` modules.
 
 extern crate alloc;
+#[cfg(feature = "with-std-adapters")]
+extern crate std;
 
 pub mod budget;
 pub mod capability;

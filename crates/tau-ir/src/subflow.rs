@@ -7,7 +7,7 @@ use crate::capability::CapabilityRequirements;
 use crate::ids::{AgentId, SubflowId};
 
 /// The kind of subflow connection.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SubflowKind {
     /// Spawn a sibling agent within the same module with a narrowed
     /// capability set. Per the subset-of-parent rule, `cap_subset`
@@ -30,7 +30,7 @@ pub enum SubflowKind {
 }
 
 /// A subflow edge in a workflow.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubflowEdge {
     /// Identifier of this subflow within the workflow.
     pub id: SubflowId,

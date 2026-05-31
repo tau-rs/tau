@@ -29,7 +29,7 @@ pub struct NativeFnRef {
 }
 
 /// How a [`crate::Tool`] node's behavior is provided at runtime.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ToolImpl {
     /// Statically linked native tool.
     Native {

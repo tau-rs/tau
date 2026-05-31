@@ -19,7 +19,7 @@ use crate::ids::ToolId;
 /// re-define what a capability *is*; it just carries the existing type
 /// across the boundary. Future evolution (capability narrowing in the IR
 /// pre-hash, etc.) lands here.
-#[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CapabilityRequirements {
     /// Declared capabilities; order is whatever the source provides
     /// (canonicalization sorts during hashing — see D-6).
@@ -31,5 +31,5 @@ pub struct CapabilityRequirements {
 /// Built by the lowering pass from per-tool TOML declarations; consumed
 /// by the capability-fit check (D-3b) and embedded in the bundle's
 /// `tau.caps` custom section (D-3).
-#[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CapabilityTable(pub BTreeMap<ToolId, CapabilityRequirements>);

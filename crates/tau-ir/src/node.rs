@@ -13,7 +13,7 @@ use crate::subflow::SubflowEdge;
 use crate::tool_impl::{NativeFnRef, ToolImpl};
 
 /// One of the four IR node variants.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Node {
     /// LLM agent loop with tool dispatch.
     Agent(Agent),
@@ -43,7 +43,7 @@ pub struct Agent {
 }
 
 /// A tool node.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tool {
     /// Identifier within the workflow.
     pub id: ToolId,
