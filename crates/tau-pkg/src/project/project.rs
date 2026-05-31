@@ -6,6 +6,8 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use tau_domain::Capability;
+
 /// Unchecked deserialization shape — fields are typed but no semantic
 /// validation has run. Use [`UncheckedProjectConfig::validate`] to
 /// produce a [`ProjectConfig`].
@@ -16,6 +18,12 @@ pub struct UncheckedProjectConfig {
     /// Map of agent id → unchecked agent definition.
     #[serde(default)]
     pub agents: BTreeMap<String, UncheckedAgent>,
+    /// Map of tool name → unchecked tool definition (IR lowering, β.2.2).
+    #[serde(default)]
+    pub tools: BTreeMap<String, UncheckedTool>,
+    /// Map of step name → unchecked deterministic step definition (IR lowering, β.2.2).
+    #[serde(default)]
+    pub steps: BTreeMap<String, UncheckedStep>,
 }
 
 /// `[project]` table.
@@ -51,6 +59,21 @@ pub struct UncheckedAgent {
     /// Optional `[agents.<id>.prompt]` sub-table.
     #[serde(default)]
     pub prompt: Option<UncheckedPrompt>,
+    // --- IR lowering fields (β.2.2) ---
+    /// LLM model identifier (e.g. `"claude-haiku-4-5"`). Used by the IR
+    /// lowering pass; ignored by the existing agent-resolution path.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Tool names this agent is allowed to call. Maps to `Agent::tool_refs`
+    /// in the IR. Ignored by the existing agent-resolution path.
+    #[serde(default)]
+    pub tool_refs: Vec<String>,
+    /// Maximum number of turns the agent loop may take.
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    /// Maximum tokens (input + output) across the entire run.
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
 }
 
 /// `[agents.<id>.requires]` sub-table.
@@ -138,6 +161,112 @@ pub struct UncheckedCapabilityOverride {
     pub max_bytes: Option<u64>,
 }
 
+// ----- IR lowering structs (β.2.2) -----
+
+/// Body of a `[tools.<name>]` table — discriminates the implementation kind.
+///
+/// These variants are mutually exclusive; exactly one must be present in the
+/// TOML table. The `#[serde(rename_all = "lowercase")]` matches the wire
+/// keys: `native`, `mcp`, `subflow`.
+///
+/// # Example
+///
+/// ```toml
+/// [tools.read_temp]
+/// native = "ReadTemp"
+/// capabilities = []
+///
+/// [tools.weather]
+/// mcp = "https://mcp.weather.example.com"
+/// capabilities = [{ kind = "net.http" }]
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolBody {
+    /// Statically linked native Rust tool. The value is the symbolic name
+    /// of the `impl Tool for X` type (e.g. `"ReadTemp"`).
+    Native(String),
+    /// MCP-contracted external server. The value is the MCP server URL.
+    Mcp(String),
+    /// Subflow-as-tool: sugar for a `SubflowEdge::Spawn` edge. The value
+    /// is the target agent id within the same workflow.
+    Subflow(String),
+}
+
+/// Unchecked `[tools.<name>]` table (β.2.2).
+///
+/// Fields use `#[serde(deny_unknown_fields)]` so typos in the TOML are
+/// caught at parse time rather than silently discarded.
+#[non_exhaustive]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedTool {
+    /// Discriminated implementation body (`native`, `mcp`, or `subflow`).
+    #[serde(flatten)]
+    pub body: ToolBody,
+    /// LLM-visible description of the tool.
+    #[serde(default)]
+    pub description: String,
+    /// JSON schema for the tool's input (freeform; passed through to IR).
+    #[serde(default)]
+    pub input_schema: serde_json::Value,
+    /// Declared capabilities. Each entry uses the `{ kind = "…" }` struct
+    /// form (same as package manifests). An empty array means no extra
+    /// capabilities beyond ambient.
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
+}
+
+/// Validated `[tools.<name>]` entry produced by `validate()`.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct ToolEntry {
+    /// Tool name (the TOML table key).
+    pub name: String,
+    /// Discriminated implementation body.
+    pub body: ToolBody,
+    /// LLM-visible description.
+    pub description: String,
+    /// JSON schema for the tool's input.
+    pub input_schema: serde_json::Value,
+    /// Declared capabilities.
+    pub capabilities: Vec<Capability>,
+}
+
+/// Unchecked `[steps.<name>]` table (β.2.2).
+///
+/// A deterministic step is a pure Rust function applied to its input
+/// without an LLM call. Fields use `#[serde(deny_unknown_fields)]`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedStep {
+    /// Symbolic name of the Rust fn (e.g. `"parse_celsius"`). Maps to
+    /// the `fn_ref` field in `Deterministic`.
+    pub deterministic: String,
+    /// JSON schema for the step's input.
+    #[serde(default)]
+    pub input_schema: serde_json::Value,
+    /// JSON schema for the step's output.
+    #[serde(default)]
+    pub output_schema: serde_json::Value,
+}
+
+/// Validated `[steps.<name>]` entry.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct StepEntry {
+    /// Step name (the TOML table key).
+    pub name: String,
+    /// Symbolic name of the Rust fn.
+    pub fn_name: String,
+    /// JSON schema for the step's input.
+    pub input_schema: serde_json::Value,
+    /// JSON schema for the step's output.
+    pub output_schema: serde_json::Value,
+}
+
 // ----- Validated shapes -----
 
 /// Validated project config. Constructed via
@@ -151,6 +280,10 @@ pub struct ProjectConfig {
     pub description: String,
     /// Map of agent id → validated agent entry.
     pub agents: BTreeMap<String, AgentEntry>,
+    /// Map of tool name → validated tool entry (IR lowering, β.2.2).
+    pub tools: BTreeMap<String, ToolEntry>,
+    /// Map of step name → validated step entry (IR lowering, β.2.2).
+    pub steps: BTreeMap<String, StepEntry>,
 }
 
 /// Validated entry for a single agent.
@@ -197,6 +330,15 @@ pub struct AgentEntry {
     /// `tau list --capabilities` rendering time. Empty = no override
     /// (effective grant = package manifest verbatim).
     pub capability_overrides: Vec<crate::capability_override::CapabilityOverride>,
+    // --- IR lowering fields (β.2.2) ---
+    /// LLM model identifier (IR lowering use). Empty string if absent.
+    pub model: String,
+    /// Tool names this agent references (IR lowering use).
+    pub tool_refs: Vec<String>,
+    /// Maximum turns (IR lowering use).
+    pub max_turns: Option<u32>,
+    /// Maximum tokens (IR lowering use).
+    pub max_tokens: Option<u64>,
 }
 
 impl AgentEntry {
@@ -223,6 +365,10 @@ impl AgentEntry {
             config,
             prompt,
             capability_overrides,
+            model: String::new(),
+            tool_refs: Vec::new(),
+            max_turns: None,
+            max_tokens: None,
         }
     }
 }
@@ -362,6 +508,34 @@ pub enum ProjectConfigError {
         /// The bare string value as it appeared in the TOML.
         value: String,
     },
+
+    // --- IR lowering errors (β.2.2) ---
+
+    /// In-memory TOML parse failure (for `parse_str`, as opposed to file-based `from_path`).
+    #[error("failed to parse tau.toml from string: {source}")]
+    ParseStr {
+        /// Underlying TOML parse error.
+        #[source]
+        source: toml::de::Error,
+    },
+
+    /// A `[tools.<name>]` entry failed validation.
+    #[error("tool {name:?}: {message}")]
+    ToolValidation {
+        /// Tool name that failed.
+        name: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
+    /// A `[steps.<name>]` entry failed validation.
+    #[error("step {name:?}: {message}")]
+    StepValidation {
+        /// Step name that failed.
+        name: String,
+        /// Human-readable reason.
+        message: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -393,10 +567,22 @@ impl UncheckedProjectConfig {
             agents.insert(id.clone(), validate_agent(id, raw)?);
         }
 
+        let mut tools = BTreeMap::new();
+        for (name, raw) in self.tools {
+            tools.insert(name.clone(), validate_tool(name, raw)?);
+        }
+
+        let mut steps = BTreeMap::new();
+        for (name, raw) in self.steps {
+            steps.insert(name.clone(), validate_step(name, raw)?);
+        }
+
         Ok(ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
             agents,
+            tools,
+            steps,
         })
     }
 }
@@ -502,6 +688,37 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         config,
         prompt,
         capability_overrides,
+        model: raw.model.unwrap_or_default(),
+        tool_refs: raw.tool_refs,
+        max_turns: raw.max_turns,
+        max_tokens: raw.max_tokens,
+    })
+}
+
+fn validate_tool(name: String, raw: UncheckedTool) -> Result<ToolEntry, ProjectConfigError> {
+    // Currently no semantic validation beyond what serde already enforced.
+    // Placeholder: future validation (e.g. non-empty native fn_name) lives here.
+    Ok(ToolEntry {
+        name,
+        body: raw.body,
+        description: raw.description,
+        input_schema: raw.input_schema,
+        capabilities: raw.capabilities,
+    })
+}
+
+fn validate_step(name: String, raw: UncheckedStep) -> Result<StepEntry, ProjectConfigError> {
+    if raw.deterministic.trim().is_empty() {
+        return Err(ProjectConfigError::StepValidation {
+            name,
+            message: "deterministic fn name must be non-empty".into(),
+        });
+    }
+    Ok(StepEntry {
+        name,
+        fn_name: raw.deterministic,
+        input_schema: raw.input_schema,
+        output_schema: raw.output_schema,
     })
 }
 
@@ -525,6 +742,30 @@ fn unchecked_to_capability_override(
 // ----- File entrypoint -----
 
 impl ProjectConfig {
+    /// Parse and validate from a TOML string. Convenience wrapper for
+    /// tests and in-memory usage (as opposed to [`ProjectConfig::from_path`]
+    /// for file-based loading).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_pkg::project::project::ProjectConfig;
+    ///
+    /// let toml = r#"
+    ///     [project]
+    ///     name = "demo"
+    /// "#;
+    /// let config = ProjectConfig::parse_str(toml).expect("valid");
+    /// assert_eq!(config.project_name, "demo");
+    /// assert!(config.tools.is_empty());
+    /// assert!(config.steps.is_empty());
+    /// ```
+    pub fn parse_str(toml: &str) -> Result<Self, ProjectConfigError> {
+        let unchecked: UncheckedProjectConfig =
+            toml::from_str(toml).map_err(|source| ProjectConfigError::ParseStr { source })?;
+        unchecked.validate()
+    }
+
     /// Load and validate from a path. Convenience wrapper around the
     /// deserialize-then-validate pipeline.
     pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, ProjectConfigError> {
@@ -927,6 +1168,169 @@ mod tests {
         assert!(cfg.agents.contains_key("alpha"));
         assert!(cfg.agents.contains_key("beta"));
     }
+
+    // --- IR lowering tests (β.2.2) ---
+
+    #[test]
+    fn parse_str_accepts_minimal_project() {
+        let cfg = ProjectConfig::parse_str("[project]\nname = \"demo\"\n").unwrap();
+        assert_eq!(cfg.project_name, "demo");
+        assert!(cfg.tools.is_empty());
+        assert!(cfg.steps.is_empty());
+    }
+
+    #[test]
+    fn parse_str_error_on_invalid_toml() {
+        let result = ProjectConfig::parse_str("not valid toml {{{{");
+        assert!(
+            matches!(result, Err(ProjectConfigError::ParseStr { .. })),
+            "expected ParseStr error"
+        );
+    }
+
+    #[test]
+    fn parse_native_tool_entry() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.read_temp]
+            native = "ReadTemp"
+            description = "reads the temperature"
+            capabilities = []
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        assert_eq!(cfg.tools.len(), 1);
+        let tool = cfg.tools.get("read_temp").unwrap();
+        assert_eq!(tool.name, "read_temp");
+        assert!(matches!(&tool.body, ToolBody::Native(s) if s == "ReadTemp"));
+        assert_eq!(tool.description, "reads the temperature");
+        assert!(tool.capabilities.is_empty());
+    }
+
+    #[test]
+    fn parse_mcp_tool_entry() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.weather]
+            mcp = "https://mcp.weather.example.com"
+            capabilities = []
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let tool = cfg.tools.get("weather").unwrap();
+        assert!(
+            matches!(&tool.body, ToolBody::Mcp(url) if url == "https://mcp.weather.example.com")
+        );
+    }
+
+    #[test]
+    fn parse_subflow_tool_entry() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.alert]
+            subflow = "alerter"
+            capabilities = []
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let tool = cfg.tools.get("alert").unwrap();
+        assert!(matches!(&tool.body, ToolBody::Subflow(t) if t == "alerter"));
+    }
+
+    #[test]
+    fn parse_step_entry() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [steps.normalize]
+            deterministic = "parse_celsius"
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        assert_eq!(cfg.steps.len(), 1);
+        let step = cfg.steps.get("normalize").unwrap();
+        assert_eq!(step.name, "normalize");
+        assert_eq!(step.fn_name, "parse_celsius");
+    }
+
+    #[test]
+    fn validate_rejects_empty_step_fn_name() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [steps.bad]
+            deterministic = ""
+        "#;
+        let result = parse(toml_str);
+        assert!(
+            matches!(result, Err(ProjectConfigError::StepValidation { .. })),
+            "expected StepValidation error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn parse_agent_ir_fields() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [agents.monitor]
+            display_name = "Monitor"
+            package      = "p@^0.1"
+            llm_backend  = "anthropic"
+            model        = "claude-haiku-4-5"
+            tool_refs    = ["read_temp", "set_fan"]
+            max_turns    = 10
+            max_tokens   = 4096
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let agent = cfg.agents.get("monitor").unwrap();
+        assert_eq!(agent.model, "claude-haiku-4-5");
+        assert_eq!(agent.tool_refs, vec!["read_temp", "set_fan"]);
+        assert_eq!(agent.max_turns, Some(10));
+        assert_eq!(agent.max_tokens, Some(4096));
+    }
+
+    #[test]
+    fn parse_agent_ir_fields_default_empty() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [agents.r]
+            display_name = "R"
+            package      = "p@^0.1"
+            llm_backend  = "anthropic"
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let agent = cfg.agents.get("r").unwrap();
+        assert_eq!(agent.model, "");
+        assert!(agent.tool_refs.is_empty());
+        assert!(agent.max_turns.is_none());
+        assert!(agent.max_tokens.is_none());
+    }
+
+    #[test]
+    fn parse_tool_with_net_http_capability() {
+        // Capability uses the struct form { kind = "net.http" }.
+        // In TOML, inline arrays-of-tables use the array-of-inline-tables
+        // syntax when embedded inline in a regular table.
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.weather]
+            mcp = "https://mcp.weather.example.com"
+            capabilities = [{ kind = "net.http" }]
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let tool = cfg.tools.get("weather").unwrap();
+        assert_eq!(tool.capabilities.len(), 1);
+    }
 }
 
 #[cfg(test)]
@@ -965,6 +1369,10 @@ mod proptests {
                         capabilities: Vec::new(),
                         config: None,
                         prompt: None,
+                        model: None,
+                        tool_refs: Vec::new(),
+                        max_turns: None,
+                        max_tokens: None,
                     },
                 )
             })
@@ -993,6 +1401,8 @@ mod proptests {
                     description: String::new(),
                 },
                 agents: agent_map.clone(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();

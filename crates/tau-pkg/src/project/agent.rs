@@ -343,6 +343,10 @@ mod tests {
             config: BTreeMap::new(),
             prompt: PromptEntry::None,
             capability_overrides: Vec::new(),
+            model: String::new(),
+            tool_refs: Vec::new(),
+            max_turns: None,
+            max_tokens: None,
         };
         mutate(&mut e);
         e

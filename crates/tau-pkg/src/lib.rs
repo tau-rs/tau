@@ -53,7 +53,7 @@ pub use lockfile::{LockFile, LockedPackage, LockedPlugin, LockedVersion, Synthes
 pub use manifest::read_manifest;
 pub use project::{
     build_agent_definition, AgentEntry, AgentResolutionError, ProjectConfig, ProjectConfigError,
-    PromptEntry, RequiresEntry,
+    PromptEntry, RequiresEntry, StepEntry, ToolBody, ToolEntry,
 };
 pub use registry::{get, list};
 pub use resolve::{
