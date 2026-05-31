@@ -12,6 +12,7 @@ mod common;
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
+use tau_runtime::RuntimeShellExt;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use tau_runtime::RuntimeShellExt;
 
 use fs_read_plugin_lib::plugin::{FsReadPlugin, FsReadSession};
 use tau_domain::{AgentStatus, FailureKind, Value};

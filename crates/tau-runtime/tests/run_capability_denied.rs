@@ -7,6 +7,7 @@ mod common;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tau_runtime::RuntimeShellExt;
 
 use tau_domain::{AgentStatus, Capability, FailureKind, Value};
 use tau_ports::fixtures::{

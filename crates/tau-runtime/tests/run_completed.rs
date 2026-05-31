@@ -5,6 +5,7 @@
 mod common;
 
 use std::sync::Arc;
+use tau_runtime::RuntimeShellExt;
 
 use tau_domain::MessagePayload;
 use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend};

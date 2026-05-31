@@ -16,6 +16,7 @@ mod common;
 
 use std::sync::Arc;
 use std::time::Duration;
+use tau_runtime::RuntimeShellExt;
 
 use tau_domain::{Capability, Value};
 use tau_plugin_protocol::test_support::FakeStdioPeer;

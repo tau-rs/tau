@@ -33,6 +33,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use tau_runtime::RuntimeShellExt;
 
 use base64::Engine as _;
 use fs_read_plugin_lib::plugin::{FsReadPlugin, FsReadSession};

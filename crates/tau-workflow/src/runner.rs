@@ -12,7 +12,7 @@ use chrono::Utc;
 use tau_domain::{
     Address, AgentDefinition, AgentInstanceId, Message, MessagePayload, PackageManifest,
 };
-use tau_runtime::Runtime;
+use tau_runtime::{Runtime, RuntimeShellExt};
 
 use crate::error::WorkflowError;
 use crate::model::{StepKind, Workflow};
@@ -182,10 +182,19 @@ impl Runner {
                         })?;
                     // Convert serde_json::Value → tau_domain::Value for invoke_tool.
                     let tau_args = json_to_tau_value(&resolved_args);
-                    let result = self
-                        .runtime
-                        .invoke_tool(agent_def, manifest, tool, tau_args)
-                        .await;
+                    // Disambiguate: tau_runtime_core::Runtime has an inherent
+                    // `invoke_tool` (with clock/random params) AND the
+                    // RuntimeShellExt trait adds one (without). Fully qualify
+                    // so we call the host-shell variant that returns
+                    // tau_runtime::RuntimeError.
+                    let result = <tau_runtime::Runtime as RuntimeShellExt>::invoke_tool(
+                        &self.runtime,
+                        agent_def,
+                        manifest,
+                        tool,
+                        tau_args,
+                    )
+                    .await;
                     let input_repr = serde_json::to_string(&resolved_args).unwrap_or_default();
                     (input_repr, tool_outcome_to_string(result))
                 }

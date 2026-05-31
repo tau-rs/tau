@@ -35,6 +35,7 @@ use tracing::{debug, info, info_span, warn, Instrument as _};
 use crate::builder::{DynLlmBackend, DynTool};
 use crate::options::RunOptions;
 use crate::outcome::RunOutcome;
+use crate::runtime_ext::RuntimeShellExt as _;
 use crate::tool_args::ToolArgsValidator;
 
 /// Return the `Clock` from `RunOptions`, panicking if absent.
@@ -719,19 +720,17 @@ pub(crate) fn run_streaming_inner(
                                         // Build child opts: share state + runtime
                                         // arc; override grant with validated skill
                                         // grant.
-                                        let child_opts = crate::RunOptions {
-                                            orchestration_state: Some(
-                                                state_arc.clone(),
-                                            ),
-                                            orchestration_runtime: Some(
-                                                child_runtime.clone(),
-                                            ),
-                                            granted_capabilities_override: Some(
-                                                skill_req.grant.clone(),
-                                            ),
-                                            clock: options.clock.clone(),
-                                            random: options.random.clone(),
-                                            ..crate::RunOptions::default()
+                                        let child_opts = {
+                                            let mut o = crate::RunOptions::default();
+                                            o.orchestration_state =
+                                                Some(state_arc.clone());
+                                            o.orchestration_runtime =
+                                                Some(child_runtime.clone());
+                                            o.granted_capabilities_override =
+                                                Some(skill_req.grant.clone());
+                                            o.clock = options.clock.clone();
+                                            o.random = options.random.clone();
+                                            o
                                         };
 
                                         // Initial user message for the child.
@@ -976,19 +975,17 @@ pub(crate) fn run_streaming_inner(
                                             // Build child opts: share state +
                                             // runtime arc; override grant with
                                                 // validated child grant.
-                                            let child_opts = crate::RunOptions {
-                                                orchestration_state: Some(
-                                                    state_arc.clone(),
-                                                ),
-                                                orchestration_runtime: Some(
-                                                    child_runtime.clone(),
-                                                ),
-                                                granted_capabilities_override: Some(
-                                                    req.grant.clone(),
-                                                ),
-                                                clock: options.clock.clone(),
-                                                random: options.random.clone(),
-                                                ..crate::RunOptions::default()
+                                            let child_opts = {
+                                                let mut o = crate::RunOptions::default();
+                                                o.orchestration_state =
+                                                    Some(state_arc.clone());
+                                                o.orchestration_runtime =
+                                                    Some(child_runtime.clone());
+                                                o.granted_capabilities_override =
+                                                    Some(req.grant.clone());
+                                                o.clock = options.clock.clone();
+                                                o.random = options.random.clone();
+                                                o
                                             };
 
                                             // Initial user message for the child.
@@ -1756,11 +1753,10 @@ mod tests {
     /// and `DeterministicRandom` so port-routed id helpers don't panic.
     fn test_run_options() -> RunOptions {
         use tau_ports::{DeterministicRandom, MockClock};
-        RunOptions {
-            clock: Some(Arc::new(MockClock::new())),
-            random: Some(Arc::new(DeterministicRandom::seeded(42))),
-            ..RunOptions::default()
-        }
+        let mut o = RunOptions::default();
+        o.clock = Some(Arc::new(MockClock::new()));
+        o.random = Some(Arc::new(DeterministicRandom::seeded(42)));
+        o
     }
 
     async fn collect_events(
@@ -2464,9 +2460,10 @@ paths = ["/etc/**"]
         // max_turns = 1: the first turn dispatches a tool use and loops
         // back; the while-condition `total_turns < 1` is now false, so
         // the loop falls through to make_max_turns_outcome.
-        let options = RunOptions {
-            max_turns: 1,
-            ..test_run_options()
+        let options = {
+            let mut o = test_run_options();
+            o.max_turns = 1;
+            o
         };
 
         // Turn 1 only: LLM emits ToolUse + Finish(ToolUse).

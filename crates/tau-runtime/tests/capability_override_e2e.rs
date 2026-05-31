@@ -33,6 +33,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use tau_runtime::RuntimeShellExt;
 
 use fs_read_plugin_lib::plugin::{FsReadPlugin, FsReadSession};
 use tau_domain::Value;
@@ -260,12 +261,16 @@ paths = ["{package_glob}"]
     let initial = common::user_message("read the file");
 
     let mut options = common::run_options();
-    options.project_override = vec![CapabilityOverride::new(
-        "fs.read".to_string(),
-        Some(vec![narrow_allow]),
-        Vec::new(),
-        None,
-    )];
+    options.capability_resolver = Some(
+        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+            CapabilityOverride::new(
+                "fs.read".to_string(),
+                Some(vec![narrow_allow]),
+                Vec::new(),
+                None,
+            ),
+        ]),
+    );
 
     let err = runtime
         .run(agent_def, manifest, initial, options)
@@ -331,12 +336,16 @@ paths = ["{package_glob}"]
     let initial = common::user_message("read the file");
 
     let mut options = common::run_options();
-    options.project_override = vec![CapabilityOverride::new(
-        "fs.read".to_string(),
-        None, // allow unchanged
-        vec![path.clone()],
-        None,
-    )];
+    options.capability_resolver = Some(
+        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+            CapabilityOverride::new(
+                "fs.read".to_string(),
+                None, // allow unchanged
+                vec![path.clone()],
+                None,
+            ),
+        ]),
+    );
 
     let err = runtime
         .run(agent_def, manifest, initial, options)
@@ -392,12 +401,16 @@ paths = ["/var/definitely-not-the-tmpfile-dir/**"]
     let initial = common::user_message("read the file");
 
     let mut options = common::run_options();
-    options.project_override = vec![CapabilityOverride::new(
-        "fs.read".to_string(),
-        Some(vec!["/etc/**".to_string()]), // not a subset of /var/...
-        Vec::new(),
-        None,
-    )];
+    options.capability_resolver = Some(
+        tau_runtime::capability_resolver_impl::resolver_from_overrides(vec![
+            CapabilityOverride::new(
+                "fs.read".to_string(),
+                Some(vec!["/etc/**".to_string()]), // not a subset of /var/...
+                Vec::new(),
+                None,
+            ),
+        ]),
+    );
 
     let err = runtime
         .run(agent_def, manifest, initial, options)

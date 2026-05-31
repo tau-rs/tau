@@ -34,7 +34,7 @@ mod common;
 use std::sync::Arc;
 
 use tau_ports::RunBudget;
-use tau_runtime::Runtime;
+use tau_runtime::{Runtime, RuntimeShellExt};
 
 // ---------------------------------------------------------------------------
 // Shared manifest helpers

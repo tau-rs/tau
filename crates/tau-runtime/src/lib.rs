@@ -29,14 +29,15 @@ pub mod orchestration;
 pub mod outcome;
 pub mod plugin_host;
 mod run;
-pub(crate) mod runtime_ext;
+pub mod runtime_ext;
 pub mod sandbox;
 pub mod stream;
 pub(crate) mod tool_args;
 
-pub use builder::{Runtime, TauRuntimeBuilder as RuntimeBuilder};
+pub use builder::{Runtime, RuntimeBuilder, TauRuntimeBuilder};
 pub use capability_override::{CapabilityOverride, EffectiveCapability, OverrideExpandError};
 pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError};
 pub use options::{RunOptions, TokenUsage};
 pub use outcome::RunOutcome;
+pub use runtime_ext::RuntimeShellExt;
 pub use stream::RunEvent;

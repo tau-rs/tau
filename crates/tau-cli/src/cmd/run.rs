@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_plugin_protocol::handshake::TraceContext;
-use tau_runtime::{RunOptions, RunOutcome};
+use tau_runtime::{RunOptions, RunOutcome, RuntimeShellExt};
 
 use crate::cli::RunArgs;
 use crate::cmd::plugin_loader;
@@ -106,7 +106,13 @@ pub async fn run(
     if let Some(n) = args.max_turns {
         options.max_turns = n;
     }
-    options.project_override = entry.capability_overrides.clone();
+    if !entry.capability_overrides.is_empty() {
+        options.capability_resolver = Some(
+            tau_runtime::capability_resolver_impl::resolver_from_overrides(
+                entry.capability_overrides.clone(),
+            ),
+        );
+    }
 
     if args.dry_run {
         emit_dry_run(

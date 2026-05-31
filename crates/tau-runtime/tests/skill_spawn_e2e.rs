@@ -22,6 +22,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tau_runtime::RuntimeShellExt;
 
 use tau_pkg::lockfile::LockFile;
 use tau_ports::RunBudget;

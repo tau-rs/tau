@@ -7,6 +7,7 @@ mod common;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use tau_runtime::RuntimeShellExt;
 
 use tau_domain::{Address, MessagePayload, Value};
 use tau_ports::fixtures::{make_completion_response, make_token_usage, make_tool_use, MockTool};

@@ -8,6 +8,7 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
 /// Token usage reported by the LLM backend, summed across the run.
 ///
@@ -98,6 +99,34 @@ pub struct RunOptions {
     /// (no narrowing, no deny entries). This is the right default for
     /// shells with no override system.
     pub capability_resolver: Option<Arc<dyn tau_ports::CapabilityResolver>>,
+
+    /// Set by `Runtime::spawn_root_agent` when running inside a
+    /// multi-agent orchestrated run. When present, virtual tool calls
+    /// (`task.*`, `run.*`, `agent.<kind>.spawn`) are intercepted before
+    /// plugin dispatch and routed through `crate::orchestration`.
+    /// Callers using single-agent `Runtime::run` should leave this `None`.
+    ///
+    /// `Arc<RefCell<RunState>>` (not async Mutex) is the honest
+    /// representation: the kernel futures are non-Send by design
+    /// (`builder::BoxFuture` is `Pin<Box<dyn Future>>` without a `Send`
+    /// bound), so the agent loop is single-task already.
+    pub orchestration_state: Option<Arc<RefCell<crate::orchestration::run_state::RunState>>>,
+
+    /// Set by `Runtime::spawn_root_agent` (v1.1+). Carries the
+    /// `Arc<Runtime>` recursion handle so the in-stream
+    /// `agent.<kind>.spawn` / `skill.<name>.spawn` intercept can
+    /// recursively invoke a child run on the same kernel via
+    /// `run_with_history`. `None` for single-agent runs.
+    pub orchestration_runtime: Option<Arc<crate::builder::Runtime>>,
+
+    /// Project-scope root on disk — used for skill resolution and JSONL
+    /// run-log paths. Set by the host shell's wrapper around
+    /// `spawn_root_agent` from its scope discovery.
+    ///
+    /// `String` (not `PathBuf`) so this field stays usable in `no_std +
+    /// alloc` shells with no `std::path`. Tokio host code wraps/unwraps
+    /// via `PathBuf::from` / `Path::to_str`.
+    pub scope_root: Option<String>,
 }
 
 impl core::fmt::Debug for RunOptions {
@@ -118,6 +147,15 @@ impl core::fmt::Debug for RunOptions {
                     .as_ref()
                     .map(|_| "<CapabilityResolver>"),
             )
+            .field(
+                "orchestration_state",
+                &self.orchestration_state.as_ref().map(|_| "<RunState>"),
+            )
+            .field(
+                "orchestration_runtime",
+                &self.orchestration_runtime.as_ref().map(|_| "<Runtime>"),
+            )
+            .field("scope_root", &self.scope_root)
             .finish()
     }
 }
@@ -131,6 +169,9 @@ impl Default for RunOptions {
             clock: None,
             random: None,
             capability_resolver: None,
+            orchestration_state: None,
+            orchestration_runtime: None,
+            scope_root: None,
         }
     }
 }

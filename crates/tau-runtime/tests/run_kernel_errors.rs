@@ -24,6 +24,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tau_runtime::RuntimeShellExt;
 
 use tau_domain::{Capability, MessagePayload, PackageName, Value};
 use tau_ports::fixtures::{
