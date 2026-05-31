@@ -1,0 +1,33 @@
+[package]
+name = "tau-ir"
+description = "The tau workflow IR — typed intermediate representation lowered from tau.toml by `tau build`. no_std + alloc; consumers include tau-runtime-core (v0 interpreter) and the future AOT lowering (β.7)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+tau-domain = { workspace = true, default-features = false, features = ["serde"] }
+tau-ports  = { workspace = true, default-features = false, features = ["serde"] }
+serde      = { workspace = true, default-features = false, features = ["alloc", "derive"] }
+serde_json = { workspace = true }
+chrono     = { workspace = true, default-features = false, features = ["alloc", "serde"] }
+thiserror  = { workspace = true, default-features = false }
+hashbrown  = { workspace = true }
+foldhash   = { workspace = true }
+# SHA-256 for the canonical-bytes hash (β.2.3). sha2 supports no_std via
+# `default-features = false`.
+sha2       = { workspace = true, default-features = false }
+
+[dev-dependencies]
+tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
+
+[features]
+default            = ["with-std-adapters"]
+# When on, enables Message↔tau_domain::Message bidirectional adapters
+# that require std (SystemTime ↔ i64-ms conversion through UNIX_EPOCH).
+# Disable for pure no_std consumers.
+with-std-adapters  = []
+test-fixtures      = []

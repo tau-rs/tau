@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/tau-domain",
     "crates/tau-ports",
+    "crates/tau-ir",
     "crates/tau-infra",
     "crates/tau-app",
     "crates/tau-pkg",
@@ -51,6 +52,7 @@ authors = ["Titouan Lebocq <75916953+LEBOCQTitouan@users.noreply.github.com>"]
 [workspace.dependencies]
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0" }
 tau-ports           = { path = "crates/tau-ports",  version = "0.0.0" }
+tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
 tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0" }
 tau-runtime-tokio   = { path = "crates/tau-runtime-tokio", version = "0.0.0" }
