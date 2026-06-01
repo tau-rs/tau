@@ -15,7 +15,7 @@ use crate::error::IrError;
 use crate::ids::{AgentId, StepId, ToolId};
 use crate::module::Workflow;
 use crate::node::{Agent, Deterministic, Tool, ToolSpec};
-use crate::subflow::{SubflowEdge, SubflowKind};
+use crate::subflow::SubflowEdge;
 use crate::tool_impl::{Hash256, NativeFnRef, ToolImpl};
 use crate::AgentBudget;
 
@@ -30,7 +30,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
     let mut agents: BTreeMap<AgentId, Agent> = BTreeMap::new();
     let mut tools: BTreeMap<ToolId, Tool> = BTreeMap::new();
     let mut steps: BTreeMap<StepId, Deterministic> = BTreeMap::new();
-    let mut edges: alloc::vec::Vec<SubflowEdge> = alloc::vec::Vec::new();
+    let edges: alloc::vec::Vec<SubflowEdge> = alloc::vec::Vec::new();
     let mut capability_table: BTreeMap<ToolId, CapabilityRequirements> = BTreeMap::new();
 
     // --- Tools ---------------------------------------------------------
@@ -55,18 +55,9 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                 contract_hash: Hash256::default(),
                 capability_subset: caps.clone(),
             },
-            ToolBody::Subflow(target) => {
-                // Subflow-as-tool is sugar for a SubflowEdge::Spawn; we
-                // emit an edge and DO NOT register a Tool node for it.
-                edges.push(SubflowEdge {
-                    id: crate::SubflowId(name.clone()),
-                    kind: SubflowKind::Spawn {
-                        target_agent: AgentId(target.clone()),
-                        cap_subset: caps,
-                    },
-                });
-                continue;
-            }
+            ToolBody::Subflow(target) => ToolImpl::Subflow {
+                target: AgentId(target.clone()),
+            },
             // `ToolBody` is `#[non_exhaustive]`; future variants are
             // forwarded as a parse error so existing callers aren't
             // silently broken when a new variant lands.
@@ -137,6 +128,36 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
         );
     }
 
+    // --- Deterministic steps as tools ----------------------------------
+    //
+    // Each [steps.<name>] block registers BOTH a `Deterministic` node
+    // (above) and a `Tool` with `ToolImpl::Step { id }`. The Tool
+    // registration is what lets an agent reference the step in its
+    // `tool_refs`; the Deterministic node is what the runtime registry
+    // dispatches against at invoke time.
+    for (name, entry) in config.steps.iter() {
+        let step_id = StepId(name.clone());
+        let tool_id = ToolId(name.clone());
+        let caps = CapabilityRequirements {
+            declared: alloc::vec::Vec::new(),
+        };
+        let spec = ToolSpec {
+            name: name.clone(),
+            description: alloc::string::String::new(),
+            input_schema: entry.input_schema.clone(),
+        };
+        capability_table.insert(tool_id.clone(), caps.clone());
+        tools.insert(
+            tool_id.clone(),
+            Tool {
+                id: tool_id,
+                impl_: ToolImpl::Step { id: step_id },
+                capabilities: caps,
+                spec,
+            },
+        );
+    }
+
     Ok(Parsed {
         workflow: Workflow {
             agents,
@@ -146,4 +167,122 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             capability_table: CapabilityTable(capability_table),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool_impl::ToolImpl;
+    use tau_pkg::project::ProjectConfig;
+
+    #[test]
+    fn parse_registers_tool_node_for_subflow_body() {
+        let toml = r#"
+[project]
+name = "p"
+
+[agents.parent]
+display_name = "Parent"
+package      = "p@^0.1"
+llm_backend  = "mock-llm"
+tool_refs    = ["notify"]
+
+[agents.worker]
+display_name = "Worker"
+package      = "p@^0.1"
+llm_backend  = "mock-llm"
+tool_refs    = []
+
+[tools.notify]
+subflow     = "worker"
+description = "Hand off to worker"
+capabilities = []
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let parsed = parse(&config).expect("parse stage");
+
+        let tool = parsed
+            .workflow
+            .tools
+            .get(&ToolId("notify".into()))
+            .expect("notify tool registered");
+        assert!(
+            matches!(&tool.impl_, ToolImpl::Subflow { target } if target.0 == "worker"),
+            "expected ToolImpl::Subflow targeting worker; got {:?}",
+            tool.impl_
+        );
+    }
+
+    #[test]
+    fn parse_registers_tool_node_for_each_step() {
+        let toml = r#"
+[project]
+name = "p"
+
+[agents.solo]
+display_name = "Solo"
+package      = "p@^0.1"
+llm_backend  = "mock-llm"
+tool_refs    = ["normalize"]
+
+[steps.normalize]
+deterministic = "parse_celsius"
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let parsed = parse(&config).expect("parse stage");
+
+        // Step registered in workflow.steps:
+        assert!(parsed
+            .workflow
+            .steps
+            .contains_key(&StepId("normalize".into())));
+
+        // AND registered as a Tool with ToolImpl::Step:
+        let tool = parsed
+            .workflow
+            .tools
+            .get(&ToolId("normalize".into()))
+            .expect("normalize tool registered");
+        assert!(
+            matches!(&tool.impl_, ToolImpl::Step { id } if id.0 == "normalize"),
+            "expected ToolImpl::Step{{normalize}}; got {:?}",
+            tool.impl_
+        );
+    }
+
+    #[test]
+    fn parse_emits_no_subflow_edge_for_subflow_body() {
+        // v0 routes subflow dispatch through ToolImpl::Subflow exclusively;
+        // SubflowEdge is reserved for SubflowKind::Compose (future). This
+        // test pins the new shape so a regression that re-introduces the
+        // edge gets caught.
+        let toml = r#"
+[project]
+name = "p"
+
+[agents.parent]
+display_name = "Parent"
+package      = "p@^0.1"
+llm_backend  = "mock-llm"
+tool_refs    = ["notify"]
+
+[agents.worker]
+display_name = "Worker"
+package      = "p@^0.1"
+llm_backend  = "mock-llm"
+tool_refs    = []
+
+[tools.notify]
+subflow     = "worker"
+description = "Hand off to worker"
+capabilities = []
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let parsed = parse(&config).expect("parse stage");
+        assert!(
+            parsed.workflow.edges.is_empty(),
+            "expected no SubflowEdge entries; got {:?}",
+            parsed.workflow.edges
+        );
+    }
 }
