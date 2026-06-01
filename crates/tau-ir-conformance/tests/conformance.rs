@@ -40,7 +40,7 @@ async fn fixture_01_dev_mode_completed_with_tool_call() {
 
     // Outcome must be Completed.
     assert!(
-        matches!(report.run_outcome, RunOutcome::Completed { .. }),
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
         "expected RunOutcome::Completed, got: {:?}",
         report.run_outcome
     );

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
 use tau_ir::lower::{lower_project, Caches};
+use tau_ir::IrModule;
 use tau_pkg::project::ProjectConfig;
 use tau_ports::error::LlmError;
 use tau_ports::llm::{
@@ -39,13 +40,16 @@ use crate::{ConformanceReport, ExecutionMode};
 /// A `LlmBackend` that pops scripted `CompletionResponse` values from a
 /// queue in the order they were added. Used to replay a `mock_llm.jsonl`
 /// script against the IR interpreter.
-struct SequencedLlm {
+///
+/// Shared with `bundle_mode` so DevMode and BundleMode drive the IR
+/// interpreter through the exact same in-process scripted backend.
+pub(crate) struct SequencedLlm {
     name: String,
     queue: Mutex<VecDeque<CompletionResponse>>,
 }
 
 impl SequencedLlm {
-    fn new(name: impl Into<String>, responses: Vec<CompletionResponse>) -> Self {
+    pub(crate) fn new(name: impl Into<String>, responses: Vec<CompletionResponse>) -> Self {
         Self {
             name: name.into(),
             queue: Mutex::new(responses.into()),
@@ -79,15 +83,18 @@ impl LlmBackend for SequencedLlm {
 // ---------------------------------------------------------------------------
 
 /// Recorded side-effect entry for one tool invocation.
-struct ToolCallRecord {
-    tool_name: String,
-    args_canonical: Vec<u8>,
+pub(crate) struct ToolCallRecord {
+    pub(crate) tool_name: String,
+    pub(crate) args_canonical: Vec<u8>,
 }
 
 /// A `ToolDispatcher` that records every tool invocation and returns a
 /// canned successful response (`{"ok": true}`). The recording is then
 /// harvested to build the `ConformanceReport`.
-struct RecordingDispatcher {
+///
+/// Shared with `bundle_mode` so DevMode and BundleMode produce
+/// byte-identical recordings for the same fixture.
+pub(crate) struct RecordingDispatcher {
     backend: Arc<dyn DynLlmBackend>,
     records: Arc<Mutex<Vec<ToolCallRecord>>>,
     /// Map from ToolId → tool name (used to look up the human name from the IR).
@@ -95,7 +102,7 @@ struct RecordingDispatcher {
 }
 
 impl RecordingDispatcher {
-    fn new(
+    pub(crate) fn new(
         backend: Arc<dyn DynLlmBackend>,
         tool_names: std::collections::BTreeMap<String, String>,
     ) -> Self {
@@ -106,7 +113,7 @@ impl RecordingDispatcher {
         }
     }
 
-    fn records(&self) -> Arc<Mutex<Vec<ToolCallRecord>>> {
+    pub(crate) fn records(&self) -> Arc<Mutex<Vec<ToolCallRecord>>> {
         self.records.clone()
     }
 }
@@ -184,7 +191,10 @@ struct MockToolUse {
 
 /// Parse `mock_llm.jsonl` into a vec of `CompletionResponse` values in
 /// turn order (sorted by the `turn` field, then extracted in order).
-fn parse_mock_llm(jsonl: &str) -> Vec<CompletionResponse> {
+///
+/// Shared with `bundle_mode` so both modes consume the same script bytes
+/// and produce the same scripted-response sequence.
+pub(crate) fn parse_mock_llm(jsonl: &str) -> Vec<CompletionResponse> {
     let lines: Vec<MockLlmLine> = jsonl
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -240,8 +250,11 @@ impl ExecutionMode for DevMode {
         // All synchronous setup (lowering, parse) runs in a separate sync
         // block so that the non-Send/non-Sync Caches closures are dropped
         // before the first `.await`, satisfying the `Send` bound on the
-        // async trait future.
-        let (module, responses, entry) = {
+        // async trait future. Returns Ok(...) on successful lowering or
+        // Err(refusal_string) when the build was refused at lowering —
+        // BundleMode mirrors this exactly so the two modes report
+        // build-refused fixtures symmetrically (see ConformanceReport).
+        let lowered: Result<(IrModule, Vec<CompletionResponse>, String), String> = {
             // 1. Load workflow.toml.
             let workflow_toml = std::fs::read_to_string(fixture_dir.join("workflow.toml"))
                 .expect("fixture must contain workflow.toml");
@@ -250,79 +263,108 @@ impl ExecutionMode for DevMode {
 
             // 2. Lower to IrModule. Caches are stack-only closures that don't
             //    cross the await point — they are dropped at the end of this block.
+            //    Uses the SHA-256-of-name native-tool cache symmetric with
+            //    `tau-cli::cmd::build::lower_ir` so DevMode and BundleMode
+            //    hash identical IR bytes for the same source workflow.
             let target = target_registry::list_available()
                 .next()
                 .expect("at least one target triple available")
                 .triple;
-            let module = {
+            let module_result = {
                 let caches = Caches {
-                    native_tool: &|_| Some([1u8; 32]),
+                    native_tool: &|name: &str| Some(crate::sha256_name(name)),
                     mcp_contract: &|_| None,
                     skill: &|_| None,
                 };
                 lower_project(&config, &target, &caches)
-                    .expect("IR lowering must succeed for a conformance fixture")
             }; // caches dropped here
 
-            // 3. Load mock_llm.jsonl.
-            let mock_llm_jsonl = std::fs::read_to_string(fixture_dir.join("mock_llm.jsonl"))
-                .expect("fixture must contain mock_llm.jsonl");
-            let responses = parse_mock_llm(&mock_llm_jsonl);
+            match module_result {
+                Ok(module) => {
+                    // 3. Load mock_llm.jsonl.
+                    let mock_llm_jsonl =
+                        std::fs::read_to_string(fixture_dir.join("mock_llm.jsonl"))
+                            .expect("fixture must contain mock_llm.jsonl");
+                    let responses = parse_mock_llm(&mock_llm_jsonl);
 
-            // Determine entry agent: first in BTreeMap (alphabetical) order.
-            let entry = module
-                .workflow
-                .agents
-                .keys()
-                .next()
-                .expect("fixture must declare at least one agent")
-                .clone();
-
-            (module, responses, entry)
+                    // Determine entry agent: first in BTreeMap (alphabetical) order.
+                    let entry = module
+                        .workflow
+                        .agents
+                        .keys()
+                        .next()
+                        .expect("fixture must declare at least one agent")
+                        .clone();
+                    Ok((module, responses, entry.0))
+                }
+                Err(e) => Err(format!("{e}")),
+            }
         };
 
-        // Build a name→name map for RecordingDispatcher (ToolId == tool name in v0).
-        let tool_names: std::collections::BTreeMap<String, String> = module
-            .workflow
-            .tools
-            .keys()
-            .map(|id| (id.0.clone(), id.0.clone()))
-            .collect();
-
-        // 4. Build SequencedLlm + RecordingDispatcher.
-        let backend: Arc<dyn DynLlmBackend> = Arc::new(SequencedLlm::new("mock-llm", responses));
-        let dispatcher = Arc::new(RecordingDispatcher::new(backend, tool_names));
-        let records_handle = dispatcher.records();
-
-        // 5. Run the interpreter (first await point — Caches already dropped).
-        let outcome: RunOutcome = run_ir(&module, &entry, dispatcher, Vec::new())
-            .await
-            .expect("run_ir must not return an Err for a valid conformance fixture");
-
-        // 6. Build ConformanceReport from recorded side effects.
-        let mut report = ConformanceReport::new(outcome.clone());
-
-        // Record tool calls.
-        let records = records_handle.lock().expect("records mutex poisoned");
-        for rec in records.iter() {
-            report.record_tool_call(rec.tool_name.clone(), rec.args_canonical.clone());
+        match lowered {
+            Ok((module, responses, entry_id)) => {
+                let entry = tau_ir::AgentId(entry_id);
+                drive_module(&module, &entry, responses).await
+            }
+            Err(refusal) => ConformanceReport::build_refused(refusal),
         }
-        drop(records);
-
-        // Record messages from outcome (all_messages multiset).
-        let messages = match &outcome {
-            RunOutcome::Completed { all_messages, .. } => all_messages.clone(),
-            RunOutcome::Failed { all_messages, .. } => all_messages.clone(),
-            _ => Vec::new(),
-        };
-        for msg in &messages {
-            // Serialize the real tau_domain::Message (which implements
-            // serde::Serialize when the "serde" feature is enabled) so each
-            // distinct message body produces a distinct multiset key.
-            let canonical = serde_json::to_vec(msg).unwrap_or_default();
-            report.record_message(canonical);
-        }
-
-        report
     }
+}
+
+/// Drive the IR interpreter for a (decoded) module with a scripted LLM
+/// backend, recording side effects into a `ConformanceReport`.
+///
+/// Shared by DevMode (in-process lowering) and BundleMode (round-tripped
+/// through a built bundle). Both modes feed in identical
+/// `(module, entry, responses)` inputs for the same fixture, so the
+/// emitted reports compare byte-for-byte under `assert_conform`.
+pub(crate) async fn drive_module(
+    module: &IrModule,
+    entry: &tau_ir::AgentId,
+    responses: Vec<CompletionResponse>,
+) -> ConformanceReport {
+    // Build a name→name map for RecordingDispatcher (ToolId == tool name in v0).
+    let tool_names: std::collections::BTreeMap<String, String> = module
+        .workflow
+        .tools
+        .keys()
+        .map(|id| (id.0.clone(), id.0.clone()))
+        .collect();
+
+    // Build SequencedLlm + RecordingDispatcher.
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(SequencedLlm::new("mock-llm", responses));
+    let dispatcher = Arc::new(RecordingDispatcher::new(backend, tool_names));
+    let records_handle = dispatcher.records();
+
+    // Run the interpreter.
+    let outcome: RunOutcome = run_ir(module, entry, dispatcher, Vec::new())
+        .await
+        .expect("run_ir must not return an Err for a valid conformance fixture");
+
+    // Build ConformanceReport from recorded side effects.
+    let mut report = ConformanceReport::new(outcome.clone());
+
+    // Record tool calls.
+    let records = records_handle.lock().expect("records mutex poisoned");
+    for rec in records.iter() {
+        report.record_tool_call(rec.tool_name.clone(), rec.args_canonical.clone());
+    }
+    drop(records);
+
+    // Record messages from outcome (all_messages multiset).
+    let messages = match &outcome {
+        RunOutcome::Completed { all_messages, .. } => all_messages.clone(),
+        RunOutcome::Failed { all_messages, .. } => all_messages.clone(),
+        _ => Vec::new(),
+    };
+    for msg in &messages {
+        // Canonicalize the message body before recording so two runs
+        // with different per-run UUIDs / timestamps produce identical
+        // multiset keys. See `canonical_message_bytes` for the exact
+        // shape — payload + address discriminants only.
+        let canonical = crate::canonical_message_bytes(msg);
+        report.record_message(canonical);
+    }
+
+    report
 }

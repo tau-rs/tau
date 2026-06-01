@@ -3366,11 +3366,13 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tau-domain",
  "tau-ir",
  "tau-pkg",
  "tau-ports",
  "tau-runtime-core",
+ "tempfile",
  "tokio",
 ]
 
