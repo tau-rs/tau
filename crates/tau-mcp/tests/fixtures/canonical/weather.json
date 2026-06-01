@@ -1,0 +1,19 @@
+{
+  "protocol_version": "2025-03-26",
+  "server_info": {"name": "weather", "version": "1.0.0"},
+  "tools": [
+    {
+      "name": "get_forecast",
+      "description": "Get a weather forecast",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "lat": {"type": "number"},
+          "lon": {"type": "number"}
+        },
+        "required": ["lat", "lon"]
+      },
+      "caps": []
+    }
+  ]
+}
