@@ -1,0 +1,7 @@
+{
+  "run_outcome_kind": "Completed",
+  "tool_calls": {
+    "page:{}": 1
+  },
+  "_note": "Subflow tools (notify) are NOT routed through dispatcher.invoke and so do NOT appear in report.tool_calls. Only the child agent's MCP call to `page` is recorded. See test fixture_04_dev_mode_subflow_dispatched."
+}

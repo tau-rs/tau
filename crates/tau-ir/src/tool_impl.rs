@@ -52,4 +52,52 @@ pub enum ToolImpl {
         /// `tau.toml` overrides).
         capability_subset: CapabilityRequirements,
     },
+    /// Sub-workflow spawn: invoking this tool runs the named agent (in the
+    /// same `IrModule`) as a child loop with empty initial history. The
+    /// child's final assistant text (or empty string) becomes the tool
+    /// result body.
+    ///
+    /// v0 limitation: tool input args are NOT forwarded to the child as a
+    /// User message — the child runs with empty initial messages and its
+    /// own prompt + LLM script drive its behavior. β.7 (AOT codegen) is
+    /// the natural place to thread arg-forwarding.
+    Subflow {
+        /// Agent id (within this `IrModule`'s `workflow.agents`) to spawn.
+        target: crate::ids::AgentId,
+    },
+    /// Deterministic step: invoking this tool calls the pure Rust function
+    /// named by the step's `fn_ref` via the dispatcher's
+    /// `deterministic_registry()`. The function's return value becomes the
+    /// tool result body. No LLM, no I/O.
+    Step {
+        /// Step id (within this `IrModule`'s `workflow.steps`).
+        id: crate::ids::StepId,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::{AgentId, StepId};
+    use alloc::string::ToString;
+
+    #[test]
+    fn tool_impl_subflow_round_trips_canonical_json() {
+        let original = ToolImpl::Subflow {
+            target: AgentId("child-agent".to_string()),
+        };
+        let bytes = serde_json::to_vec(&original).expect("serialize");
+        let decoded: ToolImpl = serde_json::from_slice(&bytes).expect("deserialize");
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn tool_impl_step_round_trips_canonical_json() {
+        let original = ToolImpl::Step {
+            id: StepId("normalize".to_string()),
+        };
+        let bytes = serde_json::to_vec(&original).expect("serialize");
+        let decoded: ToolImpl = serde_json::from_slice(&bytes).expect("deserialize");
+        assert_eq!(original, decoded);
+    }
 }

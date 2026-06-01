@@ -35,6 +35,16 @@ pub(super) fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed,
                     *capability_subset = caps;
                 }
             }
+            ToolImpl::Subflow { target: _ } => {
+                // Subflow variant: target agent lives inside the same
+                // IrModule; nothing external to resolve. The typecheck
+                // stage verifies the target exists.
+            }
+            ToolImpl::Step { id: _ } => {
+                // Step variant: deterministic step lives inside the same
+                // IrModule's `workflow.steps`; nothing external to
+                // resolve. The typecheck stage verifies the step exists.
+            }
         }
     }
     Ok(parsed)

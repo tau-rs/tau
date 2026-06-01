@@ -59,9 +59,14 @@ impl ToolDispatcher for StubDispatcher {
 async fn run_ir_minimal_module_completes() {
     let module = sample_module();
     let entry = AgentId("monitor".into());
-    let outcome = run_ir(&module, &entry, Arc::new(StubDispatcher::new()), Vec::new())
-        .await
-        .expect("run_ir returns outcome");
+    let outcome = run_ir(
+        Arc::new(module),
+        &entry,
+        Arc::new(StubDispatcher::new()),
+        Vec::new(),
+    )
+    .await
+    .expect("run_ir returns outcome");
     match outcome {
         RunOutcome::Completed { total_turns, .. } => {
             // The MockLlmBackend returns one empty EndTurn response (no
@@ -76,7 +81,13 @@ async fn run_ir_minimal_module_completes() {
 async fn run_ir_missing_entry_agent_returns_error() {
     let module = sample_module();
     let entry = AgentId("does-not-exist".into());
-    let result = run_ir(&module, &entry, Arc::new(StubDispatcher::new()), Vec::new()).await;
+    let result = run_ir(
+        Arc::new(module),
+        &entry,
+        Arc::new(StubDispatcher::new()),
+        Vec::new(),
+    )
+    .await;
     assert!(
         matches!(result, Err(RuntimeError::AgentNotFound { .. })),
         "expected AgentNotFound, got {:?}",

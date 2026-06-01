@@ -31,8 +31,12 @@ use crate::outcome::RunOutcome;
 /// `entry` names which agent in the module to start with. Future v0.x
 /// will infer it from a `[workflow]` block; v0.0 requires the caller
 /// to supply it.
+///
+/// `module` is taken as `Arc<IrModule>` so the dispatcher's
+/// `DispatcherTool` can share it across recursive subflow invocations
+/// without copying the IR.
 pub async fn run_ir<D>(
-    module: &IrModule,
+    module: alloc::sync::Arc<IrModule>,
     entry: &AgentId,
     dispatcher: Arc<D>,
     initial_messages: Vec<Message>,
@@ -48,5 +52,9 @@ where
             .ok_or_else(|| RuntimeError::AgentNotFound {
                 agent: entry.0.clone(),
             })?;
-    agent_loop::run_agent(module, agent_node, dispatcher, initial_messages).await
+    // Clone the Agent node out of the Arc so the borrow doesn't escape;
+    // it's small (id + prompt + a few Vec<...>) and avoids a self-borrow
+    // through run_agent's signature.
+    let agent_node = agent_node.clone();
+    agent_loop::run_agent(module, &agent_node, dispatcher, initial_messages).await
 }

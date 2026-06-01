@@ -1,0 +1,2 @@
+{"turn": 0, "response": {"tool_uses": [{"id": "1", "name": "normalize", "input": {"raw": "22"}}], "stop_reason": "tool_use"}}
+{"turn": 1, "response": {"text": "22 celsius", "stop_reason": "end_turn"}}

@@ -16,7 +16,7 @@ use tau_domain::{
     Address, AgentDefinition, AgentId as DomainAgentId, Message, MessagePayload, PackageId,
     PackageManifest, PackageName, UncheckedManifest, Version,
 };
-use tau_ir::{Agent, IrModule, ToolId};
+use tau_ir::{Agent, IrModule, ToolId, ToolImpl};
 use tau_ports::{
     tool::{SessionContext, ToolContent, ToolResult},
     ToolError, ToolSpec,
@@ -46,10 +46,54 @@ fn json_to_domain_value(v: serde_json::Value) -> tau_domain::Value {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the body text of the last `Assistant`-authored message in a
+/// `RunOutcome`'s `all_messages`. Returns an empty `String` when no
+/// assistant message exists (e.g. immediate `Failed` outcomes).
+///
+/// Used by `DispatcherTool::invoke`'s `Subflow` arm to convert a child
+/// agent's terminal state into a tool-result body for the parent.
+///
+/// # Important
+///
+/// Both `RunOutcome::Completed` and `RunOutcome::Failed` carry `all_messages`
+/// and this function returns the same shaped `String` for both. Callers MUST
+/// match on the outcome variant separately to decide whether to surface the
+/// result as a success or error — this function alone does not distinguish
+/// between them.
+fn last_assistant_text(outcome: &RunOutcome) -> String {
+    // Note: `RunOutcome` is `#[non_exhaustive]` but we're in the defining
+    // crate, so the compiler sees all variants. No `_` arm needed here;
+    // adding one would generate an `unreachable_patterns` warning. Future
+    // variants must be handled by updating this match.
+    let messages = match outcome {
+        RunOutcome::Completed { all_messages, .. } => all_messages,
+        RunOutcome::Failed { all_messages, .. } => all_messages,
+    };
+    for msg in messages.iter().rev() {
+        if matches!(msg.sender, tau_domain::Address::Agent(_)) {
+            if let tau_domain::MessagePayload::Text { content } = &msg.payload {
+                return content.clone();
+            }
+        }
+    }
+    String::new()
+}
+
+// ---------------------------------------------------------------------------
 // Dispatcher-backed Tool wrapper
 // ---------------------------------------------------------------------------
 
-/// A `tau_ports::Tool` whose `invoke` delegates to a `ToolDispatcher`.
+/// A `tau_ports::Tool` whose `invoke` branches on the IR `ToolImpl`:
+///
+/// - `Native` / `Mcp` → forwarded to the user's `ToolDispatcher`.
+/// - `Subflow { target }` → recursively `run_ir` against the target
+///   agent in the same module. The recursion is broken with `Box::pin`
+///   to satisfy Rust's no-self-referential-async-fn rule.
+/// - `Step { id }` → looked up in `module.workflow.steps` and called
+///   against the dispatcher's `DeterministicRegistry`.
 ///
 /// One wrapper instance is created per tool in `agent.tool_refs`. Each
 /// instance holds an `Arc<D>` (the dispatcher) and the `ToolId` it should
@@ -57,10 +101,15 @@ fn json_to_domain_value(v: serde_json::Value) -> tau_domain::Value {
 struct DispatcherTool<D> {
     /// Tool name as seen by the LLM (from the IR `ToolSpec`).
     tool_name: String,
-    /// `ToolId` forwarded to the dispatcher on each invoke.
+    /// `ToolId` forwarded to the dispatcher on each invoke (Native/Mcp).
     tool_id: ToolId,
     /// LLM-facing spec (constructed via serde to bypass `#[non_exhaustive]`).
     spec: ToolSpec,
+    /// IR module, shared so subflow recursion + step lookup work.
+    module: alloc::sync::Arc<tau_ir::IrModule>,
+    /// Clone of the IR tool's `ToolImpl`. Cheap to clone (a few hashes
+    /// or a `String`).
+    tool_impl: tau_ir::ToolImpl,
     /// Shared dispatcher handle.
     dispatcher: Arc<D>,
 }
@@ -88,46 +137,171 @@ where
         _session: &mut Self::Session,
         args: tau_domain::Value,
     ) -> Result<ToolResult, ToolError> {
-        // Convert tau_domain::Value → serde_json::Value for the dispatcher.
+        // Convert tau_domain::Value → serde_json::Value once, then branch
+        // on the IR ToolImpl. The branches do NOT share extraction logic
+        // because Subflow returns a domain-side `RunOutcome` and Step
+        // returns a raw `serde_json::Value` from the registry — both end
+        // up as ToolResult Text content but the source paths differ.
         let json_args = domain_value_to_json(&args);
 
-        let result: ToolInvocationResult = self
-            .dispatcher
-            .invoke(&self.tool_id, &json_args)
-            .await
-            .map_err(|e| ToolError::Internal {
-                message: alloc::format!("dispatcher error: {e}"),
-            })?;
+        match &self.tool_impl {
+            ToolImpl::Native { .. } | ToolImpl::Mcp { .. } => {
+                // Existing path: forward to the user's ToolDispatcher.
+                //
+                // Extract text symmetrically with `ForwardingDispatcher`'s body-shape
+                // lift in `crates/tau-cli/src/cmd/ir_dispatcher.rs`. The dispatcher
+                // try-parses the joined tool text as JSON and falls back to
+                // `Value::String(text)` on parse failure, so plain text reaches
+                // `body` as `Value::String("hello")`. `Display` on
+                // `serde_json::Value::String("hello")` emits the literal quoted
+                // form `"hello"` — corrupting every plain-text result the LLM
+                // sees. Special-case `Value::String` to extract the raw `String`
+                // (no quoting); fall through to `Display` for structured shapes
+                // (objects/arrays/numbers/bools/null) so they serialise as
+                // compact JSON. This makes the inverse direction lossless:
+                //   plain text  → Value::String  → raw text   (no extra quotes)
+                //   JSON object → Value::Object  → compact JSON
+                let result: ToolInvocationResult = self
+                    .dispatcher
+                    .invoke(&self.tool_id, &json_args)
+                    .await
+                    .map_err(|e| ToolError::Internal {
+                        message: alloc::format!("dispatcher error: {e}"),
+                    })?;
 
-        if let Some(err_msg) = result.error {
-            return Ok(ToolResult::new(
-                alloc::vec![ToolContent::Text { text: err_msg }],
-                true,
-            ));
+                if let Some(err_msg) = result.error {
+                    return Ok(ToolResult::new(
+                        alloc::vec![ToolContent::Text { text: err_msg }],
+                        true,
+                    ));
+                }
+
+                let text = match result.body {
+                    Some(serde_json::Value::String(s)) => s,
+                    Some(v) => alloc::format!("{v}"),
+                    None => alloc::string::String::new(),
+                };
+                Ok(ToolResult::new(
+                    alloc::vec![ToolContent::Text { text }],
+                    false,
+                ))
+            }
+
+            ToolImpl::Subflow { target } => {
+                // Box::pin breaks the async self-reference (run_ir →
+                // run_agent → DispatcherTool::invoke → run_ir). Without it
+                // the async-fn future type would be infinitely recursive.
+                let module = self.module.clone();
+                let target = target.clone();
+                let dispatcher = self.dispatcher.clone();
+                let outcome = alloc::boxed::Box::pin(crate::interpreter::run_ir(
+                    module,
+                    &target,
+                    dispatcher,
+                    Vec::new(),
+                ))
+                .await
+                .map_err(|e| ToolError::Internal {
+                    message: alloc::format!("subflow recursion error: {e}"),
+                })?;
+
+                // Propagate child-agent failures as `is_error: true` tool
+                // results so the parent agent sees them and can react.
+                // A silently-swallowed Failed outcome would look like a
+                // successful empty-string result to the parent — wrong.
+                match &outcome {
+                    RunOutcome::Failed { .. } => {
+                        // Child agent failed — propagate as an error tool result so
+                        // the parent agent sees an `is_error: true` and can react.
+                        // The child's last assistant text (if any) is preserved as
+                        // diagnostic content.
+                        let last_text = last_assistant_text(&outcome);
+                        let body = if last_text.is_empty() {
+                            alloc::format!(
+                                "subflow agent {:?} failed with no further detail",
+                                target
+                            )
+                        } else {
+                            alloc::format!("subflow agent {:?} failed: {}", target, last_text)
+                        };
+                        return Ok(ToolResult::new(
+                            alloc::vec![ToolContent::Text { text: body }],
+                            true,
+                        ));
+                    }
+                    RunOutcome::Completed { .. } => {}
+                }
+
+                // Convert RunOutcome → tool result body. v0 contract:
+                // emit the last `Assistant`-sent text from `all_messages`
+                // as the tool result body. Empty string if none.
+                let text = last_assistant_text(&outcome);
+                Ok(ToolResult::new(
+                    alloc::vec![ToolContent::Text { text }],
+                    false,
+                ))
+            }
+
+            ToolImpl::Step { id } => {
+                // Step accounting (e.g. conformance test recording) lives in the
+                // DeterministicRegistry implementation, NOT in the dispatcher's
+                // `invoke` path — calling dispatcher.invoke for accounting would
+                // fire a real plugin lookup in production (ForwardingDispatcher) for
+                // a tool that doesn't exist there. Recording belongs in the registry.
+                //
+                // TODO (Phase 4): to count step invocations in conformance tests,
+                // make `MapBackedDeterministicRegistry` push records into a shared
+                // `Arc<Mutex<Vec<ToolCallRecord>>>` and expose that handle via
+                // `RecordingDispatcher::deterministic_registry()`.
+
+                // Look up the step in the IR's workflow.steps table.
+                let step =
+                    self.module
+                        .workflow
+                        .steps
+                        .get(id)
+                        .ok_or_else(|| ToolError::Internal {
+                            message: alloc::format!(
+                                "step tool {:?} references unknown step {:?} \
+                             (typecheck should have caught this — possible IR corruption)",
+                                self.tool_id,
+                                id,
+                            ),
+                        })?;
+
+                let registry = self.dispatcher.deterministic_registry().ok_or_else(|| {
+                    ToolError::Internal {
+                        message: alloc::format!(
+                            "agent invoked step tool {:?} but the dispatcher \
+                             did not provide a DeterministicRegistry",
+                            self.tool_id,
+                        ),
+                    }
+                })?;
+
+                let result = registry
+                    .invoke(&step.fn_ref.name, &json_args)
+                    .map_err(|e| ToolError::Internal {
+                        message: alloc::format!(
+                            "deterministic step {:?} (fn={:?}) failed: {e}",
+                            self.tool_id,
+                            step.fn_ref.name,
+                        ),
+                    })?;
+
+                // Same body-shape extraction as the Native/Mcp arm so the
+                // LLM sees identically-shaped tool results regardless of
+                // ToolImpl variant.
+                let text = match result {
+                    serde_json::Value::String(s) => s,
+                    v => alloc::format!("{v}"),
+                };
+                Ok(ToolResult::new(
+                    alloc::vec![ToolContent::Text { text }],
+                    false,
+                ))
+            }
         }
-
-        // Extract text symmetrically with `ForwardingDispatcher`'s body-shape
-        // lift in `crates/tau-cli/src/cmd/ir_dispatcher.rs`. The dispatcher
-        // try-parses the joined tool text as JSON and falls back to
-        // `Value::String(text)` on parse failure, so plain text reaches
-        // `body` as `Value::String("hello")`. `Display` on
-        // `serde_json::Value::String("hello")` emits the literal quoted
-        // form `"hello"` — corrupting every plain-text result the LLM
-        // sees. Special-case `Value::String` to extract the raw `String`
-        // (no quoting); fall through to `Display` for structured shapes
-        // (objects/arrays/numbers/bools/null) so they serialise as
-        // compact JSON. This makes the inverse direction lossless:
-        //   plain text  → Value::String  → raw text   (no extra quotes)
-        //   JSON object → Value::Object  → compact JSON
-        let text = match result.body {
-            Some(serde_json::Value::String(s)) => s,
-            Some(v) => alloc::format!("{v}"),
-            None => alloc::string::String::new(),
-        };
-        Ok(ToolResult::new(
-            alloc::vec![ToolContent::Text { text }],
-            false,
-        ))
     }
 
     async fn teardown(&self, _session: Self::Session) -> Result<(), ToolError> {
@@ -209,7 +383,7 @@ fn stub_manifest() -> PackageManifest {
 /// calls `run_with_history` with a synthesised `AgentDefinition` and
 /// `PackageManifest`.
 pub async fn run_agent<D>(
-    module: &IrModule,
+    module: alloc::sync::Arc<IrModule>,
     agent: &Agent,
     dispatcher: Arc<D>,
     initial_messages: Vec<Message>,
@@ -248,6 +422,8 @@ where
             tool_name: ir_tool.spec.name.clone(),
             tool_id: tool_id.clone(),
             spec,
+            module: module.clone(),
+            tool_impl: ir_tool.impl_.clone(),
             dispatcher: dispatcher.clone(),
         });
     }
@@ -403,10 +579,37 @@ mod tests {
             "fixed-output tool for tests",
             &serde_json::json!({}),
         );
+        // The existing test fixtures only exercise the Native/Mcp dispatch
+        // path of `invoke`; a stub `ToolImpl::Native` keeps that branch
+        // active. Subflow/Step dispatch is covered by tau-ir-conformance.
+        let stub_impl = tau_ir::ToolImpl::Native {
+            fn_ref: tau_ir::NativeFnRef {
+                name: "stub".to_string(),
+            },
+            content_hash: [0u8; 32],
+        };
+        // Empty IrModule is fine — Native dispatch never reads it.
+        let stub_module = alloc::sync::Arc::new(tau_ir::IrModule {
+            ir_format: tau_ir::IrFormatVersion::current(),
+            tau_version: env!("CARGO_PKG_VERSION").into(),
+            target: tau_ports::target::registry::list_available()
+                .next()
+                .expect("at least one target")
+                .triple,
+            workflow: tau_ir::Workflow {
+                agents: alloc::collections::BTreeMap::new(),
+                tools: alloc::collections::BTreeMap::new(),
+                steps: alloc::collections::BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: tau_ir::CapabilityTable(alloc::collections::BTreeMap::new()),
+            },
+        });
         DispatcherTool {
             tool_name: "fixed".to_string(),
             tool_id: ToolId("fixed".to_string()),
             spec,
+            module: stub_module,
+            tool_impl: stub_impl,
             dispatcher,
         }
     }
