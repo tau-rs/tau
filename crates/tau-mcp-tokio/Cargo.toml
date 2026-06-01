@@ -1,0 +1,23 @@
+[package]
+name = "tau-mcp-tokio"
+description = "Tokio runtime + transports for tau-mcp. stdio (subprocess) and Streamable HTTP transports; host-lifecycle (handshake, keepalive, shutdown); McpBridge composable ToolDispatcher adapter. Scaffold only in PR-1; transports land in PR-2 and PR-3."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+tau-mcp         = { workspace = true }
+tau-domain      = { workspace = true, features = ["serde"] }
+tau-ports       = { workspace = true, features = ["serde"] }
+# tau-runtime-tokio dep added in PR-2 (for ProcessGate::Sandbox::wrap_spawn).
+# Held back in PR-1 to keep scaffold lightweight and dep graph clean.
+serde           = { workspace = true, features = ["derive"] }
+serde_json      = { workspace = true }
+thiserror       = { workspace = true }
+tokio           = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "io-util"] }
+
+[dev-dependencies]
+tokio           = { workspace = true, features = ["test-util"] }

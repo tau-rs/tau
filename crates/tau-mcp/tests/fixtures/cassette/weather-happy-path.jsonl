@@ -1,0 +1,8 @@
+{"version":1}
+{"dir":"in","kind":"request","id":0,"method":"initialize","payload":{"protocolVersion":"2025-03-26"}}
+{"dir":"out","kind":"response","id":0,"payload":{"protocolVersion":"2025-03-26"}}
+{"dir":"in","kind":"request","id":1,"method":"tools/list","payload":null}
+{"dir":"out","kind":"response","id":1,"payload":{"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]}}
+{"dir":"in","kind":"request","id":2,"method":"tools/call","payload":{"name":"get_forecast","arguments":{"lat":40.7,"lon":-74.0}}}
+{"dir":"out","kind":"notification","method":"notifications/progress","payload":{"progressToken":"call-2","progress":50,"total":100}}
+{"dir":"out","kind":"response","id":2,"payload":{"content":[{"type":"text","text":"Sunny, 72°F"}]}}
