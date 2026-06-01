@@ -29,8 +29,7 @@ use tau_runtime_core::outcome::RunOutcome;
 /// or execute. Any future directory-scanning conformance test must skip
 /// these. See the module docs for the unblock requirements per fixture.
 #[allow(dead_code)]
-pub const DEFERRED_FIXTURES: &[&str] =
-    &["04_subflow_spawn_child", "05_deterministic_step"];
+pub const DEFERRED_FIXTURES: &[&str] = &["04_subflow_spawn_child", "05_deterministic_step"];
 
 fn fixture_dir(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
