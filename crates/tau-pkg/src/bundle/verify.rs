@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use crate::bundle::manifest::{BundleAgent, BundleManifest};
 use crate::bundle::verify_error::VerifyError;
 
-/// Schema version this binary can verify.
-const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+/// Maximum schema version this binary can verify.
+const MAX_SUPPORTED_SCHEMA_VERSION: u32 = 2;
 
 /// Inputs to [`verify_bundle`].
 #[derive(Debug, Clone)]
@@ -65,6 +65,8 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
     verify_packages_installed_and_hashed(&manifest, &opts.project_root)?;
     // Step 8: agent prompts + build agent_lookup.
     let agent_lookup = verify_agent_prompts(&manifest, &opts.project_root)?;
+    // Step 9: IR payload integrity (v2 bundles only).
+    verify_ir_payload(&manifest)?;
     Ok(VerifyReport {
         manifest,
         agent_lookup,
@@ -213,6 +215,35 @@ fn verify_target_matches_host(m: &BundleManifest) -> Result<(), VerifyError> {
     Ok(())
 }
 
+/// Step 9: if `manifest.ir_payload` is `Some`, verify that the SHA-256
+/// of `canonical_ir_bytes_hex` (decoded) matches the stored `canonical_ir_hash`.
+/// This detects post-build tampering of the IR bytes independent of the
+/// bundle's overall self-hash check (step 3).
+fn verify_ir_payload(m: &BundleManifest) -> Result<(), VerifyError> {
+    use sha2::{Digest, Sha256};
+    if let Some(ir) = &m.ir_payload {
+        // Decode the hex-encoded IR bytes.
+        let bytes = ir
+            .canonical_ir_bytes()
+            .map_err(|e| VerifyError::IrPayloadDrift {
+                claimed: ir.canonical_ir_hash.clone(),
+                computed: format!("hex decode failed: {e}"),
+            })?;
+        // Recompute SHA-256 of the decoded bytes.
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let computed_bytes: [u8; 32] = hasher.finalize().into();
+        let computed_hex = crate::tree_hash::to_hex_lower(&computed_bytes);
+        if computed_hex != ir.canonical_ir_hash {
+            return Err(VerifyError::IrPayloadDrift {
+                claimed: ir.canonical_ir_hash.clone(),
+                computed: computed_hex,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Step 3: confirm the bundle's recorded self-hash matches its
 /// canonical-TOML content, mapping the integrity error into the
 /// verify-error namespace.
@@ -239,12 +270,12 @@ fn map_integrity_error(e: crate::bundle::error::BundleIntegrityError) -> VerifyE
 }
 
 /// Step 4: confirm the bundle's `schema_version` is one this binary can
-/// verify.
+/// verify (1 or 2).
 fn verify_schema_version(m: &BundleManifest) -> Result<(), VerifyError> {
-    if m.schema_version != SUPPORTED_SCHEMA_VERSION {
+    if m.schema_version == 0 || m.schema_version > MAX_SUPPORTED_SCHEMA_VERSION {
         return Err(VerifyError::UnsupportedSchemaVersion {
             found: m.schema_version,
-            supported: SUPPORTED_SCHEMA_VERSION,
+            supported: MAX_SUPPORTED_SCHEMA_VERSION,
         });
     }
     Ok(())
@@ -287,6 +318,7 @@ system = "you are solo"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .expect("build fixture bundle");
         artifact.path
@@ -334,19 +366,29 @@ system = "you are solo"
     }
 
     #[test]
-    fn verify_schema_version_rejects_v2() {
+    fn verify_schema_version_accepts_v2() {
         let tmp = tempdir().unwrap();
         let path = build_minimal_bundle(tmp.path());
         let s = std::fs::read_to_string(&path).unwrap();
         let mut m = BundleManifest::parse_str(&s).unwrap();
         m.schema_version = 2;
+        verify_schema_version(&m).expect("v2 must be accepted");
+    }
+
+    #[test]
+    fn verify_schema_version_rejects_v99() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path());
+        let s = std::fs::read_to_string(&path).unwrap();
+        let mut m = BundleManifest::parse_str(&s).unwrap();
+        m.schema_version = 99;
         let err = verify_schema_version(&m).unwrap_err();
         assert!(
             matches!(
                 err,
                 VerifyError::UnsupportedSchemaVersion {
-                    found: 2,
-                    supported: 1
+                    found: 99,
+                    supported: 2
                 }
             ),
             "got {err:?}",
@@ -466,6 +508,7 @@ installed_at = "2024-01-01T00:00:00Z"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .expect("build bundle with package");
         (artifact.path, pkg_dir)
@@ -549,6 +592,7 @@ system_file = "prompt.md"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         // Mutate the prompt FILE after build (tau.toml unchanged, so step 6
@@ -557,6 +601,56 @@ system_file = "prompt.md"
         let err = verify_bundle(vopts(artifact.path, tmp.path())).unwrap_err();
         assert!(
             matches!(err, VerifyError::AgentPromptDrift { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// Build a bundle with a synthetic `ir_payload` where the
+    /// `canonical_ir_hash` is correct. Then corrupt one hex char of
+    /// `canonical_ir_bytes_hex` and assert that `verify_ir_payload` catches
+    /// the tamper and returns an error whose string contains "ir_payload".
+    #[test]
+    fn verify_detects_ir_payload_drift() {
+        use crate::bundle::manifest::IrPayload;
+        use sha2::{Digest, Sha256};
+
+        // Build a valid manifest first (schema_version = 2, self-hash set).
+        let tmp = tempdir().unwrap();
+        let bundle_path = build_minimal_bundle(tmp.path());
+        let s = std::fs::read_to_string(&bundle_path).unwrap();
+        let mut m = BundleManifest::parse_str(&s).unwrap();
+
+        // Attach a synthetic IrPayload with correct hash.
+        let bytes: Vec<u8> = b"fake ir bytes".to_vec();
+        let mut h = Sha256::new();
+        h.update(&bytes);
+        let hash_bytes: [u8; 32] = h.finalize().into();
+        let hash_hex = crate::tree_hash::to_hex_lower(&hash_bytes);
+        let bytes_hex = crate::tree_hash::to_hex_lower(&bytes);
+        m.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".to_string(),
+            canonical_ir_hash: hash_hex.clone(),
+            canonical_ir_bytes_hex: bytes_hex.clone(),
+        });
+
+        // Correct hash → verify_ir_payload must pass.
+        verify_ir_payload(&m).expect("clean ir_payload must pass");
+
+        // Corrupt the bytes hex (flip one char) → verify_ir_payload must fail.
+        if let Some(p) = m.ir_payload.as_mut() {
+            // XOR the first character: '0'→'f', 'f'→'0', etc.
+            let mut hex_chars: Vec<char> = p.canonical_ir_bytes_hex.chars().collect();
+            hex_chars[0] = if hex_chars[0] == '0' { 'f' } else { '0' };
+            p.canonical_ir_bytes_hex = hex_chars.into_iter().collect();
+        }
+        let err = verify_ir_payload(&m).expect_err("tampered bytes must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ir_payload"),
+            "error must mention 'ir_payload'; got: {msg}"
+        );
+        assert!(
+            matches!(err, VerifyError::IrPayloadDrift { .. }),
             "got {err:?}"
         );
     }

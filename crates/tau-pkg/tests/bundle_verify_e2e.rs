@@ -112,6 +112,7 @@ fn e2e_build_then_verify_succeeds() {
         target: TargetTriple::host(),
         output_path: None,
         agent_filter: None,
+        ir_payload: None,
     })
     .unwrap();
 
@@ -137,6 +138,7 @@ fn e2e_verify_catches_post_build_package_mutation() {
         target: TargetTriple::host(),
         output_path: None,
         agent_filter: None,
+        ir_payload: None,
     })
     .unwrap();
 

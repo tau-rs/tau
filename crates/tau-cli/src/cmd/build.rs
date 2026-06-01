@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 
-use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact};
+use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact, IrPayload};
 use tau_ports::target::TargetTriple;
 
 use crate::cli::BuildArgs;
@@ -52,11 +52,19 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         Some(parsed)
     };
 
+    // Lower the project IR. Load the project config (same pipeline the
+    // bundle builder uses), then call lower_project with a permissive
+    // cache that returns a stub hash for any native tool name (the
+    // conformance suite in β.2.6 will wire real caches). On IrError,
+    // render a human-readable diagnostic and exit 2.
+    let ir_payload = lower_ir(&project_root, &target);
+
     let opts = BuildOptions {
         project_root,
         target,
         output_path: args.output.clone(),
         agent_filter,
+        ir_payload,
     };
 
     let _ = output.status("Building bundle…");
@@ -71,6 +79,80 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
             std::process::exit(exit_code_for(&e) as i32);
         }
     }
+}
+
+/// Attempt to lower the project IR, returning `Some(IrPayload)` on
+/// success or `None` if lowering fails (non-fatal — the bundle is still
+/// built, but without an IR payload; a warning is logged).
+///
+/// This uses a stub cache that returns the zero sentinel for every native-tool
+/// name; typecheck rejects [0u8;32], so projects with native tools fall through
+/// to the non-fatal None path. The conformance suite (β.2.6) wires real caches.
+pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrPayload> {
+    use tau_pkg::project::project::UncheckedProjectConfig;
+
+    let tau_toml_path = project_root.join("tau.toml");
+    let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("IR lowering: failed to read tau.toml: {e}");
+            return None;
+        }
+    };
+    let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!("IR lowering: failed to parse tau.toml: {e}");
+            return None;
+        }
+    };
+    let config = match unchecked.validate() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("IR lowering: project config validation failed: {e}");
+            return None;
+        }
+    };
+
+    // Stub cache for β.2.5: returns the zero sentinel for every native tool name.
+    // typecheck rejects [0u8;32], so any project with [tools.<x>.native] entries
+    // hits the non-fatal fallback below (bundle built without IR payload). Real
+    // content-addressing is wired in β.2.6.
+    let caches = tau_ir::lower::Caches {
+        native_tool: &|_name| Some([0u8; 32]),
+        mcp_contract: &|_url| None,
+        skill: &|_name| None,
+    };
+
+    match tau_ir::lower::lower_project(&config, target, &caches) {
+        Ok(module) => {
+            let bytes = tau_ir::to_canonical_bytes(&module);
+            let hash_bytes = tau_ir::compute_hash(&module);
+            // Encode both as lowercase hex for TOML-safe storage.
+            let canonical_ir_hash = hex_lower(&hash_bytes);
+            let canonical_ir_bytes_hex = hex_lower(&bytes);
+            Some(IrPayload {
+                ir_format: module.ir_format.0.clone(),
+                canonical_ir_hash,
+                canonical_ir_bytes_hex,
+            })
+        }
+        Err(e) => {
+            tracing::warn!("IR lowering failed (bundle built without IR payload): {e}");
+            None
+        }
+    }
+}
+
+/// Encode a byte slice as lowercase hex.
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Resolve the build target from CLI args. `None` → host; `Some(s)` →

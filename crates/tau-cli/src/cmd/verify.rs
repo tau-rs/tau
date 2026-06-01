@@ -374,9 +374,25 @@ fn run_reproducibility_check(
     output: &mut Output,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
+
+    // Lower the IR from the current project tree so the rebuild embeds the
+    // same payload as the original `tau build` invocation. Without this,
+    // the rebuilt bundle has no ir_payload while the shipped bundle does,
+    // causing a reproducibility failure.
+    let shipped_str = std::fs::read_to_string(bundle_path)?;
+    let shipped = tau_pkg::bundle::BundleManifest::parse_str(&shipped_str)
+        .map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
+    let ir_payload = if shipped.ir_payload.is_some() {
+        // Shipped bundle has an IR payload → rebuild with the same IR lowering.
+        crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target)
+    } else {
+        None
+    };
+
     let report = match tau_pkg::bundle::verify_reproducible(tau_pkg::bundle::ReproOptions {
         bundle_path: bundle_path.to_path_buf(),
         project_root: cwd,
+        ir_payload,
     }) {
         Ok(r) => r,
         Err(e) => {
@@ -481,6 +497,15 @@ fn format_diff(d: &tau_pkg::bundle::ManifestDiff) -> String {
         D::SchemaVersionMismatch { shipped, rebuilt } => {
             format!("schema_version: {shipped} \u{2192} {rebuilt}")
         }
+        D::IrPayloadHashMismatch { shipped, rebuilt } => {
+            format!("ir_payload.canonical_ir_hash: {shipped} \u{2192} {rebuilt}")
+        }
+        D::IrPayloadPresence { present_on } => {
+            format!(
+                "ir_payload present in {side} but missing in the other build",
+                side = format!("{present_on:?}").to_lowercase()
+            )
+        }
     }
 }
 
@@ -524,6 +549,12 @@ fn render_repro_json(
             } => serde_json::json!({"kind":"bundle_meta_field","field":field,"shipped":shipped,"rebuilt":rebuilt}),
             D::SchemaVersionMismatch { shipped, rebuilt } => {
                 serde_json::json!({"kind":"schema_version_mismatch","shipped":shipped,"rebuilt":rebuilt})
+            }
+            D::IrPayloadHashMismatch { shipped, rebuilt } => {
+                serde_json::json!({"kind":"ir_payload_hash_mismatch","shipped":shipped,"rebuilt":rebuilt})
+            }
+            D::IrPayloadPresence { present_on } => {
+                serde_json::json!({"kind":"ir_payload_presence","present_on":format!("{present_on:?}").to_lowercase()})
             }
         })
         .collect();

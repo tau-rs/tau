@@ -130,6 +130,7 @@ fn e2e_build_produces_parseable_bundle_with_correct_facts() {
         target: TargetTriple::host(),
         output_path: None,
         agent_filter: None,
+        ir_payload: None,
     })
     .expect("build");
 
@@ -143,8 +144,8 @@ fn e2e_build_produces_parseable_bundle_with_correct_facts() {
     let manifest = tau_pkg::bundle::BundleManifest::parse_str(&bundle_str).expect("bundle parses");
     tau_pkg::bundle::hash::verify_self_hash(&manifest).expect("self-hash verifies");
 
-    // Schema-level facts.
-    assert_eq!(manifest.schema_version, 1);
+    // Schema-level facts. schema_version = 2 since the schema_version bump.
+    assert_eq!(manifest.schema_version, 2);
     assert_eq!(manifest.project.name, "e2e-fixture");
     assert_eq!(manifest.project.version.to_string(), "0.1.0");
 
@@ -202,6 +203,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         target: TargetTriple::host(),
         output_path: Some(tmp.path().join("a.tau")),
         agent_filter: None,
+        ir_payload: None,
     })
     .expect("first build");
 
@@ -214,6 +216,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         target: TargetTriple::host(),
         output_path: Some(tmp.path().join("b.tau")),
         agent_filter: None,
+        ir_payload: None,
     })
     .expect("second build");
 

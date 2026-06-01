@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::bundle::manifest::BundleManifest;
+use crate::bundle::manifest::{BundleManifest, IrPayload};
 use crate::bundle::reproduce_error::ReproError;
 
 /// Inputs to [`verify_reproducible`].
@@ -16,6 +16,13 @@ pub struct ReproOptions {
     pub bundle_path: PathBuf,
     /// Local source tree to rebuild from (typically cwd).
     pub project_root: PathBuf,
+    /// Optional IR payload to embed in the rebuilt bundle. When `Some`,
+    /// the rebuilt bundle will carry an IR payload (same as the original
+    /// shipped bundle if it was built with IR lowering enabled). When
+    /// `None`, the rebuild will not embed an IR payload. The caller
+    /// (tau-cli's `cmd/verify.rs`) is responsible for lowering the IR
+    /// and supplying the payload to ensure both builds are comparable.
+    pub ir_payload: Option<IrPayload>,
 }
 
 /// Result of a reproducibility check.
@@ -38,6 +45,15 @@ pub enum Side {
     ShippedOnly,
     /// Present only in the rebuilt bundle.
     RebuiltOnly,
+}
+
+/// Which side carries the ir_payload when presence differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestSide {
+    /// The shipped bundle has the ir_payload; the rebuilt one does not.
+    Shipped,
+    /// The rebuilt bundle has the ir_payload; the shipped one does not.
+    Rebuilt,
 }
 
 /// A single field-level divergence between two manifests.
@@ -104,6 +120,18 @@ pub enum ManifestDiff {
         /// Rebuilt version.
         rebuilt: u32,
     },
+    /// shipped and rebuilt both carry an ir_payload but their canonical hashes diverge.
+    IrPayloadHashMismatch {
+        /// shipped ir_payload.canonical_ir_hash
+        shipped: String,
+        /// rebuilt ir_payload.canonical_ir_hash
+        rebuilt: String,
+    },
+    /// ir_payload presence differs between shipped and rebuilt.
+    IrPayloadPresence {
+        /// which side has the ir_payload (the other is None)
+        present_on: ManifestSide,
+    },
 }
 
 /// Rebuild from `opts.project_root` and compare to the shipped bundle.
@@ -147,6 +175,7 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
         target: shipped.bundle.target,
         output_path: Some(rebuilt_path.clone()),
         agent_filter,
+        ir_payload: opts.ir_payload.clone(),
     })
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
@@ -365,6 +394,25 @@ pub(crate) fn diff_manifests(
         }
     }
 
+    // ir_payload
+    match (&shipped.ir_payload, &rebuilt.ir_payload) {
+        (Some(s), Some(r)) => {
+            if s.canonical_ir_hash != r.canonical_ir_hash {
+                diffs.push(ManifestDiff::IrPayloadHashMismatch {
+                    shipped: s.canonical_ir_hash.clone(),
+                    rebuilt: r.canonical_ir_hash.clone(),
+                });
+            }
+        }
+        (Some(_), None) => diffs.push(ManifestDiff::IrPayloadPresence {
+            present_on: ManifestSide::Shipped,
+        }),
+        (None, Some(_)) => diffs.push(ManifestDiff::IrPayloadPresence {
+            present_on: ManifestSide::Rebuilt,
+        }),
+        (None, None) => {}
+    }
+
     diffs
 }
 
@@ -406,6 +454,7 @@ system = "hi"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         let s = std::fs::read_to_string(&artifact.path).unwrap();
@@ -484,6 +533,55 @@ system = "hi"
         );
     }
 
+    #[test]
+    fn diff_detects_ir_payload_hash_mismatch() {
+        use crate::bundle::manifest::IrPayload;
+        let mut a = sample_manifest();
+        let mut b = a.clone();
+        a.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "aa".repeat(32),
+            canonical_ir_bytes_hex: "deadbeef".into(),
+        });
+        b.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "bb".repeat(32),
+            canonical_ir_bytes_hex: "cafebabe".into(),
+        });
+        let diffs = diff_manifests(&a, &b);
+        assert!(
+            diffs.iter().any(|d| matches!(
+                d,
+                ManifestDiff::IrPayloadHashMismatch { shipped, rebuilt }
+                    if shipped == &"aa".repeat(32) && rebuilt == &"bb".repeat(32)
+            )),
+            "expected IrPayloadHashMismatch; got {diffs:?}",
+        );
+    }
+
+    #[test]
+    fn diff_detects_ir_payload_presence_mismatch() {
+        use crate::bundle::manifest::IrPayload;
+        let mut a = sample_manifest();
+        let b = a.clone();
+        a.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "aa".repeat(32),
+            canonical_ir_bytes_hex: "deadbeef".into(),
+        });
+        // b has no ir_payload
+        let diffs = diff_manifests(&a, &b);
+        assert!(
+            diffs.iter().any(|d| matches!(
+                d,
+                ManifestDiff::IrPayloadPresence {
+                    present_on: ManifestSide::Shipped
+                }
+            )),
+            "expected IrPayloadPresence {{ Shipped }}; got {diffs:?}",
+        );
+    }
+
     fn build_minimal_bundle(root: &std::path::Path) -> std::path::PathBuf {
         std::fs::write(
             root.join("tau.toml"),
@@ -511,6 +609,7 @@ system = "you are solo"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         artifact.path
@@ -520,6 +619,7 @@ system = "you are solo"
         ReproOptions {
             bundle_path: bundle,
             project_root: root.to_path_buf(),
+            ir_payload: None,
         }
     }
 
@@ -626,6 +726,7 @@ system = "you are extra"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: Some(vec!["solo".parse().unwrap()]),
+            ir_payload: None,
         })
         .unwrap();
         artifact.path
@@ -709,6 +810,7 @@ deny_paths = ["/data/secret/**"]
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         // Sanity: the bundle actually recorded narrowed caps.

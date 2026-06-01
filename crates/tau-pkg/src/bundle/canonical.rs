@@ -7,7 +7,7 @@
 use std::fmt::Write;
 
 use crate::bundle::manifest::{
-    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundlePackage,
+    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundlePackage, IrPayload,
 };
 
 /// Emit the canonical TOML serialization of a `BundleManifest`.
@@ -53,6 +53,13 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
         out.push('\n');
         out.push_str("[[agents]]\n");
         write_agent(&mut out, agent);
+    }
+
+    // [ir_payload] — emitted when present so the bytes participate in the self-hash.
+    if let Some(ir) = &manifest.ir_payload {
+        out.push('\n');
+        out.push_str("[ir_payload]\n");
+        write_ir_payload(&mut out, ir);
     }
 
     out
@@ -148,6 +155,13 @@ fn write_effective_capabilities(out: &mut String, caps: &BundleEffectiveCapabili
     if !caps.deny_skill_spawn.is_empty() {
         write_string_array(out, "deny_skill_spawn", caps.deny_skill_spawn.clone());
     }
+}
+
+fn write_ir_payload(out: &mut String, ir: &IrPayload) {
+    // Fields are already hex strings; emit in fixed order for deterministic hash.
+    write_str_kv(out, "ir_format", &ir.ir_format);
+    write_str_kv(out, "canonical_ir_hash", &ir.canonical_ir_hash);
+    write_str_kv(out, "canonical_ir_bytes_hex", &ir.canonical_ir_bytes_hex);
 }
 
 fn write_str_kv(out: &mut String, key: &str, value: &str) {

@@ -9,11 +9,85 @@ use tau_ports::target::TargetTriple;
 
 use crate::bundle::error::BundleParseError;
 
+/// IR payload carried in a v2 bundle.
+///
+/// Per the design spec D-5, v0 ships the IR as data inside the bundle;
+/// the bundle's wasm component carries the interpreter as code and reads
+/// this payload at startup. v1 (β.7) keeps the payload field but its
+/// semantics change: `canonical_ir_bytes_hex` becomes the input to AOT
+/// lowering rather than to runtime interpretation.
+///
+/// Both `canonical_ir_hash` and `canonical_ir_bytes_hex` are hex strings
+/// for TOML round-trip compatibility (`Vec<u8>` serializes to integer
+/// arrays in TOML, which is inefficient for large payloads).
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IrPayload {
+    /// IR format version (D-6 — semver-shaped, e.g. "v1.0.0").
+    pub ir_format: String,
+    /// SHA-256 of the canonical IR bytes, lowercase hex (64 chars).
+    /// Redundant with the bytes themselves but cheap; lets `tau verify`
+    /// short-circuit on a hash mismatch before re-deserializing.
+    pub canonical_ir_hash: String,
+    /// The canonical IR bytes encoded as lowercase hex. Hashed into the
+    /// bundle's self-hash via the canonical TOML, per D-6.
+    pub canonical_ir_bytes_hex: String,
+}
+
+/// Error from hex decoding of IrPayload fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexDecodeError(pub String);
+
+impl std::fmt::Display for HexDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "hex decode error: {}", self.0)
+    }
+}
+
+impl IrPayload {
+    /// Decode `canonical_ir_bytes_hex` back to raw bytes.
+    pub fn canonical_ir_bytes(&self) -> Result<Vec<u8>, HexDecodeError> {
+        hex_decode(&self.canonical_ir_bytes_hex)
+    }
+
+    /// Parse the stored `canonical_ir_hash` hex to a `[u8; 32]` array.
+    pub fn canonical_ir_hash_bytes(&self) -> Result<[u8; 32], HexDecodeError> {
+        let v = hex_decode(&self.canonical_ir_hash)?;
+        v.try_into()
+            .map_err(|_| HexDecodeError("expected 32 bytes but got a different length".into()))
+    }
+}
+
+/// Decode a lowercase hex string to bytes.
+fn hex_decode(s: &str) -> Result<Vec<u8>, HexDecodeError> {
+    if !s.len().is_multiple_of(2) {
+        return Err(HexDecodeError("odd-length hex string".into()));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let mut chars = s.chars();
+    loop {
+        match (chars.next(), chars.next()) {
+            (None, _) => break,
+            (Some(h), Some(l)) => {
+                let hi = h
+                    .to_digit(16)
+                    .ok_or_else(|| HexDecodeError(format!("invalid hex char '{h}'")))?;
+                let lo = l
+                    .to_digit(16)
+                    .ok_or_else(|| HexDecodeError(format!("invalid hex char '{l}'")))?;
+                out.push(((hi << 4) | lo) as u8);
+            }
+            _ => return Err(HexDecodeError("unexpected end of hex string".into())),
+        }
+    }
+    Ok(out)
+}
+
 /// Top-level bundle manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BundleManifest {
-    /// Major schema version. v1.x is the current line; v2+ would be a
-    /// breaking change (consumer rejects loudly).
+    /// Major schema version. v1 is the legacy line; v2 adds `ir_payload`.
+    /// v3+ would be a breaking change (consumer rejects loudly).
     pub schema_version: u32,
     /// Bundle-level metadata (sha + timestamp + tau version + target).
     pub bundle: BundleMeta,
@@ -25,6 +99,11 @@ pub struct BundleManifest {
     /// Per-agent compiled grant set + system prompt hash + tool list.
     #[serde(default)]
     pub agents: Vec<BundleAgent>,
+    /// IR payload for v2 bundles. `None` for v1 (legacy) bundles;
+    /// `Some` when `tau build` successfully lowered the project IR.
+    /// The canonical_ir_bytes are hashed into the bundle's self-hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ir_payload: Option<IrPayload>,
 }
 
 /// Bundle-level metadata.
@@ -220,7 +299,7 @@ impl BundleManifest {
     /// ```
     pub fn parse_str(s: &str) -> Result<Self, BundleParseError> {
         let manifest: BundleManifest = toml::from_str(s)?;
-        if manifest.schema_version != 1 {
+        if manifest.schema_version != 1 && manifest.schema_version != 2 {
             return Err(BundleParseError::UnsupportedSchemaVersion {
                 found: manifest.schema_version,
             });
@@ -262,7 +341,6 @@ impl BundleManifest {
     /// # "#;
     /// # let manifest = BundleManifest::parse_str(toml).unwrap();
     /// let canonical = manifest.to_canonical_toml();
-    /// assert!(canonical.contains("schema_version = 1"));
     /// assert!(canonical.contains("[bundle]"));
     /// assert!(canonical.contains("[project]"));
     /// ```
@@ -344,7 +422,7 @@ pub(crate) mod tests_helpers {
     /// across the bundle module's unit tests.
     pub fn sample_manifest() -> BundleManifest {
         BundleManifest {
-            schema_version: 1,
+            schema_version: 2,
             bundle: BundleMeta {
                 sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
                 created_at: "2026-05-19T13:42:11Z".into(),
@@ -385,6 +463,7 @@ pub(crate) mod tests_helpers {
                     ..Default::default()
                 },
             }],
+            ir_payload: None,
         }
     }
 }
@@ -403,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_str_rejects_schema_version_2() {
+    fn parse_str_accepts_schema_version_2() {
         let toml_str = r#"
 schema_version = 2
 
@@ -418,9 +497,50 @@ name = "x"
 version = "0.1.0"
 tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "#;
-        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v2");
+        let m = BundleManifest::parse_str(toml_str).expect("v2 must parse");
+        assert_eq!(m.schema_version, 2);
+    }
+
+    #[test]
+    fn parse_str_accepts_schema_version_1_legacy() {
+        // v1 bundles from before the schema_version bump must still parse.
+        let toml_str = r#"
+schema_version = 1
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-05-19T13:42:11Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+        let m = BundleManifest::parse_str(toml_str).expect("legacy v1 must still parse");
+        assert_eq!(m.schema_version, 1);
+    }
+
+    #[test]
+    fn parse_str_rejects_schema_version_3() {
+        let toml_str = r#"
+schema_version = 3
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-05-19T13:42:11Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v3");
         match err {
-            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 2),
+            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 3),
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
     }
@@ -597,9 +717,9 @@ future_key = "tolerated"
     }
 
     #[test]
-    fn schema_version_two_is_rejected() {
+    fn schema_version_ninety_nine_is_rejected() {
         let toml_str = r#"
-schema_version = 2
+schema_version = 99
 
 [bundle]
 sha256 = "x"
@@ -614,9 +734,9 @@ tau_toml_sha256 = "x"
 "#;
         match BundleManifest::parse_str(toml_str) {
             Err(crate::bundle::error::BundleParseError::UnsupportedSchemaVersion { found }) => {
-                assert_eq!(found, 2);
+                assert_eq!(found, 99);
             }
-            other => panic!("expected UnsupportedSchemaVersion(2), got {other:?}"),
+            other => panic!("expected UnsupportedSchemaVersion(99), got {other:?}"),
         }
     }
 
@@ -647,5 +767,19 @@ effective_capabilities = { allow_fs_read = ["/a/**"], allow_some_future_shape = 
             m.agents[0].effective_capabilities.allow_fs_read,
             vec!["/a/**".to_string()]
         );
+    }
+
+    #[test]
+    fn canonical_round_trip_with_ir_payload() {
+        let mut m = sample_manifest();
+        m.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "aa".repeat(32), // 64-char hex string
+            canonical_ir_bytes_hex: "deadbeef".into(),
+        });
+        let toml = m.to_canonical_toml();
+        let parsed = BundleManifest::parse_str(&toml).expect("v2 with ir_payload must parse");
+        assert_eq!(parsed.ir_payload, m.ir_payload);
+        assert_eq!(parsed.schema_version, 2);
     }
 }
