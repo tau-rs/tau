@@ -244,13 +244,17 @@ impl ToolDispatcher for ForwardingDispatcher {
     /// The joined-text result is round-tripped through
     /// `serde_json::from_str` so structured tool output (e.g. a tool
     /// that emits `{"temp":22}`) lands in `body` as a JSON object, not
-    /// as a `Value::String("{\"temp\":22}")`. That symmetry matters
-    /// because [`tau_runtime_core::interpreter::agent_loop`]'s
-    /// `DispatcherTool::invoke` (the inverse direction) renders `body`
-    /// with `format!("{v}")`, which on `Value::String("hello")`
-    /// produces the literal quoted form `"hello"` — corrupting every
-    /// plain-text tool result the LLM sees. Falling back to
-    /// `Value::String` only on parse failure preserves both directions.
+    /// as a `Value::String("{\"temp\":22}")`. Plain text (`hello`) is
+    /// not valid JSON, so the fallback `Value::String(joined_text)`
+    /// preserves it verbatim.
+    ///
+    /// That symmetry matters because
+    /// [`tau_runtime_core::interpreter::agent_loop`]'s
+    /// `DispatcherTool::invoke` (the inverse direction) special-cases
+    /// `Value::String` to extract the raw `String` and uses
+    /// `format!("{v}")` for structured shapes. Together this gives a
+    /// lossless round-trip in both directions: plain text → raw text,
+    /// structured shapes → compact JSON.
     fn invoke<'a>(
         &'a self,
         tool_id: &'a ToolId,
@@ -467,10 +471,14 @@ mod tests {
 
     /// Tool that returns a fixed plain-text string. Used for the body-shape
     /// regression: the dispatcher MUST land plain text as
-    /// `Value::String("hello")` so the inverse-direction `format!("{v}")`
-    /// in `agent_loop::DispatcherTool::invoke` yields `hello` — NOT
-    /// the literal quoted form `"hello"` that `Display` on
+    /// `Value::String("hello")` so the inverse-direction match in
+    /// `agent_loop::DispatcherTool::invoke` extracts the raw `String`
+    /// (via `Some(Value::String(s)) => s`) and the LLM sees `hello` —
+    /// NOT the literal quoted form `"hello"` that `Display` on
     /// `Value::String` would produce for an already-JSON-encoded string.
+    /// Together with the inverse-side special case, plain text round-trips
+    /// losslessly: tool emits `hello` → dispatcher `Value::String("hello")`
+    /// → DispatcherTool extracts `"hello"` (raw) → LLM sees `hello`.
     struct PlainTextTool;
 
     impl Tool for PlainTextTool {
@@ -571,12 +579,15 @@ mod tests {
         // Body must be the *raw* `Value::String("hello")` — NOT a
         // double-wrapped `Value::String("\"hello\"")` (which is what a
         // naive "always JSON-encode the text" implementation would
-        // produce, and what every subsequent `format!("{v}")` in the
-        // inverse direction would surface to the LLM as the literal
-        // string `"\"hello\""`). The try-parse fix yields this raw
-        // string because `from_str("hello")` fails (bare word is not
-        // valid JSON), so the fallback `Value::String(joined_text)`
-        // kicks in and preserves the original text exactly.
+        // produce). The try-parse fix yields this raw string because
+        // `from_str("hello")` fails (bare word is not valid JSON), so
+        // the fallback `Value::String(joined_text)` kicks in and
+        // preserves the original text exactly.
+        //
+        // The inverse-side match in
+        // `agent_loop::DispatcherTool::invoke` then extracts the raw
+        // `String` for `Value::String`, so the LLM sees the bare word
+        // `hello` (no quotes) — symmetric, lossless round-trip.
         assert_eq!(body, serde_json::Value::String("hello".to_string()));
     }
 
