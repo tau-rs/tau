@@ -1,0 +1,29 @@
+[package]
+name = "tau-mcp"
+description = "MCP (Model Context Protocol) facilitator types and contract layer — JSON-RPC envelopes, method payloads, canonical-hashed contracts, cassette format, host-handlers trait. no_std + alloc. Transport impls live in tau-mcp-tokio."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+tau-domain = { workspace = true, default-features = false, features = ["serde"] }
+tau-ports  = { workspace = true, default-features = false, features = ["serde"] }
+serde      = { workspace = true, default-features = false, features = ["alloc", "derive"] }
+serde_json = { workspace = true }
+thiserror  = { workspace = true, default-features = false }
+hashbrown  = { workspace = true }
+# SHA-256 over canonical JSON bytes for contract_hash + schema_hash.
+# Same shape as tau-ir uses for the workflow IR hash (β.2).
+sha2       = { workspace = true, default-features = false }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio      = { workspace = true, features = ["rt", "macros"] }
+
+[features]
+default            = ["with-std-adapters"]
+# When on, enables std-backed sinks (file I/O on Recorder / Replayer).
+with-std-adapters  = []
