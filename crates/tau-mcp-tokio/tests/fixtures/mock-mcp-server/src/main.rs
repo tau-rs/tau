@@ -18,7 +18,13 @@ use std::io::{BufRead, Write};
 use std::time::Duration;
 
 fn main() {
-    let scenario = std::env::var("TAU_MCP_FIXTURE_SCENARIO").unwrap_or_else(|_| "happy".into());
+    // Scenario priority: argv[1] (CLI-arg approach, race-safe under nextest)
+    // then TAU_MCP_FIXTURE_SCENARIO env var (backward-compat), then "happy".
+    let scenario = std::env::args()
+        .nth(1)
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("TAU_MCP_FIXTURE_SCENARIO").ok())
+        .unwrap_or_else(|| "happy".into());
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
