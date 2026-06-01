@@ -7,6 +7,8 @@ members = [
     "crates/tau-infra",
     "crates/tau-app",
     "crates/tau-pkg",
+    "crates/tau-mcp",
+    "crates/tau-mcp-tokio",
     "crates/tau-runtime-core",
     "crates/tau-observe",
     "crates/tau-runtime-tokio",
@@ -54,6 +56,8 @@ authors = ["Titouan Lebocq <75916953+LEBOCQTitouan@users.noreply.github.com>"]
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0" }
 tau-ports           = { path = "crates/tau-ports",  version = "0.0.0" }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
+tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
+tau-mcp-tokio       = { path = "crates/tau-mcp-tokio", version = "0.0.0", default-features = false }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
 tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0" }
 tau-runtime-tokio   = { path = "crates/tau-runtime-tokio", version = "0.0.0" }
