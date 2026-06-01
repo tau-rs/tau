@@ -106,10 +106,24 @@ where
             ));
         }
 
-        let text = result
-            .body
-            .map(|v| alloc::format!("{v}"))
-            .unwrap_or_default();
+        // Extract text symmetrically with `ForwardingDispatcher`'s body-shape
+        // lift in `crates/tau-cli/src/cmd/ir_dispatcher.rs`. The dispatcher
+        // try-parses the joined tool text as JSON and falls back to
+        // `Value::String(text)` on parse failure, so plain text reaches
+        // `body` as `Value::String("hello")`. `Display` on
+        // `serde_json::Value::String("hello")` emits the literal quoted
+        // form `"hello"` — corrupting every plain-text result the LLM
+        // sees. Special-case `Value::String` to extract the raw `String`
+        // (no quoting); fall through to `Display` for structured shapes
+        // (objects/arrays/numbers/bools/null) so they serialise as
+        // compact JSON. This makes the inverse direction lossless:
+        //   plain text  → Value::String  → raw text   (no extra quotes)
+        //   JSON object → Value::Object  → compact JSON
+        let text = match result.body {
+            Some(serde_json::Value::String(s)) => s,
+            Some(v) => alloc::format!("{v}"),
+            None => alloc::string::String::new(),
+        };
         Ok(ToolResult::new(
             alloc::vec![ToolContent::Text { text }],
             false,
@@ -326,4 +340,184 @@ fn split_history(mut messages: Vec<Message>) -> Option<(Vec<Message>, Message)> 
     }
     let last = messages.pop().expect("non-empty checked above");
     Some((messages, last))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Body-shape extraction regressions for `DispatcherTool::invoke`.
+    //!
+    //! These tests cover the inverse direction of the `ForwardingDispatcher`
+    //! body-shape lift (see `crates/tau-cli/src/cmd/ir_dispatcher.rs`):
+    //! plain text must round-trip as raw text (no extra JSON quoting),
+    //! and structured shapes must serialise as compact JSON.
+    use super::*;
+    use alloc::boxed::Box;
+    use alloc::string::ToString;
+    use alloc::sync::Arc;
+    use core::future::Future;
+    use core::pin::Pin;
+    use serde_json::Value;
+    use tau_ir::ToolId;
+    use tau_ports::fixtures::MockLlmBackend;
+    use tau_ports::tool::Tool;
+    use tokio as _; // exercised via #[tokio::test]
+
+    use crate::builder::DynLlmBackend;
+    use crate::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
+
+    /// Minimal `ToolDispatcher` that returns a fixed `ToolInvocationResult`
+    /// on every `invoke`. Used to drive `DispatcherTool::invoke` in
+    /// isolation so we can assert how it extracts text from `body`.
+    struct FixedDispatcher {
+        backend: Arc<dyn DynLlmBackend>,
+        body: Option<Value>,
+        error: Option<alloc::string::String>,
+    }
+
+    impl ToolDispatcher for FixedDispatcher {
+        fn invoke<'a>(
+            &'a self,
+            _tool_id: &'a ToolId,
+            _args: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>
+        {
+            let body = self.body.clone();
+            let error = self.error.clone();
+            Box::pin(async move { Ok(ToolInvocationResult { body, error }) })
+        }
+
+        fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
+            self.backend.clone()
+        }
+    }
+
+    /// Build a `DispatcherTool` carrying the given dispatcher, ready for
+    /// a direct `Tool::invoke` call. Spec name / ToolId are arbitrary —
+    /// `FixedDispatcher` ignores them.
+    fn make_dispatcher_tool<D>(dispatcher: Arc<D>) -> DispatcherTool<D>
+    where
+        D: ToolDispatcher + Send + Sync + 'static,
+    {
+        let spec = make_tool_spec(
+            "fixed",
+            "fixed-output tool for tests",
+            &serde_json::json!({}),
+        );
+        DispatcherTool {
+            tool_name: "fixed".to_string(),
+            tool_id: ToolId("fixed".to_string()),
+            spec,
+            dispatcher,
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_tool_extracts_raw_string_for_value_string_body() {
+        // Body shape: `Value::String("hello")` — what `ForwardingDispatcher`
+        // produces when the plugin tool emits plain text and the
+        // try-parse-as-JSON path falls back to `Value::String`.
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let dispatcher = Arc::new(FixedDispatcher {
+            backend,
+            body: Some(Value::String("hello".to_string())),
+            error: None,
+        });
+        let tool = make_dispatcher_tool(dispatcher);
+
+        let res = tool
+            .invoke(&mut (), tau_domain::Value::Null)
+            .await
+            .expect("invoke must succeed");
+
+        // Exactly one Text block containing the raw string — NOT the
+        // JSON-quoted `"hello"` that `Display` on `Value::String` would
+        // produce.
+        assert_eq!(res.content.len(), 1);
+        match &res.content[0] {
+            tau_ports::tool::ToolContent::Text { text } => {
+                assert_eq!(text, "hello");
+            }
+            other => panic!("expected Text content, got {other:?}"),
+        }
+        assert!(!res.is_error);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_tool_extracts_compact_json_for_value_object_body() {
+        // Body shape: `Value::Object({"temp": 22})` — what
+        // `ForwardingDispatcher` produces when the plugin tool emits a
+        // JSON-shaped text payload and the try-parse path lifts it.
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let dispatcher = Arc::new(FixedDispatcher {
+            backend,
+            body: Some(serde_json::json!({"temp": 22})),
+            error: None,
+        });
+        let tool = make_dispatcher_tool(dispatcher);
+
+        let res = tool
+            .invoke(&mut (), tau_domain::Value::Null)
+            .await
+            .expect("invoke must succeed");
+
+        assert_eq!(res.content.len(), 1);
+        match &res.content[0] {
+            tau_ports::tool::ToolContent::Text { text } => {
+                // `Display` on `Value::Object` emits compact JSON,
+                // matching what the LLM expects for structured tool
+                // output.
+                assert_eq!(text, r#"{"temp":22}"#);
+            }
+            other => panic!("expected Text content, got {other:?}"),
+        }
+        assert!(!res.is_error);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_tool_empty_text_for_none_body() {
+        // Body shape: `None` — well-defined success with no payload.
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let dispatcher = Arc::new(FixedDispatcher {
+            backend,
+            body: None,
+            error: None,
+        });
+        let tool = make_dispatcher_tool(dispatcher);
+
+        let res = tool
+            .invoke(&mut (), tau_domain::Value::Null)
+            .await
+            .expect("invoke must succeed");
+
+        match &res.content[0] {
+            tau_ports::tool::ToolContent::Text { text } => assert!(text.is_empty()),
+            other => panic!("expected Text content, got {other:?}"),
+        }
+        assert!(!res.is_error);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_tool_routes_error_field_to_is_error_true() {
+        // Body shape: `error = Some("boom")` — the dispatcher signals a
+        // tool-side error. `DispatcherTool` must surface it as an
+        // `is_error: true` `ToolResult` with the error text.
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let dispatcher = Arc::new(FixedDispatcher {
+            backend,
+            body: None,
+            error: Some("boom".to_string()),
+        });
+        let tool = make_dispatcher_tool(dispatcher);
+
+        let res = tool
+            .invoke(&mut (), tau_domain::Value::Null)
+            .await
+            .expect("invoke must succeed");
+
+        assert!(res.is_error);
+        match &res.content[0] {
+            tau_ports::tool::ToolContent::Text { text } => assert_eq!(text, "boom"),
+            other => panic!("expected Text content, got {other:?}"),
+        }
+    }
 }
