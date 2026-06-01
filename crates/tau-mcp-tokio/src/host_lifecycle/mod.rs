@@ -1,9 +1,16 @@
 //! Host lifecycle for a contracted MCP server.
 //!
-//! Scaffold only in PR-1. PR-2 (stdio) + PR-3 (HTTP) wire:
-//!
-//! - `open(url, &CapabilityPlan)` discriminates transport and dials.
-//! - handshake: `initialize` + `tools/list`.
-//! - keepalive + shutdown.
-//!
-//! See the β.3 design doc §2 + §8.
+//! `open(url, plan, gate, options)` is the v0 entrypoint: parse the URL,
+//! spawn (stdio) or dial (HTTP — PR-3), drive the MCP handshake, return
+//! a live `McpClient`.
+
+pub mod client;
+pub mod error;
+pub mod handshake;
+pub mod open;
+pub mod url;
+
+pub use client::{McpClient, McpClientOptions};
+pub use error::{HandshakeError, LifecycleError, UrlParseError};
+pub use open::open;
+pub use url::{parse_url, McpUrl};

@@ -1,0 +1,18 @@
+[package]
+name = "tau-mcp-mock-server"
+version = "0.0.0"
+edition = "2021"
+publish = false
+# Intentionally NOT a workspace member — keeps its dep tree minimal and
+# lets the integration tests build it on demand at test time.
+
+[[bin]]
+name = "tau-mcp-mock-server"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
+[workspace]
+# Empty workspace block: cargo treats this manifest as its own
+# workspace root so it doesn't try to attach to the outer workspace.

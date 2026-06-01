@@ -42,6 +42,8 @@ exclude = [
     "crates/tau-domain/fuzz",
     "crates/tau-pkg/fuzz",
     "crates/tau-plugin-protocol/fuzz",
+    # Integration-test fixture — out-of-workspace binary, built on demand.
+    "crates/tau-mcp-tokio/tests/fixtures/mock-mcp-server",
 ]
 
 [workspace.package]
