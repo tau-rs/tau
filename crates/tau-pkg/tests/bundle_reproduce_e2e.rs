@@ -111,6 +111,7 @@ fn e2e_clean_rebuild_is_reproducible() {
     let report = verify_reproducible(ReproOptions {
         bundle_path: artifact.path,
         project_root: tmp.path().to_path_buf(),
+        ir_payload: None,
     })
     .unwrap();
     assert!(report.reproducible, "diffs={:?}", report.diffs);
@@ -135,6 +136,7 @@ fn e2e_mutated_package_breaks_reproducibility() {
     let report = verify_reproducible(ReproOptions {
         bundle_path: artifact.path,
         project_root: tmp.path().to_path_buf(),
+        ir_payload: None,
     })
     .unwrap();
     assert!(!report.reproducible);

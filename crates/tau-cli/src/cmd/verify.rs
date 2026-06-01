@@ -374,9 +374,25 @@ fn run_reproducibility_check(
     output: &mut Output,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
+
+    // Lower the IR from the current project tree so the rebuild embeds the
+    // same payload as the original `tau build` invocation. Without this,
+    // the rebuilt bundle has no ir_payload while the shipped bundle does,
+    // causing a reproducibility failure.
+    let shipped_str = std::fs::read_to_string(bundle_path)?;
+    let shipped = tau_pkg::bundle::BundleManifest::parse_str(&shipped_str)
+        .map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
+    let ir_payload = if shipped.ir_payload.is_some() {
+        // Shipped bundle has an IR payload → rebuild with the same IR lowering.
+        crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target)
+    } else {
+        None
+    };
+
     let report = match tau_pkg::bundle::verify_reproducible(tau_pkg::bundle::ReproOptions {
         bundle_path: bundle_path.to_path_buf(),
         project_root: cwd,
+        ir_payload,
     }) {
         Ok(r) => r,
         Err(e) => {

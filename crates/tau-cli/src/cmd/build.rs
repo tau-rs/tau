@@ -87,7 +87,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
 ///
 /// This uses a permissive cache that accepts any native-tool name with
 /// a stub hash; the conformance suite (β.2.6) will supply real caches.
-fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrPayload> {
+pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrPayload> {
     use tau_pkg::project::project::UncheckedProjectConfig;
 
     let tau_toml_path = project_root.join("tau.toml");

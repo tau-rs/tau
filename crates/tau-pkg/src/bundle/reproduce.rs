@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::bundle::manifest::BundleManifest;
+use crate::bundle::manifest::{BundleManifest, IrPayload};
 use crate::bundle::reproduce_error::ReproError;
 
 /// Inputs to [`verify_reproducible`].
@@ -16,6 +16,13 @@ pub struct ReproOptions {
     pub bundle_path: PathBuf,
     /// Local source tree to rebuild from (typically cwd).
     pub project_root: PathBuf,
+    /// Optional IR payload to embed in the rebuilt bundle. When `Some`,
+    /// the rebuilt bundle will carry an IR payload (same as the original
+    /// shipped bundle if it was built with IR lowering enabled). When
+    /// `None`, the rebuild will not embed an IR payload. The caller
+    /// (tau-cli's `cmd/verify.rs`) is responsible for lowering the IR
+    /// and supplying the payload to ensure both builds are comparable.
+    pub ir_payload: Option<IrPayload>,
 }
 
 /// Result of a reproducibility check.
@@ -147,7 +154,7 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
         target: shipped.bundle.target,
         output_path: Some(rebuilt_path.clone()),
         agent_filter,
-        ir_payload: None,
+        ir_payload: opts.ir_payload.clone(),
     })
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
@@ -523,6 +530,7 @@ system = "you are solo"
         ReproOptions {
             bundle_path: bundle,
             project_root: root.to_path_buf(),
+            ir_payload: None,
         }
     }
 
