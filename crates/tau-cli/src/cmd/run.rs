@@ -69,12 +69,38 @@ pub async fn run(
     // is provably the bundle's source, so the rest of `run` proceeds
     // unchanged.
     if let Some(bundle_path) = &args.bundle {
-        if let Err(e) = tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
+        match tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
             bundle_path: bundle_path.clone(),
             project_root: cwd.clone(),
         }) {
-            eprintln!("error: {e}");
-            std::process::exit(bundle_verify_exit_code(&e));
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(bundle_verify_exit_code(&e));
+            }
+            Ok(report) => {
+                // v2 bundle with ir_payload: log the entry agent and note that
+                // full IR-interpreter dispatch is gated behind β.2.6's
+                // ToolDispatcher integration. For now, the normal cwd-based
+                // run path serves as the execution engine — the verify step
+                // already guarantees the cwd's source matches the bundle.
+                //
+                // TODO(β.2.6): construct a ToolDispatcher over the host's
+                // plugin registry, call tau_runtime_core::interpreter::run_ir,
+                // and short-circuit the remainder of this function.
+                if let Some(ir) = &report.manifest.ir_payload {
+                    if let Ok(module) = tau_ir::from_canonical_bytes(&ir.canonical_ir_bytes) {
+                        // Pick first agent (alphabetical via BTreeMap) as entry.
+                        if let Some((entry_id, _)) = module.workflow.agents.iter().next() {
+                            tracing::warn!(
+                                entry_agent = %entry_id.0,
+                                ir_format = %ir.ir_format,
+                                "bundle has ir_payload; IR interpreter dispatch deferred to \
+                                 beta.2.6 — running via normal cwd-based agent path"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
