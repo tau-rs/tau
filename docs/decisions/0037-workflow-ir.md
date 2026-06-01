@@ -32,8 +32,8 @@ each. This ADR records the binding decisions for durability.
 - `tau-ir` is a new `no_std` + `alloc` crate alongside `tau-runtime-core`.
 - `tau_ir::IrModule` + `tau_ir::Workflow` + `tau_ir::Node` + variants
   (Agent, Tool, Deterministic, Subflow) form the canonical IR shape.
-- `BundleManifest::schema_version` bumped 2 → 3 with the new `ir_payload`
-  field; legacy v1 and v2 bundles still parse and run.
+- `BundleManifest::schema_version` bumped 1 → 2 with the new `ir_payload`
+  field; legacy v1 bundles still parse and run.
 - `tau verify --bundle` extends to compare IR canonical bytes via
   `tau_ir::canonical_bytes()` + SHA-256 hash.
 - The conformance suite in `crates/tau-ir-conformance/` becomes a permanent
