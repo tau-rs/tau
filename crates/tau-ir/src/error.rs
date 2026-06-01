@@ -69,6 +69,26 @@ pub enum IrError {
         fn_name: String,
     },
 
+    /// A `ToolImpl::Subflow` tool targets an agent that is not present in
+    /// the workflow.
+    #[error("subflow tool {tool:?} targets unknown agent {agent:?}")]
+    UnknownSubflowToolTarget {
+        /// The tool id whose `Subflow` variant points at a missing agent.
+        tool: ToolId,
+        /// The unresolved target agent id.
+        agent: AgentId,
+    },
+
+    /// A `ToolImpl::Step` tool references a step id that is not present in
+    /// the workflow's `steps` table.
+    #[error("step tool {tool:?} references unknown step {step:?}")]
+    UnknownStepToolTarget {
+        /// The tool id whose `Step` variant points at a missing step.
+        tool: ToolId,
+        /// The unresolved step id.
+        step: StepId,
+    },
+
     /// Generic parse failure surfacing from the upstream TOML parser.
     #[error("tau.toml parse error: {0}")]
     Parse(String),
