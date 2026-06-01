@@ -768,4 +768,18 @@ effective_capabilities = { allow_fs_read = ["/a/**"], allow_some_future_shape = 
             vec!["/a/**".to_string()]
         );
     }
+
+    #[test]
+    fn canonical_round_trip_with_ir_payload() {
+        let mut m = sample_manifest();
+        m.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "aa".repeat(32), // 64-char hex string
+            canonical_ir_bytes_hex: "deadbeef".into(),
+        });
+        let toml = m.to_canonical_toml();
+        let parsed = BundleManifest::parse_str(&toml).expect("v2 with ir_payload must parse");
+        assert_eq!(parsed.ir_payload, m.ir_payload);
+        assert_eq!(parsed.schema_version, 2);
+    }
 }

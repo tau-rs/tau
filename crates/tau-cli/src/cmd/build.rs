@@ -85,8 +85,9 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
 /// success or `None` if lowering fails (non-fatal — the bundle is still
 /// built, but without an IR payload; a warning is logged).
 ///
-/// This uses a permissive cache that accepts any native-tool name with
-/// a stub hash; the conformance suite (β.2.6) will supply real caches.
+/// This uses a stub cache that returns the zero sentinel for every native-tool
+/// name; typecheck rejects [0u8;32], so projects with native tools fall through
+/// to the non-fatal None path. The conformance suite (β.2.6) wires real caches.
 pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrPayload> {
     use tau_pkg::project::project::UncheckedProjectConfig;
 
@@ -113,8 +114,10 @@ pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) ->
         }
     };
 
-    // Permissive cache: any native-tool name gets a stub hash (all zeros).
-    // Real content-addressing is deferred to β.2.6.
+    // Stub cache for β.2.5: returns the zero sentinel for every native tool name.
+    // typecheck rejects [0u8;32], so any project with [tools.<x>.native] entries
+    // hits the non-fatal fallback below (bundle built without IR payload). Real
+    // content-addressing is wired in β.2.6.
     let caches = tau_ir::lower::Caches {
         native_tool: &|_name| Some([0u8; 32]),
         mcp_contract: &|_url| None,

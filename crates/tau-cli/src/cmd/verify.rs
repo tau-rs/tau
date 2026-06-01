@@ -497,6 +497,15 @@ fn format_diff(d: &tau_pkg::bundle::ManifestDiff) -> String {
         D::SchemaVersionMismatch { shipped, rebuilt } => {
             format!("schema_version: {shipped} \u{2192} {rebuilt}")
         }
+        D::IrPayloadHashMismatch { shipped, rebuilt } => {
+            format!("ir_payload.canonical_ir_hash: {shipped} \u{2192} {rebuilt}")
+        }
+        D::IrPayloadPresence { present_on } => {
+            format!(
+                "ir_payload present in {side} but missing in the other build",
+                side = format!("{present_on:?}").to_lowercase()
+            )
+        }
     }
 }
 
@@ -540,6 +549,12 @@ fn render_repro_json(
             } => serde_json::json!({"kind":"bundle_meta_field","field":field,"shipped":shipped,"rebuilt":rebuilt}),
             D::SchemaVersionMismatch { shipped, rebuilt } => {
                 serde_json::json!({"kind":"schema_version_mismatch","shipped":shipped,"rebuilt":rebuilt})
+            }
+            D::IrPayloadHashMismatch { shipped, rebuilt } => {
+                serde_json::json!({"kind":"ir_payload_hash_mismatch","shipped":shipped,"rebuilt":rebuilt})
+            }
+            D::IrPayloadPresence { present_on } => {
+                serde_json::json!({"kind":"ir_payload_presence","present_on":format!("{present_on:?}").to_lowercase()})
             }
         })
         .collect();

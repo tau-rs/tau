@@ -47,6 +47,15 @@ pub enum Side {
     RebuiltOnly,
 }
 
+/// Which side carries the ir_payload when presence differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestSide {
+    /// The shipped bundle has the ir_payload; the rebuilt one does not.
+    Shipped,
+    /// The rebuilt bundle has the ir_payload; the shipped one does not.
+    Rebuilt,
+}
+
 /// A single field-level divergence between two manifests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestDiff {
@@ -110,6 +119,18 @@ pub enum ManifestDiff {
         shipped: u32,
         /// Rebuilt version.
         rebuilt: u32,
+    },
+    /// shipped and rebuilt both carry an ir_payload but their canonical hashes diverge.
+    IrPayloadHashMismatch {
+        /// shipped ir_payload.canonical_ir_hash
+        shipped: String,
+        /// rebuilt ir_payload.canonical_ir_hash
+        rebuilt: String,
+    },
+    /// ir_payload presence differs between shipped and rebuilt.
+    IrPayloadPresence {
+        /// which side has the ir_payload (the other is None)
+        present_on: ManifestSide,
     },
 }
 
@@ -373,6 +394,25 @@ pub(crate) fn diff_manifests(
         }
     }
 
+    // ir_payload
+    match (&shipped.ir_payload, &rebuilt.ir_payload) {
+        (Some(s), Some(r)) => {
+            if s.canonical_ir_hash != r.canonical_ir_hash {
+                diffs.push(ManifestDiff::IrPayloadHashMismatch {
+                    shipped: s.canonical_ir_hash.clone(),
+                    rebuilt: r.canonical_ir_hash.clone(),
+                });
+            }
+        }
+        (Some(_), None) => diffs.push(ManifestDiff::IrPayloadPresence {
+            present_on: ManifestSide::Shipped,
+        }),
+        (None, Some(_)) => diffs.push(ManifestDiff::IrPayloadPresence {
+            present_on: ManifestSide::Rebuilt,
+        }),
+        (None, None) => {}
+    }
+
     diffs
 }
 
@@ -490,6 +530,55 @@ system = "hi"
         assert!(
             diffs.iter().any(|d| matches!(d, ManifestDiff::AgentMissing { id, side } if id == "solo" && *side == Side::ShippedOnly)),
             "got {diffs:?}",
+        );
+    }
+
+    #[test]
+    fn diff_detects_ir_payload_hash_mismatch() {
+        use crate::bundle::manifest::IrPayload;
+        let mut a = sample_manifest();
+        let mut b = a.clone();
+        a.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "aa".repeat(32),
+            canonical_ir_bytes_hex: "deadbeef".into(),
+        });
+        b.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "bb".repeat(32),
+            canonical_ir_bytes_hex: "cafebabe".into(),
+        });
+        let diffs = diff_manifests(&a, &b);
+        assert!(
+            diffs.iter().any(|d| matches!(
+                d,
+                ManifestDiff::IrPayloadHashMismatch { shipped, rebuilt }
+                    if shipped == &"aa".repeat(32) && rebuilt == &"bb".repeat(32)
+            )),
+            "expected IrPayloadHashMismatch; got {diffs:?}",
+        );
+    }
+
+    #[test]
+    fn diff_detects_ir_payload_presence_mismatch() {
+        use crate::bundle::manifest::IrPayload;
+        let mut a = sample_manifest();
+        let b = a.clone();
+        a.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".into(),
+            canonical_ir_hash: "aa".repeat(32),
+            canonical_ir_bytes_hex: "deadbeef".into(),
+        });
+        // b has no ir_payload
+        let diffs = diff_manifests(&a, &b);
+        assert!(
+            diffs.iter().any(|d| matches!(
+                d,
+                ManifestDiff::IrPayloadPresence {
+                    present_on: ManifestSide::Shipped
+                }
+            )),
+            "expected IrPayloadPresence {{ Shipped }}; got {diffs:?}",
         );
     }
 
