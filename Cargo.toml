@@ -29,6 +29,7 @@ members = [
     "crates/tau-sandbox-proxy",
     "crates/tau-sandbox-windows",
     "crates/tau-workflow",
+    "crates/tau-ir-conformance",
     "xtask",
 ]
 exclude = [

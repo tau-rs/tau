@@ -3358,6 +3358,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tau-ir-conformance"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tau-domain",
+ "tau-ir",
+ "tau-pkg",
+ "tau-ports",
+ "tau-runtime-core",
+ "tokio",
+]
+
+[[package]]
 name = "tau-observe"
 version = "0.0.0"
 dependencies = [

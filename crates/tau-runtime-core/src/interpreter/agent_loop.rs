@@ -273,6 +273,31 @@ where
     if let Some(max_turns) = agent.budget.max_turns {
         run_options.max_turns = max_turns;
     }
+    // Inject test-fixture clock/random when the host shell has not provided
+    // them (e.g. tau-ir-conformance drives run_ir directly without the tokio
+    // shell drive entry). Production callers supply real implementations via
+    // their shell. The test-fixtures feature is the sanctioned escape hatch;
+    // matching the spawn_root_agent_inner pattern in run.rs.
+    #[cfg(feature = "test-fixtures")]
+    {
+        if run_options.clock.is_none() {
+            run_options.clock = Some(alloc::sync::Arc::new(tau_ports::MockClock::new()));
+        }
+        if run_options.random.is_none() {
+            run_options.random = Some(alloc::sync::Arc::new(
+                tau_ports::DeterministicRandom::seeded(0),
+            ));
+        }
+    }
+    #[cfg(not(feature = "test-fixtures"))]
+    {
+        if run_options.clock.is_none() {
+            panic!("run_agent: clock must be supplied unless test-fixtures is enabled");
+        }
+        if run_options.random.is_none() {
+            panic!("run_agent: random must be supplied unless test-fixtures is enabled");
+        }
+    }
 
     // 7. Split initial_messages into history + initial_message.
     //    The kernel requires exactly one initial_message; if the caller
