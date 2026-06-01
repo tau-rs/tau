@@ -194,9 +194,12 @@ where
                 let module = self.module.clone();
                 let target = target.clone();
                 let dispatcher = self.dispatcher.clone();
-                let outcome = alloc::boxed::Box::pin(
-                    crate::interpreter::run_ir(module, &target, dispatcher, Vec::new()),
-                )
+                let outcome = alloc::boxed::Box::pin(crate::interpreter::run_ir(
+                    module,
+                    &target,
+                    dispatcher,
+                    Vec::new(),
+                ))
                 .await
                 .map_err(|e| ToolError::Internal {
                     message: alloc::format!("subflow recursion error: {e}"),
@@ -252,36 +255,37 @@ where
                 // `RecordingDispatcher::deterministic_registry()`.
 
                 // Look up the step in the IR's workflow.steps table.
-                let step = self
-                    .module
-                    .workflow
-                    .steps
-                    .get(id)
-                    .ok_or_else(|| ToolError::Internal {
-                        message: alloc::format!(
-                            "step tool {:?} references unknown step {:?} \
+                let step =
+                    self.module
+                        .workflow
+                        .steps
+                        .get(id)
+                        .ok_or_else(|| ToolError::Internal {
+                            message: alloc::format!(
+                                "step tool {:?} references unknown step {:?} \
                              (typecheck should have caught this — possible IR corruption)",
-                            self.tool_id, id,
-                        ),
-                    })?;
+                                self.tool_id,
+                                id,
+                            ),
+                        })?;
 
-                let registry = self
-                    .dispatcher
-                    .deterministic_registry()
-                    .ok_or_else(|| ToolError::Internal {
+                let registry = self.dispatcher.deterministic_registry().ok_or_else(|| {
+                    ToolError::Internal {
                         message: alloc::format!(
                             "agent invoked step tool {:?} but the dispatcher \
                              did not provide a DeterministicRegistry",
                             self.tool_id,
                         ),
-                    })?;
+                    }
+                })?;
 
                 let result = registry
                     .invoke(&step.fn_ref.name, &json_args)
                     .map_err(|e| ToolError::Internal {
                         message: alloc::format!(
                             "deterministic step {:?} (fn={:?}) failed: {e}",
-                            self.tool_id, step.fn_ref.name,
+                            self.tool_id,
+                            step.fn_ref.name,
                         ),
                     })?;
 

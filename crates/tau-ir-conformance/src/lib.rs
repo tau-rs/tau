@@ -295,12 +295,12 @@ pub fn fixture_deterministic_registry() -> Arc<MapBackedDeterministicRegistry> {
     Arc::new(MapBackedDeterministicRegistry::default().with(
         "parse_celsius",
         |args: &serde_json::Value| {
-            let raw = args
-                .get("raw")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RuntimeError::Internal {
-                    message: "parse_celsius: `raw` must be a string".into(),
-                })?;
+            let raw =
+                args.get("raw")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RuntimeError::Internal {
+                        message: "parse_celsius: `raw` must be a string".into(),
+                    })?;
             let celsius: i64 = raw.trim().parse().map_err(|e| RuntimeError::Internal {
                 message: format!("parse_celsius: not an integer: {e}"),
             })?;
