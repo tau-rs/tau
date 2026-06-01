@@ -85,9 +85,13 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
 /// success or `None` if lowering fails (non-fatal — the bundle is still
 /// built, but without an IR payload; a warning is logged).
 ///
-/// This uses a stub cache that returns the zero sentinel for every native-tool
-/// name; typecheck rejects [0u8;32], so projects with native tools fall through
-/// to the non-fatal None path. The conformance suite (β.2.6) wires real caches.
+/// Native-tool content hashes are derived from `sha2::Sha256(symbolic_name)`.
+/// This is a deterministic, non-zero stand-in until an actual native-tool
+/// registry lands in `tau-pkg`: when that registry exists, replace the
+/// `native_tool` closure with the registry's source-content hash. Bundles
+/// produced before the switch will rebuild on the next `tau build` because
+/// their `canonical_ir_hash` will change — that's the honest forward-stability
+/// semantic (D-6): a change in tool identity is a change in workflow identity.
 pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrPayload> {
     use tau_pkg::project::project::UncheckedProjectConfig;
 
@@ -114,12 +118,15 @@ pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) ->
         }
     };
 
-    // Stub cache for β.2.5: returns the zero sentinel for every native tool name.
-    // typecheck rejects [0u8;32], so any project with [tools.<x>.native] entries
-    // hits the non-fatal fallback below (bundle built without IR payload). Real
-    // content-addressing is wired in β.2.6.
+    // Deterministic stand-in cache (β.2.6.1): hash the symbolic name with
+    // SHA-256. Two distinct names produce two distinct hashes (so future
+    // drift detection actually works), the value is non-zero (typecheck's
+    // sentinel check passes), and it's stable across builds (so the IR
+    // module hash stays reproducible). When a real native-tool registry
+    // lands in tau-pkg, replace this closure with the registry's
+    // source-content hash — see this fn's doc-comment.
     let caches = tau_ir::lower::Caches {
-        native_tool: &|_name| Some([0u8; 32]),
+        native_tool: &|name: &str| Some(sha256_name(name)),
         mcp_contract: &|_url| None,
         skill: &|_name| None,
     };
@@ -142,6 +149,19 @@ pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) ->
             None
         }
     }
+}
+
+/// Deterministic content-hash stand-in for a native tool's symbolic name.
+///
+/// Returns `SHA-256(name.as_bytes())`. Used by [`lower_ir`]'s `Caches::native_tool`
+/// closure until a real native-tool registry lands in `tau-pkg`. Distinct
+/// names always produce distinct hashes, and the value is non-zero so
+/// `tau_ir::lower::typecheck` won't reject it as the unknown-tool sentinel.
+fn sha256_name(name: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(name.as_bytes());
+    h.finalize().into()
 }
 
 /// Encode a byte slice as lowercase hex.
@@ -337,5 +357,78 @@ mod tests {
             }),
             2,
         );
+    }
+
+    /// `sha256_name` must return the same bytes for the same input — this
+    /// is what keeps `canonical_ir_hash` reproducible across `tau build`
+    /// invocations of the same source tree.
+    #[test]
+    fn sha256_name_is_deterministic_per_input() {
+        assert_eq!(sha256_name("ReadTemp"), sha256_name("ReadTemp"));
+        assert_eq!(sha256_name(""), sha256_name(""));
+    }
+
+    /// `sha256_name` must distinguish symbolic names — two distinct tools
+    /// must produce two distinct content hashes so any future drift-
+    /// detection layer can actually tell them apart.
+    #[test]
+    fn sha256_name_distinguishes_distinct_names() {
+        assert_ne!(sha256_name("A"), sha256_name("B"));
+        assert_ne!(sha256_name("ReadTemp"), sha256_name("ReadHumidity"));
+    }
+
+    /// `sha256_name` is never the zero sentinel — that's the
+    /// `tau_ir::lower::typecheck` "unknown native tool" tripwire and
+    /// would re-introduce the silent-IR-loss bug A.2 is fixing.
+    #[test]
+    fn sha256_name_is_never_zero_sentinel() {
+        assert_ne!(sha256_name("ReadTemp"), [0u8; 32]);
+        assert_ne!(sha256_name(""), [0u8; 32]);
+    }
+
+    /// End-to-end regression for A.2: a project with a `[tools.<x>] native = "…"`
+    /// entry must lower to an `IrPayload` instead of falling through to
+    /// the `None` warn-and-continue path. Before A.2, the zero-sentinel
+    /// cache caused this to return `None`.
+    #[test]
+    fn lower_ir_yields_payload_for_native_tool_project() {
+        let scratch = tempfile::tempdir().unwrap();
+        let project = scratch.path();
+        // Minimal native-tool project: one agent + one [tools.<x>] native
+        // entry. The agent doesn't have to reference the tool — lowering
+        // emits every project-level [tools.<x>] entry into the workflow.
+        std::fs::write(
+            project.join("tau.toml"),
+            r#"
+[project]
+name = "native_smoke"
+version = "0.1.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "native_smoke@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "hi"
+
+[tools.read_temp]
+native = "ReadTemp"
+description = "reads the temperature"
+capabilities = []
+"#,
+        )
+        .unwrap();
+
+        let target = TargetTriple::PASSTHROUGH;
+        let payload = lower_ir(project, &target);
+        assert!(
+            payload.is_some(),
+            "lower_ir must return Some(IrPayload) for a project with a [tools.<x>] native = ... entry; \
+             was None — did the native_tool cache regress to the zero sentinel?",
+        );
+        let payload = payload.unwrap();
+        assert!(!payload.canonical_ir_hash.is_empty());
+        assert!(!payload.canonical_ir_bytes_hex.is_empty());
     }
 }

@@ -50,6 +50,9 @@ termimad           = "0.34"
 rustyline          = "18"
 is-terminal        = "0.4"
 tempfile           = { workspace = true }
+# SHA-256 over the native-tool symbolic name in `cmd::build::lower_ir`
+# until a real native-tool registry lands in `tau-pkg`.
+sha2               = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2"
