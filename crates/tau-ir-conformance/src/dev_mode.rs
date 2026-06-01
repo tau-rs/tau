@@ -304,7 +304,7 @@ impl ExecutionMode for DevMode {
         match lowered {
             Ok((module, responses, entry_id)) => {
                 let entry = tau_ir::AgentId(entry_id);
-                drive_module(&module, &entry, responses).await
+                drive_module(Arc::new(module), &entry, responses).await
             }
             Err(refusal) => ConformanceReport::build_refused(refusal),
         }
@@ -319,7 +319,7 @@ impl ExecutionMode for DevMode {
 /// `(module, entry, responses)` inputs for the same fixture, so the
 /// emitted reports compare byte-for-byte under `assert_conform`.
 pub(crate) async fn drive_module(
-    module: &IrModule,
+    module: Arc<IrModule>,
     entry: &tau_ir::AgentId,
     responses: Vec<CompletionResponse>,
 ) -> ConformanceReport {
@@ -336,8 +336,8 @@ pub(crate) async fn drive_module(
     let dispatcher = Arc::new(RecordingDispatcher::new(backend, tool_names));
     let records_handle = dispatcher.records();
 
-    // Run the interpreter.
-    let outcome: RunOutcome = run_ir(std::sync::Arc::new(module.clone()), entry, dispatcher, Vec::new())
+    // Run the interpreter. The Arc is passed directly — no clone needed.
+    let outcome: RunOutcome = run_ir(module, entry, dispatcher, Vec::new())
         .await
         .expect("run_ir must not return an Err for a valid conformance fixture");
 

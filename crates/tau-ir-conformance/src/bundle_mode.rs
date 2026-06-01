@@ -210,7 +210,7 @@ impl ExecutionMode for BundleMode {
         match prepared {
             Ok((module, responses, entry_id)) => {
                 let entry = tau_ir::AgentId(entry_id);
-                drive_module(&module, &entry, responses).await
+                drive_module(std::sync::Arc::new(module), &entry, responses).await
             }
             Err(refusal) => ConformanceReport::build_refused(refusal),
         }
