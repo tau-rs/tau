@@ -100,6 +100,7 @@
 - [ADR-0034 — Target triple registry](decisions/0034-target-triple-registry.md)
 - [ADR-0035 — Bundle format](decisions/0035-bundle-format.md)
 - [ADR-0036 — Capability vocabulary forward-compatibility](decisions/0036-capability-forward-compatibility.md)
+- [0037: Workflow IR](decisions/0037-workflow-ir.md)
 
 # Retrospectives
 
