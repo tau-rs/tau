@@ -9,7 +9,7 @@ pub mod canonical;
 pub mod pinned;
 pub mod server_contract;
 
-pub use canonical::{canonical_hash, Hash256};
+pub use canonical::{canonical_hash, hash_to_hex, Hash256};
 pub use pinned::PinnedContract;
 pub use server_contract::{ContractTool, ServerContract};
 // Re-export from upstream protocol modules for ergonomic contract API.
