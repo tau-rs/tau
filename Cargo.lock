@@ -3351,7 +3351,7 @@ name = "tau-ir"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "foldhash 0.1.5",
+ "foldhash 0.2.0",
  "hashbrown 0.17.0",
  "serde",
  "serde_json",
@@ -3531,7 +3531,7 @@ dependencies = [
  "assert_matches",
  "async-stream",
  "chrono",
- "foldhash 0.1.5",
+ "foldhash 0.2.0",
  "futures-core",
  "futures-executor",
  "globset",
