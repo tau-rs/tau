@@ -21,6 +21,10 @@ pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind
 
 pub mod builder;
 pub mod ids;
+#[cfg(feature = "tool-validation")]
+pub mod interpreter;
+#[cfg(feature = "tool-validation")]
+pub use interpreter::run_ir;
 pub mod run;
 pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime, RuntimeBuilder};
 
