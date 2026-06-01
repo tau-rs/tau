@@ -53,10 +53,10 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
     };
 
     // Lower the project IR. Load the project config (same pipeline the
-    // bundle builder uses), then call lower_project with a permissive
-    // cache that returns a stub hash for any native tool name (the
-    // conformance suite in β.2.6 will wire real caches). On IrError,
-    // render a human-readable diagnostic and exit 2.
+    // bundle builder uses), then call lower_project with a deterministic
+    // SHA-256-of-name cache for native tools (see `lower_ir`'s doc-comment
+    // for the forward-stability semantic). On IrError, render a human-
+    // readable diagnostic and exit 2.
     let ir_payload = lower_ir(&project_root, &target);
 
     let opts = BuildOptions {
