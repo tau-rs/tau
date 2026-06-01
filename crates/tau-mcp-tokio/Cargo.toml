@@ -9,15 +9,26 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-tau-mcp         = { workspace = true }
-tau-domain      = { workspace = true, features = ["serde"] }
-tau-ports       = { workspace = true, features = ["serde"] }
-# tau-runtime-tokio dep added in PR-2 (for ProcessGate::Sandbox::wrap_spawn).
-# Held back in PR-1 to keep scaffold lightweight and dep graph clean.
-serde           = { workspace = true, features = ["derive"] }
-serde_json      = { workspace = true }
-thiserror       = { workspace = true }
-tokio           = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "io-util"] }
+tau-mcp           = { workspace = true }
+tau-domain        = { workspace = true, features = ["serde"] }
+tau-ports         = { workspace = true, features = ["serde"] }
+# Sandbox integration: tau-runtime-tokio::process_gate::wrap_spawn (PR-2).
+# HTTP transport (PR-3) doesn't need this; the dep is stdio-driven for now.
+tau-runtime-tokio = { workspace = true }
+serde             = { workspace = true, features = ["derive"] }
+serde_json        = { workspace = true }
+thiserror         = { workspace = true }
+tokio             = { workspace = true, features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "io-util",
+    "process",
+    "time",
+] }
+tracing           = { workspace = true }
 
 [dev-dependencies]
-tokio           = { workspace = true, features = ["test-util"] }
+tau-runtime-tokio = { workspace = true, features = ["test-support"] }
+tokio             = { workspace = true, features = ["test-util", "fs"] }
+tempfile          = { workspace = true }
