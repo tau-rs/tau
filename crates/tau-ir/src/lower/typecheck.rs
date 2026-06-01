@@ -67,7 +67,9 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
         }
     }
 
-    // 4. Every ToolImpl::Subflow's target must exist in `agents`.
+    // 4+5. Every ToolImpl::Subflow's target must exist in `agents`;
+    //      every ToolImpl::Step's id must exist in `steps`.
+    //      Both checks iterate the same map — fold them into one pass.
     for (tool_id, tool) in parsed.workflow.tools.iter() {
         if let ToolImpl::Subflow { target } = &tool.impl_ {
             if !parsed.workflow.agents.contains_key(target) {
@@ -77,10 +79,6 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
                 });
             }
         }
-    }
-
-    // 5. Every ToolImpl::Step's id must exist in `steps`.
-    for (tool_id, tool) in parsed.workflow.tools.iter() {
         if let ToolImpl::Step { id } = &tool.impl_ {
             if !parsed.workflow.steps.contains_key(id) {
                 return Err(IrError::UnknownStepToolTarget {
