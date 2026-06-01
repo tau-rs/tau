@@ -5,6 +5,13 @@
 //! - `passthrough_gate()` — returns a `DynProcessCapabilityGate` impl
 //!   that doesn't enforce anything (for tests that aren't exercising
 //!   sandbox refusal).
+//!
+//! `#![allow(dead_code)]` because not every integration-test binary uses
+//! every helper (e.g. `stdio_sandbox.rs` brings its own gate, so it never
+//! calls `passthrough_gate`), and each test binary that does `mod common;`
+//! gets its own dead-code analysis.
+
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::process::Command;

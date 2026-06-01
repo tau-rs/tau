@@ -10,6 +10,8 @@
 //! File-I/O sink (`save_to_file`) requires `std`; the in-memory record
 //! API is `no_std`-compatible.
 
+#[cfg(feature = "with-std-adapters")]
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::cassette::message::{
