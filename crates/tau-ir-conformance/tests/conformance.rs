@@ -6,15 +6,12 @@
 //!
 //! # Deferred fixtures
 //!
-//! Two fixture slots ship empty (just a `README.md`) because the IR /
-//! interpreter is not yet expansive enough to author them. They are
-//! listed in [`DEFERRED_FIXTURES`] and skipped by any future
-//! directory-scanning test. Each fixture's README documents the exact
-//! IR / interpreter changes needed to un-defer it:
+//! One fixture slot ships empty (just a `README.md`) because the IR /
+//! interpreter is not yet expansive enough to author it. It is listed
+//! in [`DEFERRED_FIXTURES`] and skipped by any future directory-scanning
+//! test. The fixture's README documents the exact IR / interpreter changes
+//! needed to un-defer it:
 //!
-//! - `04_subflow_spawn_child`: needs `tau-ir`'s parse / typecheck to
-//!   register subflow names as agent-referable tools AND
-//!   `tau-runtime-core`'s agent loop to dispatch them.
 //! - `05_deterministic_step`: needs `tau-runtime-core`'s agent loop to
 //!   dispatch `Deterministic` nodes via the `ToolDispatcher` surface.
 
@@ -29,7 +26,7 @@ use tau_runtime_core::outcome::RunOutcome;
 /// or execute. Any future directory-scanning conformance test must skip
 /// these. See the module docs for the unblock requirements per fixture.
 #[allow(dead_code)]
-pub const DEFERRED_FIXTURES: &[&str] = &["04_subflow_spawn_child", "05_deterministic_step"];
+pub const DEFERRED_FIXTURES: &[&str] = &["05_deterministic_step"];
 
 fn fixture_dir(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -156,6 +153,55 @@ async fn fixture_03_dev_mode_build_refused() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_03_cross_mode_conformance() {
     let dir = fixture_dir("03_agent_denied_capability");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 04 — subflow_spawn_child
+// ---------------------------------------------------------------------------
+
+/// Fixture 04: parent agent invokes a subflow tool that spawns the
+/// `worker` child agent; child calls an MCP `page` tool then ends; parent
+/// receives the child's final assistant text as the tool result and ends.
+///
+/// Subflow tools themselves are NOT routed through
+/// `RecordingDispatcher::invoke` (the Subflow arm of
+/// `DispatcherTool::invoke` goes through `Box::pin(run_ir(...))`
+/// directly — see Phase 2 fix C2). So `notify` does not appear in
+/// `report.tool_calls`. We assert subflow execution via the CHILD's
+/// recorded tool calls: if `page` is recorded, the recursive `run_ir`
+/// ran (since `page` only exists in the child agent).
+///
+/// Expected: RunOutcome::Completed; multiset has `page:{}` = 1
+/// (the child's MCP call), proving the subflow recursion executed.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_04_dev_mode_subflow_dispatched() {
+    let dir = fixture_dir("04_subflow_spawn_child");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    assert_eq!(
+        count_tool_calls(&report, "page"),
+        1,
+        "expected exactly 1 page (child MCP) call — proves subflow recursion ran"
+    );
+    assert_eq!(
+        count_tool_calls(&report, "notify"),
+        0,
+        "subflow tools are not routed through dispatcher.invoke; should not appear in tool_calls"
+    );
+}
+
+/// Cross-mode conformance for fixture 04.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_04_cross_mode_conformance() {
+    let dir = fixture_dir("04_subflow_spawn_child");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
