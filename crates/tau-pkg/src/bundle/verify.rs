@@ -287,6 +287,7 @@ system = "you are solo"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .expect("build fixture bundle");
         artifact.path
@@ -476,6 +477,7 @@ installed_at = "2024-01-01T00:00:00Z"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .expect("build bundle with package");
         (artifact.path, pkg_dir)
@@ -559,6 +561,7 @@ system_file = "prompt.md"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         // Mutate the prompt FILE after build (tau.toml unchanged, so step 6

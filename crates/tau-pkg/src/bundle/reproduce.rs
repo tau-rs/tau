@@ -147,6 +147,7 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
         target: shipped.bundle.target,
         output_path: Some(rebuilt_path.clone()),
         agent_filter,
+        ir_payload: None,
     })
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
@@ -406,6 +407,7 @@ system = "hi"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         let s = std::fs::read_to_string(&artifact.path).unwrap();
@@ -511,6 +513,7 @@ system = "you are solo"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         artifact.path
@@ -626,6 +629,7 @@ system = "you are extra"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: Some(vec!["solo".parse().unwrap()]),
+            ir_payload: None,
         })
         .unwrap();
         artifact.path
@@ -709,6 +713,7 @@ deny_paths = ["/data/secret/**"]
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         })
         .unwrap();
         // Sanity: the bundle actually recorded narrowed caps.

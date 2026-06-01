@@ -9,11 +9,32 @@ use tau_ports::target::TargetTriple;
 
 use crate::bundle::error::BundleParseError;
 
+/// IR payload carried in a v2 bundle.
+///
+/// Per the design spec D-5, v0 ships the IR as data inside the bundle;
+/// the bundle's wasm component carries the interpreter as code and reads
+/// this payload at startup. v1 (β.7) keeps the payload field but its
+/// semantics change: `canonical_ir_bytes` becomes the input to AOT
+/// lowering rather than to runtime interpretation.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IrPayload {
+    /// IR format version (D-6 — semver-shaped, e.g. "v1.0.0").
+    pub ir_format: String,
+    /// SHA-256 of the canonical IR bytes. Redundant with the bytes
+    /// themselves but cheap; lets `tau verify` short-circuit on a
+    /// hash mismatch before re-deserializing.
+    pub canonical_ir_hash: [u8; 32],
+    /// The canonical IR bytes themselves. Hashed into the bundle's
+    /// self-hash, per D-6.
+    pub canonical_ir_bytes: Vec<u8>,
+}
+
 /// Top-level bundle manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BundleManifest {
-    /// Major schema version. v1.x is the current line; v2+ would be a
-    /// breaking change (consumer rejects loudly).
+    /// Major schema version. v1 is the legacy line; v2 adds `ir_payload`.
+    /// v3+ would be a breaking change (consumer rejects loudly).
     pub schema_version: u32,
     /// Bundle-level metadata (sha + timestamp + tau version + target).
     pub bundle: BundleMeta,
@@ -25,6 +46,11 @@ pub struct BundleManifest {
     /// Per-agent compiled grant set + system prompt hash + tool list.
     #[serde(default)]
     pub agents: Vec<BundleAgent>,
+    /// IR payload for v2 bundles. `None` for v1 (legacy) bundles;
+    /// `Some` when `tau build` successfully lowered the project IR.
+    /// The canonical_ir_bytes are hashed into the bundle's self-hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ir_payload: Option<IrPayload>,
 }
 
 /// Bundle-level metadata.
@@ -384,6 +410,7 @@ pub(crate) mod tests_helpers {
                     ..Default::default()
                 },
             }],
+            ir_payload: None,
         }
     }
 }

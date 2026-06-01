@@ -57,6 +57,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         target,
         output_path: args.output.clone(),
         agent_filter,
+        ir_payload: None, // TODO(β.2.5 Task 5.3): call lower_project + populate IrPayload
     };
 
     let _ = output.status("Building bundle…");

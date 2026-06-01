@@ -7,7 +7,7 @@
 use std::fmt::Write;
 
 use crate::bundle::manifest::{
-    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundlePackage,
+    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundlePackage, IrPayload,
 };
 
 /// Emit the canonical TOML serialization of a `BundleManifest`.
@@ -53,6 +53,13 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
         out.push('\n');
         out.push_str("[[agents]]\n");
         write_agent(&mut out, agent);
+    }
+
+    // [ir_payload] — emitted when present so the bytes participate in the self-hash.
+    if let Some(ir) = &manifest.ir_payload {
+        out.push('\n');
+        out.push_str("[ir_payload]\n");
+        write_ir_payload(&mut out, ir);
     }
 
     out
@@ -148,6 +155,26 @@ fn write_effective_capabilities(out: &mut String, caps: &BundleEffectiveCapabili
     if !caps.deny_skill_spawn.is_empty() {
         write_string_array(out, "deny_skill_spawn", caps.deny_skill_spawn.clone());
     }
+}
+
+fn write_ir_payload(out: &mut String, ir: &IrPayload) {
+    write_str_kv(out, "ir_format", &ir.ir_format);
+    // canonical_ir_hash: [u8; 32] encoded as lowercase hex.
+    write_str_kv(out, "canonical_ir_hash", &bytes_to_hex(&ir.canonical_ir_hash));
+    // canonical_ir_bytes: Vec<u8> encoded as lowercase hex so it is
+    // representable in TOML and participates in the self-hash deterministically.
+    write_str_kv(out, "canonical_ir_bytes_hex", &bytes_to_hex(&ir.canonical_ir_bytes));
+}
+
+/// Encode a byte slice as lowercase hex.
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn write_str_kv(out: &mut String, key: &str, value: &str) {

@@ -11,7 +11,7 @@ use tau_ports::target::TargetTriple;
 use crate::bundle::build_error::BuildError;
 use crate::bundle::manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
-    BundlePackage, ProjectInfo,
+    BundlePackage, IrPayload, ProjectInfo,
 };
 use crate::project::project::{PromptEntry, UncheckedProjectConfig};
 
@@ -30,6 +30,14 @@ pub struct BuildOptions {
     /// reference. `None` builds every agent and keeps every package (the
     /// §C.2 behavior). The CLI maps an empty `--agent` set to `None`.
     pub agent_filter: Option<Vec<tau_domain::AgentId>>,
+    /// Optional IR payload to embed in the bundle. When `Some`, the
+    /// `canonical_ir_bytes` are hashed into the bundle's self-hash and
+    /// the bundle schema_version is written as 2. When `None`, the
+    /// bundle is schema_version 2 but with no IR payload field. The
+    /// caller (tau-cli) is responsible for lowering the project IR via
+    /// `tau_ir::lower::lower_project` and constructing the `IrPayload`
+    /// before calling `build`.
+    pub ir_payload: Option<IrPayload>,
 }
 
 /// Result of a successful build.
@@ -318,6 +326,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         },
         packages,
         agents,
+        ir_payload: opts.ir_payload,
     };
 
     // Compute and fill the self-hash. `compute_self_hash` zeros out
@@ -525,6 +534,7 @@ mod tests {
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: None,
+            ir_payload: None,
         }
     }
 
@@ -846,6 +856,7 @@ installed_at = "2024-01-01T00:00:00Z"
             target: TargetTriple::host(),
             output_path: None,
             agent_filter: Some(ids.iter().map(|s| s.parse().unwrap()).collect()),
+            ir_payload: None,
         }
     }
 
@@ -1024,6 +1035,7 @@ generated_at = "2024-01-01T00:00:00Z"
             target: TargetTriple::host(),
             output_path: Some(explicit.clone()),
             agent_filter: None,
+            ir_payload: None,
         };
         let artifact = build(o).expect("build");
         assert_eq!(artifact.path, explicit);
