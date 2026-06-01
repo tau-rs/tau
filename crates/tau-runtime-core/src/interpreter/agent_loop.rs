@@ -55,6 +55,14 @@ fn json_to_domain_value(v: serde_json::Value) -> tau_domain::Value {
 ///
 /// Used by `DispatcherTool::invoke`'s `Subflow` arm to convert a child
 /// agent's terminal state into a tool-result body for the parent.
+///
+/// # Important
+///
+/// Both `RunOutcome::Completed` and `RunOutcome::Failed` carry `all_messages`
+/// and this function returns the same shaped `String` for both. Callers MUST
+/// match on the outcome variant separately to decide whether to surface the
+/// result as a success or error — this function alone does not distinguish
+/// between them.
 fn last_assistant_text(outcome: &RunOutcome) -> String {
     // Note: `RunOutcome` is `#[non_exhaustive]` but we're in the defining
     // crate, so the compiler sees all variants. No `_` arm needed here;
@@ -194,6 +202,33 @@ where
                     message: alloc::format!("subflow recursion error: {e}"),
                 })?;
 
+                // Propagate child-agent failures as `is_error: true` tool
+                // results so the parent agent sees them and can react.
+                // A silently-swallowed Failed outcome would look like a
+                // successful empty-string result to the parent — wrong.
+                match &outcome {
+                    RunOutcome::Failed { .. } => {
+                        // Child agent failed — propagate as an error tool result so
+                        // the parent agent sees an `is_error: true` and can react.
+                        // The child's last assistant text (if any) is preserved as
+                        // diagnostic content.
+                        let last_text = last_assistant_text(&outcome);
+                        let body = if last_text.is_empty() {
+                            alloc::format!(
+                                "subflow agent {:?} failed with no further detail",
+                                target
+                            )
+                        } else {
+                            alloc::format!("subflow agent {:?} failed: {}", target, last_text)
+                        };
+                        return Ok(ToolResult::new(
+                            alloc::vec![ToolContent::Text { text: body }],
+                            true,
+                        ));
+                    }
+                    RunOutcome::Completed { .. } => {}
+                }
+
                 // Convert RunOutcome → tool result body. v0 contract:
                 // emit the last `Assistant`-sent text from `all_messages`
                 // as the tool result body. Empty string if none.
@@ -205,10 +240,16 @@ where
             }
 
             ToolImpl::Step { id } => {
-                // Record the invocation via the dispatcher (side-effect
-                // accounting only — the real result comes from the
-                // deterministic registry below).
-                let _ = self.dispatcher.invoke(&self.tool_id, &json_args).await;
+                // Step accounting (e.g. conformance test recording) lives in the
+                // DeterministicRegistry implementation, NOT in the dispatcher's
+                // `invoke` path — calling dispatcher.invoke for accounting would
+                // fire a real plugin lookup in production (ForwardingDispatcher) for
+                // a tool that doesn't exist there. Recording belongs in the registry.
+                //
+                // TODO (Phase 4): to count step invocations in conformance tests,
+                // make `MapBackedDeterministicRegistry` push records into a shared
+                // `Arc<Mutex<Vec<ToolCallRecord>>>` and expose that handle via
+                // `RecordingDispatcher::deterministic_registry()`.
 
                 // Look up the step in the IR's workflow.steps table.
                 let step = self
