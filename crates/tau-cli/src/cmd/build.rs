@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 
-use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact};
+use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact, IrPayload};
 use tau_ports::target::TargetTriple;
 
 use crate::cli::BuildArgs;
@@ -52,12 +52,19 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         Some(parsed)
     };
 
+    // Lower the project IR. Load the project config (same pipeline the
+    // bundle builder uses), then call lower_project with a permissive
+    // cache that returns a stub hash for any native tool name (the
+    // conformance suite in β.2.6 will wire real caches). On IrError,
+    // render a human-readable diagnostic and exit 2.
+    let ir_payload = lower_ir(&project_root, &target);
+
     let opts = BuildOptions {
         project_root,
         target,
         output_path: args.output.clone(),
         agent_filter,
-        ir_payload: None, // TODO(β.2.5 Task 5.3): call lower_project + populate IrPayload
+        ir_payload,
     };
 
     let _ = output.status("Building bundle…");
@@ -70,6 +77,63 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         Err(e) => {
             let _ = output.error(format!("{e}"));
             std::process::exit(exit_code_for(&e) as i32);
+        }
+    }
+}
+
+/// Attempt to lower the project IR, returning `Some(IrPayload)` on
+/// success or `None` if lowering fails (non-fatal — the bundle is still
+/// built, but without an IR payload; a warning is logged).
+///
+/// This uses a permissive cache that accepts any native-tool name with
+/// a stub hash; the conformance suite (β.2.6) will supply real caches.
+fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrPayload> {
+    use tau_pkg::project::project::UncheckedProjectConfig;
+
+    let tau_toml_path = project_root.join("tau.toml");
+    let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("IR lowering: failed to read tau.toml: {e}");
+            return None;
+        }
+    };
+    let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!("IR lowering: failed to parse tau.toml: {e}");
+            return None;
+        }
+    };
+    let config = match unchecked.validate() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("IR lowering: project config validation failed: {e}");
+            return None;
+        }
+    };
+
+    // Permissive cache: any native-tool name gets a stub hash (all zeros).
+    // Real content-addressing is deferred to β.2.6.
+    let caches = tau_ir::lower::Caches {
+        native_tool: &|_name| Some([0u8; 32]),
+        mcp_contract: &|_url| None,
+        skill: &|_name| None,
+    };
+
+    match tau_ir::lower::lower_project(&config, target, &caches) {
+        Ok(module) => {
+            let bytes = tau_ir::to_canonical_bytes(&module);
+            let hash = tau_ir::compute_hash(&module);
+            Some(IrPayload {
+                ir_format: module.ir_format.0.clone(),
+                canonical_ir_hash: hash,
+                canonical_ir_bytes: bytes,
+            })
+        }
+        Err(e) => {
+            tracing::warn!("IR lowering failed (bundle built without IR payload): {e}");
+            None
         }
     }
 }
