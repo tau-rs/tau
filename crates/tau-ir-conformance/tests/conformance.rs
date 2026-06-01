@@ -1,11 +1,22 @@
 //! Conformance test harness for the tau workflow IR.
 //!
-//! One `DevMode` test per fixture asserts that the IR interpreter
-//! produces the expected side effects (RunOutcome::Completed + at least
-//! one tool_call recorded).
+//! For each fixture, asserts the IR interpreter produces the expected
+//! side effects under `DevMode`, and asserts cross-mode equivalence
+//! (DevMode vs BundleMode) per D-7a (multiset side-effect equivalence).
 //!
-//! The cross-mode (`DevMode` vs `BundleMode`) comparison is registered
-//! but `#[ignore]`'d until β.2.6.1 unstubs the bundle-mode dispatch path.
+//! # Deferred fixtures
+//!
+//! Two fixture slots ship empty (just a `README.md`) because the IR /
+//! interpreter is not yet expansive enough to author them. They are
+//! listed in [`DEFERRED_FIXTURES`] and skipped by any future
+//! directory-scanning test. Each fixture's README documents the exact
+//! IR / interpreter changes needed to un-defer it:
+//!
+//! - `04_subflow_spawn_child`: needs `tau-ir`'s parse / typecheck to
+//!   register subflow names as agent-referable tools AND
+//!   `tau-runtime-core`'s agent loop to dispatch them.
+//! - `05_deterministic_step`: needs `tau-runtime-core`'s agent loop to
+//!   dispatch `Deterministic` nodes via the `ToolDispatcher` surface.
 
 use std::path::Path;
 
@@ -14,14 +25,31 @@ use tau_ir_conformance::{
 };
 use tau_runtime_core::outcome::RunOutcome;
 
+/// Fixture directory names that the IR / interpreter cannot yet build
+/// or execute. Any future directory-scanning conformance test must skip
+/// these. See the module docs for the unblock requirements per fixture.
+#[allow(dead_code)]
+pub const DEFERRED_FIXTURES: &[&str] = &["04_subflow_spawn_child", "05_deterministic_step"];
+
 fn fixture_dir(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures")
         .join(name)
 }
 
+/// Sum `tool_calls` entries for a given tool name (collapsing across
+/// distinct `args_canonical` byte sequences).
+fn count_tool_calls(report: &tau_ir_conformance::ConformanceReport, tool: &str) -> u32 {
+    report
+        .tool_calls
+        .iter()
+        .filter(|((name, _), _)| name == tool)
+        .map(|(_, count)| *count)
+        .sum()
+}
+
 // ---------------------------------------------------------------------------
-// Fixture 01 — agent_native_tool (DevMode, single-mode assertion)
+// Fixture 01 — agent_native_tool
 // ---------------------------------------------------------------------------
 
 /// Fixture 01: agent with one native tool, two turns.
@@ -38,53 +66,126 @@ async fn fixture_01_dev_mode_completed_with_tool_call() {
     let dir = fixture_dir("01_agent_native_tool");
     let report = DevMode.run(&dir).await;
 
-    // Outcome must be Completed.
     assert!(
-        matches!(report.run_outcome, RunOutcome::Completed { .. }),
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
         "expected RunOutcome::Completed, got: {:?}",
         report.run_outcome
     );
-
-    // At least one tool call must have been recorded.
     assert!(
         !report.tool_calls.is_empty(),
         "expected at least one tool call to be recorded; got none"
     );
+    let total = count_tool_calls(&report, "read_temp");
+    assert_eq!(total, 1, "expected exactly 1 read_temp call; got {total}");
+}
 
-    // Specifically, read_temp must appear with count 1.
-    let read_temp_key = (
-        "read_temp".to_string(),
-        serde_json::to_vec(&serde_json::json!({"ok": true})).unwrap_or_default(),
-    );
-    // The args passed are `{}` (empty object) not `{"ok": true}` — look by tool name.
-    let total_read_temp: u32 = report
-        .tool_calls
-        .iter()
-        .filter(|((name, _), _)| name == "read_temp")
-        .map(|(_, count)| count)
-        .sum();
-    let _ = read_temp_key; // suppress unused warning
-
-    assert_eq!(
-        total_read_temp, 1,
-        "expected exactly 1 read_temp call; got {total_read_temp}"
-    );
+/// Cross-mode conformance for fixture 01.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_01_cross_mode_conformance() {
+    let dir = fixture_dir("01_agent_native_tool");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
 }
 
 // ---------------------------------------------------------------------------
-// Cross-mode comparison (IGNORED — β.2.6.1 unblocks)
+// Fixture 02 — agent_mcp_tool
 // ---------------------------------------------------------------------------
 
-/// Cross-mode conformance: fixture 01 must produce the same side-effect
-/// multiset under DevMode and BundleMode.
+/// Fixture 02: agent with one MCP tool, two turns.
 ///
-/// IGNORE-REASON: β.2.6.1 unblocks: bundle_mode dispatch is stubbed
-/// (β.2.5 deferred ToolDispatcher wiring in `tau run --bundle` path).
-/// Remove this `#[ignore]` once β.2.6.1 ships.
+/// Mirrors fixture 01 except `tools.weather.mcp = "..."` instead of
+/// `native = "..."`. The `RecordingDispatcher` is implementation-blind
+/// (it canned-responses every tool regardless of `ToolImpl`), so the
+/// side-effect multiset is the same shape — only the embedded IR
+/// `ToolImpl::Mcp` variant differs from fixture 01's `ToolImpl::Native`.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "β.2.6.1 unblocks: bundle_mode dispatch is stubbed (β.2.5 deferred ToolDispatcher wiring)"]
-async fn fixture_01_cross_mode_conformance() {
-    let dir = fixture_dir("01_agent_native_tool");
+async fn fixture_02_dev_mode_completed_with_mcp_tool_call() {
+    let dir = fixture_dir("02_agent_mcp_tool");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    let total = count_tool_calls(&report, "weather");
+    assert_eq!(total, 1, "expected exactly 1 weather call; got {total}");
+}
+
+/// Cross-mode conformance for fixture 02.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_02_cross_mode_conformance() {
+    let dir = fixture_dir("02_agent_mcp_tool");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 03 — agent_denied_capability (build-refused)
+// ---------------------------------------------------------------------------
+
+/// Fixture 03: build-time capability-fit refusal.
+///
+/// `tools.forbidden.capabilities = [{ kind = "agent.spawn" }]` is not
+/// in the host target's `required_shapes`, so
+/// `tau_ir::lower::capability_fit::check` refuses lowering with
+/// `IrError::CapabilityFitFailed`. BOTH modes must surface a
+/// `build_refused` report (D-3b refusal symmetry).
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_03_dev_mode_build_refused() {
+    let dir = fixture_dir("03_agent_denied_capability");
+    let report = DevMode.run(&dir).await;
+    let refused = report
+        .build_refused
+        .as_ref()
+        .expect("expected build_refused; got an executed-run report");
+    assert!(
+        refused.to_lowercase().contains("capability")
+            || refused.contains("AgentSpawn")
+            || refused.to_lowercase().contains("agentspawn"),
+        "diagnostic should name the capability-fit refusal; got: {refused}"
+    );
+    assert!(report.tool_calls.is_empty());
+    assert!(report.message_added.is_empty());
+}
+
+/// Cross-mode conformance for fixture 03: both modes must refuse with
+/// the same `IrError::Display` string.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_03_cross_mode_conformance() {
+    let dir = fixture_dir("03_agent_denied_capability");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 06 — multi_turn_history
+// ---------------------------------------------------------------------------
+
+/// Fixture 06: three consecutive tool-use turns + one end_turn.
+///
+/// Asserts the multiset count for `read_temp:{}` is exactly 3.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_06_dev_mode_three_tool_calls() {
+    let dir = fixture_dir("06_multi_turn_history");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    let total = count_tool_calls(&report, "read_temp");
+    assert_eq!(total, 3, "expected exactly 3 read_temp calls; got {total}");
+}
+
+/// Cross-mode conformance for fixture 06.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_06_cross_mode_conformance() {
+    let dir = fixture_dir("06_multi_turn_history");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
