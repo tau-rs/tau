@@ -65,6 +65,8 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
     verify_packages_installed_and_hashed(&manifest, &opts.project_root)?;
     // Step 8: agent prompts + build agent_lookup.
     let agent_lookup = verify_agent_prompts(&manifest, &opts.project_root)?;
+    // Step 9: IR payload integrity (v2 bundles only).
+    verify_ir_payload(&manifest)?;
     Ok(VerifyReport {
         manifest,
         agent_lookup,
@@ -211,6 +213,39 @@ fn verify_target_matches_host(m: &BundleManifest) -> Result<(), VerifyError> {
         });
     }
     Ok(())
+}
+
+/// Step 9: if `manifest.ir_payload` is `Some`, verify that the SHA-256
+/// of `canonical_ir_bytes` matches the stored `canonical_ir_hash`.
+/// This detects post-build tampering of the IR bytes independent of the
+/// bundle's overall self-hash check (step 3).
+fn verify_ir_payload(m: &BundleManifest) -> Result<(), VerifyError> {
+    use sha2::{Digest, Sha256};
+    if let Some(ir) = &m.ir_payload {
+        let mut hasher = Sha256::new();
+        hasher.update(&ir.canonical_ir_bytes);
+        let computed: [u8; 32] = hasher.finalize().into();
+        if computed != ir.canonical_ir_hash {
+            let claimed = hex_bytes(&ir.canonical_ir_hash);
+            let computed_hex = hex_bytes(&computed);
+            return Err(VerifyError::IrPayloadDrift {
+                claimed,
+                computed: computed_hex,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Encode 32 bytes as lowercase hex.
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Step 3: confirm the bundle's recorded self-hash matches its
@@ -572,5 +607,47 @@ system_file = "prompt.md"
             matches!(err, VerifyError::AgentPromptDrift { .. }),
             "got {err:?}"
         );
+    }
+
+    /// Build a bundle with a synthetic `ir_payload` where the
+    /// `canonical_ir_hash` is correct. Then corrupt one byte of
+    /// `canonical_ir_bytes` and assert that `verify_ir_payload` catches
+    /// the tamper and returns an error whose string contains "ir_payload".
+    #[test]
+    fn verify_detects_ir_payload_drift() {
+        use crate::bundle::manifest::IrPayload;
+        use sha2::{Digest, Sha256};
+
+        // Build a valid manifest first (schema_version = 2, self-hash set).
+        let tmp = tempdir().unwrap();
+        let bundle_path = build_minimal_bundle(tmp.path());
+        let s = std::fs::read_to_string(&bundle_path).unwrap();
+        let mut m = BundleManifest::parse_str(&s).unwrap();
+
+        // Attach a synthetic IrPayload with correct hash.
+        let bytes: Vec<u8> = b"fake ir bytes".to_vec();
+        let mut h = Sha256::new();
+        h.update(&bytes);
+        let hash: [u8; 32] = h.finalize().into();
+        m.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".to_string(),
+            canonical_ir_hash: hash,
+            canonical_ir_bytes: bytes,
+        });
+
+        // Correct hash → verify_ir_payload must pass.
+        verify_ir_payload(&m).expect("clean ir_payload must pass");
+
+        // Corrupt one byte → verify_ir_payload must fail.
+        if let Some(p) = m.ir_payload.as_mut() {
+            p.canonical_ir_bytes[0] ^= 0xFF;
+        }
+        let err = verify_ir_payload(&m).expect_err("tampered bytes must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ir_payload"),
+            "error must mention 'ir_payload'; got: {msg}"
+        );
+        assert!(matches!(err, VerifyError::IrPayloadDrift { .. }), "got {err:?}");
     }
 }

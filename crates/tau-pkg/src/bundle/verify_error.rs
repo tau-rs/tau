@@ -134,4 +134,14 @@ pub enum VerifyError {
         /// Agent id.
         id: String,
     },
+
+    /// The bundle's `ir_payload` field is present but the SHA-256 of
+    /// `canonical_ir_bytes` does not match `canonical_ir_hash`.
+    #[error("ir_payload integrity check failed — hash of canonical_ir_bytes ({computed}) does not match canonical_ir_hash ({claimed}); the bundle's IR payload is corrupted")]
+    IrPayloadDrift {
+        /// Hash recorded in the bundle's `ir_payload.canonical_ir_hash`.
+        claimed: String,
+        /// SHA-256 recomputed from `canonical_ir_bytes`.
+        computed: String,
+    },
 }

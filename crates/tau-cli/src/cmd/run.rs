@@ -518,7 +518,8 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
         | V::PackageMissing { .. }
         | V::PackageDrift { .. }
         | V::AgentPromptDrift { .. }
-        | V::AgentSetMismatch { .. } => 3,
+        | V::AgentSetMismatch { .. }
+        | V::IrPayloadDrift { .. } => 3,
         V::PackageTreeHash { .. } | V::AgentPromptResolve { .. } => 70,
     }
 }
