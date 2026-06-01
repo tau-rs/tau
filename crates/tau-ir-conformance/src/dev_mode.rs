@@ -155,6 +155,14 @@ impl ToolDispatcher for RecordingDispatcher {
     fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
         self.backend.clone()
     }
+
+    fn deterministic_registry(
+        &self,
+    ) -> Option<
+        std::sync::Arc<dyn tau_runtime_core::interpreter::deterministic::DeterministicRegistry>,
+    > {
+        Some(crate::fixture_deterministic_registry())
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -229,3 +229,90 @@ pub trait ExecutionMode {
     /// Run the fixture at `fixture_dir` and return a side-effect report.
     async fn run(&self, fixture_dir: &Path) -> ConformanceReport;
 }
+
+// ---------------------------------------------------------------------------
+// MapBackedDeterministicRegistry — fixture-side DeterministicRegistry
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use tau_runtime_core::error::RuntimeError;
+use tau_runtime_core::interpreter::deterministic::DeterministicRegistry;
+
+/// A `DeterministicRegistry` backed by a `BTreeMap<String, Fn>`.
+///
+/// The conformance suite uses this to wire scripted deterministic
+/// functions into `RecordingDispatcher::deterministic_registry()`.
+/// Fixture authors call [`MapBackedDeterministicRegistry::with`] to
+/// register named functions.
+pub struct MapBackedDeterministicRegistry {
+    fns: BTreeMap<
+        String,
+        Arc<
+            dyn Fn(&serde_json::Value) -> Result<serde_json::Value, RuntimeError> + Send + Sync,
+        >,
+    >,
+}
+
+impl Default for MapBackedDeterministicRegistry {
+    fn default() -> Self {
+        Self {
+            fns: BTreeMap::new(),
+        }
+    }
+}
+
+impl MapBackedDeterministicRegistry {
+    /// Register a function under `fn_name`. The function must be pure
+    /// (no I/O, no global mutation).
+    pub fn with<F>(mut self, fn_name: impl Into<String>, f: F) -> Self
+    where
+        F: Fn(&serde_json::Value) -> Result<serde_json::Value, RuntimeError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.fns.insert(fn_name.into(), Arc::new(f));
+        self
+    }
+}
+
+impl DeterministicRegistry for MapBackedDeterministicRegistry {
+    fn invoke(
+        &self,
+        fn_name: &str,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, RuntimeError> {
+        let f = self
+            .fns
+            .get(fn_name)
+            .ok_or_else(|| RuntimeError::Internal {
+                message: format!("MapBackedDeterministicRegistry: unknown fn {fn_name:?}"),
+            })?;
+        f(args)
+    }
+}
+
+/// The canonical conformance-fixture registry used by the test suite.
+///
+/// Currently registers:
+///
+/// - `parse_celsius`: `{"raw": "<digits>"}` → `{"celsius": <int>}`.
+///   Used by fixture 05 (`05_deterministic_step`).
+pub fn fixture_deterministic_registry() -> Arc<MapBackedDeterministicRegistry> {
+    Arc::new(MapBackedDeterministicRegistry::default().with(
+        "parse_celsius",
+        |args: &serde_json::Value| {
+            let raw = args
+                .get("raw")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| RuntimeError::Internal {
+                    message: "parse_celsius: `raw` must be a string".into(),
+                })?;
+            let celsius: i64 = raw.trim().parse().map_err(|e| RuntimeError::Internal {
+                message: format!("parse_celsius: not an integer: {e}"),
+            })?;
+            Ok(serde_json::json!({ "celsius": celsius }))
+        },
+    ))
+}
