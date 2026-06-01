@@ -138,6 +138,17 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
     for (name, entry) in config.steps.iter() {
         let step_id = StepId(name.clone());
         let tool_id = ToolId(name.clone());
+
+        // Guard: a [tools.<name>] entry with the same key would be
+        // silently overwritten, causing the wrong implementation to be
+        // dispatched at runtime. Reject early with a clear error.
+        if tools.contains_key(&tool_id) {
+            return Err(IrError::Parse(alloc::format!(
+                "step name {name:?} collides with an existing tool name; \
+                 rename the step or the tool"
+            )));
+        }
+
         let caps = CapabilityRequirements {
             declared: alloc::vec::Vec::new(),
         };
@@ -248,6 +259,45 @@ deterministic = "parse_celsius"
             "expected ToolImpl::Step{{normalize}}; got {:?}",
             tool.impl_
         );
+    }
+
+    #[test]
+    fn parse_rejects_step_tool_collision() {
+        // A [tools.foo] and a [steps.foo] with the same name must be
+        // rejected; if the insert were allowed the step would silently
+        // overwrite the tool, dispatching the wrong implementation.
+        let toml = r#"
+[project]
+name = "p"
+
+[agents.solo]
+display_name = "Solo"
+package      = "p@^0.1"
+llm_backend  = "mock-llm"
+tool_refs    = ["foo"]
+
+[tools.foo]
+native      = "Foo"
+capabilities = []
+
+[steps.foo]
+deterministic = "do_foo"
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("toml parse");
+        let result = parse(&config);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("parse stage should reject collision but returned Ok"),
+        };
+        match &err {
+            IrError::Parse(msg) => {
+                assert!(
+                    msg.contains("collide") || msg.contains("collision"),
+                    "error message should mention collision; got: {msg:?}"
+                );
+            }
+            other => panic!("expected IrError::Parse; got {other:?}"),
+        }
     }
 
     #[test]
