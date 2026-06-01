@@ -170,7 +170,8 @@ mod tests {
 
     #[test]
     fn untagged_routing_response_error() {
-        let wire = json!({"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"method not found"}});
+        let wire =
+            json!({"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"method not found"}});
         let msg: JsonRpcMessage = serde_json::from_value(wire).expect("route");
         assert!(matches!(msg, JsonRpcMessage::Response(_)));
     }

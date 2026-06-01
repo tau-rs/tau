@@ -92,7 +92,9 @@ mod tests {
         let h = canonical_hash(&fixture()).expect("hash");
         let s = hash_to_hex(&h);
         assert_eq!(s.len(), 64);
-        assert!(s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(s
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]

@@ -13,7 +13,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::cassette::message::{CassetteHeader, CassetteMessage, Direction, MessageKind, CASSETTE_VERSION};
+use crate::cassette::message::{
+    CassetteHeader, CassetteMessage, Direction, MessageKind, CASSETTE_VERSION,
+};
 use crate::protocol::jsonrpc::{JsonRpcMessage, RequestId};
 
 /// In-memory cassette accumulator.
@@ -83,10 +85,7 @@ impl Recorder {
 
     /// Save the cassette to a file. Requires std.
     #[cfg(feature = "with-std-adapters")]
-    pub fn save_to_file<P: AsRef<std::path::Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), String> {
+    pub fn save_to_file<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), String> {
         let bytes = self.to_jsonl_bytes().map_err(|e| alloc::format!("{e}"))?;
         std::fs::write(path, bytes).map_err(|e| alloc::format!("{e}"))?;
         Ok(())

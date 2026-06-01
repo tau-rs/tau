@@ -47,8 +47,7 @@ mod tests {
             }],
         };
         let bytes = serde_json::to_vec(&resp).expect("serialize");
-        let decoded: RootsListResponse =
-            serde_json::from_slice(&bytes).expect("deserialize");
+        let decoded: RootsListResponse = serde_json::from_slice(&bytes).expect("deserialize");
         assert_eq!(resp, decoded);
     }
 
@@ -56,7 +55,10 @@ mod tests {
     fn empty_roots_round_trips() {
         let resp = RootsListResponse { roots: vec![] };
         let bytes = serde_json::to_vec(&resp).expect("serialize");
-        assert_eq!(serde_json::from_slice::<RootsListResponse>(&bytes).unwrap(), resp);
+        assert_eq!(
+            serde_json::from_slice::<RootsListResponse>(&bytes).unwrap(),
+            resp
+        );
         // Also accept legacy `{"roots":[]}` form unchanged.
         let wire = json!({"roots":[]});
         let decoded: RootsListResponse = serde_json::from_value(wire).expect("decode");

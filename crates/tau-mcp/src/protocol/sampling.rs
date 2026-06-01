@@ -36,7 +36,11 @@ pub struct SamplingCreateMessageRequest {
     /// Other parameters (temperature, stopSequences, etc.); preserved
     /// across (de)serialization. BTreeMap keeps key order stable for
     /// canonical hashing.
-    #[serde(flatten, default, skip_serializing_if = "alloc::collections::BTreeMap::is_empty")]
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "alloc::collections::BTreeMap::is_empty"
+    )]
     pub additional: alloc::collections::BTreeMap<String, Value>,
 }
 

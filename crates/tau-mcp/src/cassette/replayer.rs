@@ -16,7 +16,9 @@ use alloc::vec::Vec;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::cassette::message::{CassetteHeader, CassetteMessage, Direction, MessageKind, CASSETTE_VERSION};
+use crate::cassette::message::{
+    CassetteHeader, CassetteMessage, Direction, MessageKind, CASSETTE_VERSION,
+};
 
 /// Errors during cassette read or replay.
 #[derive(Debug, Error)]
@@ -61,7 +63,8 @@ pub struct Replayer {
 impl Replayer {
     /// Parse a cassette from JSONL bytes.
     pub fn from_jsonl_bytes(bytes: &[u8]) -> Result<Self, ReplayError> {
-        let s = core::str::from_utf8(bytes).map_err(|e| ReplayError::Parse(alloc::format!("utf8: {e}")))?;
+        let s = core::str::from_utf8(bytes)
+            .map_err(|e| ReplayError::Parse(alloc::format!("utf8: {e}")))?;
         let mut lines = s.lines();
 
         let header_line = lines
@@ -115,13 +118,10 @@ impl Replayer {
             .iter()
             .enumerate()
             .find(|(i, r)| {
-                !self.consumed[*i]
-                    && r.dir == Direction::In
-                    && r.kind == MessageKind::Request
+                !self.consumed[*i] && r.dir == Direction::In && r.kind == MessageKind::Request
             })
             .and_then(|(i, r)| {
-                if r.method.as_deref() == Some(method)
-                    && normalize(&r.payload) == *normalized_args
+                if r.method.as_deref() == Some(method) && normalize(&r.payload) == *normalized_args
                 {
                     Some(i)
                 } else {
@@ -157,11 +157,9 @@ impl Replayer {
             self.pending_outbound.push_back(rec.clone());
         }
 
-        response.ok_or_else(|| {
-            ReplayError::NoMatch {
-                method: alloc::format!("response to {method}"),
-                args: alloc::format!("id={req_id:?}"),
-            }
+        response.ok_or_else(|| ReplayError::NoMatch {
+            method: alloc::format!("response to {method}"),
+            args: alloc::format!("id={req_id:?}"),
         })
     }
 
@@ -230,7 +228,9 @@ mod tests {
             &JsonRpcMessage::Response(JsonRpcResponse {
                 jsonrpc: JSONRPC_VERSION.to_string(),
                 id: RequestId::Number(1),
-                result: Some(json!({"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]})),
+                result: Some(
+                    json!({"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]}),
+                ),
                 error: None,
             }),
         );
@@ -301,10 +301,7 @@ mod tests {
         // consume next.
         let pending = r.next_pending_outbound().expect("progress");
         assert_eq!(pending.kind, MessageKind::Notification);
-        assert_eq!(
-            pending.method.as_deref(),
-            Some("notifications/progress")
-        );
+        assert_eq!(pending.method.as_deref(), Some("notifications/progress"));
         assert_eq!(resp.kind, MessageKind::Response);
     }
 
@@ -331,11 +328,10 @@ mod tests {
         let bytes = build_weather_cassette();
         let mut r = Replayer::from_jsonl_bytes(&bytes).expect("parse");
         // Same args, different key order — should still match.
-        let resp = r
-            .match_request(
-                "tools/call",
-                &json!({"arguments":{"lon":-74.0,"lat":40.7},"name":"get_forecast"}),
-            );
+        let resp = r.match_request(
+            "tools/call",
+            &json!({"arguments":{"lon":-74.0,"lat":40.7},"name":"get_forecast"}),
+        );
         // First call: not yet matched (must consume earlier records).
         assert!(resp.is_err()); // tools/call comes after init+list, so unmatched at this point
 

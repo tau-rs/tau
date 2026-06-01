@@ -14,9 +14,7 @@ use core::pin::Pin;
 use thiserror::Error;
 
 use crate::protocol::roots::Root;
-use crate::protocol::sampling::{
-    SamplingCreateMessageRequest, SamplingCreateMessageResponse,
-};
+use crate::protocol::sampling::{SamplingCreateMessageRequest, SamplingCreateMessageResponse};
 
 /// Error returned by an inbound handler to refuse a server request.
 ///
@@ -91,9 +89,7 @@ impl HostHandlers for DefaultDenyHandlers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::sampling::{
-        ModelPreferences, SamplingContent, SamplingMessage,
-    };
+    use crate::protocol::sampling::{ModelPreferences, SamplingContent, SamplingMessage};
     use alloc::string::ToString;
     use alloc::vec;
 

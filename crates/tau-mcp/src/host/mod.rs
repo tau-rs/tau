@@ -8,6 +8,4 @@
 
 pub mod handlers;
 
-pub use handlers::{
-    DefaultDenyHandlers, HostHandlers, InboundError,
-};
+pub use handlers::{DefaultDenyHandlers, HostHandlers, InboundError};

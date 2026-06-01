@@ -67,8 +67,7 @@ mod tests {
             total: Some(100.0),
         };
         let bytes = serde_json::to_vec(&n).expect("serialize");
-        let decoded: ProgressNotification =
-            serde_json::from_slice(&bytes).expect("deserialize");
+        let decoded: ProgressNotification = serde_json::from_slice(&bytes).expect("deserialize");
         assert_eq!(n, decoded);
     }
 
@@ -79,8 +78,7 @@ mod tests {
             reason: Some("user abort".to_string()),
         };
         let bytes = serde_json::to_vec(&n).expect("serialize");
-        let decoded: CancelledNotification =
-            serde_json::from_slice(&bytes).expect("deserialize");
+        let decoded: CancelledNotification = serde_json::from_slice(&bytes).expect("deserialize");
         assert_eq!(n, decoded);
     }
 

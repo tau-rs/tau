@@ -29,7 +29,10 @@ fn weather_happy_path_full_replay() {
 
     // initialize
     let resp = r
-        .match_request("initialize", &serde_json::json!({"protocolVersion":"2025-03-26"}))
+        .match_request(
+            "initialize",
+            &serde_json::json!({"protocolVersion":"2025-03-26"}),
+        )
         .expect("init");
     assert_eq!(resp.id, Some(RequestId::Number(0)));
 
@@ -52,8 +55,5 @@ fn weather_happy_path_full_replay() {
     let pending = r.next_pending_outbound().expect("progress notification");
     assert_eq!(pending.dir, Direction::Out);
     assert_eq!(pending.kind, MessageKind::Notification);
-    assert_eq!(
-        pending.method.as_deref(),
-        Some("notifications/progress")
-    );
+    assert_eq!(pending.method.as_deref(), Some("notifications/progress"));
 }

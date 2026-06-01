@@ -11,6 +11,6 @@ pub mod sampling;
 pub mod tools;
 
 pub use jsonrpc::{
-    JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, RequestId, JSONRPC_VERSION,
+    JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, RequestId,
+    JSONRPC_VERSION,
 };

@@ -110,7 +110,10 @@ mod tests {
         });
         let info: ServerInfo = serde_json::from_value(wire.clone()).expect("decode");
         assert_eq!(info.name, "weather");
-        assert_eq!(info.additional.get("author").and_then(Value::as_str), Some("NWS"));
+        assert_eq!(
+            info.additional.get("author").and_then(Value::as_str),
+            Some("NWS")
+        );
         let reencoded = serde_json::to_value(&info).expect("encode");
         assert_eq!(reencoded, wire);
     }
