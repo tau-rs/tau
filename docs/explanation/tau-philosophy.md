@@ -69,6 +69,12 @@ The consequence: an agent isn't *running code calling a library*. It's *a
 program with a frozen capability set and a target triple*, the way a Rust
 binary is.
 
+> **Implementation status (2026-06-01):** The workflow IR shipped in β.2 (PRs #263–#271).
+> See [ADR-0037](../decisions/0037-workflow-ir.md) and the
+> [design spec](../superpowers/specs/2026-05-31-workflow-ir-design.md).
+> v0 uses partial-interpret lowering; AOT lands in β.7. Conformance suite + `tau run --bundle`
+> interpreter dispatch deferred to β.2.6.1.
+
 ### 2. tau is a *harness everywhere*; inference and credentials are *always* delegated
 
 The harness — the loop, tool dispatch, capability enforcement, context

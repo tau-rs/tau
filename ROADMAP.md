@@ -341,6 +341,10 @@ is the `tau-ports` `no_std` sweep — every `std::collections::HashMap` →
   bytes, per the C3 contract); the existing Phase 2 §C.2/C.3 bundle
   tests still pass; one minimal IR-authored workflow runs end-to-end.
 
+**Status:** Shipped 2026-06-01 in PRs #263–#271. ADR-0037 records the binding
+decisions. β.2.6.1 follow-up: unstub `tau run --bundle` interpreter dispatch +
+add remaining 5 conformance fixtures + cross-mode comparison.
+
 ### β.3 — MCP facilitator (Lane 2)
 
 - **Builds on:** existing `plugin_host` (Phase 1 §1), the sandbox stack
