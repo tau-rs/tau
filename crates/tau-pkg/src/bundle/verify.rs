@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use crate::bundle::manifest::{BundleAgent, BundleManifest};
 use crate::bundle::verify_error::VerifyError;
 
-/// Schema version this binary can verify.
-const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+/// Maximum schema version this binary can verify.
+const MAX_SUPPORTED_SCHEMA_VERSION: u32 = 2;
 
 /// Inputs to [`verify_bundle`].
 #[derive(Debug, Clone)]
@@ -239,12 +239,12 @@ fn map_integrity_error(e: crate::bundle::error::BundleIntegrityError) -> VerifyE
 }
 
 /// Step 4: confirm the bundle's `schema_version` is one this binary can
-/// verify.
+/// verify (1 or 2).
 fn verify_schema_version(m: &BundleManifest) -> Result<(), VerifyError> {
-    if m.schema_version != SUPPORTED_SCHEMA_VERSION {
+    if m.schema_version == 0 || m.schema_version > MAX_SUPPORTED_SCHEMA_VERSION {
         return Err(VerifyError::UnsupportedSchemaVersion {
             found: m.schema_version,
-            supported: SUPPORTED_SCHEMA_VERSION,
+            supported: MAX_SUPPORTED_SCHEMA_VERSION,
         });
     }
     Ok(())
@@ -334,19 +334,29 @@ system = "you are solo"
     }
 
     #[test]
-    fn verify_schema_version_rejects_v2() {
+    fn verify_schema_version_accepts_v2() {
         let tmp = tempdir().unwrap();
         let path = build_minimal_bundle(tmp.path());
         let s = std::fs::read_to_string(&path).unwrap();
         let mut m = BundleManifest::parse_str(&s).unwrap();
         m.schema_version = 2;
+        verify_schema_version(&m).expect("v2 must be accepted");
+    }
+
+    #[test]
+    fn verify_schema_version_rejects_v99() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path());
+        let s = std::fs::read_to_string(&path).unwrap();
+        let mut m = BundleManifest::parse_str(&s).unwrap();
+        m.schema_version = 99;
         let err = verify_schema_version(&m).unwrap_err();
         assert!(
             matches!(
                 err,
                 VerifyError::UnsupportedSchemaVersion {
-                    found: 2,
-                    supported: 1
+                    found: 99,
+                    supported: 2
                 }
             ),
             "got {err:?}",

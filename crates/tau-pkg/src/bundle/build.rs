@@ -302,7 +302,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     let tau_toml_sha256 = sha256_hex(&tau_toml_bytes);
 
     let mut manifest = BundleManifest {
-        schema_version: 1,
+        schema_version: 2,
         bundle: BundleMeta {
             // Placeholder — filled below after self-hash compute.
             sha256: String::new(),

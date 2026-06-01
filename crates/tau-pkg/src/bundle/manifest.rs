@@ -220,7 +220,7 @@ impl BundleManifest {
     /// ```
     pub fn parse_str(s: &str) -> Result<Self, BundleParseError> {
         let manifest: BundleManifest = toml::from_str(s)?;
-        if manifest.schema_version != 1 {
+        if manifest.schema_version != 1 && manifest.schema_version != 2 {
             return Err(BundleParseError::UnsupportedSchemaVersion {
                 found: manifest.schema_version,
             });
@@ -262,7 +262,6 @@ impl BundleManifest {
     /// # "#;
     /// # let manifest = BundleManifest::parse_str(toml).unwrap();
     /// let canonical = manifest.to_canonical_toml();
-    /// assert!(canonical.contains("schema_version = 1"));
     /// assert!(canonical.contains("[bundle]"));
     /// assert!(canonical.contains("[project]"));
     /// ```
@@ -344,7 +343,7 @@ pub(crate) mod tests_helpers {
     /// across the bundle module's unit tests.
     pub fn sample_manifest() -> BundleManifest {
         BundleManifest {
-            schema_version: 1,
+            schema_version: 2,
             bundle: BundleMeta {
                 sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
                 created_at: "2026-05-19T13:42:11Z".into(),
@@ -403,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_str_rejects_schema_version_2() {
+    fn parse_str_accepts_schema_version_2() {
         let toml_str = r#"
 schema_version = 2
 
@@ -418,9 +417,50 @@ name = "x"
 version = "0.1.0"
 tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "#;
-        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v2");
+        let m = BundleManifest::parse_str(toml_str).expect("v2 must parse");
+        assert_eq!(m.schema_version, 2);
+    }
+
+    #[test]
+    fn parse_str_accepts_schema_version_1_legacy() {
+        // v1 bundles from before the schema_version bump must still parse.
+        let toml_str = r#"
+schema_version = 1
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-05-19T13:42:11Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+        let m = BundleManifest::parse_str(toml_str).expect("legacy v1 must still parse");
+        assert_eq!(m.schema_version, 1);
+    }
+
+    #[test]
+    fn parse_str_rejects_schema_version_3() {
+        let toml_str = r#"
+schema_version = 3
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-05-19T13:42:11Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v3");
         match err {
-            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 2),
+            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 3),
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
     }
@@ -597,9 +637,9 @@ future_key = "tolerated"
     }
 
     #[test]
-    fn schema_version_two_is_rejected() {
+    fn schema_version_ninety_nine_is_rejected() {
         let toml_str = r#"
-schema_version = 2
+schema_version = 99
 
 [bundle]
 sha256 = "x"
@@ -614,9 +654,9 @@ tau_toml_sha256 = "x"
 "#;
         match BundleManifest::parse_str(toml_str) {
             Err(crate::bundle::error::BundleParseError::UnsupportedSchemaVersion { found }) => {
-                assert_eq!(found, 2);
+                assert_eq!(found, 99);
             }
-            other => panic!("expected UnsupportedSchemaVersion(2), got {other:?}"),
+            other => panic!("expected UnsupportedSchemaVersion(99), got {other:?}"),
         }
     }
 
