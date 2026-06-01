@@ -239,27 +239,19 @@ use std::sync::Arc;
 use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::deterministic::DeterministicRegistry;
 
+/// Type alias for the closure stored per registered function.
+type RegistryFn =
+    Arc<dyn Fn(&serde_json::Value) -> Result<serde_json::Value, RuntimeError> + Send + Sync>;
+
 /// A `DeterministicRegistry` backed by a `BTreeMap<String, Fn>`.
 ///
 /// The conformance suite uses this to wire scripted deterministic
 /// functions into `RecordingDispatcher::deterministic_registry()`.
 /// Fixture authors call [`MapBackedDeterministicRegistry::with`] to
 /// register named functions.
+#[derive(Default)]
 pub struct MapBackedDeterministicRegistry {
-    fns: BTreeMap<
-        String,
-        Arc<
-            dyn Fn(&serde_json::Value) -> Result<serde_json::Value, RuntimeError> + Send + Sync,
-        >,
-    >,
-}
-
-impl Default for MapBackedDeterministicRegistry {
-    fn default() -> Self {
-        Self {
-            fns: BTreeMap::new(),
-        }
-    }
+    fns: BTreeMap<String, RegistryFn>,
 }
 
 impl MapBackedDeterministicRegistry {

@@ -4,16 +4,10 @@
 //! side effects under `DevMode`, and asserts cross-mode equivalence
 //! (DevMode vs BundleMode) per D-7a (multiset side-effect equivalence).
 //!
-//! # Deferred fixtures
-//!
-//! One fixture slot ships empty (just a `README.md`) because the IR /
-//! interpreter is not yet expansive enough to author it. It is listed
-//! in [`DEFERRED_FIXTURES`] and skipped by any future directory-scanning
-//! test. The fixture's README documents the exact IR / interpreter changes
-//! needed to un-defer it:
-//!
-//! - `05_deterministic_step`: needs `tau-runtime-core`'s agent loop to
-//!   dispatch `Deterministic` nodes via the `ToolDispatcher` surface.
+//! All six fixtures are live as of β.2.6.2: `01_agent_native_tool`,
+//! `02_agent_mcp_tool`, `03_agent_denied_capability`,
+//! `04_subflow_spawn_child`, `05_deterministic_step`, and
+//! `06_multi_turn_history`. No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
 
@@ -24,9 +18,9 @@ use tau_runtime_core::outcome::RunOutcome;
 
 /// Fixture directory names that the IR / interpreter cannot yet build
 /// or execute. Any future directory-scanning conformance test must skip
-/// these. See the module docs for the unblock requirements per fixture.
+/// these. Empty as of β.2.6.2 — all six fixtures are live.
 #[allow(dead_code)]
-pub const DEFERRED_FIXTURES: &[&str] = &["05_deterministic_step"];
+pub const DEFERRED_FIXTURES: &[&str] = &[];
 
 fn fixture_dir(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -202,6 +196,61 @@ async fn fixture_04_dev_mode_subflow_dispatched() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_04_cross_mode_conformance() {
     let dir = fixture_dir("04_subflow_spawn_child");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 05 — deterministic_step
+// ---------------------------------------------------------------------------
+
+/// Fixture 05: agent invokes a deterministic step tool `normalize` (auto-
+/// registered by the parse stage for `[steps.normalize]`). The
+/// `MapBackedDeterministicRegistry::parse_celsius` runs and returns
+/// `{"celsius": 22}`. Agent's next turn emits `"22 celsius"` and ends.
+///
+/// Expected: RunOutcome::Completed; multiset has exactly one
+/// `normalize:{"raw":"22"}` entry.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_05_dev_mode_step_dispatched() {
+    let dir = fixture_dir("05_deterministic_step");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    // Step tools (like Subflow tools) are NOT routed through
+    // dispatcher.invoke — the Step arm of DispatcherTool::invoke calls
+    // the DeterministicRegistry directly (see Phase 2 fix C2). So
+    // `normalize` does NOT appear in `report.tool_calls`. The strongest
+    // observable: a tool-result message containing the step's output
+    // (`{"celsius":22}`) reached the LLM, which only happens if the
+    // step ran successfully and its result was injected into the
+    // message stream.
+    assert_eq!(
+        count_tool_calls(&report, "normalize"),
+        0,
+        "step tools are not routed through dispatcher.invoke; should not appear in tool_calls"
+    );
+    let step_result_observed = report.message_added.keys().any(|bytes| {
+        std::str::from_utf8(bytes)
+            .map(|s| s.contains("celsius"))
+            .unwrap_or(false)
+    });
+    assert!(
+        step_result_observed,
+        "expected the step's `celsius` output to appear in at least one message body; got messages: {:?}",
+        report.message_added.keys().map(|b| String::from_utf8_lossy(b).to_string()).collect::<Vec<_>>()
+    );
+}
+
+/// Cross-mode conformance for fixture 05.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_05_cross_mode_conformance() {
+    let dir = fixture_dir("05_deterministic_step");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
