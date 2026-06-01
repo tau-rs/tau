@@ -1,10 +1,14 @@
-//! Subprocess stdio transport for MCP servers.
+//! Subprocess stdio MCP transport.
 //!
-//! Scaffold only in PR-1. PR-2 fills this in with:
-//!
-//! - `spawn(cmd, &CapabilityPlan)` that wraps `tokio::process::Command`
-//!   via `tau_runtime_tokio::process_gate::Sandbox::wrap_spawn`.
-//! - line-delimited JSON-RPC framing over child stdout / stdin.
-//! - `Transport` impl carrying the spawned child + framers.
-//!
-//! See the β.3 design doc §2 (crate layout) and §9 (sandbox model).
+//! `McpStdioServer` wraps a sandboxed `tokio::process::Child` plus
+//! line-delimited JSON-RPC framing on its stdin/stdout. It impls
+//! `tau_mcp::transport::Transport`.
+
+pub mod error;
+pub mod framer;
+pub mod server;
+pub mod spawn;
+
+pub use error::{StdioSpawnError, StdioTransportError};
+pub use server::McpStdioServer;
+pub use spawn::spawn;
