@@ -209,7 +209,7 @@ fn stub_manifest() -> PackageManifest {
 /// calls `run_with_history` with a synthesised `AgentDefinition` and
 /// `PackageManifest`.
 pub async fn run_agent<D>(
-    module: &IrModule,
+    module: alloc::sync::Arc<IrModule>,
     agent: &Agent,
     dispatcher: Arc<D>,
     initial_messages: Vec<Message>,
