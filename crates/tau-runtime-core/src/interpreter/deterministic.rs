@@ -11,7 +11,7 @@ use tau_ir::Deterministic;
 use crate::error::RuntimeError;
 
 /// Caller-supplied registry of statically linked deterministic functions.
-pub trait DeterministicRegistry {
+pub trait DeterministicRegistry: Send + Sync {
     /// Invoke the function named `fn_name` with `args`. Pure; no I/O.
     fn invoke(&self, fn_name: &str, args: &Value) -> Result<Value, RuntimeError>;
 }
