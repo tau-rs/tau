@@ -22,9 +22,8 @@ pub fn mock_server_path() -> &'static PathBuf {
             "{}/tests/fixtures/mock-mcp-server/Cargo.toml",
             env!("CARGO_MANIFEST_DIR")
         );
-        let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| {
-            format!("{}/../../target", env!("CARGO_MANIFEST_DIR"))
-        });
+        let target_dir = std::env::var("CARGO_TARGET_DIR")
+            .unwrap_or_else(|_| format!("{}/../../target", env!("CARGO_MANIFEST_DIR")));
         let fixture_target = format!("{target_dir}/mock-mcp-server-build");
         let status = Command::new(env!("CARGO"))
             .args(["build", "--manifest-path", &manifest])
@@ -33,9 +32,7 @@ pub fn mock_server_path() -> &'static PathBuf {
             .status()
             .expect("build fixture");
         assert!(status.success(), "fixture build failed");
-        PathBuf::from(format!(
-            "{fixture_target}/debug/tau-mcp-mock-server"
-        ))
+        PathBuf::from(format!("{fixture_target}/debug/tau-mcp-mock-server"))
     })
 }
 

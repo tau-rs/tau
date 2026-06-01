@@ -114,9 +114,10 @@ async fn server_refuses_initialize_surfaces_server_error() {
     .await;
     let err = require_err(result, "server_refuses_initialize_surfaces_server_error");
     match err {
-        LifecycleError::Handshake(
-            tau_mcp_tokio::host_lifecycle::HandshakeError::ServerError { code, .. },
-        ) => {
+        LifecycleError::Handshake(tau_mcp_tokio::host_lifecycle::HandshakeError::ServerError {
+            code,
+            ..
+        }) => {
             assert_eq!(code, -32603);
         }
         other => panic!("expected ServerError, got {other:?}"),

@@ -65,14 +65,12 @@ impl Transport for McpStdioServer {
 
     fn next_message<'a>(
         &'a self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<JsonRpcMessage>, McpError>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<dyn std::future::Future<Output = Result<Option<JsonRpcMessage>, McpError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             let mut framer = self.framer.lock().await;
-            framer
-                .read_message()
-                .await
-                .map_err(convert_transport_error)
+            framer.read_message().await.map_err(convert_transport_error)
         })
     }
 }

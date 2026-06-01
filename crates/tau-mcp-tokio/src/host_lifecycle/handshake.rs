@@ -127,9 +127,9 @@ async fn recv_response_for(
             .map_err(|e| HandshakeError::Transport(format!("{e}")))?
             .ok_or_else(|| HandshakeError::Transport("peer closed mid-handshake".into()))?;
         match msg {
-            JsonRpcMessage::Response(JsonRpcResponse { id, result, error, .. })
-                if &id == expected_id =>
-            {
+            JsonRpcMessage::Response(JsonRpcResponse {
+                id, result, error, ..
+            }) if &id == expected_id => {
                 if let Some(e) = error {
                     return Err(HandshakeError::ServerError {
                         code: e.code,

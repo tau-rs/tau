@@ -1,7 +1,7 @@
 //! Error types for the stdio transport.
 
-use thiserror::Error;
 use tau_ports::CapabilityError;
+use thiserror::Error;
 
 /// Failure during stdio MCP server spawn.
 #[derive(Debug, Error)]

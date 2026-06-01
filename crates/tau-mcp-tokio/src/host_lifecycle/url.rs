@@ -41,11 +41,7 @@ pub fn parse_url(s: &str) -> Result<McpUrl, UrlParseError> {
         return Ok(McpUrl::Stdio { cmd });
     }
     // PR-3 will add http/https arms here.
-    let scheme = s
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let scheme = s.split(':').next().unwrap_or("").to_string();
     Err(UrlParseError::UnsupportedScheme { scheme })
 }
 
@@ -71,8 +67,14 @@ mod tests {
 
     #[test]
     fn empty_stdio_command_rejected() {
-        assert!(matches!(parse_url("stdio:"), Err(UrlParseError::EmptyStdioCommand)));
-        assert!(matches!(parse_url("stdio:   "), Err(UrlParseError::EmptyStdioCommand)));
+        assert!(matches!(
+            parse_url("stdio:"),
+            Err(UrlParseError::EmptyStdioCommand)
+        ));
+        assert!(matches!(
+            parse_url("stdio:   "),
+            Err(UrlParseError::EmptyStdioCommand)
+        ));
     }
 
     #[test]

@@ -93,14 +93,12 @@ impl McpClient {
             let result: ToolsCallResponse = serde_json::from_value(resp)?;
             Ok::<_, McpError>(result)
         };
-        timeout(call_timeout, inner)
-            .await
-            .map_err(|_| {
-                McpError::Transport(format!(
-                    "tools/call {server_tool_name:?} timed out after {}ms",
-                    call_timeout.as_millis()
-                ))
-            })?
+        timeout(call_timeout, inner).await.map_err(|_| {
+            McpError::Transport(format!(
+                "tools/call {server_tool_name:?} timed out after {}ms",
+                call_timeout.as_millis()
+            ))
+        })?
     }
 
     /// Borrow the live transport (PR-5 wires the inbound-dispatch task here).
@@ -119,9 +117,9 @@ async fn recv_response_for(
             .await?
             .ok_or_else(|| McpError::Transport("peer closed mid-call".into()))?;
         match msg {
-            JsonRpcMessage::Response(JsonRpcResponse { id, result, error, .. })
-                if &id == expected_id =>
-            {
+            JsonRpcMessage::Response(JsonRpcResponse {
+                id, result, error, ..
+            }) if &id == expected_id => {
                 if let Some(e) = error {
                     return Err(McpError::Protocol(format!(
                         "server returned error code={} msg={}",
