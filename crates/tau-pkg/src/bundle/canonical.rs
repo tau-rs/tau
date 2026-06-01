@@ -160,10 +160,18 @@ fn write_effective_capabilities(out: &mut String, caps: &BundleEffectiveCapabili
 fn write_ir_payload(out: &mut String, ir: &IrPayload) {
     write_str_kv(out, "ir_format", &ir.ir_format);
     // canonical_ir_hash: [u8; 32] encoded as lowercase hex.
-    write_str_kv(out, "canonical_ir_hash", &bytes_to_hex(&ir.canonical_ir_hash));
+    write_str_kv(
+        out,
+        "canonical_ir_hash",
+        &bytes_to_hex(&ir.canonical_ir_hash),
+    );
     // canonical_ir_bytes: Vec<u8> encoded as lowercase hex so it is
     // representable in TOML and participates in the self-hash deterministically.
-    write_str_kv(out, "canonical_ir_bytes_hex", &bytes_to_hex(&ir.canonical_ir_bytes));
+    write_str_kv(
+        out,
+        "canonical_ir_bytes_hex",
+        &bytes_to_hex(&ir.canonical_ir_bytes),
+    );
 }
 
 /// Encode a byte slice as lowercase hex.

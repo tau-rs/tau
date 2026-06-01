@@ -648,6 +648,9 @@ system_file = "prompt.md"
             msg.contains("ir_payload"),
             "error must mention 'ir_payload'; got: {msg}"
         );
-        assert!(matches!(err, VerifyError::IrPayloadDrift { .. }), "got {err:?}");
+        assert!(
+            matches!(err, VerifyError::IrPayloadDrift { .. }),
+            "got {err:?}"
+        );
     }
 }
