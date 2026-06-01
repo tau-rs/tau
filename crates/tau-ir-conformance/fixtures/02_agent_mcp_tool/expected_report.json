@@ -1,0 +1,4 @@
+{
+  "run_outcome_kind": "Completed",
+  "tool_calls": { "weather:{}": 1 }
+}

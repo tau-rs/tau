@@ -1,0 +1,15 @@
+[project]
+name = "fixture-02"
+
+[agents.weatherman]
+display_name = "Weather Man"
+package      = "weatherman@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+tool_refs    = ["weather"]
+max_turns    = 2
+
+[tools.weather]
+mcp         = "https://mcp.weather.example.com"
+description = "Look up current weather."
+capabilities = [{ kind = "net.http" }]
