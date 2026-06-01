@@ -1,0 +1,22 @@
+[package]
+name = "tau-ir-conformance"
+description = "Cross-mode conformance fixtures + runner for the tau workflow IR. Internal test crate; not published."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish = false
+
+[dependencies]
+tau-domain        = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-ir            = { workspace = true }
+tau-ports         = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-pkg           = { workspace = true }
+tau-runtime-core  = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+tokio             = { workspace = true }
+async-trait       = { workspace = true }
+
+[features]
+default = []
