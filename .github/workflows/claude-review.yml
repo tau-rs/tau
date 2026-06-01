@@ -89,6 +89,10 @@ jobs:
       - uses: anthropics/claude-code-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Dependabot PRs run with a Bot actor; without this the action
+          # aborts with "Workflow initiated by non-human actor: dependabot".
+          # Allow dependabot so dependency bumps still get an AI review.
+          allowed_bots: "dependabot"
           direct_prompt: |
             Review this pull request as a senior engineer would.
             Focus on:

@@ -68,6 +68,14 @@ pub async fn run(
     // bundle before doing anything else. On success the cwd's tau.toml
     // is provably the bundle's source, so the rest of `run` proceeds
     // unchanged.
+    //
+    // β.2.6: when the verified bundle carries an `ir_payload` (v2
+    // bundle), short-circuit through the IR-interpreter path
+    // ([`crate::cmd::ir_dispatcher::run_via_ir`]) instead of the
+    // cwd-based agent loop. v1 bundles (no `ir_payload`) keep using
+    // the cwd path below — `verify_bundle` already proved the cwd
+    // matches the bundle's recorded source bytes, so the cwd path is
+    // equivalent at v1.
     if let Some(bundle_path) = &args.bundle {
         match tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
             bundle_path: bundle_path.clone(),
@@ -78,29 +86,34 @@ pub async fn run(
                 std::process::exit(bundle_verify_exit_code(&e));
             }
             Ok(report) => {
-                // v2 bundle with ir_payload: log the entry agent and note that
-                // full IR-interpreter dispatch is gated behind β.2.6's
-                // ToolDispatcher integration. For now, the normal cwd-based
-                // run path serves as the execution engine — the verify step
-                // already guarantees the cwd's source matches the bundle.
-                //
-                // TODO(β.2.6): construct a ToolDispatcher over the host's
-                // plugin registry, call tau_runtime_core::interpreter::run_ir,
-                // and short-circuit the remainder of this function.
-                if let Some(ir) = &report.manifest.ir_payload {
-                    if let Ok(bytes) = ir.canonical_ir_bytes() {
-                        if let Ok(module) = tau_ir::from_canonical_bytes(&bytes) {
-                            // Pick first agent (alphabetical via BTreeMap) as entry.
-                            if let Some((entry_id, _)) = module.workflow.agents.iter().next() {
-                                tracing::warn!(
-                                    entry_agent = %entry_id.0,
-                                    ir_format = %ir.ir_format,
-                                    "bundle has ir_payload; IR interpreter dispatch \
-                                     deferred to beta.2.6 — running via normal \
-                                     cwd-based agent path"
-                                );
-                            }
-                        }
+                if let Some(ir) = report.manifest.ir_payload.as_ref() {
+                    let bytes = ir.canonical_ir_bytes().map_err(|e| {
+                        anyhow::anyhow!("decoding bundle's canonical_ir_bytes_hex: {e:?}")
+                    })?;
+                    let module = tau_ir::from_canonical_bytes(&bytes)
+                        .map_err(|e| anyhow::anyhow!("decoding IR module from bundle: {e:?}"))?;
+
+                    if args.dry_run {
+                        tracing::info!(
+                            ir_format = %ir.ir_format,
+                            "v2 bundle (ir_payload present); --dry-run requested \
+                             — IR-interpreter path skipped, falling through to \
+                             cwd-based dry-run preview"
+                        );
+                        // Fall through into the legacy cwd path below: the
+                        // cwd's tau.toml was just proven byte-clean, so its
+                        // dry-run preview is equivalent to what the IR
+                        // payload would render.
+                    } else {
+                        return crate::cmd::ir_dispatcher::run_via_ir(
+                            module,
+                            args,
+                            record_protocol,
+                            force_passthrough,
+                            force_adapter_kind,
+                            output,
+                        )
+                        .await;
                     }
                 }
             }
@@ -294,61 +307,76 @@ pub async fn run(
 
         let outcome = run_outcome.context("running agent")?;
 
-        match outcome {
-            RunOutcome::Completed {
-                ref final_message,
-                total_turns,
-                ref token_usage,
-                ..
-            } => {
-                if output.is_json() {
-                    let payload = serde_json::json!({
-                        "outcome": "completed",
-                        "final_message": format_message_text(&final_message.payload),
-                        "total_turns": total_turns,
-                        "token_usage": {
-                            "input_tokens": token_usage.input_tokens,
-                            "output_tokens": token_usage.output_tokens,
-                        },
-                    });
-                    output.json(&payload)?;
-                } else {
-                    let text = format_message_text(&final_message.payload);
-                    output.human(&text)?;
-                }
-                Ok(())
+        render_outcome(outcome, output)
+    }
+}
+
+/// Render a [`RunOutcome`] from the batch (non-streaming) path.
+///
+/// Promoted from an inline `match` so both the cwd-based path and the
+/// IR-bundle path ([`crate::cmd::ir_dispatcher`]) emit byte-identical
+/// `{"outcome":"completed", ...}` / `{"outcome":"failed", ...}` JSON
+/// shapes — the streaming path in [`run_streaming_and_render`] wraps
+/// the same outcome inside an `{"event":"run_completed", "outcome":{...}}`
+/// envelope, so it is kept separate by design.
+///
+/// Returns `Ok(())` on a `Completed`, `Err(AgentFailed)` on `Failed`,
+/// and an `anyhow::Error` for any unknown `#[non_exhaustive]` variant.
+pub(super) fn render_outcome(outcome: RunOutcome, output: &mut Output) -> anyhow::Result<()> {
+    match outcome {
+        RunOutcome::Completed {
+            ref final_message,
+            total_turns,
+            ref token_usage,
+            ..
+        } => {
+            if output.is_json() {
+                let payload = serde_json::json!({
+                    "outcome": "completed",
+                    "final_message": format_message_text(&final_message.payload),
+                    "total_turns": total_turns,
+                    "token_usage": {
+                        "input_tokens": token_usage.input_tokens,
+                        "output_tokens": token_usage.output_tokens,
+                    },
+                });
+                output.json(&payload)?;
+            } else {
+                let text = format_message_text(&final_message.payload);
+                output.human(&text)?;
             }
-            RunOutcome::Failed {
-                ref status,
-                total_turns,
-                ref token_usage,
-                ..
-            } => {
-                if output.is_json() {
-                    let payload = serde_json::json!({
-                        "outcome": "failed",
-                        "status": format!("{status:?}"),
-                        "total_turns": total_turns,
-                        "token_usage": {
-                            "input_tokens": token_usage.input_tokens,
-                            "output_tokens": token_usage.output_tokens,
-                        },
-                    });
-                    output.json(&payload)?;
-                } else {
-                    output.error(format!("agent failed: {status:?}"))?;
-                }
-                // Marker error → ExitCode::AgentFailed (1) via downcast in
-                // crate::run_main. Kernel/CLI errors map to ExitCode::Error
-                // (2); this case is the explicit Outcome::Failed bucket.
-                Err(AgentFailed.into())
-            }
-            // RunOutcome is `#[non_exhaustive]`; cross-crate match needs a
-            // wildcard. Any future variant should be classified explicitly
-            // by an ADR amendment; for now, treat unknown outcomes as a
-            // kernel error.
-            _ => Err(anyhow::anyhow!("unknown RunOutcome variant")),
+            Ok(())
         }
+        RunOutcome::Failed {
+            ref status,
+            total_turns,
+            ref token_usage,
+            ..
+        } => {
+            if output.is_json() {
+                let payload = serde_json::json!({
+                    "outcome": "failed",
+                    "status": format!("{status:?}"),
+                    "total_turns": total_turns,
+                    "token_usage": {
+                        "input_tokens": token_usage.input_tokens,
+                        "output_tokens": token_usage.output_tokens,
+                    },
+                });
+                output.json(&payload)?;
+            } else {
+                output.error(format!("agent failed: {status:?}"))?;
+            }
+            // Marker error → ExitCode::AgentFailed (1) via downcast in
+            // crate::run_main. Kernel/CLI errors map to ExitCode::Error
+            // (2); this case is the explicit Outcome::Failed bucket.
+            Err(AgentFailed.into())
+        }
+        // RunOutcome is `#[non_exhaustive]`; cross-crate match needs a
+        // wildcard. Any future variant should be classified explicitly
+        // by an ADR amendment; for now, treat unknown outcomes as a
+        // kernel error.
+        _ => Err(anyhow::anyhow!("unknown RunOutcome variant")),
     }
 }
 
@@ -555,7 +583,7 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
 
 /// Project a [`MessagePayload`] to a single text string for display.
 /// Non-text payloads degrade to a `Debug`-formatted preview.
-fn format_message_text(payload: &MessagePayload) -> String {
+pub(super) fn format_message_text(payload: &MessagePayload) -> String {
     match payload {
         MessagePayload::Text { content } => content.clone(),
         other => format!("{other:?}"),

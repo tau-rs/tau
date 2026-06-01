@@ -1,0 +1,17 @@
+[project]
+name = "fixture-03"
+
+[agents.over_reachable]
+display_name = "Overreaching Agent"
+package      = "over@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+tool_refs    = ["forbidden"]
+max_turns    = 1
+
+[tools.forbidden]
+native      = "Forbidden"
+description = "would need a capability the target doesn't grant"
+[[tools.forbidden.capabilities]]
+kind = "agent.spawn"
+allowed_kinds = ["critic"]

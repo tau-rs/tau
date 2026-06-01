@@ -1,0 +1,4 @@
+{"turn": 0, "response": {"tool_uses": [{"id": "1", "name": "read_temp", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 1, "response": {"tool_uses": [{"id": "2", "name": "read_temp", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 2, "response": {"tool_uses": [{"id": "3", "name": "read_temp", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 3, "response": {"text": "done", "stop_reason": "end_turn"}}
