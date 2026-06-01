@@ -44,4 +44,22 @@ pub trait ToolDispatcher {
     /// a `RuntimeBuilder` for the inner agent loop. Implementors own the
     /// backend handle (typically an `Arc`-clone of the caller's backend).
     fn llm_backend(&self) -> Arc<dyn DynLlmBackend>;
+
+    /// Optional handle to a deterministic-step registry.
+    ///
+    /// The interpreter calls this when an agent invokes a tool whose IR
+    /// `ToolImpl` is `Step { id }`. Returning `None` is allowed and means
+    /// "this dispatcher does not support deterministic steps" — invoking
+    /// a `Step` tool against a `None` registry surfaces as a
+    /// [`RuntimeError::Internal`] with a clear diagnostic.
+    ///
+    /// Production paths (e.g. `tau run --bundle`) currently return
+    /// `None`; the deterministic-registry surface ships first with the
+    /// conformance test runner in `tau-ir-conformance` and graduates to
+    /// production once a real native-fn registry is wired (β.7+).
+    fn deterministic_registry(
+        &self,
+    ) -> Option<Arc<dyn super::deterministic::DeterministicRegistry>> {
+        None
+    }
 }
