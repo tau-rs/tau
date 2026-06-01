@@ -216,36 +216,32 @@ fn verify_target_matches_host(m: &BundleManifest) -> Result<(), VerifyError> {
 }
 
 /// Step 9: if `manifest.ir_payload` is `Some`, verify that the SHA-256
-/// of `canonical_ir_bytes` matches the stored `canonical_ir_hash`.
+/// of `canonical_ir_bytes_hex` (decoded) matches the stored `canonical_ir_hash`.
 /// This detects post-build tampering of the IR bytes independent of the
 /// bundle's overall self-hash check (step 3).
 fn verify_ir_payload(m: &BundleManifest) -> Result<(), VerifyError> {
     use sha2::{Digest, Sha256};
     if let Some(ir) = &m.ir_payload {
+        // Decode the hex-encoded IR bytes.
+        let bytes = ir
+            .canonical_ir_bytes()
+            .map_err(|e| VerifyError::IrPayloadDrift {
+                claimed: ir.canonical_ir_hash.clone(),
+                computed: format!("hex decode failed: {e}"),
+            })?;
+        // Recompute SHA-256 of the decoded bytes.
         let mut hasher = Sha256::new();
-        hasher.update(&ir.canonical_ir_bytes);
-        let computed: [u8; 32] = hasher.finalize().into();
-        if computed != ir.canonical_ir_hash {
-            let claimed = hex_bytes(&ir.canonical_ir_hash);
-            let computed_hex = hex_bytes(&computed);
+        hasher.update(&bytes);
+        let computed_bytes: [u8; 32] = hasher.finalize().into();
+        let computed_hex = crate::tree_hash::to_hex_lower(&computed_bytes);
+        if computed_hex != ir.canonical_ir_hash {
             return Err(VerifyError::IrPayloadDrift {
-                claimed,
+                claimed: ir.canonical_ir_hash.clone(),
                 computed: computed_hex,
             });
         }
     }
     Ok(())
-}
-
-/// Encode 32 bytes as lowercase hex.
-fn hex_bytes(bytes: &[u8]) -> String {
-    const HEX: &[u8] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
 }
 
 /// Step 3: confirm the bundle's recorded self-hash matches its
@@ -610,8 +606,8 @@ system_file = "prompt.md"
     }
 
     /// Build a bundle with a synthetic `ir_payload` where the
-    /// `canonical_ir_hash` is correct. Then corrupt one byte of
-    /// `canonical_ir_bytes` and assert that `verify_ir_payload` catches
+    /// `canonical_ir_hash` is correct. Then corrupt one hex char of
+    /// `canonical_ir_bytes_hex` and assert that `verify_ir_payload` catches
     /// the tamper and returns an error whose string contains "ir_payload".
     #[test]
     fn verify_detects_ir_payload_drift() {
@@ -628,19 +624,24 @@ system_file = "prompt.md"
         let bytes: Vec<u8> = b"fake ir bytes".to_vec();
         let mut h = Sha256::new();
         h.update(&bytes);
-        let hash: [u8; 32] = h.finalize().into();
+        let hash_bytes: [u8; 32] = h.finalize().into();
+        let hash_hex = crate::tree_hash::to_hex_lower(&hash_bytes);
+        let bytes_hex = crate::tree_hash::to_hex_lower(&bytes);
         m.ir_payload = Some(IrPayload {
             ir_format: "v1.0.0".to_string(),
-            canonical_ir_hash: hash,
-            canonical_ir_bytes: bytes,
+            canonical_ir_hash: hash_hex.clone(),
+            canonical_ir_bytes_hex: bytes_hex.clone(),
         });
 
         // Correct hash → verify_ir_payload must pass.
         verify_ir_payload(&m).expect("clean ir_payload must pass");
 
-        // Corrupt one byte → verify_ir_payload must fail.
+        // Corrupt the bytes hex (flip one char) → verify_ir_payload must fail.
         if let Some(p) = m.ir_payload.as_mut() {
-            p.canonical_ir_bytes[0] ^= 0xFF;
+            // XOR the first character: '0'→'f', 'f'→'0', etc.
+            let mut hex_chars: Vec<char> = p.canonical_ir_bytes_hex.chars().collect();
+            hex_chars[0] = if hex_chars[0] == '0' { 'f' } else { '0' };
+            p.canonical_ir_bytes_hex = hex_chars.into_iter().collect();
         }
         let err = verify_ir_payload(&m).expect_err("tampered bytes must fail");
         let msg = err.to_string();

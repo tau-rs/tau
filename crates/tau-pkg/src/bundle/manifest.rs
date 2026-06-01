@@ -14,20 +14,73 @@ use crate::bundle::error::BundleParseError;
 /// Per the design spec D-5, v0 ships the IR as data inside the bundle;
 /// the bundle's wasm component carries the interpreter as code and reads
 /// this payload at startup. v1 (β.7) keeps the payload field but its
-/// semantics change: `canonical_ir_bytes` becomes the input to AOT
+/// semantics change: `canonical_ir_bytes_hex` becomes the input to AOT
 /// lowering rather than to runtime interpretation.
+///
+/// Both `canonical_ir_hash` and `canonical_ir_bytes_hex` are hex strings
+/// for TOML round-trip compatibility (`Vec<u8>` serializes to integer
+/// arrays in TOML, which is inefficient for large payloads).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IrPayload {
     /// IR format version (D-6 — semver-shaped, e.g. "v1.0.0").
     pub ir_format: String,
-    /// SHA-256 of the canonical IR bytes. Redundant with the bytes
-    /// themselves but cheap; lets `tau verify` short-circuit on a
-    /// hash mismatch before re-deserializing.
-    pub canonical_ir_hash: [u8; 32],
-    /// The canonical IR bytes themselves. Hashed into the bundle's
-    /// self-hash, per D-6.
-    pub canonical_ir_bytes: Vec<u8>,
+    /// SHA-256 of the canonical IR bytes, lowercase hex (64 chars).
+    /// Redundant with the bytes themselves but cheap; lets `tau verify`
+    /// short-circuit on a hash mismatch before re-deserializing.
+    pub canonical_ir_hash: String,
+    /// The canonical IR bytes encoded as lowercase hex. Hashed into the
+    /// bundle's self-hash via the canonical TOML, per D-6.
+    pub canonical_ir_bytes_hex: String,
+}
+
+/// Error from hex decoding of IrPayload fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexDecodeError(pub String);
+
+impl std::fmt::Display for HexDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "hex decode error: {}", self.0)
+    }
+}
+
+impl IrPayload {
+    /// Decode `canonical_ir_bytes_hex` back to raw bytes.
+    pub fn canonical_ir_bytes(&self) -> Result<Vec<u8>, HexDecodeError> {
+        hex_decode(&self.canonical_ir_bytes_hex)
+    }
+
+    /// Parse the stored `canonical_ir_hash` hex to a `[u8; 32]` array.
+    pub fn canonical_ir_hash_bytes(&self) -> Result<[u8; 32], HexDecodeError> {
+        let v = hex_decode(&self.canonical_ir_hash)?;
+        v.try_into()
+            .map_err(|_| HexDecodeError("expected 32 bytes but got a different length".into()))
+    }
+}
+
+/// Decode a lowercase hex string to bytes.
+fn hex_decode(s: &str) -> Result<Vec<u8>, HexDecodeError> {
+    if !s.len().is_multiple_of(2) {
+        return Err(HexDecodeError("odd-length hex string".into()));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let mut chars = s.chars();
+    loop {
+        match (chars.next(), chars.next()) {
+            (None, _) => break,
+            (Some(h), Some(l)) => {
+                let hi = h
+                    .to_digit(16)
+                    .ok_or_else(|| HexDecodeError(format!("invalid hex char '{h}'")))?;
+                let lo = l
+                    .to_digit(16)
+                    .ok_or_else(|| HexDecodeError(format!("invalid hex char '{l}'")))?;
+                out.push(((hi << 4) | lo) as u8);
+            }
+            _ => return Err(HexDecodeError("unexpected end of hex string".into())),
+        }
+    }
+    Ok(out)
 }
 
 /// Top-level bundle manifest.

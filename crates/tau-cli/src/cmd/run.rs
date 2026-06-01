@@ -88,15 +88,18 @@ pub async fn run(
                 // plugin registry, call tau_runtime_core::interpreter::run_ir,
                 // and short-circuit the remainder of this function.
                 if let Some(ir) = &report.manifest.ir_payload {
-                    if let Ok(module) = tau_ir::from_canonical_bytes(&ir.canonical_ir_bytes) {
-                        // Pick first agent (alphabetical via BTreeMap) as entry.
-                        if let Some((entry_id, _)) = module.workflow.agents.iter().next() {
-                            tracing::warn!(
-                                entry_agent = %entry_id.0,
-                                ir_format = %ir.ir_format,
-                                "bundle has ir_payload; IR interpreter dispatch deferred to \
-                                 beta.2.6 — running via normal cwd-based agent path"
-                            );
+                    if let Ok(bytes) = ir.canonical_ir_bytes() {
+                        if let Ok(module) = tau_ir::from_canonical_bytes(&bytes) {
+                            // Pick first agent (alphabetical via BTreeMap) as entry.
+                            if let Some((entry_id, _)) = module.workflow.agents.iter().next() {
+                                tracing::warn!(
+                                    entry_agent = %entry_id.0,
+                                    ir_format = %ir.ir_format,
+                                    "bundle has ir_payload; IR interpreter dispatch \
+                                     deferred to beta.2.6 — running via normal \
+                                     cwd-based agent path"
+                                );
+                            }
                         }
                     }
                 }

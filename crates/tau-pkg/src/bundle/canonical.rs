@@ -158,31 +158,10 @@ fn write_effective_capabilities(out: &mut String, caps: &BundleEffectiveCapabili
 }
 
 fn write_ir_payload(out: &mut String, ir: &IrPayload) {
+    // Fields are already hex strings; emit in fixed order for deterministic hash.
     write_str_kv(out, "ir_format", &ir.ir_format);
-    // canonical_ir_hash: [u8; 32] encoded as lowercase hex.
-    write_str_kv(
-        out,
-        "canonical_ir_hash",
-        &bytes_to_hex(&ir.canonical_ir_hash),
-    );
-    // canonical_ir_bytes: Vec<u8> encoded as lowercase hex so it is
-    // representable in TOML and participates in the self-hash deterministically.
-    write_str_kv(
-        out,
-        "canonical_ir_bytes_hex",
-        &bytes_to_hex(&ir.canonical_ir_bytes),
-    );
-}
-
-/// Encode a byte slice as lowercase hex.
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
+    write_str_kv(out, "canonical_ir_hash", &ir.canonical_ir_hash);
+    write_str_kv(out, "canonical_ir_bytes_hex", &ir.canonical_ir_bytes_hex);
 }
 
 fn write_str_kv(out: &mut String, key: &str, value: &str) {

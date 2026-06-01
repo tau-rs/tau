@@ -124,11 +124,14 @@ fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrP
     match tau_ir::lower::lower_project(&config, target, &caches) {
         Ok(module) => {
             let bytes = tau_ir::to_canonical_bytes(&module);
-            let hash = tau_ir::compute_hash(&module);
+            let hash_bytes = tau_ir::compute_hash(&module);
+            // Encode both as lowercase hex for TOML-safe storage.
+            let canonical_ir_hash = hex_lower(&hash_bytes);
+            let canonical_ir_bytes_hex = hex_lower(&bytes);
             Some(IrPayload {
                 ir_format: module.ir_format.0.clone(),
-                canonical_ir_hash: hash,
-                canonical_ir_bytes: bytes,
+                canonical_ir_hash,
+                canonical_ir_bytes_hex,
             })
         }
         Err(e) => {
@@ -136,6 +139,17 @@ fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrP
             None
         }
     }
+}
+
+/// Encode a byte slice as lowercase hex.
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Resolve the build target from CLI args. `None` → host; `Some(s)` →
