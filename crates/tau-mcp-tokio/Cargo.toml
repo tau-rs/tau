@@ -28,7 +28,15 @@ tokio             = { workspace = true, features = [
 ] }
 tracing           = { workspace = true }
 
+# NOTE: do NOT enable tau-runtime-tokio's "test-support" feature here.
+# PassthroughSandbox (the only test-support thing our fixture-driven
+# integration tests touch) is unconditionally public; activating
+# "test-support" unifies feature flags workspace-wide and exposes
+# tau-runtime-tokio's own `plugin_host_ipc_llm.rs` test, which has
+# been broken on main since β.1.5 added a SessionContext arg to
+# DynTool::invoke. Fixing that test is out of PR-2's scope; not
+# activating the feature keeps the test dormant the same way every
+# other PR (incl. PR #280) did.
 [dev-dependencies]
-tau-runtime-tokio = { workspace = true, features = ["test-support"] }
-tokio             = { workspace = true, features = ["test-util", "fs"] }
-tempfile          = { workspace = true }
+tokio    = { workspace = true, features = ["test-util", "fs"] }
+tempfile = { workspace = true }
