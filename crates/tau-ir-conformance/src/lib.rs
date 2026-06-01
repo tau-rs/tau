@@ -19,6 +19,67 @@ use tau_runtime_core::outcome::RunOutcome;
 pub mod bundle_mode;
 pub mod dev_mode;
 
+/// Deterministic SHA-256 stand-in for a native tool's symbolic name —
+/// the same shape `tau-cli::cmd::build::sha256_name` uses to populate the
+/// `lower_ir` cache. Shared by DevMode and BundleMode here so both modes
+/// hash identical IR bytes for the same workflow.
+pub(crate) fn sha256_name(name: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(name.as_bytes());
+    h.finalize().into()
+}
+
+/// Canonical multiset-key bytes for a `tau_domain::Message`.
+///
+/// Strips fields that are inherently per-run nondeterministic so the
+/// dev-mode and bundle-mode runs of the same fixture produce identical
+/// multisets:
+///
+/// - `id` and `parent_id` (fresh `MessageId` UUIDs minted per `Message::new`).
+/// - `created_at` (per-run `SystemTime::now()`).
+/// - `AgentInstanceId` UUIDs inside `Address::Agent(...)` — normalized to
+///   the bare discriminant `"Agent"`. Tool / User / System addresses
+///   keep their full identity (those ARE the load-bearing parts of
+///   D-7a's side-effect record).
+///
+/// Returns JSON bytes of the form
+/// `{"sender": "...", "recipient": "...", "payload": <json>}` so two
+/// distinct payload shapes still produce distinct keys.
+pub(crate) fn canonical_message_bytes(msg: &tau_domain::Message) -> Vec<u8> {
+    use tau_domain::Address;
+    fn addr_tag(a: &Address) -> serde_json::Value {
+        match a {
+            // Strip the AgentInstanceId UUID — per-run nondeterminism.
+            Address::Agent(_) => serde_json::Value::String("Agent".into()),
+            Address::Tool(name) => serde_json::json!({"Tool": name}),
+            Address::User => serde_json::Value::String("User".into()),
+            Address::System => serde_json::Value::String("System".into()),
+            _ => serde_json::Value::String("Unknown".into()),
+        }
+    }
+    let v = serde_json::json!({
+        "sender": addr_tag(&msg.sender),
+        "recipient": addr_tag(&msg.recipient),
+        "payload": serde_json::to_value(&msg.payload).unwrap_or(serde_json::Value::Null),
+    });
+    serde_json::to_vec(&v).unwrap_or_default()
+}
+
+/// Discriminant of a `RunOutcome` (Completed / Failed / future variants)
+/// as a stable string. Used by `assert_conform` to compare outcomes
+/// without touching the per-run nondeterministic message UUIDs +
+/// timestamps embedded in the variant payloads.
+pub(crate) fn run_outcome_kind(outcome: &Option<RunOutcome>) -> &'static str {
+    match outcome {
+        None => "None",
+        Some(RunOutcome::Completed { .. }) => "Completed",
+        Some(RunOutcome::Failed { .. }) => "Failed",
+        // Future variants — RunOutcome is #[non_exhaustive].
+        Some(_) => "Unknown",
+    }
+}
+
 /// Side-effect summary produced by a single execution.
 ///
 /// Used by [`assert_conform`] to compare dev-mode and bundle-mode runs
@@ -26,7 +87,11 @@ pub mod dev_mode;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConformanceReport {
     /// Final outcome (Completed / Failed / ...).
-    pub run_outcome: RunOutcome,
+    ///
+    /// `Some(_)` when the interpreter actually ran; `None` when the
+    /// build refused before the interpreter could be driven (in which
+    /// case `build_refused` is `Some(_)` instead).
+    pub run_outcome: Option<RunOutcome>,
     /// Multiset of (tool_name, args_canonical_bytes) → count.
     ///
     /// Keyed by `(tool_name, serde_json::to_vec(args))` so two identical
@@ -36,15 +101,39 @@ pub struct ConformanceReport {
     pub tool_calls: BTreeMap<(String, Vec<u8>), u32>,
     /// Multiset of message bodies keyed by canonical bytes → count.
     pub message_added: BTreeMap<Vec<u8>, u32>,
+    /// Build-refused marker (D-3b).
+    ///
+    /// `None` ⇒ lowering succeeded and the run was executed; the
+    /// multiset fields reflect the recorded side effects.
+    ///
+    /// `Some(diagnostic)` ⇒ lowering / IR-bundle decode refused this
+    /// fixture before the interpreter could run. The `String` is the
+    /// `Display`-formatted `IrError` (or bundle-build error). When this
+    /// field is `Some`, the multiset fields are empty placeholders and
+    /// [`assert_conform`] compares only the build-refused strings.
+    pub build_refused: Option<String>,
 }
 
 impl ConformanceReport {
     /// Construct an empty report with the given outcome.
     pub fn new(run_outcome: RunOutcome) -> Self {
         Self {
-            run_outcome,
+            run_outcome: Some(run_outcome),
             tool_calls: BTreeMap::new(),
             message_added: BTreeMap::new(),
+            build_refused: None,
+        }
+    }
+
+    /// Construct a build-refused report. Use this when lowering (DevMode)
+    /// or bundle build / IR-payload decode (BundleMode) refused before
+    /// the interpreter could be driven.
+    pub fn build_refused(diagnostic: impl Into<String>) -> Self {
+        Self {
+            run_outcome: None,
+            tool_calls: BTreeMap::new(),
+            message_added: BTreeMap::new(),
+            build_refused: Some(diagnostic.into()),
         }
     }
 
@@ -66,19 +155,64 @@ impl ConformanceReport {
 
 /// Assert that two reports are equivalent per D-7a.
 ///
-/// Panics if `run_outcome`, `tool_calls`, or `message_added` differ.
-/// This is the primary conformance assertion: dev-mode and bundle-mode
-/// must produce identical side-effect multisets.
+/// Comparison semantics:
+///
+/// - When BOTH reports carry `build_refused = Some(_)`: compares only
+///   the refusal strings. The two modes must produce the same
+///   `IrError::Display` (or equivalent bundle-build error message),
+///   matching the D-3b "refusal symmetry" rule — both surfaces must
+///   refuse the same fixture for the same reason.
+/// - When NEITHER carries `build_refused`: compares `run_outcome`,
+///   `tool_calls`, and `message_added` byte-for-byte.
+/// - When ONE carries `build_refused` and the other does not: panics
+///   immediately — the two surfaces disagree about whether the fixture
+///   is buildable, which is a conformance bug.
 pub fn assert_conform(dev: &ConformanceReport, bundle: &ConformanceReport) {
-    assert_eq!(dev.run_outcome, bundle.run_outcome, "RunOutcome mismatch");
-    assert_eq!(
-        dev.tool_calls, bundle.tool_calls,
-        "tool-call multiset mismatch"
-    );
-    assert_eq!(
-        dev.message_added, bundle.message_added,
-        "message-added multiset mismatch"
-    );
+    match (&dev.build_refused, &bundle.build_refused) {
+        (Some(d), Some(b)) => {
+            assert_eq!(
+                d, b,
+                "build-refused diagnostic mismatch: dev refused with {d:?}, bundle refused with {b:?}"
+            );
+        }
+        (Some(d), None) => {
+            panic!(
+                "build-refused asymmetry: dev refused ({d:?}) but bundle did not refuse \
+                 (bundle outcome: {:?})",
+                bundle.run_outcome
+            );
+        }
+        (None, Some(b)) => {
+            panic!(
+                "build-refused asymmetry: bundle refused ({b:?}) but dev did not refuse \
+                 (dev outcome: {:?})",
+                dev.run_outcome
+            );
+        }
+        (None, None) => {
+            // Compare RunOutcome by *discriminant* only — variant
+            // payloads embed per-run nondeterministic message UUIDs
+            // and SystemTime::now() values that would never compare
+            // equal across two runs. D-7a's side-effect equivalence is
+            // captured by `tool_calls` and `message_added` (which key
+            // off canonical message bytes that strip those nondeterminisms).
+            assert_eq!(
+                run_outcome_kind(&dev.run_outcome),
+                run_outcome_kind(&bundle.run_outcome),
+                "RunOutcome kind mismatch: dev={:?}, bundle={:?}",
+                dev.run_outcome,
+                bundle.run_outcome,
+            );
+            assert_eq!(
+                dev.tool_calls, bundle.tool_calls,
+                "tool-call multiset mismatch"
+            );
+            assert_eq!(
+                dev.message_added, bundle.message_added,
+                "message-added multiset mismatch"
+            );
+        }
+    }
 }
 
 /// Trait the runner calls to execute a fixture under one mode.
