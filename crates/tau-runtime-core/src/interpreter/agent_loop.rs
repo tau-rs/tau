@@ -56,11 +56,13 @@ fn json_to_domain_value(v: serde_json::Value) -> tau_domain::Value {
 /// Used by `DispatcherTool::invoke`'s `Subflow` arm to convert a child
 /// agent's terminal state into a tool-result body for the parent.
 fn last_assistant_text(outcome: &RunOutcome) -> String {
+    // Note: `RunOutcome` is `#[non_exhaustive]` but we're in the defining
+    // crate, so the compiler sees all variants. No `_` arm needed here;
+    // adding one would generate an `unreachable_patterns` warning. Future
+    // variants must be handled by updating this match.
     let messages = match outcome {
         RunOutcome::Completed { all_messages, .. } => all_messages,
         RunOutcome::Failed { all_messages, .. } => all_messages,
-        // Future variants — RunOutcome is #[non_exhaustive].
-        _ => return String::new(),
     };
     for msg in messages.iter().rev() {
         if matches!(msg.sender, tau_domain::Address::Agent(_)) {

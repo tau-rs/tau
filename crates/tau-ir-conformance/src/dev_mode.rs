@@ -337,7 +337,7 @@ pub(crate) async fn drive_module(
     let records_handle = dispatcher.records();
 
     // Run the interpreter.
-    let outcome: RunOutcome = run_ir(module, entry, dispatcher, Vec::new())
+    let outcome: RunOutcome = run_ir(std::sync::Arc::new(module.clone()), entry, dispatcher, Vec::new())
         .await
         .expect("run_ir must not return an Err for a valid conformance fixture");
 

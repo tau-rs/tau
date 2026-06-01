@@ -180,7 +180,7 @@ pub(crate) async fn run_via_ir(
     );
 
     // 7. Drive the IR interpreter.
-    let run_outcome = run_ir(&module, &entry_agent_id, dispatcher, vec![initial]).await;
+    let run_outcome = run_ir(std::sync::Arc::new(module), &entry_agent_id, dispatcher, vec![initial]).await;
 
     // 8. Drop runtime + flush recorders before rendering, identical to
     //    the cwd path's discipline so plugin processes are reaped and
