@@ -29,9 +29,10 @@ pub struct ConformanceReport {
     pub run_outcome: RunOutcome,
     /// Multiset of (tool_name, args_canonical_bytes) → count.
     ///
-    /// Keyed by `(tool_name, serde_json::to_vec_canonical(args))` so two
-    /// calls with the same name and semantically identical args collapse to
-    /// a count of 2.
+    /// Keyed by `(tool_name, serde_json::to_vec(args))` so two identical
+    /// invocations collapse to one entry with count incremented. Note: this
+    /// is insertion-order-dependent for JSON objects; β.2.6.1 will switch
+    /// to `tau_ir::to_canonical_bytes` for stable ordering across modes.
     pub tool_calls: BTreeMap<(String, Vec<u8>), u32>,
     /// Multiset of message bodies keyed by canonical bytes → count.
     pub message_added: BTreeMap<Vec<u8>, u32>,
@@ -59,10 +60,7 @@ impl ConformanceReport {
 
     /// Record a message body (canonical bytes).
     pub fn record_message(&mut self, canonical_bytes: Vec<u8>) {
-        *self
-            .message_added
-            .entry(canonical_bytes)
-            .or_insert(0) += 1;
+        *self.message_added.entry(canonical_bytes).or_insert(0) += 1;
     }
 }
 

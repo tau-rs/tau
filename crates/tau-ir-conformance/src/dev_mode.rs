@@ -15,14 +15,15 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
-use tau_ir::lower::{Caches, lower_project};
+use tau_ir::lower::{lower_project, Caches};
 use tau_pkg::project::ProjectConfig;
 use tau_ports::error::LlmError;
 use tau_ports::llm::{
-    CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, StopReason, batch_to_stream,
+    batch_to_stream, CompletionRequest, CompletionResponse, CompletionStream, LlmBackend,
+    StopReason,
 };
-use tau_ports::ToolUse;
 use tau_ports::target::registry as target_registry;
+use tau_ports::ToolUse;
 use tau_runtime_core::builder::DynLlmBackend;
 use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::run_ir;
@@ -115,8 +116,7 @@ impl ToolDispatcher for RecordingDispatcher {
         &'a self,
         tool_id: &'a tau_ir::ToolId,
         args: &'a JsonValue,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
         // Resolve the tool name from the id (fall back to the raw id string).
         let tool_name = self
             .tool_names
@@ -130,10 +130,13 @@ impl ToolDispatcher for RecordingDispatcher {
         let records = self.records.clone();
 
         Box::pin(async move {
-            records.lock().expect("records mutex poisoned").push(ToolCallRecord {
-                tool_name,
-                args_canonical,
-            });
+            records
+                .lock()
+                .expect("records mutex poisoned")
+                .push(ToolCallRecord {
+                    tool_name,
+                    args_canonical,
+                });
 
             Ok(ToolInvocationResult {
                 body: Some(serde_json::json!({"ok": true})),
@@ -262,9 +265,8 @@ impl ExecutionMode for DevMode {
             }; // caches dropped here
 
             // 3. Load mock_llm.jsonl.
-            let mock_llm_jsonl =
-                std::fs::read_to_string(fixture_dir.join("mock_llm.jsonl"))
-                    .expect("fixture must contain mock_llm.jsonl");
+            let mock_llm_jsonl = std::fs::read_to_string(fixture_dir.join("mock_llm.jsonl"))
+                .expect("fixture must contain mock_llm.jsonl");
             let responses = parse_mock_llm(&mock_llm_jsonl);
 
             // Determine entry agent: first in BTreeMap (alphabetical) order.
@@ -313,14 +315,11 @@ impl ExecutionMode for DevMode {
             RunOutcome::Failed { all_messages, .. } => all_messages.clone(),
             _ => Vec::new(),
         };
-        for msg in messages {
-            // `tau_ir::Message` doesn't implement Serialize; record the
-            // tau_domain::Message (if we had it). In v0, use the outcome's
-            // `all_messages` count as the canonical bytes substitute.
-            // We record the turn index as canonical bytes to track message count.
-            let canonical = serde_json::to_vec(&serde_json::json!({"msg": "recorded"}))
-                .unwrap_or_default();
-            let _ = msg; // consumed; actual content isn't needed for count-based comparison
+        for msg in &messages {
+            // Serialize the real tau_domain::Message (which implements
+            // serde::Serialize when the "serde" feature is enabled) so each
+            // distinct message body produces a distinct multiset key.
+            let canonical = serde_json::to_vec(msg).unwrap_or_default();
             report.record_message(canonical);
         }
 
