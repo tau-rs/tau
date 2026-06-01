@@ -307,61 +307,76 @@ pub async fn run(
 
         let outcome = run_outcome.context("running agent")?;
 
-        match outcome {
-            RunOutcome::Completed {
-                ref final_message,
-                total_turns,
-                ref token_usage,
-                ..
-            } => {
-                if output.is_json() {
-                    let payload = serde_json::json!({
-                        "outcome": "completed",
-                        "final_message": format_message_text(&final_message.payload),
-                        "total_turns": total_turns,
-                        "token_usage": {
-                            "input_tokens": token_usage.input_tokens,
-                            "output_tokens": token_usage.output_tokens,
-                        },
-                    });
-                    output.json(&payload)?;
-                } else {
-                    let text = format_message_text(&final_message.payload);
-                    output.human(&text)?;
-                }
-                Ok(())
+        render_outcome(outcome, output)
+    }
+}
+
+/// Render a [`RunOutcome`] from the batch (non-streaming) path.
+///
+/// Promoted from an inline `match` so both the cwd-based path and the
+/// IR-bundle path ([`crate::cmd::ir_dispatcher`]) emit byte-identical
+/// `{"outcome":"completed", ...}` / `{"outcome":"failed", ...}` JSON
+/// shapes — the streaming path in [`run_streaming_and_render`] wraps
+/// the same outcome inside an `{"event":"run_completed", "outcome":{...}}`
+/// envelope, so it is kept separate by design.
+///
+/// Returns `Ok(())` on a `Completed`, `Err(AgentFailed)` on `Failed`,
+/// and an `anyhow::Error` for any unknown `#[non_exhaustive]` variant.
+pub(super) fn render_outcome(outcome: RunOutcome, output: &mut Output) -> anyhow::Result<()> {
+    match outcome {
+        RunOutcome::Completed {
+            ref final_message,
+            total_turns,
+            ref token_usage,
+            ..
+        } => {
+            if output.is_json() {
+                let payload = serde_json::json!({
+                    "outcome": "completed",
+                    "final_message": format_message_text(&final_message.payload),
+                    "total_turns": total_turns,
+                    "token_usage": {
+                        "input_tokens": token_usage.input_tokens,
+                        "output_tokens": token_usage.output_tokens,
+                    },
+                });
+                output.json(&payload)?;
+            } else {
+                let text = format_message_text(&final_message.payload);
+                output.human(&text)?;
             }
-            RunOutcome::Failed {
-                ref status,
-                total_turns,
-                ref token_usage,
-                ..
-            } => {
-                if output.is_json() {
-                    let payload = serde_json::json!({
-                        "outcome": "failed",
-                        "status": format!("{status:?}"),
-                        "total_turns": total_turns,
-                        "token_usage": {
-                            "input_tokens": token_usage.input_tokens,
-                            "output_tokens": token_usage.output_tokens,
-                        },
-                    });
-                    output.json(&payload)?;
-                } else {
-                    output.error(format!("agent failed: {status:?}"))?;
-                }
-                // Marker error → ExitCode::AgentFailed (1) via downcast in
-                // crate::run_main. Kernel/CLI errors map to ExitCode::Error
-                // (2); this case is the explicit Outcome::Failed bucket.
-                Err(AgentFailed.into())
-            }
-            // RunOutcome is `#[non_exhaustive]`; cross-crate match needs a
-            // wildcard. Any future variant should be classified explicitly
-            // by an ADR amendment; for now, treat unknown outcomes as a
-            // kernel error.
-            _ => Err(anyhow::anyhow!("unknown RunOutcome variant")),
+            Ok(())
         }
+        RunOutcome::Failed {
+            ref status,
+            total_turns,
+            ref token_usage,
+            ..
+        } => {
+            if output.is_json() {
+                let payload = serde_json::json!({
+                    "outcome": "failed",
+                    "status": format!("{status:?}"),
+                    "total_turns": total_turns,
+                    "token_usage": {
+                        "input_tokens": token_usage.input_tokens,
+                        "output_tokens": token_usage.output_tokens,
+                    },
+                });
+                output.json(&payload)?;
+            } else {
+                output.error(format!("agent failed: {status:?}"))?;
+            }
+            // Marker error → ExitCode::AgentFailed (1) via downcast in
+            // crate::run_main. Kernel/CLI errors map to ExitCode::Error
+            // (2); this case is the explicit Outcome::Failed bucket.
+            Err(AgentFailed.into())
+        }
+        // RunOutcome is `#[non_exhaustive]`; cross-crate match needs a
+        // wildcard. Any future variant should be classified explicitly
+        // by an ADR amendment; for now, treat unknown outcomes as a
+        // kernel error.
+        _ => Err(anyhow::anyhow!("unknown RunOutcome variant")),
     }
 }
 
@@ -568,7 +583,7 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
 
 /// Project a [`MessagePayload`] to a single text string for display.
 /// Non-text payloads degrade to a `Debug`-formatted preview.
-fn format_message_text(payload: &MessagePayload) -> String {
+pub(super) fn format_message_text(payload: &MessagePayload) -> String {
     match payload {
         MessagePayload::Text { content } => content.clone(),
         other => format!("{other:?}"),
