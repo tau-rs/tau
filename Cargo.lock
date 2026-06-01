@@ -3304,6 +3304,7 @@ dependencies = [
  "tau-pkg",
  "tau-plugin-protocol",
  "tau-ports",
+ "tau-runtime-core",
  "tau-runtime-tokio",
  "tau-workflow",
  "tempfile",

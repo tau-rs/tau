@@ -68,6 +68,14 @@ pub async fn run(
     // bundle before doing anything else. On success the cwd's tau.toml
     // is provably the bundle's source, so the rest of `run` proceeds
     // unchanged.
+    //
+    // β.2.6: when the verified bundle carries an `ir_payload` (v2
+    // bundle), short-circuit through the IR-interpreter path
+    // ([`crate::cmd::ir_dispatcher::run_via_ir`]) instead of the
+    // cwd-based agent loop. v1 bundles (no `ir_payload`) keep using
+    // the cwd path below — `verify_bundle` already proved the cwd
+    // matches the bundle's recorded source bytes, so the cwd path is
+    // equivalent at v1.
     if let Some(bundle_path) = &args.bundle {
         match tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
             bundle_path: bundle_path.clone(),
@@ -78,29 +86,34 @@ pub async fn run(
                 std::process::exit(bundle_verify_exit_code(&e));
             }
             Ok(report) => {
-                // v2 bundle with ir_payload: log the entry agent and note that
-                // full IR-interpreter dispatch is gated behind β.2.6's
-                // ToolDispatcher integration. For now, the normal cwd-based
-                // run path serves as the execution engine — the verify step
-                // already guarantees the cwd's source matches the bundle.
-                //
-                // TODO(β.2.6): construct a ToolDispatcher over the host's
-                // plugin registry, call tau_runtime_core::interpreter::run_ir,
-                // and short-circuit the remainder of this function.
-                if let Some(ir) = &report.manifest.ir_payload {
-                    if let Ok(bytes) = ir.canonical_ir_bytes() {
-                        if let Ok(module) = tau_ir::from_canonical_bytes(&bytes) {
-                            // Pick first agent (alphabetical via BTreeMap) as entry.
-                            if let Some((entry_id, _)) = module.workflow.agents.iter().next() {
-                                tracing::warn!(
-                                    entry_agent = %entry_id.0,
-                                    ir_format = %ir.ir_format,
-                                    "bundle has ir_payload; IR interpreter dispatch \
-                                     deferred to beta.2.6 — running via normal \
-                                     cwd-based agent path"
-                                );
-                            }
-                        }
+                if let Some(ir) = report.manifest.ir_payload.as_ref() {
+                    let bytes = ir.canonical_ir_bytes().map_err(|e| {
+                        anyhow::anyhow!("decoding bundle's canonical_ir_bytes_hex: {e:?}")
+                    })?;
+                    let module = tau_ir::from_canonical_bytes(&bytes)
+                        .map_err(|e| anyhow::anyhow!("decoding IR module from bundle: {e:?}"))?;
+
+                    if args.dry_run {
+                        tracing::info!(
+                            ir_format = %ir.ir_format,
+                            "v2 bundle (ir_payload present); --dry-run requested \
+                             — IR-interpreter path skipped, falling through to \
+                             cwd-based dry-run preview"
+                        );
+                        // Fall through into the legacy cwd path below: the
+                        // cwd's tau.toml was just proven byte-clean, so its
+                        // dry-run preview is equivalent to what the IR
+                        // payload would render.
+                    } else {
+                        return crate::cmd::ir_dispatcher::run_via_ir(
+                            module,
+                            args,
+                            record_protocol,
+                            force_passthrough,
+                            force_adapter_kind,
+                            output,
+                        )
+                        .await;
                     }
                 }
             }

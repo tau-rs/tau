@@ -11,6 +11,7 @@ pub mod check;
 pub mod error_render;
 pub mod init;
 pub mod install;
+pub(crate) mod ir_dispatcher;
 pub mod list;
 pub mod output_orchestration;
 pub mod plugin;
