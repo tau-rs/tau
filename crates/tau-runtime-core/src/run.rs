@@ -53,10 +53,11 @@ use crate::outcome::RunOutcome;
 #[cfg(feature = "test-fixtures")]
 fn run_options_with_defaults() -> crate::options::RunOptions {
     use tau_ports::{DeterministicRandom, MockClock};
-    let mut opts = crate::options::RunOptions::default();
-    opts.clock = Some(Arc::new(MockClock::new()));
-    opts.random = Some(Arc::new(DeterministicRandom::seeded(0)));
-    opts
+    crate::options::RunOptions {
+        clock: Some(Arc::new(MockClock::new())),
+        random: Some(Arc::new(DeterministicRandom::seeded(0))),
+        ..Default::default()
+    }
 }
 
 impl Runtime {
