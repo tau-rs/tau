@@ -18,11 +18,20 @@ pub enum McpUrl {
         /// argv to spawn (first element is the binary).
         cmd: Vec<String>,
     },
+    /// Plain-HTTP Streamable MCP server (accepted but should warn at
+    /// build time per spec §3).
+    Http {
+        /// Validated URL with a host component.
+        url: url::Url,
+    },
+    /// HTTPS Streamable MCP server.
+    Https {
+        /// Validated URL with a host component.
+        url: url::Url,
+    },
 }
 
 /// Parse an MCP URL string into a typed `McpUrl`.
-///
-/// Currently accepts only `stdio:<command>` — HTTP variants land in PR-3.
 pub fn parse_url(s: &str) -> Result<McpUrl, UrlParseError> {
     let s = s.trim();
     if s.is_empty() {
@@ -33,14 +42,26 @@ pub fn parse_url(s: &str) -> Result<McpUrl, UrlParseError> {
         if rest.is_empty() {
             return Err(UrlParseError::EmptyStdioCommand);
         }
-        // Shell-split the command. v0 uses naive whitespace splitting —
-        // future may grow to handle quoted args, but real MCP server
-        // commands (`npx --yes @modelcontextprotocol/server-weather`,
-        // `uvx mcp-server-fetch`) don't need quoting.
         let cmd = rest.split_whitespace().map(String::from).collect();
         return Ok(McpUrl::Stdio { cmd });
     }
-    // PR-3 will add http/https arms here.
+    if s.starts_with("http://") || s.starts_with("https://") {
+        let url = url::Url::parse(s).map_err(|e| UrlParseError::UnsupportedScheme {
+            scheme: format!("invalid URL: {e}"),
+        })?;
+        if url.host().is_none() {
+            return Err(UrlParseError::UnsupportedScheme {
+                scheme: "http(s) URL has no host".to_string(),
+            });
+        }
+        return match url.scheme() {
+            "http" => Ok(McpUrl::Http { url }),
+            "https" => Ok(McpUrl::Https { url }),
+            other => Err(UrlParseError::UnsupportedScheme {
+                scheme: other.to_string(),
+            }),
+        };
+    }
     let scheme = s.split(':').next().unwrap_or("").to_string();
     Err(UrlParseError::UnsupportedScheme { scheme })
 }
@@ -56,6 +77,7 @@ mod tests {
             McpUrl::Stdio { cmd } => {
                 assert_eq!(cmd, vec!["npx", "--yes", "weather"]);
             }
+            other => panic!("expected Stdio, got {other:?}"),
         }
     }
 
@@ -78,18 +100,30 @@ mod tests {
     }
 
     #[test]
-    fn http_rejected_in_pr2_with_correct_scheme() {
-        let err = parse_url("https://mcp.example.com").expect_err("should reject in PR-2");
-        match err {
-            UrlParseError::UnsupportedScheme { scheme } => {
-                assert_eq!(scheme, "https");
+    fn https_accepted() {
+        let url = parse_url("https://mcp.example.com").expect("parse");
+        match url {
+            McpUrl::Https { url } => {
+                assert_eq!(url.host_str(), Some("mcp.example.com"));
             }
-            other => panic!("expected UnsupportedScheme, got {other:?}"),
+            other => panic!("expected Https, got {other:?}"),
         }
     }
 
     #[test]
-    fn unknown_scheme_rejected() {
+    fn http_accepted() {
+        let url = parse_url("http://localhost:8080/mcp").expect("parse");
+        match url {
+            McpUrl::Http { url } => {
+                assert_eq!(url.host_str(), Some("localhost"));
+                assert_eq!(url.port(), Some(8080));
+            }
+            other => panic!("expected Http, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ws_rejected() {
         let err = parse_url("ws://example.com").expect_err("should reject");
         match err {
             UrlParseError::UnsupportedScheme { scheme } => {
@@ -97,5 +131,22 @@ mod tests {
             }
             other => panic!("expected UnsupportedScheme, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn file_rejected() {
+        let err = parse_url("file:///etc/passwd").expect_err("should reject");
+        match err {
+            UrlParseError::UnsupportedScheme { scheme } => {
+                assert_eq!(scheme, "file");
+            }
+            other => panic!("expected UnsupportedScheme, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_without_host_rejected() {
+        let err = parse_url("http://").expect_err("should reject");
+        assert!(matches!(err, UrlParseError::UnsupportedScheme { .. }));
     }
 }

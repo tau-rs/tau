@@ -13,7 +13,6 @@ tau-mcp           = { workspace = true }
 tau-domain        = { workspace = true, features = ["serde"] }
 tau-ports         = { workspace = true, features = ["serde"] }
 # Sandbox integration: tau-runtime-tokio::process_gate::wrap_spawn (PR-2).
-# HTTP transport (PR-3) doesn't need this; the dep is stdio-driven for now.
 tau-runtime-tokio = { workspace = true }
 serde             = { workspace = true, features = ["derive"] }
 serde_json        = { workspace = true }
@@ -25,18 +24,22 @@ tokio             = { workspace = true, features = [
     "io-util",
     "process",
     "time",
+    "sync",
 ] }
 tracing           = { workspace = true }
+# HTTP transport (PR-3).
+reqwest           = { workspace = true }
+bytes             = { workspace = true }
+futures           = { workspace = true }
+url               = { workspace = true }
 
 # NOTE: do NOT enable tau-runtime-tokio's "test-support" feature here.
-# PassthroughSandbox (the only test-support thing our fixture-driven
-# integration tests touch) is unconditionally public; activating
-# "test-support" unifies feature flags workspace-wide and exposes
-# tau-runtime-tokio's own `plugin_host_ipc_llm.rs` test, which has
-# been broken on main since β.1.5 added a SessionContext arg to
-# DynTool::invoke. Fixing that test is out of PR-2's scope; not
-# activating the feature keeps the test dormant the same way every
-# other PR (incl. PR #280) did.
+# PassthroughSandbox is unconditionally public; activating "test-support"
+# unifies feature flags workspace-wide and exposes tau-runtime-tokio's own
+# plugin_host_ipc_llm.rs test, which would compile silently broken until
+# someone activated the feature workspace-wide. (Fixed in PR #282, but
+# the principle holds: don't enable features you don't use.)
 [dev-dependencies]
 tokio    = { workspace = true, features = ["test-util", "fs"] }
 tempfile = { workspace = true }
+wiremock = { workspace = true }
