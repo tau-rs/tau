@@ -11,9 +11,12 @@
 //! once per source change to drive the interpreter against a fresh IR).
 
 pub mod capability_fit;
+pub mod mcp_build_error;
 pub mod parse;
 pub mod resolve;
 pub mod typecheck;
+
+pub use mcp_build_error::McpBuildError;
 
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;

@@ -93,6 +93,10 @@ pub enum IrError {
     #[error("tau.toml parse error: {0}")]
     Parse(String),
 
+    /// MCP-specific build error (per β.3 design doc §5).
+    #[error("MCP build: {0}")]
+    McpBuild(#[from] crate::lower::McpBuildError),
+
     /// SubflowEdge::Compose is not yet implemented (v0 reserves the variant).
     #[error("subflow {subflow:?}: Compose variant is not supported in v0")]
     UnsupportedComposeSubflow {
