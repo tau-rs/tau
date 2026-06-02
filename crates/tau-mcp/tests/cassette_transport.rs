@@ -7,9 +7,7 @@
 #![cfg(feature = "with-std-adapters")]
 
 use tau_mcp::cassette::CassetteTransport;
-use tau_mcp::protocol::jsonrpc::{
-    JsonRpcMessage, JsonRpcRequest, RequestId, JSONRPC_VERSION,
-};
+use tau_mcp::protocol::jsonrpc::{JsonRpcMessage, JsonRpcRequest, RequestId, JSONRPC_VERSION};
 use tau_mcp::transport::Transport;
 
 /// A minimal cassette covering initialize + tools/list + tools/call
@@ -57,13 +55,23 @@ async fn happy_path_initialize_then_list_then_call() {
     assert!(matches!(resp, JsonRpcMessage::Response(_)));
 
     // tools/call — expect notification then response (interleaved per cassette)
-    t.send_message(&req(2, "tools/call", serde_json::json!({"name":"echo","arguments":{"message":"hi"}})))
-        .await
-        .expect("send tools/call");
+    t.send_message(&req(
+        2,
+        "tools/call",
+        serde_json::json!({"name":"echo","arguments":{"message":"hi"}}),
+    ))
+    .await
+    .expect("send tools/call");
     let first = t.next_message().await.unwrap().expect("first message");
-    assert!(matches!(first, JsonRpcMessage::Notification(_)), "first msg should be the notification");
+    assert!(
+        matches!(first, JsonRpcMessage::Notification(_)),
+        "first msg should be the notification"
+    );
     let second = t.next_message().await.unwrap().expect("second message");
-    assert!(matches!(second, JsonRpcMessage::Response(_)), "second msg should be the response");
+    assert!(
+        matches!(second, JsonRpcMessage::Response(_)),
+        "second msg should be the response"
+    );
 }
 
 #[tokio::test]

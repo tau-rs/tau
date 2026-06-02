@@ -89,8 +89,14 @@ mod tests {
 
     #[test]
     fn empty_stdio_command_rejected() {
-        assert!(matches!(parse_url("stdio:"), Err(UrlParseError::EmptyStdioCommand)));
-        assert!(matches!(parse_url("stdio:   "), Err(UrlParseError::EmptyStdioCommand)));
+        assert!(matches!(
+            parse_url("stdio:"),
+            Err(UrlParseError::EmptyStdioCommand)
+        ));
+        assert!(matches!(
+            parse_url("stdio:   "),
+            Err(UrlParseError::EmptyStdioCommand)
+        ));
     }
 
     #[test]

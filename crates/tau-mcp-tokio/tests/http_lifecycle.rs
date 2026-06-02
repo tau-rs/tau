@@ -9,7 +9,8 @@ use tau_ports::CapabilityPlan;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn passthrough_gate() -> std::sync::Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> {
+fn passthrough_gate(
+) -> std::sync::Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> {
     use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
     std::sync::Arc::new(PassthroughSandbox::new())
 }

@@ -49,9 +49,7 @@ impl CassetteTransport {
         while let Some(rec) = replayer.next_pending_outbound() {
             let msg = cassette_record_to_jsonrpc(&rec)?;
             if self.inbound_tx.unbounded_send(msg).is_err() {
-                return Err(McpError::Transport(
-                    "inbound channel closed".to_string(),
-                ));
+                return Err(McpError::Transport("inbound channel closed".to_string()));
             }
         }
         Ok(())
@@ -74,10 +72,7 @@ impl Transport for CassetteTransport {
                             McpError::Transport("replayer mutex poisoned".to_string())
                         })?;
                         let method = req.method.clone();
-                        let args = req
-                            .params
-                            .clone()
-                            .unwrap_or(serde_json::Value::Null);
+                        let args = req.params.clone().unwrap_or(serde_json::Value::Null);
                         replayer
                             .match_request(&method, &args)
                             .map_err(|e| McpError::Transport(format!("cassette: {e}")))?
@@ -106,8 +101,7 @@ impl Transport for CassetteTransport {
 
     fn next_message<'a>(
         &'a self,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<JsonRpcMessage>, McpError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<JsonRpcMessage>, McpError>> + Send + 'a>> {
         Box::pin(async move {
             let mut rx = self.inbound_rx.lock().await;
             Ok(rx.next().await)
@@ -131,9 +125,10 @@ fn cassette_record_to_jsonrpc(rec: &CassetteMessage) -> Result<JsonRpcMessage, M
             // payload IS the result/error directly for responses).
             // Parse defensively: if payload has top-level "error", treat
             // as error; else as result.
-            let id = rec.id.clone().ok_or_else(|| {
-                McpError::Transport("cassette response without id".to_string())
-            })?;
+            let id = rec
+                .id
+                .clone()
+                .ok_or_else(|| McpError::Transport("cassette response without id".to_string()))?;
             // The cassette stores the result directly as `payload` per
             // spec §11. We construct a JsonRpcResponse.
             // Per §11 example: payload for response is the inner result.
@@ -163,9 +158,7 @@ fn cassette_record_to_jsonrpc(rec: &CassetteMessage) -> Result<JsonRpcMessage, M
                 McpError::Transport("cassette server-initiated request without id".to_string())
             })?;
             let method = rec.method.clone().ok_or_else(|| {
-                McpError::Transport(
-                    "cassette server-initiated request without method".to_string(),
-                )
+                McpError::Transport("cassette server-initiated request without method".to_string())
             })?;
             let req = JsonRpcRequest {
                 jsonrpc: crate::protocol::jsonrpc::JSONRPC_VERSION.to_string(),

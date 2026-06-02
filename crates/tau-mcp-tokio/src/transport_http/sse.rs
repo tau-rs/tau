@@ -19,17 +19,12 @@ pub struct SseFramer {
 impl SseFramer {
     /// Construct a fresh framer.
     pub fn new() -> Self {
-        Self {
-            buf: String::new(),
-        }
+        Self { buf: String::new() }
     }
 
     /// Feed a chunk of bytes, returning any complete messages parsed
     /// out of the accumulated buffer.
-    pub fn feed_bytes(
-        &mut self,
-        chunk: &[u8],
-    ) -> Result<Vec<JsonRpcMessage>, HttpTransportError> {
+    pub fn feed_bytes(&mut self, chunk: &[u8]) -> Result<Vec<JsonRpcMessage>, HttpTransportError> {
         // SSE is text per spec — utf-8 only. Append, then scan for
         // event boundaries.
         let s = std::str::from_utf8(chunk)
@@ -71,9 +66,7 @@ impl SseFramer {
 /// Parse one SSE event block (without the trailing `\n\n`) into an
 /// optional `JsonRpcMessage`. Returns `Ok(None)` for keep-alive
 /// comments (lines starting with `:`).
-pub fn parse_event_block(
-    block: &str,
-) -> Result<Option<JsonRpcMessage>, HttpTransportError> {
+pub fn parse_event_block(block: &str) -> Result<Option<JsonRpcMessage>, HttpTransportError> {
     // Collect data: lines (SSE allows multi-line data fields joined by
     // `\n`). MCP only uses one data: line per event, but parse robustly.
     let mut data = String::new();
@@ -107,9 +100,7 @@ pub fn parse_event_block(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tau_mcp::protocol::jsonrpc::{
-        JsonRpcMessage, JsonRpcResponse, RequestId, JSONRPC_VERSION,
-    };
+    use tau_mcp::protocol::jsonrpc::{JsonRpcMessage, JsonRpcResponse, RequestId, JSONRPC_VERSION};
 
     fn response_msg(id: i64) -> JsonRpcMessage {
         JsonRpcMessage::Response(JsonRpcResponse {

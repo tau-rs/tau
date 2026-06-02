@@ -80,8 +80,7 @@ impl McpHttpServer {
                 let chunk = match chunk {
                     Ok(b) => b,
                     Err(e) => {
-                        let _ = inbound_tx
-                            .send(Err(HttpTransportError::Send(format!("{e}"))));
+                        let _ = inbound_tx.send(Err(HttpTransportError::Send(format!("{e}"))));
                         return;
                     }
                 };
@@ -156,8 +155,9 @@ impl Transport for McpHttpServer {
 
     fn next_message<'a>(
         &'a self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<JsonRpcMessage>, McpError>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<dyn std::future::Future<Output = Result<Option<JsonRpcMessage>, McpError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             let mut rx = self.inbound_rx.lock().await;
             match rx.recv().await {
@@ -178,10 +178,8 @@ fn convert_transport_error(e: HttpTransportError) -> McpError {
         HttpTransportError::Status { status, body } => {
             McpError::Transport(format!("HTTP {status}: {body}"))
         }
-        HttpTransportError::HostPinViolation { actual, pinned } => {
-            McpError::Transport(format!(
-                "host-pin violation: actual={actual} pinned={pinned}"
-            ))
-        }
+        HttpTransportError::HostPinViolation { actual, pinned } => McpError::Transport(format!(
+            "host-pin violation: actual={actual} pinned={pinned}"
+        )),
     }
 }

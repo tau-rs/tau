@@ -54,10 +54,7 @@ async fn open_stdio(
     Ok(McpClient::new(transport, contract, options))
 }
 
-async fn open_http(
-    url: url::Url,
-    options: McpClientOptions,
-) -> Result<McpClient, LifecycleError> {
+async fn open_http(url: url::Url, options: McpClientOptions) -> Result<McpClient, LifecycleError> {
     info!(http_url = %url, "dialing HTTP MCP server");
     let transport = http_dial(url, HttpDialOptions::default())?;
     let contract = drive_handshake(&*transport, &options.handshake).await?;

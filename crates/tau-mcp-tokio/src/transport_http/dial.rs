@@ -35,10 +35,7 @@ impl Default for HttpDialOptions {
 /// Dial an HTTP MCP server. Returns a ready `Arc<McpHttpServer>` that
 /// `host_lifecycle::open` then drives through the MCP handshake.
 #[instrument(name = "mcp_http_dial", skip(options), fields(url = %url))]
-pub fn dial(
-    url: Url,
-    options: HttpDialOptions,
-) -> Result<Arc<McpHttpServer>, HttpSpawnError> {
+pub fn dial(url: Url, options: HttpDialOptions) -> Result<Arc<McpHttpServer>, HttpSpawnError> {
     let pinned_host = url.host().ok_or_else(|| HttpSpawnError::NoHost {
         url: url.to_string(),
     })?;

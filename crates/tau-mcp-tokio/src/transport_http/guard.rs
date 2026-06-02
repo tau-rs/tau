@@ -41,10 +41,7 @@ impl HttpClientGuard {
 
     /// Validate the request URL's host against the pinned host, then
     /// execute the request via the inner client.
-    pub async fn send(
-        &self,
-        request: Request,
-    ) -> Result<Response, HttpTransportError> {
+    pub async fn send(&self, request: Request) -> Result<Response, HttpTransportError> {
         let url = request.url().clone();
         self.check_host(&url)?;
         self.inner

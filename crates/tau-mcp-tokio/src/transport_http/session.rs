@@ -26,7 +26,10 @@ impl SessionState {
 
     /// Get the current session ID (None until initialize response sets it).
     pub fn get(&self) -> Option<String> {
-        self.id.lock().expect("session state mutex poisoned").clone()
+        self.id
+            .lock()
+            .expect("session state mutex poisoned")
+            .clone()
     }
 
     /// Set the session ID. Idempotent: re-setting to the same value is
