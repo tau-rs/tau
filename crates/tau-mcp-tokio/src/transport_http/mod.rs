@@ -11,5 +11,6 @@ pub mod server;
 pub mod session;
 pub mod sse;
 
+pub use dial::dial;
 pub use error::{HttpSpawnError, HttpTransportError};
 pub use server::McpHttpServer;
