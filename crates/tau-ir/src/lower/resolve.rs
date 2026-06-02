@@ -39,13 +39,20 @@ pub(super) fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed,
     }
 
     // Second pass: per MCP entry, expand into N server-tool IR nodes.
+    //
+    // Cache-miss policy mirrors the native_tool path above: leave the
+    // original ToolImpl::Mcp untouched and let downstream stages (or
+    // a caller that wires an empty cache deliberately, e.g. the
+    // tau-ir-conformance tests that exercise the IR-level Mcp variant
+    // directly) decide whether that's an error. tau-cli's build path
+    // always populates the cache via PinnedResolver or
+    // LiveMcpContractResolver, so the strict "missing entry =>
+    // ContractUnreachable" behavior is enforced there via the
+    // resolver's own error path; resolve itself stays permissive.
     for (old_id, url) in mcp_entries {
-        let resolved = (caches.mcp_contract)(&url).ok_or_else(|| {
-            IrError::McpBuild(McpBuildError::ContractUnreachable {
-                entry: old_id.0.clone(),
-                reason: alloc::format!("no cache entry for url {url:?}"),
-            })
-        })?;
+        let Some(resolved) = (caches.mcp_contract)(&url) else {
+            continue;
+        };
         expand_mcp_entry(&mut parsed, &old_id, &url, &resolved)?;
     }
 
