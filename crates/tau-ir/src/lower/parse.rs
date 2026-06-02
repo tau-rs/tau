@@ -20,6 +20,7 @@ use crate::tool_impl::{Hash256, NativeFnRef, ToolImpl};
 use crate::AgentBudget;
 
 /// Output of the parse stage.
+#[derive(Debug)]
 pub(super) struct Parsed {
     /// Partially-populated workflow (content hashes are zero pending `resolve`).
     pub(super) workflow: Workflow,
