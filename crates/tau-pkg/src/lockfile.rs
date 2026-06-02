@@ -60,7 +60,11 @@ use crate::error::RegistryError;
 ///   to `None` for legacy entries via `#[serde(default)]`; packages
 ///   installed before the upgrade retain `None` provenance, which is
 ///   correct — they were installed from tau-native sources).
-pub const MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION: u32 = 6;
+/// - `7` — MCP facilitator (β.3 PR-4): `LockFile` gains
+///   `mcp_entries: Vec<LockedMcpEntry>` via `#[serde(default)]`;
+///   v6 lockfiles auto-upgrade silently (empty `mcp_entries` is correct
+///   for projects with no MCP tool entries).
+pub const MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION: u32 = 7;
 
 /// Schema for `tau-lock.toml`.
 ///
@@ -74,14 +78,14 @@ pub const MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION: u32 = 6;
 ///
 /// // `LockFile` is `#[non_exhaustive]`; constructed via `Default`.
 /// let lf = LockFile::default();
-/// assert_eq!(lf.schema_version, 6);
+/// assert_eq!(lf.schema_version, 7);
 /// assert!(lf.packages.is_empty());
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LockFile {
-    /// Schema version. Currently `6`. Bumped on breaking changes only.
-    /// v1–v5 lockfiles are accepted on load and auto-upgraded to v6
+    /// Schema version. Currently `7`. Bumped on breaking changes only.
+    /// v1–v6 lockfiles are accepted on load and auto-upgraded to v7
     /// on the next save (v1→v2: legacy entries get `plugin = None`;
     /// v2→v3: `LockedPlugin` entries get `binary_sha256 = ""`
     /// defaulted via `#[serde(default)]`; v3→v4: `LockedPlugin`
@@ -90,7 +94,9 @@ pub struct LockFile {
     /// v4→v5: `LockedPackage` entries get `skill = None` defaulted
     /// via `#[serde(default)]` with a once-per-process warn emitted;
     /// v5→v6: `LockedPackage` entries get `synthesized_from = None`
-    /// defaulted via `#[serde(default)]`).
+    /// defaulted via `#[serde(default)]`;
+    /// v6→v7: `LockFile` gains `mcp_entries: Vec<LockedMcpEntry>`
+    /// defaulted via `#[serde(default)]` (β.3 PR-4)).
     pub schema_version: u32,
     /// `CARGO_PKG_VERSION` of the tau-pkg crate that last wrote this file.
     pub generated_by_tau_version: String,
@@ -103,6 +109,12 @@ pub struct LockFile {
     /// natural diff output.
     #[serde(default, rename = "package")]
     pub packages: Vec<LockedPackage>,
+    /// Per-MCP-entry resolved records (β.3 PR-4; lockfile schema v7).
+    /// Empty `Vec` on lockfiles that have no `[tools.<name>] mcp = …`
+    /// entries; v6 lockfiles read with no `mcp` key get `Vec::new()`
+    /// via `#[serde(default)]`.
+    #[serde(default, rename = "mcp")]
+    pub mcp_entries: Vec<LockedMcpEntry>,
 }
 
 /// Provenance marker for synthesized manifests (Skills-5).
@@ -148,7 +160,7 @@ pub enum SynthesizedSource {
 /// // values from `LockFile::find`, `LockFile::packages`, or `registry::list`.
 /// // Here we round-trip a minimal lockfile to obtain one.
 /// # let toml = r#"
-/// # schema_version = 6
+/// # schema_version = 7
 /// # generated_by_tau_version = "0.1.0"
 /// # generated_at = "2024-01-01T00:00:00Z"
 /// #
@@ -371,6 +383,44 @@ impl LockedSkill {
     }
 }
 
+/// Per-MCP-entry lockfile record (β.3 PR-4).
+///
+/// Records what `tau build` resolved for one `[tools.<entry>]` MCP
+/// server so subsequent `tau verify --bundle` and the runtime drift
+/// check can re-validate without re-handshaking.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LockedMcpEntry {
+    /// Author-side `[tools.<entry>]` name from tau.toml.
+    pub entry: String,
+    /// MCP server URL the entry was resolved against.
+    pub url: String,
+    /// Hex-encoded SHA-256 of the canonical resolved contract.
+    pub contract_hash: String,
+    /// Optional path to the pinned-contract file (relative to project
+    /// root). Present when `tau build` wrote the pin or when `--offline`
+    /// was used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_contract: Option<String>,
+    /// Server-side tools the contract expanded into.
+    #[serde(default)]
+    pub expanded_tools: Vec<LockedMcpExpandedTool>,
+}
+
+/// One expanded server-tool's lockfile record.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LockedMcpExpandedTool {
+    /// Server-side tool name.
+    pub name: String,
+    /// Capability shape names (v0 string form `"kind=…[,host=…]"`).
+    #[serde(default)]
+    pub caps: Vec<String>,
+    /// Hex-encoded SHA-256 of the tool's `input_schema` (deterministic
+    /// canonical JSON hash). Used for the runtime drift check.
+    pub schema_hash: String,
+}
+
 /// One installed version's lockfile entry.
 ///
 /// `rev` is opaque user input (branch name, tag, or 40-char SHA);
@@ -391,7 +441,7 @@ impl LockedSkill {
 /// // values from `LockedPackage::installed_versions`.
 /// // Round-trip a lockfile to obtain one.
 /// # let toml = r#"
-/// # schema_version = 6
+/// # schema_version = 7
 /// # generated_by_tau_version = "0.1.0"
 /// # generated_at = "2024-01-01T00:00:00Z"
 /// #
@@ -479,6 +529,7 @@ impl Default for LockFile {
             generated_by_tau_version: env!("CARGO_PKG_VERSION").to_owned(),
             generated_at: SystemTime::now(),
             packages: Vec::new(),
+            mcp_entries: Vec::new(),
         }
     }
 }
@@ -508,7 +559,7 @@ impl LockFile {
     /// // writes the lockfile via [`LockFile::save`]).
     /// let lf = LockFile::load(Path::new("/nonexistent/tau-lock.toml")).unwrap();
     /// assert!(lf.packages.is_empty());
-    /// assert_eq!(lf.schema_version, 6);
+    /// assert_eq!(lf.schema_version, 7);
     /// ```
     pub fn load(path: &Path) -> Result<Self, RegistryError> {
         match fs::metadata(path) {
@@ -550,7 +601,7 @@ impl LockFile {
     /// use tau_pkg::lockfile::LockFile;
     ///
     /// let toml = r#"
-    /// schema_version = 6
+    /// schema_version = 7
     /// generated_by_tau_version = "0.1.0"
     /// generated_at = "2024-01-01T00:00:00Z"
     ///
@@ -584,6 +635,7 @@ impl LockFile {
         let was_pre_v4 = parsed.schema_version < 4;
         let was_pre_v5 = parsed.schema_version < 5;
         let was_pre_v6 = parsed.schema_version < 6;
+        let was_pre_v7 = parsed.schema_version < 7;
         if parsed.schema_version < MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION {
             parsed.schema_version = MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION;
         }
@@ -617,6 +669,12 @@ impl LockFile {
         // Skills-5 (they were all installed from tau-native sources).
         // No warning needed — `None` is the silent, correct default.
         let _ = was_pre_v6; // migration is purely serde-default; no warn required
+
+        // v6 → v7 migration: `mcp_entries` is absent on legacy lockfiles.
+        // The field defaults to `Vec::new()` via `#[serde(default)]` which
+        // is correct for projects with no MCP tool entries.
+        // No warning needed — empty Vec is the silent, correct default.
+        let _ = was_pre_v7; // migration is purely serde-default; no warn required
 
         Ok(parsed)
     }
@@ -723,7 +781,7 @@ impl LockFile {
     ///
     /// // `LockedPackage` is `#[non_exhaustive]`; parse it from a lockfile string.
     /// # let toml = r#"
-    /// # schema_version = 6
+    /// # schema_version = 7
     /// # generated_by_tau_version = "0.1.0"
     /// # generated_at = "2024-01-01T00:00:00Z"
     /// #
@@ -805,7 +863,7 @@ mod tests {
     fn default_lockfile_has_current_schema_version() {
         let lf = LockFile::default();
         assert_eq!(lf.schema_version, MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION);
-        assert_eq!(lf.schema_version, 6);
+        assert_eq!(lf.schema_version, 7);
     }
 
     #[test]
@@ -997,7 +1055,7 @@ mod tests {
             err,
             RegistryError::SchemaTooNew {
                 found: 999,
-                supported: 6,
+                supported: 7,
             }
         ));
     }
@@ -1237,8 +1295,8 @@ mod tests {
             plugin.required_shapes.is_empty(),
             "required_shapes should default to empty for v3 lockfile entries"
         );
-        // Schema version is bumped to v6 in memory.
-        assert_eq!(loaded.schema_version, 6);
+        // Schema version is bumped to v7 in memory.
+        assert_eq!(loaded.schema_version, 7);
     }
 
     /// A v4 lockfile with `required_shapes` populated must round-trip
@@ -1265,7 +1323,7 @@ mod tests {
         lf.save(&path).unwrap();
         let loaded = LockFile::load(&path).unwrap();
 
-        assert_eq!(loaded.schema_version, 6);
+        assert_eq!(loaded.schema_version, 7);
         assert_eq!(loaded.packages.len(), 1);
         let loaded_plugin = loaded.packages[0].plugin.as_ref().unwrap();
         assert_eq!(
@@ -1368,6 +1426,6 @@ installed_at = "2026-05-15T10:00:00Z"
             lf2.packages[0].synthesized_from,
             lf.packages[0].synthesized_from
         );
-        assert_eq!(lf2.schema_version, 6);
+        assert_eq!(lf2.schema_version, 7);
     }
 }
