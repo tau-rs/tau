@@ -89,15 +89,17 @@ fn lower_fixture(path: &std::path::Path) -> LowerFixtureOutcome {
 
     // Skip fixtures that have MCP tool entries — they need a resolver and
     // are covered by the offline e2e test (Task 7.2).
-    if config.tools.values().any(|t| matches!(t.body, ToolBody::Mcp(_))) {
+    if config
+        .tools
+        .values()
+        .any(|t| matches!(t.body, ToolBody::Mcp(_)))
+    {
         return LowerFixtureOutcome::SkippedMcp;
     }
 
     let target = match registry::list_available().next() {
         Some(e) => e.triple,
-        None => {
-            return LowerFixtureOutcome::LowerFailed("no Available target in registry".into())
-        }
+        None => return LowerFixtureOutcome::LowerFailed("no Available target in registry".into()),
     };
 
     // Empty MCP cache (no MCP entries in these fixtures).
@@ -231,11 +233,8 @@ fn write_pinned_weather_contract(pin_dir: &std::path::Path) {
         }],
     };
 
-    let pinned = PinnedContract::from_parts(
-        "https://mcp.example.com/weather".into(),
-        contract,
-    )
-    .expect("build PinnedContract");
+    let pinned = PinnedContract::from_parts("https://mcp.example.com/weather".into(), contract)
+        .expect("build PinnedContract");
 
     std::fs::create_dir_all(pin_dir).unwrap();
     let bytes = serde_json::to_vec_pretty(&pinned).expect("serialize pinned contract");

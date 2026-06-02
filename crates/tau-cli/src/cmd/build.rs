@@ -122,8 +122,10 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
 async fn resolve_mcp_cache(
     project_root: &std::path::Path,
     offline: bool,
-) -> anyhow::Result<(Vec<LockedMcpEntry>, BTreeMap<String, tau_ir::lower::ResolvedMcpContract>)>
-{
+) -> anyhow::Result<(
+    Vec<LockedMcpEntry>,
+    BTreeMap<String, tau_ir::lower::ResolvedMcpContract>,
+)> {
     use tau_pkg::project::project::{ToolBody, UncheckedProjectConfig};
 
     // Parse tau.toml to find MCP entries.

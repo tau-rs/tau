@@ -427,7 +427,11 @@ impl LockedMcpExpandedTool {
     /// The struct is `#[non_exhaustive]`; use this constructor from
     /// crates outside `tau-pkg`.
     pub fn new(name: String, caps: Vec<String>, schema_hash: String) -> Self {
-        Self { name, caps, schema_hash }
+        Self {
+            name,
+            caps,
+            schema_hash,
+        }
     }
 }
 
@@ -1476,7 +1480,10 @@ source = "https://example.com/x.git"
 "#;
         let lf = LockFile::from_toml_str(v6_toml).expect("v6 parses");
         assert_eq!(lf.schema_version, MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION);
-        assert!(lf.mcp_entries.is_empty(), "v6 lockfile auto-upgrades with empty mcp_entries");
+        assert!(
+            lf.mcp_entries.is_empty(),
+            "v6 lockfile auto-upgrades with empty mcp_entries"
+        );
     }
 
     #[test]

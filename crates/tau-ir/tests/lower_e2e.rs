@@ -30,14 +30,13 @@ fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'sta
         })),
         mcp_contract: Box::leak(Box::new(
             move |url: &str| -> Option<tau_ir::lower::ResolvedMcpContract> {
-                mcp_known
-                    .iter()
-                    .find(|u| u.as_str() == url)
-                    .map(|u| tau_ir::lower::ResolvedMcpContract {
+                mcp_known.iter().find(|u| u.as_str() == url).map(|u| {
+                    tau_ir::lower::ResolvedMcpContract {
                         hash: hash_of(u),
                         expanded_tools: vec![],
                         requires_sampling: false,
-                    })
+                    }
+                })
             },
         )),
         skill: Box::leak(Box::new(|_name: &str| -> Option<[u8; 32]> { None })),

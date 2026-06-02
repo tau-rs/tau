@@ -96,7 +96,9 @@ mod tests {
 
     #[tokio::test]
     async fn empty_entries_returns_empty_map() {
-        let result = resolve_all(Vec::new()).await.expect("empty resolve succeeds");
+        let result = resolve_all(Vec::new())
+            .await
+            .expect("empty resolve succeeds");
         assert!(result.is_empty());
     }
 }

@@ -53,7 +53,9 @@ pub enum McpBuildError {
         entry: String,
     },
     /// `--offline` was passed but `.tau/mcp/<entry>.contract.json` is missing.
-    #[error("entry {entry:?}: --offline requested but pinned contract file is missing at {path:?}")]
+    #[error(
+        "entry {entry:?}: --offline requested but pinned contract file is missing at {path:?}"
+    )]
     PinnedContractMissing {
         /// `[tools.<entry>]` name.
         entry: String,

@@ -21,7 +21,10 @@ pub(super) fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed,
     let mut mcp_entries: Vec<(ToolId, String)> = Vec::new(); // (old id, url)
     for (id, tool) in parsed.workflow.tools.iter_mut() {
         match &mut tool.impl_ {
-            ToolImpl::Native { fn_ref, content_hash } => {
+            ToolImpl::Native {
+                fn_ref,
+                content_hash,
+            } => {
                 if let Some(h) = (caches.native_tool)(&fn_ref.name) {
                     *content_hash = h;
                 }
@@ -63,7 +66,9 @@ fn expand_mcp_entry(
         .cloned()
         .expect("old_id was just collected from this map");
     let envelope = match &original_tool.impl_ {
-        ToolImpl::Mcp { capability_subset, .. } => capability_subset.clone(),
+        ToolImpl::Mcp {
+            capability_subset, ..
+        } => capability_subset.clone(),
         _ => unreachable!("expand_mcp_entry called on non-Mcp tool"),
     };
 
@@ -78,10 +83,12 @@ fn expand_mcp_entry(
     let mut new_entries: Vec<(ToolId, Tool)> = Vec::new();
     for st in &resolved.expanded_tools {
         if st.name.contains('.') {
-            return Err(IrError::McpBuild(McpBuildError::ServerToolNameContainsDot {
-                entry: old_id.0.clone(),
-                name: st.name.clone(),
-            }));
+            return Err(IrError::McpBuild(
+                McpBuildError::ServerToolNameContainsDot {
+                    entry: old_id.0.clone(),
+                    name: st.name.clone(),
+                },
+            ));
         }
         let missing = caps_missing_from_envelope(&envelope, &st.caps);
         if !missing.is_empty() {
@@ -246,10 +253,7 @@ capabilities = []
 
         let contract = ResolvedMcpContract {
             hash: [2u8; 32],
-            expanded_tools: alloc::vec![
-                rsc_minimal("get_forecast"),
-                rsc_minimal("get_current"),
-            ],
+            expanded_tools: alloc::vec![rsc_minimal("get_forecast"), rsc_minimal("get_current"),],
             requires_sampling: false,
         };
 
@@ -262,7 +266,10 @@ capabilities = []
         let result = resolve(parsed, &caches).expect("resolve");
 
         // Old entry removed.
-        assert!(!result.workflow.tools.contains_key(&ToolId("weather".into())));
+        assert!(!result
+            .workflow
+            .tools
+            .contains_key(&ToolId("weather".into())));
         // New entries present.
         assert!(result
             .workflow
@@ -279,8 +286,12 @@ capabilities = []
             .agents
             .get(&AgentId("main".into()))
             .expect("agent present");
-        assert!(agent.tool_refs.contains(&ToolId("weather.get_forecast".into())));
-        assert!(agent.tool_refs.contains(&ToolId("weather.get_current".into())));
+        assert!(agent
+            .tool_refs
+            .contains(&ToolId("weather.get_forecast".into())));
+        assert!(agent
+            .tool_refs
+            .contains(&ToolId("weather.get_current".into())));
         assert!(!agent.tool_refs.contains(&ToolId("weather".into())));
     }
 }

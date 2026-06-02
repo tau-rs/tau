@@ -141,23 +141,22 @@ impl McpContractResolver for PinnedResolver {
                 }
             }
         })?;
-        let pinned: PinnedContract = serde_json::from_slice(&bytes).map_err(|e| {
-            ResolveError::PinnedFileParse {
+        let pinned: PinnedContract =
+            serde_json::from_slice(&bytes).map_err(|e| ResolveError::PinnedFileParse {
                 path: path.display().to_string(),
                 reason: alloc::format!("{e}"),
-            }
-        })?;
-        pinned.verify_self_hash().map_err(|_| {
-            ResolveError::PinnedFileSelfHashMismatch {
+            })?;
+        pinned
+            .verify_self_hash()
+            .map_err(|_| ResolveError::PinnedFileSelfHashMismatch {
                 path: path.display().to_string(),
-            }
-        })?;
-        let hash = pinned.decoded_hash().map_err(|e| {
-            ResolveError::PinnedFileParse {
+            })?;
+        let hash = pinned
+            .decoded_hash()
+            .map_err(|e| ResolveError::PinnedFileParse {
                 path: path.display().to_string(),
                 reason: alloc::format!("decoded_hash: {e}"),
-            }
-        })?;
+            })?;
         Ok(resolved_from_server_contract(hash, &pinned.contract))
     }
 }
@@ -202,7 +201,9 @@ fn caps_from_contract_tool(t: &ContractTool) -> Vec<String> {
 
 /// Return the wire `kind` string for a [`Capability`] variant.
 fn cap_kind_string(cap: &Capability) -> String {
-    use tau_domain::{AgentCapability, FsCapability, NetCapability, ProcessCapability, SkillCapability};
+    use tau_domain::{
+        AgentCapability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
+    };
     match cap {
         Capability::Filesystem(FsCapability::Read { .. }) => "fs.read".to_string(),
         Capability::Filesystem(FsCapability::Write { .. }) => "fs.write".to_string(),
@@ -270,8 +271,7 @@ mod tests {
     #[test]
     fn resolved_from_server_contract_round_trip() {
         let contract = two_tool_contract();
-        let expected_hash =
-            crate::contract::canonical::canonical_hash(&contract).expect("hash");
+        let expected_hash = crate::contract::canonical::canonical_hash(&contract).expect("hash");
         let resolved = resolved_from_server_contract(expected_hash, &contract);
 
         // hash must match the canonical hash
@@ -318,9 +318,10 @@ mod tests {
     #[test]
     fn cap_kind_string_net_http() {
         use tau_domain::Capability;
-        let cap: Capability =
-            serde_json::from_str(r#"{"kind":"net.http","hosts":["example.com"],"methods":["GET"]}"#)
-                .expect("deserialize net.http cap");
+        let cap: Capability = serde_json::from_str(
+            r#"{"kind":"net.http","hosts":["example.com"],"methods":["GET"]}"#,
+        )
+        .expect("deserialize net.http cap");
         assert_eq!(cap_kind_string(&cap), "net.http");
     }
 

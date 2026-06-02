@@ -1501,9 +1501,8 @@ mod tests {
                 mcp = "{url}"
             "#
             );
-            ProjectConfig::parse_str(&toml_str).unwrap_or_else(|e| {
-                panic!("URL {url:?} should be accepted but got: {e}")
-            });
+            ProjectConfig::parse_str(&toml_str)
+                .unwrap_or_else(|e| panic!("URL {url:?} should be accepted but got: {e}"));
         }
     }
 }
