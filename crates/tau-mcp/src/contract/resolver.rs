@@ -16,6 +16,7 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(feature = "with-std-adapters")]
 use crate::contract::pinned::PinnedContract;
 use crate::contract::server_contract::{ContractTool, ServerContract};
 use crate::McpError;
