@@ -22,18 +22,8 @@ pub(super) fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed,
                 // The reason: `tau dev` typically has every native tool in
                 // its registry, but a mocked-out test fixture might not.
             }
-            ToolImpl::Mcp {
-                url,
-                contract_hash,
-                capability_subset,
-            } => {
-                if let Some((h, caps)) = (caches.mcp_contract)(url) {
-                    *contract_hash = h;
-                    // The MCP server's declared capability subset must be a
-                    // superset of the workflow's narrowed subset. v0 only
-                    // checks at the lowering boundary; runtime enforces.
-                    *capability_subset = caps;
-                }
+            ToolImpl::Mcp { .. } => {
+                // MCP tools are handled by the expansion pass below.
             }
             ToolImpl::Subflow { target: _ } => {
                 // Subflow variant: target agent lives inside the same

@@ -54,6 +54,10 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                 url: url.clone(),
                 contract_hash: Hash256::default(),
                 capability_subset: caps.clone(),
+                // server_tool_name is empty at parse time; the resolve stage
+                // expands this single entry into N entries (one per server-tool)
+                // with real names filled in.
+                server_tool_name: alloc::string::String::new(),
             },
             ToolBody::Subflow(target) => ToolImpl::Subflow {
                 target: AgentId(target.clone()),
