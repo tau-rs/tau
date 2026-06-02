@@ -261,12 +261,12 @@ async fn ipc_tool_invoke_roundtrip_via_fake_peer() {
         uuid::Uuid::new_v4(),
         None,
     );
-    tool.init(session_ctx).await.expect("init no-op");
+    tool.init(session_ctx.clone()).await.expect("init no-op");
 
     let arg = Value::String("hi".into());
     let arg_for_assert = arg.clone();
     let mut session = ();
-    let call_fut = tool.invoke(&mut session, arg);
+    let call_fut = tool.invoke(&session_ctx, &mut session, arg);
     let peer_fut = async {
         let (msgid, params_bytes) = peer.expect_request("tool.call").await;
         let (_ctx, decoded_args): (tau_ports::SessionContext, Value) =
