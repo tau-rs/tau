@@ -163,6 +163,16 @@ pub struct UncheckedCapabilityOverride {
 
 // ----- IR lowering structs (β.2.2) -----
 
+/// Author-declared sampling allowlist for an MCP-contracted tool.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SamplingConfig {
+    /// Allowlisted LLM model ids. Empty = sampling refused.
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
 /// Body of a `[tools.<name>]` table — discriminates the implementation kind.
 ///
 /// These variants are mutually exclusive; exactly one must be present in the
@@ -216,6 +226,13 @@ pub struct UncheckedTool {
     /// capabilities beyond ambient.
     #[serde(default)]
     pub capabilities: Vec<Capability>,
+    /// Sampling allowlist (β.3 — empty/missing = sampling refused).
+    #[serde(default)]
+    pub sampling: Option<SamplingConfig>,
+    /// Roots advertised to the MCP server via `roots/list` (β.3 —
+    /// must be subset of `fs.read` caps; checked at lowering time).
+    #[serde(default)]
+    pub roots: Vec<std::path::PathBuf>,
 }
 
 /// Validated `[tools.<name>]` entry produced by `validate()`.
@@ -232,6 +249,10 @@ pub struct ToolEntry {
     pub input_schema: serde_json::Value,
     /// Declared capabilities.
     pub capabilities: Vec<Capability>,
+    /// Sampling allowlist (β.3 — empty/missing = sampling refused).
+    pub sampling: Option<SamplingConfig>,
+    /// Roots advertised to the MCP server via `roots/list` (β.3).
+    pub roots: Vec<std::path::PathBuf>,
 }
 
 /// Unchecked `[steps.<name>]` table (β.2.2).
@@ -535,6 +556,15 @@ pub enum ProjectConfigError {
         /// Human-readable reason.
         message: String,
     },
+
+    /// `[tools.<name>] mcp = "..."` URL has an unsupported scheme.
+    #[error("tool {tool:?}: unsupported MCP URL scheme: {url:?}")]
+    UnsupportedMcpUrl {
+        /// Tool name.
+        tool: String,
+        /// Offending URL.
+        url: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -711,6 +741,16 @@ fn validate_tool(name: String, raw: UncheckedTool) -> Result<ToolEntry, ProjectC
                     message: "mcp body must specify a non-empty url".into(),
                 });
             }
+            let url_trim = url.trim();
+            if !(url_trim.starts_with("stdio:")
+                || url_trim.starts_with("http://")
+                || url_trim.starts_with("https://"))
+            {
+                return Err(ProjectConfigError::UnsupportedMcpUrl {
+                    tool: name.clone(),
+                    url: url.clone(),
+                });
+            }
         }
         ToolBody::Subflow(target) => {
             if target.trim().is_empty() {
@@ -727,6 +767,8 @@ fn validate_tool(name: String, raw: UncheckedTool) -> Result<ToolEntry, ProjectC
         description: raw.description,
         input_schema: raw.input_schema,
         capabilities: raw.capabilities,
+        sampling: raw.sampling,
+        roots: raw.roots,
     })
 }
 
@@ -1407,6 +1449,62 @@ mod tests {
         let cfg = parse(toml_str).unwrap();
         let tool = cfg.tools.get("weather").unwrap();
         assert_eq!(tool.capabilities.len(), 1);
+    }
+
+    #[test]
+    fn unchecked_tool_parses_sampling_and_roots() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.weather]
+            mcp = "https://mcp.example.com"
+            description = "weather"
+            capabilities = []
+            sampling = { models = ["claude-haiku-4-5"] }
+            roots = ["/tmp/mcp"]
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let tool = cfg.tools.get("weather").unwrap();
+        let sampling = tool.sampling.as_ref().expect("sampling present");
+        assert_eq!(sampling.models.len(), 1);
+        assert_eq!(sampling.models[0], "claude-haiku-4-5");
+        assert_eq!(tool.roots.len(), 1);
+    }
+
+    #[test]
+    fn mcp_url_with_unsupported_scheme_rejected() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [tools.bad]
+            mcp = "ws://example.com"
+        "#;
+        let err = ProjectConfig::parse_str(toml_str).expect_err("should reject");
+        assert!(matches!(err, ProjectConfigError::UnsupportedMcpUrl { .. }));
+    }
+
+    #[test]
+    fn mcp_url_with_stdio_or_https_accepted() {
+        for url in [
+            "stdio:weather-server",
+            "https://mcp.example.com",
+            "http://localhost:8080",
+        ] {
+            let toml_str = format!(
+                r#"
+                [project]
+                name = "x"
+
+                [tools.test]
+                mcp = "{url}"
+            "#
+            );
+            ProjectConfig::parse_str(&toml_str).unwrap_or_else(|e| {
+                panic!("URL {url:?} should be accepted but got: {e}")
+            });
+        }
     }
 }
 
