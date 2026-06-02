@@ -384,7 +384,11 @@ fn run_reproducibility_check(
         .map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
     let ir_payload = if shipped.ir_payload.is_some() {
         // Shipped bundle has an IR payload → rebuild with the same IR lowering.
-        crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target)
+        // For reproducibility verification, skip live MCP resolution and use an
+        // empty cache; the reproduce check compares manifests field-by-field and
+        // MCP entries are expected to match via pinned contracts already on disk.
+        let empty_mcp_cache = std::collections::BTreeMap::new();
+        crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target, &empty_mcp_cache)
     } else {
         None
     };

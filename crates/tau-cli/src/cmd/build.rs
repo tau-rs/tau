@@ -6,16 +6,19 @@
 //! the bundle path to stdout, then exits with the appropriate code
 //! per spec §6 (0 success, 2 config/parse, 3 install-state, 70 internal).
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 
 use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact, IrPayload};
+use tau_pkg::lockfile::{LockedMcpEntry, LockedMcpExpandedTool};
 use tau_ports::target::TargetTriple;
 
 use crate::cli::BuildArgs;
 use crate::output::Output;
 
 /// CLI entry point for `tau build`. The function is async to match the
-/// dispatcher's signature, but the underlying builder is synchronous.
+/// dispatcher's signature; MCP contract resolution requires async I/O.
 pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
     let project_root = match std::env::current_dir() {
         Ok(p) => p,
@@ -52,15 +55,26 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         Some(parsed)
     };
 
+    // Resolve MCP contracts (pinned or live) before lowering the IR.
+    // This is async; the result is passed into lower_ir as a sync cache.
+    let (mcp_entries_meta, mcp_cache_ir) =
+        match resolve_mcp_cache(&project_root, args.offline).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = output.error(format!("{e}"));
+                std::process::exit(2);
+            }
+        };
+
     // Lower the project IR. Load the project config (same pipeline the
     // bundle builder uses), then call lower_project with a deterministic
     // SHA-256-of-name cache for native tools (see `lower_ir`'s doc-comment
     // for the forward-stability semantic). On IrError, render a human-
     // readable diagnostic and exit 2.
-    let ir_payload = lower_ir(&project_root, &target);
+    let ir_payload = lower_ir(&project_root, &target, &mcp_cache_ir);
 
     let opts = BuildOptions {
-        project_root,
+        project_root: project_root.clone(),
         target,
         output_path: args.output.clone(),
         agent_filter,
@@ -71,6 +85,21 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
 
     match build(opts) {
         Ok(artifact) => {
+            // After a successful build, persist MCP entries to tau.lock.
+            if !mcp_entries_meta.is_empty() {
+                let lockfile_path = project_root.join("tau.lock");
+                match tau_pkg::lockfile::LockFile::load(&lockfile_path) {
+                    Ok(mut lf) => {
+                        lf.mcp_entries = mcp_entries_meta;
+                        if let Err(e) = lf.save(&lockfile_path) {
+                            tracing::warn!("failed to write mcp_entries to tau.lock: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to reload tau.lock for mcp_entries: {e}");
+                    }
+                }
+            }
             emit_artifact(&artifact, output);
             Ok(())
         }
@@ -79,6 +108,184 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
             std::process::exit(exit_code_for(&e) as i32);
         }
     }
+}
+
+/// Discover all MCP entries from tau.toml and resolve their contracts.
+///
+/// Returns:
+/// - `Vec<McpEntryMeta>` — per-entry metadata for writing to `tau.lock`.
+/// - `BTreeMap<String, tau_ir::lower::ResolvedMcpContract>` — URL-keyed
+///   cache for `Caches::mcp_contract`.
+///
+/// On `--offline`, reads `.tau/mcp/<entry>.contract.json` (error if missing).
+/// On the live path, performs MCP handshakes and writes pinned files.
+async fn resolve_mcp_cache(
+    project_root: &std::path::Path,
+    offline: bool,
+) -> anyhow::Result<(Vec<LockedMcpEntry>, BTreeMap<String, tau_ir::lower::ResolvedMcpContract>)>
+{
+    use tau_pkg::project::project::{ToolBody, UncheckedProjectConfig};
+
+    // Parse tau.toml to find MCP entries.
+    let tau_toml_path = project_root.join("tau.toml");
+    let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
+        Ok(s) => s,
+        Err(_) => {
+            // No tau.toml → no MCP entries. lower_ir will warn separately.
+            return Ok((Vec::new(), BTreeMap::new()));
+        }
+    };
+    let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
+        Ok(u) => u,
+        Err(_) => {
+            // Parse failure → no MCP entries. lower_ir will warn separately.
+            return Ok((Vec::new(), BTreeMap::new()));
+        }
+    };
+    let config = match unchecked.validate() {
+        Ok(c) => c,
+        Err(_) => {
+            return Ok((Vec::new(), BTreeMap::new()));
+        }
+    };
+
+    // Collect all MCP entries.
+    let mcp_entries: Vec<(String, String)> = config
+        .tools
+        .iter()
+        .filter_map(|(name, t)| match &t.body {
+            ToolBody::Mcp(url) => Some((name.clone(), url.clone())),
+            _ => None,
+        })
+        .collect();
+
+    if mcp_entries.is_empty() {
+        return Ok((Vec::new(), BTreeMap::new()));
+    }
+
+    let pin_base = project_root.join(".tau").join("mcp");
+
+    if offline {
+        // Pinned path: read `.tau/mcp/<entry>.contract.json`.
+        use tau_mcp::contract::McpContractResolver as _;
+        let resolver = tau_mcp::contract::resolver::PinnedResolver::new(&pin_base);
+        let mut ir_cache: BTreeMap<String, tau_ir::lower::ResolvedMcpContract> = BTreeMap::new();
+        let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
+        for (entry, url) in &mcp_entries {
+            let resolved = resolver
+                .resolve(entry, url)
+                .map_err(|e| anyhow::anyhow!("MCP pin resolve failed for {entry:?}: {e}"))?;
+            locked_entries.push(mcp_entry_to_locked(
+                entry,
+                url,
+                &resolved,
+                Some(format!(".tau/mcp/{entry}.contract.json")),
+            ));
+            ir_cache.insert(url.clone(), to_ir_shape(resolved));
+        }
+        Ok((locked_entries, ir_cache))
+    } else {
+        // Live path: perform MCP handshakes.
+        let inputs: Vec<tau_mcp_tokio::resolver::McpEntryInput> = mcp_entries
+            .iter()
+            .map(|(entry, url)| tau_mcp_tokio::resolver::McpEntryInput {
+                entry: entry.clone(),
+                url: url.clone(),
+                plan: tau_ports::CapabilityPlan::new(Vec::new(), None, None),
+            })
+            .collect();
+        let live = tau_mcp_tokio::resolver::resolve_all(inputs)
+            .await
+            .map_err(|e| anyhow::anyhow!("MCP live resolve failed: {e}"))?;
+
+        // Write pinned files for next-time --offline.
+        std::fs::create_dir_all(&pin_base)
+            .map_err(|e| anyhow::anyhow!("failed to create .tau/mcp/: {e}"))?;
+        for (entry, url) in &mcp_entries {
+            if let Some(lr) = live.get(url) {
+                let path = pin_base.join(format!("{entry}.contract.json"));
+                let bytes = serde_json::to_vec_pretty(&lr.pinned)
+                    .map_err(|e| anyhow::anyhow!("serialize pinned contract for {entry:?}: {e}"))?;
+                std::fs::write(&path, bytes)
+                    .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+            }
+        }
+
+        let mut ir_cache: BTreeMap<String, tau_ir::lower::ResolvedMcpContract> = BTreeMap::new();
+        let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
+        for (entry, url) in &mcp_entries {
+            if let Some(lr) = live.get(url) {
+                locked_entries.push(mcp_entry_to_locked(
+                    entry,
+                    url,
+                    &lr.resolved,
+                    Some(format!(".tau/mcp/{entry}.contract.json")),
+                ));
+                ir_cache.insert(url.clone(), to_ir_shape(lr.resolved.clone()));
+            }
+        }
+        Ok((locked_entries, ir_cache))
+    }
+}
+
+/// Convert a `tau_mcp` resolver output to tau-ir's structurally-identical type.
+fn to_ir_shape(
+    r: tau_mcp::contract::resolver::ResolvedMcpContract,
+) -> tau_ir::lower::ResolvedMcpContract {
+    use tau_ir::lower::{ResolvedMcpContract as IrR, ResolvedServerTool as IrS};
+    IrR {
+        hash: r.hash,
+        expanded_tools: r
+            .expanded_tools
+            .into_iter()
+            .map(|t| IrS {
+                name: t.name,
+                // v0 lossy: caps is `CapabilityRequirements` in tau-ir (structured),
+                // `Vec<String>` in tau-mcp (wire kind names). Use empty default;
+                // the author's envelope is the source of truth at build time,
+                // and runtime drift-check uses the lockfile.
+                caps: tau_ir::capability::CapabilityRequirements::default(),
+                input_schema: t.input_schema,
+            })
+            .collect(),
+        requires_sampling: r.requires_sampling,
+    }
+}
+
+/// Build a `LockedMcpEntry` from a resolved contract + metadata.
+fn mcp_entry_to_locked(
+    entry: &str,
+    url: &str,
+    resolved: &tau_mcp::contract::resolver::ResolvedMcpContract,
+    pinned_contract: Option<String>,
+) -> LockedMcpEntry {
+    let expanded_tools = resolved
+        .expanded_tools
+        .iter()
+        .map(|st| {
+            LockedMcpExpandedTool::new(
+                st.name.clone(),
+                st.caps.clone(),
+                schema_hash_json(&st.input_schema),
+            )
+        })
+        .collect();
+    LockedMcpEntry::new(
+        entry.to_owned(),
+        url.to_owned(),
+        hex_lower(&resolved.hash),
+        pinned_contract,
+        expanded_tools,
+    )
+}
+
+/// SHA-256 of a JSON value's canonical bytes (compact serialization).
+fn schema_hash_json(v: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(v).unwrap_or_default();
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    hex_lower(&h.finalize())
 }
 
 /// Attempt to lower the project IR, returning `Some(IrPayload)` on
@@ -92,7 +299,13 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
 /// produced before the switch will rebuild on the next `tau build` because
 /// their `canonical_ir_hash` will change — that's the honest forward-stability
 /// semantic (D-6): a change in tool identity is a change in workflow identity.
-pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) -> Option<IrPayload> {
+///
+/// `mcp_cache` is keyed by MCP URL and populated by `resolve_mcp_cache`.
+pub(crate) fn lower_ir(
+    project_root: &std::path::Path,
+    target: &TargetTriple,
+    mcp_cache: &BTreeMap<String, tau_ir::lower::ResolvedMcpContract>,
+) -> Option<IrPayload> {
     use tau_pkg::project::project::UncheckedProjectConfig;
 
     let tau_toml_path = project_root.join("tau.toml");
@@ -127,7 +340,7 @@ pub(crate) fn lower_ir(project_root: &std::path::Path, target: &TargetTriple) ->
     // source-content hash — see this fn's doc-comment.
     let caches = tau_ir::lower::Caches {
         native_tool: &|name: &str| Some(sha256_name(name)),
-        mcp_contract: &|_url| None,
+        mcp_contract: &|url| mcp_cache.get(url).cloned(),
         skill: &|_name| None,
     };
 
@@ -259,6 +472,7 @@ mod tests {
             target: t.map(|s| s.to_string()),
             output: None,
             agents: vec![],
+            offline: false,
         }
     }
 
@@ -421,7 +635,9 @@ capabilities = []
         .unwrap();
 
         let target = TargetTriple::PASSTHROUGH;
-        let payload = lower_ir(project, &target);
+        // No MCP entries → empty cache.
+        let mcp_cache = std::collections::BTreeMap::new();
+        let payload = lower_ir(project, &target, &mcp_cache);
         assert!(
             payload.is_some(),
             "lower_ir must return Some(IrPayload) for a project with a [tools.<x>] native = ... entry; \

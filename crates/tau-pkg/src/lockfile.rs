@@ -421,6 +421,38 @@ pub struct LockedMcpExpandedTool {
     pub schema_hash: String,
 }
 
+impl LockedMcpExpandedTool {
+    /// Construct a `LockedMcpExpandedTool`.
+    ///
+    /// The struct is `#[non_exhaustive]`; use this constructor from
+    /// crates outside `tau-pkg`.
+    pub fn new(name: String, caps: Vec<String>, schema_hash: String) -> Self {
+        Self { name, caps, schema_hash }
+    }
+}
+
+impl LockedMcpEntry {
+    /// Construct a `LockedMcpEntry`.
+    ///
+    /// The struct is `#[non_exhaustive]`; use this constructor from
+    /// crates outside `tau-pkg`.
+    pub fn new(
+        entry: String,
+        url: String,
+        contract_hash: String,
+        pinned_contract: Option<String>,
+        expanded_tools: Vec<LockedMcpExpandedTool>,
+    ) -> Self {
+        Self {
+            entry,
+            url,
+            contract_hash,
+            pinned_contract,
+            expanded_tools,
+        }
+    }
+}
+
 /// One installed version's lockfile entry.
 ///
 /// `rev` is opaque user input (branch name, tag, or 40-char SHA);

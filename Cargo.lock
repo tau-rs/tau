@@ -3349,6 +3349,8 @@ dependencies = [
  "tau-app",
  "tau-domain",
  "tau-ir",
+ "tau-mcp",
+ "tau-mcp-tokio",
  "tau-observe",
  "tau-pkg",
  "tau-plugin-protocol",
