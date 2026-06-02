@@ -3428,6 +3428,7 @@ dependencies = [
 name = "tau-mcp"
 version = "0.0.0"
 dependencies = [
+ "futures",
  "hashbrown 0.17.0",
  "serde",
  "serde_json",

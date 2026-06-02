@@ -18,6 +18,7 @@ hashbrown  = { workspace = true }
 # SHA-256 over canonical JSON bytes for contract_hash + schema_hash.
 # Same shape as tau-ir uses for the workflow IR hash (β.2).
 sha2       = { workspace = true, default-features = false }
+futures    = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -26,4 +27,4 @@ tokio      = { workspace = true, features = ["rt", "macros"] }
 [features]
 default            = ["with-std-adapters"]
 # When on, enables std-backed sinks (file I/O on Recorder / Replayer).
-with-std-adapters  = []
+with-std-adapters  = ["dep:futures"]
