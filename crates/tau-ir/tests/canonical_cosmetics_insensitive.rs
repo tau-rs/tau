@@ -13,7 +13,13 @@ fn lower(toml: &str, target: &tau_ports::target::TargetTriple) -> tau_ir::IrModu
     let config = ProjectConfig::parse_str(toml).expect("parse");
     let caches = Caches {
         native_tool: &|_n: &str| Some([1u8; 32]),
-        mcp_contract: &|_u: &str| Some(([2u8; 32], tau_ir::CapabilityRequirements::default())),
+        mcp_contract: &|_u: &str| {
+            Some(tau_ir::lower::ResolvedMcpContract {
+                hash: [2u8; 32],
+                expanded_tools: vec![],
+                requires_sampling: false,
+            })
+        },
         skill: &|_n: &str| None,
     };
     lower_project(&config, target, &caches).expect("lower")

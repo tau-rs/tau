@@ -11,9 +11,12 @@
 //! once per source change to drive the interpreter against a fresh IR).
 
 pub mod capability_fit;
+pub mod mcp_build_error;
 pub mod parse;
 pub mod resolve;
 pub mod typecheck;
+
+pub use mcp_build_error::McpBuildError;
 
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;
@@ -22,10 +25,36 @@ use crate::capability::CapabilityRequirements;
 use crate::error::IrError;
 use crate::module::IrModule;
 
-/// Return type of the MCP-contract cache closure.
+/// Per-server-tool slice of a resolved MCP contract.
 ///
-/// Extracted into a type alias to satisfy `clippy::type_complexity`.
-pub type McpContractEntry = ([u8; 32], CapabilityRequirements);
+/// The resolve stage expands one `ToolImpl::Mcp` author entry into N IR
+/// nodes (one per server-tool). Each node uses one of these structs to
+/// fill in its `capability_subset` + `server_tool_name` + (separately)
+/// the agent's `tool_refs` rewrite.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedServerTool {
+    /// Server-side tool name (what tau-mcp-tokio sends on `tools/call`).
+    pub name: alloc::string::String,
+    /// Capability requirements the server declares for this tool.
+    pub caps: CapabilityRequirements,
+    /// JSON schema for the tool's input (passed through to IR; opaque to
+    /// the resolver).
+    pub input_schema: serde_json::Value,
+}
+
+/// Resolved MCP contract for one author-side `[tools.<entry>]` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMcpContract {
+    /// SHA-256 of the canonical contract — participates in the IR
+    /// module hash so contract drift invalidates the bundle.
+    pub hash: [u8; 32],
+    /// All server-side tools the contract advertises (one ToolImpl::Mcp
+    /// IR node will be emitted per entry).
+    pub expanded_tools: alloc::vec::Vec<ResolvedServerTool>,
+    /// Whether the contract advertises `sampling/*` capabilities. Used
+    /// by resolve to enforce the `SamplingRequiredByContract` invariant.
+    pub requires_sampling: bool,
+}
 
 /// Lower a parsed `ProjectConfig` into an `IrModule` for the given target.
 ///
@@ -75,8 +104,10 @@ pub fn lower_project(
 pub struct Caches<'a> {
     /// Resolves a native tool symbolic name to its content hash.
     pub native_tool: &'a dyn Fn(&str) -> Option<[u8; 32]>,
-    /// Resolves an MCP URL to (contract hash, declared capabilities).
-    pub mcp_contract: &'a dyn Fn(&str) -> Option<McpContractEntry>,
+    /// Resolves an MCP URL to its fully-expanded contract (per
+    /// β.3 design doc §5). Returns `None` only if `tau build` did not
+    /// pre-fetch this URL — the resolver typically errors instead.
+    pub mcp_contract: &'a dyn Fn(&str) -> Option<ResolvedMcpContract>,
     /// Resolves a skill name to its content hash (from Skills-2 lockfile).
     ///
     /// **Reserved for a future `ToolImpl::Skill` variant.** No code path

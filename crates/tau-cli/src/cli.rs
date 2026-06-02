@@ -205,6 +205,11 @@ pub struct BuildArgs {
     /// `-o`/`--output`.
     #[arg(long = "agent", value_name = "ID")]
     pub agents: Vec<String>,
+    /// Use pinned `.tau/mcp/<entry>.contract.json` files for MCP
+    /// contracts; never reach out to live MCP servers. Build errors
+    /// out if any pinned file is missing.
+    #[arg(long)]
+    pub offline: bool,
 }
 
 /// `tau plugin <action>` — debug-tier helpers per spec §9.

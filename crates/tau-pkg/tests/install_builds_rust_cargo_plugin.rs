@@ -188,7 +188,7 @@ fn install_runs_cargo_build_for_rust_cargo_plugin() {
 
     // The lockfile should record a LockedPlugin with the resolved binary path.
     let lockfile = LockFile::load(&scope.lockfile_path()).unwrap();
-    assert_eq!(lockfile.schema_version, 6);
+    assert_eq!(lockfile.schema_version, 7);
 
     let entry = lockfile
         .packages
@@ -319,8 +319,8 @@ installed_at = "2026-04-27T10:00:00Z"
     // Sanity-check the file is parseable as v1 (auto-upgraded in memory).
     let pre = LockFile::load(&lock_path).unwrap();
     assert_eq!(
-        pre.schema_version, 6,
-        "load should auto-upgrade v1 to v6 in memory",
+        pre.schema_version, 7,
+        "load should auto-upgrade v1 to v7 in memory",
     );
     assert_eq!(pre.packages.len(), 1);
     assert_eq!(pre.packages[0].name.as_str(), "legacy-pkg");
@@ -331,16 +331,16 @@ installed_at = "2026-04-27T10:00:00Z"
 
     // Install a *non-plugin* fixture so the build step is skipped (the
     // fixture has no `[plugin]` table). This still triggers the
-    // lockfile-write path, which should persist `schema_version = 6`.
+    // lockfile-write path, which should persist `schema_version = 7`.
     let bare = fixtures::make_fixture_repo(tmp.path(), "data-only-pkg", "0.1.0", "tool");
     let source = PackageSource::from_str(&fixtures::file_url(&bare)).unwrap();
     install_with_options(&source, &scope, install_options_skip_cross_check()).unwrap();
 
-    // Verify the file on disk is now v6.
+    // Verify the file on disk is now v7.
     let updated = std::fs::read_to_string(&lock_path).unwrap();
     assert!(
-        updated.contains("schema_version = 6"),
-        "lockfile on disk should be schema_version = 6 after auto-upgrade install; got:\n{updated}",
+        updated.contains("schema_version = 7"),
+        "lockfile on disk should be schema_version = 7 after auto-upgrade install; got:\n{updated}",
     );
     assert!(
         !updated.contains("schema_version = 1"),
@@ -348,7 +348,7 @@ installed_at = "2026-04-27T10:00:00Z"
     );
 
     let post = LockFile::load(&lock_path).unwrap();
-    assert_eq!(post.schema_version, 6);
+    assert_eq!(post.schema_version, 7);
     // Both the legacy entry and the freshly installed data-only package
     // should have plugin = None (data-only).
     for pkg in &post.packages {

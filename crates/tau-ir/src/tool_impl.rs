@@ -51,6 +51,13 @@ pub enum ToolImpl {
         /// subset of the contract's declared capabilities; narrowed by
         /// `tau.toml` overrides).
         capability_subset: CapabilityRequirements,
+        /// The name passed on the MCP wire (server-side tool name).
+        /// Differs from this `Tool` node's `ToolId` because lowering
+        /// expands one author-side entry (`weather`) into N IR nodes
+        /// (`weather.get_forecast`, `weather.get_current`, ...); each
+        /// expanded node carries the server-side name to forward on
+        /// `tools/call` requests.
+        server_tool_name: String,
     },
     /// Sub-workflow spawn: invoking this tool runs the named agent (in the
     /// same `IrModule`) as a child loop with empty initial history. The

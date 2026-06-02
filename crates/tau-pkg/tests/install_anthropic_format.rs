@@ -321,15 +321,15 @@ installed_at = "2026-05-12T10:00:00Z"
 
     install_with_options(&source, &scope, test_install_options()).unwrap();
 
-    // The lockfile on disk should now be v6.
+    // The lockfile on disk should now be v7.
     let disk_content = std::fs::read_to_string(scope.lockfile_path()).unwrap();
     assert!(
-        disk_content.contains("schema_version = 6"),
-        "lockfile should be upgraded to v6; disk content:\n{disk_content}"
+        disk_content.contains("schema_version = 7"),
+        "lockfile should be upgraded to v7; disk content:\n{disk_content}"
     );
 
     let lf = LockFile::load(&scope.lockfile_path()).unwrap();
-    assert_eq!(lf.schema_version, 6, "schema_version should be 6");
+    assert_eq!(lf.schema_version, 7, "schema_version should be 7");
     assert_eq!(lf.packages.len(), 2, "both packages should be present");
 
     // Original entry retains synthesized_from = None.

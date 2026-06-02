@@ -151,7 +151,7 @@ fn lockfile_load_rejects_too_new_schema_version() {
         err,
         RegistryError::SchemaTooNew {
             found: 999,
-            supported: 6,
+            supported: 7,
         }
     ));
 }
