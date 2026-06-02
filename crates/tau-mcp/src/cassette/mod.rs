@@ -1,14 +1,19 @@
-//! Transport-agnostic message-level cassette format.
+//! Transport-agnostic message-level cassette format (spec §11).
 //!
-//! Captures MCP-message traffic at the handler-dispatch boundary (above
-//! the transport layer), so the same cassette replays under any transport
-//! (stdio, HTTP, future ws) and any host shell (tokio, wasm, embassy).
-//!
-//! Spec: design doc §11.
+//! Lives in `tau-mcp` (not `tau-mcp-tokio`) so wasm + embassy shells
+//! can replay cassettes in tests without a tokio dependency. The
+//! `transport` submodule (which provides `CassetteTransport`) requires
+//! std + futures and is therefore gated on `with-std-adapters`.
 
 pub mod message;
 pub mod recorder;
 pub mod replayer;
+
+#[cfg(feature = "with-std-adapters")]
+pub mod transport;
+
+#[cfg(feature = "with-std-adapters")]
+pub use transport::CassetteTransport;
 
 pub use message::{CassetteMessage, Direction, MessageKind, CASSETTE_VERSION};
 pub use recorder::Recorder;
