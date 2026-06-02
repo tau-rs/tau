@@ -1428,4 +1428,53 @@ installed_at = "2026-05-15T10:00:00Z"
         );
         assert_eq!(lf2.schema_version, 7);
     }
+
+    // ---- v6 → v7 migration tests (β.3 PR-4) ----
+
+    #[test]
+    fn v6_lockfile_silently_upgrades_to_v7_with_empty_mcp_entries() {
+        let v6_toml = r#"schema_version = 6
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "example"
+active_version = "1.0.0"
+source = "https://example.com/x.git"
+"#;
+        let lf = LockFile::from_toml_str(v6_toml).expect("v6 parses");
+        assert_eq!(lf.schema_version, MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION);
+        assert!(lf.mcp_entries.is_empty(), "v6 lockfile auto-upgrades with empty mcp_entries");
+    }
+
+    #[test]
+    fn v7_lockfile_with_mcp_entries_round_trips() {
+        let v7_toml = r#"schema_version = 7
+generated_by_tau_version = "0.1.0"
+generated_at = "2024-01-01T00:00:00Z"
+
+[[package]]
+name = "example"
+active_version = "1.0.0"
+source = "https://example.com/x.git"
+
+[[mcp]]
+entry = "weather"
+url = "stdio:npx --yes weather"
+contract_hash = "9f2e000000000000000000000000000000000000000000000000000000000000"
+pinned_contract = ".tau/mcp/weather.contract.json"
+
+[[mcp.expanded_tools]]
+name = "get_forecast"
+caps = ["kind=net.http,host=api.weather.com"]
+schema_hash = "0a1b000000000000000000000000000000000000000000000000000000000000"
+"#;
+        let lf = LockFile::from_toml_str(v7_toml).expect("v7 parses");
+        assert_eq!(lf.schema_version, 7);
+        assert_eq!(lf.mcp_entries.len(), 1);
+        let entry = &lf.mcp_entries[0];
+        assert_eq!(entry.entry, "weather");
+        assert_eq!(entry.expanded_tools.len(), 1);
+        assert_eq!(entry.expanded_tools[0].name, "get_forecast");
+    }
 }
