@@ -110,6 +110,7 @@ tokio-util      = { version = "0.7", features = ["rt"] }
 chrono          = { version = "0.4", features = ["serde"] }
 tokio           = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-util", "io-std", "process", "sync", "time"] }
 reqwest             = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+wiremock        = "0.6"
 eventsource-stream  = "0.2"
 async-stream        = "0.3"
 secrecy             = "0.10"
