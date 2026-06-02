@@ -3368,6 +3368,7 @@ dependencies = [
  "ulid",
  "url",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

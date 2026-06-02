@@ -64,6 +64,7 @@ proptest   = { workspace = true }
 rstest     = { workspace = true }
 tempfile   = "3"
 url        = { workspace = true }
+walkdir    = { workspace = true }
 # test-fixtures feature needed by tests/common/mock_llm.rs (T9: orchestration pattern tests).
 tau-ports  = { workspace = true, features = ["test-fixtures", "serde"] }
 
