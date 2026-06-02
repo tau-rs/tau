@@ -41,7 +41,7 @@ fn collect_tau_tomls(root: &std::path::Path) -> Vec<std::path::PathBuf> {
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-        if path.file_name().map_or(false, |n| n == "tau.toml") {
+        if path.file_name().is_some_and(|n| n == "tau.toml") {
             let path_str = path.to_string_lossy();
             // Exclude anything inside a cargo target directory.
             if !path_str.contains("/target/") {
