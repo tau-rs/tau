@@ -1,9 +1,15 @@
-//! Streamable HTTP transport for MCP servers.
+//! Streamable HTTP MCP transport (PR-3).
 //!
-//! Scaffold only in PR-1. PR-3 fills this in with:
-//!
-//! - `connect(url, &CapabilityPlan)` using reqwest + SSE parsing.
-//! - Per-call net.http cap enforcement via host-pinning middleware.
-//! - `Transport` impl carrying the HTTP client + SSE stream.
-//!
-//! See the β.3 design doc §2 + §9.
+//! Per MCP spec rev 2025-03-26, the Streamable HTTP transport uses
+//! POST for client→server messages and either application/json or
+//! text/event-stream for server→client responses.
+
+pub mod dial;
+pub mod error;
+pub mod guard;
+pub mod server;
+pub mod session;
+pub mod sse;
+
+pub use error::{HttpSpawnError, HttpTransportError};
+pub use server::McpHttpServer;
