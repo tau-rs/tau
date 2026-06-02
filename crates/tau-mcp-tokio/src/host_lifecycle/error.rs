@@ -57,6 +57,9 @@ pub enum LifecycleError {
     /// Subprocess spawn failure (stdio transport).
     #[error("stdio spawn: {0}")]
     StdioSpawn(#[from] crate::transport_stdio::StdioSpawnError),
+    /// HTTP dial failure (Streamable HTTP transport).
+    #[error("http dial: {0}")]
+    HttpSpawn(#[from] crate::transport_http::HttpSpawnError),
     /// Handshake failure.
     #[error("handshake: {0}")]
     Handshake(#[from] HandshakeError),
