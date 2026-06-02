@@ -29,11 +29,15 @@ fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'sta
                 .map(|n| hash_of(n))
         })),
         mcp_contract: Box::leak(Box::new(
-            move |url: &str| -> Option<tau_ir::lower::McpContractEntry> {
+            move |url: &str| -> Option<tau_ir::lower::ResolvedMcpContract> {
                 mcp_known
                     .iter()
                     .find(|u| u.as_str() == url)
-                    .map(|u| (hash_of(u), tau_ir::CapabilityRequirements::default()))
+                    .map(|u| tau_ir::lower::ResolvedMcpContract {
+                        hash: hash_of(u),
+                        expanded_tools: vec![],
+                        requires_sampling: false,
+                    })
             },
         )),
         skill: Box::leak(Box::new(|_name: &str| -> Option<[u8; 32]> { None })),
