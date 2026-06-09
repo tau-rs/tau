@@ -487,6 +487,122 @@ impl HostHandlers for WiredHostHandlers {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Drift-check helpers (β.3 PR-5 Phase 4)
+// ---------------------------------------------------------------------------
+
+use tau_mcp::contract::canonical::{canonical_hash, hash_to_hex};
+use tau_mcp_tokio::host_lifecycle::client::McpClient;
+use tau_pkg::lockfile::LockedMcpEntry;
+
+/// Inner-helper version of the drift check — takes a `ServerContract`
+/// directly so unit tests can exercise it without a live `McpClient`.
+///
+/// Returns `Err(RuntimeError::McpContractDriftAtBoot)` when the
+/// canonical hash of `contract` differs from `entry.contract_hash`,
+/// or `Err(RuntimeError::McpSetupFailed)` when hashing itself fails.
+// Phase 5 (setup_mcp_runtime) will consume this fn; allow dead_code
+// until that wiring lands.
+#[allow(dead_code)]
+pub(crate) fn verify_hash_against_lockfile(
+    entry: &LockedMcpEntry,
+    contract: &tau_mcp::contract::ServerContract,
+) -> Result<(), RuntimeError> {
+    let actual_hash = canonical_hash(contract).map_err(|e| RuntimeError::McpSetupFailed {
+        entry: entry.entry.clone(),
+        reason: format!("canonical_hash failed: {e}"),
+    })?;
+    let actual_hex = hash_to_hex(&actual_hash);
+    if actual_hex != entry.contract_hash {
+        return Err(RuntimeError::McpContractDriftAtBoot {
+            entry: entry.entry.clone(),
+            expected_hash: entry.contract_hash.clone(),
+            actual_hash: actual_hex,
+        });
+    }
+    Ok(())
+}
+
+/// Verify that the live MCP handshake matches the lockfile-recorded hash.
+///
+/// Delegates to `verify_hash_against_lockfile` using `client.contract()`.
+// Phase 5 (setup_mcp_runtime) will consume this fn; allow dead_code
+// until that wiring lands.
+#[allow(dead_code)]
+pub(crate) fn verify_lockfile_against_live(
+    entry: &LockedMcpEntry,
+    client: &McpClient,
+) -> Result<(), RuntimeError> {
+    verify_hash_against_lockfile(entry, client.contract())
+}
+
+#[cfg(test)]
+mod drift_tests {
+    use std::collections::BTreeMap;
+
+    use tau_mcp::contract::canonical::canonical_hash;
+    use tau_mcp::contract::ServerContract;
+    use tau_mcp::protocol::initialize::ServerInfo;
+    use tau_pkg::lockfile::LockedMcpEntry;
+
+    use super::{hash_to_hex, verify_hash_against_lockfile, RuntimeError};
+
+    fn empty_contract() -> ServerContract {
+        ServerContract {
+            protocol_version: "2025-03-26".to_string(),
+            server_info: ServerInfo {
+                name: "mock".to_string(),
+                version: "0.0.0".to_string(),
+                additional: BTreeMap::new(),
+            },
+            tools: vec![],
+        }
+    }
+
+    fn locked_entry_with_hash(hex_hash: &str) -> LockedMcpEntry {
+        LockedMcpEntry::new(
+            "weather".to_string(),
+            "stdio:mock".to_string(),
+            hex_hash.to_string(),
+            None,
+            vec![],
+        )
+    }
+
+    #[test]
+    fn matching_hash_passes() {
+        let contract = empty_contract();
+        let live_hash = canonical_hash(&contract).expect("hash");
+        let entry = locked_entry_with_hash(&hash_to_hex(&live_hash));
+        verify_hash_against_lockfile(&entry, &contract).expect("matching hash succeeds");
+    }
+
+    #[test]
+    fn drift_raises_typed_error() {
+        let contract = empty_contract();
+        let entry = locked_entry_with_hash(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let err =
+            verify_hash_against_lockfile(&entry, &contract).expect_err("hash differs");
+        match err {
+            RuntimeError::McpContractDriftAtBoot {
+                entry: e,
+                expected_hash,
+                actual_hash,
+            } => {
+                assert_eq!(e, "weather");
+                assert_eq!(
+                    expected_hash,
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                );
+                assert_ne!(actual_hash, expected_hash);
+            }
+            other => panic!("expected McpContractDriftAtBoot, got {other:?}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod wired_handlers_tests {
     use super::*;
