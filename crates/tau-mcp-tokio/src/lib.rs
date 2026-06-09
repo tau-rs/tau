@@ -6,6 +6,7 @@ pub mod resolver;
 pub mod transport_http;
 pub mod transport_stdio;
 
+pub use bridge::McpBackedTool;
 pub use host_lifecycle::{
     open, HandshakeError, LifecycleError, McpClient, McpClientOptions, McpUrl, UrlParseError,
 };
