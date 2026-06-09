@@ -1,0 +1,54 @@
+name: full-matrix label — PR comment poster
+
+# Posts a single PR comment summarizing the Tier 2 result when
+# tier2.yml completes for a `full-matrix`-labeled PR. Non-blocking.
+
+on:
+  workflow_run:
+    workflows: ["Tier 2 — Heavy validation"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  contents: read
+  actions: read
+
+jobs:
+  comment:
+    name: post tier 2 result comment
+    runs-on: ubuntu-latest
+    # Only fire if the originating Tier 2 run was on a PR event.
+    if: github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Resolve PR number from workflow_run
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          PR=$(gh pr list --search "$HEAD_SHA" --state open --json number --jq '.[0].number // empty')
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+      - name: Build comment body
+        if: steps.pr.outputs.number != ''
+        id: body
+        env:
+          STATUS: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          {
+            echo "## 🧪 Tier 2 (full-matrix) results"
+            echo ""
+            echo "Outcome: **$STATUS**"
+            echo ""
+            echo "Run: $RUN_URL"
+            echo ""
+            echo "_Non-blocking. Auto-merge gates on Tier 1 (ci-summary) only._"
+          } > comment.md
+          echo "path=comment.md" >> "$GITHUB_OUTPUT"
+      - name: Post or update comment
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ steps.pr.outputs.number }}
+          body-path: ${{ steps.body.outputs.path }}
+          edit-mode: replace
