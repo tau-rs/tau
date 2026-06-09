@@ -388,6 +388,158 @@ impl ToolDispatcher for ForwardingDispatcher {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WiredHostHandlers (β.3 PR-5)
+// ---------------------------------------------------------------------------
+
+use tau_mcp::host::handlers::{BoxFuture as HostBoxFuture, HostHandlers, InboundError};
+use tau_mcp::protocol::roots::Root;
+use tau_mcp::protocol::sampling::{
+    SamplingContent, SamplingCreateMessageRequest, SamplingCreateMessageResponse,
+};
+
+/// Inbound MCP handler impl wired against an agent's LlmBackend + the
+/// per-server sampling.models allowlist + roots declaration from tau.toml.
+///
+/// v0: sampling checks the allowlist and delegates to a stub response;
+/// real LlmBackend invocation is wired in β.3.1. The empty-allowlist
+/// refuse path is fully exercised by the unit tests in this file.
+// Phase 5 (setup_mcp_runtime) will consume this struct; allow dead_code
+// until that wiring lands.
+#[allow(dead_code)]
+pub(crate) struct WiredHostHandlers {
+    /// LLM backend the agent owns — sampling delegates to this (β.3.1).
+    backend: Arc<dyn DynLlmBackend>,
+    /// Allowlisted model ids. Empty = sampling refused (default-deny).
+    sampling_models: Vec<String>,
+    /// Roots returned to the server on `roots/list`.
+    roots: Vec<std::path::PathBuf>,
+}
+
+impl WiredHostHandlers {
+    #[allow(dead_code)]
+    pub(crate) fn new(
+        backend: Arc<dyn DynLlmBackend>,
+        sampling_models: Vec<String>,
+        roots: Vec<std::path::PathBuf>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            backend,
+            sampling_models,
+            roots,
+        })
+    }
+}
+
+impl HostHandlers for WiredHostHandlers {
+    fn sampling<'a>(
+        &'a self,
+        req: SamplingCreateMessageRequest,
+    ) -> HostBoxFuture<'a, Result<SamplingCreateMessageResponse, InboundError>> {
+        Box::pin(async move {
+            if self.sampling_models.is_empty() {
+                return Err(InboundError::SamplingNotAllowed);
+            }
+            // v0 model picker: first allowlisted model. β.3.1 will honour
+            // req.model_preferences for smarter selection.
+            let model = self.sampling_models[0].clone();
+
+            // Translate MCP SamplingMessage[] → a prompt string.
+            // Only Text content is joined; Image blocks are skipped in v0.
+            let prompt_text = req
+                .messages
+                .iter()
+                .map(|m| match &m.content {
+                    SamplingContent::Text { text } => text.as_str(),
+                    SamplingContent::Image { .. } => "",
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // STUB — real backend.complete() call is wired in β.3.1.
+            // The `backend` field is held so the struct compiles with the
+            // real DynLlmBackend handle; tests only exercise the allowlist
+            // refuse path above and never reach here.
+            let _ = &self.backend;
+            let text =
+                format!("[sampling stub for model {model}; prompt={prompt_text:?}]");
+
+            Ok(SamplingCreateMessageResponse {
+                role: "assistant".to_string(),
+                content: SamplingContent::Text { text },
+                model,
+                stop_reason: Some("endTurn".to_string()),
+            })
+        })
+    }
+
+    fn roots<'a>(&'a self) -> HostBoxFuture<'a, Result<Vec<Root>, InboundError>> {
+        Box::pin(async move {
+            Ok(self
+                .roots
+                .iter()
+                .map(|p| Root {
+                    uri: format!("file://{}", p.display()),
+                    name: p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()),
+                })
+                .collect())
+        })
+    }
+}
+
+#[cfg(test)]
+mod wired_handlers_tests {
+    use super::*;
+    use tau_mcp::protocol::sampling::{SamplingContent, SamplingCreateMessageRequest, SamplingMessage};
+    use tau_ports::fixtures::MockLlmBackend;
+
+    fn req(text: &str) -> SamplingCreateMessageRequest {
+        SamplingCreateMessageRequest {
+            messages: vec![SamplingMessage {
+                role: "user".to_string(),
+                content: SamplingContent::Text {
+                    text: text.to_string(),
+                },
+            }],
+            model_preferences: None,
+            system_prompt: None,
+            include_context: None,
+            max_tokens: None,
+            additional: Default::default(),
+        }
+    }
+
+    fn backend_stub() -> Arc<dyn DynLlmBackend> {
+        Arc::new(MockLlmBackend::new("stub-backend"))
+    }
+
+    #[tokio::test]
+    async fn empty_allowlist_refuses_sampling() {
+        let h = WiredHostHandlers::new(backend_stub(), Vec::new(), Vec::new());
+        let err = h.sampling(req("hi")).await.expect_err("should refuse");
+        assert!(matches!(err, InboundError::SamplingNotAllowed));
+    }
+
+    #[tokio::test]
+    async fn empty_roots_returns_empty_list() {
+        let h = WiredHostHandlers::new(backend_stub(), Vec::new(), Vec::new());
+        let roots = h.roots().await.expect("ok");
+        assert!(roots.is_empty());
+    }
+
+    #[tokio::test]
+    async fn roots_serializes_paths_as_file_uri() {
+        let h = WiredHostHandlers::new(
+            backend_stub(),
+            Vec::new(),
+            vec![std::path::PathBuf::from("/tmp/mcp-cache")],
+        );
+        let roots = h.roots().await.expect("ok");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].uri, "file:///tmp/mcp-cache");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
