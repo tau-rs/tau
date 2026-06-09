@@ -1,0 +1,32 @@
+name: Dependabot — auto-merge patches
+
+# Auto-merges PRs from dependabot[bot] when:
+# - PR is labeled `dependencies` (dependabot adds this automatically)
+# - update-type is patch-level (semver patch bump)
+# - All Tier 1 checks pass (gated by `gh pr merge --auto` itself)
+
+on:
+  pull_request:
+    types: [labeled, opened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: enroll auto-merge if patch-level
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable auto-merge for patch updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto "$PR_URL"

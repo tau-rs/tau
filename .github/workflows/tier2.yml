@@ -1,0 +1,358 @@
+name: Tier 2 — Heavy validation
+
+# Runs on:
+# - nightly cron 04:00 UTC against main HEAD (regression detection ≤24h)
+# - pull_request labeled `full-matrix` (opt-in pre-merge heavy run)
+# - workflow_dispatch (manual)
+#
+# Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 1
+# (ci-summary) green; Tier 2 results are informational, posted as PR
+# comments or — on cron — as rolling regression issues.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+  workflow_call:  # release.yml reuses this workflow for preflight
+
+concurrency:
+  group: tier2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  gate:
+    # For pull_request triggers, only run downstream jobs when the
+    # `full-matrix` label is present. For schedule + workflow_dispatch,
+    # always run.
+    name: gate
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.compute.outputs.run }}
+    steps:
+      - id: compute
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if echo "$LABELS" | grep -q '"full-matrix"'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-fixtures-linux:
+    # Self-contained: build the fixture binaries inside this workflow
+    # rather than downloading from ci.yml's artifact (avoids cross-
+    # workflow race conditions when ci.yml hasn't yet uploaded).
+    name: build-fixtures / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-mold: true
+      - name: Build all release-mode binaries
+        run: |
+          cargo build --release \
+            -p anthropic -p ollama -p openai \
+            -p fs-read -p shell \
+            -p echo-llm -p echo-tool \
+            -p tau-cli
+          cargo build --release \
+            -p tau-sandbox-native --bin tau-net-bridge
+      - name: Build controlled-env binary
+        run: |
+          cargo build --release \
+            --manifest-path crates/tau-plugin-compat/fixtures/controlled-env-binary/Cargo.toml
+      - name: Stage binaries into flat _artifacts directory
+        run: |
+          mkdir -p _artifacts
+          cp target/release/anthropic-plugin _artifacts/
+          cp target/release/ollama-plugin _artifacts/
+          cp target/release/openai-plugin _artifacts/
+          cp target/release/fs-read-plugin _artifacts/
+          cp target/release/shell-plugin _artifacts/
+          cp target/release/echo-llm _artifacts/
+          cp target/release/echo-tool _artifacts/
+          cp target/release/tau _artifacts/
+          cp target/release/tau-net-bridge _artifacts/
+          cp crates/tau-plugin-compat/fixtures/controlled-env-binary/target/release/tau-controlled-env _artifacts/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tier2-linux-fixture-binaries
+          retention-days: 1
+          path: _artifacts/
+
+  nextest-macos:
+    name: nextest / macos
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: macos-latest-stable
+          with-nextest: true
+          with-sccache: true
+      - run: cargo nextest run --profile ci --workspace --all-targets
+
+  nextest-windows:
+    name: nextest / windows
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: windows-latest-stable
+          with-nextest: true
+      - run: cargo nextest run --profile ci --workspace --all-targets
+
+  coverage:
+    name: cargo llvm-cov nextest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage
+        run: cargo llvm-cov nextest --profile ci --workspace --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+
+  test-conformance:
+    name: test (conformance)
+    needs: [gate, build-fixtures-linux]
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - uses: actions/download-artifact@v6
+        with:
+          name: tier2-linux-fixture-binaries
+          path: _artifacts/
+      - uses: ./.github/actions/place-fixture-binaries
+        with:
+          binaries: "anthropic-plugin ollama-plugin openai-plugin"
+      - name: Run conformance suite against all 3 plugins
+        run: |
+          cargo nextest run --profile ci -p anthropic --test conformance --no-capture
+          cargo nextest run --profile ci -p ollama    --test conformance --no-capture
+          cargo nextest run --profile ci -p openai    --test conformance --no-capture
+
+  test-tau-plugin-compat:
+    name: test (tau-plugin-compat / linux)
+    needs: [gate, build-fixtures-linux]
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAU_CONTAINER_RUNTIME: docker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-mold: true
+      - uses: actions/download-artifact@v6
+        with:
+          name: tier2-linux-fixture-binaries
+          path: _artifacts/
+      - uses: ./.github/actions/place-fixture-binaries
+        with:
+          binaries: "all"
+      - name: Build tau binary (debug)
+        run: cargo build -p tau-cli --bin tau
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+      - name: Build per-plugin images
+        run: cargo run -p xtask -- build-plugin-images
+        env:
+          BUILDX_CACHE_FROM: type=gha
+          BUILDX_CACHE_TO: type=gha,mode=max
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: "1"
+      - name: Test tau-plugin-compat
+        run: cargo nextest run --profile ci -p tau-plugin-compat --features integration-tests --tests --verbose
+
+  test-tau-plugin-compat-layer4-ignored:
+    name: test (tau-plugin-compat / layer4-ignored / ${{ matrix.flavor }})
+    needs: [gate, build-fixtures-linux]
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [native, container]
+    env:
+      TAU_CONTAINER_RUNTIME: docker
+      FLAVOR: ${{ matrix.flavor }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-mold: true
+      - uses: actions/download-artifact@v6
+        with:
+          name: tier2-linux-fixture-binaries
+          path: _artifacts/
+      - uses: ./.github/actions/place-fixture-binaries
+        with:
+          binaries: "all"
+      - name: Set up Docker buildx
+        if: matrix.flavor == 'container'
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+      - name: Build per-plugin images
+        if: matrix.flavor == 'container'
+        run: cargo run -p xtask -- build-plugin-images
+        env:
+          BUILDX_CACHE_FROM: type=gha
+          BUILDX_CACHE_TO: type=gha,mode=max
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: "1"
+      - name: Build NEXTEST_FILTER for this leg
+        run: |
+          if [ "$FLAVOR" = "native" ]; then
+            echo 'NEXTEST_FILTER=not (test(/anthropic_layer4_native_completes_via_cassette/) | test(/ollama_layer4_native_completes_via_cassette/) | test(/openai_layer4_native_completes_via_cassette/))' >> "$GITHUB_ENV"
+          else
+            echo 'NEXTEST_FILTER=all()' >> "$GITHUB_ENV"
+          fi
+      - name: Run ignored layer4 tests
+        run: |
+          cargo nextest run --profile ci \
+            -p tau-plugin-compat \
+            --features integration-tests \
+            --run-ignored only \
+            --test "layer4_$FLAVOR" \
+            -E "$NEXTEST_FILTER" \
+            --verbose
+
+  test-tau-sandbox-native-e2e:
+    name: test (tau-sandbox-native e2e / linux)
+    needs: [gate, build-fixtures-linux]
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-mold: true
+      - uses: actions/download-artifact@v6
+        with:
+          name: tier2-linux-fixture-binaries
+          path: _artifacts/
+      - uses: ./.github/actions/place-fixture-binaries
+        with:
+          binaries: "tau-controlled-env"
+      - name: Test tau-sandbox-native e2e
+        run: cargo nextest run --profile ci -p tau-sandbox-native --features integration-tests --tests --verbose
+      - name: Run --ignored landlock-gated tests
+        run: cargo nextest run --profile ci -p tau-sandbox-native --features integration-tests --run-ignored only --verbose
+
+  test-tau-runtime-e2e:
+    name: test (tau-runtime e2e / linux)
+    needs: [gate, build-fixtures-linux]
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-mold: true
+      - uses: actions/download-artifact@v6
+        with:
+          name: tier2-linux-fixture-binaries
+          path: _artifacts/
+      - uses: ./.github/actions/place-fixture-binaries
+        with:
+          binaries: "tau-controlled-env"
+      - name: Test tau-runtime-tokio e2e
+        run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --tests --verbose
+
+  nightly-regression-handler:
+    # Opens or updates a rolling issue on cron failure. Skips for PR-
+    # labeled runs (those report via PR comment from a separate workflow).
+    name: nightly-regression-handler
+    needs:
+      - nextest-macos
+      - nextest-windows
+      - coverage
+      - test-conformance
+      - test-tau-plugin-compat
+      - test-tau-plugin-compat-layer4-ignored
+      - test-tau-sandbox-native-e2e
+      - test-tau-runtime-e2e
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Open or append rolling regression issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Find an existing open issue with the nightly-regression label.
+          EXISTING=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
+          BODY="Nightly Tier 2 cron failed on commit \`$SHA\`.\n\nRun: $RUN_URL\n\nSee failing jobs in the run page; auto-bisect will post the offending commit when available."
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            DATE=$(date -u +%Y-%m-%d)
+            gh issue create \
+              --title "[nightly-CI] regression on $DATE" \
+              --label nightly-regression \
+              --body "$BODY"
+          fi

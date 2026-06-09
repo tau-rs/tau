@@ -1,0 +1,110 @@
+name: Security — daily CVE scan
+
+# Daily 04:00 UTC. Runs cargo-audit + osv-scanner against main HEAD.
+# Diffs result vs yesterday's cached report. Opens issue
+# `[security] new CVE: <id>` (label `security`) on NEW findings only.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: security-daily-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    name: cargo audit + osv-scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+      - name: cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v1
+        with:
+          scan-args: |-
+            -r .
+        continue-on-error: true
+      - name: Save scan results as artifact (for tomorrow's diff)
+        run: |
+          mkdir -p _security
+          # cargo-audit output already surfaced by the action; for diff,
+          # re-run cargo audit json to a file.
+          cargo install cargo-audit --locked || true
+          cargo audit --json > _security/cargo-audit.json || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: security-daily-${{ github.run_id }}
+          path: _security/
+          retention-days: 30
+
+  diff-and-file-issues:
+    name: diff vs yesterday + file issues on new
+    needs: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download today's report
+        uses: actions/download-artifact@v6
+        with:
+          name: security-daily-${{ github.run_id }}
+          path: _today/
+      - name: Find yesterday's report
+        id: yesterday
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find the most recent successful run of THIS workflow other
+          # than the current run, and download its artifact.
+          PREV=$(gh run list --workflow=security-daily.yml --status success \
+            --limit 5 --json databaseId --jq ".[] | select(.databaseId != ${{ github.run_id }}) | .databaseId" \
+            | head -1)
+          if [ -n "$PREV" ]; then
+            echo "prev_run=$PREV" >> "$GITHUB_OUTPUT"
+          else
+            echo "prev_run=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download yesterday's report
+        if: steps.yesterday.outputs.prev_run != ''
+        uses: actions/download-artifact@v6
+        with:
+          run-id: ${{ steps.yesterday.outputs.prev_run }}
+          name: security-daily-${{ steps.yesterday.outputs.prev_run }}
+          path: _yesterday/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Diff + open issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -f _yesterday/cargo-audit.json ]; then
+            echo "No yesterday baseline; skipping diff (will file issues for ALL findings tomorrow)."
+            exit 0
+          fi
+          # Extract advisory IDs from both reports (jq), diff, file
+          # issue for each new ID.
+          TODAY_IDS=$(jq -r '.vulnerabilities.list[].advisory.id // empty' _today/cargo-audit.json 2>/dev/null | sort -u)
+          YDAY_IDS=$(jq -r '.vulnerabilities.list[].advisory.id // empty' _yesterday/cargo-audit.json 2>/dev/null | sort -u)
+          NEW_IDS=$(comm -23 <(echo "$TODAY_IDS") <(echo "$YDAY_IDS"))
+          if [ -z "$NEW_IDS" ]; then
+            echo "No new advisories vs yesterday."
+            exit 0
+          fi
+          echo "$NEW_IDS" | while read -r ID; do
+            [ -z "$ID" ] && continue
+            DETAILS=$(jq -r ".vulnerabilities.list[] | select(.advisory.id == \"$ID\") | .advisory" _today/cargo-audit.json)
+            gh issue create \
+              --title "[security] new CVE: $ID" \
+              --label security \
+              --body "New RustSec advisory detected.\n\nID: $ID\n\nDetails:\n\`\`\`json\n$DETAILS\n\`\`\`\n\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          done
