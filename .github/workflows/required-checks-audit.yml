@@ -1,0 +1,46 @@
+name: Required-checks audit
+
+# Trivial guard. Fails when a PR modifies any workflow `name:` field
+# without referencing an ADR in the PR body. Catches accidental
+# "I added a new required check" drift.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/*.yml'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  audit:
+    name: audit workflow name changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: "Detect name: changes"
+        id: detect
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "$BASE_REF" --depth 1
+          DIFF=$(git diff "origin/$BASE_REF...HEAD" -- '.github/workflows/*.yml')
+          if echo "$DIFF" | grep -qE '^\+name:'; then
+            echo "name_added=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "name_added=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Require ADR reference in PR body
+        if: steps.detect.outputs.name_added == 'true'
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$BODY" | grep -qE 'ADR-[0-9]+|docs/decisions/'; then
+            echo "PR body references an ADR; audit passes."
+          else
+            echo "::error::This PR adds a new workflow name (potential new branch-protection-required check) but the PR body does not reference an ADR. Either revert the name change OR add an ADR reference (ADR-XXXX or docs/decisions/...) explaining why the change is intended."
+            exit 1
+          fi
