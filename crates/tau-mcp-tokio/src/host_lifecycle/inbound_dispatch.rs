@@ -95,32 +95,33 @@ async fn route_request(
     let id = req.id.clone();
     let response_payload: Result<serde_json::Value, tau_mcp::McpError> = match req.method.as_str() {
         "sampling/createMessage" => {
-            let parsed: SamplingCreateMessageRequest = match serde_json::from_value(
-                req.params.unwrap_or(serde_json::Value::Null),
-            ) {
-                Ok(p) => p,
-                Err(e) => return send_error(transport, id, format!("decode sampling: {e}")).await,
-            };
+            let parsed: SamplingCreateMessageRequest =
+                match serde_json::from_value(req.params.unwrap_or(serde_json::Value::Null)) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return send_error(transport, id, format!("decode sampling: {e}")).await
+                    }
+                };
             match handlers.sampling(parsed).await {
                 Ok(resp) => match serde_json::to_value(resp) {
                     Ok(v) => Ok(v),
-                    Err(e) => return send_error(transport, id, format!("encode sampling: {e}")).await,
+                    Err(e) => {
+                        return send_error(transport, id, format!("encode sampling: {e}")).await
+                    }
                 },
                 Err(e) => return send_inbound_error(transport, id, e).await,
             }
         }
-        "roots/list" => {
-            match handlers.roots().await {
-                Ok(roots) => {
-                    let resp = RootsListResponse { roots };
-                    match serde_json::to_value(resp) {
-                        Ok(v) => Ok(v),
-                        Err(e) => return send_error(transport, id, format!("encode roots: {e}")).await,
-                    }
+        "roots/list" => match handlers.roots().await {
+            Ok(roots) => {
+                let resp = RootsListResponse { roots };
+                match serde_json::to_value(resp) {
+                    Ok(v) => Ok(v),
+                    Err(e) => return send_error(transport, id, format!("encode roots: {e}")).await,
                 }
-                Err(e) => return send_inbound_error(transport, id, e).await,
             }
-        }
+            Err(e) => return send_inbound_error(transport, id, e).await,
+        },
         other => {
             return send_error(
                 transport,

@@ -52,8 +52,8 @@ impl McpBackedTool {
     ) -> Arc<Self> {
         // serde_json::Value → tau_domain::Value via JSON round-trip.
         // Both enums share the same on-wire shape, so this is lossless.
-        let input_schema: Value = serde_json::from_value(input_schema_json)
-            .unwrap_or(Value::Object(Default::default()));
+        let input_schema: Value =
+            serde_json::from_value(input_schema_json).unwrap_or(Value::Object(Default::default()));
         Arc::new(Self {
             ir_tool_id: ir_tool_id.into(),
             client,
@@ -153,7 +153,9 @@ mod tests {
     use super::*;
 
     fn text_block(s: &str) -> ContentBlock {
-        ContentBlock::Text { text: s.to_string() }
+        ContentBlock::Text {
+            text: s.to_string(),
+        }
     }
 
     #[test]

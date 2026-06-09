@@ -134,8 +134,8 @@ pub(crate) async fn run_via_ir(
     //     verify drift vs lockfile, spawn inbound-dispatch tasks, and
     //     insert one McpBackedTool per server-tool into tools_by_id.
     //     Non-MCP projects (empty mcp_entries) produce an empty setup — no-op.
-    let lockfile = tau_pkg::lockfile::LockFile::load(&scope.lockfile_path())
-        .with_context(|| {
+    let lockfile =
+        tau_pkg::lockfile::LockFile::load(&scope.lockfile_path()).with_context(|| {
             format!(
                 "loading lockfile for MCP setup: {}",
                 scope.lockfile_path().display()
@@ -478,8 +478,7 @@ impl HostHandlers for WiredHostHandlers {
             // real DynLlmBackend handle; tests only exercise the allowlist
             // refuse path above and never reach here.
             let _ = &self.backend;
-            let text =
-                format!("[sampling stub for model {model}; prompt={prompt_text:?}]");
+            let text = format!("[sampling stub for model {model}; prompt={prompt_text:?}]");
 
             Ok(SamplingCreateMessageResponse {
                 role: "assistant".to_string(),
@@ -497,7 +496,10 @@ impl HostHandlers for WiredHostHandlers {
                 .iter()
                 .map(|p| Root {
                     uri: format!("file://{}", p.display()),
-                    name: p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()),
+                    name: p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_string()),
                 })
                 .collect())
         })
@@ -581,15 +583,17 @@ pub(crate) async fn setup_mcp_runtime(
 
     for locked in &lockfile.mcp_entries {
         // Locate the corresponding tau.toml entry (sampling.models + roots).
-        let tool_entry = config.tools.get(&locked.entry).ok_or_else(|| {
-            RuntimeError::McpSetupFailed {
-                entry: locked.entry.clone(),
-                reason: format!(
-                    "lockfile names entry {:?} but [tools.{}] missing in tau.toml",
-                    locked.entry, locked.entry
-                ),
-            }
-        })?;
+        let tool_entry =
+            config
+                .tools
+                .get(&locked.entry)
+                .ok_or_else(|| RuntimeError::McpSetupFailed {
+                    entry: locked.entry.clone(),
+                    reason: format!(
+                        "lockfile names entry {:?} but [tools.{}] missing in tau.toml",
+                        locked.entry, locked.entry
+                    ),
+                })?;
 
         let url = match &tool_entry.body {
             tau_pkg::project::project::ToolBody::Mcp(u) => u.clone(),
@@ -635,8 +639,7 @@ pub(crate) async fn setup_mcp_runtime(
 
         // Per server-tool in the contract, register one McpBackedTool.
         for st in &arc_client.contract().tools {
-            let ir_tool_id =
-                tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
+            let ir_tool_id = tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
             let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
                 ir_tool_id.0.clone(),
                 arc_client.clone(),
@@ -702,8 +705,7 @@ mod drift_tests {
         let entry = locked_entry_with_hash(
             "0000000000000000000000000000000000000000000000000000000000000000",
         );
-        let err =
-            verify_hash_against_lockfile(&entry, &contract).expect_err("hash differs");
+        let err = verify_hash_against_lockfile(&entry, &contract).expect_err("hash differs");
         match err {
             RuntimeError::McpContractDriftAtBoot {
                 entry: e,
@@ -725,7 +727,9 @@ mod drift_tests {
 #[cfg(test)]
 mod wired_handlers_tests {
     use super::*;
-    use tau_mcp::protocol::sampling::{SamplingContent, SamplingCreateMessageRequest, SamplingMessage};
+    use tau_mcp::protocol::sampling::{
+        SamplingContent, SamplingCreateMessageRequest, SamplingMessage,
+    };
     use tau_ports::fixtures::MockLlmBackend;
 
     fn req(text: &str) -> SamplingCreateMessageRequest {

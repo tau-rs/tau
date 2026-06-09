@@ -13,6 +13,8 @@ pub mod url;
 
 pub use client::{McpClient, McpClientOptions};
 pub use error::{HandshakeError, LifecycleError, UrlParseError};
-pub use inbound_dispatch::{spawn_inbound_dispatch, InboundDispatchHandle, INBOUND_REFUSED_ERROR_CODE};
+pub use inbound_dispatch::{
+    spawn_inbound_dispatch, InboundDispatchHandle, INBOUND_REFUSED_ERROR_CODE,
+};
 pub use open::open;
 pub use url::{parse_url, McpUrl};

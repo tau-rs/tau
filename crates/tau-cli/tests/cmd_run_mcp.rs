@@ -39,8 +39,8 @@ fn minimal_cassette() -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_backed_tool_round_trips_via_cassette() {
-    let transport = CassetteTransport::from_jsonl_bytes(&minimal_cassette())
-        .expect("parse cassette");
+    let transport =
+        CassetteTransport::from_jsonl_bytes(&minimal_cassette()).expect("parse cassette");
     // Cast Arc<CassetteTransport> to Arc<dyn Transport> for McpClient::new.
     let transport: Arc<dyn tau_mcp::transport::Transport> = transport;
 
@@ -53,7 +53,11 @@ async fn mcp_backed_tool_round_trips_via_cassette() {
         },
         tools: vec![],
     };
-    let client = Arc::new(McpClient::new(transport, contract, McpClientOptions::default()));
+    let client = Arc::new(McpClient::new(
+        transport,
+        contract,
+        McpClientOptions::default(),
+    ));
 
     let tool = McpBackedTool::new(
         "weather.echo",
