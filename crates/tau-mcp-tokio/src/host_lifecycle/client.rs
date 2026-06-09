@@ -105,6 +105,24 @@ impl McpClient {
     pub fn transport(&self) -> &Arc<dyn Transport> {
         &self.transport
     }
+
+    /// Spawn the inbound-dispatch task for this client.
+    ///
+    /// Routes server-initiated `sampling/createMessage` + `roots/list`
+    /// requests through `handlers`. Returns a handle whose `shutdown()`
+    /// or `Drop` aborts the pump.
+    ///
+    /// Call AT MOST ONCE per McpClient — the pump owns the inbound side
+    /// of the transport. Calling twice would race with `call_tool`'s
+    /// response loop. In v0 the pattern is: spawn the pump for clients
+    /// that need server-initiated routing; do nothing for outbound-only
+    /// clients (e.g. the live resolver from PR-4).
+    pub fn start_inbound_dispatch(
+        &self,
+        handlers: std::sync::Arc<dyn tau_mcp::host::handlers::HostHandlers>,
+    ) -> crate::host_lifecycle::InboundDispatchHandle {
+        crate::host_lifecycle::spawn_inbound_dispatch(self.transport.clone(), handlers)
+    }
 }
 
 async fn recv_response_for(
