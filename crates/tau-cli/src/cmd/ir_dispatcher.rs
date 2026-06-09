@@ -130,6 +130,27 @@ pub(crate) async fn run_via_ir(
         // run aborts before any LLM tokens are spent.
     }
 
+    // 5c. MCP extension: open each [tools.<entry>] mcp = "..." server,
+    //     verify drift vs lockfile, spawn inbound-dispatch tasks, and
+    //     insert one McpBackedTool per server-tool into tools_by_id.
+    //     Non-MCP projects (empty mcp_entries) produce an empty setup — no-op.
+    let lockfile =
+        tau_pkg::lockfile::LockFile::load(&scope.lockfile_path()).with_context(|| {
+            format!(
+                "loading lockfile for MCP setup: {}",
+                scope.lockfile_path().display()
+            )
+        })?;
+    let mcp_setup = setup_mcp_runtime(&project, &lockfile, llm_backend.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP setup: {e}"))?;
+    for (id, tool) in mcp_setup.tools {
+        tools_by_id.insert(id, tool);
+    }
+    // Hold inbound-dispatch task handles for the lifetime of the run.
+    // Dropping them here would abort the pumps immediately.
+    let _mcp_lifetime = mcp_setup.inbound_handles;
+
     // 5b. Pre-check: every ToolId referenced by the entry agent must be
     //     resolvable through the dispatcher. tau's general stance (per
     //     CLAUDE.md / "feedback_tau_rust_like_build_enforcement"): any
@@ -385,6 +406,376 @@ impl ToolDispatcher for ForwardingDispatcher {
 
     fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
         self.backend.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WiredHostHandlers (β.3 PR-5)
+// ---------------------------------------------------------------------------
+
+use tau_mcp::host::handlers::{BoxFuture as HostBoxFuture, HostHandlers, InboundError};
+use tau_mcp::protocol::roots::Root;
+use tau_mcp::protocol::sampling::{
+    SamplingContent, SamplingCreateMessageRequest, SamplingCreateMessageResponse,
+};
+
+/// Inbound MCP handler impl wired against an agent's LlmBackend + the
+/// per-server sampling.models allowlist + roots declaration from tau.toml.
+///
+/// v0: sampling checks the allowlist and delegates to a stub response;
+/// real LlmBackend invocation is wired in β.3.1. The empty-allowlist
+/// refuse path is fully exercised by the unit tests in this file.
+pub(crate) struct WiredHostHandlers {
+    /// LLM backend the agent owns — sampling delegates to this (β.3.1).
+    backend: Arc<dyn DynLlmBackend>,
+    /// Allowlisted model ids. Empty = sampling refused (default-deny).
+    sampling_models: Vec<String>,
+    /// Roots returned to the server on `roots/list`.
+    roots: Vec<std::path::PathBuf>,
+}
+
+impl WiredHostHandlers {
+    pub(crate) fn new(
+        backend: Arc<dyn DynLlmBackend>,
+        sampling_models: Vec<String>,
+        roots: Vec<std::path::PathBuf>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            backend,
+            sampling_models,
+            roots,
+        })
+    }
+}
+
+impl HostHandlers for WiredHostHandlers {
+    fn sampling<'a>(
+        &'a self,
+        req: SamplingCreateMessageRequest,
+    ) -> HostBoxFuture<'a, Result<SamplingCreateMessageResponse, InboundError>> {
+        Box::pin(async move {
+            if self.sampling_models.is_empty() {
+                return Err(InboundError::SamplingNotAllowed);
+            }
+            // v0 model picker: first allowlisted model. β.3.1 will honour
+            // req.model_preferences for smarter selection.
+            let model = self.sampling_models[0].clone();
+
+            // Translate MCP SamplingMessage[] → a prompt string.
+            // Only Text content is joined; Image blocks are skipped in v0.
+            let prompt_text = req
+                .messages
+                .iter()
+                .map(|m| match &m.content {
+                    SamplingContent::Text { text } => text.as_str(),
+                    SamplingContent::Image { .. } => "",
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // STUB — real backend.complete() call is wired in β.3.1.
+            // The `backend` field is held so the struct compiles with the
+            // real DynLlmBackend handle; tests only exercise the allowlist
+            // refuse path above and never reach here.
+            let _ = &self.backend;
+            let text = format!("[sampling stub for model {model}; prompt={prompt_text:?}]");
+
+            Ok(SamplingCreateMessageResponse {
+                role: "assistant".to_string(),
+                content: SamplingContent::Text { text },
+                model,
+                stop_reason: Some("endTurn".to_string()),
+            })
+        })
+    }
+
+    fn roots<'a>(&'a self) -> HostBoxFuture<'a, Result<Vec<Root>, InboundError>> {
+        Box::pin(async move {
+            Ok(self
+                .roots
+                .iter()
+                .map(|p| Root {
+                    uri: format!("file://{}", p.display()),
+                    name: p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_string()),
+                })
+                .collect())
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drift-check helpers (β.3 PR-5 Phase 4)
+// ---------------------------------------------------------------------------
+
+use tau_mcp::contract::canonical::{canonical_hash, hash_to_hex};
+use tau_mcp_tokio::host_lifecycle::client::McpClient;
+use tau_pkg::lockfile::{LockFile, LockedMcpEntry};
+
+/// Inner-helper version of the drift check — takes a `ServerContract`
+/// directly so unit tests can exercise it without a live `McpClient`.
+///
+/// Returns `Err(RuntimeError::McpContractDriftAtBoot)` when the
+/// canonical hash of `contract` differs from `entry.contract_hash`,
+/// or `Err(RuntimeError::McpSetupFailed)` when hashing itself fails.
+pub(crate) fn verify_hash_against_lockfile(
+    entry: &LockedMcpEntry,
+    contract: &tau_mcp::contract::ServerContract,
+) -> Result<(), RuntimeError> {
+    let actual_hash = canonical_hash(contract).map_err(|e| RuntimeError::McpSetupFailed {
+        entry: entry.entry.clone(),
+        reason: format!("canonical_hash failed: {e}"),
+    })?;
+    let actual_hex = hash_to_hex(&actual_hash);
+    if actual_hex != entry.contract_hash {
+        return Err(RuntimeError::McpContractDriftAtBoot {
+            entry: entry.entry.clone(),
+            expected_hash: entry.contract_hash.clone(),
+            actual_hash: actual_hex,
+        });
+    }
+    Ok(())
+}
+
+/// Verify that the live MCP handshake matches the lockfile-recorded hash.
+///
+/// Delegates to `verify_hash_against_lockfile` using `client.contract()`.
+pub(crate) fn verify_lockfile_against_live(
+    entry: &LockedMcpEntry,
+    client: &McpClient,
+) -> Result<(), RuntimeError> {
+    verify_hash_against_lockfile(entry, client.contract())
+}
+
+// ---------------------------------------------------------------------------
+// setup_mcp_runtime (β.3 PR-5 Phase 5)
+// ---------------------------------------------------------------------------
+
+use tau_mcp_tokio::bridge::McpBackedTool;
+use tau_mcp_tokio::host_lifecycle::{open as mcp_open, InboundDispatchHandle, McpClientOptions};
+use tau_ports::CapabilityPlan;
+use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
+
+/// Outcome of `setup_mcp_runtime` — the `tools` extension vec for
+/// `ForwardingDispatcher` + handles whose `Drop` aborts the inbound pumps.
+pub(crate) struct McpRuntimeSetup {
+    /// Entries to merge into `ForwardingDispatcher`'s `tools_by_id`.
+    pub tools: Vec<(tau_ir::ids::ToolId, Arc<dyn DynTool>)>,
+    /// Inbound-dispatch task handles. Drop to abort.
+    pub inbound_handles: Vec<InboundDispatchHandle>,
+}
+
+/// Boot the MCP runtime: per-entry handshake + drift check +
+/// `WiredHostHandlers` + inbound dispatch + `McpBackedTool` registration.
+///
+/// Errors out before `ForwardingDispatcher` is constructed if any entry
+/// fails (drift, network, parse). Returns an empty setup struct when
+/// `lockfile.mcp_entries` is empty (non-MCP projects are unaffected).
+pub(crate) async fn setup_mcp_runtime(
+    config: &crate::config::ProjectConfig,
+    lockfile: &LockFile,
+    backend: Arc<dyn DynLlmBackend>,
+) -> Result<McpRuntimeSetup, RuntimeError> {
+    let mut tools: Vec<(tau_ir::ids::ToolId, Arc<dyn DynTool>)> = Vec::new();
+    let mut inbound_handles: Vec<InboundDispatchHandle> = Vec::new();
+
+    for locked in &lockfile.mcp_entries {
+        // Locate the corresponding tau.toml entry (sampling.models + roots).
+        let tool_entry =
+            config
+                .tools
+                .get(&locked.entry)
+                .ok_or_else(|| RuntimeError::McpSetupFailed {
+                    entry: locked.entry.clone(),
+                    reason: format!(
+                        "lockfile names entry {:?} but [tools.{}] missing in tau.toml",
+                        locked.entry, locked.entry
+                    ),
+                })?;
+
+        let url = match &tool_entry.body {
+            tau_pkg::project::project::ToolBody::Mcp(u) => u.clone(),
+            other => {
+                return Err(RuntimeError::McpSetupFailed {
+                    entry: locked.entry.clone(),
+                    reason: format!("[tools.{}] body is not Mcp: {other:?}", locked.entry),
+                });
+            }
+        };
+
+        let sampling_models = tool_entry
+            .sampling
+            .as_ref()
+            .map(|s| s.models.clone())
+            .unwrap_or_default();
+        let roots = tool_entry.roots.clone();
+
+        // Open the MCP server (handshake). Use PassthroughSandbox for v0;
+        // PR-5.1 will plumb the real sandbox per-entry CapabilityPlan.
+        let gate: Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> =
+            Arc::new(PassthroughSandbox::new());
+        let client = mcp_open(
+            &url,
+            &CapabilityPlan::new(Vec::new(), None, None),
+            gate,
+            McpClientOptions::default(),
+        )
+        .await
+        .map_err(|e| RuntimeError::McpSetupFailed {
+            entry: locked.entry.clone(),
+            reason: format!("open failed: {e}"),
+        })?;
+
+        // Drift check: live contract hash must match lockfile-recorded hash.
+        verify_lockfile_against_live(locked, &client)?;
+
+        // Wrap in Arc; spawn inbound-dispatch task.
+        let arc_client = Arc::new(client);
+        let handlers = WiredHostHandlers::new(backend.clone(), sampling_models, roots);
+        let handle = arc_client.start_inbound_dispatch(handlers);
+        inbound_handles.push(handle);
+
+        // Per server-tool in the contract, register one McpBackedTool.
+        for st in &arc_client.contract().tools {
+            let ir_tool_id = tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
+            let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
+                ir_tool_id.0.clone(),
+                arc_client.clone(),
+                st.name.clone(),
+                st.caps.clone(),
+                st.input_schema.0.clone(),
+                st.description.clone().unwrap_or_default(),
+            );
+            tools.push((ir_tool_id, mcp_tool));
+        }
+    }
+
+    Ok(McpRuntimeSetup {
+        tools,
+        inbound_handles,
+    })
+}
+
+#[cfg(test)]
+mod drift_tests {
+    use std::collections::BTreeMap;
+
+    use tau_mcp::contract::canonical::canonical_hash;
+    use tau_mcp::contract::ServerContract;
+    use tau_mcp::protocol::initialize::ServerInfo;
+    use tau_pkg::lockfile::LockedMcpEntry;
+
+    use super::{hash_to_hex, verify_hash_against_lockfile, RuntimeError};
+
+    fn empty_contract() -> ServerContract {
+        ServerContract {
+            protocol_version: "2025-03-26".to_string(),
+            server_info: ServerInfo {
+                name: "mock".to_string(),
+                version: "0.0.0".to_string(),
+                additional: BTreeMap::new(),
+            },
+            tools: vec![],
+        }
+    }
+
+    fn locked_entry_with_hash(hex_hash: &str) -> LockedMcpEntry {
+        LockedMcpEntry::new(
+            "weather".to_string(),
+            "stdio:mock".to_string(),
+            hex_hash.to_string(),
+            None,
+            vec![],
+        )
+    }
+
+    #[test]
+    fn matching_hash_passes() {
+        let contract = empty_contract();
+        let live_hash = canonical_hash(&contract).expect("hash");
+        let entry = locked_entry_with_hash(&hash_to_hex(&live_hash));
+        verify_hash_against_lockfile(&entry, &contract).expect("matching hash succeeds");
+    }
+
+    #[test]
+    fn drift_raises_typed_error() {
+        let contract = empty_contract();
+        let entry = locked_entry_with_hash(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let err = verify_hash_against_lockfile(&entry, &contract).expect_err("hash differs");
+        match err {
+            RuntimeError::McpContractDriftAtBoot {
+                entry: e,
+                expected_hash,
+                actual_hash,
+            } => {
+                assert_eq!(e, "weather");
+                assert_eq!(
+                    expected_hash,
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                );
+                assert_ne!(actual_hash, expected_hash);
+            }
+            other => panic!("expected McpContractDriftAtBoot, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod wired_handlers_tests {
+    use super::*;
+    use tau_mcp::protocol::sampling::{
+        SamplingContent, SamplingCreateMessageRequest, SamplingMessage,
+    };
+    use tau_ports::fixtures::MockLlmBackend;
+
+    fn req(text: &str) -> SamplingCreateMessageRequest {
+        SamplingCreateMessageRequest {
+            messages: vec![SamplingMessage {
+                role: "user".to_string(),
+                content: SamplingContent::Text {
+                    text: text.to_string(),
+                },
+            }],
+            model_preferences: None,
+            system_prompt: None,
+            include_context: None,
+            max_tokens: None,
+            additional: Default::default(),
+        }
+    }
+
+    fn backend_stub() -> Arc<dyn DynLlmBackend> {
+        Arc::new(MockLlmBackend::new("stub-backend"))
+    }
+
+    #[tokio::test]
+    async fn empty_allowlist_refuses_sampling() {
+        let h = WiredHostHandlers::new(backend_stub(), Vec::new(), Vec::new());
+        let err = h.sampling(req("hi")).await.expect_err("should refuse");
+        assert!(matches!(err, InboundError::SamplingNotAllowed));
+    }
+
+    #[tokio::test]
+    async fn empty_roots_returns_empty_list() {
+        let h = WiredHostHandlers::new(backend_stub(), Vec::new(), Vec::new());
+        let roots = h.roots().await.expect("ok");
+        assert!(roots.is_empty());
+    }
+
+    #[tokio::test]
+    async fn roots_serializes_paths_as_file_uri() {
+        let h = WiredHostHandlers::new(
+            backend_stub(),
+            Vec::new(),
+            vec![std::path::PathBuf::from("/tmp/mcp-cache")],
+        );
+        let roots = h.roots().await.expect("ok");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].uri, "file:///tmp/mcp-cache");
     }
 }
 
