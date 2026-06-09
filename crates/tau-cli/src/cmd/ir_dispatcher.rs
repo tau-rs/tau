@@ -130,6 +130,27 @@ pub(crate) async fn run_via_ir(
         // run aborts before any LLM tokens are spent.
     }
 
+    // 5c. MCP extension: open each [tools.<entry>] mcp = "..." server,
+    //     verify drift vs lockfile, spawn inbound-dispatch tasks, and
+    //     insert one McpBackedTool per server-tool into tools_by_id.
+    //     Non-MCP projects (empty mcp_entries) produce an empty setup — no-op.
+    let lockfile = tau_pkg::lockfile::LockFile::load(&scope.lockfile_path())
+        .with_context(|| {
+            format!(
+                "loading lockfile for MCP setup: {}",
+                scope.lockfile_path().display()
+            )
+        })?;
+    let mcp_setup = setup_mcp_runtime(&project, &lockfile, llm_backend.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP setup: {e}"))?;
+    for (id, tool) in mcp_setup.tools {
+        tools_by_id.insert(id, tool);
+    }
+    // Hold inbound-dispatch task handles for the lifetime of the run.
+    // Dropping them here would abort the pumps immediately.
+    let _mcp_lifetime = mcp_setup.inbound_handles;
+
     // 5b. Pre-check: every ToolId referenced by the entry agent must be
     //     resolvable through the dispatcher. tau's general stance (per
     //     CLAUDE.md / "feedback_tau_rust_like_build_enforcement"): any
@@ -537,13 +558,10 @@ use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
 
 /// Outcome of `setup_mcp_runtime` — the `tools` extension vec for
 /// `ForwardingDispatcher` + handles whose `Drop` aborts the inbound pumps.
-// Phases 6-7 will consume this struct; allow dead_code until wired.
-#[allow(dead_code)]
 pub(crate) struct McpRuntimeSetup {
     /// Entries to merge into `ForwardingDispatcher`'s `tools_by_id`.
     pub tools: Vec<(tau_ir::ids::ToolId, Arc<dyn DynTool>)>,
     /// Inbound-dispatch task handles. Drop to abort.
-    #[allow(dead_code)] // held for inbound pump lifetime; drop = abort
     pub inbound_handles: Vec<InboundDispatchHandle>,
 }
 
@@ -553,8 +571,6 @@ pub(crate) struct McpRuntimeSetup {
 /// Errors out before `ForwardingDispatcher` is constructed if any entry
 /// fails (drift, network, parse). Returns an empty setup struct when
 /// `lockfile.mcp_entries` is empty (non-MCP projects are unaffected).
-// Phases 6-7 will call this; allow dead_code until wired.
-#[allow(dead_code)]
 pub(crate) async fn setup_mcp_runtime(
     config: &crate::config::ProjectConfig,
     lockfile: &LockFile,
