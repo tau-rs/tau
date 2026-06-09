@@ -1,0 +1,39 @@
+name: Security — CodeQL
+
+# Weekly Monday 06:00 UTC. Static analysis for Rust. Posts findings as
+# GitHub Code Scanning alerts (native UI under Security tab).
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: CodeQL / rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Build (CodeQL trace)
+        run: cargo build --workspace --all-targets
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:rust'
