@@ -20,6 +20,7 @@ on:
     # `merge_group` event does not accept a `branches:` filter; the
     # queue itself only exists for branches that opt in.
     types: [checks_requested]
+  workflow_call:  # release.yml reuses this workflow for preflight
 
 # Cancel superseded runs on the same ref EXCEPT on main, where the
 # Swatinem rust-cache save-step only runs (see
@@ -49,8 +50,7 @@ permissions:
 jobs:
   changes:
     # Detect whether the PR is safe to fast-path (skip the heavy
-    # integration jobs: build-fixtures-linux, test-conformance,
-    # test-tau-plugin-compat, the two e2e jobs).
+    # build-fixtures-linux job and its tier-1 consumers).
     #
     # A PR is fast-pathable when BOTH conditions hold:
     #   (1) every changed file is in the safe set — tests/benches,
@@ -59,7 +59,7 @@ jobs:
     #
     # Condition (1) keeps source-code changes out of the fast path.
     # Condition (2) prevents a Cargo.toml-only PR (e.g. a runtime dep
-    # bump with no test changes) from skipping the integration jobs —
+    # bump with no test changes) from skipping the build-fixtures job —
     # the path filter can't tell a dev-dep add from a runtime-dep
     # bump, so the test-file requirement is the conservative gate.
     #
@@ -144,19 +144,72 @@ jobs:
           # check advisories + licenses + bans + sources per deny.toml at repo root.
           arguments: --all-features
 
-  test-stable:
-    name: test-stable / ${{ matrix.os == 'ubuntu-latest' && 'linux' || matrix.os == 'macos-latest' && 'macos' || 'windows' }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  osv-scanner:
+    name: osv-scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: google/osv-scanner-action/osv-scanner-action@v1
+        with:
+          scan-args: |-
+            -r .
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cargo-check-macos:
+    name: cargo-check / macos
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
-          shared-key: ${{ matrix.os }}-stable
+          shared-key: macos-latest-stable
+          with-sccache: true
+      - run: cargo check --workspace --all-targets
+
+  cargo-check-windows:
+    name: cargo-check / windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: windows-latest-stable
+      - run: cargo check --workspace --all-targets
+
+  test-stable:
+    name: test-stable / linux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
           with-nextest: true
           with-sccache: true
           with-mold: true
@@ -346,206 +399,6 @@ jobs:
         run: cargo build -p tau-plugin-compat
       - name: Build tau-plugin-compat (integration-tests feature)
         run: cargo build -p tau-plugin-compat --features integration-tests --tests
-
-  test-conformance:
-    name: test (conformance)
-    needs: [changes, build-fixtures-linux]
-    if: needs.changes.outputs.skip_heavy_jobs != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-sccache: true
-          with-mold: true
-      - uses: ./.github/actions/place-fixture-binaries
-        with:
-          binaries: "anthropic-plugin ollama-plugin openai-plugin"
-      - name: Run conformance suite against all 3 plugins
-        run: |
-          cargo nextest run --profile ci -p anthropic --test conformance --no-capture
-          cargo nextest run --profile ci -p ollama    --test conformance --no-capture
-          cargo nextest run --profile ci -p openai    --test conformance --no-capture
-
-  test-tau-plugin-compat:
-    name: test (tau-plugin-compat / linux)
-    needs: [changes, build-fixtures-linux]
-    if: needs.changes.outputs.skip_heavy_jobs != 'true'
-    runs-on: ubuntu-latest
-    env:
-      # GHA Linux runners ship both podman and docker. The xtask + adapter
-      # probes both default to podman; pin to docker for the whole job so
-      # plugin-compat tests run against the same runtime that xtask used to
-      # build the images (image storage matches).
-      TAU_CONTAINER_RUNTIME: docker
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-mold: true
-      - uses: ./.github/actions/place-fixture-binaries
-        with:
-          binaries: "all"
-      - name: Build tau binary (debug)
-        # Layer 3 tests at crates/tau-plugin-compat/tests/layer3_check_sandbox.rs
-        # hardcode the debug binary path (target/debug/tau). Build it here;
-        # the 5 release plugin binaries still come from the artifact, which
-        # is where the bulk of the time savings come from.
-        run: cargo build -p tau-cli --bin tau
-      - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v4
-        with:
-          driver: docker-container
-      - name: Build per-plugin images (sub-project I)
-        run: cargo run -p xtask -- build-plugin-images
-        env:
-          # TAU_CONTAINER_RUNTIME is set at the job level. BUILDX_CACHE_*
-          # are buildx-specific (docker buildx); xtask reads them and
-          # forwards as --cache-from / --cache-to to the build call.
-          BUILDX_CACHE_FROM: type=gha
-          BUILDX_CACHE_TO: type=gha,mode=max
-          BUILDKIT_PROGRESS: plain
-          DOCKER_BUILDKIT: "1"
-      - name: Test tau-plugin-compat (integration-tests feature)
-        run: cargo nextest run --profile ci -p tau-plugin-compat --features integration-tests --tests --verbose
-
-  test-tau-plugin-compat-layer4-ignored:
-    # Promotes the 10 `#[ignore]`'d layer-4 sandbox boundary tests in
-    # crates/tau-plugin-compat/tests/layer4_{native,container}.rs from
-    # DARK to LIT (see docs/test-ignores-inventory.md bucket 2). Same
-    # prerequisites as test-tau-plugin-compat (pre-built plugin binaries
-    # + per-plugin Docker images on the container leg), but invoked
-    # with `--run-ignored only` and scoped to the layer4 test target.
-    #
-    # `matrix.flavor` is workflow-defined ("native" | "container"), not
-    # user input — no injection risk in the run: commands below.
-    #
-    # Plan: docs/superpowers/plans/2026-05-17-test-suite-upgrades.md
-    # Task 11 ("Layer4 sandbox CI dark-spot").
-    name: test (tau-plugin-compat / linux / layer4-ignored / ${{ matrix.flavor }})
-    needs: [changes, build-fixtures-linux]
-    if: needs.changes.outputs.skip_heavy_jobs != 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        flavor: [native, container]
-    env:
-      # Match the sister test-tau-plugin-compat job so adapter probes and
-      # xtask image storage land in the same place (docker, not podman).
-      TAU_CONTAINER_RUNTIME: docker
-      FLAVOR: ${{ matrix.flavor }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-mold: true
-      - uses: ./.github/actions/place-fixture-binaries
-        with:
-          binaries: "all"
-      - name: Set up Docker buildx
-        if: matrix.flavor == 'container'
-        uses: docker/setup-buildx-action@v4
-        with:
-          driver: docker-container
-      - name: Build per-plugin images (sub-project I)
-        if: matrix.flavor == 'container'
-        run: cargo run -p xtask -- build-plugin-images
-        env:
-          BUILDX_CACHE_FROM: type=gha
-          BUILDX_CACHE_TO: type=gha,mode=max
-          BUILDKIT_PROGRESS: plain
-          DOCKER_BUILDKIT: "1"
-      - name: Build NEXTEST_FILTER for this leg
-        # The 3 layer4_native HTTP cassette tests
-        # (anthropic|ollama|openai _layer4_native_completes_via_cassette)
-        # need tau-net-bridge to set up a network namespace, which
-        # requires CAP_SYS_ADMIN + CAP_NET_ADMIN. Standard GHA
-        # ubuntu-latest runners don't grant those caps; the lefthook
-        # pre-push gate gets them via `podman run --cap-add SYS_ADMIN
-        # --cap-add NET_ADMIN`. Skip them on the native leg until a
-        # privileged runner is available. The container leg covers them
-        # via its in-container bridge setup.
-        run: |
-          if [ "$FLAVOR" = "native" ]; then
-            echo 'NEXTEST_FILTER=not (test(/anthropic_layer4_native_completes_via_cassette/) | test(/ollama_layer4_native_completes_via_cassette/) | test(/openai_layer4_native_completes_via_cassette/))' >> "$GITHUB_ENV"
-          else
-            echo 'NEXTEST_FILTER=all()' >> "$GITHUB_ENV"
-          fi
-      - name: Run ignored layer4 tests
-        # --run-ignored only runs ONLY the `#[ignore]`'d tests in the
-        # target. --test layer4_<flavor> scopes the test binary so we
-        # do not drag in unrelated targets. We deliberately do NOT pass
-        # the `--tests` flag here: combining `--tests` (all test
-        # targets) with `--test <name>` (one specific test target) lets
-        # nextest pick up BOTH targets, defeating the per-flavor
-        # filtering and causing the wrong-leg tests to fail on missing
-        # prerequisites. `-E` applies the per-leg filterset from the
-        # previous step.
-        run: |
-          cargo nextest run --profile ci \
-            -p tau-plugin-compat \
-            --features integration-tests \
-            --run-ignored only \
-            --test "layer4_$FLAVOR" \
-            -E "$NEXTEST_FILTER" \
-            --verbose
-
-  test-tau-sandbox-native-e2e:
-    name: test (tau-sandbox-native e2e / linux)
-    needs: [changes, build-fixtures-linux]
-    if: needs.changes.outputs.skip_heavy_jobs != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-mold: true
-      - uses: ./.github/actions/place-fixture-binaries
-        with:
-          binaries: "tau-controlled-env"
-      - name: Test tau-sandbox-native e2e
-        # strict_net_filter tests were replaced by strict_proxy tests (sub-project H,
-        # ADR-0020). The proxy pattern needs no CAP_NET_ADMIN; all integration tests
-        # run on this stock ubuntu-latest runner.
-        # No untrusted input in run: commands here or below.
-        run: cargo nextest run --profile ci -p tau-sandbox-native --features integration-tests --tests --verbose
-      - name: Run --ignored landlock-gated tests
-        # Two tau-sandbox-native tests are `#[ignore]`'d because their
-        # runtime probes for landlock + seccomp + namespaces (or a
-        # working proxy spawn) would otherwise silently SKIP in
-        # environments that lack them. CI runners DO support those,
-        # so we explicitly opt in via --run-ignored only here.
-        # Promotes `bridge_survives_strict_tier_filter` (integration
-        # test) and `wrap_spawn_with_http_cap_sets_both_proxy_env_vars`
-        # (unit test in src/strict.rs) from DARK to LIT.
-        run: cargo nextest run --profile ci -p tau-sandbox-native --features integration-tests --run-ignored only --verbose
-
-  test-tau-runtime-e2e:
-    name: test (tau-runtime e2e / linux)
-    needs: [changes, build-fixtures-linux]
-    if: needs.changes.outputs.skip_heavy_jobs != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-mold: true
-      - uses: ./.github/actions/place-fixture-binaries
-        with:
-          binaries: "tau-controlled-env"
-      - name: Test tau-runtime-tokio e2e
-        run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --tests --verbose
 
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's
