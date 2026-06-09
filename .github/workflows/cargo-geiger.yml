@@ -1,0 +1,66 @@
+name: Security — cargo-geiger
+
+# Weekly Sunday 06:00 UTC. Counts unsafe-code blocks per crate.
+# Diffs against last main commit's report; opens issue on increase.
+
+on:
+  schedule:
+    - cron: '0 6 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: cargo-geiger-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  geiger:
+    name: cargo-geiger
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Install cargo-geiger
+        run: cargo install cargo-geiger --locked
+      - name: Run geiger on workspace
+        run: |
+          mkdir -p _geiger
+          cargo geiger --output-format Json > _geiger/today.json || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cargo-geiger-${{ github.run_id }}
+          path: _geiger/
+          retention-days: 90
+      - name: Find previous run + diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PREV=$(gh run list --workflow=cargo-geiger.yml --status success \
+            --limit 5 --json databaseId --jq ".[] | select(.databaseId != ${{ github.run_id }}) | .databaseId" \
+            | head -1)
+          if [ -z "$PREV" ]; then
+            echo "No baseline; first run."
+            exit 0
+          fi
+          gh run download "$PREV" --name "cargo-geiger-$PREV" --dir _prev/ || true
+          if [ ! -f _prev/today.json ]; then
+            echo "Previous run had no artifact."
+            exit 0
+          fi
+          TODAY_UNSAFE=$(jq -r '[.. | objects | .unsafe_used? // empty] | add // 0' _geiger/today.json)
+          PREV_UNSAFE=$(jq -r '[.. | objects | .unsafe_used? // empty] | add // 0' _prev/today.json)
+          DIFF=$((TODAY_UNSAFE - PREV_UNSAFE))
+          if [ "$DIFF" -gt 0 ]; then
+            gh issue create \
+              --title "[security] unsafe surface grew by $DIFF" \
+              --label security \
+              --body "cargo-geiger reports total unsafe count grew from $PREV_UNSAFE to $TODAY_UNSAFE (+$DIFF) since the last weekly scan.\n\nReport: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
