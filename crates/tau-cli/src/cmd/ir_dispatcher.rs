@@ -404,9 +404,6 @@ use tau_mcp::protocol::sampling::{
 /// v0: sampling checks the allowlist and delegates to a stub response;
 /// real LlmBackend invocation is wired in β.3.1. The empty-allowlist
 /// refuse path is fully exercised by the unit tests in this file.
-// Phase 5 (setup_mcp_runtime) will consume this struct; allow dead_code
-// until that wiring lands.
-#[allow(dead_code)]
 pub(crate) struct WiredHostHandlers {
     /// LLM backend the agent owns — sampling delegates to this (β.3.1).
     backend: Arc<dyn DynLlmBackend>,
@@ -417,7 +414,6 @@ pub(crate) struct WiredHostHandlers {
 }
 
 impl WiredHostHandlers {
-    #[allow(dead_code)]
     pub(crate) fn new(
         backend: Arc<dyn DynLlmBackend>,
         sampling_models: Vec<String>,
@@ -493,7 +489,7 @@ impl HostHandlers for WiredHostHandlers {
 
 use tau_mcp::contract::canonical::{canonical_hash, hash_to_hex};
 use tau_mcp_tokio::host_lifecycle::client::McpClient;
-use tau_pkg::lockfile::LockedMcpEntry;
+use tau_pkg::lockfile::{LockFile, LockedMcpEntry};
 
 /// Inner-helper version of the drift check — takes a `ServerContract`
 /// directly so unit tests can exercise it without a live `McpClient`.
@@ -501,9 +497,6 @@ use tau_pkg::lockfile::LockedMcpEntry;
 /// Returns `Err(RuntimeError::McpContractDriftAtBoot)` when the
 /// canonical hash of `contract` differs from `entry.contract_hash`,
 /// or `Err(RuntimeError::McpSetupFailed)` when hashing itself fails.
-// Phase 5 (setup_mcp_runtime) will consume this fn; allow dead_code
-// until that wiring lands.
-#[allow(dead_code)]
 pub(crate) fn verify_hash_against_lockfile(
     entry: &LockedMcpEntry,
     contract: &tau_mcp::contract::ServerContract,
@@ -526,14 +519,124 @@ pub(crate) fn verify_hash_against_lockfile(
 /// Verify that the live MCP handshake matches the lockfile-recorded hash.
 ///
 /// Delegates to `verify_hash_against_lockfile` using `client.contract()`.
-// Phase 5 (setup_mcp_runtime) will consume this fn; allow dead_code
-// until that wiring lands.
-#[allow(dead_code)]
 pub(crate) fn verify_lockfile_against_live(
     entry: &LockedMcpEntry,
     client: &McpClient,
 ) -> Result<(), RuntimeError> {
     verify_hash_against_lockfile(entry, client.contract())
+}
+
+// ---------------------------------------------------------------------------
+// setup_mcp_runtime (β.3 PR-5 Phase 5)
+// ---------------------------------------------------------------------------
+
+use tau_mcp_tokio::bridge::McpBackedTool;
+use tau_mcp_tokio::host_lifecycle::{open as mcp_open, InboundDispatchHandle, McpClientOptions};
+use tau_ports::CapabilityPlan;
+use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
+
+/// Outcome of `setup_mcp_runtime` — the `tools` extension vec for
+/// `ForwardingDispatcher` + handles whose `Drop` aborts the inbound pumps.
+// Phases 6-7 will consume this struct; allow dead_code until wired.
+#[allow(dead_code)]
+pub(crate) struct McpRuntimeSetup {
+    /// Entries to merge into `ForwardingDispatcher`'s `tools_by_id`.
+    pub tools: Vec<(tau_ir::ids::ToolId, Arc<dyn DynTool>)>,
+    /// Inbound-dispatch task handles. Drop to abort.
+    #[allow(dead_code)] // held for inbound pump lifetime; drop = abort
+    pub inbound_handles: Vec<InboundDispatchHandle>,
+}
+
+/// Boot the MCP runtime: per-entry handshake + drift check +
+/// `WiredHostHandlers` + inbound dispatch + `McpBackedTool` registration.
+///
+/// Errors out before `ForwardingDispatcher` is constructed if any entry
+/// fails (drift, network, parse). Returns an empty setup struct when
+/// `lockfile.mcp_entries` is empty (non-MCP projects are unaffected).
+// Phases 6-7 will call this; allow dead_code until wired.
+#[allow(dead_code)]
+pub(crate) async fn setup_mcp_runtime(
+    config: &crate::config::ProjectConfig,
+    lockfile: &LockFile,
+    backend: Arc<dyn DynLlmBackend>,
+) -> Result<McpRuntimeSetup, RuntimeError> {
+    let mut tools: Vec<(tau_ir::ids::ToolId, Arc<dyn DynTool>)> = Vec::new();
+    let mut inbound_handles: Vec<InboundDispatchHandle> = Vec::new();
+
+    for locked in &lockfile.mcp_entries {
+        // Locate the corresponding tau.toml entry (sampling.models + roots).
+        let tool_entry = config.tools.get(&locked.entry).ok_or_else(|| {
+            RuntimeError::McpSetupFailed {
+                entry: locked.entry.clone(),
+                reason: format!(
+                    "lockfile names entry {:?} but [tools.{}] missing in tau.toml",
+                    locked.entry, locked.entry
+                ),
+            }
+        })?;
+
+        let url = match &tool_entry.body {
+            tau_pkg::project::project::ToolBody::Mcp(u) => u.clone(),
+            other => {
+                return Err(RuntimeError::McpSetupFailed {
+                    entry: locked.entry.clone(),
+                    reason: format!("[tools.{}] body is not Mcp: {other:?}", locked.entry),
+                });
+            }
+        };
+
+        let sampling_models = tool_entry
+            .sampling
+            .as_ref()
+            .map(|s| s.models.clone())
+            .unwrap_or_default();
+        let roots = tool_entry.roots.clone();
+
+        // Open the MCP server (handshake). Use PassthroughSandbox for v0;
+        // PR-5.1 will plumb the real sandbox per-entry CapabilityPlan.
+        let gate: Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> =
+            Arc::new(PassthroughSandbox::new());
+        let client = mcp_open(
+            &url,
+            &CapabilityPlan::new(Vec::new(), None, None),
+            gate,
+            McpClientOptions::default(),
+        )
+        .await
+        .map_err(|e| RuntimeError::McpSetupFailed {
+            entry: locked.entry.clone(),
+            reason: format!("open failed: {e}"),
+        })?;
+
+        // Drift check: live contract hash must match lockfile-recorded hash.
+        verify_lockfile_against_live(locked, &client)?;
+
+        // Wrap in Arc; spawn inbound-dispatch task.
+        let arc_client = Arc::new(client);
+        let handlers = WiredHostHandlers::new(backend.clone(), sampling_models, roots);
+        let handle = arc_client.start_inbound_dispatch(handlers);
+        inbound_handles.push(handle);
+
+        // Per server-tool in the contract, register one McpBackedTool.
+        for st in &arc_client.contract().tools {
+            let ir_tool_id =
+                tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
+            let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
+                ir_tool_id.0.clone(),
+                arc_client.clone(),
+                st.name.clone(),
+                st.caps.clone(),
+                st.input_schema.0.clone(),
+                st.description.clone().unwrap_or_default(),
+            );
+            tools.push((ir_tool_id, mcp_tool));
+        }
+    }
+
+    Ok(McpRuntimeSetup {
+        tools,
+        inbound_handles,
+    })
 }
 
 #[cfg(test)]
