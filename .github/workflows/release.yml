@@ -1,0 +1,184 @@
+name: Release
+
+# Triggered ONLY on git tag push (v*). This is the ship gate — any
+# job failing aborts the GitHub Release creation; the tag stays in
+# the repo but no artifacts are published.
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: write     # for GitHub Release creation
+  id-token: write     # for OIDC signing (attest-build-provenance)
+  attestations: write # for attestation upload
+  packages: read
+
+jobs:
+  preflight-tier1:
+    # Re-run Tier 1 against the tag SHA. Even if main was green
+    # yesterday, the tag commit may be newer.
+    name: preflight-tier1
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  preflight-tier2:
+    name: preflight-tier2
+    uses: ./.github/workflows/tier2.yml
+    secrets: inherit
+
+  build-release-binaries:
+    name: build-release-binaries / ${{ matrix.os }}
+    needs: [preflight-tier1, preflight-tier2]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: tag
+        shell: bash
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: ${{ matrix.os }}-stable-release
+          with-sccache: true
+          with-mold: true
+      - name: Build tau-cli (release)
+        run: cargo build --release -p tau-cli --bin tau
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p _release
+          # cargo emits tau OR tau.exe depending on OS
+          if [ -f target/release/tau.exe ]; then
+            cp target/release/tau.exe "_release/tau-${{ matrix.os }}.exe"
+          else
+            cp target/release/tau "_release/tau-${{ matrix.os }}"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-bin-${{ matrix.os }}
+          path: _release/
+          retention-days: 7
+
+  sbom-rust:
+    name: sbom-rust (SPDX 2.3)
+    needs: [preflight-tier1, preflight-tier2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Install cargo-sbom
+        run: cargo install cargo-sbom --locked
+      - name: Generate SPDX 2.3 SBOM
+        run: cargo sbom --output-format spdx_json_2_3 > tau-sbom-rust.spdx.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom-rust
+          path: tau-sbom-rust.spdx.json
+          retention-days: 7
+
+  sbom-aggregate:
+    name: sbom-aggregate (syft)
+    needs: [preflight-tier1, preflight-tier2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Generate aggregate SBOM via syft
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: tau-sbom-aggregate.spdx.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom-aggregate
+          path: tau-sbom-aggregate.spdx.json
+          retention-days: 7
+
+  attest:
+    name: attest provenance + sbom
+    needs: [build-release-binaries, sbom-rust, sbom-aggregate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: release-bin-*
+          path: _release/
+          merge-multiple: true
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: sbom-*
+          path: _sbom/
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: '_release/*'
+      - uses: actions/attest-sbom@v3
+        with:
+          subject-path: '_release/*'
+          sbom-path: '_sbom/tau-sbom-rust.spdx.json'
+
+  changelog:
+    name: changelog
+    needs: [preflight-tier1, preflight-tier2]
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.cliff.outputs.content }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: cliff
+        uses: orhun/git-cliff-action@v3
+        with:
+          config: .github/cliff.toml
+          args: --latest --strip header
+
+  gh-release-create:
+    name: gh-release-create
+    needs: [build-release-binaries, sbom-rust, sbom-aggregate, attest, changelog]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: release-bin-*
+          path: _release/
+          merge-multiple: true
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: sbom-*
+          path: _sbom/
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.build-release-binaries.outputs.tag }}
+          body: ${{ needs.changelog.outputs.body }}
+          files: |
+            _release/*
+            _sbom/*
+          fail_on_unmatched_files: true
