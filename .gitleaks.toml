@@ -1,0 +1,14 @@
+# gitleaks configuration for the tau repository.
+# See https://github.com/gitleaks/gitleaks#configuration
+
+title = "tau gitleaks config"
+
+[extend]
+# Extend the default ruleset.
+useDefault = true
+
+[[allowlists]]
+description = "False positive: cargo cache key strings matched by generic-api-key rule"
+# `cargo-fuzz-bin-v1` in fuzz-nightly.yml is a GitHub Actions cache key, not a secret.
+regexes = ['''cargo-fuzz-bin-v\d+''']
+paths = ['''.github/workflows/fuzz-nightly\.yml''']
