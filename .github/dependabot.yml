@@ -34,8 +34,8 @@ updates:
     directory: /
     schedule:
       interval: daily
-      time: "06:00"
-      timezone: Europe/Paris
+      time: "03:00"
+      timezone: Etc/UTC
     open-pull-requests-limit: 10
     commit-message:
       prefix: "chore(deps)"
@@ -44,6 +44,9 @@ updates:
       - dependencies
       - rust
     groups:
+      # All patch-level bumps in a single PR to reduce churn.
+      patch-updates:
+        update-types: [patch]
       # Bundle patch + minor lockfile bumps of the same crate family.
       # Major bumps still open one PR each (the default) — except for
       # the `opentelemetry` group below, where the crates pin to each
