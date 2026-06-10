@@ -70,6 +70,10 @@ pub async fn run_loop(session: &mut DevSession, output: &mut Output) -> Result<(
     let mut editor = DefaultEditor::new()?;
     print_banner(output, session);
     loop {
+        use std::sync::atomic::Ordering;
+        if session.pending_reload.load(Ordering::Acquire) {
+            output.human("(manifest changed; type :reload to apply)")?;
+        }
         let prompt = format!("({}) > ", session.current_agent_name());
         let line = match editor.readline(&prompt) {
             Ok(l) => l,
@@ -88,7 +92,18 @@ pub async fn run_loop(session: &mut DevSession, output: &mut Output) -> Result<(
                     let _ = output.human(&format!("turn failed: {e:#}"));
                 }
             }
-            Command::Reload => output.human("(:reload stub — Phase 5)")?,
+            Command::Reload => {
+                match session.reload().await {
+                    Ok(true) => output.human(&format!(
+                        "reloaded; {} messages preserved",
+                        session.history.len()
+                    ))?,
+                    Ok(false) => output.human("nothing to reload")?,
+                    Err(e) => output.human(&format!(
+                        "reload failed: {e}\n(keeping previous config; fix and try :reload again)"
+                    ))?,
+                }
+            }
             Command::State => output.human("(:state stub — Phase 5)")?,
             Command::History => output.human("(:history stub — Phase 5)")?,
             Command::Agents => print_agents(session, output)?,

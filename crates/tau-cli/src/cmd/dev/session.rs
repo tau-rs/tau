@@ -126,6 +126,76 @@ impl DevSession {
         &self.history
     }
 
+    /// Apply pending manifest changes.
+    ///
+    /// Re-parses `tau.toml`, re-lowers IR, and updates `self.project` and
+    /// `self.ir`. Conversation history is intentionally preserved so that
+    /// the REPL retains multi-turn context across hot-reloads.
+    ///
+    /// MCP clients are created per-turn in [`run_turn`] (the `_mcp_lifetime`
+    /// binding), so there are no long-lived MCP handles to drop here —
+    /// the next call to `run_turn` automatically picks up the new config.
+    ///
+    /// Returns:
+    /// - `Ok(true)`  — manifest reloaded successfully.
+    /// - `Ok(false)` — `pending_reload` was not set; nothing to do.
+    /// - `Err(e)`    — parse or lowering error; old config is kept intact
+    ///   and `pending_reload` is restored so the user can fix and retry.
+    pub async fn reload(&mut self) -> anyhow::Result<bool> {
+        use std::sync::atomic::Ordering;
+
+        if !self.pending_reload.swap(false, Ordering::AcqRel) {
+            return Ok(false);
+        }
+
+        let tau_toml_path = self.project_root.join("tau.toml");
+
+        let bytes = match std::fs::read(&tau_toml_path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.pending_reload.store(true, Ordering::Release);
+                return Err(anyhow!("read tau.toml: {e}"));
+            }
+        };
+
+        let toml_str = match std::str::from_utf8(&bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                self.pending_reload.store(true, Ordering::Release);
+                return Err(anyhow!("tau.toml is not UTF-8: {e}"));
+            }
+        };
+
+        let new_project = match ProjectConfig::parse_str(toml_str) {
+            Ok(p) => p,
+            Err(e) => {
+                self.pending_reload.store(true, Ordering::Release);
+                return Err(anyhow!("parse tau.toml: {e}"));
+            }
+        };
+
+        let new_ir = match lower_project_to_ir(&new_project) {
+            Ok(ir) => ir,
+            Err(e) => {
+                self.pending_reload.store(true, Ordering::Release);
+                return Err(anyhow!("lower IR: {e}"));
+            }
+        };
+
+        // If the current agent was removed in the new manifest, fall back
+        // to the first agent (alphabetical order) so the session stays valid.
+        if !new_project.agents.contains_key(&self.current_agent) {
+            if let Some(first) = new_project.agents.keys().next() {
+                self.current_agent = first.clone();
+            }
+        }
+
+        self.project = new_project;
+        self.ir = new_ir;
+        // history intentionally NOT touched
+        Ok(true)
+    }
+
     /// Run one turn against the current agent.
     ///
     /// Mirrors the construction in `crate::cmd::ir_dispatcher::run_via_ir`:
