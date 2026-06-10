@@ -19,6 +19,9 @@ pub enum UrlParseError {
     /// `stdio:` URL had an empty command after the prefix.
     #[error("stdio: URL has empty command after prefix")]
     EmptyStdioCommand,
+    /// `cassette:` URL had no path after the prefix (e.g. `cassette:`).
+    #[error("cassette URL has empty path")]
+    EmptyCassettePath,
 }
 
 /// Failure during the MCP handshake (initialize / tools/list).
@@ -63,4 +66,20 @@ pub enum LifecycleError {
     /// Handshake failure.
     #[error("handshake: {0}")]
     Handshake(#[from] HandshakeError),
+    /// Cassette IO error (file read failure).
+    #[error("cassette IO error at {path}")]
+    Io {
+        /// Path to the cassette file.
+        path: std::path::PathBuf,
+        /// Underlying IO error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Cassette parse error (invalid JSONL format).
+    #[error("cassette parse error: {source}")]
+    CassetteParse {
+        /// Underlying replay error.
+        #[source]
+        source: tau_mcp::cassette::ReplayError,
+    },
 }
