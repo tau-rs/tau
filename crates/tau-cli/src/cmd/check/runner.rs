@@ -72,5 +72,8 @@ async fn run_one(ctx: &CheckCtx, cat: CheckCategory) -> CheckResult {
         CheckCategory::Sandbox => super::categories::sandbox::run_sandbox(ctx).await,
         CheckCategory::Plugins => super::categories::plugins::run_plugins(ctx).await,
         CheckCategory::Skills => super::categories::skills::run_skills(ctx),
+        CheckCategory::McpContracts => {
+            super::categories::mcp_contracts::run_mcp_contracts(ctx)
+        }
     }
 }

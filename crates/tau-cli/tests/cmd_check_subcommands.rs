@@ -18,7 +18,13 @@ fn fixture(name: &str) -> PathBuf {
 fn each_subcommand_is_invokable() {
     check_common::ensure_tau_home();
     for cat in [
-        "config", "lockfile", "packages", "sandbox", "plugins", "skills",
+        "config",
+        "lockfile",
+        "packages",
+        "sandbox",
+        "plugins",
+        "skills",
+        "mcp-contracts",
     ] {
         let tmp = TempDir::new().unwrap();
         let src = fixture("clean-project");
