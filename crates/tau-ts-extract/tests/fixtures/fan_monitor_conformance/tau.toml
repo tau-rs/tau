@@ -1,0 +1,21 @@
+[project]
+name = "fan-monitor-conformance"
+version = "0.0.1"
+
+[agents.fan_monitor]
+display_name = "Fan Monitor"
+package      = "fan-monitor@^0.1"
+llm_backend  = "anthropic"
+model        = "claude-haiku-4-5"
+tool_refs    = ["read_temp", "set_fan"]
+
+[agents.fan_monitor.prompt]
+system = "Watch the temperature; turn on the fan if above 30°C."
+
+[tools.read_temp]
+native = "ReadTemp"
+description = "Read the temperature sensor"
+
+[tools.set_fan]
+native = "SetFan"
+description = "Toggle the fan"
