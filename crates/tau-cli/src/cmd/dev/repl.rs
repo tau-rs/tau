@@ -84,7 +84,9 @@ pub async fn run_loop(session: &mut DevSession, output: &mut Output) -> Result<(
 
         match parse_command(&line) {
             Command::Prompt(p) => {
-                output.human(&format!("[dev] would run: {p}"))?;
+                if let Err(e) = session.run_turn(&p, output).await {
+                    let _ = output.human(&format!("turn failed: {e:#}"));
+                }
             }
             Command::Reload => output.human("(:reload stub — Phase 5)")?,
             Command::State => output.human("(:state stub — Phase 5)")?,

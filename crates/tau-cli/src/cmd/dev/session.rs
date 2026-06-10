@@ -1,17 +1,25 @@
 //! `DevSession` — owns the loaded project, IR, history, and (Phase 4+)
 //! the file watcher + MCP client cache.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use tau_domain::Message;
+use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_ir::lower::{lower_project, Caches};
-use tau_ir::IrModule;
+use tau_ir::{AgentId, IrModule};
 use tau_pkg::project::ProjectConfig;
+use tau_plugin_protocol::handshake::TraceContext;
 use tau_ports::target::TargetTriple;
+use tau_runtime_core::builder::{DynLlmBackend, DynTool};
+use tau_runtime_core::interpreter::run_ir;
+
+use crate::cmd::ir_dispatcher::{setup_mcp_runtime, ForwardingDispatcher};
+use crate::cmd::plugin_loader;
+use crate::cmd::run::render_outcome;
 
 /// All the long-lived state for one `tau dev` invocation.
 pub struct DevSession {
@@ -116,6 +124,126 @@ impl DevSession {
     /// Read-only access to the conversation history.
     pub fn history(&self) -> &[Message] {
         &self.history
+    }
+
+    /// Run one turn against the current agent.
+    ///
+    /// Mirrors the construction in `crate::cmd::ir_dispatcher::run_via_ir`:
+    /// 1. Resolve the agent entry from `self.project`.
+    /// 2. Load the per-scope lockfile + plugins via [`plugin_loader`].
+    /// 3. Boot MCP servers from the project config + lockfile.
+    /// 4. Build a [`ForwardingDispatcher`].
+    /// 5. Append the user prompt to `self.history` and call [`run_ir`].
+    /// 6. Append the agent's reply to `self.history` and render the outcome.
+    ///
+    /// History is preserved across turns so the REPL has multi-turn context.
+    /// On error the history is left unchanged (the failed turn is not appended).
+    pub async fn run_turn(
+        &mut self,
+        prompt: &str,
+        output: &mut crate::output::Output,
+    ) -> Result<()> {
+        // 1. Resolve the agent entry.
+        let agent_entry = self
+            .project
+            .agents
+            .get(&self.current_agent)
+            .ok_or_else(|| {
+                anyhow!(
+                    "agent `{}` not in project (was it removed between loads?)",
+                    self.current_agent
+                )
+            })?
+            .clone();
+
+        // 2. Resolve the package scope from the project root.
+        let scope =
+            tau_pkg::Scope::resolve(&self.project_root).context("resolving package scope")?;
+
+        // 3. Build plugin host options (no recording, no forced sandbox in dev mode).
+        let run_id = format!(
+            "tau-dev-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let trace_context = TraceContext::new(
+            run_id,
+            self.current_agent.clone(),
+            "dev-root".to_string(),
+        );
+        let host_options = plugin_loader::build_host_options(
+            None,  // no --record-protocol in dev mode
+            false, // no --no-sandbox override
+            None,  // no forced adapter kind
+        );
+        let loaded =
+            plugin_loader::load_plugins(&agent_entry, &scope, trace_context, host_options).await?;
+        let runtime = loaded
+            .builder
+            .build()
+            .context("failed to build runtime from spawned plugins")?;
+
+        // 4. Pull DynLlmBackend + DynTool handles.
+        let llm_backend: Arc<dyn DynLlmBackend> = runtime
+            .llm_backends()
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| anyhow!("runtime has no LLM backend after plugin load"))?;
+
+        let mut tools_by_id: BTreeMap<tau_ir::ToolId, Arc<dyn DynTool>> = BTreeMap::new();
+        for ir_tool_id in self.ir.workflow.tools.keys() {
+            if let Some(handle) = runtime.tools().get(&ir_tool_id.0) {
+                tools_by_id.insert(ir_tool_id.clone(), handle.clone());
+            }
+        }
+
+        // 5. Boot MCP servers (from lockfile + project config) when a lockfile exists.
+        //    Non-MCP projects (or projects not yet locked) skip this step safely.
+        let lockfile_path = scope.lockfile_path();
+        let _mcp_lifetime; // keep inbound-dispatch handles alive for the full turn
+        if lockfile_path.exists() {
+            let lockfile = tau_pkg::lockfile::LockFile::load(&lockfile_path)
+                .with_context(|| format!("loading lockfile at {}", lockfile_path.display()))?;
+            let mcp_setup = setup_mcp_runtime(&self.project, &lockfile, llm_backend.clone())
+                .await
+                .map_err(|e| anyhow!("MCP setup failed: {e}"))?;
+            for (id, tool) in mcp_setup.tools {
+                tools_by_id.insert(id, tool);
+            }
+            _mcp_lifetime = mcp_setup.inbound_handles;
+        } else {
+            _mcp_lifetime = Vec::new();
+        }
+
+        // 6. Build dispatcher, append the user turn to history, and run IR.
+        let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backend, tools_by_id));
+        let entry_id = AgentId(self.current_agent.clone());
+        let initial = Message::new(
+            Address::User,
+            Address::Agent(AgentInstanceId::new()),
+            MessagePayload::Text {
+                content: prompt.to_string(),
+            },
+        );
+        self.history.push(initial);
+        let history_snapshot = self.history.clone();
+
+        let run_outcome = run_ir(
+            Arc::new(self.ir.clone()),
+            &entry_id,
+            dispatcher,
+            history_snapshot,
+        )
+        .await;
+
+        drop(runtime);
+        plugin_loader::flush_recorders().await;
+
+        let outcome = run_outcome.context("running agent via IR interpreter")?;
+        render_outcome(outcome, output)
     }
 }
 

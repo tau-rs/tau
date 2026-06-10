@@ -13,10 +13,15 @@ use crate::cli::DevArgs;
 use crate::output::Output;
 use session::DevSession;
 
-/// Entry point for `tau dev`. Loads the project session and enters the REPL.
-/// Phase 6 will branch on `args.prompt.is_some()` for `-p` one-shot mode.
+/// Entry point for `tau dev`.
+///
+/// When `--prompt` (`-p`) is supplied, runs exactly one turn and exits
+/// (single-shot mode). When omitted, enters the interactive REPL loop.
+/// Phase 6 will layer `--watch` auto-reload on top.
 pub async fn run(args: DevArgs, output: &mut Output) -> Result<()> {
     let mut session = DevSession::load(args.project, args.agent).await?;
-    repl::run_loop(&mut session, output).await?;
-    Ok(())
+    match args.prompt {
+        Some(p) => session.run_turn(&p, output).await,
+        None => repl::run_loop(&mut session, output).await,
+    }
 }
