@@ -188,6 +188,97 @@ fn show_sarif_emits_valid_sarif_document() {
     assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 0);
 }
 
+// ─── Phase 3: diff ──────────────────────────────────────────────────────────
+
+#[test]
+fn diff_unchanged_exits_zero() {
+    let tmp = assert_fs::TempDir::new().expect("tmpdir");
+    let cassette_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tau-mcp-tokio/tests/fixtures/weather_minimal_cassette.jsonl");
+    tmp.child("fixtures/weather.jsonl")
+        .write_binary(&std::fs::read(&cassette_src).expect("read"))
+        .expect("write");
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
+[project]
+name = "diff-test"
+version = "0.0.1"
+
+[tools.weather]
+mcp = "cassette:./fixtures/weather.jsonl"
+"#,
+        )
+        .expect("write");
+
+    assert_cmd::Command::cargo_bin("tau")
+        .expect("bin")
+        .current_dir(tmp.path())
+        .args(["mcp", "pin", "weather"])
+        .assert()
+        .success();
+    assert_cmd::Command::cargo_bin("tau")
+        .expect("bin")
+        .current_dir(tmp.path())
+        .args(["mcp", "diff", "weather"])
+        .assert()
+        .success(); // exit 0
+}
+
+#[test]
+fn diff_drift_exits_64() {
+    let tmp = assert_fs::TempDir::new().expect("tmpdir");
+    let cassette_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tau-mcp-tokio/tests/fixtures/weather_minimal_cassette.jsonl");
+    tmp.child("fixtures/weather.jsonl")
+        .write_binary(&std::fs::read(&cassette_src).expect("read"))
+        .expect("write");
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
+[project]
+name = "diff-test"
+version = "0.0.1"
+
+[tools.weather]
+mcp = "cassette:./fixtures/weather.jsonl"
+"#,
+        )
+        .expect("write");
+
+    assert_cmd::Command::cargo_bin("tau")
+        .expect("bin")
+        .current_dir(tmp.path())
+        .args(["mcp", "pin", "weather"])
+        .assert()
+        .success();
+
+    // Tamper: load the pin, mutate the server version, and re-derive the hash
+    // so the pin is self-consistent (drift is between pin and live cassette).
+    let pin_path = tmp.child(".tau/mcp/weather.contract.json");
+    let bytes = std::fs::read(pin_path.path()).unwrap();
+    let mut pinned: tau_mcp::contract::pinned::PinnedContract =
+        serde_json::from_slice(&bytes).unwrap();
+    pinned.contract.server_info.version = "99.0".to_string();
+    let rebuilt = tau_mcp::contract::pinned::PinnedContract::from_parts(
+        pinned.url.clone(),
+        pinned.contract.clone(),
+    )
+    .unwrap();
+    std::fs::write(
+        pin_path.path(),
+        serde_json::to_vec_pretty(&rebuilt).unwrap(),
+    )
+    .unwrap();
+
+    assert_cmd::Command::cargo_bin("tau")
+        .expect("bin")
+        .current_dir(tmp.path())
+        .args(["mcp", "diff", "weather"])
+        .assert()
+        .code(64);
+}
+
 // ─── Phase 3: refresh ───────────────────────────────────────────────────────
 
 #[test]
