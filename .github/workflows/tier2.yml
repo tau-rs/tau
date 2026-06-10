@@ -356,3 +356,61 @@ jobs:
               --label nightly-regression \
               --body "$BODY"
           fi
+
+  auto-bisect:
+    # Runs after nightly-regression-handler on cron failure. Bisects
+    # main between yesterday's passing SHA and today's failing SHA.
+    # Posts the offending commit to the rolling regression issue.
+    # Cap 7 days back; if no green ancestor found, file note without bisect.
+    name: auto-bisect
+    needs: nightly-regression-handler
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-mold: true
+      - name: Find yesterday's last green SHA
+        id: green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Look back 7 days of nightly cron runs for the most recent success.
+          PREV=$(gh run list --workflow=tier2.yml --event=schedule --status success \
+            --limit 20 --json databaseId,headSha --created '>=7 days ago' \
+            --jq '.[0] // empty')
+          if [ -z "$PREV" ]; then
+            echo "No green ancestor in 7 days; cannot bisect."
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "sha=$(echo "$PREV" | jq -r '.headSha')" >> "$GITHUB_OUTPUT"
+      - name: Bisect
+        if: steps.green.outputs.sha != ''
+        env:
+          GREEN_SHA: ${{ steps.green.outputs.sha }}
+          BAD_SHA: ${{ github.sha }}
+        run: |
+          # The exact test command must reproduce the failure.
+          # For v0, use a placeholder that runs the same workspace nextest
+          # as Tier 2's nextest-macos / windows. Real bisect against
+          # platform-specific jobs would need an macOS runner — defer
+          # cross-platform bisect to a follow-up.
+          git bisect start
+          git bisect bad "$BAD_SHA"
+          git bisect good "$GREEN_SHA"
+          BISECT_OUT=$(git bisect run cargo nextest run --profile ci --workspace --all-targets 2>&1 | tail -40)
+          OFFENDING=$(echo "$BISECT_OUT" | grep -E 'first bad commit' | awk '{print $1}')
+          if [ -n "$OFFENDING" ]; then
+            COMMIT=$(echo "$BISECT_OUT" | grep -oE '[0-9a-f]{40}' | head -1)
+            AUTHOR=$(git show -s --format='%an <%ae>' "$COMMIT")
+            ISSUE=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
+            if [ -n "$ISSUE" ]; then
+              gh issue comment "$ISSUE" --body "Auto-bisect found offending commit: \`$COMMIT\` by $AUTHOR."
+            fi
+          fi
