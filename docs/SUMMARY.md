@@ -105,6 +105,7 @@
 - [0037: Workflow IR](decisions/0037-workflow-ir.md)
 - [ADR-0038 — MCP Facilitator](decisions/0038-mcp-facilitator.md)
 - [ADR-0040 — `tau dev` REPL + β.7/β.7.5 split](decisions/0040-tau-dev-repl.md)
+- [ADR-0041 — β.8 TS authoring surface: declarations-only via static AST analysis](decisions/0041-ts-authoring-declarations-only.md)
 
 # Retrospectives
 
