@@ -146,11 +146,16 @@ jobs:
 
   cargo-audit:
     name: cargo-audit
+    # Skipped in merge_group context: GitHub's merge queue evaluates
+    # per-job conclusions and treats `failure` as a hard eviction trigger
+    # regardless of `continue-on-error`. Since this job's failures are
+    # informational (e.g. RUSTSEC-2024-0436 / paste 1.0.15, unmaintained,
+    # no fix available), running it in the queue's check round would
+    # block every PR despite ci-summary itself being green. The PR-level
+    # run still provides the signal; the queue trusts the PR's result.
+    # Drop this guard once all unfixed advisories are resolved.
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    # Informational scan — fail only on CRITICAL/HIGH severity once the
-    # existing unfixed advisories (e.g. RUSTSEC-2024-0436 / paste 1.0.15,
-    # unmaintained, no fix available) are resolved. Until then, treat as
-    # signal not gate. Matches the osv-scanner job's stance below.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -160,10 +165,9 @@ jobs:
 
   osv-scanner:
     name: osv-scanner
+    # Same merge_group skip as cargo-audit above.
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    # Informational scan — fail only on CRITICAL/HIGH severity once the
-    # existing unfixed advisories (e.g. RUSTSEC-2024-0436 / paste 1.0.15,
-    # no fix available) are resolved. Until then, treat as signal not gate.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
