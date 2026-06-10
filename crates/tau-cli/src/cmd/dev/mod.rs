@@ -3,6 +3,8 @@
 //! See spec at `docs/superpowers/specs/2026-06-10-beta-7-tau-dev-design.md`
 //! and ADR-0040 (forthcoming).
 
+pub mod session;
+
 use anyhow::Result;
 
 use crate::cli::DevArgs;
