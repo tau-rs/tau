@@ -4,6 +4,41 @@ use assert_cmd::Command;
 use assert_fs::prelude::*;
 use predicates::prelude::*;
 
+/// Write a synthetic pin file into a fresh tempdir with a minimal tau.toml.
+///
+/// Used by Phase 3 `show`, `refresh`, and `diff` tests that only need a
+/// pre-existing pin on disk (not a live server probe).
+fn setup_project_with_pin() -> assert_fs::TempDir {
+    let tmp = assert_fs::TempDir::new().expect("tmpdir");
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
+[project]
+name = "show-test"
+version = "0.0.1"
+"#,
+        )
+        .expect("write");
+    let pin = serde_json::json!({
+        "schema_version": 1,
+        "url": "cassette:./fixtures/weather.jsonl",
+        "contract_hash_hex": "0".repeat(64),
+        "contract": {
+            "protocol_version": "2025-03-26",
+            "server_info": {"name": "weather", "version": "1.0"},
+            "tools": [{
+                "name": "get_forecast",
+                "input_schema": {"type": "object"},
+                "caps": [],
+            }],
+        }
+    });
+    tmp.child(".tau/mcp/weather.contract.json")
+        .write_str(&serde_json::to_string(&pin).unwrap())
+        .expect("write");
+    tmp
+}
+
 #[test]
 fn mcp_help_lists_five_verbs() {
     let output = Command::cargo_bin("tau")
@@ -121,4 +156,34 @@ version = "0.0.1"
         .assert()
         .success()
         .stdout(predicates::str::contains("weather"));
+}
+
+// ─── Phase 3: show ──────────────────────────────────────────────────────────
+
+#[test]
+fn show_json_emits_full_contract() {
+    let tmp = setup_project_with_pin();
+    let mut cmd = assert_cmd::Command::cargo_bin("tau").expect("bin");
+    cmd.current_dir(tmp.path())
+        .args(["mcp", "show", "weather", "--json"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("\"server_info\""))
+        .stdout(predicates::str::contains("\"tools\""));
+}
+
+#[test]
+fn show_sarif_emits_valid_sarif_document() {
+    let tmp = setup_project_with_pin();
+    let mut cmd = assert_cmd::Command::cargo_bin("tau").expect("bin");
+    let output = cmd
+        .current_dir(tmp.path())
+        .args(["mcp", "show", "weather", "--sarif"])
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(parsed["version"], "2.1.0");
+    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "tau-mcp");
+    assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 0);
 }
