@@ -1,0 +1,16 @@
+# .cargo/audit.toml — cargo-audit configuration.
+#
+# Mirrors tau's deny.toml [advisories] policy. cargo-deny reads
+# deny.toml directly; cargo-audit does not — it reads this file.
+# Both scanners now align on the same explicit acceptance list.
+#
+# When adding an entry: document the WHY in the comment above the
+# `ignore = [...]` block. Drop the entry once the upstream dep tree
+# no longer references the vulnerable crate.
+
+[advisories]
+# RUSTSEC-2024-0436 — paste 1.0.15 unmaintained.
+# Transitive via netlink-packet-core ← rtnetlink ← tau-sandbox-native.
+# rust-netlink upstream ecosystem hasn't cut a paste-replacement
+# release. See osv-scanner.toml + deny.toml for the matching policy.
+ignore = ["RUSTSEC-2024-0436"]
