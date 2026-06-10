@@ -189,6 +189,12 @@ pub enum Command {
     /// Manage Model Context Protocol (MCP) server contracts.
     #[command(subcommand)]
     Mcp(McpSubcommand),
+    /// Hot-reload REPL driving the post-β.3 IR runtime.
+    ///
+    /// `tau dev <project>` boots a stdin REPL with file-watching;
+    /// editing `tau.toml` triggers a `:reload` hint that preserves
+    /// conversation history.
+    Dev(DevArgs),
 }
 
 /// Arguments for `tau build`.
@@ -558,6 +564,29 @@ pub struct ChatArgs {
     /// Override drift detection on resume.
     #[arg(long, default_value_t = false)]
     pub force: bool,
+}
+
+/// Arguments for `tau dev`.
+#[derive(Debug, clap::Args)]
+pub struct DevArgs {
+    /// Path to the project directory containing `tau.toml`.
+    pub project: std::path::PathBuf,
+
+    /// Run one turn with this prompt and exit (single-shot mode).
+    #[arg(short = 'p', long = "prompt", value_name = "STR")]
+    pub prompt: Option<String>,
+
+    /// Pick a non-default agent. Default = first declared in tau.toml.
+    #[arg(long, value_name = "NAME")]
+    pub agent: Option<String>,
+
+    /// Auto-reload on file change (Mastra-style). No manual `:reload`.
+    #[arg(long)]
+    pub watch: bool,
+
+    /// Disable ANSI coloring of output.
+    #[arg(long)]
+    pub no_color: bool,
 }
 
 /// Resource kinds accepted by `tau list`.

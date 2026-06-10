@@ -104,6 +104,7 @@
 - [ADR-0036 — Capability vocabulary forward-compatibility](decisions/0036-capability-forward-compatibility.md)
 - [0037: Workflow IR](decisions/0037-workflow-ir.md)
 - [ADR-0038 — MCP Facilitator](decisions/0038-mcp-facilitator.md)
+- [ADR-0040 — `tau dev` REPL + β.7/β.7.5 split](decisions/0040-tau-dev-repl.md)
 
 # Retrospectives
 

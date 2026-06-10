@@ -50,6 +50,7 @@ anyhow             = "1"
 chrono             = { workspace = true }
 termimad           = "0.34"
 rustyline          = "18"
+notify             = "6"
 is-terminal        = "0.4"
 tempfile           = { workspace = true }
 # SHA-256 over the native-tool symbolic name in `cmd::build::lower_ir`

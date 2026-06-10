@@ -89,6 +89,15 @@ jobs:
       - uses: anthropics/claude-code-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Pass the workflow's auto-injected GITHUB_TOKEN so the action's
+          # GitHub REST calls (permission check on the PR actor, comment
+          # posting) authenticate against the current repo. Without this
+          # the action exchanges the OAuth token for a GitHub App
+          # installation token scoped to the App's installed owner — that
+          # breaks on repo transfer (tau: LEBOCQTitouan → tau-rs on
+          # 2026-06-10 surfaced this). GITHUB_TOKEN is always scoped to
+          # the current repo, so it survives transfers.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           # Dependabot PRs run with a Bot actor; without this the action
           # aborts with "Workflow initiated by non-human actor: dependabot".
           # Allow dependabot so dependency bumps still get an AI review.
@@ -142,6 +151,10 @@ jobs:
           PREV_REF: ${{ steps.prev.outputs.previous }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # See note above on the PR-review job — same reason: survive
+          # repo transfers by using the workflow-scoped GITHUB_TOKEN
+          # instead of the GitHub App installation token.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           direct_prompt: |
             A new GitHub release was published: $CURRENT_TAG.
             Read the diff between $PREV_REF and $CURRENT_TAG and
