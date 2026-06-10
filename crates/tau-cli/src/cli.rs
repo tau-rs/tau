@@ -200,6 +200,11 @@ pub enum Command {
 /// Arguments for `tau build`.
 #[derive(Args, Debug)]
 pub struct BuildArgs {
+    /// Path to the project to build. May be a directory (containing
+    /// `tau.toml`) or a `.ts` file (β.8 TypeScript-authoring surface).
+    /// Defaults to the current working directory.
+    #[arg(value_name = "PROJECT")]
+    pub project: Option<std::path::PathBuf>,
     /// Target triple to build for (default: host). Must be an
     /// Available triple in the ADR-0034 registry.
     #[arg(long, value_name = "TRIPLE")]
@@ -569,7 +574,8 @@ pub struct ChatArgs {
 /// Arguments for `tau dev`.
 #[derive(Debug, clap::Args)]
 pub struct DevArgs {
-    /// Path to the project directory containing `tau.toml`.
+    /// Path to the project. May be a directory (containing `tau.toml`) or a
+    /// `.ts` file (β.8 TypeScript-authoring surface).
     pub project: std::path::PathBuf,
 
     /// Run one turn with this prompt and exit (single-shot mode).

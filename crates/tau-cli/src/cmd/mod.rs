@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod output_orchestration;
 pub mod plugin;
 pub(crate) mod plugin_loader;
+pub mod project_load;
 pub mod resolve;
 pub(crate) mod resolve_helpers;
 pub mod run;

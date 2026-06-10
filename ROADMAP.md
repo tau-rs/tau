@@ -510,20 +510,30 @@ surface needed for an authoring-quality experience; δ.2 polishes it
 into a publishable SDK.
 
 - **Builds on:** β.2 (the IR) + β.7 (`tau dev`).
-- **Preserves:** TOML manifest authoring stays first-class.
+- **Preserves:** TOML manifest authoring stays first-class. β.7's REPL
+  behavior is identical regardless of project format.
 - **Adds:** `@tau/sdk` package shape — `agent({...})`, `tool({...})`,
-  `mcp({...})`, `contextManager({...})` factory functions that produce
-  IR-emitting JS objects. `tau dev project.ts` reads the TS file via
-  a thin loader (esbuild-in-process) and emits the IR. **One way to
-  write a project** (TOML or TS, your choice), one IR underneath.
+  `mcp({...})` factory functions accepting object literals matching the
+  TOML schema 1:1 (snake_case fields, no name-mapping layer).
+  `tau dev project.ts` parses via swc + statically analyzes the AST +
+  emits the same `ProjectConfig` the TOML loader produces.
+  `contextManager({...})` factory **exists** but rejects at parse time
+  pending β.4. **One way to write a project** (TOML or TS, your
+  choice), one IR underneath.
 - **Supersedes:** nothing.
-- **DoD:** the canonical β.6 scenario can be authored in either TOML
-  *or* TS and produces an identical IR (verified by the conformance
-  gate).
+- **DoD:** the canonical β.6 scenario authored in either TOML *or* TS
+  produces a byte-equal IR after canonical encoding (verified by the
+  TOML↔TS conformance test).
+- **Design:** `docs/superpowers/specs/2026-06-10-beta-8-ts-authoring-design.md`
+- **ADR:** 0041 (records the declarations-only-no-embedded-JS decision)
 
-Out of scope for β.8 (held for δ.2): npm publishing pipeline, TS type
-generation from skill schemas, browser-side runtime, full editor
-plugin polish.
+Out of scope for β.8 v1:
+- Inline TS tool bodies (`run: async () => ...`) — δ.2 adds runtime JS
+  execution via QuickJS embed
+- Multi-file TS imports (`from "./helpers"`) — v1.1
+- npm publishing pipeline, TS type generation from skill schemas,
+  browser-side runtime, full editor plugin polish — δ.2
+- `contextManager` factory implementation — β.4 prerequisite
 
 ### Phase β success criterion
 

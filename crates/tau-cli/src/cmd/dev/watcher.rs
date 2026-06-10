@@ -24,12 +24,17 @@ use tau_pkg::project::project::{AgentEntry, ProjectConfig, PromptEntry};
 ///
 /// On any modify/create/remove event for a watched path,
 /// `pending_reload` is set to `true` (Acquire/Release ordering).
+///
+/// `project_file_path` is the original path supplied by the caller (may be
+/// a `.ts` file or a directory). When it ends in `.ts`, the watcher tracks
+/// the `.ts` file instead of `<root>/tau.toml`.
 pub fn spawn(
     project_root: &Path,
+    project_file_path: &Path,
     project: &ProjectConfig,
     pending_reload: Arc<AtomicBool>,
 ) -> Result<RecommendedWatcher> {
-    let paths = resolve_watch_paths(project_root, project);
+    let paths = resolve_watch_paths(project_root, project_file_path, project);
 
     let pending_for_callback = pending_reload.clone();
     let mut watcher = RecommendedWatcher::new(
@@ -58,11 +63,22 @@ pub fn spawn(
 }
 
 /// Resolve the full set of paths to watch for this project:
-///   - `<root>/tau.toml`
+///   - for `.ts` projects: `project_file_path` (the `.ts` source)
+///   - for TOML projects: `<root>/tau.toml`
 ///   - `<root>/workflows/*.toml` (if directory exists)
 ///   - external prompt files declared as `prompt.system_file = "..."` in any agent
-fn resolve_watch_paths(project_root: &Path, project: &ProjectConfig) -> Vec<PathBuf> {
-    let mut paths = vec![project_root.join("tau.toml")];
+fn resolve_watch_paths(
+    project_root: &Path,
+    project_file_path: &Path,
+    project: &ProjectConfig,
+) -> Vec<PathBuf> {
+    let ext = project_file_path.extension().and_then(|s| s.to_str());
+    let manifest_path = if ext == Some("ts") {
+        project_file_path.to_path_buf()
+    } else {
+        project_root.join("tau.toml")
+    };
+    let mut paths = vec![manifest_path];
 
     // workflows/*.toml
     let workflows_dir = project_root.join("workflows");

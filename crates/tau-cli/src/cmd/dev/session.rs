@@ -23,7 +23,13 @@ use crate::cmd::run::render_outcome;
 
 /// All the long-lived state for one `tau dev` invocation.
 pub struct DevSession {
-    /// Project root (contains `tau.toml`).
+    /// Original project path supplied by the caller.
+    ///
+    /// May be a directory (TOML-based project) or a `.ts` file (β.8
+    /// TypeScript-based project). Used by the file watcher and `:reload`
+    /// to re-extract the project config from the correct source.
+    pub project_file_path: PathBuf,
+    /// Project root (the directory containing the manifest file).
     pub project_root: PathBuf,
     /// Parsed + validated project config.
     pub project: ProjectConfig,
@@ -44,6 +50,7 @@ pub struct DevSession {
 impl fmt::Debug for DevSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DevSession")
+            .field("project_file_path", &self.project_file_path)
             .field("project_root", &self.project_root)
             .field("current_agent", &self.current_agent)
             .field("history_len", &self.history.len())
@@ -63,21 +70,22 @@ impl fmt::Debug for DevSession {
 
 impl DevSession {
     /// Load + validate + lower a project into a fresh session.
-    pub async fn load(project_root: PathBuf, agent_override: Option<String>) -> Result<Self> {
-        let tau_toml_path = project_root.join("tau.toml");
-        let toml_bytes = std::fs::read(&tau_toml_path)
-            .with_context(|| format!("read {}", tau_toml_path.display()))?;
-        let toml_str = std::str::from_utf8(&toml_bytes)
-            .with_context(|| format!("{} is not UTF-8", tau_toml_path.display()))?;
-        let project =
-            ProjectConfig::parse_str(toml_str).map_err(|e| anyhow!("parse tau.toml: {e}"))?;
+    ///
+    /// `project_path` may be a directory (TOML-based project) or a `.ts` file
+    /// (β.8 TypeScript-based project). File-extension dispatch happens inside
+    /// [`crate::cmd::project_load::load_project`].
+    pub async fn load(project_path: PathBuf, agent_override: Option<String>) -> Result<Self> {
+        let crate::cmd::project_load::LoadedProject {
+            project_root,
+            project,
+        } = crate::cmd::project_load::load_project(&project_path)?;
 
         // `project.agents` is a `BTreeMap<String, AgentEntry>`, so `.keys()` iterates
         // in alphabetical order — the first key is the alphabetical default.
         let current_agent = match agent_override {
             Some(name) => {
                 if !project.agents.contains_key(&name) {
-                    return Err(anyhow!("agent `{name}` not in tau.toml"));
+                    return Err(anyhow!("agent `{name}` not found in project"));
                 }
                 name
             }
@@ -85,7 +93,7 @@ impl DevSession {
                 .agents
                 .keys()
                 .next()
-                .ok_or_else(|| anyhow!("tau.toml declares no agents"))?
+                .ok_or_else(|| anyhow!("project declares no agents"))?
                 .clone(),
         };
 
@@ -95,6 +103,7 @@ impl DevSession {
 
         let notify_handle = match crate::cmd::dev::watcher::spawn(
             &project_root,
+            &project_path,
             &project,
             pending_reload.clone(),
         ) {
@@ -106,6 +115,7 @@ impl DevSession {
         };
 
         Ok(Self {
+            project_file_path: project_path,
             project_root,
             project,
             ir,
@@ -148,29 +158,11 @@ impl DevSession {
             return Ok(false);
         }
 
-        let tau_toml_path = self.project_root.join("tau.toml");
-
-        let bytes = match std::fs::read(&tau_toml_path) {
-            Ok(b) => b,
+        let new_project = match crate::cmd::project_load::load_project(&self.project_file_path) {
+            Ok(loaded) => loaded.project,
             Err(e) => {
                 self.pending_reload.store(true, Ordering::Release);
-                return Err(anyhow!("read tau.toml: {e}"));
-            }
-        };
-
-        let toml_str = match std::str::from_utf8(&bytes) {
-            Ok(s) => s,
-            Err(e) => {
-                self.pending_reload.store(true, Ordering::Release);
-                return Err(anyhow!("tau.toml is not UTF-8: {e}"));
-            }
-        };
-
-        let new_project = match ProjectConfig::parse_str(toml_str) {
-            Ok(p) => p,
-            Err(e) => {
-                self.pending_reload.store(true, Ordering::Release);
-                return Err(anyhow!("parse tau.toml: {e}"));
+                return Err(anyhow!("reload project: {e}"));
             }
         };
 

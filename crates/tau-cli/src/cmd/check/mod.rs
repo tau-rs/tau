@@ -23,8 +23,9 @@ use tau_ports::target::TargetTriple;
 /// selects category list, runs the orchestrator, dispatches output
 /// (Tasks 10-12 wire renderers), and exits with the appropriate code.
 pub async fn run(args: crate::cli::CheckArgs) -> Result<()> {
-    // Resolve project root.
-    let project_root = match args.project.as_ref() {
+    // Resolve project path. May be a directory (TOML-based project) or a
+    // `.ts` file (β.8 TypeScript-authoring surface).
+    let project_path = match args.project.as_ref() {
         Some(p) => p.clone(),
         None => std::env::current_dir()?,
     };
@@ -47,7 +48,7 @@ pub async fn run(args: crate::cli::CheckArgs) -> Result<()> {
         None
     };
 
-    let ctx = runner::CheckCtx::load(project_root, args.fast, target).await?;
+    let ctx = runner::CheckCtx::load(project_path, args.fast, target).await?;
 
     // --auto-resolve: attempt to install missing required tools for all agents
     // before running checks. Errors are non-fatal — the packages category will

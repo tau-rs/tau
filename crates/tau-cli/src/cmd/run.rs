@@ -30,7 +30,6 @@ use tau_runtime_tokio::{RunOptions, RunOutcome};
 
 use crate::cli::RunArgs;
 use crate::cmd::plugin_loader;
-use crate::config::ProjectConfig;
 use crate::output::Output;
 
 /// Marker error: the agent ran but reported [`RunOutcome::Failed`].
@@ -120,9 +119,10 @@ pub async fn run(
         }
     }
 
-    let project_path = cwd.join("tau.toml");
-    let project = ProjectConfig::from_path(&project_path)
-        .with_context(|| format!("project tau.toml required at {project_path:?}"))?;
+    let crate::cmd::project_load::LoadedProject { project, .. } =
+        crate::cmd::project_load::load_project(&cwd).with_context(|| {
+            format!("loading project from {cwd:?} (expected tau.toml or a .ts file)",)
+        })?;
 
     let entry = project.agents.get(&args.agent_id).ok_or_else(|| {
         anyhow::anyhow!(
