@@ -20,11 +20,41 @@ use crate::output::Output;
 /// CLI entry point for `tau build`. The function is async to match the
 /// dispatcher's signature; MCP contract resolution requires async I/O.
 pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
-    let project_root = match std::env::current_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = output.error(format!("cannot determine current directory: {e}"));
-            std::process::exit(70);
+    // Resolve the project path: prefer the CLI positional arg, fall back to cwd.
+    let project_path = match &args.project {
+        Some(p) => p.clone(),
+        None => match std::env::current_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = output.error(format!("cannot determine current directory: {e}"));
+                std::process::exit(70);
+            }
+        },
+    };
+
+    // Resolve the project root and optionally extract a ProjectConfig from a
+    // `.ts` source (β.8). For TOML-based projects the root IS the project
+    // directory; for `.ts` projects it is the parent directory.
+    let (project_root, ts_project) = {
+        let ext = project_path.extension().and_then(|s| s.to_str());
+        if project_path.is_file() && ext == Some("ts") {
+            match crate::cmd::project_load::load_project(&project_path) {
+                Ok(loaded) => (loaded.project_root, Some(loaded.project)),
+                Err(e) => {
+                    let _ = output.error(format!("{e}"));
+                    std::process::exit(2);
+                }
+            }
+        } else {
+            let root = if project_path.is_dir() {
+                project_path.clone()
+            } else {
+                project_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| project_path.clone())
+            };
+            (root, None)
         }
     };
 
@@ -71,7 +101,10 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
     // SHA-256-of-name cache for native tools (see `lower_ir`'s doc-comment
     // for the forward-stability semantic). On IrError, render a human-
     // readable diagnostic and exit 2.
-    let ir_payload = lower_ir(&project_root, &target, &mcp_cache_ir);
+    //
+    // For `.ts` projects `ts_project` is already parsed; pass it through so
+    // `lower_ir` does not try to read a non-existent `tau.toml`.
+    let ir_payload = lower_ir(&project_root, &target, &mcp_cache_ir, ts_project.as_ref());
 
     let opts = BuildOptions {
         project_root: project_root.clone(),
@@ -303,34 +336,45 @@ fn schema_hash_json(v: &serde_json::Value) -> String {
 /// semantic (D-6): a change in tool identity is a change in workflow identity.
 ///
 /// `mcp_cache` is keyed by MCP URL and populated by `resolve_mcp_cache`.
+///
+/// `preloaded_config` — when `Some`, the config is used directly instead of
+/// reading `tau.toml` from `project_root`. Used by the `.ts` source path
+/// (β.8) where there is no `tau.toml`.
 pub(crate) fn lower_ir(
     project_root: &std::path::Path,
     target: &TargetTriple,
     mcp_cache: &BTreeMap<String, tau_ir::lower::ResolvedMcpContract>,
+    preloaded_config: Option<&tau_pkg::project::ProjectConfig>,
 ) -> Option<IrPayload> {
     use tau_pkg::project::project::UncheckedProjectConfig;
 
-    let tau_toml_path = project_root.join("tau.toml");
-    let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("IR lowering: failed to read tau.toml: {e}");
-            return None;
-        }
-    };
-    let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::warn!("IR lowering: failed to parse tau.toml: {e}");
-            return None;
-        }
-    };
-    let config = match unchecked.validate() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("IR lowering: project config validation failed: {e}");
-            return None;
-        }
+    let config_owned;
+    let config = if let Some(c) = preloaded_config {
+        c
+    } else {
+        let tau_toml_path = project_root.join("tau.toml");
+        let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("IR lowering: failed to read tau.toml: {e}");
+                return None;
+            }
+        };
+        let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!("IR lowering: failed to parse tau.toml: {e}");
+                return None;
+            }
+        };
+        config_owned = match unchecked.validate() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("IR lowering: project config validation failed: {e}");
+                return None;
+            }
+        };
+        &config_owned
     };
 
     // Deterministic stand-in cache (β.2.6.1): hash the symbolic name with
@@ -346,7 +390,7 @@ pub(crate) fn lower_ir(
         skill: &|_name| None,
     };
 
-    match tau_ir::lower::lower_project(&config, target, &caches) {
+    match tau_ir::lower::lower_project(config, target, &caches) {
         Ok(module) => {
             let bytes = tau_ir::to_canonical_bytes(&module);
             let hash_bytes = tau_ir::compute_hash(&module);
@@ -471,6 +515,7 @@ mod tests {
 
     fn args_with_target(t: Option<&str>) -> BuildArgs {
         BuildArgs {
+            project: None,
             target: t.map(|s| s.to_string()),
             output: None,
             agents: vec![],
@@ -639,7 +684,7 @@ capabilities = []
         let target = TargetTriple::PASSTHROUGH;
         // No MCP entries → empty cache.
         let mcp_cache = std::collections::BTreeMap::new();
-        let payload = lower_ir(project, &target, &mcp_cache);
+        let payload = lower_ir(project, &target, &mcp_cache, None);
         assert!(
             payload.is_some(),
             "lower_ir must return Some(IrPayload) for a project with a [tools.<x>] native = ... entry; \

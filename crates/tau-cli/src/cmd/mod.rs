@@ -6,6 +6,7 @@
 //! returning an "unimplemented" error.
 
 pub mod build;
+pub mod project_load;
 pub mod chat;
 pub mod check;
 pub mod dev;

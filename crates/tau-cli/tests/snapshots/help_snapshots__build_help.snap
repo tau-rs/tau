@@ -5,7 +5,11 @@ expression: s
 ---
 Build a deployment bundle from this project (Phase 2 §C.2)
 
-Usage: tau build [OPTIONS]
+Usage: tau build [OPTIONS] [PROJECT]
+
+Arguments:
+  [PROJECT]
+          Path to the project to build. May be a directory (containing `tau.toml`) or a `.ts` file (β.8 TypeScript-authoring surface). Defaults to the current working directory
 
 Options:
       --target <TRIPLE>

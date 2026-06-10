@@ -29,17 +29,33 @@ pub struct CheckCtx {
 }
 
 impl CheckCtx {
-    /// Build context from a project root path.
+    /// Build context from a project path.
+    ///
+    /// `project_path` may be a directory (TOML-based project) or a `.ts` file
+    /// (β.8 TypeScript-based project). File-extension dispatch happens inside
+    /// [`crate::cmd::project_load::load_project`].
     pub async fn load(
-        project_root: PathBuf,
+        project_path: PathBuf,
         fast: bool,
         target: Option<TargetTriple>,
     ) -> Result<Self> {
+        // Derive the project root for scope resolution regardless of whether
+        // the path is a directory or a .ts file.
+        let project_root = if project_path.is_dir() {
+            project_path.clone()
+        } else {
+            project_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| project_path.clone())
+        };
+
         let scope =
             Scope::resolve(&project_root).map_err(|e| anyhow::anyhow!("resolve scope: {e}"))?;
-        // Project load may legitimately fail (malformed tau.toml). Record
+        // Project load may legitimately fail (malformed source). Record
         // None and let the `config` check report the error.
-        let project = ProjectConfig::from_path(project_root.join("tau.toml")).ok();
+        let project =
+            crate::cmd::project_load::load_project(&project_path).ok().map(|l| l.project);
         Ok(Self {
             project_root,
             scope,
