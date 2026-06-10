@@ -26,6 +26,7 @@ Breakdown by file:
 - `security.md` — 9 findings (S1 High; S2–S5 Medium; S6–S9 Low)
 - `design.md` — 10 findings (D1, D2, D6, D7 Medium; D3, D4, D5, D8, D9, D10 Low)
 - `diagnostics.md` — 5 findings (O1, O2 Medium; O3, O4, O5 Low) + 1 strength (O6)
+- `devops.md` — DevOps & CI/CD audit: 10 gaps (G1, G2 High; G3–G6 Medium; G7–G10 Low) vs. the canonical DevOps model, framed with tau as the most-mature reference / template source.
 
 ## Top 5 issues
 
