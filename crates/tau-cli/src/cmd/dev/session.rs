@@ -1,6 +1,7 @@
 //! `DevSession` — owns the loaded project, IR, history, and (Phase 4+)
 //! the file watcher + MCP client cache.
 
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -13,7 +14,6 @@ use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;
 
 /// All the long-lived state for one `tau dev` invocation.
-#[derive(Debug)]
 pub struct DevSession {
     /// Project root (contains `tau.toml`).
     pub project_root: PathBuf,
@@ -28,7 +28,29 @@ pub struct DevSession {
     /// Set true by the file watcher (Phase 4) when a watched file changes.
     /// Cleared by `:reload`.
     pub pending_reload: Arc<AtomicBool>,
-    // Phase 4+ adds: notify_handle, mcp_clients
+    /// Watcher handle — kept alive to keep file-watching active.
+    /// `None` if the watcher failed to register at boot (degraded mode).
+    pub notify_handle: Option<notify::RecommendedWatcher>,
+}
+
+impl fmt::Debug for DevSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DevSession")
+            .field("project_root", &self.project_root)
+            .field("current_agent", &self.current_agent)
+            .field("history_len", &self.history.len())
+            .field(
+                "pending_reload",
+                &self
+                    .pending_reload
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )
+            .field(
+                "notify_handle",
+                &self.notify_handle.as_ref().map(|_| "<watcher>"),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl DevSession {
@@ -61,13 +83,28 @@ impl DevSession {
 
         let ir = lower_project_to_ir(&project).context("lower project to IR")?;
 
+        let pending_reload = Arc::new(AtomicBool::new(false));
+
+        let notify_handle =
+            match crate::cmd::dev::watcher::spawn(&project_root, &project, pending_reload.clone())
+            {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!(
+                        "warning: file watcher unavailable ({e}); use :reload manually"
+                    );
+                    None
+                }
+            };
+
         Ok(Self {
             project_root,
             project,
             ir,
             current_agent,
             history: Vec::new(),
-            pending_reload: Arc::new(AtomicBool::new(false)),
+            pending_reload,
+            notify_handle,
         })
     }
 

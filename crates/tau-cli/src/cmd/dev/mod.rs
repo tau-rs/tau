@@ -5,6 +5,7 @@
 
 pub mod repl;
 pub mod session;
+pub mod watcher;
 
 use anyhow::Result;
 
