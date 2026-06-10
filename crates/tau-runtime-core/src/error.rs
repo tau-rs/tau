@@ -286,6 +286,28 @@ pub enum RuntimeError {
     #[error("SubflowKind::Compose is not supported in the v0 interpreter")]
     UnsupportedSubflowCompose,
 
+    /// Boot-time drift: live tools/list hash differs from lockfile.
+    #[error(
+        "MCP contract drift at boot for entry {entry:?}: expected hash {expected_hash}, got {actual_hash}"
+    )]
+    McpContractDriftAtBoot {
+        /// `[tools.<entry>]` name.
+        entry: String,
+        /// Hex hash from the lockfile.
+        expected_hash: String,
+        /// Hex hash from the live handshake.
+        actual_hash: String,
+    },
+
+    /// MCP setup failed (handshake / spawn / etc.) — folds resolver errors.
+    #[error("MCP setup failed for entry {entry:?}: {reason}")]
+    McpSetupFailed {
+        /// `[tools.<entry>]` name.
+        entry: String,
+        /// Reason rendered.
+        reason: String,
+    },
+
     /// Catch-all for invariant violations / unexpected states.
     /// See: [escape-hatches.md#runtimeerror-internal](../docs/explanation/escape-hatches.md#runtimeerror-internal).
     #[error("internal: {message}")]
