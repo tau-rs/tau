@@ -17,9 +17,9 @@ mod factory;
 #[allow(missing_docs)]
 mod lower;
 #[allow(missing_docs)]
-mod parse;
+pub(crate) mod parse;
 #[allow(missing_docs)]
-mod scope;
+pub(crate) mod scope;
 
 pub use error::TsExtractError;
 use std::path::Path;
@@ -31,15 +31,18 @@ use tau_pkg::project::project::ProjectConfig;
 /// The function does NOT read from disk — caller is responsible for
 /// reading + UTF-8 validation.
 ///
-/// Phase 1: stub. Phase 2+ fills this in.
+/// Phase 2: parses + collects top-level names; factory recognition deferred to Phase 3.
 pub fn extract_project(
-    _source: &str,
+    source: &str,
     source_path: &Path,
 ) -> Result<ProjectConfig, TsExtractError> {
+    let (module, _sm) = parse::parse_module(source, source_path)?;
+    let _names = scope::collect_top_level(&module);
+    // Phase 3 builds the actual ProjectConfig. Phase 2 returns error.
     Err(TsExtractError::ParseError {
         file: source_path.to_path_buf(),
         line: 0,
         col: 0,
-        message: "not yet implemented (β.8 Phase 1 scaffold)".to_string(),
+        message: "phase 2: factory recognition not yet implemented".to_string(),
     })
 }
