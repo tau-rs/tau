@@ -53,6 +53,10 @@ on:
   issues:
     types: [opened, assigned]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   claude:
     # Allowlist actors. Add additional logins as more contributors
@@ -86,7 +90,7 @@ jobs:
       actions: read
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
         with:
           # Shallow checkout is enough; the action fetches more if needed.
           fetch-depth: 1

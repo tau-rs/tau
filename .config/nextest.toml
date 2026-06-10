@@ -22,3 +22,37 @@ success-output = "never"
 retries = 0
 failure-output = "immediate-final"
 success-output = "never"
+
+# =============================================================================
+# Flaky-test quarantine — pattern documentation (no active overrides at v0)
+# =============================================================================
+#
+# nextest validates EVERY [[profile.ci.overrides]] at parse time, including
+# the filter expression. `package(NAME)` references must match a real
+# workspace package; `test(/regex/)` must be valid regex. An empty
+# placeholder override therefore can't sit in this file as a "scaffold" —
+# it would fail config validation on every test job.
+#
+# When a real test needs quarantining, ADD a block like:
+#
+#     [[profile.ci.overrides]]
+#     # Quarantined YYYY-MM-DD by @<handle> — reason: <one line + flake URLs>
+#     # De-quarantine TODO: <what we'd need to root-cause>
+#     filter = 'test(/^chat_ephemeral_writes_no_file$/)'
+#     retries = 3
+#     failure-output = "immediate-final"
+#
+# Notes for promoters:
+# - `retries = N` re-runs the matched test N times before declaring failure
+#   (masks intermittent flakes while a root-cause investigation is open).
+# - `failure-output` accepts `immediate`, `immediate-final`, `final`, `never`.
+#   Use `immediate-final` for visibility while quarantined.
+# - nextest does NOT natively support "run but treat failure as pass".
+#   Real non-blocking quarantine relies on (a) retries + (b)
+#   auto-rerun-flaky.yml to rerun the WORKFLOW on the flake patterns it
+#   recognizes + (c) explicit documentation in
+#   docs/how-to/quarantine-flaky-tests.md (Phase 4 deliverable).
+# - Promotion pattern: ≥5 failures in a rolling 7-day window — open a PR
+#   adding a block here with links to the failing run URLs.
+# - Auto-promotion based on rolling-window flake counts is a follow-up
+#   not in scope of this redesign.

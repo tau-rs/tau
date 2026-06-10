@@ -65,7 +65,7 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
@@ -96,7 +96,7 @@ jobs:
           cp target/release/tau _artifacts/
           cp target/release/tau-net-bridge _artifacts/
           cp crates/tau-plugin-compat/fixtures/controlled-env-binary/target/release/tau-controlled-env _artifacts/
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: tier2-linux-fixture-binaries
           retention-days: 1
@@ -108,7 +108,7 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -123,7 +123,7 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -138,7 +138,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -148,10 +148,10 @@ jobs:
           with-sccache: true
           with-mold: true
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-llvm-cov
       - name: Generate coverage
         run: cargo llvm-cov nextest --profile ci --workspace --lcov --output-path lcov.info
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
         with:
           files: lcov.info
           fail_ci_if_error: false
@@ -162,14 +162,14 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-sccache: true
           with-mold: true
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
         with:
           name: tier2-linux-fixture-binaries
           path: _artifacts/
@@ -190,13 +190,13 @@ jobs:
     env:
       TAU_CONTAINER_RUNTIME: docker
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
         with:
           name: tier2-linux-fixture-binaries
           path: _artifacts/
@@ -206,7 +206,7 @@ jobs:
       - name: Build tau binary (debug)
         run: cargo build -p tau-cli --bin tau
       - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
         with:
           driver: docker-container
       - name: Build per-plugin images
@@ -232,13 +232,13 @@ jobs:
       TAU_CONTAINER_RUNTIME: docker
       FLAVOR: ${{ matrix.flavor }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
         with:
           name: tier2-linux-fixture-binaries
           path: _artifacts/
@@ -247,7 +247,7 @@ jobs:
           binaries: "all"
       - name: Set up Docker buildx
         if: matrix.flavor == 'container'
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
         with:
           driver: docker-container
       - name: Build per-plugin images
@@ -281,13 +281,13 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
         with:
           name: tier2-linux-fixture-binaries
           path: _artifacts/
@@ -305,13 +305,13 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
         with:
           name: tier2-linux-fixture-binaries
           path: _artifacts/
@@ -337,7 +337,7 @@ jobs:
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - name: Open or append rolling regression issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -355,4 +355,62 @@ jobs:
               --title "[nightly-CI] regression on $DATE" \
               --label nightly-regression \
               --body "$BODY"
+          fi
+
+  auto-bisect:
+    # Runs after nightly-regression-handler on cron failure. Bisects
+    # main between yesterday's passing SHA and today's failing SHA.
+    # Posts the offending commit to the rolling regression issue.
+    # Cap 7 days back; if no green ancestor found, file note without bisect.
+    name: auto-bisect
+    needs: nightly-regression-handler
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-mold: true
+      - name: Find yesterday's last green SHA
+        id: green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Look back 7 days of nightly cron runs for the most recent success.
+          PREV=$(gh run list --workflow=tier2.yml --event=schedule --status success \
+            --limit 20 --json databaseId,headSha --created '>=7 days ago' \
+            --jq '.[0] // empty')
+          if [ -z "$PREV" ]; then
+            echo "No green ancestor in 7 days; cannot bisect."
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "sha=$(echo "$PREV" | jq -r '.headSha')" >> "$GITHUB_OUTPUT"
+      - name: Bisect
+        if: steps.green.outputs.sha != ''
+        env:
+          GREEN_SHA: ${{ steps.green.outputs.sha }}
+          BAD_SHA: ${{ github.sha }}
+        run: |
+          # The exact test command must reproduce the failure.
+          # For v0, use a placeholder that runs the same workspace nextest
+          # as Tier 2's nextest-macos / windows. Real bisect against
+          # platform-specific jobs would need an macOS runner — defer
+          # cross-platform bisect to a follow-up.
+          git bisect start
+          git bisect bad "$BAD_SHA"
+          git bisect good "$GREEN_SHA"
+          BISECT_OUT=$(git bisect run cargo nextest run --profile ci --workspace --all-targets 2>&1 | tail -40)
+          OFFENDING=$(echo "$BISECT_OUT" | grep -E 'first bad commit' | awk '{print $1}')
+          if [ -n "$OFFENDING" ]; then
+            COMMIT=$(echo "$BISECT_OUT" | grep -oE '[0-9a-f]{40}' | head -1)
+            AUTHOR=$(git show -s --format='%an <%ae>' "$COMMIT")
+            ISSUE=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
+            if [ -n "$ISSUE" ]; then
+              gh issue comment "$ISSUE" --body "Auto-bisect found offending commit: \`$COMMIT\` by $AUTHOR."
+            fi
           fi
