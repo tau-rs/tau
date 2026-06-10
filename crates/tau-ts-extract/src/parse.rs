@@ -34,11 +34,9 @@ pub fn parse_module(
 
     let module = parser.parse_module().map_err(|e| {
         let span = e.span();
-        let loc = cm.lookup_char_pos(span.lo);
+        let pos = TsExtractError::position_from_span(&cm, span, source_path.to_path_buf());
         TsExtractError::ParseError {
-            file: source_path.to_path_buf(),
-            line: loc.line as u32,
-            col: (loc.col.0 + 1) as u32,
+            pos,
             message: format!("{:?}", e.kind()),
         }
     })?;

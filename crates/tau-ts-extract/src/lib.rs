@@ -34,7 +34,7 @@ pub fn extract_project(
     source: &str,
     source_path: &Path,
 ) -> Result<ProjectConfig, TsExtractError> {
-    let (module, _sm) = parse::parse_module(source, source_path)?;
+    let (module, sm) = parse::parse_module(source, source_path)?;
     let names = scope::collect_top_level(&module);
-    lower::build_project_config(&module, &names, source_path)
+    lower::build_project_config(&module, &names, source_path, &sm)
 }

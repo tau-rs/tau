@@ -9,11 +9,15 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use swc_ecma_ast::{Expr, KeyValueProp, Lit, Module, ObjectLit, Prop, PropName, PropOrSpread};
+use swc_common::{sync::Lrc, SourceMap, Spanned};
+use swc_ecma_ast::{
+    Expr, KeyValueProp, Lit, Module, ModuleDecl, ModuleItem, ObjectLit, Prop, PropName,
+    PropOrSpread,
+};
 
 use tau_pkg::project::project::ProjectConfig;
 
-use crate::error::TsExtractError;
+use crate::error::{Position, TsExtractError};
 use crate::factory::{arg_as_object, arg_as_string, recognize_factory_call, Factory};
 use crate::scope::NameMap;
 
@@ -46,15 +50,39 @@ struct IrTool {
 
 /// Build a `ProjectConfig` from a parsed module + name map.
 pub fn build_project_config(
-    _module: &Module,
+    module: &Module,
     names: &NameMap,
     source_path: &Path,
+    sm: &Lrc<SourceMap>,
 ) -> Result<ProjectConfig, TsExtractError> {
     let project_name = source_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("project")
         .to_owned();
+
+    // Walk imports: reject any import not from "tau".
+    for item in &module.body {
+        if let ModuleItem::ModuleDecl(ModuleDecl::Import(import_decl)) = item {
+            let source_str = import_decl
+                .src
+                .value
+                .as_wtf8()
+                .to_string_lossy()
+                .into_owned();
+            if source_str != "tau" {
+                let pos = TsExtractError::position_from_span(
+                    sm,
+                    import_decl.span,
+                    source_path.to_path_buf(),
+                );
+                return Err(TsExtractError::ImportNotSupported {
+                    pos,
+                    import_source: source_str,
+                });
+            }
+        }
+    }
 
     let mut agents: BTreeMap<String, IrAgent> = BTreeMap::new();
     let mut tools: BTreeMap<String, IrTool> = BTreeMap::new();
@@ -68,18 +96,22 @@ pub fn build_project_config(
                     let obj = arg_as_object(call, 0).ok_or_else(|| {
                         mk_err(
                             source_path,
+                            sm,
+                            call.span(),
                             &format!(
                                 "`tool({name})`: first argument must be an object literal"
                             ),
                         )
                     })?;
-                    let tool = extract_tool(name, obj, source_path)?;
+                    let tool = extract_tool(name, obj, source_path, sm)?;
                     tools.insert(name.clone(), tool);
                 }
                 Factory::Mcp => {
                     let url = arg_as_string(call, 0).ok_or_else(|| {
                         mk_err(
                             source_path,
+                            sm,
+                            call.span(),
                             &format!(
                                 "`mcp({name})`: first argument must be a string URL"
                             ),
@@ -94,13 +126,16 @@ pub fn build_project_config(
                     );
                 }
                 Factory::ContextManager => {
-                    return Err(mk_err(
-                        source_path,
-                        &format!(
-                            "`contextManager({name})`: contextManager is not yet supported \
-                             (deferred to Phase 4)"
-                        ),
-                    ));
+                    let pos = TsExtractError::position_from_span(
+                        sm,
+                        call.span(),
+                        source_path.to_path_buf(),
+                    );
+                    return Err(TsExtractError::Deferred {
+                        pos,
+                        factory: "contextManager".to_string(),
+                        until: "β.4".to_string(),
+                    });
                 }
                 Factory::Agent => {} // second pass
             }
@@ -113,10 +148,12 @@ pub fn build_project_config(
             let obj = arg_as_object(call, 0).ok_or_else(|| {
                 mk_err(
                     source_path,
+                    sm,
+                    call.span(),
                     &format!("`agent({name})`: first argument must be an object literal"),
                 )
             })?;
-            let (agent, extra_tools) = extract_agent(name, obj, names, source_path)?;
+            let (agent, extra_tools) = extract_agent(name, obj, names, source_path, sm)?;
             agents.insert(name.clone(), agent);
             for (tool_name, tool) in extra_tools {
                 tools.entry(tool_name).or_insert(tool);
@@ -126,7 +163,7 @@ pub fn build_project_config(
 
     // Serialize to TOML and parse through the standard validation path.
     let toml = build_toml(&project_name, &agents, &tools);
-    ProjectConfig::parse_str(&toml).map_err(|e| map_config_err(e, source_path))
+    ProjectConfig::parse_str(&toml).map_err(|e| map_config_err(e, source_path, sm))
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -286,13 +323,38 @@ fn extract_tool(
     name: &str,
     obj: &ObjectLit,
     source_path: &Path,
+    sm: &Lrc<SourceMap>,
 ) -> Result<IrTool, TsExtractError> {
-    let props = obj_props(obj);
+    let props_kv = obj_props(obj);
 
-    let body = if let Some(native_val) = props.get("native") {
+    // Walk raw props to detect `run: <function>` — must happen before
+    // checking `native` so we emit InlineToolBody rather than "missing native".
+    for prop in &obj.props {
+        if let PropOrSpread::Prop(p) = prop {
+            if let Prop::KeyValue(KeyValueProp { key, value }) = p.as_ref() {
+                let key_str = match key {
+                    PropName::Ident(i) => i.sym.to_string(),
+                    PropName::Str(s) => s.value.as_wtf8().to_string_lossy().into_owned(),
+                    _ => continue,
+                };
+                if key_str == "run" && matches!(value.as_ref(), Expr::Arrow(_) | Expr::Fn(_)) {
+                    let pos = TsExtractError::position_from_span(
+                        sm,
+                        value.span(),
+                        source_path.to_path_buf(),
+                    );
+                    return Err(TsExtractError::InlineToolBody { pos });
+                }
+            }
+        }
+    }
+
+    let body = if let Some(native_val) = props_kv.get("native") {
         let fn_name = expr_as_string(native_val).ok_or_else(|| {
             mk_err(
                 source_path,
+                sm,
+                native_val.span(),
                 &format!("tool({name}): `native` field must be a string"),
             )
         })?;
@@ -300,13 +362,15 @@ fn extract_tool(
     } else {
         return Err(mk_err(
             source_path,
+            sm,
+            obj.span(),
             &format!(
                 "tool({name}): must have a `native` field (use mcp() factory for MCP tools)"
             ),
         ));
     };
 
-    let description = get_string(&props, "description").unwrap_or_default();
+    let description = get_string(&props_kv, "description").unwrap_or_default();
 
     Ok(IrTool { body, description })
 }
@@ -316,24 +380,31 @@ fn extract_agent(
     obj: &ObjectLit,
     names: &NameMap,
     source_path: &Path,
+    sm: &Lrc<SourceMap>,
 ) -> Result<(IrAgent, BTreeMap<String, IrTool>), TsExtractError> {
     let props = obj_props(obj);
 
     let display_name = get_string(&props, "display_name").ok_or_else(|| {
         mk_err(
             source_path,
+            sm,
+            obj.span(),
             &format!("agent({name}): missing required string field `display_name`"),
         )
     })?;
     let package = get_string(&props, "package").ok_or_else(|| {
         mk_err(
             source_path,
+            sm,
+            obj.span(),
             &format!("agent({name}): missing required string field `package`"),
         )
     })?;
     let llm_backend = get_string(&props, "llm_backend").ok_or_else(|| {
         mk_err(
             source_path,
+            sm,
+            obj.span(),
             &format!("agent({name}): missing required string field `llm_backend`"),
         )
     })?;
@@ -363,7 +434,7 @@ fn extract_agent(
                     match factory {
                         Factory::Tool => {
                             if let Some(obj) = arg_as_object(call, 0) {
-                                let tool = extract_tool(&tool_name, obj, source_path)?;
+                                let tool = extract_tool(&tool_name, obj, source_path, sm)?;
                                 extra_tools.insert(tool_name, tool);
                             }
                         }
@@ -379,13 +450,16 @@ fn extract_agent(
                             }
                         }
                         Factory::ContextManager => {
-                            return Err(mk_err(
-                                source_path,
-                                &format!(
-                                    "agent({name}).tools.{tool_name}: contextManager not \
-                                     yet supported (deferred to Phase 4)"
-                                ),
-                            ));
+                            let pos = TsExtractError::position_from_span(
+                                sm,
+                                call.span(),
+                                source_path.to_path_buf(),
+                            );
+                            return Err(TsExtractError::Deferred {
+                                pos,
+                                factory: "contextManager".to_string(),
+                                until: "β.4".to_string(),
+                            });
                         }
                         Factory::Agent => {}
                     }
@@ -410,20 +484,28 @@ fn extract_agent(
 // Error helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-fn mk_err(path: &Path, message: &str) -> TsExtractError {
+fn mk_err(path: &Path, sm: &Lrc<SourceMap>, span: swc_common::Span, message: &str) -> TsExtractError {
+    let pos = TsExtractError::position_from_span(sm, span, path.to_path_buf());
     TsExtractError::ParseError {
-        file: path.to_path_buf(),
-        line: 0,
-        col: 0,
+        pos,
         message: message.to_owned(),
     }
 }
 
-fn map_config_err(e: tau_pkg::project::project::ProjectConfigError, path: &Path) -> TsExtractError {
-    TsExtractError::ParseError {
+fn map_config_err(
+    e: tau_pkg::project::project::ProjectConfigError,
+    path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> TsExtractError {
+    // No useful span available — use dummy span at byte 0.
+    let pos = Position {
         file: path.to_path_buf(),
         line: 0,
         col: 0,
+    };
+    let _ = sm; // kept for API symmetry; no span to resolve
+    TsExtractError::ParseError {
+        pos,
         message: format!("project validation failed: {e}"),
     }
 }
@@ -516,5 +598,84 @@ mod tests {
         "#;
         let config = extract_project(src, Path::new("/tmp/p.ts")).expect("parse");
         assert!(config.agents.contains_key("solo"));
+    }
+
+    // ── Phase 4 rejection tests ──────────────────────────────────────────────
+
+    #[test]
+    fn rejects_async_function_body() {
+        let src = r#"
+            const t = tool({
+                native: "X",
+                run: async () => 42
+            });
+            export const a = agent({
+                display_name: "A",
+                package: "a@^0.1",
+                llm_backend: "anthropic",
+                model: "x",
+                prompt: { system: "x" },
+                tools: { t }
+            });
+        "#;
+        let err = crate::extract_project(src, std::path::Path::new("/tmp/t.ts"))
+            .expect_err("should fail");
+        assert!(
+            matches!(
+                err,
+                crate::error::TsExtractError::InlineToolBody { .. }
+                    | crate::error::TsExtractError::UnsupportedExpression { .. }
+            ),
+            "expected InlineToolBody or UnsupportedExpression, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_context_manager_factory() {
+        let src = r#"
+            export const ctx = contextManager({
+                budget: { tokens: 16000 }
+            });
+        "#;
+        let err = crate::extract_project(src, std::path::Path::new("/tmp/t.ts"))
+            .expect_err("should fail");
+        assert!(
+            matches!(err, crate::error::TsExtractError::Deferred { .. }),
+            "expected Deferred, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_non_tau_import() {
+        let src = r#"
+            import { x } from "./helpers";
+            export const a = agent({
+                display_name: "A",
+                package: "a@^0.1",
+                llm_backend: "anthropic",
+                model: "x",
+                prompt: { system: "x" }
+            });
+        "#;
+        let err = crate::extract_project(src, std::path::Path::new("/tmp/t.ts"))
+            .expect_err("should fail");
+        assert!(
+            matches!(err, crate::error::TsExtractError::ImportNotSupported { .. }),
+            "expected ImportNotSupported, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn error_position_carries_line_col() {
+        let src = "const broken = ();"; // syntax error
+        let err = crate::extract_project(src, std::path::Path::new("/tmp/t.ts"))
+            .expect_err("should fail");
+        match err {
+            crate::error::TsExtractError::ParseError { pos, .. } => {
+                assert_eq!(pos.line, 1, "expected line 1, got {}", pos.line);
+                assert!(pos.col > 0, "expected non-zero col, got {}", pos.col);
+            }
+            other => panic!("expected ParseError, got: {other:?}"),
+        }
     }
 }
