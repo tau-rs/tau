@@ -174,6 +174,7 @@ async fn dispatch(cli: cli::Cli, workflow_run_id: Option<String>) -> anyhow::Res
             )
             .await
         }
+        cli::Command::Dev(args) => cmd::dev::run(args, &mut output).await,
         cli::Command::Resolve(args) => cmd::resolve::run(&args, &mut output).await,
         cli::Command::Uninstall(args) => cmd::uninstall::run(&args, &mut output).await,
         cli::Command::Update(args) => cmd::update::run(&args, &mut output).await,
