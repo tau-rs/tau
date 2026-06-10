@@ -66,13 +66,32 @@ pub fn parse_command(line: &str) -> Command {
 }
 
 /// Run the REPL loop until the user quits.
-pub async fn run_loop(session: &mut DevSession, output: &mut Output) -> Result<()> {
+///
+/// When `watch_mode` is `true`, a pending reload is applied automatically at
+/// the top of each iteration (before the next prompt). When `false`, the REPL
+/// prints a hint asking the user to type `:reload` instead.
+pub async fn run_loop(
+    session: &mut DevSession,
+    output: &mut Output,
+    watch_mode: bool,
+) -> Result<()> {
     let mut editor = DefaultEditor::new()?;
     print_banner(output, session);
     loop {
         use std::sync::atomic::Ordering;
         if session.pending_reload.load(Ordering::Acquire) {
-            output.human("(manifest changed; type :reload to apply)")?;
+            if watch_mode {
+                match session.auto_reload_if_pending().await {
+                    Ok(true) => output.human(&format!(
+                        "(auto-reloaded; {} messages preserved)",
+                        session.history.len()
+                    ))?,
+                    Ok(false) => {} // race: cleared between observing and acting
+                    Err(e) => output.human(&format!("auto-reload failed: {e}"))?,
+                }
+            } else {
+                output.human("(manifest changed; type :reload to apply)")?;
+            }
         }
         let prompt = format!("({}) > ", session.current_agent_name());
         let line = match editor.readline(&prompt) {

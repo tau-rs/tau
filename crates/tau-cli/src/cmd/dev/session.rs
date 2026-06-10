@@ -196,6 +196,15 @@ impl DevSession {
         Ok(true)
     }
 
+    /// Watch-mode counterpart to [`reload`][Self::reload].
+    ///
+    /// Has the same effect (re-parse + re-lower + keep history) but signals
+    /// "auto-applied by `--watch`" rather than "user typed `:reload`". The thin
+    /// wrapper makes the watch-mode path explicit at call sites.
+    pub async fn auto_reload_if_pending(&mut self) -> anyhow::Result<bool> {
+        self.reload().await
+    }
+
     /// Run one turn against the current agent.
     ///
     /// Mirrors the construction in `crate::cmd::ir_dispatcher::run_via_ir`:

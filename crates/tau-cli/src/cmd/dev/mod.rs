@@ -17,11 +17,20 @@ use session::DevSession;
 ///
 /// When `--prompt` (`-p`) is supplied, runs exactly one turn and exits
 /// (single-shot mode). When omitted, enters the interactive REPL loop.
-/// Phase 6 will layer `--watch` auto-reload on top.
+/// When `--watch` is set, the REPL auto-applies pending manifest reloads at
+/// the top of each iteration without requiring the user to type `:reload`.
+/// If both `-p` and `--watch` are set, `--watch` is a no-op (one-shot doesn't
+/// loop) and a warning is emitted.
 pub async fn run(args: DevArgs, output: &mut Output) -> Result<()> {
     let mut session = DevSession::load(args.project, args.agent).await?;
     match args.prompt {
-        Some(p) => session.run_turn(&p, output).await,
-        None => repl::run_loop(&mut session, output).await,
+        Some(p) => {
+            // --watch is meaningless in one-shot mode; warn but proceed.
+            if args.watch {
+                eprintln!("warning: --watch is ignored when -p is set");
+            }
+            session.run_turn(&p, output).await
+        }
+        None => repl::run_loop(&mut session, output, args.watch).await,
     }
 }
