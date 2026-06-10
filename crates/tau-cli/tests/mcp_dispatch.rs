@@ -187,3 +187,52 @@ fn show_sarif_emits_valid_sarif_document() {
     assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "tau-mcp");
     assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 0);
 }
+
+// ─── Phase 3: refresh ───────────────────────────────────────────────────────
+
+#[test]
+fn refresh_overwrites_pin_file_and_reports_changed_false_on_no_drift() {
+    let tmp = assert_fs::TempDir::new().expect("tmpdir");
+    let cassette_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tau-mcp-tokio/tests/fixtures/weather_minimal_cassette.jsonl");
+    tmp.child("fixtures/weather.jsonl")
+        .write_binary(&std::fs::read(&cassette_src).expect("read"))
+        .expect("write");
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
+[project]
+name = "refresh-test"
+version = "0.0.1"
+
+[tools.weather]
+mcp = "cassette:./fixtures/weather.jsonl"
+"#,
+        )
+        .expect("write");
+
+    // First, pin it.
+    assert_cmd::Command::cargo_bin("tau")
+        .expect("bin")
+        .current_dir(tmp.path())
+        .args(["mcp", "pin", "weather"])
+        .assert()
+        .success();
+    let first =
+        std::fs::read_to_string(tmp.child(".tau/mcp/weather.contract.json").path()).unwrap();
+
+    // Refresh against the same cassette → identical contract.
+    assert_cmd::Command::cargo_bin("tau")
+        .expect("bin")
+        .current_dir(tmp.path())
+        .args(["mcp", "refresh", "weather", "--json"])
+        .assert()
+        .success()
+        .stdout(
+            predicates::str::contains("\"changed\": false")
+                .or(predicates::str::contains("\"changed\":false")),
+        );
+    let second =
+        std::fs::read_to_string(tmp.child(".tau/mcp/weather.contract.json").path()).unwrap();
+    assert_eq!(first, second);
+}
