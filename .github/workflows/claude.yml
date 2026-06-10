@@ -53,6 +53,10 @@ on:
   issues:
     types: [opened, assigned]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   claude:
     # Allowlist actors. Add additional logins as more contributors
