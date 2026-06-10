@@ -134,6 +134,68 @@ pub struct PluginProcess {
     _sandbox_handle: std::sync::Mutex<Option<CapabilityHandle>>,
 }
 
+/// Secret env-var names re-injected into every plugin child after
+/// [`tokio::process::Command::env_clear`]. This is an **explicit
+/// allowlist**, not the host's full environment: `env_clear()` exists
+/// precisely so plugins run in a minimal, reproducible env, and only
+/// these well-known secret names are passed back through.
+///
+/// One entry per shipped LLM plugin's default env-var name
+/// (`default_api_key_env` / `default_bearer_token_env`):
+/// - `ANTHROPIC_API_KEY` — `tau-plugins/anthropic`
+/// - `OPENAI_API_KEY` — `tau-plugins/openai`
+/// - `OLLAMA_BEARER_TOKEN` — `tau-plugins/ollama`
+///
+/// A plugin configured with a *custom* `api_key_env` name still needs
+/// the cleartext-config path or a future per-plugin env declaration; the
+/// host cannot enumerate arbitrary names without re-introducing the
+/// pass-everything behavior `env_clear()` removed.
+const SECRET_ENV_ALLOWLIST: &[&str] =
+    &["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OLLAMA_BEARER_TOKEN"];
+
+/// Apply the plugin child's minimal, reproducible environment to
+/// `command`: clear the inherited env, then re-add only the two
+/// `TAU_PLUGIN_*` identity vars, `PATH` (for shared-library
+/// resolution), and any [`SECRET_ENV_ALLOWLIST`] names present in the
+/// parent env (resolved via `env_lookup`).
+///
+/// Without the allowlist re-injection, `env_clear()` wiped env-provided
+/// secrets like `ANTHROPIC_API_KEY` before the plugin's `from_config`
+/// `std::env::var` lookup could read them — forcing real keys into
+/// plaintext `tau.toml`. Only allowlisted names cross over, so the
+/// security intent of `env_clear()` (no ambient host env) is preserved.
+///
+/// `env_lookup` is injected (rather than calling `std::env::var`
+/// directly) so the policy is unit-testable without spawning a
+/// subprocess or mutating the test process's real environment. The
+/// production caller passes `|n| std::env::var(n).ok()`.
+fn configure_plugin_command_env(
+    command: &mut Command,
+    run_id: &str,
+    agent_id: &str,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) {
+    command
+        .env_clear()
+        .env("TAU_PLUGIN_RUN_ID", run_id)
+        .env("TAU_PLUGIN_AGENT_ID", agent_id)
+        // Inherit PATH so shared-library lookups (libc, libssl, …) work
+        // the same as for the host. Anything more ambient than PATH and
+        // the allowlisted secrets below should be added via the
+        // per-plugin config payload, not the env, so plugin behavior
+        // stays reproducible across hosts.
+        .env("PATH", env_lookup("PATH").unwrap_or_default());
+
+    // Re-inject env-provided secrets so plaintext `tau.toml` is no
+    // longer the only working path. Only allowlisted names cross over,
+    // and only when actually set in the parent env.
+    for name in SECRET_ENV_ALLOWLIST {
+        if let Some(value) = env_lookup(name) {
+            command.env(name, value);
+        }
+    }
+}
+
 impl PluginProcess {
     /// Spawn a plugin subprocess and install the framer, dispatch
     /// read loop, and stderr re-emit task. The handshake is **not**
@@ -210,16 +272,11 @@ impl PluginProcess {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .env_clear()
-            .env("TAU_PLUGIN_RUN_ID", run_id)
-            .env("TAU_PLUGIN_AGENT_ID", agent_id)
-            // Inherit PATH so shared-library lookups (libc, libssl,
-            // …) work the same as for the host. Anything more
-            // ambient than PATH should be added via the per-plugin
-            // config payload, not the env, so plugin behavior stays
-            // reproducible across hosts.
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
             .kill_on_drop(true);
+        // Clear the inherited env and re-add only the identity vars,
+        // PATH, and the secret-env allowlist (so env-provided keys like
+        // ANTHROPIC_API_KEY reach the plugin without plaintext config).
+        configure_plugin_command_env(&mut command, run_id, agent_id, |n| std::env::var(n).ok());
 
         // Layer 3 + 4: sandbox validation and enforcement.
         //
@@ -735,6 +792,74 @@ fn emit_plugin_line(plugin_name: &str, line: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configure_plugin_command_env_injects_allowlisted_secrets_only() {
+        use std::collections::HashMap;
+
+        // A fake parent environment: allowlisted secrets + PATH, plus
+        // non-allowlisted entries (including a non-allowlisted secret) that
+        // must NOT cross into the child.
+        let parent: HashMap<&str, &str> = [
+            ("ANTHROPIC_API_KEY", "sk-ant-parent"),
+            ("OPENAI_API_KEY", "sk-openai-parent"),
+            ("OLLAMA_BEARER_TOKEN", "ollama-parent"),
+            ("PATH", "/usr/bin:/bin"),
+            ("AWS_SECRET_ACCESS_KEY", "leak-me-not"),
+            ("HOME", "/home/host-user"),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut command = Command::new("/bin/true");
+        configure_plugin_command_env(&mut command, "run-7", "agent-9", |name| {
+            parent.get(name).map(|v| (*v).to_string())
+        });
+
+        let envs: HashMap<String, Option<String>> = command
+            .as_std()
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+
+        // Allowlisted secrets are re-injected from the parent env.
+        assert_eq!(
+            envs.get("ANTHROPIC_API_KEY"),
+            Some(&Some("sk-ant-parent".to_string())),
+            "ANTHROPIC_API_KEY must reach the plugin from the parent env"
+        );
+        assert_eq!(
+            envs.get("OPENAI_API_KEY"),
+            Some(&Some("sk-openai-parent".to_string()))
+        );
+        assert_eq!(
+            envs.get("OLLAMA_BEARER_TOKEN"),
+            Some(&Some("ollama-parent".to_string()))
+        );
+
+        // Required plumbing is still set.
+        assert_eq!(
+            envs.get("TAU_PLUGIN_RUN_ID"),
+            Some(&Some("run-7".to_string()))
+        );
+        assert_eq!(
+            envs.get("TAU_PLUGIN_AGENT_ID"),
+            Some(&Some("agent-9".to_string()))
+        );
+        assert_eq!(envs.get("PATH"), Some(&Some("/usr/bin:/bin".to_string())));
+
+        // Non-allowlisted vars (even secret-looking ones) stay cleared.
+        assert!(
+            !envs.contains_key("AWS_SECRET_ACCESS_KEY"),
+            "non-allowlisted secret must not cross into the plugin"
+        );
+        assert!(!envs.contains_key("HOME"));
+    }
 
     #[test]
     fn emit_plugin_line_handles_json_and_raw_without_panicking() {
