@@ -1,4 +1,4 @@
-# tau dev environment — Linux pre-commit + pre-push gate
+# tau dev environment — Linux pre-commit hook + opt-in deep gate
 
 Goal: catch cross-platform build/runtime issues locally before pushing, so CI is confirmation rather than discovery. Also unblocks local debugging of F task 6.5 follow-ups (strict_net_filter integration test hang, Container-adapter network filtering).
 
@@ -18,15 +18,15 @@ brew install filosottile/musl-cross/musl-cross   # for cross-compile-check (x86_
 podman machine init --cpus 4 --memory 8192 --rootful
 podman machine start
 
-# 4. Wire git hooks
+# 4. Wire the pre-commit git hook
 lefthook install
 
 # 5. Verify
 lefthook run pre-commit --all-files     # ~30-60s, must exit 0
-lefthook run pre-push --all-files       # ~3-5min cold, must exit 0
+lefthook run deep-gate   --all-files     # ~3-5min cold, opt-in pre-flight
 ```
 
-After this, every `git commit` runs the fast checks; every `git push` runs the deep Linux gate.
+After this, every `git commit` runs the fast checks. The deep Linux gate is **opt-in** — it is not a push hook; run `lefthook run deep-gate` on demand (e.g. before a release tag) when you want a full local pre-flight. CI runs the same Linux jobs on every PR, so CI is the gate.
 
 ## Toolchain setup — rustup, not Homebrew rust
 
@@ -66,12 +66,12 @@ The `check-linux-x86` pre-commit step requires the musl stdlib for the `x86_64-u
 │                  • cargo nextest run --workspace --all-targets   │
 │                  • cargo check --target x86_64-unknown-linux-musl│
 │                                                                  │
-│  git push ─────── lefthook pre-push ────  ~3-5min (Linux VM)     │
+│  lefthook run deep-gate (opt-in) ──────  ~3-5min (Linux VM)     │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ Podman machine (Linux VM, persistent)                      │  │
 │  │                                                            │  │
-│  │  ephemeral container per pre-push run:                     │  │
+│  │  ephemeral container per deep-gate run:                    │  │
 │  │  podman run --rm                                           │  │
 │  │    --cap-add SYS_ADMIN --cap-add NET_ADMIN                 │  │
 │  │    --security-opt seccomp=unconfined                       │  │
@@ -118,14 +118,14 @@ artifact to the workflow summary.
 
 Coverage is a signal, not a gate — do not write tests to hit a number.
 
-## Bypassing the gate (emergencies only)
+## Bypassing the pre-commit hook (emergencies only)
 
 ```bash
 git commit --no-verify        # skip pre-commit
-git push --no-verify          # skip pre-push
 ```
 
-Don't do this routinely. The gate exists so CI doesn't have to find the bugs.
+`git push` runs no hook (the deep gate is opt-in), so nothing to bypass there.
+Don't skip pre-commit routinely — it exists so CI doesn't have to find the bugs.
 
 ## Architecture mismatch (known gaps)
 
@@ -143,7 +143,7 @@ The local gate will NOT catch:
 - ❌ Windows-specific issues (deferred to follow-up PR)
 - ❌ macOS-specific issues that require a fresh macOS VM (deferred indefinitely; Mac coverage stays via the host)
 
-These remaining gaps are caught by CI. The pre-push gate covers ~95% of the cross-platform pain points; CI handles the rest.
+These remaining gaps are caught by CI. The deep gate covers ~95% of the cross-platform pain points; CI handles the rest.
 
 ## Troubleshooting
 
@@ -159,9 +159,9 @@ podman machine init --cpus 4 --memory 8192 --rootful
 podman machine start
 ```
 
-**Pre-push hangs at apt-get**: the container is a fresh Debian — `apt-get update` reaches Debian mirrors. If you're behind a corporate proxy, configure Podman to use it (`podman machine ssh` then add proxy env vars to `/etc/profile.d/`).
+**Deep gate hangs at apt-get**: the container is a fresh Debian — `apt-get update` reaches Debian mirrors. If you're behind a corporate proxy, configure Podman to use it (`podman machine ssh` then add proxy env vars to `/etc/profile.d/`).
 
-**Pre-push fails with permission denied on a syscall**: a test is using a cap outside the documented list. Either expand the cap list in `lefthook.yml` (with a justifying comment) or fix the test to not need that cap. Never silently widen to `--privileged` — that defeats the gate.
+**Deep gate fails with permission denied on a syscall**: a test is using a cap outside the documented list. Either expand the cap list in `lefthook.yml` (with a justifying comment) or fix the test to not need that cap. Never silently widen to `--privileged` — that defeats the gate.
 
 **Pre-commit hook didn't run**: check `.git/hooks/pre-commit` exists. If not, re-run `lefthook install`.
 
