@@ -1,0 +1,5 @@
+{"version":1}
+{"dir":"in","kind":"request","id":0,"method":"initialize","payload":{"clientInfo":{"name":"tau","version":"0.0.0"},"protocolVersion":"2025-03-26"}}
+{"dir":"out","kind":"response","id":0,"payload":{"protocolVersion":"2025-03-26","serverInfo":{"name":"weather-minimal","version":"0.0.0"}}}
+{"dir":"in","kind":"request","id":1,"method":"tools/list","payload":{}}
+{"dir":"out","kind":"response","id":1,"payload":{"tools":[{"name":"get_forecast","description":"Get weather forecast","inputSchema":{"type":"object","properties":{"location":{"type":"string"}}}}]}}
