@@ -84,6 +84,7 @@ pub async fn run(args: crate::cli::CheckArgs) -> Result<()> {
         Some("sandbox") => vec![CheckCategory::Sandbox],
         Some("plugins") => vec![CheckCategory::Plugins],
         Some("skills") => vec![CheckCategory::Skills],
+        Some("mcp-contracts") => vec![CheckCategory::McpContracts],
         Some(other) => anyhow::bail!("unknown check category: {other}"),
     };
 

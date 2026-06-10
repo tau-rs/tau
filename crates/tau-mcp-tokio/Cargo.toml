@@ -9,7 +9,7 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-tau-mcp           = { workspace = true }
+tau-mcp           = { workspace = true, features = ["with-std-adapters"] }
 tau-domain        = { workspace = true, features = ["serde"] }
 tau-ports         = { workspace = true, features = ["serde"] }
 # Sandbox integration: tau-runtime-tokio::process_gate::wrap_spawn (PR-2).

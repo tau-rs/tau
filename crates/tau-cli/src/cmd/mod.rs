@@ -13,6 +13,7 @@ pub mod init;
 pub mod install;
 pub(crate) mod ir_dispatcher;
 pub mod list;
+pub mod mcp;
 pub mod output_orchestration;
 pub mod plugin;
 pub(crate) mod plugin_loader;

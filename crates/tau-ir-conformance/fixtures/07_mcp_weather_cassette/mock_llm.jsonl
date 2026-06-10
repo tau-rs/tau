@@ -1,0 +1,2 @@
+{"turn": 0, "response": {"tool_uses": [{"id": "1", "name": "weather", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 1, "response": {"text": "sunny", "stop_reason": "end_turn"}}

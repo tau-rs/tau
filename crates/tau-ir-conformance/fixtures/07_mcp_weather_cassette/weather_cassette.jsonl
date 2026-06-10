@@ -1,0 +1,7 @@
+{"version":1}
+{"dir":"in","kind":"request","id":0,"method":"initialize","payload":{"protocolVersion":"2025-03-26"}}
+{"dir":"out","kind":"response","id":0,"payload":{"protocolVersion":"2025-03-26"}}
+{"dir":"in","kind":"request","id":1,"method":"tools/list","payload":null}
+{"dir":"out","kind":"response","id":1,"payload":{"tools":[{"name":"weather","inputSchema":{"type":"object"}}]}}
+{"dir":"in","kind":"request","id":2,"method":"tools/call","payload":{"name":"weather","arguments":{}}}
+{"dir":"out","kind":"response","id":2,"payload":{"content":[{"type":"text","text":"Sunny, 72°F"}]}}

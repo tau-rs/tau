@@ -26,6 +26,7 @@
 - [Configure the sandbox tier](how-to/configure-sandbox-tier.md)
 - [Export a skill](how-to/export-a-skill.md)
 - [Install a skill](how-to/install-a-skill.md)
+- [Use MCP servers](how-to/mcp-servers.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
 - [Write a tool plugin](how-to/write-a-tool-plugin.md)
@@ -39,6 +40,7 @@
 - [Sandbox platform support](reference/sandbox-platform-support.md)
 - [Serve mode protocol](reference/serve-mode-protocol.md)
 - [Skill manifest schema](reference/skill-manifest-schema.md)
+- [tau mcp](reference/tau-mcp.md)
 - [Target triple reference](reference/target-triples.md)
 
 # Explanation
@@ -101,6 +103,7 @@
 - [ADR-0035 — Bundle format](decisions/0035-bundle-format.md)
 - [ADR-0036 — Capability vocabulary forward-compatibility](decisions/0036-capability-forward-compatibility.md)
 - [0037: Workflow IR](decisions/0037-workflow-ir.md)
+- [ADR-0038 — MCP Facilitator](decisions/0038-mcp-facilitator.md)
 
 # Retrospectives
 

@@ -1,0 +1,15 @@
+[project]
+name = "fixture-07"
+
+[agents.weatherman]
+display_name = "Weather Man"
+package      = "weatherman@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+tool_refs    = ["weather"]
+max_turns    = 2
+
+[tools.weather]
+mcp         = "cassette:./weather_cassette.jsonl"
+description = "Look up current weather via cassette replay."
+capabilities = [{ kind = "net.http" }]
