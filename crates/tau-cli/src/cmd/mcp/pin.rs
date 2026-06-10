@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use tau_mcp::contract::pinned::PinnedContract;
 use tau_mcp_tokio::host_lifecycle::client::McpClientOptions;
 use tau_mcp_tokio::host_lifecycle::open::open;
-use tau_pkg::project::project::UncheckedProjectConfig;
+use tau_pkg::project::project::{ProjectConfig, ToolBody};
 use tau_ports::CapabilityPlan;
 use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
 
@@ -25,26 +25,25 @@ pub async fn run(args: McpPinArgs, _output: &mut Output) -> Result<()> {
     let url = if let Some(override_url) = args.from {
         override_url
     } else {
-        // Use the unchecked config to allow cassette: URLs (validate_tool rejects them).
         let toml_path = project_root.join("tau.toml");
         let toml_str = std::fs::read_to_string(&toml_path)
             .with_context(|| format!("read {}", toml_path.display()))?;
-        let unchecked: UncheckedProjectConfig = toml::from_str(&toml_str)
+        let config = ProjectConfig::parse_str(&toml_str)
             .with_context(|| format!("parse {}", toml_path.display()))?;
-        let tool = unchecked
+        let tool = config
             .tools
             .get(&args.name)
             .ok_or_else(|| anyhow!("tool {:?} not found in tau.toml [tools] section", args.name))?;
         // Extract the MCP URL from the tool body.
         match &tool.body {
-            tau_pkg::project::project::ToolBody::Mcp(url) => url.clone(),
-            tau_pkg::project::project::ToolBody::Native(_) => {
+            ToolBody::Mcp(url) => url.clone(),
+            ToolBody::Native(_) => {
                 anyhow::bail!(
                     "tool {:?} is a native tool, not an MCP tool",
                     args.name
                 )
             }
-            tau_pkg::project::project::ToolBody::Subflow(_) => {
+            ToolBody::Subflow(_) => {
                 anyhow::bail!(
                     "tool {:?} is a subflow, not an MCP tool",
                     args.name
