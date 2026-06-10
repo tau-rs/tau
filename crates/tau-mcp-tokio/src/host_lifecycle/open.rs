@@ -73,7 +73,7 @@ async fn open_cassette(
     options: McpClientOptions,
 ) -> Result<McpClient, LifecycleError> {
     info!(cassette_path = %path.display(), "dialing cassette MCP server");
-    let transport = cassette_dial::dial(path, cassette_dial::CassetteDialOptions::default())?;
+    let transport = cassette_dial::dial(path)?;
     let contract = drive_handshake(&*transport, &options.handshake).await?;
     info!(
         server_name = %contract.server_info.name,

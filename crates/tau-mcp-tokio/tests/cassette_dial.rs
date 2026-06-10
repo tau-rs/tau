@@ -14,6 +14,13 @@ fn empty_plan() -> CapabilityPlan {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn open_cassette_replays_handshake() {
+    // The cassette fixture (weather_minimal_cassette.jsonl) records the
+    // initialize request with `clientInfo:{name:"tau",version:"0.0.0"}`.
+    // The replayer matches on the full params object (strict), so the
+    // cassette must stay in sync with what `drive_handshake` sends.
+    // `HandshakeOptions::default()` uses `env!("CARGO_PKG_VERSION")` for
+    // the version, which equals "0.0.0" for this workspace — update both
+    // together if the workspace version ever changes.
     let cassette = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/weather_minimal_cassette.jsonl");
     let plan = empty_plan();
     let gate = passthrough_gate();

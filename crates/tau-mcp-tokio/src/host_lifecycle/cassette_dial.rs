@@ -8,24 +8,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tau_mcp::cassette::CassetteTransport;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::host_lifecycle::error::LifecycleError;
-
-/// Options for cassette dialing (currently no fields; reserved for future use).
-#[derive(Debug, Default, Clone)]
-pub struct CassetteDialOptions {}
 
 /// Open a cassette file as a `CassetteTransport`.
 ///
 /// Reads the JSONL cassette from `path`, parses it, and returns an
 /// `Arc<CassetteTransport>` ready to be used with `drive_handshake`.
-#[instrument(name = "cassette_dial", skip(_options), fields(path = %path.display()))]
-pub fn dial(
-    path: &Path,
-    _options: CassetteDialOptions,
-) -> Result<Arc<CassetteTransport>, LifecycleError> {
-    info!("dialing cassette");
+#[instrument(name = "cassette_dial", fields(path = %path.display()))]
+pub fn dial(path: &Path) -> Result<Arc<CassetteTransport>, LifecycleError> {
     let bytes = std::fs::read(path).map_err(|e| LifecycleError::Io {
         path: PathBuf::from(path),
         source: e,
