@@ -5,8 +5,11 @@
 //!
 //! - `stdio:<command>` → subprocess MCP server (PR-2)
 //! - `http://...` / `https://...` → Streamable HTTP (PR-3)
+//! - `cassette:<path>` → JSONL cassette replay (PR-6)
 //!
 //! Any other scheme is rejected with `UrlParseError::UnsupportedScheme`.
+
+use std::path::PathBuf;
 
 use crate::host_lifecycle::error::UrlParseError;
 
@@ -29,6 +32,11 @@ pub enum McpUrl {
         /// Validated URL with a host component.
         url: url::Url,
     },
+    /// JSONL cassette replay — reads from a local file path.
+    Cassette {
+        /// Path to the JSONL cassette file.
+        path: PathBuf,
+    },
 }
 
 /// Parse an MCP URL string into a typed `McpUrl`.
@@ -44,6 +52,15 @@ pub fn parse_url(s: &str) -> Result<McpUrl, UrlParseError> {
         }
         let cmd = rest.split_whitespace().map(String::from).collect();
         return Ok(McpUrl::Stdio { cmd });
+    }
+    if let Some(rest) = s.strip_prefix("cassette:") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return Err(UrlParseError::EmptyCassettePath);
+        }
+        return Ok(McpUrl::Cassette {
+            path: PathBuf::from(rest),
+        });
     }
     if s.starts_with("http://") || s.starts_with("https://") {
         let url = url::Url::parse(s).map_err(|e| UrlParseError::UnsupportedScheme {
@@ -148,5 +165,51 @@ mod tests {
     fn http_without_host_rejected() {
         let err = parse_url("http://").expect_err("should reject");
         assert!(matches!(err, UrlParseError::UnsupportedScheme { .. }));
+    }
+
+    #[test]
+    fn cassette_relative_path_parses() {
+        let url = parse_url("cassette:./fixtures/weather.jsonl").expect("parse");
+        match url {
+            McpUrl::Cassette { path } => {
+                assert_eq!(path, std::path::PathBuf::from("./fixtures/weather.jsonl"));
+            }
+            other => panic!("expected Cassette, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cassette_absolute_path_parses() {
+        let url = parse_url("cassette:/tmp/x.jsonl").expect("parse");
+        match url {
+            McpUrl::Cassette { path } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/x.jsonl"));
+            }
+            other => panic!("expected Cassette, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cassette_empty_path_rejected() {
+        let err = parse_url("cassette:").expect_err("should reject");
+        match err {
+            UrlParseError::EmptyCassettePath => {}
+            other => panic!("expected EmptyCassettePath, got {other:?}"),
+        }
+        assert!(matches!(
+            parse_url("cassette:   "),
+            Err(UrlParseError::EmptyCassettePath)
+        ));
+    }
+
+    #[test]
+    fn cassette_path_trimmed() {
+        let url = parse_url("cassette:   ./x.jsonl   ").expect("parse");
+        match url {
+            McpUrl::Cassette { path } => {
+                assert_eq!(path, std::path::PathBuf::from("./x.jsonl"));
+            }
+            other => panic!("expected Cassette, got {other:?}"),
+        }
     }
 }

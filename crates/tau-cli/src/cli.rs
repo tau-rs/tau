@@ -181,11 +181,14 @@ pub enum Command {
     /// Start serve mode: accept JSON-RPC requests over stdio.
     Serve(ServeArgs),
     /// Run pre-flight validation against the project (config, lockfile,
-    /// packages, sandbox, plugins, skills). Aggregates existing validators
-    /// into one CI/IDE-friendly verb.
+    /// packages, sandbox, plugins, skills, mcp-contracts). Aggregates
+    /// existing validators into one CI/IDE-friendly verb.
     Check(CheckArgs),
     /// Build a deployment bundle from this project (Phase 2 §C.2).
     Build(BuildArgs),
+    /// Manage Model Context Protocol (MCP) server contracts.
+    #[command(subcommand)]
+    Mcp(McpSubcommand),
 }
 
 /// Arguments for `tau build`.
@@ -780,9 +783,9 @@ pub struct TargetShowArgs {
 #[derive(Args, Debug)]
 pub struct CheckArgs {
     /// Optional category — runs only the named check (one of:
-    /// config, lockfile, packages, sandbox, plugins, skills).
-    /// When omitted, runs all 6 categories.
-    #[arg(value_name = "CATEGORY", value_parser = ["config", "lockfile", "packages", "sandbox", "plugins", "skills"])]
+    /// config, lockfile, packages, sandbox, plugins, skills,
+    /// mcp-contracts). When omitted, runs all 7 categories.
+    #[arg(value_name = "CATEGORY", value_parser = ["config", "lockfile", "packages", "sandbox", "plugins", "skills", "mcp-contracts"])]
     pub category: Option<String>,
 
     /// Reduce per-check I/O where a fast variant exists.
@@ -835,6 +838,76 @@ pub struct ServeArgs {
     /// Seconds to wait for in-flight tasks during graceful shutdown.
     #[arg(long, value_name = "SECS", default_value_t = 5)]
     pub shutdown_grace: u64,
+}
+
+/// `tau mcp <subcommand>` variants — manage MCP server contracts.
+#[derive(Debug, clap::Subcommand)]
+pub enum McpSubcommand {
+    /// Probe a server and write its contract to `.tau/mcp/<name>.contract.json`.
+    Pin(McpPinArgs),
+    /// List pinned MCP contracts in the current project.
+    Ls(McpLsArgs),
+    /// Show a pinned contract (human / JSON / SARIF).
+    Show(McpShowArgs),
+    /// Re-probe a server and overwrite the existing pin file.
+    Refresh(McpRefreshArgs),
+    /// Diff a pinned contract against a live probe (read-only).
+    Diff(McpDiffArgs),
+}
+
+/// Arguments for `tau mcp pin`.
+#[derive(Debug, clap::Args)]
+pub struct McpPinArgs {
+    /// Tool name (must match a `[tools.<name>]` block in tau.toml).
+    pub name: String,
+    /// Override the URL (defaults to `[tools.<name>] mcp = "..."`).
+    /// Accepts stdio:, http://, https://, or cassette: URLs.
+    #[arg(long, value_name = "URL")]
+    pub from: Option<String>,
+    /// Emit machine-readable JSON instead of human output.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `tau mcp ls`.
+#[derive(Debug, clap::Args)]
+pub struct McpLsArgs {
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `tau mcp show`.
+#[derive(Debug, clap::Args)]
+pub struct McpShowArgs {
+    /// Tool name.
+    pub name: String,
+    /// Emit machine-readable JSON.
+    #[arg(long, conflicts_with = "sarif")]
+    pub json: bool,
+    /// Emit SARIF 2.1.0 (single-rule, zero-results vacuous doc).
+    #[arg(long, conflicts_with = "json")]
+    pub sarif: bool,
+}
+
+/// Arguments for `tau mcp refresh`.
+#[derive(Debug, clap::Args)]
+pub struct McpRefreshArgs {
+    /// Tool name.
+    pub name: String,
+    /// Emit machine-readable JSON describing the diff.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `tau mcp diff`.
+#[derive(Debug, clap::Args)]
+pub struct McpDiffArgs {
+    /// Tool name.
+    pub name: String,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[cfg(test)]

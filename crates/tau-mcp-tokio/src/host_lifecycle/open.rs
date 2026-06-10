@@ -10,6 +10,7 @@ use tau_runtime_tokio::process_gate::DynProcessCapabilityGate;
 use tokio::process::Command;
 use tracing::{info, instrument};
 
+use crate::host_lifecycle::cassette_dial;
 use crate::host_lifecycle::client::{McpClient, McpClientOptions};
 use crate::host_lifecycle::error::{HandshakeError, LifecycleError};
 use crate::host_lifecycle::handshake::drive_handshake;
@@ -30,6 +31,7 @@ pub async fn open(
         McpUrl::Stdio { cmd } => open_stdio(cmd, plan, gate, options).await,
         McpUrl::Http { url } => open_http(url, options).await,
         McpUrl::Https { url } => open_http(url, options).await,
+        McpUrl::Cassette { path } => open_cassette(&path, options).await,
     }
 }
 
@@ -62,6 +64,21 @@ async fn open_http(url: url::Url, options: McpClientOptions) -> Result<McpClient
         server_name = %contract.server_info.name,
         tools_count = contract.tools.len(),
         "MCP handshake complete (HTTP)"
+    );
+    Ok(McpClient::new(transport, contract, options))
+}
+
+async fn open_cassette(
+    path: &std::path::Path,
+    options: McpClientOptions,
+) -> Result<McpClient, LifecycleError> {
+    info!(cassette_path = %path.display(), "dialing cassette MCP server");
+    let transport = cassette_dial::dial(path)?;
+    let contract = drive_handshake(&*transport, &options.handshake).await?;
+    info!(
+        server_name = %contract.server_info.name,
+        tools_count = contract.tools.len(),
+        "MCP handshake complete (cassette)"
     );
     Ok(McpClient::new(transport, contract, options))
 }

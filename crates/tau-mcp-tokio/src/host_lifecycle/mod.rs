@@ -4,6 +4,7 @@
 //! spawn (stdio) or dial (HTTP — PR-3), drive the MCP handshake, return
 //! a live `McpClient`.
 
+pub mod cassette_dial;
 pub mod client;
 pub mod error;
 pub mod handshake;

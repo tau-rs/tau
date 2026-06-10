@@ -4,10 +4,11 @@
 //! side effects under `DevMode`, and asserts cross-mode equivalence
 //! (DevMode vs BundleMode) per D-7a (multiset side-effect equivalence).
 //!
-//! All six fixtures are live as of β.2.6.2: `01_agent_native_tool`,
+//! All seven fixtures are live as of β.3 PR-6: `01_agent_native_tool`,
 //! `02_agent_mcp_tool`, `03_agent_denied_capability`,
-//! `04_subflow_spawn_child`, `05_deterministic_step`, and
-//! `06_multi_turn_history`. No `DEFERRED_FIXTURES` slots remain.
+//! `04_subflow_spawn_child`, `05_deterministic_step`,
+//! `06_multi_turn_history`, and `07_mcp_weather_cassette`.
+//! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
 
@@ -281,6 +282,63 @@ async fn fixture_06_dev_mode_three_tool_calls() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_06_cross_mode_conformance() {
     let dir = fixture_dir("06_multi_turn_history");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 07 — mcp_weather_cassette
+// ---------------------------------------------------------------------------
+
+/// Fixture 07: agent with one MCP tool declared via a `cassette:` URL.
+///
+/// Mirrors fixture 02 (`02_agent_mcp_tool`) exactly, with the single
+/// difference that `tools.weather.mcp` uses the `cassette:` URL scheme
+/// instead of `https://`. The cassette file (`weather_cassette.jsonl`)
+/// ships alongside the fixture and contains a valid JSONL cassette that
+/// the `tau-mcp` replayer can consume — but the conformance harness does
+/// **not** actually open it. `RecordingDispatcher` intercepts every tool
+/// invocation at the IR/dispatcher layer before any MCP transport is
+/// dialled, returning a canned `{"ok": true}` regardless of `ToolImpl`
+/// variant (see `dev_mode.rs`).
+///
+/// **What this fixture verifies:**
+/// - The `cassette:` URL scheme is accepted by `lower_project` without
+///   error (the parse stage stores the URL verbatim in `ToolImpl::Mcp`).
+/// - The resulting `ToolImpl::Mcp` IR variant round-trips correctly
+///   through the canonical encoder / bundle path (BundleMode cross-mode
+///   test below).
+/// - The conformance harness produces the same side-effect multiset as
+///   fixture 02, confirming implementation-blind dispatch for MCP tools.
+///
+/// **What this fixture does NOT verify:**
+/// - End-to-end cassette transport execution (JSONL replay, MCP
+///   handshake, `tools/call` dispatch). That is covered by the
+///   integration tests in `crates/tau-mcp-tokio/tests/cassette_dial.rs`,
+///   which run the real `tau_mcp_tokio::host_lifecycle::open()` path
+///   against the cassette replayer. If the harness gains a real-dial
+///   mode in a future PR, this fixture's cassette is ready to use.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_07_dev_mode_completed_with_cassette_mcp_tool_call() {
+    let dir = fixture_dir("07_mcp_weather_cassette");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    let total = count_tool_calls(&report, "weather");
+    assert_eq!(total, 1, "expected exactly 1 weather call; got {total}");
+}
+
+/// Cross-mode conformance for fixture 07: the `cassette:` URL round-trips
+/// through the bundle encoder/decoder without error, and both modes
+/// produce the same side-effect multiset.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_07_cross_mode_conformance() {
+    let dir = fixture_dir("07_mcp_weather_cassette");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

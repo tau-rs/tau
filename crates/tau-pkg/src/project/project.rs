@@ -744,7 +744,8 @@ fn validate_tool(name: String, raw: UncheckedTool) -> Result<ToolEntry, ProjectC
             let url_trim = url.trim();
             if !(url_trim.starts_with("stdio:")
                 || url_trim.starts_with("http://")
-                || url_trim.starts_with("https://"))
+                || url_trim.starts_with("https://")
+                || url_trim.starts_with("cassette:"))
             {
                 return Err(ProjectConfigError::UnsupportedMcpUrl {
                     tool: name.clone(),
@@ -1503,6 +1504,23 @@ mod tests {
             );
             ProjectConfig::parse_str(&toml_str)
                 .unwrap_or_else(|e| panic!("URL {url:?} should be accepted but got: {e}"));
+        }
+    }
+
+    #[test]
+    fn cassette_url_validates() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [tools.weather]
+            mcp = "cassette:./fixtures/weather.jsonl"
+        "#;
+        let project = ProjectConfig::parse_str(toml).expect("cassette: URL should validate");
+        let tool = project.tools.get("weather").expect("tool present");
+        match &tool.body {
+            ToolBody::Mcp(url) => assert_eq!(url, "cassette:./fixtures/weather.jsonl"),
+            other => panic!("expected Mcp body, got {other:?}"),
         }
     }
 }

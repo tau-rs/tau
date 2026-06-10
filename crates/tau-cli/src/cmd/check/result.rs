@@ -18,17 +18,20 @@ pub enum CheckCategory {
     Plugins,
     /// Skill manifest and content checks.
     Skills,
+    /// MCP pinned-contract drift checks.
+    McpContracts,
 }
 
 impl CheckCategory {
-    /// All 6 categories in stable order.
-    pub const ALL: [Self; 6] = [
+    /// All 7 categories in stable order.
+    pub const ALL: [Self; 7] = [
         Self::Config,
         Self::Lockfile,
         Self::Packages,
         Self::Sandbox,
         Self::Plugins,
         Self::Skills,
+        Self::McpContracts,
     ];
 
     /// Display name used in CLI output and JSON `category` fields.
@@ -40,6 +43,7 @@ impl CheckCategory {
             Self::Sandbox => "sandbox",
             Self::Plugins => "plugins",
             Self::Skills => "skills",
+            Self::McpContracts => "mcp_contracts",
         }
     }
 
