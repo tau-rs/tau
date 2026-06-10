@@ -101,6 +101,24 @@ The build auto-detects the container runtime — Podman first, Docker
 fallback. On Apple Silicon, install Podman via `brew install podman` and
 start the VM with `podman machine init && podman machine start`.
 
+## PR labels
+
+The CI strategy (ADR-0039) recognizes the following PR labels:
+
+- **`full-matrix`** — opts the PR into Tier 2 heavy validation pre-merge (macOS + Windows nextest, coverage, plugin-compat matrices, sandbox-e2e, runtime-e2e). Use this for PRs touching:
+  - Sandbox layer (`tau-sandbox-*` crates)
+  - Transports (`tau-mcp-tokio::transport_*`)
+  - Anything platform-specific (path handling, process spawn, etc.)
+  - Anything cross-platform-test-relevant
+
+  Tier 2 results post as a comment from `tau-ci-bot`. **Non-blocking** — auto-merge still fires on Tier 1 green even if Tier 2 surfaces an issue. Use the label as an informational signal.
+
+- **`dependencies`** — dependabot adds this automatically to its PRs. The `dependabot-auto-merge.yml` workflow enables auto-merge for patch-level updates carrying this label.
+
+- **`nightly-regression`** — applied by `tier2.yml`'s `nightly-regression-handler` when a cron run on main fails. Tracks rolling issues.
+
+- **`security`** — applied to issues filed by `security-daily.yml` / `codeql.yml` / `cargo-geiger.yml` when new findings appear.
+
 ## Filing an ADR
 
 If your change touches anything in the QG18 list — guidelines, public
