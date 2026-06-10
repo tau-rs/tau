@@ -1,0 +1,13 @@
+[project]
+name    = "dev-smoke-fan-monitor"
+version = "0.0.1"
+
+# Minimal single-agent project used by the Phase 7 surface tests.
+# No real tools — the agent validates the tau dev boot / REPL path
+# without requiring any installed plugins.
+[agents.fan-monitor]
+display_name  = "Fan Monitor"
+package       = "fan-monitor@^0.1"
+llm_backend   = "mock-llm"
+model         = "mock-1"
+prompt.system = "Demo agent for tau dev smoke testing."

@@ -163,7 +163,7 @@ A bespoke-protocol plugin migrates when its replacement is ready:
 
 | plugin | replacement | trigger |
 |---|---|---|
-| `fs-read` | native tool (compiled-in) | wasm-component build target stable (β.7) |
+| `fs-read` | native tool (compiled-in) | wasm-component build target stable (β.7.5) |
 | `shell` | native tool (compiled-in) | same as `fs-read` |
 | `anthropic` | first-class `LlmBackend` impl in `tau-runtime-core`, OR contracted MCP server if a maintained one ships | β.5 credential chain land + in-tree LlmBackend extraction |
 | `ollama` | same | same |
@@ -341,9 +341,10 @@ is the `tau-ports` `no_std` sweep — every `std::collections::HashMap` →
   bytes, per the C3 contract); the existing Phase 2 §C.2/C.3 bundle
   tests still pass; one minimal IR-authored workflow runs end-to-end.
 
-**Status:** Shipped 2026-06-01 in PRs #263–#271. ADR-0037 records the binding
-decisions. β.2.6.1 follow-up: unstub `tau run --bundle` interpreter dispatch +
-add remaining 5 conformance fixtures + cross-mode comparison.
+> Implementation status (2026-06-10): The workflow IR shipped in β.2 (PRs
+> #263–#271). See ADR-0037 and the design spec. v0 uses partial-interpret
+> lowering; AOT (wasm component artifact) lands in β.7.5. Conformance suite
+> + `tau run --bundle` interpreter dispatch shipped in β.2.6.1/β.2.6.2.
 
 ### β.3 — MCP facilitator (Lane 2)
 
@@ -462,18 +463,44 @@ This scenario doubles as **the Phase β success criterion** (see below):
 shipping β means this scenario runs under `tau dev` and as a wasm
 component in wasmtime, and the conformance gate confirms agreement.
 
-### β.7 — Dev / release one-engine discipline
+### β.7 — `tau dev` one-engine REPL
 
-- **Builds on:** existing `tau run` / `tau chat` / `tau serve` (dev-side
-  surface) and `tau build` / `tau run --bundle` (release-side surface).
+- **Builds on:** β.1 (`tau-runtime-core`), β.2 (workflow IR + `run_via_ir`),
+  β.3 (MCP facilitator + `McpBridge`).
 - **Preserves:** every existing CLI verb continues to do what it does
   today. `tau dev` is **new**; nothing existing is renamed or removed.
-- **Adds:** `tau dev` — a hot-reload host shell driving
-  `tau-runtime-core` directly, with user tools as callbacks. The new
-  zero-toolchain on-ramp.
+- **Adds:** `tau dev` — a hot-reload REPL driving the existing β.3 runtime
+  path (`tau-runtime-tokio` + `McpBridge` + `run_via_ir`) with a stdin loop
+  and a notify-driven file watcher. REPL semantics: explicit `:reload` by
+  default, `--watch` opts into Mastra-style auto-reload, `-p "<prompt>"` for
+  one-shot.
 - **Supersedes:** nothing.
-- **DoD:** `tau dev <project>` boots in under a second; editing a tool
-  hot-reloads; the same project lowers cleanly via `tau build wasm`.
+- **DoD:** `tau dev <project>` boots in under 1s; editing the manifest
+  hot-reloads via `:reload` while preserving conversation history; the
+  simplified-fan-monitor smoke runs end-to-end.
+
+Design: `docs/superpowers/specs/2026-06-10-beta-7-tau-dev-design.md`
+ADR: 0040 — records the REPL-explicit-reload over Mastra-style-auto-reload
+decision + the β.7/β.7.5 split rationale.
+
+### β.7.5 — IR-to-wasm AOT compiler (split out from β.7, 2026-06-10)
+
+- **Builds on:** β.2 (workflow IR), β.7 (REPL gives us a working dev/host
+  path to test against).
+- **Preserves:** `tau dev` unchanged. `tau build wasm` is the new artifact
+  path.
+- **Adds:** ahead-of-time lowering of the workflow IR + `tau-runtime-core` +
+  linked native tools to a runnable wasm component (WASI 0.2). The artifact
+  runs in wasmtime; γ.1 extends to Spin + browser hosts.
+- **DoD:** `tau build wasm <project>` produces a wasm component that executes
+  the simplified-fan-monitor scenario in wasmtime, with the same observable
+  `RunEvent` stream as `tau dev` produced.
+- **Sized:** ~4–8 weeks. Wasm component model integration is the hard part.
+
+*(This sub-project was originally folded into β.7 via the β.2 footnote
+"AOT lands in β.7"; split out 2026-06-10 because wasm AOT complexity
+ballooned after β.3 PR-6 expanded the MCP surface — the in-wasm
+MCP-facilitator path deserves its own ADR and conformance scope.)*
 
 ### β.8 — TypeScript minimal authoring surface
 
@@ -544,7 +571,7 @@ green. The registry's stability discipline (ADR-0034) applies throughout.
 
 | # | Target | Builds on | Preserves | Adds |
 |---|---|---|---|---|
-| γ.1 | wasm component on **server / edge** (Spin / wasmtime) | β.6/β.7 baseline; existing `tau build wasm` target slot | existing bundle format; existing `run --bundle` | hardening for Spin / wasmtime hosts; CI matrix lane |
+| γ.1 | wasm component on **server / edge** (Spin / wasmtime) | β.6/β.7/β.7.5 baseline; existing `tau build wasm` target slot | existing bundle format; existing `run --bundle` | hardening for Spin / wasmtime hosts; CI matrix lane |
 | γ.2 | wasm component in **browser** (Angular/React via jco) | γ.1; β.5 `TokenBroker` provider | the BFF + AI Gateway credential pattern | jco / wasm-bindgen integration; browser-host scenarios |
 | γ.3 | **C-ABI library** (`libtauflow.a` + cbindgen header) | β.1 core; existing `tau-app` scaffold | nothing — net new artifact shape | passthrough-only enforcement (advisory) honestly labeled |
 | γ.4 | **`wasm-mcu-preview1-tau-managed`** | β.1 core; existing target registry | reserved-slot existence (per α.3) | WAMR Preview-1 host integration; ESP32-S3 reference board |
