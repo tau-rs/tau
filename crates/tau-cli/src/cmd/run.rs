@@ -120,12 +120,9 @@ pub async fn run(
     }
 
     let crate::cmd::project_load::LoadedProject { project, .. } =
-        crate::cmd::project_load::load_project(&cwd)
-            .with_context(|| {
-                format!(
-                    "loading project from {cwd:?} (expected tau.toml or a .ts file)",
-                )
-            })?;
+        crate::cmd::project_load::load_project(&cwd).with_context(|| {
+            format!("loading project from {cwd:?} (expected tau.toml or a .ts file)",)
+        })?;
 
     let entry = project.agents.get(&args.agent_id).ok_or_else(|| {
         anyhow::anyhow!(

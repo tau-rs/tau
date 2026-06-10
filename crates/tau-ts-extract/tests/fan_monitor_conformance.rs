@@ -5,18 +5,16 @@ use std::path::Path;
 
 #[test]
 fn toml_and_ts_produce_byte_equal_canonical_ir() {
-    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fan_monitor_conformance");
+    let fixture_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fan_monitor_conformance");
 
     // ── TOML path ────────────────────────────────────────────────────────────
-    let toml_str = std::fs::read_to_string(fixture_dir.join("tau.toml"))
-        .expect("read tau.toml");
-    let toml_project = tau_pkg::project::project::ProjectConfig::parse_str(&toml_str)
-        .expect("parse tau.toml");
+    let toml_str = std::fs::read_to_string(fixture_dir.join("tau.toml")).expect("read tau.toml");
+    let toml_project =
+        tau_pkg::project::project::ProjectConfig::parse_str(&toml_str).expect("parse tau.toml");
 
     // ── TS path ──────────────────────────────────────────────────────────────
-    let ts_src = std::fs::read_to_string(fixture_dir.join("project.ts"))
-        .expect("read project.ts");
+    let ts_src = std::fs::read_to_string(fixture_dir.join("project.ts")).expect("read project.ts");
     let ts_project = tau_ts_extract::extract_project(&ts_src, &fixture_dir.join("project.ts"))
         .expect("extract project.ts");
 
@@ -42,10 +40,10 @@ fn toml_and_ts_produce_byte_equal_canonical_ir() {
         skill: &|_| None,
     };
 
-    let toml_ir = tau_ir::lower::lower_project(&toml_project, &target, &caches)
-        .expect("lower TOML to IR");
-    let ts_ir = tau_ir::lower::lower_project(&ts_project, &target, &caches)
-        .expect("lower TS to IR");
+    let toml_ir =
+        tau_ir::lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
+    let ts_ir =
+        tau_ir::lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
 
     // ── Canonical-encode and compare bytes ───────────────────────────────────
     let toml_bytes = tau_ir::canonical::to_canonical_bytes(&toml_ir);

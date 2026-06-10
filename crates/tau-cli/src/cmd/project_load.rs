@@ -23,10 +23,9 @@ pub struct LoadedProject {
 pub fn load_project(path: &Path) -> Result<LoadedProject> {
     let ext = path.extension().and_then(|s| s.to_str());
     if path.is_file() && ext == Some("ts") {
-        let src = std::fs::read_to_string(path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let project = tau_ts_extract::extract_project(&src, path)
-            .map_err(|e| anyhow!("{}", e))?;
+        let src =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let project = tau_ts_extract::extract_project(&src, path).map_err(|e| anyhow!("{}", e))?;
         let project_root = path
             .parent()
             .map(|p| p.to_path_buf())
@@ -47,8 +46,8 @@ pub fn load_project(path: &Path) -> Result<LoadedProject> {
         let tau_toml = project_root.join("tau.toml");
         let toml_str = std::fs::read_to_string(&tau_toml)
             .with_context(|| format!("read {}", tau_toml.display()))?;
-        let project = ProjectConfig::parse_str(&toml_str)
-            .map_err(|e| anyhow!("parse tau.toml: {e}"))?;
+        let project =
+            ProjectConfig::parse_str(&toml_str).map_err(|e| anyhow!("parse tau.toml: {e}"))?;
         Ok(LoadedProject {
             project_root,
             project,

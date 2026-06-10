@@ -30,10 +30,7 @@ use tau_pkg::project::project::ProjectConfig;
 /// `source_path` is used only for error positioning (file:line:col).
 /// The function does NOT read from disk — caller is responsible for
 /// reading + UTF-8 validation.
-pub fn extract_project(
-    source: &str,
-    source_path: &Path,
-) -> Result<ProjectConfig, TsExtractError> {
+pub fn extract_project(source: &str, source_path: &Path) -> Result<ProjectConfig, TsExtractError> {
     let (module, sm) = parse::parse_module(source, source_path)?;
     let names = scope::collect_top_level(&module);
     lower::build_project_config(&module, &names, source_path, &sm)

@@ -72,9 +72,7 @@ fn resolve_watch_paths(
     project_file_path: &Path,
     project: &ProjectConfig,
 ) -> Vec<PathBuf> {
-    let ext = project_file_path
-        .extension()
-        .and_then(|s| s.to_str());
+    let ext = project_file_path.extension().and_then(|s| s.to_str());
     let manifest_path = if ext == Some("ts") {
         project_file_path.to_path_buf()
     } else {

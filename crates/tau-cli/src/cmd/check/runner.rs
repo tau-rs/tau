@@ -54,8 +54,9 @@ impl CheckCtx {
             Scope::resolve(&project_root).map_err(|e| anyhow::anyhow!("resolve scope: {e}"))?;
         // Project load may legitimately fail (malformed source). Record
         // None and let the `config` check report the error.
-        let project =
-            crate::cmd::project_load::load_project(&project_path).ok().map(|l| l.project);
+        let project = crate::cmd::project_load::load_project(&project_path)
+            .ok()
+            .map(|l| l.project);
         Ok(Self {
             project_root,
             scope,

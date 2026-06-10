@@ -98,9 +98,7 @@ pub fn build_project_config(
                             source_path,
                             sm,
                             call.span(),
-                            &format!(
-                                "`tool({name})`: first argument must be an object literal"
-                            ),
+                            &format!("`tool({name})`: first argument must be an object literal"),
                         )
                     })?;
                     let tool = extract_tool(name, obj, source_path, sm)?;
@@ -112,9 +110,7 @@ pub fn build_project_config(
                             source_path,
                             sm,
                             call.span(),
-                            &format!(
-                                "`mcp({name})`: first argument must be a string URL"
-                            ),
+                            &format!("`mcp({name})`: first argument must be a string URL"),
                         )
                     })?;
                     tools.insert(
@@ -198,7 +194,10 @@ fn build_toml(
 
     for (name, agent) in agents {
         out.push_str(&format!("[agents.{}]\n", toml_key(name)));
-        out.push_str(&format!("display_name = {}\n", toml_str(&agent.display_name)));
+        out.push_str(&format!(
+            "display_name = {}\n",
+            toml_str(&agent.display_name)
+        ));
         out.push_str(&format!("package = {}\n", toml_str(&agent.package)));
         out.push_str(&format!("llm_backend = {}\n", toml_str(&agent.llm_backend)));
         if let Some(model) = &agent.model {
@@ -234,7 +233,9 @@ fn toml_str(s: &str) -> String {
 /// Produce a TOML bare key or quoted key for an identifier.
 fn toml_key(s: &str) -> String {
     // TOML bare keys: A-Za-z0-9_-
-    if s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         s.to_owned()
     } else {
         toml_str(s)
@@ -364,9 +365,7 @@ fn extract_tool(
             source_path,
             sm,
             obj.span(),
-            &format!(
-                "tool({name}): must have a `native` field (use mcp() factory for MCP tools)"
-            ),
+            &format!("tool({name}): must have a `native` field (use mcp() factory for MCP tools)"),
         ));
     };
 
@@ -484,7 +483,12 @@ fn extract_agent(
 // Error helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-fn mk_err(path: &Path, sm: &Lrc<SourceMap>, span: swc_common::Span, message: &str) -> TsExtractError {
+fn mk_err(
+    path: &Path,
+    sm: &Lrc<SourceMap>,
+    span: swc_common::Span,
+    message: &str,
+) -> TsExtractError {
     let pos = TsExtractError::position_from_span(sm, span, path.to_path_buf());
     TsExtractError::ParseError {
         pos,
