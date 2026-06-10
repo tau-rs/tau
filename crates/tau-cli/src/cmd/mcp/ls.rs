@@ -28,8 +28,8 @@ pub async fn run(args: McpLsArgs, _output: &mut Output) -> Result<()> {
     let pin_dir = project_root.join(".tau/mcp");
     let mut pins = Vec::new();
     if pin_dir.is_dir() {
-        for entry in std::fs::read_dir(&pin_dir)
-            .with_context(|| format!("read {}", pin_dir.display()))?
+        for entry in
+            std::fs::read_dir(&pin_dir).with_context(|| format!("read {}", pin_dir.display()))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -41,8 +41,7 @@ pub async fn run(args: McpLsArgs, _output: &mut Output) -> Result<()> {
             else {
                 continue;
             };
-            let bytes = std::fs::read(&path)
-                .with_context(|| format!("read {}", path.display()))?;
+            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             let pinned: PinnedContract = serde_json::from_slice(&bytes)
                 .with_context(|| format!("parse {}", path.display()))?;
             pins.push(PinSummary {

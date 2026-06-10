@@ -15,8 +15,8 @@ pub async fn run(args: McpShowArgs, _output: &mut Output) -> Result<()> {
         .join(format!("{}.contract.json", &args.name));
     let bytes = std::fs::read(&pin_path)
         .with_context(|| format!("no pin file at {}", pin_path.display()))?;
-    let pinned: PinnedContract = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse {}", pin_path.display()))?;
+    let pinned: PinnedContract =
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", pin_path.display()))?;
 
     match OutputFormat::from_flags(args.json, args.sarif) {
         OutputFormat::Json => {

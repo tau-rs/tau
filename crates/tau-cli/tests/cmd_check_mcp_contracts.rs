@@ -16,7 +16,6 @@ use tau_pkg::lockfile::{LockedMcpEntry, LockedMcpExpandedTool};
 use tau_pkg::LockFile;
 use tempfile::TempDir;
 
-
 /// Build a minimal `PinnedContract` for a "weather" server.
 fn build_pin(url: &str) -> PinnedContract {
     let contract = ServerContract {
@@ -70,8 +69,7 @@ version = "0.0.1"
             "get_forecast".to_string(),
             vec![],
             // schema_hash is not validated by this check — use a placeholder
-            "0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
         )],
     ));
     lf.save(&dir.path().join("tau-lock.toml"))

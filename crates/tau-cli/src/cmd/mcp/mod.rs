@@ -113,11 +113,9 @@ pub(super) async fn probe_and_pin(
 
     let new_pin = probe_only(name, override_url, project_root).await?;
 
-    std::fs::create_dir_all(&pin_dir)
-        .with_context(|| format!("create {}", pin_dir.display()))?;
+    std::fs::create_dir_all(&pin_dir).with_context(|| format!("create {}", pin_dir.display()))?;
     let bytes = serde_json::to_vec_pretty(&new_pin).context("serialize pinned contract")?;
-    std::fs::write(&pin_path, &bytes)
-        .with_context(|| format!("write {}", pin_path.display()))?;
+    std::fs::write(&pin_path, &bytes).with_context(|| format!("write {}", pin_path.display()))?;
 
     Ok((new_pin, prev_pin))
 }

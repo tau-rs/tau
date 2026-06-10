@@ -60,14 +60,18 @@ fn pin_writes_contract_file_for_cassette_tool() {
     tmp.child("fixtures/weather.jsonl")
         .write_binary(&std::fs::read(&cassette_src).expect("read fixture"))
         .expect("write fixture");
-    tmp.child("tau.toml").write_str(r#"
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
 [project]
 name = "pin-test"
 version = "0.0.1"
 
 [tools.weather]
 mcp = "cassette:./fixtures/weather.jsonl"
-"#).expect("write tau.toml");
+"#,
+        )
+        .expect("write tau.toml");
 
     let mut cmd = assert_cmd::Command::cargo_bin("tau").expect("bin");
     cmd.current_dir(tmp.path())
@@ -78,8 +82,14 @@ mcp = "cassette:./fixtures/weather.jsonl"
     let pinned = tmp.child(".tau/mcp/weather.contract.json");
     pinned.assert(predicates::path::is_file());
     let content = std::fs::read_to_string(pinned.path()).expect("read");
-    assert!(content.contains("\"schema_version\":1") || content.contains("\"schema_version\": 1"), "got: {content}");
-    assert!(content.contains("\"url\": \"cassette:") || content.contains("\"url\":\"cassette:"), "got: {content}");
+    assert!(
+        content.contains("\"schema_version\":1") || content.contains("\"schema_version\": 1"),
+        "got: {content}"
+    );
+    assert!(
+        content.contains("\"url\": \"cassette:") || content.contains("\"url\":\"cassette:"),
+        "got: {content}"
+    );
     assert!(content.contains("contract_hash_hex"), "got: {content}");
 }
 
@@ -91,14 +101,18 @@ fn pin_with_from_override_uses_override_url() {
     tmp.child("fixtures/weather.jsonl")
         .write_binary(&std::fs::read(&cassette_src).expect("read"))
         .expect("write");
-    tmp.child("tau.toml").write_str(r#"
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
 [project]
 name = "pin-test"
 version = "0.0.1"
 
 [tools.weather]
 mcp = "stdio:nonexistent-binary"
-"#).expect("write tau.toml");
+"#,
+        )
+        .expect("write tau.toml");
 
     let override_url = "cassette:./fixtures/weather.jsonl";
     let mut cmd = assert_cmd::Command::cargo_bin("tau").expect("bin");
@@ -106,36 +120,46 @@ mcp = "stdio:nonexistent-binary"
         .args(["mcp", "pin", "weather", "--from", override_url])
         .assert()
         .success();
-    let content = std::fs::read_to_string(tmp.child(".tau/mcp/weather.contract.json").path())
-        .expect("read");
+    let content =
+        std::fs::read_to_string(tmp.child(".tau/mcp/weather.contract.json").path()).expect("read");
     assert!(content.contains(override_url), "got: {content}");
 }
 
 #[test]
 fn ls_empty_project_returns_zero_pins() {
     let tmp = assert_fs::TempDir::new().expect("tmpdir");
-    tmp.child("tau.toml").write_str(r#"
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
 [project]
 name = "ls-test"
 version = "0.0.1"
-"#).expect("write");
+"#,
+        )
+        .expect("write");
 
     let mut cmd = assert_cmd::Command::cargo_bin("tau").expect("bin");
     cmd.current_dir(tmp.path())
         .args(["mcp", "ls", "--json"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("\"pins\": []").or(predicates::str::contains("\"pins\":[]")));
+        .stdout(
+            predicates::str::contains("\"pins\": []").or(predicates::str::contains("\"pins\":[]")),
+        );
 }
 
 #[test]
 fn ls_lists_existing_pin_files() {
     let tmp = assert_fs::TempDir::new().expect("tmpdir");
-    tmp.child("tau.toml").write_str(r#"
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
 [project]
 name = "ls-test"
 version = "0.0.1"
-"#).expect("write");
+"#,
+        )
+        .expect("write");
     let pin = serde_json::json!({
         "schema_version": 1,
         "url": "stdio:echo",
