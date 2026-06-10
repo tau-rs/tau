@@ -111,18 +111,16 @@ pub async fn run_loop(
                     let _ = output.human(&format!("turn failed: {e:#}"));
                 }
             }
-            Command::Reload => {
-                match session.reload().await {
-                    Ok(true) => output.human(&format!(
-                        "reloaded; {} messages preserved",
-                        session.history.len()
-                    ))?,
-                    Ok(false) => output.human("nothing to reload")?,
-                    Err(e) => output.human(&format!(
-                        "reload failed: {e}\n(keeping previous config; fix and try :reload again)"
-                    ))?,
-                }
-            }
+            Command::Reload => match session.reload().await {
+                Ok(true) => output.human(&format!(
+                    "reloaded; {} messages preserved",
+                    session.history.len()
+                ))?,
+                Ok(false) => output.human("nothing to reload")?,
+                Err(e) => output.human(&format!(
+                    "reload failed: {e}\n(keeping previous config; fix and try :reload again)"
+                ))?,
+            },
             Command::State => output.human("(:state stub — Phase 5)")?,
             Command::History => output.human("(:history stub — Phase 5)")?,
             Command::Agents => print_agents(session, output)?,

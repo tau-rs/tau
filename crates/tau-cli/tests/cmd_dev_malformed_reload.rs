@@ -23,12 +23,9 @@ prompt.system = "valid"
         )
         .unwrap();
 
-    let mut session = tau_cli::cmd::dev::session::DevSession::load(
-        tmp.path().to_path_buf(),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut session = tau_cli::cmd::dev::session::DevSession::load(tmp.path().to_path_buf(), None)
+        .await
+        .unwrap();
     assert_eq!(session.current_agent_name(), "a");
     assert_eq!(session.project.agents.len(), 1);
 
@@ -40,7 +37,10 @@ prompt.system = "valid"
     // Arm the flag that the watcher would normally set.
     session.pending_reload.store(true, Ordering::Release);
 
-    let err = session.reload().await.expect_err("should fail on malformed TOML");
+    let err = session
+        .reload()
+        .await
+        .expect_err("should fail on malformed TOML");
     let msg = format!("{err}");
     assert!(
         msg.contains("parse") || msg.contains("TOML") || msg.contains("toml"),

@@ -69,8 +69,8 @@ impl DevSession {
             .with_context(|| format!("read {}", tau_toml_path.display()))?;
         let toml_str = std::str::from_utf8(&toml_bytes)
             .with_context(|| format!("{} is not UTF-8", tau_toml_path.display()))?;
-        let project = ProjectConfig::parse_str(toml_str)
-            .map_err(|e| anyhow!("parse tau.toml: {e}"))?;
+        let project =
+            ProjectConfig::parse_str(toml_str).map_err(|e| anyhow!("parse tau.toml: {e}"))?;
 
         // `project.agents` is a `BTreeMap<String, AgentEntry>`, so `.keys()` iterates
         // in alphabetical order — the first key is the alphabetical default.
@@ -93,17 +93,17 @@ impl DevSession {
 
         let pending_reload = Arc::new(AtomicBool::new(false));
 
-        let notify_handle =
-            match crate::cmd::dev::watcher::spawn(&project_root, &project, pending_reload.clone())
-            {
-                Ok(w) => Some(w),
-                Err(e) => {
-                    eprintln!(
-                        "warning: file watcher unavailable ({e}); use :reload manually"
-                    );
-                    None
-                }
-            };
+        let notify_handle = match crate::cmd::dev::watcher::spawn(
+            &project_root,
+            &project,
+            pending_reload.clone(),
+        ) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                eprintln!("warning: file watcher unavailable ({e}); use :reload manually");
+                None
+            }
+        };
 
         Ok(Self {
             project_root,
@@ -247,11 +247,8 @@ impl DevSession {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         );
-        let trace_context = TraceContext::new(
-            run_id,
-            self.current_agent.clone(),
-            "dev-root".to_string(),
-        );
+        let trace_context =
+            TraceContext::new(run_id, self.current_agent.clone(), "dev-root".to_string());
         let host_options = plugin_loader::build_host_options(
             None,  // no --record-protocol in dev mode
             false, // no --no-sandbox override
@@ -265,12 +262,13 @@ impl DevSession {
             .context("failed to build runtime from spawned plugins")?;
 
         // 4. Pull DynLlmBackend + DynTool handles.
-        let llm_backend: Arc<dyn DynLlmBackend> = runtime
-            .llm_backends()
-            .values()
-            .next()
-            .cloned()
-            .ok_or_else(|| anyhow!("runtime has no LLM backend after plugin load"))?;
+        let llm_backend: Arc<dyn DynLlmBackend> =
+            runtime
+                .llm_backends()
+                .values()
+                .next()
+                .cloned()
+                .ok_or_else(|| anyhow!("runtime has no LLM backend after plugin load"))?;
 
         let mut tools_by_id: BTreeMap<tau_ir::ToolId, Arc<dyn DynTool>> = BTreeMap::new();
         for ir_tool_id in self.ir.workflow.tools.keys() {

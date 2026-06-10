@@ -24,12 +24,9 @@ prompt.system = "v1"
         )
         .unwrap();
 
-    let mut session = tau_cli::cmd::dev::session::DevSession::load(
-        tmp.path().to_path_buf(),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut session = tau_cli::cmd::dev::session::DevSession::load(tmp.path().to_path_buf(), None)
+        .await
+        .unwrap();
 
     // Push a real Message into history so we have something concrete to
     // verify survives the reload.

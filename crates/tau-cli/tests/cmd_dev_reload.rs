@@ -23,12 +23,9 @@ prompt.system = "first"
         )
         .unwrap();
 
-    let mut session = tau_cli::cmd::dev::session::DevSession::load(
-        tmp.path().to_path_buf(),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut session = tau_cli::cmd::dev::session::DevSession::load(tmp.path().to_path_buf(), None)
+        .await
+        .unwrap();
     assert_eq!(session.current_agent_name(), "first");
     assert_eq!(session.project.agents.len(), 1);
 
@@ -61,7 +58,10 @@ prompt.system = "second"
     session.pending_reload.store(true, Ordering::Release);
 
     let did_reload = session.reload().await.unwrap();
-    assert!(did_reload, "reload() should return true when pending was set");
+    assert!(
+        did_reload,
+        "reload() should return true when pending was set"
+    );
     assert_eq!(session.project.agents.len(), 2, "new manifest has 2 agents");
     // current_agent falls back to first alphabetically — still "first".
     assert_eq!(session.current_agent_name(), "first");

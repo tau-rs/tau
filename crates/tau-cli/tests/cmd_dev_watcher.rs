@@ -24,12 +24,9 @@ prompt.system = "first"
         )
         .expect("write");
 
-    let session = tau_cli::cmd::dev::session::DevSession::load(
-        tmp.path().to_path_buf(),
-        None,
-    )
-    .await
-    .expect("load");
+    let session = tau_cli::cmd::dev::session::DevSession::load(tmp.path().to_path_buf(), None)
+        .await
+        .expect("load");
 
     assert!(
         !session.pending_reload.load(Ordering::Acquire),
@@ -83,12 +80,9 @@ prompt.system = "x"
         )
         .expect("write");
 
-    let session = tau_cli::cmd::dev::session::DevSession::load(
-        tmp.path().to_path_buf(),
-        None,
-    )
-    .await
-    .expect("load");
+    let session = tau_cli::cmd::dev::session::DevSession::load(tmp.path().to_path_buf(), None)
+        .await
+        .expect("load");
 
     // Write tau-lock.toml — NOT a watched path.
     tmp.child("tau-lock.toml")
