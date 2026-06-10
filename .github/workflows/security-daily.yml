@@ -22,16 +22,16 @@ jobs:
     name: cargo audit + osv-scanner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
       - name: cargo audit
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998  # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: osv-scanner
-        uses: google/osv-scanner-action/osv-scanner-action@v1
+        uses: google/osv-scanner-action/osv-scanner-action@f0e6719deb666cd19a0b56bc56d01161bd848b4f  # v1.8.5
         with:
           scan-args: |-
             -r .
@@ -43,7 +43,7 @@ jobs:
           # re-run cargo audit json to a file.
           cargo install cargo-audit --locked || true
           cargo audit --json > _security/cargo-audit.json || true
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: security-daily-${{ github.run_id }}
           path: _security/
@@ -54,9 +54,9 @@ jobs:
     needs: audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - name: Download today's report
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
         with:
           name: security-daily-${{ github.run_id }}
           path: _today/
@@ -77,7 +77,7 @@ jobs:
           fi
       - name: Download yesterday's report
         if: steps.yesterday.outputs.prev_run != ''
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
         with:
           run-id: ${{ steps.yesterday.outputs.prev_run }}
           name: security-daily-${{ steps.yesterday.outputs.prev_run }}
