@@ -30,19 +30,11 @@ use tau_pkg::project::project::ProjectConfig;
 /// `source_path` is used only for error positioning (file:line:col).
 /// The function does NOT read from disk — caller is responsible for
 /// reading + UTF-8 validation.
-///
-/// Phase 2: parses + collects top-level names; factory recognition deferred to Phase 3.
 pub fn extract_project(
     source: &str,
     source_path: &Path,
 ) -> Result<ProjectConfig, TsExtractError> {
     let (module, _sm) = parse::parse_module(source, source_path)?;
-    let _names = scope::collect_top_level(&module);
-    // Phase 3 builds the actual ProjectConfig. Phase 2 returns error.
-    Err(TsExtractError::ParseError {
-        file: source_path.to_path_buf(),
-        line: 0,
-        col: 0,
-        message: "phase 2: factory recognition not yet implemented".to_string(),
-    })
+    let names = scope::collect_top_level(&module);
+    lower::build_project_config(&module, &names, source_path)
 }
