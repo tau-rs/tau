@@ -1,14 +1,21 @@
-# lefthook.yml — automatic pre-commit + pre-push gate for tau
+# lefthook.yml — automatic pre-commit hook + opt-in deep gate for tau
 #
 # Goal: catch cross-platform build/runtime issues locally before
 # pushing, so CI is confirmation rather than discovery.
 #
-# Two tiers, both automatic, no manual scripts:
-#   - pre-commit: fast host checks (~30-60s, parallel)
-#   - pre-push:   deep Linux gate (~3-5min cold, ~20s warm via cache)
+# Two tiers:
+#   - pre-commit (automatic): fast host checks (~30-60s, parallel)
+#   - deep-gate  (opt-in):    deep Linux gate mirroring every Linux CI
+#                             job (~3-5min cold, ~20s warm). NOT a git
+#                             hook — run on demand: `lefthook run deep-gate`.
+#                             CI already runs these same jobs on every PR,
+#                             so the gate is a local pre-flight, not a push
+#                             blocker. Anchor heavy validation to release
+#                             tags (the T2 heavy CI tier) rather than
+#                             blocking every `git push`.
 #
 # Install: `lefthook install` (after `brew install lefthook`)
-# Bypass for emergencies: `git commit --no-verify` / `git push --no-verify`
+# Bypass pre-commit for emergencies: `git commit --no-verify`
 #
 # Cargo target dirs are isolated per command per CLAUDE.md Rule 1:
 #   target/lefthook/fmt
@@ -69,9 +76,15 @@ pre-commit:
       #   brew install filosottile/musl-cross/musl-cross   # x86_64 included by default
       run: env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/lefthook/check-linux cargo check --workspace --all-targets --target x86_64-unknown-linux-musl
 
-pre-push:
+# Opt-in deep gate — NOT an automatic git hook. Run manually before a
+# release tag, or when you want a full local Linux pre-flight:
+#     lefthook run deep-gate
+# Heavy Linux-CI mirroring belongs in CI (which already runs these exact
+# jobs on every PR); running it on every `git push` made pushes slow and,
+# in agent runtimes / environments without the podman socket, hard-fail.
+deep-gate:
   commands:
-    deep-gate:
+    gate:
       # Privileged Linux container running every Linux CI job locally so
       # `git push` only proceeds when the same checks remote CI runs would
       # also pass. Selective caps mirror what tau's strict-tier sandbox

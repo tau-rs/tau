@@ -14,14 +14,15 @@ NEVER run bare `cargo`. ALWAYS prefix with `CARGO_TARGET_DIR=<path>`.
 | Any subagent spawned via Agent tool | `target/agent-<role>` where `<role>` is the subagent's purpose (e.g. `spec-review`, `solution-review`, `impl`, `adversary`) |
 | One-off diagnostic from main agent (cargo --version, cargo metadata, etc.) | `target/main` |
 | `lefthook` pre-commit hooks (host-side) | `target/lefthook/fmt`, `target/lefthook/clippy`, `target/lefthook/test`, `target/lefthook/check-linux` (one per command) |
-| `lefthook` pre-push hook (Podman container) | `target/lefthook-podman` (mounted as a named Podman volume `target-cache` so it persists across runs) |
+| `lefthook` deep-gate (opt-in, Podman container) | `target/lefthook-podman` (mounted as a named Podman volume `target-cache` so it persists across runs) |
 
 If you cannot determine your role, use `target/agent-misc`. Never omit the variable.
 
 The `target/lefthook/*` and `target/lefthook-podman` paths are reserved
-for the pre-commit and pre-push git hooks defined in `lefthook.yml`.
-Contributors install them with `lefthook install` after `brew install
-lefthook podman`. See `docs/dev-environment.md` for full setup.
+for the pre-commit hook and the opt-in deep gate defined in
+`lefthook.yml`. Contributors install the pre-commit hook with `lefthook
+install` after `brew install lefthook podman`. See
+`docs/dev-environment.md` for full setup.
 
 ## Rule 2: Always scope to a single crate
 
@@ -102,52 +103,34 @@ Copy-paste template, fill in `<role>`, `<crate>`, and the actual cargo args:
 
 # AGENT PUSH RULES — read before running `git push`
 
-When invoking `git push` from an agent runtime (Claude Code's Bash tool,
-similar), `git push` is silently terminated mid-hook if the lefthook
-pre-push hook spawns a long-running container (the deep gate runs all
-10 Linux CI jobs in Podman, ~3-4 min warm / ~15-20 min cold). The
-container survives orphaned because Podman owns it; the push itself
-never completes. Diagnosed 2026-05-09.
+The lefthook deep gate is **opt-in**, not an automatic pre-push hook
+(changed 2026-06-10). There is no pre-push git hook anymore, so a plain
+`git push` runs no hook and completes normally — including from an agent
+runtime. The old silent-kill failure mode (an agent's `git push` dying
+mid-hook while the deep-gate Podman container ran ~3-4 min warm / ~15-20
+min cold, diagnosed 2026-05-09) no longer applies, because nothing runs
+on push. CI runs every Linux job on the PR, so CI is the gate.
 
-Empirical:
+## Rule: plain `git push` is fine; run the gate explicitly when you want it
 
-- Plain `run_in_background` bash + sleep loops survive 60s+
-- Plain `run_in_background` podman containers survive 60s+
-- `git push` triggering the deep gate dies mid-hook every time
+- **Ordinary pushes:** just `git push`. No hook, no special handling.
 
-The kill is specific to the git-push-invokes-long-running-hook path,
-not background commands generally. Likely cause: signal propagation
-when the hook's stdout/stderr are wired through git push's pipe.
+- **Local pre-flight before a release tag or a large Rust change** you
+  want validated before CI — run the deep gate first, then push:
 
-## Rule: never `git push` directly from agent runtime when the gate is on
+      scripts/agent-push.sh            # runs `lefthook run deep-gate`, then git push
 
-Three options, ordered by preference:
+  or inline:
 
-1. **`scripts/agent-push.sh`** — runs `lefthook run pre-push` as a
-   standalone command (which does NOT die), then `git push --no-verify`
-   (fast network-only step). Forwards args. Use this by default.
+      lefthook run deep-gate && git push
 
-2. **`git push --no-verify`** — bypass the gate entirely. Acceptable
-   for docs-only / yaml-only changes where the gate adds nothing.
-   Document the bypass in the commit message; CI is the safety net.
+  The gate's Podman container outlives the invoking shell, so if the
+  runtime kills the command mid-gate the container keeps running and you
+  see its result on the next `lefthook run deep-gate`. If you spot an
+  orphaned gate container:
 
-3. **`lefthook run pre-push && git push --no-verify`** — inline form
-   of option 1 if the script isn't available. Same effect.
-
-NEVER:
-
-- Run `git push` (no flags) and expect it to complete with the gate
-  active. It will silently die.
-- Bypass with `--no-verify` for Rust code changes when the agent
-  runtime is the only Linux validation surface, unless you've run
-  the gate separately first.
-
-If you observe a `git push` that produced 0 bytes of output and no
-error message, the silent-kill happened. Recover by:
-
-    podman ps   # zombie gate container probably still running
-    podman rm -f <container-id>   # clean it up
-    scripts/agent-push.sh         # try again the right way
+      podman ps                     # find the gate container
+      podman rm -f <container-id>   # clean it up
 
 ## Keeping PRs up-to-date with main
 
@@ -236,17 +219,13 @@ need a corresponding line. Linkcheck only verifies links between
 pages that *are* in SUMMARY, so a forgotten entry hides both the page
 and any broken outbound links it contains.
 
-## Rule: docs-only PRs may bypass the pre-push gate
+## Rule: docs-only PRs don't need the deep gate
 
-The lefthook deep gate is Rust-CI mirroring; it adds nothing to a
-docs-only change and the gate has its own silent-kill failure mode
-under `git push` (see AGENT PUSH RULES above). For pure
-`docs/**` + `.md` changes:
-
-    git push --no-verify
-
-is sanctioned. CI's `docs-deploy` job is the real gate. If the PR
-also touches Rust, follow AGENT PUSH RULES and run the full gate.
+The lefthook deep gate is Rust-CI mirroring and is opt-in (not a push
+hook), so a docs-only change needs nothing special — just `git push`.
+CI's `docs-deploy` job is the real gate. Run `lefthook run deep-gate`
+(or `scripts/agent-push.sh`) only if a PR also touches Rust and you
+want a local pre-flight before CI.
 
 ## Rule: the live URL is `lebocqtitouan.github.io/tau/`
 
