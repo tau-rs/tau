@@ -18,9 +18,9 @@ Severity / priority scale: High / Medium / Low.
 | Priority | Count |
 |---|---|
 | High | 2 |
-| Medium | 4 |
+| Medium | 5 |
 | Low | 4 |
-| Total | 10 |
+| Total | 11 |
 
 ---
 
@@ -152,6 +152,25 @@ These are genuine strengths and are the parts other repos should copy verbatim.
   no signing or provenance attestation on (currently non-existent) release
   artifacts. Tracked here only for completeness; not actionable until G1 lands a
   release build.
+- **G11 (Medium) — pre-push `deep-gate` is a heavy podman gate in a git hook.**
+  `lefthook.yml:74` defines a `pre-push: deep-gate:` command that runs a
+  privileged podman/container-based check on EVERY push, reproducing every Linux
+  CI job inside one container (~3-4 min warm, ~15-20 min cold per its own header).
+  This (a) violates the lightweight-hooks principle (heavy/container work belongs
+  in the T2 `v*` heavy tier, not on `git push`), and (b) hard-fails in any
+  environment without a podman socket (`/run/podman/podman.sock`), so any
+  contributor or agent runtime lacking podman cannot push without `--no-verify` —
+  the gate relocates CI latency onto the developer and is routinely bypassed
+  anyway (CLAUDE.md's AGENT PUSH RULES exist precisely because the gate silently
+  kills agent-driven `git push`). Compounding this, a local `core.hooksPath`
+  override makes lefthook skip its hook-sync, and the lefthook integration-test
+  suite corrupts the worktree git identity to `Test User <test@example.com>`
+  (both documented in CLAUDE.md), so the hooks installed locally drift from
+  `lefthook.yml` and commits silently pick up the wrong author.
+  **Recommendation:** relocate `deep-gate` to the T2 heavy CI tier (the
+  `v*`-tag `heavy.yml` of G1) or a dedicated CI job; keep pre-push fast (a `just
+  ci` subset) or absent. Fix the local `core.hooksPath` override with `lefthook
+  install --reset-hooks-path` so lefthook owns hook sync again.
 
 ---
 
@@ -313,6 +332,14 @@ optional nextest/sccache/mold) consumed by every job via
   four repos. In tau it WRAPS xtask (delegates image/e2e work) and lefthook + CI
   both call the same `just <verb>` so local == CI by construction, not by
   parallel maintenance of two copies of each command string.
+- **Git hooks stay lightweight.** Pre-commit runs ONLY the fast `just` verbs
+  (fmt, lint, fast staged tests) — seconds, never blocking. NO heavy or
+  container-based checks belong in git hooks. Heavy correctness work runs in the
+  T2 `v*`-tag heavy CI tier and T3 schedules, never on `git commit` / `git push`.
+  A pre-push hook, if present, runs at most a fast `just ci` subset. Rationale:
+  pushes must stay fast; a slow pre-push gate just relocates CI latency onto the
+  developer and gets bypassed with `--no-verify` anyway. (tau currently violates
+  this — see G11.)
 
 ---
 
@@ -344,6 +371,12 @@ priority and a one-line rationale.
   and `ci.yml` steps to call `just <verb>`. **Medium** — single source of truth
   for each command so local == CI; aligns tau with the cross-repo verb contract
   (closes G4).
+- [ ] **Move lefthook pre-push `deep-gate` (podman) out of git hooks into a CI
+  job; keep pre-push fast/absent. Fix local `core.hooksPath` override (`lefthook
+  install --reset-hooks-path`).** **Medium** — heavy/container checks belong in
+  the T2 heavy tier, not on `git push`; the gate hard-fails without a podman
+  socket and is routinely bypassed, and the hooksPath override desyncs installed
+  hooks from `lefthook.yml` (closes G11).
 - [ ] **Pin tool versions for `cargo install cargo-mutants` / `cargo-fuzz`**
   (`mutants-scheduled.yml:105`, `fuzz-nightly.yml:94`) via
   `taiki-e/install-action` or an explicit `--version`. **Medium** — stops a
