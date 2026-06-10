@@ -1,0 +1,27 @@
+# osv-scanner.toml — vulnerability ignore list.
+#
+# Mirrors tau's deny.toml [advisories] policy. cargo-deny passes because
+# deny.toml has `unmaintained = "workspace"` (only flag transitive
+# `unmaintained` advisories for workspace-direct deps). osv-scanner does
+# NOT read deny.toml — it has its own config format here.
+#
+# When adding an entry: document the WHY in `reason` and set an
+# `ignoreUntil` date if the upstream fix is expected. Drop the entry
+# (rather than refresh `ignoreUntil`) once the upstream dep tree no
+# longer references the vulnerable crate.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+# Transitive via:
+#   paste 1.0.15  ←  netlink-packet-core 0.8.1
+#                 ←  netlink-packet-route 0.30.0
+#                 ←  rtnetlink 0.21.0
+#                 ←  tau-sandbox-native
+# rtnetlink is the Linux netlink-socket library tau-sandbox-native uses
+# to set up network namespaces for the strict sandbox tier. The
+# rust-netlink upstream ecosystem hasn't yet cut a release migrating
+# off paste (no fix available; informational `unmaintained` advisory).
+# tau's deny.toml [advisories] `unmaintained = "workspace"` documents
+# the policy; this file mirrors it for osv-scanner.
+ignoreUntil = 2026-12-31
+reason = "Transitive via netlink-packet-core; upstream rust-netlink ecosystem hasn't cut a paste-replacement release. Tracking via tau's deny.toml policy."

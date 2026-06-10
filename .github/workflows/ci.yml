@@ -145,18 +145,10 @@ jobs:
           arguments: --all-features
 
   cargo-audit:
+    # cargo-audit reads .cargo/audit.toml for the ignore list.
+    # Mirrors tau's deny.toml [advisories] policy.
     name: cargo-audit
-    # Skipped in merge_group context: GitHub's merge queue evaluates
-    # per-job conclusions and treats `failure` as a hard eviction trigger
-    # regardless of `continue-on-error`. Since this job's failures are
-    # informational (e.g. RUSTSEC-2024-0436 / paste 1.0.15, unmaintained,
-    # no fix available), running it in the queue's check round would
-    # block every PR despite ci-summary itself being green. The PR-level
-    # run still provides the signal; the queue trusts the PR's result.
-    # Drop this guard once all unfixed advisories are resolved.
-    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: rustsec/audit-check@v2
@@ -164,11 +156,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   osv-scanner:
+    # osv-scanner reads osv-scanner.toml for IgnoredVulns.
+    # Mirrors tau's deny.toml [advisories] policy.
     name: osv-scanner
-    # Same merge_group skip as cargo-audit above.
-    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: google/osv-scanner-action/osv-scanner-action@v2.3.8
