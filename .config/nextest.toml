@@ -40,6 +40,17 @@ filter = 'package(__quarantine_placeholder__)'
 # Replace the filter above with a real `test(/<regex>/)` filter when
 # quarantining; the placeholder package never matches so this override
 # is a no-op until a real entry is added.
-failure-output = 'final-fail'
-success-output = 'final-fail'
-retries = 2
+#
+# When promoting a real test:
+# - `retries = N` re-runs N times before declaring failure (masks
+#   intermittent flakes while a root-cause investigation is open).
+# - `failure-output` accepts `immediate`, `immediate-final`, `final`,
+#   `never`. Use `immediate-final` for visibility while quarantined.
+# - True "non-blocking" failures (test runs but failure doesn't fail
+#   the suite) are NOT natively supported by nextest. Real quarantine
+#   workflow: bump `retries`, document the flake in the link list at
+#   docs/how-to/quarantine-flaky-tests.md (Phase 4), and rely on
+#   auto-rerun-flaky.yml to retry the workflow if a real run hits the
+#   flake.
+retries = 3
+failure-output = "immediate-final"
