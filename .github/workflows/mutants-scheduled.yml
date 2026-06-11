@@ -102,7 +102,7 @@ jobs:
 
       - name: Install cargo-mutants
         if: steps.precheck.outputs.skip != 'true'
-        run: cargo install cargo-mutants --locked
+        run: cargo install cargo-mutants --locked --version =27.1.0
 
       - name: Run mutation testing
         if: steps.precheck.outputs.skip != 'true'

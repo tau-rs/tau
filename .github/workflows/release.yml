@@ -87,7 +87,7 @@ jobs:
           with-sccache: true
           with-mold: true
       - name: Install cargo-sbom
-        run: cargo install cargo-sbom --locked
+        run: cargo install cargo-sbom --locked --version =0.10.0
       - name: Generate SPDX 2.3 SBOM
         run: cargo sbom --output-format spdx_json_2_3 > tau-sbom-rust.spdx.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
