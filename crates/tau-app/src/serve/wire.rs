@@ -134,7 +134,11 @@ struct FatalErrorDto {
 }
 
 /// Serialize a fixed-shape wire DTO to a `Value`. Infallible for these
-/// types (no non-string map keys, no fallible custom serializers).
+/// types except for the `@bytes:`-prefix reservation in `tau_domain::Value`
+/// (`args` / `ContentDto::Json.data`), which serializes that reserved string
+/// form to an error. This mirrors the pre-refactor `json!({"args": args})`
+/// path exactly — that macro also unwraps the same serialization, so the
+/// panic behavior is preserved, not introduced.
 fn to_value<T: Serialize>(dto: &T) -> Value {
     serde_json::to_value(dto).expect("wire DTO serialization is infallible")
 }
@@ -181,6 +185,12 @@ pub(crate) fn outcome_to_json(outcome: &RunOutcome) -> Value {
             token_usage,
             ..
         } => OutcomeDto::Failed {
+            // `agent_status` is the `AgentStatus` Debug string, preserved
+            // byte-for-byte from the pre-refactor code. A *field* rename is a
+            // compile error (the destructure above); a *variant* rename of
+            // `AgentStatus` would silently change this string — knowingly out
+            // of scope for this pure refactor (the golden test pins the
+            // current string so a rename at least breaks a test).
             agent_status: format!("{:?}", status),
             total_turns: *total_turns,
             token_usage: token_usage_dto(token_usage),
@@ -254,6 +264,10 @@ pub(crate) fn event_to_wire(event: &RunEvent) -> WireEvent {
             usage,
             turn,
         } => {
+            // `stop_reason` is the `StopReason` Debug string, preserved
+            // byte-for-byte. As with `agent_status`, a *variant* rename of
+            // `StopReason` would silently change this string — knowingly out
+            // of scope for this pure refactor; the golden test pins it.
             let sr_str = format!("{:?}", sr);
             // TurnCompleted.usage is Option<tau_ports::TokenUsage> which has
             // only input_tokens and output_tokens (no total_tokens field).
@@ -500,6 +514,18 @@ mod tests {
         let tu = json!({ "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 });
         assert_eq!(w.data, json!({ "token_usage": tu.clone() }));
         assert_eq!(w.token_usage, Some(tu));
+    }
+
+    // Guard-arm shapes for future `#[non_exhaustive]` upstream variants.
+    // Asserted at the DTO level because a `RunOutcome`/`ToolContent` variant
+    // we don't yet know about can't be constructed here.
+    #[test]
+    fn unknown_guard_arm_wire_shapes() {
+        assert_eq!(
+            to_value(&OutcomeDto::Unknown),
+            json!({ "status": "unknown" })
+        );
+        assert_eq!(to_value(&ContentDto::Unknown), json!({ "type": "unknown" }));
     }
 
     #[test]
