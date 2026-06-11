@@ -24,6 +24,31 @@ use tau_domain::PackageSource;
 
 use crate::error::GitError;
 
+/// Build the `git clone` [`Command`] (env + argv) without spawning it.
+///
+/// Extracted as a pure builder so the argument construction can be
+/// asserted in unit tests without a network or filesystem clone.
+fn build_clone_command(url: &str, rev: Option<&str>, dest: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    // Allow file:// protocol even when the system or CI git config sets
+    // protocol.file.allow = user (the post-git-2.38 default) or never.
+    // tau intentionally supports file://-based local sources (e.g. for
+    // test fixtures and air-gapped installs).
+    cmd.env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
+        .env("GIT_CONFIG_VALUE_0", "always");
+    cmd.arg("clone");
+    if let Some(rev) = rev {
+        cmd.arg("--branch").arg(rev).arg("--single-branch");
+    }
+    // `--` terminates option parsing so a `url`/`dest` beginning with `-`
+    // can never be interpreted as a git flag (e.g. `--upload-pack=...`).
+    // `PackageSource` URL-scheme validation already guards this upstream,
+    // but the wrapper is defensive in its own right (audit S7).
+    cmd.arg("--").arg(url).arg(dest);
+    cmd
+}
+
 /// Zero-sized handle for namespacing the git-binary subprocess wrapper.
 ///
 /// All methods are associated functions (no instance state).
@@ -61,8 +86,9 @@ impl Git {
 
     /// Clone `source` into `dest`.
     ///
-    /// If `source.rev` is `None`, runs `git clone <url> <dest>`. If
-    /// `Some(rev)`, runs `git clone --branch <rev> --single-branch <url> <dest>`
+    /// If `source.rev` is `None`, runs `git clone -- <url> <dest>`. If
+    /// `Some(rev)`, runs
+    /// `git clone --branch <rev> --single-branch -- <url> <dest>`
     /// — `--branch` accepts branch names and tag names but NOT
     /// arbitrary commit SHAs. A user passing a 40-char SHA as `rev`
     /// will get [`GitError::CloneFailed`] with git's
@@ -85,19 +111,7 @@ impl Git {
             }
         };
 
-        let mut cmd = Command::new("git");
-        // Allow file:// protocol even when the system or CI git config sets
-        // protocol.file.allow = user (the post-git-2.38 default) or never.
-        // tau intentionally supports file://-based local sources (e.g. for
-        // test fixtures and air-gapped installs).
-        cmd.env("GIT_CONFIG_COUNT", "1")
-            .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
-            .env("GIT_CONFIG_VALUE_0", "always");
-        cmd.arg("clone");
-        if let Some(rev) = &rev_opt {
-            cmd.arg("--branch").arg(rev).arg("--single-branch");
-        }
-        cmd.arg(&url_string).arg(dest);
+        let mut cmd = build_clone_command(&url_string, rev_opt.as_deref(), dest);
 
         // Note: blocks until git exits; no timeout at v0.1 (sync API).
         let output = cmd.output().map_err(|e| {
@@ -191,4 +205,54 @@ mod tests {
     // file://-based local fixture. Both belong in Task 14's
     // integration test suite (tests/install_lifecycle.rs), where the
     // test infrastructure for `git init --bare` already exists.
+
+    fn clone_argv(url: &str, rev: Option<&str>, dest: &Path) -> Vec<String> {
+        build_clone_command(url, rev, dest)
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn clone_command_inserts_double_dash_before_url_and_dest() {
+        let url = "https://example.com/repo.git";
+        let dest = Path::new("/tmp/clone-dest");
+        let args = clone_argv(url, None, dest);
+
+        let dd = args
+            .iter()
+            .position(|a| a == "--")
+            .expect("`--` option terminator must be present");
+        let url_pos = args.iter().position(|a| a == url).expect("url in argv");
+        let dest_pos = args
+            .iter()
+            .position(|a| a == "/tmp/clone-dest")
+            .expect("dest in argv");
+
+        assert!(dd < url_pos, "`--` must precede the URL: {args:?}");
+        assert!(dd < dest_pos, "`--` must precede the dest: {args:?}");
+    }
+
+    #[test]
+    fn clone_command_with_rev_terminates_options_before_positionals() {
+        let url = "https://example.com/repo.git";
+        let dest = Path::new("/tmp/clone-dest");
+        let args = clone_argv(url, Some("v1.0"), dest);
+
+        let branch_pos = args
+            .iter()
+            .position(|a| a == "--branch")
+            .expect("--branch in argv");
+        let dd = args
+            .iter()
+            .position(|a| a == "--")
+            .expect("`--` terminator must be present");
+        let url_pos = args.iter().position(|a| a == url).expect("url in argv");
+
+        assert!(
+            branch_pos < dd,
+            "`--branch <rev>` is an option and must come before `--`: {args:?}"
+        );
+        assert!(dd < url_pos, "`--` must precede the URL: {args:?}");
+    }
 }

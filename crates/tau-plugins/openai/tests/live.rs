@@ -23,7 +23,7 @@ use tau_ports::{CompletionChunk, CompletionRequest, ContentBlock, LlmBackend, Ll
 fn live_config() -> OpenAIConfig {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY required for live tests");
     let mut cfg = OpenAIConfig::default();
-    cfg.api_key = Some(api_key);
+    cfg.api_key = Some(api_key.into());
     cfg
 }
 

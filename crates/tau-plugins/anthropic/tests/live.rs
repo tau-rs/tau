@@ -26,7 +26,7 @@ fn live_config() -> AnthropicConfig {
     // we can't use struct-literal construction. Build via Default and
     // mutate.
     let mut cfg = AnthropicConfig::default();
-    cfg.api_key = Some(api_key);
+    cfg.api_key = Some(api_key.into());
     cfg.base_url = "https://api.anthropic.com".into();
     cfg
 }
