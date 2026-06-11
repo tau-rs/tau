@@ -1,5 +1,6 @@
 //! NDJSON framing for stdin/stdout. One JSON value per line.
 
+use super::idle::Activity;
 use super::protocol::Outbound;
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -19,7 +20,10 @@ pub enum Inbound {
 
 /// Reader task: read NDJSON lines from stdin, push to channel.
 /// Returns when stdin EOF is reached (after sending `Inbound::Eof`).
-pub async fn reader_task(tx: mpsc::Sender<Inbound>) -> Result<()> {
+///
+/// `activity` is touched on every non-empty inbound line so the idle
+/// timeout (see [`super::idle`]) resets on incoming traffic.
+pub async fn reader_task(tx: mpsc::Sender<Inbound>, activity: Activity) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
     let mut line = String::new();
@@ -37,6 +41,7 @@ pub async fn reader_task(tx: mpsc::Sender<Inbound>) -> Result<()> {
         if trimmed.is_empty() {
             continue;
         }
+        activity.touch();
         let msg = match serde_json::from_str::<Value>(trimmed) {
             Ok(v) => Inbound::Json(v),
             Err(e) => Inbound::ParseError(format!("{}: {}", e, trimmed)),
@@ -53,9 +58,14 @@ pub async fn reader_task(tx: mpsc::Sender<Inbound>) -> Result<()> {
 /// stdout is locked once per write to guarantee atomic line writes
 /// (concurrent dispatcher tasks send through `mpsc`, but the actual
 /// stdout `write_all` happens here single-threaded).
-pub async fn writer_task(mut rx: mpsc::Receiver<Outbound>) -> Result<()> {
+///
+/// `activity` is touched on every emitted message so the idle timeout
+/// (see [`super::idle`]) resets on outgoing traffic — an in-flight run
+/// that keeps streaming output holds the timer open.
+pub async fn writer_task(mut rx: mpsc::Receiver<Outbound>, activity: Activity) -> Result<()> {
     let mut stdout = tokio::io::stdout();
     while let Some(out) = rx.recv().await {
+        activity.touch();
         let mut line = serde_json::to_string(&out).context("serialize outbound message")?;
         line.push('\n');
         stdout
@@ -86,8 +96,11 @@ mod tests {
         drop(tx); // close so writer exits
 
         // Smoke check: writer task completes without deadlock within timeout.
-        let res =
-            tokio::time::timeout(std::time::Duration::from_millis(200), writer_task(rx)).await;
+        let res = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            writer_task(rx, Activity::new()),
+        )
+        .await;
         assert!(res.is_ok());
     }
 }

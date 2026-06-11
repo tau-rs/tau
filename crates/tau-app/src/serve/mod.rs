@@ -11,6 +11,7 @@ mod error_codes;
 mod error_map;
 mod framing;
 mod handshake;
+mod idle;
 mod lifecycle;
 mod methods;
 mod options;
