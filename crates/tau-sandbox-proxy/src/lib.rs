@@ -202,6 +202,25 @@ async fn handle_connect(
     Ok(())
 }
 
+/// True if `host` is an IP literal that is a loopback address
+/// (`127.0.0.0/8` or `::1`). Non-IP hostnames are never loopback.
+/// Matches the loopback semantics of [`validate::validate_hosts`].
+#[cfg(unix)]
+fn is_loopback_host(host: &str) -> bool {
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Plaintext HTTP egress port policy. Mirrors [`handle_connect`]'s 443-only
+/// rule: a remote (non-loopback) host may only be reached on the well-known
+/// HTTP port 80; loopback hosts may use any port so local servers (e.g. a
+/// local model server on `http://127.0.0.1:11434`) keep working.
+#[cfg(unix)]
+fn http_port_allowed(host: &str, port: u16) -> bool {
+    is_loopback_host(host) || port == 80
+}
+
 #[cfg(unix)]
 async fn handle_http(
     plugin_sock: &mut UnixStream,
@@ -220,6 +239,20 @@ async fn handle_http(
     if !allowed_hosts.iter().any(|h| h == &req.host) {
         plugin_sock
             .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            .await?;
+        return Ok(());
+    }
+    // Mirror handle_connect's port restriction on the plaintext path: a
+    // remote allowlisted host is reachable over plaintext only on port 80;
+    // loopback hosts may use any port (local servers).
+    if !http_port_allowed(&req.host, req.port) {
+        tracing::warn!(
+            host = %req.host,
+            port = req.port,
+            "proxy rejected plaintext HTTP to non-80 port on non-loopback host"
+        );
+        plugin_sock
+            .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
             .await?;
         return Ok(());
     }
@@ -333,5 +366,72 @@ mod proxy_lifecycle_tests {
         let n = conn.read(&mut resp).await.expect("read");
         let s = std::str::from_utf8(&resp[..n]).expect("utf8");
         assert!(s.starts_with("HTTP/1.1 400"), "got: {s}");
+    }
+
+    #[tokio::test]
+    async fn http_non_loopback_non_80_port_returns_400() {
+        let h = spawn_proxy(vec!["allowed.example.com".to_string()]).expect("spawn");
+        let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
+        // Allowlisted host, but plaintext on a non-80 port: must be rejected,
+        // mirroring CONNECT's non-443 -> 400.
+        conn.write_all(
+            b"GET http://allowed.example.com:8080/ HTTP/1.1\r\nHost: allowed.example.com:8080\r\n\r\n",
+        )
+        .await
+        .expect("write");
+        let mut resp = [0u8; 256];
+        let n = conn.read(&mut resp).await.expect("read");
+        let s = std::str::from_utf8(&resp[..n]).expect("utf8");
+        assert!(s.starts_with("HTTP/1.1 400"), "got: {s}");
+    }
+
+    #[tokio::test]
+    async fn http_loopback_arbitrary_port_not_rejected_by_port_gate() {
+        let h = spawn_proxy(vec!["127.0.0.1".to_string()]).expect("spawn");
+        let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
+        // Loopback host on an arbitrary (closed) port: the port gate must NOT
+        // reject it. It reaches the upstream-connect path, which fails to dial
+        // the closed port and returns 502 — proving the gate let it through.
+        conn.write_all(b"GET http://127.0.0.1:9/ HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n")
+            .await
+            .expect("write");
+        let mut resp = [0u8; 256];
+        let n = conn.read(&mut resp).await.expect("read");
+        let s = std::str::from_utf8(&resp[..n]).expect("utf8");
+        assert!(
+            s.starts_with("HTTP/1.1 502"),
+            "expected 502 not 400, got: {s}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+mod port_gate_tests {
+    use super::{http_port_allowed, is_loopback_host};
+
+    #[test]
+    fn remote_host_port_80_allowed() {
+        assert!(http_port_allowed("allowed.example.com", 80));
+    }
+
+    #[test]
+    fn remote_host_non_80_rejected() {
+        assert!(!http_port_allowed("allowed.example.com", 8080));
+        assert!(!http_port_allowed("allowed.example.com", 443));
+    }
+
+    #[test]
+    fn loopback_any_port_allowed() {
+        assert!(http_port_allowed("127.0.0.1", 11434));
+        assert!(http_port_allowed("::1", 9000));
+    }
+
+    #[test]
+    fn loopback_detection() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("::1"));
+        assert!(!is_loopback_host("8.8.8.8"));
+        assert!(!is_loopback_host("example.com"));
     }
 }
