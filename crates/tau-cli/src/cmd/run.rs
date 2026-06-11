@@ -695,3 +695,110 @@ mod tests {
         assert!(s.contains("agent failed"), "got: {s}");
     }
 }
+
+#[cfg(test)]
+mod bundle_source_xcheck_tests {
+    use super::verify_bundle_against_source;
+    use std::collections::BTreeMap;
+    use tau_pkg::bundle::{build, BuildOptions, IrPayload, VerifyError};
+    use tau_ports::target::TargetTriple;
+
+    /// Write a native-tool project whose single tool declares `caps`
+    /// (a TOML capabilities array, e.g. `[]` or `[{ kind = "net.http" }]`).
+    /// The capability set is what makes two otherwise-identical projects
+    /// lower to different IR hashes.
+    fn write_project(root: &std::path::Path, name: &str, caps: &str) {
+        std::fs::write(
+            root.join("tau.toml"),
+            format!(
+                r#"
+[project]
+name = "{name}"
+version = "0.1.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "{name}@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "hi"
+
+[tools.read_temp]
+native = "ReadTemp"
+description = "reads the temperature"
+capabilities = {caps}
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+    }
+
+    fn lower(root: &std::path::Path) -> IrPayload {
+        let empty = BTreeMap::new();
+        crate::cmd::build::lower_ir(root, &TargetTriple::host(), &empty, None)
+            .expect("native-tool project must lower to Some(IrPayload)")
+    }
+
+    /// Build a bundle in `src_root` but embed `ir_payload`. When
+    /// `ir_payload` comes from a *different* source tree, the bundle's
+    /// recorded tau.toml hash still matches `src_root` (so verify steps
+    /// 6/8 pass) while its IR diverges — exactly the S3 attack shape.
+    fn build_bundle(src_root: &std::path::Path, ir_payload: Option<IrPayload>) -> std::path::PathBuf {
+        build(BuildOptions {
+            project_root: src_root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+            agent_filter: None,
+            ir_payload,
+        })
+        .expect("build must succeed")
+        .path
+    }
+
+    #[test]
+    fn run_bundle_rejects_ir_lowered_from_a_different_source() {
+        // A: the source the user ships + inspects (no extra caps).
+        let a = tempfile::tempdir().unwrap();
+        write_project(a.path(), "proj", "[]");
+        // B: a divergent source the attacker lowered the IR from.
+        let b = tempfile::tempdir().unwrap();
+        write_project(b.path(), "proj", "[{ kind = \"net.http\" }]");
+
+        let ir_b = lower(b.path());
+        // Bundle records A's tau.toml hash, but carries B's IR.
+        let bundle = build_bundle(a.path(), Some(ir_b.clone()));
+
+        let err = verify_bundle_against_source(a.path(), &bundle).unwrap_err();
+        match err {
+            VerifyError::IrSourceDivergence { bundle_hash, source_hash } => {
+                assert_eq!(bundle_hash, ir_b.canonical_ir_hash, "bundle carries B's IR");
+                assert_ne!(source_hash, bundle_hash, "A's re-lowered hash must differ");
+            }
+            other => panic!("expected IrSourceDivergence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_bundle_accepts_genuine_ir() {
+        let a = tempfile::tempdir().unwrap();
+        write_project(a.path(), "proj", "[]");
+        let ir_a = lower(a.path());
+        let bundle = build_bundle(a.path(), Some(ir_a));
+        verify_bundle_against_source(a.path(), &bundle).expect("genuine bundle must verify");
+    }
+
+    #[test]
+    fn run_bundle_v1_unaffected() {
+        // A v1 bundle (no ir_payload) verifies regardless of re-lowering.
+        let a = tempfile::tempdir().unwrap();
+        write_project(a.path(), "proj", "[]");
+        let bundle = build_bundle(a.path(), None);
+        verify_bundle_against_source(a.path(), &bundle).expect("v1 bundle must verify");
+    }
+}
