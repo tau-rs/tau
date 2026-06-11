@@ -55,6 +55,45 @@ use crate::lockfile::{
 use crate::manifest::read_manifest;
 use crate::scope::Scope;
 
+/// Run `make_fut()` to completion from a synchronous function that may
+/// itself be called from inside a Tokio runtime.
+///
+/// The install pipeline is synchronous but must `await` the Layer-2
+/// cross-check exactly once. Building a current-thread runtime *inline*
+/// and calling `block_on` panics ("Cannot start a runtime from within a
+/// runtime") when `install_with_options` runs inside an existing async
+/// context — which it does under `tau run` / `tau install` (both
+/// `#[tokio::main]`). Offloading the runtime onto a dedicated OS thread
+/// sidesteps the nesting entirely: the new thread has no ambient
+/// runtime, so `block_on` is always legal there, regardless of whether
+/// the caller's runtime is multi-thread or current-thread (D5).
+///
+/// The future is built *inside* the worker thread, so it need not be
+/// `Send` — only the builder closure and the output value cross the
+/// thread boundary. A fully `async` install pipeline is the cleaner
+/// long-term shape but ripples through every sync caller and their test
+/// sites; this contained seam fixes the panic without that churn.
+fn block_on_in_fresh_thread<T, B, Fut>(make_fut: B) -> Result<T, InstallError>
+where
+    B: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = T>,
+    T: Send + 'static,
+{
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| InstallError::Internal {
+                message: format!("build tokio runtime for cross-check: {e}"),
+            })?;
+        Ok(rt.block_on(make_fut()))
+    })
+    .join()
+    .map_err(|_| InstallError::Internal {
+        message: "cross-check worker thread panicked".into(),
+    })?
+}
+
 /// Options governing plugin builds during install.
 ///
 /// Used by [`InstallOptions::build`] to control the `cargo build` step
@@ -417,25 +456,23 @@ pub fn install_with_options(
         //     even for plugin packages — test / --no-build path).
         //
         // cross_check_plugin_capabilities is async; install_with_options is
-        // synchronous. Bridge via a current-thread tokio runtime spun up just
-        // for this step.
+        // synchronous. Bridge via `block_on_in_fresh_thread`, which runs the
+        // future on a dedicated thread with its own runtime — never nesting a
+        // `block_on` inside the caller's async context (D5).
         if !options.skip_cross_check {
             if let Some(ref mut lp) = locked_plugin {
                 let binary_path = lp.binary_path.clone();
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| InstallError::Internal {
-                        message: format!("build tokio runtime for cross-check: {e}"),
-                    })?;
-                let shapes = runtime
-                    .block_on(crate::sandbox_check::cross_check_plugin_capabilities(
+                let manifest_for_check = manifest.clone();
+                let shapes = block_on_in_fresh_thread(move || async move {
+                    crate::sandbox_check::cross_check_plugin_capabilities(
                         &binary_path,
-                        &manifest,
-                    ))
-                    .map_err(|e| InstallError::CrossCheck {
-                        message: e.to_string(),
-                    })?;
+                        &manifest_for_check,
+                    )
+                    .await
+                })?
+                .map_err(|e| InstallError::CrossCheck {
+                    message: e.to_string(),
+                })?;
                 lp.required_shapes = shapes;
             }
 
@@ -945,6 +982,21 @@ pub fn uninstall(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_on_in_fresh_thread_runs_with_no_ambient_runtime() {
+        let v = block_on_in_fresh_thread(|| async { 21 + 21 }).unwrap();
+        assert_eq!(v, 42);
+    }
+
+    #[tokio::test]
+    async fn block_on_in_fresh_thread_from_async_context_does_not_panic() {
+        // Regression (D5): the old inline `block_on` panicked with "Cannot
+        // start a runtime from within a runtime" when reached from inside
+        // an ambient async context. The off-thread bridge does not.
+        let v = block_on_in_fresh_thread(|| async { 9 }).unwrap();
+        assert_eq!(v, 9);
+    }
 
     #[test]
     fn install_options_default() {
