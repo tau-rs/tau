@@ -7,6 +7,7 @@
 //! See `docs/superpowers/specs/2026-04-29-anthropic-plugin-design.md`
 //! §6.1.
 
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use std::time::Duration;
 use tau_plugin_sdk::ConfigError;
@@ -39,8 +40,12 @@ pub struct AnthropicConfig {
     /// Direct API key override. **Test-only** — never put a real key
     /// in project tau.toml. If both `api_key` and `api_key_env` are
     /// present, `api_key` wins and a `tracing::warn!` is emitted.
-    #[serde(default)]
-    pub api_key: Option<String>,
+    ///
+    /// Held as a [`SecretString`] so a stray `{:?}` of this config (a
+    /// trace, a panic message, an error wrapper) redacts the key
+    /// instead of printing it verbatim (audit S8).
+    #[serde(default, deserialize_with = "deserialize_optional_secret")]
+    pub api_key: Option<SecretString>,
 
     /// Override base URL. Default: <https://api.anthropic.com>. Tests
     /// use this to point at the cassette replayer.
@@ -136,6 +141,17 @@ fn default_respect_retry_after() -> bool {
     true
 }
 
+/// Deserialize an optional API key from a plain JSON string into a
+/// [`SecretString`]. Used instead of `secrecy`'s gated `serde` feature
+/// so the redaction is end-to-end without a workspace feature change.
+fn deserialize_optional_secret<'de, D>(deserializer: D) -> Result<Option<SecretString>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.map(SecretString::from))
+}
+
 /// Validate + resolve the API key from config or env.
 ///
 /// Returns the resolved API key on success. Errors map to [`ConfigError`]
@@ -152,7 +168,7 @@ pub(crate) fn resolve_api_key(
             target: "anthropic_plugin::config",
             "config.api_key set directly — recommended only for tests"
         );
-        direct.clone()
+        direct.expose_secret().to_owned()
     } else {
         lookup(&cfg.api_key_env).ok_or_else(|| ConfigError::InvalidEnvVar {
             name: cfg.api_key_env.clone(),
@@ -288,5 +304,26 @@ mod tests {
             respect_retry_after: true,
         };
         validate_retry(&retry).unwrap();
+    }
+
+    #[test]
+    fn debug_output_redacts_api_key() {
+        let cfg = AnthropicConfig {
+            api_key: Some("sk-ant-supersecret-leaked-value".into()),
+            ..AnthropicConfig::default()
+        };
+        let debug = format!("{cfg:?}");
+        assert!(
+            !debug.contains("sk-ant-supersecret-leaked-value"),
+            "Debug output leaked the API key: {debug}"
+        );
+    }
+
+    #[test]
+    fn api_key_deserializes_from_plain_string() {
+        let cfg: AnthropicConfig =
+            serde_json::from_str(r#"{"api_key": "sk-ant-fromjson"}"#).unwrap();
+        let key = resolve_api_key(&cfg, |_| None).unwrap();
+        assert_eq!(key, "sk-ant-fromjson");
     }
 }

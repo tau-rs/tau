@@ -146,10 +146,40 @@ impl StepStatus {
 /// assert!(path.to_string_lossy().contains(".tau/workflow-runs"));
 /// ```
 pub fn run_log_path(scope_root: &std::path::Path, workflow_name: &str, run_id: &str) -> PathBuf {
+    let name = sanitize_path_component(workflow_name);
+    let id = sanitize_path_component(run_id);
     scope_root
         .join(".tau")
         .join("workflow-runs")
-        .join(format!("{workflow_name}-{run_id}.jsonl"))
+        .join(format!("{name}-{id}.jsonl"))
+}
+
+/// Sanitize a single filename component so it cannot escape the
+/// `workflow-runs` directory.
+///
+/// `workflow_name` originates from user config, so a value containing a
+/// path separator or `..` would otherwise let the run log escape the
+/// intended directory (audit S9). Every character outside
+/// `[A-Za-z0-9._-]` is mapped to `_`, then the traversal-significant
+/// `.` / `..` whole-component values are replaced so they can never be
+/// interpreted as the current/parent directory.
+fn sanitize_path_component(raw: &str) -> String {
+    let mapped: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    match mapped.as_str() {
+        "" => "_".to_string(),
+        "." => "_".to_string(),
+        ".." => "__".to_string(),
+        _ => mapped,
+    }
 }
 
 use std::path::Path;
@@ -422,6 +452,32 @@ mod tests {
         let records = replay(&path).await.unwrap();
         assert_eq!(records.len(), 1, "trailing partial line should be dropped");
         assert_eq!(records[0].step_id, "a");
+    }
+
+    #[test]
+    fn run_log_path_stays_inside_workflow_runs_dir() {
+        let root = Path::new("/workspace");
+        let expected_parent = root.join(".tau").join("workflow-runs");
+
+        for (name, id) in [
+            ("../../etc/passwd", "01HKZTEST"),
+            ("..", ".."),
+            ("a/b", "c/d"),
+            ("a\\b", "c\\d"),
+            ("wörk", "ïd"),
+            ("normal-name", "01HKZTEST"),
+        ] {
+            let path = run_log_path(root, name, id);
+            assert_eq!(
+                path.parent().expect("path has a parent"),
+                expected_parent,
+                "run_log_path escaped workflow-runs for ({name:?}, {id:?}): {path:?}"
+            );
+            assert!(
+                path.extension().is_some_and(|e| e == "jsonl"),
+                "expected a .jsonl file: {path:?}"
+            );
+        }
     }
 
     #[tokio::test]
