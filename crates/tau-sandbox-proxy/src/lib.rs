@@ -52,6 +52,7 @@ use tokio::task::JoinHandle;
 #[non_exhaustive]
 pub struct ProxyHandle {
     sock_path: PathBuf,
+    sock_dir: PathBuf,
     task: JoinHandle<()>,
 }
 
@@ -68,6 +69,9 @@ impl Drop for ProxyHandle {
     fn drop(&mut self) {
         self.task.abort();
         let _ = std::fs::remove_file(&self.sock_path);
+        // Remove the per-run directory too (best-effort; only succeeds once
+        // the socket file inside it is gone).
+        let _ = std::fs::remove_dir(&self.sock_dir);
     }
 }
 
@@ -79,34 +83,45 @@ impl Drop for ProxyHandle {
 /// so the bridge inside the sandbox can dial it.
 #[cfg(unix)]
 pub fn spawn_proxy(allowed_hosts: Vec<String>) -> std::io::Result<ProxyHandle> {
-    use std::os::unix::fs::PermissionsExt;
-    let sock_path = make_temp_sock_path()?;
+    let (sock_dir, sock_path) = make_run_dir_and_sock_path()?;
     let listener = UnixListener::bind(&sock_path)?;
-    // The container's bridge runs as a non-root user (tau, uid 1000 in
-    // tau-plugin-base) whose UID does not match the host user that bound
-    // this socket. Make the socket world-writable so the bridge can dial
-    // it from inside any sandboxed container regardless of its UID. This
-    // is safe: the socket is in a per-pid temp file, and connections are
-    // already validated against the plan's host allowlist before any
-    // forwarding happens. Removing this chmod produces silent
-    // "Permission denied" inside the container — see the Bridge's
-    // `proxy connect failed` warning.
-    std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o666))?;
     let task = tokio::spawn(accept_loop(listener, allowed_hosts));
-    Ok(ProxyHandle { sock_path, task })
+    Ok(ProxyHandle {
+        sock_path,
+        sock_dir,
+        task,
+    })
 }
 
+/// Create a private per-run directory (mode `0o700`) in the system temp dir
+/// and return `(dir, socket_path)` for the proxy's Unix socket.
+///
+/// The `0o700` directory — not the socket file mode — is the access boundary,
+/// mirroring the ssh-agent / gpg-agent socket-in-a-private-dir pattern. This
+/// replaces the former world-writable (`0o666`) socket sitting directly in
+/// shared `/tmp`, which let any local user dial the proxy and relay egress to
+/// allowlisted hosts for the lifetime of a run (audit S6).
+///
+/// The socket file is left at the OS default mode: no other local user can
+/// traverse the `0o700` directory to reach it, while the two legitimate
+/// callers are unaffected — the container bridge reaches the socket through a
+/// bind-mount of the inode (independent of host-side directory perms) and the
+/// native bridge runs as the same host user that owns the directory (so DAC
+/// traversal is permitted; landlock grants the socket path itself).
 #[cfg(unix)]
-fn make_temp_sock_path() -> std::io::Result<PathBuf> {
+fn make_run_dir_and_sock_path() -> std::io::Result<(PathBuf, PathBuf)> {
+    use std::os::unix::fs::DirBuilderExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let mut p = std::env::temp_dir();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let suffix = format!("tau-proxy-{}-{}.sock", std::process::id(), n);
-    p.push(suffix);
-    // Ensure the file does not exist (clean state from a prior aborted run)
-    let _ = std::fs::remove_file(&p);
-    Ok(p)
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("tau-proxy-{}-{}", std::process::id(), n));
+    // Clear any stale directory from a prior aborted run, then create fresh
+    // at 0o700 so only the owning user can traverse into it.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    let sock_path = dir.join("proxy.sock");
+    Ok((dir, sock_path))
 }
 
 #[cfg(unix)]
@@ -193,13 +208,70 @@ async fn handle_connect(
     }
     // Forward the peeked bytes onward, then splice
     remote.write_all(&peek_buf[..n]).await?;
-    let (mut pr, mut pw) = plugin_sock.split();
-    let (mut rr, mut rw) = remote.split();
-    let _ = tokio::try_join!(
-        tokio::io::copy(&mut pr, &mut rw),
-        tokio::io::copy(&mut rr, &mut pw),
-    );
+    let (pr, pw) = plugin_sock.split();
+    let (rr, rw) = remote.split();
+    splice_bidirectional(pr, pw, rr, rw, &req.host).await;
     Ok(())
+}
+
+/// Splice both directions of a proxied connection and log each direction's
+/// outcome under target `tau::proxy`.
+///
+/// Uses [`tokio::join!`] rather than `try_join!` so a failure in one direction
+/// does not discard the other direction's byte count — both data-path outcomes
+/// are always recorded. On success the transferred byte count is logged at
+/// debug; on error a `warn!` carries the destination `host` and the io error,
+/// so a mid-stream truncation (reset, upstream drop, partial transfer) is no
+/// longer silent (audit O3).
+#[cfg(unix)]
+async fn splice_bidirectional<CR, CW, RR, RW>(
+    mut client_r: CR,
+    mut client_w: CW,
+    mut remote_r: RR,
+    mut remote_w: RW,
+    host: &str,
+) where
+    CR: tokio::io::AsyncRead + Unpin,
+    CW: tokio::io::AsyncWrite + Unpin,
+    RR: tokio::io::AsyncRead + Unpin,
+    RW: tokio::io::AsyncWrite + Unpin,
+{
+    let (up, down) = tokio::join!(
+        tokio::io::copy(&mut client_r, &mut remote_w),
+        tokio::io::copy(&mut remote_r, &mut client_w),
+    );
+    match up {
+        Ok(bytes) => tracing::debug!(
+            target: "tau::proxy",
+            host = %host,
+            bytes,
+            direction = "client->remote",
+            "proxy splice direction complete"
+        ),
+        Err(e) => tracing::warn!(
+            target: "tau::proxy",
+            host = %host,
+            error = %e,
+            direction = "client->remote",
+            "proxy splice direction failed mid-stream"
+        ),
+    }
+    match down {
+        Ok(bytes) => tracing::debug!(
+            target: "tau::proxy",
+            host = %host,
+            bytes,
+            direction = "remote->client",
+            "proxy splice direction complete"
+        ),
+        Err(e) => tracing::warn!(
+            target: "tau::proxy",
+            host = %host,
+            error = %e,
+            direction = "remote->client",
+            "proxy splice direction failed mid-stream"
+        ),
+    }
 }
 
 /// True if `host` is an IP literal that is a loopback address
@@ -274,12 +346,9 @@ async fn handle_http(
     remote.write_all(rewritten.as_bytes()).await?;
     remote.write_all(&initial[req.line_end..]).await?;
     // Splice both directions for the rest of the conversation.
-    let (mut pr, mut pw) = plugin_sock.split();
-    let (mut rr, mut rw) = remote.split();
-    let _ = tokio::try_join!(
-        tokio::io::copy(&mut pr, &mut rw),
-        tokio::io::copy(&mut rr, &mut pw),
-    );
+    let (pr, pw) = plugin_sock.split();
+    let (rr, rw) = remote.split();
+    splice_bidirectional(pr, pw, rr, rw, &req.host).await;
     Ok(())
 }
 
@@ -287,6 +356,36 @@ async fn handle_http(
 #[cfg(test)]
 mod proxy_lifecycle_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn socket_lives_in_private_0700_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = spawn_proxy(vec!["example.com".to_string()]).expect("spawn");
+        let sock = h.sock_path().to_path_buf();
+        let dir = sock
+            .parent()
+            .expect("socket has a parent dir")
+            .to_path_buf();
+        // The socket must NOT sit directly in the shared temp dir — it must
+        // live in a dedicated per-run subdirectory whose perms gate access.
+        assert_ne!(
+            dir,
+            std::env::temp_dir(),
+            "socket must live in a private per-run dir, not shared temp"
+        );
+        // The per-run dir must be 0o700: no group/other access, so no other
+        // local user can traverse into it to reach the socket (audit S6).
+        let mode = std::fs::metadata(&dir)
+            .expect("dir metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "per-run dir must be 0o700, got {:o}",
+            mode & 0o777
+        );
+    }
 
     #[tokio::test]
     async fn proxy_handle_drop_unlinks_socket_file() {
@@ -401,6 +500,104 @@ mod proxy_lifecycle_tests {
         assert!(
             s.starts_with("HTTP/1.1 502"),
             "expected 502 not 400, got: {s}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+mod splice_logging_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Clone, Default, Debug)]
+    struct CapturedEvent {
+        target: String,
+        host: Option<String>,
+        bytes: Option<u64>,
+    }
+
+    #[derive(Default)]
+    struct CaptureVisitor {
+        ev: CapturedEvent,
+    }
+    impl Visit for CaptureVisitor {
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            if field.name() == "bytes" {
+                self.ev.bytes = Some(value);
+            }
+        }
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "host" {
+                self.ev.host = Some(format!("{value:?}").trim_matches('"').to_string());
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct CaptureLayer {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut v = CaptureVisitor::default();
+            v.ev.target = event.metadata().target().to_string();
+            event.record(&mut v);
+            self.events.lock().unwrap().push(v.ev);
+        }
+    }
+
+    // A clean plaintext-HTTP exchange through the proxy must emit a
+    // `tau::proxy` splice event carrying the destination `host` and a `bytes`
+    // count — proving the byte-splice result is no longer swallowed (audit O3).
+    #[tokio::test]
+    async fn splice_emits_event_with_host_and_bytes() {
+        let cap = CaptureLayer::default();
+        let events = cap.events.clone();
+        let subscriber = tracing_subscriber::registry()
+            .with(cap.with_filter(tracing_subscriber::filter::LevelFilter::DEBUG));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // Loopback upstream: read the forwarded request, reply, then close.
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream");
+        let port = upstream.local_addr().expect("addr").port();
+        let up = tokio::spawn(async move {
+            let (mut s, _) = upstream.accept().await.expect("accept");
+            let mut b = [0u8; 1024];
+            let _ = s.read(&mut b).await.expect("read req");
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+                .await
+                .expect("write resp");
+            // drop -> clean close -> EOF on the remote->client copy direction
+        });
+
+        let h = spawn_proxy(vec!["127.0.0.1".to_string()]).expect("spawn");
+        let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
+        let req =
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+        conn.write_all(req.as_bytes()).await.expect("write req");
+        // Half-close our write side so the client->remote copy reaches EOF and
+        // the splice can complete cleanly.
+        conn.shutdown().await.expect("shutdown write");
+        let mut resp = Vec::new();
+        let _ = conn.read_to_end(&mut resp).await;
+        up.await.expect("upstream task");
+
+        // Let the proxy's spawned connection task finish logging.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let evs = events.lock().unwrap();
+        let found = evs.iter().any(|e| {
+            e.target == "tau::proxy" && e.host.as_deref() == Some("127.0.0.1") && e.bytes.is_some()
+        });
+        assert!(
+            found,
+            "expected a tau::proxy splice event with host+bytes, got: {evs:?}"
         );
     }
 }

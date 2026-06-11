@@ -63,6 +63,36 @@ pub(crate) fn clone_strategy(rev: Option<&str>) -> CloneStrategy {
     }
 }
 
+/// Build the `git clone` [`Command`] (env + argv) without spawning it.
+///
+/// Extracted as a pure builder so the argument construction can be
+/// asserted in unit tests without a network or filesystem clone.
+///
+/// Dispatches on [`clone_strategy`]: a branch/tag name adds
+/// `--branch <name> --single-branch`; a commit SHA omits `--branch`
+/// (which rejects SHAs) and clones the full default-branch history so
+/// the caller can `git checkout --detach <sha>` afterwards (D4).
+fn build_clone_command(url: &str, rev: Option<&str>, dest: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    // Allow file:// protocol even when the system or CI git config sets
+    // protocol.file.allow = user (the post-git-2.38 default) or never.
+    // tau intentionally supports file://-based local sources (e.g. for
+    // test fixtures and air-gapped installs).
+    cmd.env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
+        .env("GIT_CONFIG_VALUE_0", "always");
+    cmd.arg("clone");
+    if let CloneStrategy::Branch(name) = clone_strategy(rev) {
+        cmd.arg("--branch").arg(&name).arg("--single-branch");
+    }
+    // `--` terminates option parsing so a `url`/`dest` beginning with `-`
+    // can never be interpreted as a git flag (e.g. `--upload-pack=...`).
+    // `PackageSource` URL-scheme validation already guards this upstream,
+    // but the wrapper is defensive in its own right (audit S7).
+    cmd.arg("--").arg(url).arg(dest);
+    cmd
+}
+
 /// Zero-sized handle for namespacing the git-binary subprocess wrapper.
 ///
 /// All methods are associated functions (no instance state).
@@ -100,11 +130,12 @@ impl Git {
 
     /// Clone `source` into `dest`.
     ///
-    /// Dispatches on [`clone_strategy`]:
-    /// - `rev = None` → `git clone <url> <dest>` (default branch).
+    /// Dispatches on [`clone_strategy`] (the `--` terminator before the
+    /// positional `<url> <dest>` is always present, audit S7):
+    /// - `rev = None` → `git clone -- <url> <dest>` (default branch).
     /// - branch / tag name → `git clone --branch <rev> --single-branch
-    ///   <url> <dest>`.
-    /// - commit SHA (40-hex / 64-hex) → `git clone <url> <dest>` then
+    ///   -- <url> <dest>`.
+    /// - commit SHA (40-hex / 64-hex) → `git clone -- <url> <dest>` then
     ///   `git checkout --detach <sha>` (D4): `--branch` rejects SHAs, so
     ///   pinning an install to an immutable commit needs a post-clone
     ///   checkout. A bad SHA surfaces as [`GitError::CheckoutFailed`].
@@ -124,26 +155,11 @@ impl Git {
             }
         };
 
-        let mut cmd = Command::new("git");
-        // Allow file:// protocol even when the system or CI git config sets
-        // protocol.file.allow = user (the post-git-2.38 default) or never.
-        // tau intentionally supports file://-based local sources (e.g. for
-        // test fixtures and air-gapped installs).
-        cmd.env("GIT_CONFIG_COUNT", "1")
-            .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
-            .env("GIT_CONFIG_VALUE_0", "always");
-        cmd.arg("clone");
-
+        // The argv (incl. the audit-S7 `--` terminator and the branch/tag
+        // vs SHA dispatch) is built by `build_clone_command`; `strategy`
+        // is recomputed here only to drive the post-clone checkout below.
         let strategy = clone_strategy(rev_opt.as_deref());
-        match &strategy {
-            // SHA pinning needs the full history reachable, so we clone
-            // plainly here and `git checkout <sha>` below.
-            CloneStrategy::Default | CloneStrategy::CommitSha(_) => {}
-            CloneStrategy::Branch(name) => {
-                cmd.arg("--branch").arg(name).arg("--single-branch");
-            }
-        }
-        cmd.arg(&url_string).arg(dest);
+        let mut cmd = build_clone_command(&url_string, rev_opt.as_deref(), dest);
 
         // Note: blocks until git exits; no timeout at v0.1 (sync API).
         let output = cmd.output().map_err(|e| {
@@ -389,5 +405,74 @@ mod tests {
         } else {
             format!("file:///{s}")
         }
+    }
+
+    fn clone_argv(url: &str, rev: Option<&str>, dest: &Path) -> Vec<String> {
+        build_clone_command(url, rev, dest)
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn clone_command_inserts_double_dash_before_url_and_dest() {
+        let url = "https://example.com/repo.git";
+        let dest = Path::new("/tmp/clone-dest");
+        let args = clone_argv(url, None, dest);
+
+        let dd = args
+            .iter()
+            .position(|a| a == "--")
+            .expect("`--` option terminator must be present");
+        let url_pos = args.iter().position(|a| a == url).expect("url in argv");
+        let dest_pos = args
+            .iter()
+            .position(|a| a == "/tmp/clone-dest")
+            .expect("dest in argv");
+
+        assert!(dd < url_pos, "`--` must precede the URL: {args:?}");
+        assert!(dd < dest_pos, "`--` must precede the dest: {args:?}");
+    }
+
+    #[test]
+    fn clone_command_with_rev_terminates_options_before_positionals() {
+        let url = "https://example.com/repo.git";
+        let dest = Path::new("/tmp/clone-dest");
+        let args = clone_argv(url, Some("v1.0"), dest);
+
+        let branch_pos = args
+            .iter()
+            .position(|a| a == "--branch")
+            .expect("--branch in argv");
+        let dd = args
+            .iter()
+            .position(|a| a == "--")
+            .expect("`--` terminator must be present");
+        let url_pos = args.iter().position(|a| a == url).expect("url in argv");
+
+        assert!(
+            branch_pos < dd,
+            "`--branch <rev>` is an option and must come before `--`: {args:?}"
+        );
+        assert!(dd < url_pos, "`--` must precede the URL: {args:?}");
+    }
+
+    #[test]
+    fn clone_command_with_sha_rev_omits_branch_flag() {
+        // D4 × S7: a SHA-shaped rev must NOT become `--branch <sha>` (git
+        // rejects it); `build_clone_command` clones plainly and the caller
+        // checks the SHA out afterwards. The `--` terminator stays.
+        let url = "https://example.com/repo.git";
+        let dest = Path::new("/tmp/clone-dest");
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let args = clone_argv(url, Some(sha), dest);
+        assert!(
+            !args.iter().any(|a| a == "--branch"),
+            "SHA rev must not produce a --branch flag: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--"),
+            "`--` terminator must still be present: {args:?}"
+        );
     }
 }
