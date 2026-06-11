@@ -18,6 +18,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 /// Shared dispatcher state. Cheap to clone (all `Arc`/clone-safe inner).
@@ -35,6 +36,9 @@ pub struct Dispatcher {
     pub max_concurrent: usize,
     /// Channel sender to the writer task.
     pub out_tx: mpsc::Sender<Outbound>,
+    /// Tripped (once, with a log) when an outbound send fails because the
+    /// writer task is gone. The dispatch loop selects on it to begin shutdown.
+    pub writer_gone: CancellationToken,
 }
 
 impl Dispatcher {
@@ -45,11 +49,10 @@ impl Dispatcher {
                 Inbound::Eof => break,
                 Inbound::ParseError(msg) => {
                     warn!(error = %msg, "parse error");
-                    // Per JSON-RPC 2.0, parse errors carry null id; we use
-                    // 0 since our RequestId enum doesn't model null and the
-                    // client side typically ignores the id on parse errors.
+                    // Per JSON-RPC 2.0, parse errors carry a null id (the
+                    // originating id can't be recovered from malformed input).
                     self.send_err(
-                        RequestId::Int(0),
+                        RequestId::Null,
                         error_codes::PARSE_ERROR,
                         "Parse error".into(),
                         None,
@@ -67,8 +70,10 @@ impl Dispatcher {
         let req: Request = match serde_json::from_value(value) {
             Ok(r) => r,
             Err(e) => {
+                // Invalid JSON-RPC object: the id is unknown, so per spec the
+                // error response carries a null id.
                 self.send_err(
-                    RequestId::Int(0),
+                    RequestId::Null,
                     error_codes::INVALID_REQUEST,
                     format!("invalid request: {}", e),
                     None,
@@ -212,21 +217,38 @@ impl Dispatcher {
         });
     }
 
+    /// Record that the writer task is gone: log and trip the shutdown token.
+    /// Idempotent — calls after the first are silent. The dispatcher and its
+    /// per-request `spawn_local` tasks share one current-thread executor and
+    /// this fn has no `.await`, so the `is_cancelled`→`cancel` window can't be
+    /// interleaved: a dead writer yields exactly one warning, not one per
+    /// dropped message.
+    fn note_writer_gone(&self) {
+        if !self.writer_gone.is_cancelled() {
+            warn!("writer task gone; outbound message dropped, beginning shutdown");
+            self.writer_gone.cancel();
+        }
+    }
+
     /// Send a successful JSON-RPC 2.0 response to the writer task.
     pub async fn send_ok(&self, id: RequestId, result: Value) {
-        let _ = self
+        if self
             .out_tx
             .send(Outbound::Response(Response {
                 jsonrpc: "2.0".into(),
                 id,
                 result,
             }))
-            .await;
+            .await
+            .is_err()
+        {
+            self.note_writer_gone();
+        }
     }
 
     /// Send an error JSON-RPC 2.0 response to the writer task.
     pub async fn send_err(&self, id: RequestId, code: i32, message: String, data: Option<Value>) {
-        let _ = self
+        if self
             .out_tx
             .send(Outbound::Error(ErrorResponse {
                 jsonrpc: "2.0".into(),
@@ -237,18 +259,26 @@ impl Dispatcher {
                     data,
                 },
             }))
-            .await;
+            .await
+            .is_err()
+        {
+            self.note_writer_gone();
+        }
     }
 
     /// Send a server-initiated JSON-RPC 2.0 notification to the writer task.
     pub async fn send_notification(&self, method: &str, params: Value) {
-        let _ = self
+        if self
             .out_tx
             .send(Outbound::Notification(Notification {
                 jsonrpc: "2.0".into(),
                 method: method.into(),
                 params: Some(params),
             }))
-            .await;
+            .await
+            .is_err()
+        {
+            self.note_writer_gone();
+        }
     }
 }

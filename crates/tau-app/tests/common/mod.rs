@@ -14,12 +14,16 @@ use tau_app::serve::{CancelRegistry, Dispatcher, HandshakeState, Inbound, Outbou
 use tau_ports::fixtures::MockLlmBackend;
 use tokio::sync::mpsc;
 use tokio::task::LocalSet;
+use tokio_util::sync::CancellationToken;
 
 pub struct Harness {
     pub in_tx: mpsc::Sender<Inbound>,
     pub out_rx: mpsc::Receiver<Outbound>,
     /// Exposed so tests can pre-register in-flight tokens (e.g. concurrency tests).
     pub cancel_reg: CancelRegistry,
+    /// Shutdown token tripped when an outbound send fails (audit O4). Exposed
+    /// so tests can await it after simulating a dead writer via [`Harness::kill_writer`].
+    pub writer_gone: CancellationToken,
     /// Keeps the dispatcher thread alive until Harness is dropped.
     /// Public so shutdown tests can `.join()` on it after sending Eof.
     pub dispatcher_thread: std::thread::JoinHandle<()>,
@@ -63,6 +67,7 @@ impl Harness {
         // Shared cancel_reg: exposed on Harness so tests can pre-register
         // in-flight tokens to simulate a saturated concurrency cap.
         let cancel_reg = CancelRegistry::default();
+        let writer_gone = CancellationToken::new();
 
         let dispatcher = Dispatcher {
             project,
@@ -71,6 +76,7 @@ impl Harness {
             cancel_reg: cancel_reg.clone(),
             max_concurrent,
             out_tx,
+            writer_gone: writer_gone.clone(),
         };
 
         // `LocalSet` is !Send, so it cannot be spawned with tokio::spawn.
@@ -92,8 +98,18 @@ impl Harness {
             in_tx,
             out_rx,
             cancel_reg,
+            writer_gone,
             dispatcher_thread: thread,
         }
+    }
+
+    /// Simulate the writer task dying: drop the out-channel receiver so the
+    /// dispatcher's next outbound send fails (and trips `writer_gone`).
+    pub fn kill_writer(&mut self) {
+        let (tx, rx) = mpsc::channel::<Outbound>(1);
+        drop(tx);
+        let original = std::mem::replace(&mut self.out_rx, rx);
+        drop(original);
     }
 
     /// Perform a successful handshake. Must be called before any runtime.*

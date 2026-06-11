@@ -9,6 +9,7 @@ use super::dispatch::Dispatcher;
 use super::error_codes;
 use super::error_map::from_runtime_error;
 use super::methods;
+use super::project::ResolveError;
 use super::protocol::{Request, RequestId};
 use super::wire;
 use futures::StreamExt;
@@ -59,36 +60,35 @@ pub async fn execute(disp: Dispatcher, req: Request, streaming: bool) {
         }
     };
 
-    // 2. Pre-check unknown agent (typed path; avoids brittle string matching).
-    if !disp.project.config.agents.contains_key(&agent_id) {
-        disp.send_err(
-            req.id,
-            error_codes::UNKNOWN_AGENT,
-            format!("agent_id not found: {}", agent_id),
-            Some(json!({"agent_id": agent_id})),
-        )
-        .await;
-        return;
-    }
-
-    // 3. Resolve the agent (manifest + AgentDefinition).
+    // 2. Resolve the agent. Unknown agents and package/manifest failures both
+    // surface here through one typed path (no string-prefix matching).
     let (agent_def, manifest) = match disp.project.resolve(&agent_id) {
         Ok(pair) => pair,
+        Err(ResolveError::AgentNotFound { agent_id, .. }) => {
+            disp.send_err(
+                req.id,
+                error_codes::UNKNOWN_AGENT,
+                format!("agent_id not found: {}", agent_id),
+                Some(json!({ "agent_id": agent_id })),
+            )
+            .await;
+            return;
+        }
         Err(e) => {
-            // Resolve can fail for reasons OTHER than unknown-agent
-            // (manifest invalid, package not installed at the requested version, etc.).
+            // Manifest invalid, package not installed at the requested
+            // version, etc. — anything that isn't an unknown agent id.
             disp.send_err(
                 req.id,
                 error_codes::RUNTIME_ERROR,
                 format!("agent resolution failed: {}", e),
-                Some(json!({"agent_id": agent_id})),
+                Some(json!({ "agent_id": agent_id })),
             )
             .await;
             return;
         }
     };
 
-    // 4. Build initial Message. tau_domain::Message has no Message::user()
+    // 3. Build initial Message. tau_domain::Message has no Message::user()
     // constructor outside tau-domain (non_exhaustive + struct-literal blocked).
     // Use Message::new with Address::User sender/recipient and a Text payload.
     // The runtime overwrites the recipient address internally.

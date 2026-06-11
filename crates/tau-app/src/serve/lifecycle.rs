@@ -39,6 +39,9 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
     set_pdeathsig();
 
     let cancel_reg = CancelRegistry::default();
+    // Tripped when an outbound send fails (writer task gone). The dispatch
+    // loop selects on it to begin graceful shutdown (audit O4).
+    let writer_gone = tokio_util::sync::CancellationToken::new();
     let dispatcher = Dispatcher {
         project: project.clone(),
         runtime: Arc::new(runtime),
@@ -46,6 +49,7 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
         cancel_reg: cancel_reg.clone(),
         max_concurrent: opts.max_concurrent,
         out_tx: out_tx.clone(),
+        writer_gone: writer_gone.clone(),
     };
 
     let local_set = LocalSet::new();
@@ -68,6 +72,7 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
     // spawn_local (used inside Dispatcher::spawn_run) works within any
     // active LocalSet on the current thread — no &LocalSet borrow needed.
     let idle_timeout = opts.idle_timeout;
+    let writer_gone_signal = writer_gone.clone();
     let dispatch_result = local_set
         .run_until(async move {
             let shutdown_signal = wait_for_shutdown_signal();
@@ -84,6 +89,10 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
                 _ = shutdown_signal => Ok(()),
                 _ = idle => {
                     info!(timeout = ?idle_timeout, "idle timeout reached, shutting down");
+                    Ok(())
+                }
+                _ = writer_gone_signal.cancelled() => {
+                    warn!("writer task gone; shutting down dispatcher");
                     Ok(())
                 }
             }

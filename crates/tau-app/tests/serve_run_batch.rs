@@ -39,6 +39,23 @@ async fn run_unknown_agent_returns_32010() {
     );
 }
 
+/// A request missing the required `id` field fails to parse as a Request
+/// and returns -32600 INVALID_REQUEST with the spec-correct null id — not a
+/// fabricated id 0 that would collide with a legitimate id-0 request.
+#[tokio::test]
+async fn invalid_request_carries_null_id() {
+    let mut h = Harness::new(fixture_dir()).await;
+    // No `id` field → not a valid Request.
+    h.send_raw(r#"{"jsonrpc":"2.0","method":"meta.ping"}"#)
+        .await;
+    let resp = h.recv().await.expect("no response");
+    assert_eq!(
+        resp["error"]["code"], -32600,
+        "expected INVALID_REQUEST, got: {resp}"
+    );
+    assert!(resp["id"].is_null(), "expected null id, got: {resp}");
+}
+
 /// `runtime.run` with a missing `prompt` param returns -32602 INVALID_PARAMS.
 #[tokio::test]
 async fn run_missing_prompt_returns_32602() {

@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// JSON-RPC 2.0 request id. Per spec, may be integer, string, or null.
-/// We accept integer or string; null is treated as a notification
-/// (handled separately).
+/// Requests normally carry an integer or string id. The `Null` variant is
+/// used for the spec-mandated null id on parse / invalid-request error
+/// responses, where the originating id cannot be recovered from the input.
 ///
 /// ```
 /// use tau_app::serve::RequestId;
@@ -21,11 +22,14 @@ use serde_json::Value;
 /// map.insert(int_id.clone(), "request-42");
 /// assert_eq!(map[&RequestId::Int(42)], "request-42");
 ///
-/// // Serde round-trip (untagged: integer → JSON number, string → JSON string).
+/// // Serde round-trip (untagged: integer → JSON number, string → JSON
+/// // string, null → JSON null).
 /// let json_int = serde_json::to_string(&int_id).expect("serialize int id");
 /// assert_eq!(json_int, "42");
 /// let json_str = serde_json::to_string(&str_id).expect("serialize str id");
 /// assert_eq!(json_str, "\"uuid-abc\"");
+/// let json_null = serde_json::to_string(&RequestId::Null).expect("serialize null id");
+/// assert_eq!(json_null, "null");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -34,6 +38,12 @@ pub enum RequestId {
     Int(i64),
     /// String id (UUIDs, etc.).
     Str(String),
+    /// Null id. Outbound: parse / invalid-request error responses use this
+    /// because the originating id is unknown. Inbound: a request that sets
+    /// `"id": null` explicitly now deserializes to this variant and is handled
+    /// as a normal (non-notification) request — JSON-RPC 2.0 permits a null id
+    /// on a request, and the response echoes it back as null.
+    Null,
 }
 
 /// JSON-RPC 2.0 request.
@@ -158,6 +168,26 @@ mod tests {
         let s = serde_json::to_string(&out).unwrap();
         assert!(s.contains("\"code\":-32007"));
         assert!(s.contains("\"kind\":\"CapabilityDenial\""));
+    }
+
+    #[test]
+    fn null_id_round_trips_to_json_null() {
+        let out = Outbound::Error(ErrorResponse {
+            jsonrpc: "2.0".into(),
+            id: RequestId::Null,
+            error: ErrorObject {
+                code: -32700,
+                message: "Parse error".into(),
+                data: None,
+            },
+        });
+        let s = serde_json::to_string(&out).unwrap();
+        assert!(s.contains(r#""id":null"#), "got: {s}");
+        // null id is distinct from int id 0.
+        assert_eq!(serde_json::to_string(&RequestId::Int(0)).unwrap(), "0");
+        assert_eq!(serde_json::to_string(&RequestId::Null).unwrap(), "null");
+        let parsed: RequestId = serde_json::from_str("null").unwrap();
+        assert_eq!(parsed, RequestId::Null);
     }
 
     #[test]
