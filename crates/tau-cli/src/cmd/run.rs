@@ -568,10 +568,22 @@ async fn run_streaming_path(
 /// `lower_ir` returning `None` (the source no longer lowers) flows through
 /// as `recomputed_ir_hash: None`, which verify_bundle turns into a
 /// fail-closed `IrSourceUnverifiable` for a v2 bundle.
+///
+/// MCP caveat (fail-closed): re-lowering here uses an **empty** MCP
+/// contract cache, whereas `tau build` resolves MCP contracts (live or
+/// pinned) and embeds the expanded server-tool nodes. A v2 bundle built
+/// from a project that uses MCP tools therefore re-lowers to a *different*
+/// hash and is conservatively rejected with `IrSourceDivergence` — it
+/// cannot currently be run via `--bundle`. This is the same limitation
+/// `tau verify --bundle` has (see `cmd::verify::run_reproducibility_check`)
+/// and is safe (fail-closed, never fail-open). Wiring the pinned MCP cache
+/// (`build::resolve_mcp_cache(cwd, /*offline=*/true)`) into this re-lowering
+/// so honest MCP bundles verify is a tracked follow-up.
 fn verify_bundle_against_source(
     cwd: &std::path::Path,
     bundle_path: &std::path::Path,
 ) -> Result<tau_pkg::bundle::VerifyReport, tau_pkg::bundle::VerifyError> {
+    // Empty MCP cache — see the "MCP caveat" in this fn's doc-comment.
     let empty_mcp_cache = std::collections::BTreeMap::new();
     let recomputed_ir_hash = crate::cmd::build::lower_ir(
         cwd,

@@ -183,12 +183,18 @@ existing `verify --bundle` reproduce path (`verify.rs:385`) and the
 `verify_reproducible` callers are unaffected — they construct their own options
 type.
 
-Note: `lower_ir` uses an empty MCP cache here, matching the existing
-`run_reproducibility_check` precedent. For MCP projects the per-server contract
-hashes are pinned on disk and resolved through the lockfile during MCP setup; an
-empty cache during re-lowering is the same trade `verify --bundle` already makes.
-If a future MCP project's IR cannot be reproduced offline, the fail-closed
-`IrSourceUnverifiable` path correctly refuses rather than silently trusting.
+Note (MCP limitation, fail-closed): `lower_ir` uses an empty MCP cache here,
+matching the existing `run_reproducibility_check` precedent. `tau build`, by
+contrast, resolves MCP contracts (live or pinned) and embeds the expanded
+server-tool nodes, so a v2 bundle built from a project that uses MCP tools
+re-lowers to a *different* hash and is conservatively rejected with
+`IrSourceDivergence` — it cannot currently be run via `--bundle`. (This is
+*not* the `IrSourceUnverifiable` path, which only fires when `lower_ir` returns
+`None`; an MCP project still lowers to `Some`, just with a divergent hash.)
+This is safe — fail-closed, never fail-open, and the same limitation
+`verify --bundle` already has. Wiring the pinned MCP cache
+(`build::resolve_mcp_cache(cwd, offline = true)`) into this re-lowering so
+honest MCP bundles verify is a tracked follow-up, listed alongside S2.
 
 ### Integrity-vs-authenticity language (S3, second half)
 
