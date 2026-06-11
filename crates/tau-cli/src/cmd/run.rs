@@ -749,7 +749,10 @@ capabilities = {caps}
     /// `ir_payload` comes from a *different* source tree, the bundle's
     /// recorded tau.toml hash still matches `src_root` (so verify steps
     /// 6/8 pass) while its IR diverges — exactly the S3 attack shape.
-    fn build_bundle(src_root: &std::path::Path, ir_payload: Option<IrPayload>) -> std::path::PathBuf {
+    fn build_bundle(
+        src_root: &std::path::Path,
+        ir_payload: Option<IrPayload>,
+    ) -> std::path::PathBuf {
         build(BuildOptions {
             project_root: src_root.to_path_buf(),
             target: TargetTriple::host(),
@@ -776,7 +779,10 @@ capabilities = {caps}
 
         let err = verify_bundle_against_source(a.path(), &bundle).unwrap_err();
         match err {
-            VerifyError::IrSourceDivergence { bundle_hash, source_hash } => {
+            VerifyError::IrSourceDivergence {
+                bundle_hash,
+                source_hash,
+            } => {
                 assert_eq!(bundle_hash, ir_b.canonical_ir_hash, "bundle carries B's IR");
                 assert_ne!(source_hash, bundle_hash, "A's re-lowered hash must differ");
             }

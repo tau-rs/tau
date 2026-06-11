@@ -699,7 +699,10 @@ system_file = "prompt.md"
         let (m, _genuine) = manifest_with_ir(tmp.path());
         let err = verify_ir_matches_source(&m, Some("deadbeefdivergent")).unwrap_err();
         match err {
-            VerifyError::IrSourceDivergence { bundle_hash, source_hash } => {
+            VerifyError::IrSourceDivergence {
+                bundle_hash,
+                source_hash,
+            } => {
                 assert_eq!(source_hash, "deadbeefdivergent");
                 assert_eq!(bundle_hash, m.ir_payload.unwrap().canonical_ir_hash);
             }
@@ -719,7 +722,10 @@ system_file = "prompt.md"
         let tmp = tempdir().unwrap();
         let (m, _genuine) = manifest_with_ir(tmp.path());
         let err = verify_ir_matches_source(&m, None).unwrap_err();
-        assert!(matches!(err, VerifyError::IrSourceUnverifiable), "got {err:?}");
+        assert!(
+            matches!(err, VerifyError::IrSourceUnverifiable),
+            "got {err:?}"
+        );
     }
 
     #[test]
