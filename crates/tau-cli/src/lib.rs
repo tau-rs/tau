@@ -95,7 +95,14 @@ pub async fn run_main() -> std::process::ExitCode {
             // emitted a structured failure to the user. All other
             // errors are kernel/CLI failures; they get the prefix and
             // map to `ExitCode::Error`.
-            if err.downcast_ref::<crate::cmd::run::AgentFailed>().is_some() {
+            if let Some(bvf) = err.downcast_ref::<crate::cmd::run::BundleVerifyFailed>() {
+                // D9: `tau run --bundle` verification failure. The message
+                // is already structured by `render_verify_error`; print it
+                // as-is (no generic "error:" prefix) and use the mapped
+                // §C.3 exit code instead of the catch-all ExitCode::Error.
+                eprint!("{}", bvf.rendered);
+                std::process::ExitCode::from(bvf.code as u8)
+            } else if err.downcast_ref::<crate::cmd::run::AgentFailed>().is_some() {
                 ExitCode::AgentFailed.into()
             } else {
                 if debug {

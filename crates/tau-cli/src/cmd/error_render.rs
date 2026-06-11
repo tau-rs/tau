@@ -286,6 +286,21 @@ pub fn render_install_error(err: &InstallError) -> String {
     }
 }
 
+/// Render a [`tau_pkg::bundle::VerifyError`] as a guided, structured
+/// error message — the shared path `tau run --bundle` uses instead of a
+/// bare `eprintln!("error: {e}")` (D9).
+///
+/// The `VerifyError` Display strings already carry remediation hints, so
+/// the renderer frames them with the standard "✗" marker used by the
+/// other `render_*` helpers and lets `run_main` map the exit code.
+pub fn render_verify_error(err: &tau_pkg::bundle::VerifyError) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "✗ bundle verification failed");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "  {err}");
+    out
+}
+
 /// Render an `ImportError` as a guided, human-readable error message.
 ///
 /// Covers Skills-5 `tau skill import` error variants. Each variant
@@ -441,6 +456,22 @@ mod tests {
         let rendered = render_resolution_error(&err);
         assert!(rendered.contains("unknown adapter kind: weird"));
         assert!(rendered.contains("configuration error"));
+    }
+
+    #[test]
+    fn verify_error_renders_structured_block() {
+        use tau_pkg::bundle::VerifyError;
+        let err = VerifyError::SelfHashMismatch {
+            claimed: "aaaa".into(),
+            computed: "bbbb".into(),
+        };
+        let rendered = render_verify_error(&err);
+        assert!(
+            rendered.contains("bundle verification failed"),
+            "got: {rendered}"
+        );
+        // The guided Display detail is preserved in the structured output.
+        assert!(rendered.contains("self-hash mismatch"), "got: {rendered}");
     }
 
     #[test]

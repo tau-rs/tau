@@ -44,6 +44,30 @@ use crate::output::Output;
 #[error("agent failed (exit code 1)")]
 pub(crate) struct AgentFailed;
 
+/// Marker error: `tau run --bundle` verification failed.
+///
+/// Carries the structured-renderer output and the spec §C.3 exit code so
+/// `run_main` can print the guided message (no generic "error:" prefix)
+/// and exit with the mapped code — instead of the command body calling
+/// `process::exit` and bypassing the shared error path (D9).
+#[derive(Debug, thiserror::Error)]
+#[error("bundle verification failed")]
+pub(crate) struct BundleVerifyFailed {
+    /// Process exit code per spec §C.3 (2 / 3 / 70).
+    pub(crate) code: i32,
+    /// Pre-rendered guided message (already through `render_verify_error`).
+    pub(crate) rendered: String,
+}
+
+/// Build a [`BundleVerifyFailed`] from a `VerifyError`: structured
+/// renderer output paired with the §C.3 exit-code mapping.
+pub(crate) fn bundle_verify_failure(e: &tau_pkg::bundle::VerifyError) -> BundleVerifyFailed {
+    BundleVerifyFailed {
+        code: bundle_verify_exit_code(e),
+        rendered: crate::cmd::error_render::render_verify_error(e),
+    }
+}
+
 /// Run `tau run`.
 ///
 /// `record_protocol` is the optional `--record-protocol <path>` global
@@ -78,8 +102,9 @@ pub async fn run(
     if let Some(bundle_path) = &args.bundle {
         match verify_bundle_against_source(&cwd, bundle_path) {
             Err(e) => {
-                eprintln!("error: {e}");
-                std::process::exit(bundle_verify_exit_code(&e));
+                // D9: route through the shared renderer + exit.rs mapping
+                // in run_main rather than printing + process::exit here.
+                return Err(bundle_verify_failure(&e).into());
             }
             Ok(report) => {
                 if let Some(ir) = report.manifest.ir_payload.as_ref() {
@@ -173,20 +198,10 @@ pub async fn run(
     // surface as `RuntimeError`s mapped to ExitCode::Error.
 
     // run_id: per-invocation identifier so plugin-side traces can group
-    // events back to this run. Plain UUID — no need to coordinate with
-    // the kernel's own internal id (the kernel mints its own
-    // AgentInstanceId for the loop; the plugin's run_id is host-side).
-    //
-    // We intentionally avoid a uuid dep here and use a timestamp-based
-    // string: the only contract is uniqueness within a host process,
-    // and humantime-style strings are easier to read in logs.
-    let run_id = format!(
-        "tau-run-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
+    // events back to this run. No need to coordinate with the kernel's
+    // own internal id (the kernel mints its own AgentInstanceId for the
+    // loop; the plugin's run_id is host-side).
+    let run_id = mint_run_id();
     let trace_context = TraceContext::new(run_id, args.agent_id.clone(), "root".to_string());
     let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
@@ -624,6 +639,18 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
     }
 }
 
+/// Mint a per-invocation run id.
+///
+/// A ULID (Crockford base32, 26 chars) — lexicographically sortable and
+/// collision-resistant. Matches `run_main`'s workflow-run-id minting
+/// (`ulid::Ulid::new()`) and replaces the old bespoke `tau-run-<nanos>`
+/// string, which could collide under fast successive runs or a backward
+/// clock adjustment (D8). The only contract is uniqueness within a host
+/// process; the kernel still mints its own `AgentInstanceId`.
+pub(super) fn mint_run_id() -> String {
+    ulid::Ulid::new().to_string()
+}
+
 /// Project a [`MessagePayload`] to a single text string for display.
 /// Non-text payloads degrade to a `Debug`-formatted preview.
 pub(super) fn format_message_text(payload: &MessagePayload) -> String {
@@ -698,6 +725,45 @@ mod tests {
         let payload = MessagePayload::ToolResult { body: Value::Null };
         let s = format_message_text(&payload);
         assert!(s.contains("ToolResult"), "got: {s}");
+    }
+
+    #[test]
+    fn bundle_verify_failure_carries_renderer_output_and_mapped_code() {
+        use tau_pkg::bundle::VerifyError;
+        // integrity/install-state → 3
+        let drift = VerifyError::SelfHashMismatch {
+            claimed: "a".into(),
+            computed: "b".into(),
+        };
+        let f = super::bundle_verify_failure(&drift);
+        assert_eq!(f.code, 3);
+        assert!(
+            f.rendered.contains("bundle verification failed"),
+            "got: {}",
+            f.rendered
+        );
+        // bad-input/parse → 2
+        let parse = VerifyError::UnsupportedSchemaVersion {
+            found: 99,
+            supported: 2,
+        };
+        assert_eq!(super::bundle_verify_failure(&parse).code, 2);
+    }
+
+    #[test]
+    fn mint_run_id_is_a_unique_ulid_across_fast_successive_calls() {
+        let a = super::mint_run_id();
+        let b = super::mint_run_id();
+        // 26-char Crockford base32 ULID.
+        assert_eq!(a.len(), 26, "ulid is 26 chars, got {a:?}");
+        assert!(
+            a.chars().all(|c| c.is_ascii_alphanumeric()),
+            "ulid is alphanumeric, got {a:?}"
+        );
+        // Unique even back-to-back (the old tau-run-<nanos> scheme could
+        // collide under same-nanosecond calls / clock adjustment).
+        assert_ne!(a, b, "two run-ids minted back-to-back must differ");
+        assert!(ulid::Ulid::from_string(&a).is_ok(), "must parse as ULID");
     }
 
     #[test]

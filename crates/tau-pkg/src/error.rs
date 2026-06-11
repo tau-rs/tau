@@ -106,6 +106,14 @@ pub enum GitError {
         /// Captured stderr (lossy UTF-8).
         stderr: String,
     },
+    /// `git checkout --detach <sha>` exited non-zero (D4 SHA-pinning).
+    #[error("git checkout failed: exit {exit_code}: {stderr}")]
+    CheckoutFailed {
+        /// Exit code from `git checkout` (`-1` if terminated by signal).
+        exit_code: i32,
+        /// Captured stderr (lossy UTF-8).
+        stderr: String,
+    },
     /// A non-clone git command failed.
     #[error("git command failed: {what}: {stderr}")]
     CommandFailed {
