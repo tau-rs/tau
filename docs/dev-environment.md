@@ -184,6 +184,19 @@ After this PR ships:
 3. The cfg(unix) / cfg(target_os) class of bug is caught at commit time, not CI time.
 4. Privilege drift is caught at commit/push time, not silently masked by CI's previous `--privileged`.
 
+## CI secrets
+
+| Secret | Used by | Scope | Purpose |
+|---|---|---|---|
+| `REPO_FILE_SYNC_TOKEN` | `.github/workflows/sync-template.yml` | classic PAT with `repo` + `workflow`, or fine-grained with Contents:write + Pull requests:write + Workflows on the three sibling repos | Lets the CI-template sync open PRs into `cairn` / `cairn-ui` / `tau-ui`. Read with `GITHUB_TOKEN` only — cross-repo writes need this PAT. |
+
+The sync workflow declares the canonical template surface in `.github/sync.yml`
+(see `audit/devops.md` §3, the anti-drift "B+C" model). Until
+`REPO_FILE_SYNC_TOKEN` is configured the workflow fails loudly at the sync step
+(never silently). Before granting write, run the workflow manually
+(`workflow_dispatch`) with `dry_run=true` (the default) to log the file→repo
+plan, or run `python3 scripts/verify-sync-config.py` locally for the same plan.
+
 ## Out of scope (follow-up PRs)
 
 - **Windows VM (UTM + Windows 11 ARM)** — largest setup; tracked as PR2 candidate.

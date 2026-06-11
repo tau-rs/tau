@@ -1,0 +1,76 @@
+# Sync the canonical CI template (.github/sync.yml) into the sibling repos.
+#
+# Operationalizes "tau = source of truth" (audit/devops.md §3, Diagram 1): on
+# any change to the template surface, BetaHuhn/repo-file-sync-action opens a PR
+# in each target repo. Drift = a visible open PR, reviewed and merged by the
+# target repo's owner.
+#
+# This is NOT a runtime workflow_call to a central workflow — the action copies
+# file bytes into each target's own tree, so every sibling's ci.yml stays fully
+# self-contained (model constraint B). No moving-tag SPOF.
+#
+# REQUIRED SECRET: REPO_FILE_SYNC_TOKEN — a PAT (classic: `repo` + `workflow`
+# scopes; or fine-grained with Contents:write + Pull requests:write + Workflows
+# on the three target repos). Until it is configured, the action step fails
+# loudly (visible), never silently. Run the workflow manually with dry_run=true
+# (the default) first to verify the file->repo mapping before granting write.
+name: sync-template
+
+on:
+  push:
+    branches: [main]
+    # Only run when the canonical template surface actually changes.
+    paths:
+      - .github/workflows/**
+      - .github/actions/**
+      - deny.toml
+      - lefthook.yml
+      - .github/sync.yml
+      # - justfile   # uncomment together with the sync.yml entry (brief 70)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Resolve and log the sync plan without opening PRs"
+        type: boolean
+        default: true
+
+# Never let two syncs race; cancel the older queued run.
+concurrency:
+  group: sync-template
+  cancel-in-progress: true
+
+permissions:
+  contents: read  # cross-repo writes use REPO_FILE_SYNC_TOKEN, not GITHUB_TOKEN
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - name: Verify sync config (recursion guard + source existence)
+        # Fail fast BEFORE the action runs: assert every declared source exists
+        # and that sync-template.yml is excluded (so a sibling never becomes a
+        # second sync source). Keeps the recursion guard live on every change.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/verify-sync-config.py
+      - name: Sync template to sibling repos
+        uses: BetaHuhn/repo-file-sync-action@8b92be3375cf1d1b0cd579af488a9255572e4619  # v1.21.1
+        with:
+          GH_PAT: ${{ secrets.REPO_FILE_SYNC_TOKEN }}
+          CONFIG_PATH: .github/sync.yml
+          # push events run a real sync; manual runs honour the dry_run toggle.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          PR_LABELS: |
+            sync
+            ci-template
+          COMMIT_PREFIX: "ci(sync):"
+          PR_BODY: |
+            Automated CI template sync from
+            [`tau-rs/tau`](https://github.com/tau-rs/tau) (`.github/sync.yml`).
+
+            This PR mirrors the canonical `.github/workflows/*` + `.github/actions/*`
+            surface so this repo stays converged with the source. Review and merge
+            (or close) — this repo owns the final decision. Drift is intentionally
+            surfaced as a PR, never force-pushed.
