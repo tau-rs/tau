@@ -4,6 +4,7 @@ use super::cancel::CancelRegistry;
 use super::dispatch::Dispatcher;
 use super::framing;
 use super::handshake::HandshakeState;
+use super::idle::{self, Activity};
 use super::options::ServeOptions;
 use super::project::Project;
 use anyhow::{Context, Result};
@@ -17,6 +18,10 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
     super::tracing_init::install();
 
     info!(project = %opts.project_path.display(), "serve starting");
+    // Echo the resolved configuration so an operator can confirm from the
+    // logs that their flags (`--idle-timeout`, `--max-concurrent`, …) took
+    // effect (audit O1).
+    info!(?opts, "serve config");
 
     let project = Arc::new(
         Project::load(&opts.project_path)
@@ -45,9 +50,14 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
 
     let local_set = LocalSet::new();
 
+    // Shared idle clock — touched by the reader on every inbound line and by
+    // the writer on every outbound message, so an in-flight run that keeps
+    // streaming holds the timer open.
+    let activity = Activity::new();
+
     // Reader and writer tasks are Send-friendly — spawn on multi-thread side.
-    let reader_handle = tokio::spawn(framing::reader_task(in_tx));
-    let writer_handle = tokio::spawn(framing::writer_task(out_rx));
+    let reader_handle = tokio::spawn(framing::reader_task(in_tx, activity.clone()));
+    let writer_handle = tokio::spawn(framing::writer_task(out_rx, activity.clone()));
 
     if opts.ready_on_stderr {
         eprintln!("tau-serve ready");
@@ -57,12 +67,25 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
     // current_thread executor available for non-Send streams.
     // spawn_local (used inside Dispatcher::spawn_run) works within any
     // active LocalSet on the current thread — no &LocalSet borrow needed.
+    let idle_timeout = opts.idle_timeout;
     let dispatch_result = local_set
         .run_until(async move {
             let shutdown_signal = wait_for_shutdown_signal();
+            // When no `--idle-timeout` is set, this future never resolves and
+            // the select arm is effectively disabled.
+            let idle = async {
+                match idle_timeout {
+                    Some(d) => idle::wait_for_idle(activity, d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             tokio::select! {
                 r = dispatcher.run(in_rx) => r,
                 _ = shutdown_signal => Ok(()),
+                _ = idle => {
+                    info!(timeout = ?idle_timeout, "idle timeout reached, shutting down");
+                    Ok(())
+                }
             }
         })
         .await;
