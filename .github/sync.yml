@@ -1,0 +1,55 @@
+# Cross-repo CI template sync — SOURCE config (tau = canonical source).
+#
+# Consumed by .github/workflows/sync-template.yml via
+# BetaHuhn/repo-file-sync-action. On push to `main` (or manual dispatch) the
+# action opens a PR in each target repo carrying the files below. Drift in the
+# canonical CI surface therefore shows up as a VISIBLE open PR, never silent rot.
+#
+# Anti-drift model "B+C" (audit/devops.md §3):
+#   B — each repo keeps its FULL self-contained ci.yml. This action copies file
+#       BYTES into the target's own tree; there is NO runtime workflow_call to a
+#       central moving-tag workflow (explicitly REJECTED for blast radius).
+#   C — thin SHA-pinned composite actions (.github/actions/*) are synced too, so
+#       the stable atomic layer stays byte-identical across all four repos.
+#
+# The target repo OWNS the merge decision on each sync PR — this is a proposal,
+# not a force-push (SKIP_PR is not set; OVERWRITE_EXISTING_PR keeps one PR fresh).
+
+group:
+  # The three sibling repos that converge to tau's canonical CI template.
+  repos: |
+    tau-rs/cairn
+    tau-rs/cairn-ui
+    tau-rs/tau-ui
+
+  files:
+    # Full workflows directory = the canonical CI template surface. The brief
+    # mandates the glob `.github/workflows/*` (not a named heavy file): the
+    # heavy/release `v*` anchor lives in release.yml + tier2.yml, and the fast
+    # gate in ci.yml + ci-summary.yml. deleteOrphaned is left at its default
+    # (false) so a sibling's repo-specific workflows are never deleted — sync is
+    # additive; convergence is reviewed per-PR by the target owner.
+    - source: .github/workflows/
+      dest: .github/workflows/
+      exclude: |
+        # The sync mechanism itself must NOT propagate — a sibling carrying
+        # sync-template.yml would become a second sync source (recursion / a
+        # second writer to the same three targets). Source-only by design.
+        sync-template.yml
+
+    # Thin composite actions (model layer C) — setup-rust + place-fixture-binaries.
+    - source: .github/actions/
+      dest: .github/actions/
+
+    # cargo-deny policy — shared supply-chain / license gate.
+    - source: deny.toml
+      dest: deny.toml
+
+    # Local git-hook definitions — keeps the lightweight pre-commit gate identical.
+    - source: lefthook.yml
+      dest: lefthook.yml
+
+    # The universal `just` verb wrapper (brief 70). Uncomment once the justfile
+    # lands in tau so local == CI verbs stay byte-identical across all four repos.
+    # - source: justfile
+    #   dest: justfile
