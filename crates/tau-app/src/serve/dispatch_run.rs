@@ -10,6 +10,7 @@ use super::error_codes;
 use super::error_map::from_runtime_error;
 use super::methods;
 use super::protocol::{Request, RequestId};
+use super::wire;
 use futures::StreamExt;
 use serde_json::{json, Value};
 use tau_domain::{Address, Message, MessagePayload};
@@ -148,9 +149,7 @@ async fn execute_batch(
     select! {
         outcome = fut => {
             let outcome = outcome?;
-            // RunOutcome does not implement Serialize in tau-app's dep graph
-            // (serde feature not enabled). Manually construct the JSON body.
-            let body = outcome_to_json(outcome);
+            let body = wire::outcome_to_json(&outcome);
             disp.send_ok(id, body).await;
             Ok(())
         }
@@ -164,55 +163,6 @@ async fn execute_batch(
             Ok(())
         }
     }
-}
-
-/// Manually serialize a `RunOutcome` to JSON. `RunOutcome` only derives
-/// `Serialize` under the `serde` feature of `tau-domain`/`tau-runtime`,
-/// which `tau-app` does not enable. We manually extract the fields we
-/// expose in the serve-mode protocol response.
-fn outcome_to_json(outcome: tau_runtime_tokio::RunOutcome) -> Value {
-    match outcome {
-        tau_runtime_tokio::RunOutcome::Completed {
-            final_message,
-            total_turns,
-            token_usage,
-            ..
-        } => {
-            let final_text = match &final_message.payload {
-                MessagePayload::Text { content } => content.clone(),
-                other => format!("{:?}", other),
-            };
-            json!({
-                "status": "completed",
-                "final_message": final_text,
-                "total_turns": total_turns,
-                "token_usage": token_usage_to_json(token_usage),
-            })
-        }
-        tau_runtime_tokio::RunOutcome::Failed {
-            status,
-            total_turns,
-            token_usage,
-            ..
-        } => {
-            json!({
-                "status": "failed",
-                "agent_status": format!("{:?}", status),
-                "total_turns": total_turns,
-                "token_usage": token_usage_to_json(token_usage),
-            })
-        }
-        // RunOutcome is #[non_exhaustive]; guard for future variants.
-        _ => json!({"status": "unknown"}),
-    }
-}
-
-fn token_usage_to_json(usage: tau_runtime_tokio::TokenUsage) -> Value {
-    json!({
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens,
-    })
 }
 
 async fn execute_streaming(
@@ -273,115 +223,20 @@ async fn emit_event(
     last_token_usage: &mut Option<Value>,
     stop_reason: &mut Option<String>,
 ) {
-    // Field names verified against crates/tau-runtime/src/stream.rs in
-    // Task 11 reconciliation. Adjusted from plan template:
-    //   TextDelta:         delta (not text)
-    //   ToolCallStarted:   id, name, args (not tool/call_id)
-    //   ToolCallCompleted: id, name, result: Result<ToolResult,String> (not tool/call_id)
-    //   TurnCompleted:     stop_reason: StopReason, usage: Option<TokenUsage>, turn: u32
-    //   RunCompleted:      outcome: RunOutcome (not token_usage directly)
-    //   FatalError:        kind, detail, context_json, tool_error_variant
-    //
-    // StopReason, ToolResult, TokenUsage do NOT implement Serialize in tau-app's
-    // dep graph (serde feature not enabled). Use Debug formatting / manual extraction.
-    let (kind, data) = match event {
-        RunEvent::TextDelta { delta } => ("TextDelta", json!({"text": delta})),
-        RunEvent::ToolCallStarted {
-            id: call_id,
-            name,
-            args,
-        } => (
-            "ToolCallStarted",
-            json!({"tool": name, "args": args, "call_id": call_id}),
-        ),
-        RunEvent::ToolCallCompleted {
-            id: call_id,
-            name,
-            result,
-        } => {
-            let result_json = match result {
-                Ok(tool_result) => {
-                    // ToolResult has no Serialize; extract content manually.
-                    let content: Vec<Value> = tool_result
-                        .content
-                        .iter()
-                        .map(|c| match c {
-                            tau_ports::ToolContent::Text { text } => {
-                                json!({"type": "text", "text": text})
-                            }
-                            tau_ports::ToolContent::Json { data } => {
-                                json!({"type": "json", "data": data})
-                            }
-                            // ToolContent is #[non_exhaustive].
-                            _ => json!({"type": "unknown"}),
-                        })
-                        .collect();
-                    json!({"ok": true, "content": content, "is_error": tool_result.is_error})
-                }
-                Err(reason) => json!({"ok": false, "error": reason}),
-            };
-            (
-                "ToolCallCompleted",
-                json!({"tool": name, "call_id": call_id, "result": result_json}),
-            )
-        }
-        RunEvent::TurnCompleted {
-            stop_reason: sr,
-            usage,
-            turn,
-        } => {
-            let sr_str = format!("{:?}", sr);
-            *stop_reason = Some(sr_str.clone());
-            // TurnCompleted.usage is Option<tau_ports::TokenUsage> which has
-            // only input_tokens and output_tokens (no total_tokens field).
-            let usage_json = usage
-                .as_ref()
-                .map(|u| {
-                    json!({
-                        "input_tokens": u.input_tokens,
-                        "output_tokens": u.output_tokens,
-                    })
-                })
-                .unwrap_or(Value::Null);
-            (
-                "TurnCompleted",
-                json!({"turn": turn, "stop_reason": sr_str, "usage": usage_json}),
-            )
-        }
-        RunEvent::RunCompleted { outcome } => {
-            // Extract token_usage from the outcome for the final summary.
-            let tu = match outcome {
-                tau_runtime_tokio::RunOutcome::Completed { token_usage, .. } => {
-                    token_usage_to_json(*token_usage)
-                }
-                tau_runtime_tokio::RunOutcome::Failed { token_usage, .. } => {
-                    token_usage_to_json(*token_usage)
-                }
-                _ => Value::Null,
-            };
-            *last_token_usage = Some(tu.clone());
-            ("RunCompleted", json!({"token_usage": tu}))
-        }
-        RunEvent::FatalError {
-            kind,
-            detail,
-            context_json,
-            tool_error_variant,
-        } => (
-            "FatalError",
-            json!({
-                "kind": kind,
-                "detail": detail,
-                "context_json": context_json,
-                "tool_error_variant": tool_error_variant,
-            }),
-        ),
-        // RunEvent is #[non_exhaustive]; guard for future variants.
-        _ => ("Unknown", json!({})),
-    };
+    // The wire-shape projection (including the field renames vs the runtime
+    // types) lives in `wire::event_to_wire`, the single source of truth.
+    // `wire` carries the streaming side-effect updates the dispatcher must
+    // remember for the final summary.
+    let w = wire::event_to_wire(event);
+    if let Some(sr) = w.stop_reason {
+        *stop_reason = Some(sr);
+    }
+    if let Some(tu) = w.token_usage {
+        *last_token_usage = Some(tu);
+    }
     disp.send_notification(
         methods::RUNTIME_EVENT,
-        json!({"id": id, "kind": kind, "data": data}),
+        json!({ "id": id, "kind": w.kind, "data": w.data }),
     )
     .await;
 }

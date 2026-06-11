@@ -18,6 +18,7 @@ mod options;
 mod project;
 mod protocol;
 mod tracing_init;
+mod wire;
 
 pub use options::ServeOptions;
 
