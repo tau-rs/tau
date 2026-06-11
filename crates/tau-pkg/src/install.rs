@@ -633,15 +633,7 @@ fn build_rust_cargo_plugin(
         cmd.arg(arg);
     }
 
-    tracing::info!(
-        target: "tau_pkg::install",
-        package = %package_name,
-        version = %package_version,
-        bin = %plugin_manifest.bin,
-        kind = %plugin_manifest.kind,
-        dir = %package_dir.display(),
-        "building plugin binary",
-    );
+    log_build_start(package_name, package_version, plugin_manifest, package_dir);
 
     let output = match cmd.output() {
         Ok(o) => o,
@@ -704,6 +696,30 @@ fn build_rust_cargo_plugin(
         SystemTime::now(),
         binary_sha256,
     )))
+}
+
+/// Emit the build-start lifecycle event for a plugin build.
+///
+/// Factored out of [`build_rust_cargo_plugin`] so the structured event
+/// (target `tau_pkg::install`, `package`/`version` fields) can be
+/// asserted by a capturing subscriber without spawning a real `cargo`
+/// build. Field drift here is caught by
+/// `diagnostics_tracing_tests::build_start_emits_structured_info`.
+fn log_build_start(
+    package_name: &PackageName,
+    package_version: &Version,
+    plugin_manifest: &tau_domain::PluginManifest,
+    package_dir: &Path,
+) {
+    tracing::info!(
+        target: "tau_pkg::install",
+        package = %package_name,
+        version = %package_version,
+        bin = %plugin_manifest.bin,
+        kind = %plugin_manifest.kind,
+        dir = %package_dir.display(),
+        "building plugin binary",
+    );
 }
 
 /// Take the last `max_bytes` bytes of `buf` and decode lossily as UTF-8.
@@ -1148,13 +1164,14 @@ mod diagnostics_tracing_tests {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::{EnvFilter, Layer};
 
-    /// One captured `tracing` event: its target, level, and the value of
-    /// the `package` field (if present).
+    /// One captured `tracing` event: its target, level, and the values of
+    /// the `package` / `version` fields (if present).
     #[derive(Clone, Debug)]
     struct Captured {
         target: String,
         level: Level,
         package: Option<String>,
+        version: Option<String>,
         #[allow(dead_code)]
         message: Option<String>,
     }
@@ -1173,6 +1190,7 @@ mod diagnostics_tracing_tests {
                     target: event.metadata().target().to_string(),
                     level: *event.metadata().level(),
                     package: v.package,
+                    version: v.version,
                     message: v.message,
                 });
         }
@@ -1185,6 +1203,7 @@ mod diagnostics_tracing_tests {
     #[derive(Default)]
     struct FieldVisitor {
         package: Option<String>,
+        version: Option<String>,
         message: Option<String>,
     }
 
@@ -1192,6 +1211,7 @@ mod diagnostics_tracing_tests {
         fn set(&mut self, name: &str, value: String) {
             match name {
                 "package" => self.package = Some(value),
+                "version" => self.version = Some(value),
                 "message" => self.message = Some(value),
                 _ => {}
             }
@@ -1317,5 +1337,54 @@ mod diagnostics_tracing_tests {
                 "RUST_LOG=warn must admit the warn advisory; captured = {events:?}"
             );
         }
+    }
+
+    #[test]
+    fn build_start_emits_structured_info() {
+        let captured = CaptureLayer::default();
+        let _guard = tracing_subscriber::registry()
+            .with(captured.clone())
+            .set_default();
+
+        // Manifest with a `[plugin]` table so `.plugin()` is `Some`.
+        let body = "name = \"acme-tool\"\n\
+                    version = \"1.2.3\"\n\
+                    description = \"a tool\"\n\
+                    authors = [\"Acme <acme@example.com>\"]\n\
+                    source = \"https://example.com/acme/tool.git\"\n\
+                    kind = \"tool\"\n\
+                    dependencies = []\n\
+                    capabilities = []\n\
+                    \n\
+                    [plugin]\n\
+                    provides = \"tool\"\n\
+                    kind = \"rust-cargo\"\n\
+                    bin = \"acme-tool\"\n";
+        let manifest = manifest_from_toml(body);
+        let plugin = manifest.plugin().expect("manifest has a [plugin] table");
+
+        // Drive only the logging helper — no real `cargo` build.
+        super::log_build_start(
+            manifest.name(),
+            manifest.version(),
+            plugin,
+            std::path::Path::new("/tmp/acme-pkg"),
+        );
+
+        let events = captured.0.lock().expect("capture mutex poisoned").clone();
+        let info = events
+            .iter()
+            .find(|e| e.level == Level::INFO && e.target == "tau_pkg::install")
+            .unwrap_or_else(|| panic!("no INFO @ tau_pkg::install; captured = {events:?}"));
+        assert_eq!(
+            info.package.as_deref(),
+            Some("acme-tool"),
+            "build-start event must carry the package-name field; captured = {events:?}"
+        );
+        assert_eq!(
+            info.version.as_deref(),
+            Some("1.2.3"),
+            "build-start event must carry the version field; captured = {events:?}"
+        );
     }
 }
