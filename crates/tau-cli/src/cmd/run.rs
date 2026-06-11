@@ -76,10 +76,7 @@ pub async fn run(
     // matches the bundle's recorded source bytes, so the cwd path is
     // equivalent at v1.
     if let Some(bundle_path) = &args.bundle {
-        match tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
-            bundle_path: bundle_path.clone(),
-            project_root: cwd.clone(),
-        }) {
+        match verify_bundle_against_source(&cwd, bundle_path) {
             Err(e) => {
                 eprintln!("error: {e}");
                 std::process::exit(bundle_verify_exit_code(&e));
@@ -559,6 +556,38 @@ async fn run_streaming_path(
     }
 }
 
+/// Re-lower the cwd source and verify `bundle_path` against it.
+///
+/// Computes the canonical IR hash of the local `tau.toml` and hands it to
+/// [`tau_pkg::bundle::verify_bundle`] so the bundle's embedded IR can be
+/// cross-checked against the source it claims to come from (verify step
+/// 10). Bundles are host-sealed (verify step 5 rejects a foreign target),
+/// so lowering for the host target is correct: a foreign-target bundle is
+/// rejected by step 5 before the divergence check is reached.
+///
+/// `lower_ir` returning `None` (the source no longer lowers) flows through
+/// as `recomputed_ir_hash: None`, which verify_bundle turns into a
+/// fail-closed `IrSourceUnverifiable` for a v2 bundle.
+fn verify_bundle_against_source(
+    cwd: &std::path::Path,
+    bundle_path: &std::path::Path,
+) -> Result<tau_pkg::bundle::VerifyReport, tau_pkg::bundle::VerifyError> {
+    let empty_mcp_cache = std::collections::BTreeMap::new();
+    let recomputed_ir_hash = crate::cmd::build::lower_ir(
+        cwd,
+        &tau_ports::target::TargetTriple::host(),
+        &empty_mcp_cache,
+        None,
+    )
+    .map(|p| p.canonical_ir_hash);
+
+    tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
+        bundle_path: bundle_path.to_path_buf(),
+        project_root: cwd.to_path_buf(),
+        recomputed_ir_hash,
+    })
+}
+
 /// Maps a [`tau_pkg::bundle::VerifyError`] to its CLI exit code per
 /// spec §C.3: bad-input/config/parse → 2, integrity/install-state → 3,
 /// internal/IO → 70.
@@ -576,7 +605,9 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
         | V::PackageDrift { .. }
         | V::AgentPromptDrift { .. }
         | V::AgentSetMismatch { .. }
-        | V::IrPayloadDrift { .. } => 3,
+        | V::IrPayloadDrift { .. }
+        | V::IrSourceDivergence { .. }
+        | V::IrSourceUnverifiable => 3,
         V::PackageTreeHash { .. } | V::AgentPromptResolve { .. } => 70,
     }
 }

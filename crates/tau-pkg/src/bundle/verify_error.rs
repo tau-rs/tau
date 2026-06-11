@@ -144,4 +144,20 @@ pub enum VerifyError {
         /// SHA-256 recomputed from `canonical_ir_bytes`.
         computed: String,
     },
+
+    /// The IR embedded in the bundle does not match what the local
+    /// (verified) tau.toml lowers to — a capability/workflow divergence
+    /// between the source the user inspected and the IR that would run.
+    #[error("bundle IR diverges from the local tau.toml — bundle IR hash {bundle_hash}, but the source lowers to {source_hash}; the executed workflow does not match the inspected source")]
+    IrSourceDivergence {
+        /// Canonical IR hash recorded in the bundle's `ir_payload`.
+        bundle_hash: String,
+        /// Canonical IR hash recomputed by re-lowering the cwd source.
+        source_hash: String,
+    },
+
+    /// The bundle carries an IR payload, but the local source could not be
+    /// re-lowered to authenticate it; the run is refused (fail-closed).
+    #[error("bundle carries an IR payload but the local tau.toml could not be re-lowered to authenticate it; refusing to run an unverifiable bundle")]
+    IrSourceUnverifiable,
 }
