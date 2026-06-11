@@ -10,6 +10,7 @@
 //! `{"final": true, ...}` streaming summary) live in `dispatch_run` — they
 //! are serve-layer constructs, not runtime-type projections.
 
+use serde::Serialize;
 use serde_json::{json, Value};
 use tau_domain::MessagePayload;
 use tau_runtime_tokio::{RunEvent, RunOutcome, TokenUsage};
@@ -24,49 +25,175 @@ pub(crate) struct WireEvent {
     pub token_usage: Option<Value>,
 }
 
+// ---------------------------------------------------------------------------
+// Wire DTOs. These ARE the protocol shape: each `#[serde(rename)]` /
+// field name is a deliberate divergence from the runtime type, and the
+// conversions below destructure the runtime enums by field name, so a
+// rename upstream fails to compile here instead of silently desyncing the
+// JSON-RPC wire format (finding D2).
+//
+// serde_json has no `preserve_order` feature in this workspace, so `Value`
+// is a `BTreeMap` and key order is alphabetical regardless of construction
+// path — `to_value(dto)` is byte-identical to the equivalent `json!`.
+// ---------------------------------------------------------------------------
+
+/// Batch `runtime.run` result body. The `status` tag selects the variant.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+enum OutcomeDto {
+    Completed {
+        final_message: String,
+        total_turns: u32,
+        token_usage: TokenUsageDto,
+    },
+    Failed {
+        agent_status: String,
+        total_turns: u32,
+        token_usage: TokenUsageDto,
+    },
+    /// Guard for future `#[non_exhaustive]` `RunOutcome` variants.
+    Unknown,
+}
+
+/// Runtime-summed token usage (input/output + optional unified total).
+#[derive(Serialize)]
+struct TokenUsageDto {
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: Option<u64>,
+}
+
+/// Per-turn token usage (`tau_ports::TokenUsage`: no unified total).
+#[derive(Serialize)]
+struct PortTokenUsageDto {
+    input_tokens: u32,
+    output_tokens: u32,
+}
+
+/// One content block of a tool result. The `type` tag selects the variant.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum ContentDto {
+    Text {
+        text: String,
+    },
+    Json {
+        data: tau_domain::Value,
+    },
+    /// Guard for future `#[non_exhaustive]` `ToolContent` variants.
+    Unknown,
+}
+
+/// `ToolCallCompleted.result`: either a successful result or an error reason.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ToolResultDto {
+    Ok {
+        ok: bool, // always true
+        content: Vec<ContentDto>,
+        is_error: bool,
+    },
+    Err {
+        ok: bool, // always false
+        error: String,
+    },
+}
+
+#[derive(Serialize)]
+struct TextDeltaDto {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct ToolCallStartedDto {
+    tool: String,
+    args: tau_domain::Value,
+    call_id: String,
+}
+
+#[derive(Serialize)]
+struct ToolCallCompletedDto {
+    tool: String,
+    call_id: String,
+    result: ToolResultDto,
+}
+
+#[derive(Serialize)]
+struct TurnCompletedDto {
+    turn: u32,
+    stop_reason: String,
+    usage: Option<PortTokenUsageDto>,
+}
+
+#[derive(Serialize)]
+struct FatalErrorDto {
+    kind: String,
+    detail: String,
+    context_json: Option<String>,
+    tool_error_variant: Option<String>,
+}
+
+/// Serialize a fixed-shape wire DTO to a `Value`. Infallible for these
+/// types (no non-string map keys, no fallible custom serializers).
+fn to_value<T: Serialize>(dto: &T) -> Value {
+    serde_json::to_value(dto).expect("wire DTO serialization is infallible")
+}
+
+fn token_usage_dto(usage: &TokenUsage) -> TokenUsageDto {
+    TokenUsageDto {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+    }
+}
+
+fn content_dto(content: &tau_ports::ToolContent) -> ContentDto {
+    match content {
+        tau_ports::ToolContent::Text { text } => ContentDto::Text { text: text.clone() },
+        tau_ports::ToolContent::Json { data } => ContentDto::Json { data: data.clone() },
+        // ToolContent is #[non_exhaustive].
+        _ => ContentDto::Unknown,
+    }
+}
+
 /// Project a finished [`RunOutcome`] into the batch `runtime.run` result body.
 pub(crate) fn outcome_to_json(outcome: &RunOutcome) -> Value {
-    match outcome {
+    let dto = match outcome {
         RunOutcome::Completed {
             final_message,
             total_turns,
             token_usage,
             ..
         } => {
-            let final_text = match &final_message.payload {
+            let final_message = match &final_message.payload {
                 MessagePayload::Text { content } => content.clone(),
                 other => format!("{:?}", other),
             };
-            json!({
-                "status": "completed",
-                "final_message": final_text,
-                "total_turns": total_turns,
-                "token_usage": token_usage_to_json(token_usage),
-            })
+            OutcomeDto::Completed {
+                final_message,
+                total_turns: *total_turns,
+                token_usage: token_usage_dto(token_usage),
+            }
         }
         RunOutcome::Failed {
             status,
             total_turns,
             token_usage,
             ..
-        } => json!({
-            "status": "failed",
-            "agent_status": format!("{:?}", status),
-            "total_turns": total_turns,
-            "token_usage": token_usage_to_json(token_usage),
-        }),
+        } => OutcomeDto::Failed {
+            agent_status: format!("{:?}", status),
+            total_turns: *total_turns,
+            token_usage: token_usage_dto(token_usage),
+        },
         // RunOutcome is #[non_exhaustive]; guard for future variants.
-        _ => json!({ "status": "unknown" }),
-    }
+        _ => OutcomeDto::Unknown,
+    };
+    to_value(&dto)
 }
 
 /// Project the runtime's summed [`TokenUsage`] (input/output + optional total).
 pub(crate) fn token_usage_to_json(usage: &TokenUsage) -> Value {
-    json!({
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens,
-    })
+    to_value(&token_usage_dto(usage))
 }
 
 /// Project one [`RunEvent`] into its wire `kind` + `data` and any streaming
@@ -75,7 +202,9 @@ pub(crate) fn event_to_wire(event: &RunEvent) -> WireEvent {
     match event {
         RunEvent::TextDelta { delta } => WireEvent {
             kind: "TextDelta",
-            data: json!({ "text": delta }),
+            data: to_value(&TextDeltaDto {
+                text: delta.clone(),
+            }),
             stop_reason: None,
             token_usage: None,
         },
@@ -85,7 +214,11 @@ pub(crate) fn event_to_wire(event: &RunEvent) -> WireEvent {
             args,
         } => WireEvent {
             kind: "ToolCallStarted",
-            data: json!({ "tool": name, "args": args, "call_id": call_id }),
+            data: to_value(&ToolCallStartedDto {
+                tool: name.clone(),
+                args: args.clone(),
+                call_id: call_id.clone(),
+            }),
             stop_reason: None,
             token_usage: None,
         },
@@ -94,29 +227,24 @@ pub(crate) fn event_to_wire(event: &RunEvent) -> WireEvent {
             name,
             result,
         } => {
-            let result_json = match result {
-                Ok(tool_result) => {
-                    let content: Vec<Value> = tool_result
-                        .content
-                        .iter()
-                        .map(|c| match c {
-                            tau_ports::ToolContent::Text { text } => {
-                                json!({ "type": "text", "text": text })
-                            }
-                            tau_ports::ToolContent::Json { data } => {
-                                json!({ "type": "json", "data": data })
-                            }
-                            // ToolContent is #[non_exhaustive].
-                            _ => json!({ "type": "unknown" }),
-                        })
-                        .collect();
-                    json!({ "ok": true, "content": content, "is_error": tool_result.is_error })
-                }
-                Err(reason) => json!({ "ok": false, "error": reason }),
+            let result = match result {
+                Ok(tool_result) => ToolResultDto::Ok {
+                    ok: true,
+                    content: tool_result.content.iter().map(content_dto).collect(),
+                    is_error: tool_result.is_error,
+                },
+                Err(reason) => ToolResultDto::Err {
+                    ok: false,
+                    error: reason.clone(),
+                },
             };
             WireEvent {
                 kind: "ToolCallCompleted",
-                data: json!({ "tool": name, "call_id": call_id, "result": result_json }),
+                data: to_value(&ToolCallCompletedDto {
+                    tool: name.clone(),
+                    call_id: call_id.clone(),
+                    result,
+                }),
                 stop_reason: None,
                 token_usage: None,
             }
@@ -129,18 +257,17 @@ pub(crate) fn event_to_wire(event: &RunEvent) -> WireEvent {
             let sr_str = format!("{:?}", sr);
             // TurnCompleted.usage is Option<tau_ports::TokenUsage> which has
             // only input_tokens and output_tokens (no total_tokens field).
-            let usage_json = usage
-                .as_ref()
-                .map(|u| {
-                    json!({
-                        "input_tokens": u.input_tokens,
-                        "output_tokens": u.output_tokens,
-                    })
-                })
-                .unwrap_or(Value::Null);
+            let usage = usage.as_ref().map(|u| PortTokenUsageDto {
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+            });
             WireEvent {
                 kind: "TurnCompleted",
-                data: json!({ "turn": turn, "stop_reason": sr_str, "usage": usage_json }),
+                data: to_value(&TurnCompletedDto {
+                    turn: *turn,
+                    stop_reason: sr_str.clone(),
+                    usage,
+                }),
                 stop_reason: Some(sr_str),
                 token_usage: None,
             }
@@ -166,11 +293,11 @@ pub(crate) fn event_to_wire(event: &RunEvent) -> WireEvent {
             tool_error_variant,
         } => WireEvent {
             kind: "FatalError",
-            data: json!({
-                "kind": kind,
-                "detail": detail,
-                "context_json": context_json,
-                "tool_error_variant": tool_error_variant,
+            data: to_value(&FatalErrorDto {
+                kind: kind.clone(),
+                detail: detail.clone(),
+                context_json: context_json.clone(),
+                tool_error_variant: tool_error_variant.clone(),
             }),
             stop_reason: None,
             token_usage: None,
