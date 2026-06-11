@@ -605,22 +605,34 @@ fn build_rust_cargo_plugin(
         .clone()
         .unwrap_or_else(|| PathBuf::from("cargo"));
 
+    // Single source of truth for where this plugin's build artifacts
+    // land. Both the spawned build (via `CARGO_TARGET_DIR`) and the
+    // binary-path lookup below derive from `target_dir`, so they can
+    // never drift.
+    //
+    // Pinning `CARGO_TARGET_DIR` explicitly — rather than relying on
+    // cargo's default of `<cwd>/target` — makes the build robust to an
+    // inherited `CARGO_TARGET_DIR` in the parent environment. This
+    // workspace's CLAUDE.md requires every cargo invocation to set a
+    // per-agent target dir; that variable is inherited by child
+    // processes, so without an explicit override the inner cargo would
+    // build into the *outer* target dir and this lookup would fail with
+    // "binary not found after build" (audit finding D6). An explicit
+    // `env` set wins over any inherited value, so no defensive
+    // `env_remove` is needed.
+    //
+    // `package_dir` is scope-derived and therefore absolute, so this
+    // `CARGO_TARGET_DIR` is an absolute path; cargo doesn't re-resolve
+    // it against the spawned build's cwd (also `package_dir`).
+    let target_dir = package_dir.join("target");
+
     let mut cmd = Command::new(&cargo);
     cmd.arg("build")
         .arg("--release")
         .arg("--bin")
         .arg(&plugin_manifest.bin)
-        .current_dir(package_dir);
-    // Strip CARGO_TARGET_DIR from the spawned cargo's environment.
-    // If the caller (a tau-pkg integration test running under
-    // nextest, or an agent session) has CARGO_TARGET_DIR set, the
-    // inner cargo inherits it and builds the plugin to
-    // `<outer-target-dir>/release/` instead of the per-package
-    // `<package_dir>/target/release/` that the binary-path lookup
-    // below expects. CLAUDE.md documents this leak pattern; the
-    // lefthook pre-commit `test-native` command uses the same fix
-    // via `bash -c 'unset CARGO_TARGET_DIR && ...'`.
-    cmd.env_remove("CARGO_TARGET_DIR");
+        .current_dir(package_dir)
+        .env("CARGO_TARGET_DIR", &target_dir);
     for arg in &options.extra_args {
         cmd.arg(arg);
     }
@@ -668,10 +680,7 @@ fn build_rust_cargo_plugin(
     // `std::env::consts::EXE_SUFFIX` so Windows installs find their
     // binaries.
     let bin_filename = format!("{}{}", plugin_manifest.bin, std::env::consts::EXE_SUFFIX);
-    let binary_path = package_dir
-        .join("target")
-        .join("release")
-        .join(&bin_filename);
+    let binary_path = target_dir.join("release").join(&bin_filename);
     let canonical = binary_path
         .canonicalize()
         .map_err(|e| InstallError::BuildFailed {
