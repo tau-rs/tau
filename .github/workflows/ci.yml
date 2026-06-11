@@ -120,7 +120,8 @@ jobs:
           components: rustfmt
           shared-key: linux-stable
           with-mold: true
-      - run: cargo fmt --all -- --check
+          with-just: true
+      - run: just fmt
 
   clippy:
     name: clippy
@@ -134,7 +135,8 @@ jobs:
           shared-key: linux-stable
           with-sccache: true
           with-mold: true
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+          with-just: true
+      - run: just lint
 
   cargo-deny:
     name: cargo-deny / linux
@@ -230,7 +232,8 @@ jobs:
           with-nextest: true
           with-sccache: true
           with-mold: true
-      - run: cargo nextest run --profile ci --workspace --all-targets
+          with-just: true
+      - run: just test
 
   doc-tests:
     name: doc-tests / linux
