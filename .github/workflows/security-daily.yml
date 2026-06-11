@@ -21,6 +21,7 @@ jobs:
   audit:
     name: cargo audit + osv-scanner
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -53,6 +54,7 @@ jobs:
     name: diff vs yesterday + file issues on new
     needs: audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - name: Download today's report

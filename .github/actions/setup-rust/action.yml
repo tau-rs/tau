@@ -53,14 +53,14 @@ runs:
       # `toolchain:` input below independently controls *which* Rust
       # version gets installed (stable / 1.91 / etc.); the @stable
       # action ref is just the action version.
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       with:
         toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}
 
     - name: Install mold linker (Linux only)
       if: inputs.with-mold == 'true' && runner.os == 'Linux'
-      uses: rui314/setup-mold@v1
+      uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444  # v1
 
     # sccache disabled on Windows: mozilla-actions/sccache-action@v0.0.10's
     # post-step has a state-handling bug that intermittently fails on
@@ -72,7 +72,7 @@ runs:
     # cross-job rustc-cache reuse benefit to give up.
     - name: Install sccache
       if: inputs.with-sccache == 'true' && runner.os != 'Windows'
-      uses: mozilla-actions/sccache-action@v0.0.10
+      uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
 
     - name: Configure sccache env
       if: inputs.with-sccache == 'true' && runner.os != 'Windows'
@@ -108,12 +108,12 @@ runs:
 
     - name: Install cargo-nextest
       if: inputs.with-nextest == 'true'
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912  # v2
       with:
         tool: nextest
 
     - name: Cache cargo registry, target, and sccache
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       with:
         # `shared-key` enables cross-job cache sharing per (os, toolchain).
         # The deprecated `key` input acts as a suffix when both are set

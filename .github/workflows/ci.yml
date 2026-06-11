@@ -71,6 +71,7 @@ jobs:
     # `crates/tau-plugins/ollama/Cargo.toml` in PR #158).
     name: detect changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       skip_heavy_jobs: ${{ steps.compute.outputs.skip_heavy_jobs }}
     steps:
@@ -111,6 +112,7 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -123,6 +125,7 @@ jobs:
   clippy:
     name: clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -136,6 +139,7 @@ jobs:
   cargo-deny:
     name: cargo-deny / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe  # v2
@@ -149,6 +153,7 @@ jobs:
     # Mirrors tau's deny.toml [advisories] policy.
     name: cargo-audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998  # v2.0.0
@@ -160,6 +165,7 @@ jobs:
     # Mirrors tau's deny.toml [advisories] policy.
     name: osv-scanner
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2  # v2.3.8
@@ -170,6 +176,7 @@ jobs:
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
         with:
@@ -184,6 +191,7 @@ jobs:
   cargo-check-macos:
     name: cargo-check / macos
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -196,6 +204,7 @@ jobs:
   cargo-check-windows:
     name: cargo-check / windows
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -207,6 +216,7 @@ jobs:
   test-stable:
     name: test-stable / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -225,6 +235,7 @@ jobs:
   doc-tests:
     name: doc-tests / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -246,6 +257,7 @@ jobs:
     # runner minutes per CI run.
     name: msrv-check / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -259,6 +271,7 @@ jobs:
   test-fixtures-ports:
     name: test-fixtures-ports / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -278,6 +291,7 @@ jobs:
   feature-flag-matrix:
     name: feature-flag-matrix / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -297,6 +311,7 @@ jobs:
   runtime-core-no-std:
     name: runtime-core no-std build + no-forbidden-imports / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -334,6 +349,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.skip_heavy_jobs != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -388,6 +404,7 @@ jobs:
   build-checks-linux:
     name: build-checks / linux
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust

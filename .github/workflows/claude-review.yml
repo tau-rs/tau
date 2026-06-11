@@ -86,7 +86,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@beta
+      - uses: anthropics/claude-code-action@28f83620103c48a57093dcc2837eec89e036bb9f  # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Pass the workflow's auto-injected GITHUB_TOKEN so the action's
@@ -145,7 +145,7 @@ jobs:
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "Previous tag/commit: $previous"
 
-      - uses: anthropics/claude-code-action@beta
+      - uses: anthropics/claude-code-action@28f83620103c48a57093dcc2837eec89e036bb9f  # beta
         env:
           CURRENT_TAG: ${{ github.event.release.tag_name }}
           PREV_REF: ${{ steps.prev.outputs.previous }}
