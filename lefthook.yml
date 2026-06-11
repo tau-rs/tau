@@ -39,10 +39,10 @@ pre-commit:
       # `cargo fmt` only acts on Rust files — narrower glob than the
       # sibling commands is intentional, not an oversight.
       glob: "*.rs"
-      run: env CARGO_TARGET_DIR=target/lefthook/fmt cargo fmt --all -- --check
+      run: env CARGO_TARGET_DIR=target/lefthook/fmt just fmt
     clippy:
       glob: "*.{rs,toml}"
-      run: env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/lefthook/clippy cargo clippy --workspace --all-targets -- -D warnings
+      run: env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/lefthook/clippy just lint
     test-native:
       glob: "*.{rs,toml}"
       # env -u CARGO_TARGET_DIR: unset the var so child `cargo build`
