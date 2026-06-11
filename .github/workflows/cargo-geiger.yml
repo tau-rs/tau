@@ -29,7 +29,7 @@ jobs:
           with-sccache: true
           with-mold: true
       - name: Install cargo-geiger
-        run: cargo install cargo-geiger --locked
+        run: cargo install cargo-geiger --locked --version =0.13.0
       - name: Run geiger on workspace
         run: |
           mkdir -p _geiger
