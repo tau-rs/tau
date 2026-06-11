@@ -29,8 +29,13 @@ pub fn compute_self_hash(manifest: &BundleManifest) -> String {
     hex_encode(&hasher.finalize())
 }
 
-/// Verify that the manifest's `bundle.sha256` field equals the
-/// recomputed self-hash.
+/// Verify the bundle's recorded self-hash against its canonical content.
+///
+/// This is an **integrity** check — it detects corruption or tampering of
+/// the sealed bytes. It is **not** a signature and proves nothing about
+/// *who* built the bundle or whether its source is trustworthy (see the
+/// module doc on `bundle::verify` for the integrity / correspondence /
+/// authenticity distinction).
 pub fn verify_self_hash(manifest: &BundleManifest) -> Result<(), BundleIntegrityError> {
     if manifest.bundle.sha256.is_empty() {
         return Err(BundleIntegrityError::HashFieldEmpty);

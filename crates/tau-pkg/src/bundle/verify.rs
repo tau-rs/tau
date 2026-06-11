@@ -3,6 +3,21 @@
 //! Confirms a `.tau` bundle matches the source tree at `project_root`
 //! before the CLI dispatches the run. See spec
 //! `2026-05-27-tau-run-bundle-design.md`.
+//!
+//! # What "verified" means here
+//!
+//! This pipeline provides two guarantees and deliberately *not* a third:
+//!
+//! - **Integrity** (step 3, self-hash): the bundle's bytes have not been
+//!   corrupted or altered since its builder sealed it. This is a checksum
+//!   the builder computed over its own output — **not** a signature.
+//! - **Source correspondence** (steps 6, 9, 10): the cwd `tau.toml`, the
+//!   embedded IR bytes, and the IR the source lowers to all agree, so the
+//!   executed workflow matches the source the user inspected.
+//! - **Authenticity is *not* provided.** Nothing here proves *who* built
+//!   the bundle or that its author is trustworthy; there is no signature.
+//!   Trusting a bundle still means trusting whoever produced its source
+//!   (see the `tau install` trust boundary in `SECURITY.md`).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
