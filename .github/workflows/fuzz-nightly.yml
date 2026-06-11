@@ -76,7 +76,7 @@ jobs:
 
       - name: Install Rust nightly + cargo-fuzz
         if: steps.precheck.outputs.skip != 'true'
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2  # nightly
 
       - name: Cache cargo-fuzz binary
         if: steps.precheck.outputs.skip != 'true'
@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v cargo-fuzz >/dev/null 2>&1; then
-            cargo +nightly install cargo-fuzz --locked
+            cargo +nightly install cargo-fuzz --locked --version =0.13.2
           else
             echo "cargo-fuzz already present"
           fi

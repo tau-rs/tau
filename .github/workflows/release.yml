@@ -40,6 +40,7 @@ jobs:
     name: build-release-binaries / ${{ matrix.os }}
     needs: [preflight-tier1, preflight-tier2]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -79,6 +80,7 @@ jobs:
     name: sbom-rust (SPDX 2.3)
     needs: [preflight-tier1, preflight-tier2]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -87,7 +89,7 @@ jobs:
           with-sccache: true
           with-mold: true
       - name: Install cargo-sbom
-        run: cargo install cargo-sbom --locked
+        run: cargo install cargo-sbom --locked --version =0.10.0
       - name: Generate SPDX 2.3 SBOM
         run: cargo sbom --output-format spdx_json_2_3 > tau-sbom-rust.spdx.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
@@ -100,6 +102,7 @@ jobs:
     name: sbom-aggregate (syft)
     needs: [preflight-tier1, preflight-tier2]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - name: Generate aggregate SBOM via syft
@@ -118,6 +121,7 @@ jobs:
     name: attest provenance + sbom
     needs: [build-release-binaries, sbom-rust, sbom-aggregate]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       id-token: write
@@ -145,6 +149,7 @@ jobs:
     name: changelog
     needs: [preflight-tier1, preflight-tier2]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       body: ${{ steps.cliff.outputs.content }}
     steps:
@@ -161,6 +166,7 @@ jobs:
     name: gh-release-create
     needs: [build-release-binaries, sbom-rust, sbom-aggregate, attest, changelog]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

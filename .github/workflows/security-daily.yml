@@ -21,6 +21,7 @@ jobs:
   audit:
     name: cargo audit + osv-scanner
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: ./.github/actions/setup-rust
@@ -41,7 +42,7 @@ jobs:
           mkdir -p _security
           # cargo-audit output already surfaced by the action; for diff,
           # re-run cargo audit json to a file.
-          cargo install cargo-audit --locked || true
+          cargo install cargo-audit --locked --version =0.22.2 || true
           cargo audit --json > _security/cargo-audit.json || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
@@ -53,6 +54,7 @@ jobs:
     name: diff vs yesterday + file issues on new
     needs: audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - name: Download today's report
