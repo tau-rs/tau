@@ -76,10 +76,7 @@ pub async fn run(
     // matches the bundle's recorded source bytes, so the cwd path is
     // equivalent at v1.
     if let Some(bundle_path) = &args.bundle {
-        match tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
-            bundle_path: bundle_path.clone(),
-            project_root: cwd.clone(),
-        }) {
+        match verify_bundle_against_source(&cwd, bundle_path) {
             Err(e) => {
                 eprintln!("error: {e}");
                 std::process::exit(bundle_verify_exit_code(&e));
@@ -559,6 +556,50 @@ async fn run_streaming_path(
     }
 }
 
+/// Re-lower the cwd source and verify `bundle_path` against it.
+///
+/// Computes the canonical IR hash of the local `tau.toml` and hands it to
+/// [`tau_pkg::bundle::verify_bundle`] so the bundle's embedded IR can be
+/// cross-checked against the source it claims to come from (verify step
+/// 10). Bundles are host-sealed (verify step 5 rejects a foreign target),
+/// so lowering for the host target is correct: a foreign-target bundle is
+/// rejected by step 5 before the divergence check is reached.
+///
+/// `lower_ir` returning `None` (the source no longer lowers) flows through
+/// as `recomputed_ir_hash: None`, which verify_bundle turns into a
+/// fail-closed `IrSourceUnverifiable` for a v2 bundle.
+///
+/// MCP caveat (fail-closed): re-lowering here uses an **empty** MCP
+/// contract cache, whereas `tau build` resolves MCP contracts (live or
+/// pinned) and embeds the expanded server-tool nodes. A v2 bundle built
+/// from a project that uses MCP tools therefore re-lowers to a *different*
+/// hash and is conservatively rejected with `IrSourceDivergence` — it
+/// cannot currently be run via `--bundle`. This is the same limitation
+/// `tau verify --bundle` has (see `cmd::verify::run_reproducibility_check`)
+/// and is safe (fail-closed, never fail-open). Wiring the pinned MCP cache
+/// (`build::resolve_mcp_cache(cwd, /*offline=*/true)`) into this re-lowering
+/// so honest MCP bundles verify is a tracked follow-up.
+fn verify_bundle_against_source(
+    cwd: &std::path::Path,
+    bundle_path: &std::path::Path,
+) -> Result<tau_pkg::bundle::VerifyReport, tau_pkg::bundle::VerifyError> {
+    // Empty MCP cache — see the "MCP caveat" in this fn's doc-comment.
+    let empty_mcp_cache = std::collections::BTreeMap::new();
+    let recomputed_ir_hash = crate::cmd::build::lower_ir(
+        cwd,
+        &tau_ports::target::TargetTriple::host(),
+        &empty_mcp_cache,
+        None,
+    )
+    .map(|p| p.canonical_ir_hash);
+
+    tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
+        bundle_path: bundle_path.to_path_buf(),
+        project_root: cwd.to_path_buf(),
+        recomputed_ir_hash,
+    })
+}
+
 /// Maps a [`tau_pkg::bundle::VerifyError`] to its CLI exit code per
 /// spec §C.3: bad-input/config/parse → 2, integrity/install-state → 3,
 /// internal/IO → 70.
@@ -576,7 +617,9 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
         | V::PackageDrift { .. }
         | V::AgentPromptDrift { .. }
         | V::AgentSetMismatch { .. }
-        | V::IrPayloadDrift { .. } => 3,
+        | V::IrPayloadDrift { .. }
+        | V::IrSourceDivergence { .. }
+        | V::IrSourceUnverifiable => 3,
         V::PackageTreeHash { .. } | V::AgentPromptResolve { .. } => 70,
     }
 }
@@ -662,5 +705,118 @@ mod tests {
         let err: anyhow::Error = AgentFailed.into();
         let s = format!("{err}");
         assert!(s.contains("agent failed"), "got: {s}");
+    }
+}
+
+#[cfg(test)]
+mod bundle_source_xcheck_tests {
+    use super::verify_bundle_against_source;
+    use std::collections::BTreeMap;
+    use tau_pkg::bundle::{build, BuildOptions, IrPayload, VerifyError};
+    use tau_ports::target::TargetTriple;
+
+    /// Write a native-tool project whose single tool declares `caps`
+    /// (a TOML capabilities array, e.g. `[]` or `[{ kind = "net.http" }]`).
+    /// The capability set is what makes two otherwise-identical projects
+    /// lower to different IR hashes.
+    fn write_project(root: &std::path::Path, name: &str, caps: &str) {
+        std::fs::write(
+            root.join("tau.toml"),
+            format!(
+                r#"
+[project]
+name = "{name}"
+version = "0.1.0"
+
+[agents.solo]
+display_name = "Solo"
+package = "{name}@^0.1"
+llm_backend = "anthropic"
+
+[agents.solo.prompt]
+system = "hi"
+
+[tools.read_temp]
+native = "ReadTemp"
+description = "reads the temperature"
+capabilities = {caps}
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+    }
+
+    fn lower(root: &std::path::Path) -> IrPayload {
+        let empty = BTreeMap::new();
+        crate::cmd::build::lower_ir(root, &TargetTriple::host(), &empty, None)
+            .expect("native-tool project must lower to Some(IrPayload)")
+    }
+
+    /// Build a bundle in `src_root` but embed `ir_payload`. When
+    /// `ir_payload` comes from a *different* source tree, the bundle's
+    /// recorded tau.toml hash still matches `src_root` (so verify steps
+    /// 6/8 pass) while its IR diverges — exactly the S3 attack shape.
+    fn build_bundle(
+        src_root: &std::path::Path,
+        ir_payload: Option<IrPayload>,
+    ) -> std::path::PathBuf {
+        build(BuildOptions {
+            project_root: src_root.to_path_buf(),
+            target: TargetTriple::host(),
+            output_path: None,
+            agent_filter: None,
+            ir_payload,
+        })
+        .expect("build must succeed")
+        .path
+    }
+
+    #[test]
+    fn run_bundle_rejects_ir_lowered_from_a_different_source() {
+        // A: the source the user ships + inspects (no extra caps).
+        let a = tempfile::tempdir().unwrap();
+        write_project(a.path(), "proj", "[]");
+        // B: a divergent source the attacker lowered the IR from.
+        let b = tempfile::tempdir().unwrap();
+        write_project(b.path(), "proj", "[{ kind = \"net.http\" }]");
+
+        let ir_b = lower(b.path());
+        // Bundle records A's tau.toml hash, but carries B's IR.
+        let bundle = build_bundle(a.path(), Some(ir_b.clone()));
+
+        let err = verify_bundle_against_source(a.path(), &bundle).unwrap_err();
+        match err {
+            VerifyError::IrSourceDivergence {
+                bundle_hash,
+                source_hash,
+            } => {
+                assert_eq!(bundle_hash, ir_b.canonical_ir_hash, "bundle carries B's IR");
+                assert_ne!(source_hash, bundle_hash, "A's re-lowered hash must differ");
+            }
+            other => panic!("expected IrSourceDivergence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_bundle_accepts_genuine_ir() {
+        let a = tempfile::tempdir().unwrap();
+        write_project(a.path(), "proj", "[]");
+        let ir_a = lower(a.path());
+        let bundle = build_bundle(a.path(), Some(ir_a));
+        verify_bundle_against_source(a.path(), &bundle).expect("genuine bundle must verify");
+    }
+
+    #[test]
+    fn run_bundle_v1_unaffected() {
+        // A v1 bundle (no ir_payload) verifies regardless of re-lowering.
+        let a = tempfile::tempdir().unwrap();
+        write_project(a.path(), "proj", "[]");
+        let bundle = build_bundle(a.path(), None);
+        verify_bundle_against_source(a.path(), &bundle).expect("v1 bundle must verify");
     }
 }

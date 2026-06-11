@@ -3,6 +3,21 @@
 //! Confirms a `.tau` bundle matches the source tree at `project_root`
 //! before the CLI dispatches the run. See spec
 //! `2026-05-27-tau-run-bundle-design.md`.
+//!
+//! # What "verified" means here
+//!
+//! This pipeline provides two guarantees and deliberately *not* a third:
+//!
+//! - **Integrity** (step 3, self-hash): the bundle's bytes have not been
+//!   corrupted or altered since its builder sealed it. This is a checksum
+//!   the builder computed over its own output — **not** a signature.
+//! - **Source correspondence** (steps 6, 9, 10): the cwd `tau.toml`, the
+//!   embedded IR bytes, and the IR the source lowers to all agree, so the
+//!   executed workflow matches the source the user inspected.
+//! - **Authenticity is *not* provided.** Nothing here proves *who* built
+//!   the bundle or that its author is trustworthy; there is no signature.
+//!   Trusting a bundle still means trusting whoever produced its source
+//!   (see the `tau install` trust boundary in `SECURITY.md`).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -20,6 +35,11 @@ pub struct VerifyOptions {
     pub bundle_path: PathBuf,
     /// Project source tree to verify against (typically cwd).
     pub project_root: PathBuf,
+    /// The canonical IR hash the caller recomputed by re-lowering the
+    /// cwd source (tau-cli owns lowering — see the design doc's layering
+    /// note). `None` means the caller could not lower the source; for a
+    /// v2 bundle that is a fail-closed refusal (`IrSourceUnverifiable`).
+    pub recomputed_ir_hash: Option<String>,
 }
 
 /// Result of a successful verification.
@@ -67,6 +87,11 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
     let agent_lookup = verify_agent_prompts(&manifest, &opts.project_root)?;
     // Step 9: IR payload integrity (v2 bundles only).
     verify_ir_payload(&manifest)?;
+    // Step 10: cross-check the embedded IR against the verified source.
+    // Steps 6 + 9 prove the tau.toml and the IR bytes individually; this
+    // ties them together so the executed IR cannot diverge from the
+    // inspected source. See the fn doc for the v1 / fail-closed cases.
+    verify_ir_matches_source(&manifest, opts.recomputed_ir_hash.as_deref())?;
     Ok(VerifyReport {
         manifest,
         agent_lookup,
@@ -215,6 +240,43 @@ fn verify_target_matches_host(m: &BundleManifest) -> Result<(), VerifyError> {
     Ok(())
 }
 
+/// Step 10: cross-check the bundle's embedded IR against the verified
+/// source. `recomputed_ir_hash` is the canonical IR hash the caller
+/// produced by re-lowering the cwd `tau.toml` (already proven byte-clean
+/// by step 6).
+///
+/// This is the edge that turns the pipeline's *integrity* guarantee into
+/// a *source-correspondence* guarantee: combined with step 9 (stored
+/// hash == embedded IR bytes), a match here proves the executed IR is
+/// exactly what the inspected `tau.toml` lowers to.
+///
+/// - v1 bundle (`ir_payload` is `None`): no IR to diverge — `Ok`.
+/// - v2 bundle + `recomputed_ir_hash` `Some`: the hashes must be equal,
+///   else [`VerifyError::IrSourceDivergence`].
+/// - v2 bundle + `recomputed_ir_hash` `None`: the source could not be
+///   re-lowered to authenticate the IR — fail closed with
+///   [`VerifyError::IrSourceUnverifiable`].
+fn verify_ir_matches_source(
+    m: &BundleManifest,
+    recomputed_ir_hash: Option<&str>,
+) -> Result<(), VerifyError> {
+    let Some(ir) = &m.ir_payload else {
+        return Ok(()); // v1 bundle — nothing to cross-check.
+    };
+    match recomputed_ir_hash {
+        Some(source_hash) => {
+            if source_hash != ir.canonical_ir_hash {
+                return Err(VerifyError::IrSourceDivergence {
+                    bundle_hash: ir.canonical_ir_hash.clone(),
+                    source_hash: source_hash.to_string(),
+                });
+            }
+            Ok(())
+        }
+        None => Err(VerifyError::IrSourceUnverifiable),
+    }
+}
+
 /// Step 9: if `manifest.ir_payload` is `Some`, verify that the SHA-256
 /// of `canonical_ir_bytes_hex` (decoded) matches the stored `canonical_ir_hash`.
 /// This detects post-build tampering of the IR bytes independent of the
@@ -328,6 +390,10 @@ system = "you are solo"
         VerifyOptions {
             bundle_path,
             project_root: root.to_path_buf(),
+            // Existing tests target steps 1–9; leave step 10 inert. The
+            // happy-path fixture is v1 (no ir_payload), so None is a
+            // no-op here, not a fail-closed refusal.
+            recomputed_ir_hash: None,
         }
     }
 
@@ -603,6 +669,74 @@ system_file = "prompt.md"
             matches!(err, VerifyError::AgentPromptDrift { .. }),
             "got {err:?}"
         );
+    }
+
+    /// Parse the minimal fixture bundle and attach a synthetic, internally
+    /// consistent v2 `ir_payload` (its `canonical_ir_hash` matches its
+    /// bytes). Returns the manifest + the genuine IR hash.
+    fn manifest_with_ir(root: &std::path::Path) -> (BundleManifest, String) {
+        use crate::bundle::manifest::IrPayload;
+        use sha2::{Digest, Sha256};
+        let path = build_minimal_bundle(root);
+        let s = std::fs::read_to_string(&path).unwrap();
+        let mut m = BundleManifest::parse_str(&s).unwrap();
+        let bytes: Vec<u8> = b"genuine ir bytes".to_vec();
+        let mut h = Sha256::new();
+        h.update(&bytes);
+        let hash_bytes: [u8; 32] = h.finalize().into();
+        let hash_hex = crate::tree_hash::to_hex_lower(&hash_bytes);
+        m.ir_payload = Some(IrPayload {
+            ir_format: "v1.0.0".to_string(),
+            canonical_ir_hash: hash_hex.clone(),
+            canonical_ir_bytes_hex: crate::tree_hash::to_hex_lower(&bytes),
+        });
+        (m, hash_hex)
+    }
+
+    #[test]
+    fn ir_xcheck_rejects_divergent_source_hash() {
+        let tmp = tempdir().unwrap();
+        let (m, _genuine) = manifest_with_ir(tmp.path());
+        let err = verify_ir_matches_source(&m, Some("deadbeefdivergent")).unwrap_err();
+        match err {
+            VerifyError::IrSourceDivergence {
+                bundle_hash,
+                source_hash,
+            } => {
+                assert_eq!(source_hash, "deadbeefdivergent");
+                assert_eq!(bundle_hash, m.ir_payload.unwrap().canonical_ir_hash);
+            }
+            other => panic!("expected IrSourceDivergence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ir_xcheck_accepts_matching_source_hash() {
+        let tmp = tempdir().unwrap();
+        let (m, genuine) = manifest_with_ir(tmp.path());
+        verify_ir_matches_source(&m, Some(&genuine)).expect("matching hash must pass");
+    }
+
+    #[test]
+    fn ir_xcheck_fails_closed_when_source_unlowerable() {
+        let tmp = tempdir().unwrap();
+        let (m, _genuine) = manifest_with_ir(tmp.path());
+        let err = verify_ir_matches_source(&m, None).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::IrSourceUnverifiable),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ir_xcheck_noop_for_v1_bundle() {
+        let tmp = tempdir().unwrap();
+        let path = build_minimal_bundle(tmp.path()); // v1 — no ir_payload
+        let s = std::fs::read_to_string(&path).unwrap();
+        let m = BundleManifest::parse_str(&s).unwrap();
+        assert!(m.ir_payload.is_none(), "fixture must be v1 for this test");
+        verify_ir_matches_source(&m, None).expect("v1 + None must pass");
+        verify_ir_matches_source(&m, Some("anything")).expect("v1 + Some must pass");
     }
 
     /// Build a bundle with a synthetic `ir_payload` where the

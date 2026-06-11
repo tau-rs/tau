@@ -119,6 +119,7 @@ fn e2e_build_then_verify_succeeds() {
     let report = verify_bundle(VerifyOptions {
         bundle_path: artifact.path,
         project_root: tmp.path().to_path_buf(),
+        recomputed_ir_hash: None,
     })
     .expect("verify succeeds on freshly-built bundle");
 
@@ -151,6 +152,7 @@ fn e2e_verify_catches_post_build_package_mutation() {
     let err = verify_bundle(VerifyOptions {
         bundle_path: artifact.path,
         project_root: tmp.path().to_path_buf(),
+        recomputed_ir_hash: None,
     })
     .unwrap_err();
     assert!(

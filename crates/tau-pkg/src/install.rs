@@ -25,6 +25,19 @@
 //! parsed. The clone is therefore always performed; the idempotency
 //! short-circuit happens at step (8) before the rename, avoiding only
 //! the disk-write phase.
+//!
+//! # Trust boundary (security)
+//!
+//! `tau install <source>` clones an arbitrary repository and, for a
+//! buildable package, compiles it (`cargo build`, which executes the
+//! package's `build.rs` and proc macros) and may spawn the freshly built
+//! binary for a capability cross-check — all **before** any Layer-4
+//! sandbox or capability enforcement applies. **Installing a package
+//! therefore executes its author's code on your machine: it is equivalent
+//! to trusting that author.** Only install sources you trust. Running the
+//! install-time build under a sandbox tier is tracked as a follow-up
+//! (finding S2); the bundle-vs-source authenticity check (finding S3) is
+//! implemented in `bundle::verify`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -44,3 +44,20 @@ provider.
 `cargo audit` and `cargo-deny` are scheduled for Phase 2 (QG16). Until
 then, dependency vulnerabilities may be reported through this channel
 even if they would normally be flagged by automation.
+
+## Trust boundaries
+
+**`tau install <source>` runs the author's code.** Installing a package
+clones an arbitrary source and builds it — running its `build.rs` and proc
+macros, and possibly the freshly built binary — before any sandbox or
+capability enforcement applies. Installing a package is equivalent to
+trusting its author; only install sources you trust. (Sandboxing the
+install-time build is a tracked follow-up.)
+
+**A verified `.tau` bundle is integrity-checked, not signed.** `tau run
+--bundle` proves a bundle's bytes are intact (integrity) and that its
+embedded IR matches what the local `tau.toml` lowers to (source
+correspondence), so the executed workflow cannot silently diverge from the
+source you inspected. It does **not** prove *who* built the bundle —
+there is no cryptographic signature. Trusting a bundle means trusting
+whoever produced its source.
