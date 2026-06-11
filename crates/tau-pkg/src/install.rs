@@ -582,7 +582,13 @@ fn build_plugin_if_needed(
     }
 
     match plugin_manifest.kind {
-        PluginKind::RustCargo => build_rust_cargo_plugin(plugin_manifest, package_dir, options),
+        PluginKind::RustCargo => build_rust_cargo_plugin(
+            plugin_manifest,
+            manifest.name(),
+            manifest.version(),
+            package_dir,
+            options,
+        ),
         // `PluginKind` is `#[non_exhaustive]`. Future variants (e.g.
         // `PythonPip`, `NodeNpm`, `Prebuilt`) get their own build paths;
         // until then, surface unknown kinds via `Internal` so the user
@@ -597,6 +603,8 @@ fn build_plugin_if_needed(
 /// return the [`LockedPlugin`] for the lockfile.
 fn build_rust_cargo_plugin(
     plugin_manifest: &tau_domain::PluginManifest,
+    package_name: &PackageName,
+    package_version: &Version,
     package_dir: &Path,
     options: &BuildOptions,
 ) -> Result<Option<LockedPlugin>, InstallError> {
@@ -637,12 +645,7 @@ fn build_rust_cargo_plugin(
         cmd.arg(arg);
     }
 
-    eprintln!(
-        "  building {bin} ({kind}) in {dir}...",
-        bin = plugin_manifest.bin,
-        kind = plugin_manifest.kind,
-        dir = package_dir.display(),
-    );
+    log_build_start(package_name, package_version, plugin_manifest, package_dir);
 
     let output = match cmd.output() {
         Ok(o) => o,
@@ -704,6 +707,30 @@ fn build_rust_cargo_plugin(
     )))
 }
 
+/// Emit the build-start lifecycle event for a plugin build.
+///
+/// Factored out of [`build_rust_cargo_plugin`] so the structured event
+/// (target `tau_pkg::install`, `package`/`version` fields) can be
+/// asserted by a capturing subscriber without spawning a real `cargo`
+/// build. Field drift here is caught by
+/// `diagnostics_tracing_tests::build_start_emits_structured_info`.
+fn log_build_start(
+    package_name: &PackageName,
+    package_version: &Version,
+    plugin_manifest: &tau_domain::PluginManifest,
+    package_dir: &Path,
+) {
+    tracing::info!(
+        target: "tau_pkg::install",
+        package = %package_name,
+        version = %package_version,
+        bin = %plugin_manifest.bin,
+        kind = %plugin_manifest.kind,
+        dir = %package_dir.display(),
+        "building plugin binary",
+    );
+}
+
 /// Take the last `max_bytes` bytes of `buf` and decode lossily as UTF-8.
 /// Used to bound the size of [`InstallError::BuildFailed::stderr_tail`].
 fn tail_lossy_utf8(buf: &[u8], max_bytes: usize) -> String {
@@ -711,7 +738,7 @@ fn tail_lossy_utf8(buf: &[u8], max_bytes: usize) -> String {
     String::from_utf8_lossy(&buf[start..]).into_owned()
 }
 
-/// Warn (eprintln) if the manifest's kind isn't a known canonical from
+/// Warn (via `tracing`) if the manifest's kind isn't a known canonical from
 /// `tau_domain::kinds`. v0.1 is permissive — unknown kinds are valid;
 /// the runtime decides what to do with them. NG12: tau is a runtime,
 /// not a framework.
@@ -737,25 +764,27 @@ fn warn_unknown_kind(manifest: &tau_domain::PackageManifest) {
     };
 
     if !known_kinds.contains(&kind_str) {
-        eprintln!(
-            "warning: package {} has unknown kind {:?}; tau-runtime will treat it as opaque",
-            manifest.name(),
-            kind_str,
+        tracing::warn!(
+            target: "tau_pkg::install",
+            package = %manifest.name(),
+            kind = kind_str,
+            "package declares unknown kind; tau-runtime will treat it as opaque",
         );
     }
 }
 
-/// Warn (eprintln) on `Capability::Custom { name }` without a dot-namespaced name.
+/// Warn (via `tracing`) on `Capability::Custom { name }` without a dot-namespaced name.
 /// Encourages `mcp.tool.use` style; permits non-namespaced for forward-compat.
 fn warn_non_namespaced_custom_capabilities(manifest: &tau_domain::PackageManifest) {
     for cap in manifest.capabilities() {
         if let Capability::Custom { name, .. } = cap {
             if !name.contains('.') {
-                eprintln!(
-                    "warning: package {} declares Capability::Custom {{ name = {:?} }} \
-                     without a dot-namespaced name; consider e.g. \"vendor.feature.action\"",
-                    manifest.name(),
-                    name,
+                tracing::warn!(
+                    target: "tau_pkg::install",
+                    package = %manifest.name(),
+                    capability = %name,
+                    "Capability::Custom name is not dot-namespaced; \
+                     consider e.g. \"vendor.feature.action\"",
                 );
             }
         }
@@ -1129,6 +1158,242 @@ mod tests {
         assert!(
             scope.package_dir(&name, &v2).exists(),
             "v2 dir should remain"
+        );
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tracing_tests {
+    use std::sync::{Arc, Mutex};
+
+    use tau_domain::{PackageManifest, UncheckedManifest};
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Level, Subscriber};
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{EnvFilter, Layer};
+
+    /// One captured `tracing` event: its target, level, and the values of
+    /// the `package` / `version` fields (if present).
+    #[derive(Clone, Debug)]
+    struct Captured {
+        target: String,
+        level: Level,
+        package: Option<String>,
+        version: Option<String>,
+        #[allow(dead_code)]
+        message: Option<String>,
+    }
+
+    #[derive(Default, Clone)]
+    struct CaptureLayer(Arc<Mutex<Vec<Captured>>>);
+
+    impl<S: Subscriber> Layer<S> for CaptureLayer {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+            let mut v = FieldVisitor::default();
+            event.record(&mut v);
+            self.0
+                .lock()
+                .expect("capture mutex poisoned")
+                .push(Captured {
+                    target: event.metadata().target().to_string(),
+                    level: *event.metadata().level(),
+                    package: v.package,
+                    version: v.version,
+                    message: v.message,
+                });
+        }
+    }
+
+    /// Extracts the `package` field and the event `message` (recorded by
+    /// `tracing` under the reserved `message` field name). Both arrive via
+    /// `record_str` or `record_debug` depending on the recorder; accept
+    /// both and strip the `Debug` quotes.
+    #[derive(Default)]
+    struct FieldVisitor {
+        package: Option<String>,
+        version: Option<String>,
+        message: Option<String>,
+    }
+
+    impl FieldVisitor {
+        fn set(&mut self, name: &str, value: String) {
+            match name {
+                "package" => self.package = Some(value),
+                "version" => self.version = Some(value),
+                "message" => self.message = Some(value),
+                _ => {}
+            }
+        }
+    }
+
+    impl Visit for FieldVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.set(field.name(), value.to_string());
+        }
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            let raw = format!("{value:?}");
+            self.set(field.name(), raw.trim_matches('"').to_string());
+        }
+    }
+
+    /// Parse + validate a manifest from a TOML body (mirrors the install
+    /// pipeline's `read_manifest`, minus disk I/O).
+    fn manifest_from_toml(body: &str) -> PackageManifest {
+        toml::from_str::<UncheckedManifest>(body)
+            .expect("test manifest TOML parses")
+            .validate()
+            .expect("test manifest validates")
+    }
+
+    /// Minimal valid manifest with an arbitrary `kind` and capability list
+    /// spliced in. `kind` and `caps_toml` are caller-controlled so each
+    /// test drives a specific warn path.
+    fn manifest_toml(kind: &str, caps_toml: &str) -> String {
+        format!(
+            "name = \"acme-tool\"\n\
+             version = \"1.2.3\"\n\
+             description = \"a tool\"\n\
+             authors = [\"Acme <acme@example.com>\"]\n\
+             source = \"https://example.com/acme/tool.git\"\n\
+             kind = \"{kind}\"\n\
+             dependencies = []\n\
+             {caps_toml}\n"
+        )
+    }
+
+    #[test]
+    fn warn_unknown_kind_emits_structured_warn() {
+        let captured = CaptureLayer::default();
+        let _guard = tracing_subscriber::registry()
+            .with(captured.clone())
+            .set_default();
+
+        // `weird-kind` is not in the canonical kinds list → warn path fires.
+        let manifest = manifest_from_toml(&manifest_toml("weird-kind", "capabilities = []"));
+        super::warn_unknown_kind(&manifest);
+
+        let events = captured.0.lock().expect("capture mutex poisoned").clone();
+        let warn = events
+            .iter()
+            .find(|e| e.level == Level::WARN && e.target == "tau_pkg::install")
+            .unwrap_or_else(|| panic!("no WARN @ tau_pkg::install; captured = {events:?}"));
+        assert_eq!(
+            warn.package.as_deref(),
+            Some("acme-tool"),
+            "warn event must carry the package-name field; captured = {events:?}"
+        );
+    }
+
+    #[test]
+    fn warn_non_namespaced_capability_emits_structured_warn() {
+        let captured = CaptureLayer::default();
+        let _guard = tracing_subscriber::registry()
+            .with(captured.clone())
+            .set_default();
+
+        // A capability whose `kind` has no dot deserializes to
+        // `Capability::Custom { name: "mytool" }` → warn path fires.
+        let caps = "[[capabilities]]\nkind = \"mytool\"";
+        let manifest = manifest_from_toml(&manifest_toml("tool", caps));
+        super::warn_non_namespaced_custom_capabilities(&manifest);
+
+        let events = captured.0.lock().expect("capture mutex poisoned").clone();
+        let warn = events
+            .iter()
+            .find(|e| e.level == Level::WARN && e.target == "tau_pkg::install")
+            .unwrap_or_else(|| panic!("no WARN @ tau_pkg::install; captured = {events:?}"));
+        assert_eq!(
+            warn.package.as_deref(),
+            Some("acme-tool"),
+            "warn event must carry the package-name field; captured = {events:?}"
+        );
+    }
+
+    #[test]
+    fn warn_paths_honor_rust_log_filtering() {
+        // Below threshold: RUST_LOG=error suppresses the warn event.
+        {
+            let captured = CaptureLayer::default();
+            let _guard = tracing_subscriber::registry()
+                .with(EnvFilter::new("error"))
+                .with(captured.clone())
+                .set_default();
+            let manifest = manifest_from_toml(&manifest_toml("weird-kind", "capabilities = []"));
+            super::warn_unknown_kind(&manifest);
+            let events = captured.0.lock().expect("capture mutex poisoned").clone();
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| e.target == "tau_pkg::install" && e.level == Level::WARN),
+                "RUST_LOG=error must suppress the warn advisory; captured = {events:?}"
+            );
+        }
+        // At threshold: RUST_LOG=warn lets it through.
+        {
+            let captured = CaptureLayer::default();
+            let _guard = tracing_subscriber::registry()
+                .with(EnvFilter::new("warn"))
+                .with(captured.clone())
+                .set_default();
+            let manifest = manifest_from_toml(&manifest_toml("weird-kind", "capabilities = []"));
+            super::warn_unknown_kind(&manifest);
+            let events = captured.0.lock().expect("capture mutex poisoned").clone();
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e.target == "tau_pkg::install" && e.level == Level::WARN),
+                "RUST_LOG=warn must admit the warn advisory; captured = {events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_start_emits_structured_info() {
+        let captured = CaptureLayer::default();
+        let _guard = tracing_subscriber::registry()
+            .with(captured.clone())
+            .set_default();
+
+        // Manifest with a `[plugin]` table so `.plugin()` is `Some`.
+        let body = "name = \"acme-tool\"\n\
+                    version = \"1.2.3\"\n\
+                    description = \"a tool\"\n\
+                    authors = [\"Acme <acme@example.com>\"]\n\
+                    source = \"https://example.com/acme/tool.git\"\n\
+                    kind = \"tool\"\n\
+                    dependencies = []\n\
+                    capabilities = []\n\
+                    \n\
+                    [plugin]\n\
+                    provides = \"tool\"\n\
+                    kind = \"rust-cargo\"\n\
+                    bin = \"acme-tool\"\n";
+        let manifest = manifest_from_toml(body);
+        let plugin = manifest.plugin().expect("manifest has a [plugin] table");
+
+        // Drive only the logging helper — no real `cargo` build.
+        super::log_build_start(
+            manifest.name(),
+            manifest.version(),
+            plugin,
+            std::path::Path::new("/tmp/acme-pkg"),
+        );
+
+        let events = captured.0.lock().expect("capture mutex poisoned").clone();
+        let info = events
+            .iter()
+            .find(|e| e.level == Level::INFO && e.target == "tau_pkg::install")
+            .unwrap_or_else(|| panic!("no INFO @ tau_pkg::install; captured = {events:?}"));
+        assert_eq!(
+            info.package.as_deref(),
+            Some("acme-tool"),
+            "build-start event must carry the package-name field; captured = {events:?}"
+        );
+        assert_eq!(
+            info.version.as_deref(),
+            Some("1.2.3"),
+            "build-start event must carry the version field; captured = {events:?}"
         );
     }
 }
