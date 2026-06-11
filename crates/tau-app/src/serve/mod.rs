@@ -34,7 +34,7 @@ pub use framing::Inbound;
 #[doc(hidden)]
 pub use handshake::HandshakeState;
 #[doc(hidden)]
-pub use project::Project;
+pub use project::{Project, ResolveError};
 #[doc(hidden)]
 pub use protocol::{Outbound, RequestId};
 

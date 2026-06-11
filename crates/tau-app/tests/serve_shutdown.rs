@@ -31,6 +31,7 @@ async fn eof_triggers_clean_shutdown() {
         out_rx: _out,
         cancel_reg: _cr,
         dispatcher_thread: thread,
+        ..
     } = Harness::new(fixture_dir()).await;
 
     // Send EOF signal through the input channel.
@@ -61,6 +62,7 @@ async fn channel_close_triggers_shutdown() {
         out_rx: _out,
         cancel_reg: _cr,
         dispatcher_thread: thread,
+        ..
     } = Harness::new(fixture_dir()).await;
 
     // Drop the sender immediately — no messages sent at all.
@@ -91,6 +93,7 @@ async fn shutdown_after_handshake() {
         out_rx: _out,
         cancel_reg: _cr,
         dispatcher_thread: thread,
+        ..
     } = h;
     drop(in_tx);
 

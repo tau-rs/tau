@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 /// Outcome of reading one line from stdin.
 #[derive(Debug)]
@@ -68,11 +69,14 @@ pub async fn writer_task(mut rx: mpsc::Receiver<Outbound>, activity: Activity) -
         activity.touch();
         let mut line = serde_json::to_string(&out).context("serialize outbound message")?;
         line.push('\n');
-        stdout
-            .write_all(line.as_bytes())
-            .await
-            .context("stdout write failed")?;
-        stdout.flush().await.ok();
+        if let Err(e) = stdout.write_all(line.as_bytes()).await {
+            warn!(error = %e, "stdout write failed; writer task exiting");
+            return Err(e).context("stdout write failed");
+        }
+        if let Err(e) = stdout.flush().await {
+            warn!(error = %e, "stdout flush failed; writer task exiting");
+            return Err(e).context("stdout flush failed");
+        }
     }
     Ok(())
 }

@@ -16,10 +16,11 @@
 //! - `Scope::resolve(root)` is used instead (walk-up from project root,
 //!   no side-effecting directory creation).
 //! - Unknown-agent detection is done in [`Project::resolve`] by returning
-//!   an `anyhow::Error` wrapping a plain message; the dispatcher (Task 10)
-//!   pattern-matches the error string for `-32010 Unknown agent` mapping.
+//!   the typed [`ResolveError::AgentNotFound`] variant; the dispatcher
+//!   (Task 10) maps that single typed path to JSON-RPC `-32010 Unknown
+//!   agent`. There is no string-prefix error contract.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tau_domain::{AgentDefinition, PackageManifest};
 use tau_pkg::project::{build_agent_definition, AgentResolutionError, ProjectConfig};
@@ -38,6 +39,26 @@ pub struct Project {
     pub scope: Scope,
     /// Parsed tau.toml.
     pub config: ProjectConfig,
+}
+
+/// Error returned by [`Project::resolve`].
+///
+/// Typed so the dispatcher routes unknown agents to `-32010 Unknown agent`
+/// through one match arm — no string-prefix sniffing.
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveError {
+    /// `agent_id` is not defined in the project's `tau.toml`.
+    #[error("agent {agent_id:?} is not defined in {root}")]
+    AgentNotFound {
+        /// The unknown agent id, echoed back in the JSON-RPC error data.
+        agent_id: String,
+        /// Project root, for the human-readable message.
+        root: String,
+    },
+    /// Package resolution failed (not installed, version unsatisfied, manifest
+    /// invalid). Flows to `-32006 RUNTIME_ERROR` at the dispatcher.
+    #[error(transparent)]
+    Resolution(#[from] AgentResolutionError),
 }
 
 impl Project {
@@ -61,25 +82,50 @@ impl Project {
 
     /// Resolve an agent id to `(AgentDefinition, PackageManifest)`.
     ///
-    /// Returns `Err` on:
-    /// - Unknown agent id: error message begins with `"agent not found: "`.
-    ///   The dispatcher (Task 10) maps this to JSON-RPC `-32010 Unknown agent`.
-    /// - Package not installed / version not satisfied / manifest invalid:
-    ///   flows through the standard `AgentResolutionError` path.
-    pub fn resolve(&self, agent_id: &str) -> Result<(AgentDefinition, PackageManifest)> {
-        let entry = self.config.agents.get(agent_id).ok_or_else(|| {
-            anyhow!(
-                "agent not found: {:?} is not defined in {}",
-                agent_id,
-                self.root.display()
-            )
-        })?;
-        build_agent_definition(entry, &self.root, &self.scope)
-            .map_err(|e: AgentResolutionError| anyhow!(e))
+    /// Returns [`ResolveError::AgentNotFound`] for an unknown agent id and
+    /// [`ResolveError::Resolution`] for package/manifest failures. The
+    /// dispatcher maps these to `-32010` and `-32006` respectively.
+    pub fn resolve(
+        &self,
+        agent_id: &str,
+    ) -> std::result::Result<(AgentDefinition, PackageManifest), ResolveError> {
+        let entry =
+            self.config
+                .agents
+                .get(agent_id)
+                .ok_or_else(|| ResolveError::AgentNotFound {
+                    agent_id: agent_id.to_string(),
+                    root: self.root.display().to_string(),
+                })?;
+        Ok(build_agent_definition(entry, &self.root, &self.scope)?)
     }
 
     /// List all agent ids defined in the project's `tau.toml`.
     pub fn agent_ids(&self) -> Vec<String> {
         self.config.agents.keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/handshake-only")
+    }
+
+    #[tokio::test]
+    async fn resolve_unknown_agent_returns_typed_variant() {
+        // The handshake-only fixture defines zero agents, so any id is unknown.
+        let tau_home = std::env::temp_dir().join("tau-project-unit-test");
+        std::fs::create_dir_all(&tau_home).unwrap();
+        std::env::set_var("TAU_HOME", &tau_home);
+
+        let project = Project::load(&fixture_dir()).await.expect("load fixture");
+        let err = project.resolve("no-such-agent").unwrap_err();
+        assert!(
+            matches!(err, ResolveError::AgentNotFound { ref agent_id, .. } if agent_id == "no-such-agent"),
+            "expected typed AgentNotFound, got: {err:?}"
+        );
     }
 }
