@@ -446,6 +446,26 @@ async fn wait_for_shutdown_signal() {
     info!("received Ctrl-C");
 }
 
+/// On Linux, ask the kernel to deliver SIGTERM to us when our parent dies.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn set_pdeathsig() {
+    // SAFETY: prctl is async-signal-safe; the SIGTERM target is the
+    // current process which always exists. This is the only unsafe
+    // block in tau-app — see the crate-level lib.rs note for context.
+    unsafe {
+        libc::prctl(
+            libc::PR_SET_PDEATHSIG,
+            libc::SIGTERM as libc::c_ulong,
+            0,
+            0,
+            0,
+        );
+    }
+}
+
+// NB: keep this test module last — `clippy::items_after_test_module` (deny)
+// rejects any item declared after a `#[cfg(test)] mod tests`.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,23 +535,5 @@ mod tests {
     fn serve_plan_for_zero_capabilities_is_empty_not_none() {
         let plan = plan_for_plugin(&[], &[]).expect("serve must build a plan");
         assert!(plan.capabilities.is_empty());
-    }
-}
-
-/// On Linux, ask the kernel to deliver SIGTERM to us when our parent dies.
-#[cfg(target_os = "linux")]
-#[allow(unsafe_code)]
-fn set_pdeathsig() {
-    // SAFETY: prctl is async-signal-safe; the SIGTERM target is the
-    // current process which always exists. This is the only unsafe
-    // block in tau-app — see the crate-level lib.rs note for context.
-    unsafe {
-        libc::prctl(
-            libc::PR_SET_PDEATHSIG,
-            libc::SIGTERM as libc::c_ulong,
-            0,
-            0,
-            0,
-        );
     }
 }
