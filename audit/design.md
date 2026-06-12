@@ -131,6 +131,15 @@ and so the env var never leaks into plugin builds.
 
 ### D7. The only working secret-provisioning path is the one the code discourages
 
+**Status:** ✅ Resolved by #306 (commit `1db8fdd`). `process.rs` now defines a
+`SECRET_ENV_ALLOWLIST` (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`OLLAMA_BEARER_TOKEN`)
+and `configure_plugin_command_env` re-injects those names from the parent env
+*after* `env_clear()`, so the documented env-var path works without nudging users
+toward the test-only `config.api_key`. Covered by the unit test
+`configure_plugin_command_env_injects_allowlisted_secrets_only` (asserts the three
+secrets cross over while non-allowlisted vars like `AWS_SECRET_ACCESS_KEY` stay
+cleared).
+
 **Severity:** Medium (DX facet of S1)
 **Locations:** `crates/tau-plugins/anthropic/src/config.rs:39-43, 150-160`; `crates/tau-runtime-tokio/src/plugin_host/process.rs:213`
 
