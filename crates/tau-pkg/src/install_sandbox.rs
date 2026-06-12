@@ -288,8 +288,13 @@ pub(crate) mod tests {
         )
         .unwrap();
         let plan = build_envelope(dir.path());
-        let json = serde_json::to_value(&plan.capabilities).unwrap().to_string();
-        assert!(json.contains("index.crates.io"), "registry host present: {json}");
+        let json = serde_json::to_value(&plan.capabilities)
+            .unwrap()
+            .to_string();
+        assert!(
+            json.contains("index.crates.io"),
+            "registry host present: {json}"
+        );
         assert!(json.contains("static.crates.io"));
         assert!(json.contains("net.http"));
         assert!(json.contains("fs.write"));
@@ -308,7 +313,10 @@ pub(crate) mod tests {
         .unwrap();
         let hosts = git_dep_hosts(dir.path());
         assert!(hosts.contains(&"github.com".to_string()), "got {hosts:?}");
-        assert!(hosts.contains(&"gitlab.example.com".to_string()), "got {hosts:?}");
+        assert!(
+            hosts.contains(&"gitlab.example.com".to_string()),
+            "got {hosts:?}"
+        );
     }
 
     #[test]
@@ -325,33 +333,57 @@ pub(crate) mod tests {
 
     #[test]
     fn host_of_url_handles_scp_and_url_forms() {
-        assert_eq!(host_of_git_url("https://github.com/a/b"), Some("github.com".into()));
+        assert_eq!(
+            host_of_git_url("https://github.com/a/b"),
+            Some("github.com".into())
+        );
         assert_eq!(
             host_of_git_url("ssh://git@host.example:22/a/b"),
             Some("host.example".into())
         );
-        assert_eq!(host_of_git_url("git@github.com:a/b.git"), Some("github.com".into()));
+        assert_eq!(
+            host_of_git_url("git@github.com:a/b.git"),
+            Some("github.com".into())
+        );
         assert_eq!(host_of_git_url("not a url"), None);
     }
 
     #[test]
     fn decision_enforced_gate_sandboxes() {
         let g = MockInstallSandbox::new(true);
-        assert!(matches!(sandbox_decision(Some(&g), false), SandboxDecision::Sandbox));
-        assert!(matches!(sandbox_decision(Some(&g), true), SandboxDecision::Sandbox));
+        assert!(matches!(
+            sandbox_decision(Some(&g), false),
+            SandboxDecision::Sandbox
+        ));
+        assert!(matches!(
+            sandbox_decision(Some(&g), true),
+            SandboxDecision::Sandbox
+        ));
     }
 
     #[test]
     fn decision_unenforced_gate_refuses_without_flag() {
         let g = MockInstallSandbox::new(false);
-        assert!(matches!(sandbox_decision(Some(&g), false), SandboxDecision::Refuse));
-        assert!(matches!(sandbox_decision(None, false), SandboxDecision::Refuse));
+        assert!(matches!(
+            sandbox_decision(Some(&g), false),
+            SandboxDecision::Refuse
+        ));
+        assert!(matches!(
+            sandbox_decision(None, false),
+            SandboxDecision::Refuse
+        ));
     }
 
     #[test]
     fn decision_allow_flag_permits_unsandboxed() {
         let g = MockInstallSandbox::new(false);
-        assert!(matches!(sandbox_decision(Some(&g), true), SandboxDecision::Unsandboxed));
-        assert!(matches!(sandbox_decision(None, true), SandboxDecision::Unsandboxed));
+        assert!(matches!(
+            sandbox_decision(Some(&g), true),
+            SandboxDecision::Unsandboxed
+        ));
+        assert!(matches!(
+            sandbox_decision(None, true),
+            SandboxDecision::Unsandboxed
+        ));
     }
 }

@@ -989,7 +989,10 @@ mod tests {
         let Command::Install(args) = cli.command else {
             panic!()
         };
-        assert!(!args.allow_unsandboxed_build, "off by default (fail-closed)");
+        assert!(
+            !args.allow_unsandboxed_build,
+            "off by default (fail-closed)"
+        );
 
         let cli = Cli::parse_from([
             "tau",

@@ -50,9 +50,7 @@ use tau_domain::{kinds, Capability, PackageName, PackageSource, PluginKind, Vers
 
 use crate::error::{InstallError, UninstallError};
 use crate::git::Git;
-use crate::install_sandbox::{
-    build_envelope, sandbox_decision, InstallSandbox, SandboxDecision,
-};
+use crate::install_sandbox::{build_envelope, sandbox_decision, InstallSandbox, SandboxDecision};
 use crate::lockfile::{
     LockFile, LockedPackage, LockedPlugin, LockedSkill, LockedVersion, SkillFrontmatterSnapshot,
 };
@@ -1126,7 +1124,10 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(matches!(err, crate::error::InstallError::UnsandboxedBuildRefused));
+        assert!(matches!(
+            err,
+            crate::error::InstallError::UnsandboxedBuildRefused
+        ));
     }
 
     #[test]
@@ -1142,8 +1143,10 @@ mod tests {
             "[package]\nname=\"p\"\nversion=\"0.1.0\"\n",
         )
         .unwrap();
-        let mut opts = BuildOptions::default();
-        opts.cargo_path = Some(std::path::PathBuf::from("/nonexistent/cargo-xyz"));
+        let opts = BuildOptions {
+            cargo_path: Some(std::path::PathBuf::from("/nonexistent/cargo-xyz")),
+            ..Default::default()
+        };
         let _ = run_cargo_build_gated(
             dir.path(),
             &dir.path().join("target"),
@@ -1155,7 +1158,9 @@ mod tests {
         let calls = gate.calls.lock().unwrap();
         assert_eq!(calls.len(), 1, "gate.wrap called exactly once");
         // The plan handed to the gate is the build envelope (has net.http).
-        let json = serde_json::to_value(&calls[0].capabilities).unwrap().to_string();
+        let json = serde_json::to_value(&calls[0].capabilities)
+            .unwrap()
+            .to_string();
         assert!(json.contains("net.http"), "build envelope passed: {json}");
     }
 
