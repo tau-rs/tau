@@ -396,6 +396,12 @@ pub struct InstallArgs {
     /// Validate the install without writing to disk or updating the lockfile.
     #[arg(long)]
     pub dry_run: bool,
+    /// Allow the package's `cargo build` (and the post-build cross-check) to
+    /// run WITHOUT an OS sandbox when no enforcing sandbox is available on this
+    /// host. Install-time build code (build.rs, proc macros) then runs with
+    /// full host access. Off by default — install fails closed (audit S2).
+    #[arg(long)]
+    pub allow_unsandboxed_build: bool,
 }
 
 /// Arguments for `tau list`.
@@ -975,6 +981,29 @@ mod tests {
         };
         assert!(args.global);
         assert!(args.dry_run);
+    }
+
+    #[test]
+    fn install_allow_unsandboxed_build_defaults_off_and_parses() {
+        let cli = Cli::parse_from(["tau", "install", "https://example.com/p.git"]);
+        let Command::Install(args) = cli.command else {
+            panic!()
+        };
+        assert!(
+            !args.allow_unsandboxed_build,
+            "off by default (fail-closed)"
+        );
+
+        let cli = Cli::parse_from([
+            "tau",
+            "install",
+            "https://example.com/p.git",
+            "--allow-unsandboxed-build",
+        ]);
+        let Command::Install(args) = cli.command else {
+            panic!()
+        };
+        assert!(args.allow_unsandboxed_build);
     }
 
     #[test]

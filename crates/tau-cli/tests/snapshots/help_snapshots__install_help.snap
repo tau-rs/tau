@@ -17,6 +17,9 @@ Options:
       --dry-run
           Validate the install without writing to disk or updating the lockfile
 
+      --allow-unsandboxed-build
+          Allow the package's `cargo build` (and the post-build cross-check) to run WITHOUT an OS sandbox when no enforcing sandbox is available on this host. Install-time build code (build.rs, proc macros) then runs with full host access. Off by default — install fails closed (audit S2)
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

@@ -12,6 +12,7 @@ pub mod dev;
 pub mod error_render;
 pub mod init;
 pub mod install;
+pub mod install_sandbox;
 pub(crate) mod ir_dispatcher;
 pub mod list;
 pub mod mcp;

@@ -40,6 +40,15 @@ use tempfile::TempDir;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/// Default options with the unsandboxed-build escape hatch enabled. tau-pkg
+/// tests inject no sandbox gate, so a real build would otherwise fail closed
+/// (audit S2).
+fn unsandboxed_opts() -> InstallOptions {
+    let mut opts = InstallOptions::default();
+    opts.allow_unsandboxed_build = true;
+    opts
+}
+
 /// Returns true if `git` is available on PATH.
 fn git_available() -> bool {
     Command::new("git")
@@ -147,7 +156,7 @@ fn cross_check_skipped_for_data_only_package() {
     let source = PackageSource::from_str(&fixtures::file_url(&bare)).unwrap();
 
     // Should succeed: data-only package, no cross-check attempted.
-    let installed = install_with_options(&source, &scope, InstallOptions::default()).unwrap();
+    let installed = install_with_options(&source, &scope, unsandboxed_opts()).unwrap();
     assert_eq!(installed.name.as_str(), "data-only-crosscheck");
 
     let lf = LockFile::load(&scope.lockfile_path()).unwrap();
@@ -236,7 +245,7 @@ fn cross_check_fires_and_fails_for_non_protocol_binary() {
     let bare = make_plugin_repo_no_protocol(tmp.path(), "no-proto-plugin", "0.1.0");
     let source = PackageSource::from_str(&fixtures::file_url(&bare)).unwrap();
 
-    let result = install_with_options(&source, &scope, InstallOptions::default());
+    let result = install_with_options(&source, &scope, unsandboxed_opts());
     let err = result.expect_err("expected install to fail with CrossCheck");
 
     assert!(
@@ -457,7 +466,7 @@ fn install_with_matching_manifest_succeeds_and_populates_required_shapes() {
     );
     let source = PackageSource::from_str(&fixtures::file_url(&bare)).unwrap();
 
-    let installed = install_with_options(&source, &scope, InstallOptions::default())
+    let installed = install_with_options(&source, &scope, unsandboxed_opts())
         .expect("install with matching manifest should succeed");
     assert_eq!(installed.name.as_str(), "match-plugin");
 
@@ -512,7 +521,7 @@ fn install_force_after_cross_check_fix_succeeds() {
     let bare = make_relay_plugin_repo(tmp.path(), "force-plugin", "0.1.0", caps_unused, echo_tool);
     let source = PackageSource::from_str(&fixtures::file_url(&bare)).unwrap();
 
-    let err = install_with_options(&source, &scope, InstallOptions::default())
+    let err = install_with_options(&source, &scope, unsandboxed_opts())
         .expect_err("install should fail with CrossCheck for declared-but-unused capability");
     assert!(
         matches!(err, tau_pkg::InstallError::CrossCheck { .. }),
@@ -552,6 +561,7 @@ fn install_force_after_cross_check_fix_succeeds() {
     // ── Step 3: re-install with force=true ───────────────────────────────────
     let mut opts = InstallOptions::default();
     opts.force = true;
+    opts.allow_unsandboxed_build = true;
     let installed = install_with_options(&source, &scope, opts)
         .expect("install --force after fix should succeed");
     assert_eq!(installed.name.as_str(), "force-plugin");

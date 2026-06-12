@@ -42,6 +42,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use fs4::FileExt;
@@ -49,6 +50,7 @@ use tau_domain::{kinds, Capability, PackageName, PackageSource, PluginKind, Vers
 
 use crate::error::{InstallError, UninstallError};
 use crate::git::Git;
+use crate::install_sandbox::{build_envelope, sandbox_decision, InstallSandbox, SandboxDecision};
 use crate::lockfile::{
     LockFile, LockedPackage, LockedPlugin, LockedSkill, LockedVersion, SkillFrontmatterSnapshot,
 };
@@ -154,8 +156,11 @@ impl BuildOptions {
 }
 
 /// Options for [`install_with_options`].
+///
+/// `Debug` is hand-written rather than derived because [`InstallOptions::sandbox`]
+/// is a trait object that does not implement `Debug`.
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InstallOptions {
     /// If `true` (default), wait indefinitely for a concurrent install
     /// to release the advisory file lock. If `false`, error
@@ -178,6 +183,28 @@ pub struct InstallOptions {
     /// `meta.handshake` protocol set this to `true` to bypass the
     /// cross-check.
     pub skip_cross_check: bool,
+    /// Install-time sandbox gate, injected by the caller (`tau-cli`). When an
+    /// enforcing gate is present, the build + cross-check run sandboxed. When
+    /// absent (or non-enforcing), the install fails closed unless
+    /// `allow_unsandboxed_build` is set. Default: `None` (audit S2).
+    pub sandbox: Option<Arc<dyn InstallSandbox>>,
+    /// Explicit escape hatch: permit an unsandboxed build/cross-check when no
+    /// enforcing gate is available. Maps to `tau install
+    /// --allow-unsandboxed-build`. Default: `false` (fail-closed).
+    pub allow_unsandboxed_build: bool,
+}
+
+impl std::fmt::Debug for InstallOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallOptions")
+            .field("block_on_lock", &self.block_on_lock)
+            .field("force", &self.force)
+            .field("build", &self.build)
+            .field("skip_cross_check", &self.skip_cross_check)
+            .field("sandbox", &self.sandbox.as_ref().map(|_| "<gate>"))
+            .field("allow_unsandboxed_build", &self.allow_unsandboxed_build)
+            .finish()
+    }
 }
 
 impl Default for InstallOptions {
@@ -187,6 +214,8 @@ impl Default for InstallOptions {
             force: false,
             build: BuildOptions::default(),
             skip_cross_check: false,
+            sandbox: None,
+            allow_unsandboxed_build: false,
         }
     }
 }
@@ -442,7 +471,13 @@ pub fn install_with_options(
         // updated, but the cloned source is left in place so users can
         // diagnose without re-cloning. Users retry with `tau install
         // --force` or inspect the failure under the package dir.
-        let mut locked_plugin = build_plugin_if_needed(&manifest, &target, &options.build)?;
+        let mut locked_plugin = build_plugin_if_needed(
+            &manifest,
+            &target,
+            &options.build,
+            options.sandbox.as_deref(),
+            options.allow_unsandboxed_build,
+        )?;
 
         // Step 8.7: Layer 2 cross-check — spawn the freshly-built binary,
         // perform handshake + per-method tool.describe_capabilities, compare
@@ -463,10 +498,14 @@ pub fn install_with_options(
             if let Some(ref mut lp) = locked_plugin {
                 let binary_path = lp.binary_path.clone();
                 let manifest_for_check = manifest.clone();
+                let gate_for_check = options.sandbox.clone();
+                let allow_for_check = options.allow_unsandboxed_build;
                 let shapes = block_on_in_fresh_thread(move || async move {
-                    crate::sandbox_check::cross_check_plugin_capabilities(
+                    crate::sandbox_check::cross_check_plugin_capabilities_gated(
                         &binary_path,
                         &manifest_for_check,
+                        gate_for_check.as_deref(),
+                        allow_for_check,
                     )
                     .await
                 })?
@@ -623,6 +662,8 @@ fn build_plugin_if_needed(
     manifest: &tau_domain::PackageManifest,
     package_dir: &Path,
     options: &BuildOptions,
+    gate: Option<&dyn InstallSandbox>,
+    allow_unsandboxed_build: bool,
 ) -> Result<Option<LockedPlugin>, InstallError> {
     let Some(plugin_manifest) = manifest.plugin() else {
         return Ok(None);
@@ -638,6 +679,8 @@ fn build_plugin_if_needed(
             manifest.version(),
             package_dir,
             options,
+            gate,
+            allow_unsandboxed_build,
         ),
         // `PluginKind` is `#[non_exhaustive]`. Future variants (e.g.
         // `PythonPip`, `NodeNpm`, `Prebuilt`) get their own build paths;
@@ -649,6 +692,71 @@ fn build_plugin_if_needed(
     }
 }
 
+/// Construct the `cargo build` command, apply the fail-closed sandbox
+/// decision, wrap the command under the gate when enforcing, and spawn it.
+///
+/// Fail-closed (audit S2): with no enforcing gate and no
+/// `--allow-unsandboxed-build`, this refuses with
+/// [`InstallError::UnsandboxedBuildRefused`] *before* spawning anything.
+fn run_cargo_build_gated(
+    package_dir: &Path,
+    target_dir: &Path,
+    bin: &str,
+    options: &BuildOptions,
+    gate: Option<&dyn InstallSandbox>,
+    allow_unsandboxed_build: bool,
+) -> Result<std::process::Output, InstallError> {
+    let cargo = options
+        .cargo_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("cargo"));
+
+    let mut cmd = Command::new(&cargo);
+    cmd.arg("build")
+        .arg("--release")
+        .arg("--bin")
+        .arg(bin)
+        .current_dir(package_dir)
+        .env("CARGO_TARGET_DIR", target_dir);
+    for arg in &options.extra_args {
+        cmd.arg(arg);
+    }
+
+    // Decide-then-wrap-then-spawn. The guard holds any sandbox resources
+    // (egress proxy, namespace fds) and must outlive `cmd.output()`.
+    let _guard = match sandbox_decision(gate, allow_unsandboxed_build) {
+        SandboxDecision::Sandbox => {
+            let plan = build_envelope(package_dir);
+            let g = gate.expect("Sandbox decision implies a gate is present");
+            Some(
+                g.wrap(&plan, &mut cmd)
+                    .map_err(|e| InstallError::Internal {
+                        message: format!("wrapping cargo build in sandbox: {e}"),
+                    })?,
+            )
+        }
+        SandboxDecision::Unsandboxed => {
+            tracing::warn!(
+                target: "tau_pkg::install",
+                "building untrusted package code WITHOUT a sandbox \
+                 (--allow-unsandboxed-build); build.rs runs with full host access",
+            );
+            None
+        }
+        SandboxDecision::Refuse => return Err(InstallError::UnsandboxedBuildRefused),
+    };
+
+    cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            InstallError::CargoNotFound
+        } else {
+            InstallError::Internal {
+                message: format!("spawning cargo at {}: {e}", cargo.display()),
+            }
+        }
+    })
+}
+
 /// Run `cargo build --release --bin <plugin.bin>` in `package_dir` and
 /// return the [`LockedPlugin`] for the lockfile.
 fn build_rust_cargo_plugin(
@@ -657,12 +765,9 @@ fn build_rust_cargo_plugin(
     package_version: &Version,
     package_dir: &Path,
     options: &BuildOptions,
+    gate: Option<&dyn InstallSandbox>,
+    allow_unsandboxed_build: bool,
 ) -> Result<Option<LockedPlugin>, InstallError> {
-    let cargo = options
-        .cargo_path
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("cargo"));
-
     // Single source of truth for where this plugin's build artifacts
     // land. Both the spawned build (via `CARGO_TARGET_DIR`) and the
     // binary-path lookup below derive from `target_dir`, so they can
@@ -684,30 +789,16 @@ fn build_rust_cargo_plugin(
     // it against the spawned build's cwd (also `package_dir`).
     let target_dir = package_dir.join("target");
 
-    let mut cmd = Command::new(&cargo);
-    cmd.arg("build")
-        .arg("--release")
-        .arg("--bin")
-        .arg(&plugin_manifest.bin)
-        .current_dir(package_dir)
-        .env("CARGO_TARGET_DIR", &target_dir);
-    for arg in &options.extra_args {
-        cmd.arg(arg);
-    }
-
     log_build_start(package_name, package_version, plugin_manifest, package_dir);
 
-    let output = match cmd.output() {
-        Ok(o) => o,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(InstallError::CargoNotFound);
-        }
-        Err(e) => {
-            return Err(InstallError::Internal {
-                message: format!("spawning cargo at {}: {e}", cargo.display()),
-            });
-        }
-    };
+    let output = run_cargo_build_gated(
+        package_dir,
+        &target_dir,
+        &plugin_manifest.bin,
+        options,
+        gate,
+        allow_unsandboxed_build,
+    )?;
 
     // Stream cargo's captured output to the host's stderr so users see
     // build progress. (We capture rather than inherit so we can record
@@ -996,6 +1087,115 @@ mod tests {
         // an ambient async context. The off-thread bridge does not.
         let v = block_on_in_fresh_thread(|| async { 9 }).unwrap();
         assert_eq!(v, 9);
+    }
+
+    // ── audit S2: install-time sandbox ────────────────────────────────────────
+
+    #[test]
+    fn unsandboxed_refused_error_names_the_flag() {
+        let e = crate::error::InstallError::UnsandboxedBuildRefused;
+        assert!(e.to_string().contains("--allow-unsandboxed-build"), "{e}");
+    }
+
+    #[test]
+    fn install_options_default_is_fail_closed() {
+        let o = InstallOptions::default();
+        assert!(o.sandbox.is_none());
+        assert!(!o.allow_unsandboxed_build);
+    }
+
+    #[test]
+    fn build_refuses_when_unsandboxed_and_not_allowed() {
+        use crate::install_sandbox::tests::MockInstallSandbox;
+        // A non-enforcing gate + no allow flag must refuse BEFORE spawning cargo.
+        let gate = MockInstallSandbox::new(false);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname=\"p\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        let err = run_cargo_build_gated(
+            dir.path(),
+            &dir.path().join("target"),
+            "p-bin",
+            &BuildOptions::default(),
+            Some(&gate),
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::error::InstallError::UnsandboxedBuildRefused
+        ));
+    }
+
+    #[test]
+    fn build_wraps_with_build_envelope_when_enforced() {
+        use crate::install_sandbox::tests::MockInstallSandbox;
+        // An enforcing gate is consulted with the build envelope before spawn.
+        // We point cargo at a nonexistent binary so the spawn fails fast with
+        // CargoNotFound — but the gate must already have been asked to wrap.
+        let gate = MockInstallSandbox::new(true);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname=\"p\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        let opts = BuildOptions {
+            cargo_path: Some(std::path::PathBuf::from("/nonexistent/cargo-xyz")),
+            ..Default::default()
+        };
+        let _ = run_cargo_build_gated(
+            dir.path(),
+            &dir.path().join("target"),
+            "p-bin",
+            &opts,
+            Some(&gate),
+            false,
+        );
+        let calls = gate.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "gate.wrap called exactly once");
+        // The plan handed to the gate is the build envelope (has net.http).
+        let json = serde_json::to_value(&calls[0].capabilities)
+            .unwrap()
+            .to_string();
+        assert!(json.contains("net.http"), "build envelope passed: {json}");
+    }
+
+    #[tokio::test]
+    async fn cross_check_refuses_unsandboxed_without_flag() {
+        use crate::install_sandbox::tests::MockInstallSandbox;
+        let gate = MockInstallSandbox::new(false);
+        // Minimal valid manifest; the refuse decision precedes any manifest use.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("tau.toml"),
+            "name = \"acme-tool\"\n\
+             version = \"1.2.3\"\n\
+             description = \"a tool\"\n\
+             authors = [\"Acme <acme@example.com>\"]\n\
+             source = \"https://example.com/acme/tool.git\"\n\
+             kind = \"tool\"\n\
+             dependencies = []\n\
+             capabilities = []\n",
+        )
+        .unwrap();
+        let manifest = read_manifest(&dir.path().join("tau.toml")).unwrap();
+        // Binary path need not exist: the fail-closed decision precedes spawn.
+        let err = crate::sandbox_check::cross_check_plugin_capabilities_gated(
+            std::path::Path::new("/nonexistent/bin"),
+            &manifest,
+            Some(&gate),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::sandbox_check::CrossCheckError::SandboxRefused
+        ));
     }
 
     #[test]

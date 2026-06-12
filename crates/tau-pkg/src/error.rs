@@ -282,6 +282,14 @@ pub enum InstallError {
     /// or the default discovery (`cargo` on PATH) found nothing.
     #[error("`cargo` not found on PATH; set BuildOptions::cargo_path or install Rust")]
     CargoNotFound,
+    /// The install-time `cargo build` (or the cross-check spawn) could not be
+    /// sandboxed and `--allow-unsandboxed-build` was not passed. Failing closed
+    /// here prevents install-time RCE from untrusted package code (audit S2).
+    #[error(
+        "refusing to run an unsandboxed build of untrusted package code; \
+         re-run with --allow-unsandboxed-build to override (audit S2)"
+    )]
+    UnsandboxedBuildRefused,
     /// Layer 2 cross-check detected a mismatch between the plugin binary's
     /// claimed capabilities and those declared in the manifest.
     ///
