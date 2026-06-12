@@ -3,6 +3,23 @@ name: Release
 # Triggered ONLY on git tag push (v*). This is the ship gate — any
 # job failing aborts the GitHub Release creation; the tag stays in
 # the repo but no artifacts are published.
+#
+# This is the canonical T2 HEAVY / release anchor (audit G1). A v*
+# tag means "this exact commit passed the full heavy suite", re-run
+# against the tagged SHA rather than trusted from a stale main run:
+#
+#   * preflight-tier1  (ci.yml)    — fmt/clippy/unit/doc/deny/build + feature matrix
+#   * preflight-tier2  (tier2.yml) — full OS matrix · conformance · sandbox/runtime e2e · coverage
+#   * msrv             (this file) — MSRV re-asserted as a distinct release gate (audit G5)
+#   * fuzz             (this file) — cargo-fuzz crash regression on the tagged commit (audit G1)
+#   * mutants          (this file) — mutation re-run on the tagged commit (audit G1; non-blocking — see job)
+#
+# Publication (build-release-binaries → sbom → attest → gh-release-create)
+# NEEDS the blocking gates above, so no artifact ships unless they pass.
+#
+# Coverage is NOT duplicated here — it is owned by the separate
+# coverage.yml lane (measurement-not-gating); preflight-tier2 also
+# re-runs it against the tag.
 
 on:
   push:
@@ -36,9 +53,171 @@ jobs:
     uses: ./.github/workflows/tier2.yml
     secrets: inherit
 
+  msrv:
+    # Audit G5: MSRV runs per-PR in ci.yml but is not a distinct
+    # release gate. Re-assert it on the tagged commit — the version
+    # you ship is the version whose MSRV claim you guarantee. Mirrors
+    # ci.yml `msrv-check` (toolchain 1.91, --locked). Blocks the release.
+    name: msrv
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.91"
+          shared-key: linux-1.91
+          with-sccache: true
+          with-mold: true
+      - run: cargo check --workspace --all-targets --locked
+
+  fuzz:
+    # Audit G1: cargo-fuzz lives only on a nightly schedule
+    # (fuzz-nightly.yml) — it never re-runs against a tagged commit.
+    # Re-run each harness here as a bounded crash-regression smoke
+    # check: a crash (non-zero exit) is a real correctness bug and
+    # BLOCKS the release. Mirrors fuzz-nightly.yml's setup; the matrix
+    # stays in sync with it by hand (release.yml-only change per scope).
+    name: fuzz ${{ matrix.target }} (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: tau-pkg
+            fuzz_dir: crates/tau-pkg/fuzz
+            target: lockfile_from_toml_str
+          - crate: tau-plugin-protocol
+            fuzz_dir: crates/tau-plugin-protocol/fuzz
+            target: frame_decode
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - name: Skip if fuzz directory not present
+        id: precheck
+        env:
+          FUZZ_DIR: ${{ matrix.fuzz_dir }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$FUZZ_DIR/Cargo.toml" ]; then
+            echo "fuzz dir $FUZZ_DIR not present — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust nightly + cargo-fuzz
+        if: steps.precheck.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2  # nightly
+
+      - name: Cache cargo-fuzz binary
+        if: steps.precheck.outputs.skip != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-bin-v1
+
+      - name: Install cargo-fuzz (if not cached)
+        if: steps.precheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v cargo-fuzz >/dev/null 2>&1; then
+            cargo +nightly install cargo-fuzz --locked --version =0.13.2
+          else
+            echo "cargo-fuzz already present"
+          fi
+
+      - name: Run fuzz target (release crash-regression budget)
+        if: steps.precheck.outputs.skip != 'true'
+        env:
+          FUZZ_DIR: ${{ matrix.fuzz_dir }}
+          TARGET: ${{ matrix.target }}
+          # Bounded smoke budget — a release gate exercises the harness
+          # against the tagged commit to catch crashes/regressions, it
+          # is not an open-ended coverage campaign (that is the nightly
+          # lane's job). 5 minutes per target.
+          MINUTES: "5"
+        run: |
+          set -euo pipefail
+          SECONDS_BUDGET=$(( MINUTES * 60 ))
+          echo "Running $TARGET for ${SECONDS_BUDGET}s..."
+          cd "$FUZZ_DIR"
+          cargo +nightly fuzz run "$TARGET" -- \
+            -max_total_time="$SECONDS_BUDGET" \
+            -print_final_stats=1
+
+      - name: Upload crash artifacts on failure
+        if: steps.precheck.outputs.skip != 'true' && failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: release-fuzz-crashes-${{ matrix.target }}-${{ github.run_id }}
+          path: ${{ matrix.fuzz_dir }}/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  mutants:
+    # Audit G1: mutation testing lives only on a weekly schedule
+    # (mutants-scheduled.yml) — it never re-runs against a tagged
+    # commit. Re-run it here so the v* tag carries a fresh mutation
+    # report for that exact SHA.
+    #
+    # NON-BLOCKING by design: cargo-mutants exits non-zero when ANY
+    # mutant survives, i.e. it reports a test GAP, not a correctness
+    # regression of the tagged commit. Pre-existing surviving mutants
+    # are expected (the scheduled lane uploads missed.txt as a normal
+    # report), so hard-gating publication on a green mutation score
+    # would make releases un-cuttable. This is the same measurement-
+    # not-gating stance the audit takes for coverage (G9). The report
+    # is uploaded; publication does NOT depend on this job.
+    name: mutants (${{ matrix.crate }})
+    needs: [preflight-tier1]  # don't burn hours of mutation if basic CI is red
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - tau-domain
+          - tau-pkg
+          - tau-ports
+          - tau-runtime-core
+          - tau-runtime-tokio
+          - tau-plugin-protocol
+          - tau-cli
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          shared-key: linux-stable
+          save-if: "false"
+      - uses: taiki-e/install-action@fa8484446eeba15720aa701ffc5dcb6dfa092ff1  # nextest
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked --version =27.1.0
+      - name: Run mutation testing
+        env:
+          CRATE: ${{ matrix.crate }}
+        run: |
+          set -euo pipefail
+          cargo mutants \
+            --in-place \
+            -p "$CRATE" \
+            --timeout 300 \
+            --no-shuffle
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: release-mutants-${{ matrix.crate }}-${{ github.run_id }}
+          path: mutants.out/
+          if-no-files-found: ignore
+          retention-days: 90
+
   build-release-binaries:
     name: build-release-binaries / ${{ matrix.os }}
-    needs: [preflight-tier1, preflight-tier2]
+    needs: [preflight-tier1, preflight-tier2, msrv, fuzz]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -78,7 +257,7 @@ jobs:
 
   sbom-rust:
     name: sbom-rust (SPDX 2.3)
-    needs: [preflight-tier1, preflight-tier2]
+    needs: [preflight-tier1, preflight-tier2, msrv, fuzz]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -100,7 +279,7 @@ jobs:
 
   sbom-aggregate:
     name: sbom-aggregate (syft)
-    needs: [preflight-tier1, preflight-tier2]
+    needs: [preflight-tier1, preflight-tier2, msrv, fuzz]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -147,7 +326,7 @@ jobs:
 
   changelog:
     name: changelog
-    needs: [preflight-tier1, preflight-tier2]
+    needs: [preflight-tier1, preflight-tier2, msrv, fuzz]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
