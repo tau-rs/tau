@@ -53,9 +53,16 @@ on:
   issues:
     types: [opened, assigned]
 
+# Serialize runs per PR/issue so two near-simultaneous @claude mentions on
+# the same target cannot race (this workflow has `contents: write` and can
+# push commits to a PR branch). For the comment/review/issue events this
+# workflow fires on, `github.ref` is always the default branch, so it cannot
+# distinguish targets — key on the PR/issue number instead, mirroring
+# claude-review.yml's per-PR concurrency. The latest mention cancels the
+# in-flight run for the same target; distinct PRs/issues get distinct groups.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   claude:
