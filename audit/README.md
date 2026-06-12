@@ -22,6 +22,11 @@ proxy. This audit covers the workspace at branch `audit/design-security`.
 
 (Plus several explicitly-checked non-findings / strengths documented inline.)
 
+**Resolved since audit:** 2 of 20 (both Medium) — **D7** by #306 (`1db8fdd`) and
+**G11** by #305 (`bcbcfc3`). Counts above are the as-audited totals; see the
+per-finding **Status:** notes in `design.md` / `devops.md`. Top-5 below is
+unaffected (neither D7 nor G11 appears in it).
+
 Breakdown by file:
 - `security.md` — 9 findings (S1 High; S2–S5 Medium; S6–S9 Low)
 - `design.md` — 10 findings (D1, D2, D6, D7 Medium; D3, D4, D5, D8, D9, D10 Low)

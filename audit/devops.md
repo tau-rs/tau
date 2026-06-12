@@ -153,6 +153,11 @@ These are genuine strengths and are the parts other repos should copy verbatim.
   artifacts. Tracked here only for completeness; not actionable until G1 lands a
   release build.
 - **G11 (Medium) — pre-push `deep-gate` is a heavy podman gate in a git hook.**
+  **✅ Resolved by #305 (commit `bcbcfc3`).** `lefthook.yml` no longer has a
+  `pre-push:` section at all (top-level keys are `pre-commit:` and `deep-gate:`);
+  the `deep-gate:` group is now opt-in, run on demand via `lefthook run deep-gate`,
+  so a plain `git push` runs no hook and no longer hard-fails in podman-less
+  environments. Original finding retained below for the record.
   `lefthook.yml:74` defines a `pre-push: deep-gate:` command that runs a
   privileged podman/container-based check on EVERY push, reproducing every Linux
   CI job inside one container (~3-4 min warm, ~15-20 min cold per its own header).
