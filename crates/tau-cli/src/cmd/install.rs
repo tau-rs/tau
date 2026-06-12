@@ -23,8 +23,11 @@ use tau_domain::{
     PackageSource, ProcessCapability,
 };
 use tau_pkg::{install_with_options, read_manifest, InstallOptions, Scope, ScopeKind};
+use tau_ports::{CapabilityProbe, CapabilityTier};
+use tau_runtime_tokio::process_gate::resolve_adapter;
 
 use crate::cli::InstallArgs;
+use crate::cmd::install_sandbox::RuntimeInstallSandbox;
 use crate::output::Output;
 
 /// Run `tau install`.
@@ -48,9 +51,31 @@ pub async fn run(args: &InstallArgs, output: &mut Output) -> anyhow::Result<()> 
         return Ok(());
     }
 
-    // 4. Real install.
+    // 4. Real install. Resolve the host's sandbox adapter and inject it so the
+    //    install-time `cargo build` + cross-check run sandboxed (audit S2).
+    //    The build path fails closed unless --allow-unsandboxed-build is set.
     output.status(format!("installing from {}...", args.url))?;
-    let installed = install_with_options(&source, &scope, InstallOptions::default())
+
+    // The strict-tier egress proxy task spawned by `wrap_spawn` runs on this
+    // (the ambient) runtime; the gate's guard aborts it on drop. We pass a
+    // `Handle` rather than owning a `Runtime` so nothing is dropped in async
+    // context (which would panic in tokio's blocking shutdown).
+    let handle = tokio::runtime::Handle::current();
+    let requirements = tau_pkg::scope::SandboxRequirements::default();
+    let adapter = resolve_adapter(&requirements, &[])
+        .await
+        .map_err(|e| anyhow::anyhow!("resolving install sandbox adapter: {e}"))?;
+    let enforced = matches!(
+        adapter.probe().await,
+        CapabilityProbe::Available { tier, .. } if tier > CapabilityTier::None
+    );
+    let gate = RuntimeInstallSandbox::new(adapter, handle, enforced);
+
+    let mut options = InstallOptions::default();
+    options.sandbox = Some(std::sync::Arc::new(gate));
+    options.allow_unsandboxed_build = args.allow_unsandboxed_build;
+
+    let installed = install_with_options(&source, &scope, options)
         .map_err(|e| anyhow::anyhow!("install failed: {e}"))?;
 
     if output.is_json() {
