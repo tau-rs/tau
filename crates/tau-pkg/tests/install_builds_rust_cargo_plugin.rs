@@ -35,6 +35,9 @@ use tempfile::TempDir;
 fn install_options_skip_cross_check() -> InstallOptions {
     let mut opts = InstallOptions::default();
     opts.skip_cross_check = true;
+    // No sandbox gate is injected in tau-pkg tests; opt into the unsandboxed
+    // build explicitly so the install does not fail closed (audit S2).
+    opts.allow_unsandboxed_build = true;
     opts
 }
 

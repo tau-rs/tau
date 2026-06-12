@@ -55,6 +55,13 @@ pub enum CrossCheckError {
     /// The plugin binary could not be launched.
     #[error("plugin spawn failed: {0}")]
     SpawnFailed(String),
+    /// The cross-check spawn could not be sandboxed and the unsandboxed escape
+    /// hatch was not enabled (audit S2).
+    #[error(
+        "refusing to spawn an unsandboxed cross-check of untrusted plugin code; \
+         re-run with --allow-unsandboxed-build to override (audit S2)"
+    )]
+    SandboxRefused,
     /// The `meta.handshake` round-trip failed (encode / IO / decode /
     /// protocol error).
     #[error("plugin handshake failed: {0}")]
@@ -105,12 +112,55 @@ pub async fn cross_check_plugin_capabilities(
     binary_path: &Path,
     manifest: &PackageManifest,
 ) -> Result<Vec<CapabilityShape>, CrossCheckError> {
+    // Back-compat entry point (e.g. `tau check`): spawns unsandboxed. The
+    // install-time path uses [`cross_check_plugin_capabilities_gated`] with a
+    // real gate. `tau check`'s sandbox posture is out of scope for audit S2.
+    cross_check_plugin_capabilities_gated(binary_path, manifest, None, true).await
+}
+
+/// As [`cross_check_plugin_capabilities`], but applies the install-time
+/// sandbox gate before spawning the untrusted binary (audit S2).
+///
+/// Fail-closed: with no enforcing `gate` and no `allow_unsandboxed_build`,
+/// returns [`CrossCheckError::SandboxRefused`] before spawning.
+pub async fn cross_check_plugin_capabilities_gated(
+    binary_path: &Path,
+    manifest: &PackageManifest,
+    gate: Option<&dyn crate::install_sandbox::InstallSandbox>,
+    allow_unsandboxed_build: bool,
+) -> Result<Vec<CapabilityShape>, CrossCheckError> {
+    use crate::install_sandbox::{cross_check_envelope, sandbox_decision, SandboxDecision};
+
     // ── 1. Spawn ─────────────────────────────────────────────────────────────
-    let mut child = Command::new(binary_path)
+    let mut command = Command::new(binary_path);
+    command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true) // ensure child is reaped on every early-return path
+        .kill_on_drop(true); // ensure child is reaped on every early-return path
+
+    // Decide-then-wrap-then-spawn. The guard holds any sandbox resources and
+    // must outlive the child.
+    let _sandbox_guard = match sandbox_decision(gate, allow_unsandboxed_build) {
+        SandboxDecision::Sandbox => {
+            let plan = cross_check_envelope();
+            let g = gate.expect("Sandbox decision implies a gate is present");
+            Some(
+                g.wrap(&plan, command.as_std_mut())
+                    .map_err(|e| CrossCheckError::SpawnFailed(format!("sandbox wrap: {e}")))?,
+            )
+        }
+        SandboxDecision::Unsandboxed => {
+            tracing::warn!(
+                target: "tau_pkg::install",
+                "spawning cross-check WITHOUT a sandbox (--allow-unsandboxed-build)"
+            );
+            None
+        }
+        SandboxDecision::Refuse => return Err(CrossCheckError::SandboxRefused),
+    };
+
+    let mut child = command
         .spawn()
         .map_err(|e| CrossCheckError::SpawnFailed(format!("{e}")))?;
 
