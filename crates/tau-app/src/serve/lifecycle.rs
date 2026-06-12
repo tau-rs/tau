@@ -123,13 +123,21 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
 /// `tau_runtime_tokio::plugin_host`. Deduplicates by plugin name so that two
 /// agents sharing the same backend/tool spawn only one subprocess.
 ///
+/// Sandbox enforcement (audit S4): serve mirrors the CLI `run`/`chat`
+/// path. It resolves one [`SandboxAdapter`] for the whole serve process
+/// and builds a per-plugin [`tau_ports::CapabilityPlan`] from each
+/// plugin's declared capabilities, then passes both into `load_*`.
+/// `plugin_host` only enforces when both are present (`plan.zip(adapter)`),
+/// so resolving the adapter is as load-bearing as building the plan —
+/// passing one without the other silently disables the Layer-4 backstop.
+///
 /// Serve mode v1 simplifications (deferred to future iterations):
-/// - Sandbox is not enforced (`sandbox_plan = None`); plugins run
-///   unsandboxed. `PluginHostOptions::sandbox_adapter` is `None`.
 /// - Recorder / trace context: a synthetic trace context is generated
 ///   per plugin (no recorder ledger, no run-level trace propagation).
 /// - `[agents.<id>.config]` is forwarded to the LLM backend as JSON;
 ///   tools always receive `{}` (per-tool config selectors not yet landed).
+/// - `working_context` / resource `limits` are not yet threaded into the
+///   plan (both `None`), matching the CLI tool path.
 async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> {
     use tau_pkg::LockFile;
     use tau_plugin_protocol::handshake::TraceContext;
@@ -138,6 +146,16 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
     let lockfile_path = project.scope.lockfile_path();
     let lockfile = LockFile::load(&lockfile_path)
         .with_context(|| format!("load lockfile {}", lockfile_path.display()))?;
+
+    // Resolve a single sandbox adapter for the serve process. Serve has no
+    // `--no-sandbox` / `--sandbox` flags, so we always ask the resolver for
+    // the best adapter satisfying the scope's `[sandbox]` requirements and
+    // every referenced plugin's declared tier floor (audit S4).
+    let scope_reqs = read_scope_sandbox_requirements(&project.scope)?;
+    let plugin_reqs = gather_plugin_sandbox_reqs(&project.scope, &lockfile, &project.config);
+    let adapter = resolve_serve_adapter(&scope_reqs, &plugin_reqs).await?;
+    let mut host_options = plugin_host::PluginHostOptions::default();
+    host_options.sandbox_adapter = Some(adapter);
 
     let mut builder = tau_runtime_tokio::Runtime::builder();
 
@@ -171,12 +189,21 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
                 "serve-root".to_string(),
             );
             let config = agent_config_to_json(entry);
+            // Build this plugin's capability plan from its manifest, narrowed
+            // by the agent's project-level capability overrides (audit S4).
+            let caps = read_plugin_caps(&project.scope, &lockfile, &entry.llm_backend);
+            let plan = plan_for_plugin(&caps, &entry.capability_overrides).with_context(|| {
+                format!(
+                    "building sandbox plan for LLM backend {:?}",
+                    entry.llm_backend
+                )
+            })?;
             let backend = plugin_host::load_llm_backend(
                 plugin,
                 config,
                 trace_context,
-                plugin_host::PluginHostOptions::default(),
-                None,
+                host_options.clone(),
+                Some(&plan),
             )
             .await
             .with_context(|| format!("load LLM backend {:?}", entry.llm_backend))?;
@@ -205,12 +232,18 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
                     entry.id.clone(),
                     "serve-root".to_string(),
                 );
+                // Per-tool capability overrides are not addressable in the
+                // project tau.toml at v0.1 — pass an empty override slice, as
+                // the CLI tool path does (audit S4).
+                let caps = read_plugin_caps(&project.scope, &lockfile, &tool_name);
+                let plan = plan_for_plugin(&caps, &[])
+                    .with_context(|| format!("building sandbox plan for tool {tool_name:?}"))?;
                 let loaded = plugin_host::load_tool(
                     plugin,
                     serde_json::Value::Object(Default::default()),
                     trace_context,
-                    plugin_host::PluginHostOptions::default(),
-                    None,
+                    host_options.clone(),
+                    Some(&plan),
                 )
                 .await
                 .with_context(|| format!("load tool {:?}", tool_name))?;
@@ -224,6 +257,128 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
     // any project; `runtime.run` calls will return -32010 UNKNOWN_AGENT
     // which is the correct behaviour when no agents are defined.
     builder.build_allow_empty().context("build Runtime")
+}
+
+/// Resolve the sandbox adapter for serve mode (audit S4).
+///
+/// Mirrors the non-force branch of the CLI `run`/`chat` path
+/// (`plugin_loader::load_plugins`): serve exposes no `--no-sandbox` /
+/// `--sandbox` flags, so it always asks the resolver for the best adapter
+/// satisfying the scope's `[sandbox]` requirements and every referenced
+/// plugin's declared tier floor. The returned adapter is the half
+/// `plugin_host` zips against each plugin's [`tau_ports::CapabilityPlan`];
+/// without it the Layer-4 backstop is silently disabled.
+async fn resolve_serve_adapter(
+    requirements: &tau_pkg::scope::SandboxRequirements,
+    plugin_reqs: &[tau_domain::PluginSandboxRequirements],
+) -> Result<std::sync::Arc<tau_runtime_tokio::process_gate::SandboxAdapter>> {
+    tau_runtime_tokio::process_gate::resolve_adapter(requirements, plugin_reqs)
+        .await
+        .map(std::sync::Arc::new)
+        .map_err(|e| anyhow::anyhow!("resolve sandbox adapter for serve mode: {e}"))
+}
+
+/// Build a plugin's Layer-3 capability plan (audit S4).
+///
+/// Thin serve-side wrapper over [`tau_runtime_tokio::process_gate::build_plan`]:
+/// serve defers `working_context` and resource `limits` (both `None`),
+/// exactly like the CLI tool path. Returns a real `CapabilityPlan` so serve
+/// can pass `Some(&plan)` into `load_*` and have `plugin_host` enforce it.
+fn plan_for_plugin(
+    caps: &[tau_domain::Capability],
+    overrides: &[tau_pkg::capability_override::CapabilityOverride],
+) -> Result<tau_ports::CapabilityPlan> {
+    tau_runtime_tokio::process_gate::build_plan(caps, overrides, None, None)
+        .map_err(|e| anyhow::anyhow!("build sandbox plan: {e}"))
+}
+
+/// Read the scope's `[sandbox]` requirements from `config.toml`, falling
+/// back to defaults when the file doesn't exist (a freshly-created scope
+/// without an explicit config). Mirrors `plugin_loader::load_plugins`.
+fn read_scope_sandbox_requirements(
+    scope: &tau_pkg::Scope,
+) -> Result<tau_pkg::scope::SandboxRequirements> {
+    let config_path = scope.config_path();
+    if config_path.exists() {
+        let text = std::fs::read_to_string(&config_path)
+            .with_context(|| format!("reading scope config at {config_path:?}"))?;
+        let scope_config = tau_pkg::scope::ScopeConfig::read_from_str(&text)
+            .with_context(|| format!("parsing scope config at {config_path:?}"))?;
+        Ok(scope_config.sandbox)
+    } else {
+        Ok(tau_pkg::scope::SandboxRequirements::default())
+    }
+}
+
+/// Collect the sandbox-tier floors declared by every plugin the project's
+/// agents reference (LLM backends + tools), deduplicated by package name.
+/// Feeds the resolver so a plugin demanding e.g. `Strict` can't be admitted
+/// under a weaker adapter (audit S4).
+fn gather_plugin_sandbox_reqs(
+    scope: &tau_pkg::Scope,
+    lockfile: &tau_pkg::LockFile,
+    config: &tau_pkg::project::ProjectConfig,
+) -> Vec<tau_domain::PluginSandboxRequirements> {
+    let mut seen: std::collections::HashSet<String> = Default::default();
+    let mut reqs = Vec::new();
+    for entry in config.agents.values() {
+        if seen.insert(entry.llm_backend.clone()) {
+            if let Some(req) = read_plugin_sandbox_req(scope, lockfile, &entry.llm_backend) {
+                reqs.push(req);
+            }
+        }
+        for tool in &entry.requires.tools {
+            let name = tool.name.to_string();
+            if seen.insert(name.clone()) {
+                if let Some(req) = read_plugin_sandbox_req(scope, lockfile, &name) {
+                    reqs.push(req);
+                }
+            }
+        }
+    }
+    reqs
+}
+
+/// Read a plugin's `[sandbox]` requirements from its on-disk `tau.toml`.
+///
+/// Mirrors `plugin_loader::read_plugin_sandbox_req`. Returns `None` if the
+/// package is absent from the lockfile (treated as "no floor", not an error).
+fn read_plugin_sandbox_req(
+    scope: &tau_pkg::Scope,
+    lockfile: &tau_pkg::LockFile,
+    package_name: &str,
+) -> Option<tau_domain::PluginSandboxRequirements> {
+    let pkg_name: tau_domain::PackageName = package_name.parse().ok()?;
+    let locked = lockfile.find(&pkg_name)?;
+    let pkg_dir = scope.package_dir(&locked.name, &locked.active_version);
+    match tau_pkg::read_manifest(&pkg_dir.join("tau.toml")) {
+        Ok(manifest) => Some(manifest.sandbox().clone()),
+        Err(_) => Some(tau_domain::PluginSandboxRequirements::default()),
+    }
+}
+
+/// Read a plugin's declared capabilities from its on-disk `tau.toml`, used
+/// to construct its [`tau_ports::CapabilityPlan`].
+///
+/// Mirrors `plugin_loader::read_plugin_caps_by_name`. Returns an empty vec
+/// when the package is absent from the lockfile or its manifest can't be
+/// read — an empty plan denies everything, the safe default.
+fn read_plugin_caps(
+    scope: &tau_pkg::Scope,
+    lockfile: &tau_pkg::LockFile,
+    package_name: &str,
+) -> Vec<tau_domain::Capability> {
+    let Ok(pkg_name) = package_name.parse::<tau_domain::PackageName>() else {
+        return Vec::new();
+    };
+    let Some(locked) = lockfile.find(&pkg_name) else {
+        return Vec::new();
+    };
+    let pkg_dir = scope.package_dir(&locked.name, &locked.active_version);
+    match tau_pkg::read_manifest(&pkg_dir.join("tau.toml")) {
+        Ok(manifest) => manifest.capabilities().to_vec(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Convert an agent's `[agents.<id>.config]` TOML sub-table to a
@@ -289,6 +444,78 @@ async fn wait_for_shutdown_signal() {
 async fn wait_for_shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     info!("received Ctrl-C");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tau_domain::Capability;
+
+    fn cap(json: &str) -> Capability {
+        serde_json::from_str(json).expect("test capability JSON must be valid")
+    }
+
+    /// S4 regression — the adapter half.
+    ///
+    /// `plugin_host::load_*` enforces the sandbox only when **both** the
+    /// capability plan and the adapter are present (`plan.zip(adapter)`).
+    /// Serve previously passed `PluginHostOptions::default()`, whose
+    /// `sandbox_adapter` is `None`, so the zip collapsed to `None` and every
+    /// plugin ran unsandboxed. Serve must now resolve a real adapter.
+    #[tokio::test]
+    async fn serve_resolves_a_sandbox_adapter() {
+        // Mock injection makes `resolve_adapter` deterministic across host
+        // platforms (no real landlock/SBPL tooling needed in CI).
+        std::env::set_var("TAU_TESTING_ALLOW_MOCK_SANDBOX", "1");
+        let reqs = tau_pkg::scope::SandboxRequirements::default();
+        let result = resolve_serve_adapter(&reqs, &[]).await;
+        std::env::remove_var("TAU_TESTING_ALLOW_MOCK_SANDBOX");
+
+        let adapter = result.expect("serve must resolve a sandbox adapter");
+        assert!(
+            matches!(
+                *adapter,
+                tau_runtime_tokio::process_gate::SandboxAdapter::Mock(_)
+            ),
+            "expected a resolved adapter (the half plugin_host zips against the plan), \
+             got a non-mock variant under TAU_TESTING_ALLOW_MOCK_SANDBOX",
+        );
+    }
+
+    /// S4 regression — the plan half.
+    ///
+    /// Serve previously passed `sandbox_plan = None` to every `load_*` call.
+    /// `plan_for_plugin` is the serve-side construction point that produces a
+    /// real (non-`None`) `CapabilityPlan` carrying the plugin's declared
+    /// capability shapes, which serve then passes as `Some(&plan)`.
+    #[test]
+    fn serve_builds_non_none_plan_carrying_declared_capabilities() {
+        let caps = vec![
+            cap(r#"{"kind":"fs.read","paths":["/proj/**"]}"#),
+            cap(r#"{"kind":"net.http","hosts":["api.example.com"],"methods":["GET"]}"#),
+        ];
+        let plan = plan_for_plugin(&caps, &[]).expect("serve must build a plan");
+        // A non-empty plan with both declared shapes preserved.
+        assert_eq!(plan.capabilities.len(), 2);
+        use tau_domain::CapabilityShape;
+        assert_eq!(
+            plan.capabilities[0].required_shape(),
+            CapabilityShape::FilesystemRead
+        );
+        assert_eq!(
+            plan.capabilities[1].required_shape(),
+            CapabilityShape::NetworkHttp
+        );
+    }
+
+    /// An empty manifest still yields a real, enforceable (empty) plan — never
+    /// `None`. An empty plan means "deny everything", which is the safe default
+    /// for a plugin that declared no capabilities.
+    #[test]
+    fn serve_plan_for_zero_capabilities_is_empty_not_none() {
+        let plan = plan_for_plugin(&[], &[]).expect("serve must build a plan");
+        assert!(plan.capabilities.is_empty());
+    }
 }
 
 /// On Linux, ask the kernel to deliver SIGTERM to us when our parent dies.
