@@ -24,6 +24,7 @@ members = [
     "crates/tau-plugins/ollama",
     "crates/tau-plugins/openai",
     "crates/tau-plugins/fs-read",
+    "crates/tau-plugins/fs-write",
     "crates/tau-plugins/shell",
     "crates/tau-sandbox-container",
     "crates/tau-sandbox-darwin",
