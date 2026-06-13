@@ -28,3 +28,11 @@ run = "agent:fan_monitor"
 id = "act"
 run = "agent:fan_monitor"
 input = "${steps.check.output}"
+
+[goals.has_output]
+evaluates = "steps.check.output"
+check = "exists"
+
+[deliverables.summary]
+output = "steps.check.output"
+must_satisfy = "A valid fan status report."

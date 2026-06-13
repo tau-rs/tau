@@ -50,6 +50,31 @@ struct IrPipelineStep {
     input: Option<String>,
 }
 
+struct IrGoal {
+    id: String,
+    evaluates: String,
+    check: String,
+    pattern: Option<String>,
+    equals: Option<String>,
+    min: Option<u64>,
+    native_fn: Option<String>,
+    on_fail: Option<String>,
+    max_attempts: Option<u32>,
+    retry_from: Option<String>,
+}
+
+struct IrDeliverable {
+    id: String,
+    path: Option<String>,
+    output: Option<String>,
+    must_satisfy: String,
+    judge: Option<String>,
+    judge_model: Option<String>,
+    on_fail: Option<String>,
+    max_attempts: Option<u32>,
+    retry_from: Option<String>,
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Public entry point
 // ──────────────────────────────────────────────────────────────────────────────
@@ -93,6 +118,8 @@ pub fn build_project_config(
     let mut agents: BTreeMap<String, IrAgent> = BTreeMap::new();
     let mut tools: BTreeMap<String, IrTool> = BTreeMap::new();
     let mut pipeline_steps: Vec<IrPipelineStep> = Vec::new();
+    let mut goals_items: Vec<IrGoal> = Vec::new();
+    let mut deliverables_items: Vec<IrDeliverable> = Vec::new();
 
     // First pass — collect tools/mcp (so agent `tools: { ref }` can resolve them).
     for (name, expr) in names {
@@ -151,6 +178,28 @@ pub fn build_project_config(
                     })?;
                     pipeline_steps = extract_pipeline_steps(arr, source_path, sm)?;
                 }
+                Factory::Goals => {
+                    let arr = arg_as_array(call, 0).ok_or_else(|| {
+                        mk_err(
+                            source_path,
+                            sm,
+                            call.span(),
+                            "`goals(...)`: first argument must be an array literal",
+                        )
+                    })?;
+                    goals_items = extract_goals(arr, source_path, sm)?;
+                }
+                Factory::Deliverables => {
+                    let arr = arg_as_array(call, 0).ok_or_else(|| {
+                        mk_err(
+                            source_path,
+                            sm,
+                            call.span(),
+                            "`deliverables(...)`: first argument must be an array literal",
+                        )
+                    })?;
+                    deliverables_items = extract_deliverables(arr, source_path, sm)?;
+                }
                 Factory::Agent => {} // second pass
             }
         }
@@ -176,7 +225,7 @@ pub fn build_project_config(
     }
 
     // Serialize to TOML and parse through the standard validation path.
-    let toml = build_toml(&project_name, &agents, &tools, &pipeline_steps);
+    let toml = build_toml(&project_name, &agents, &tools, &pipeline_steps, &goals_items, &deliverables_items);
     ProjectConfig::parse_str(&toml).map_err(|e| map_config_err(e, source_path, sm))
 }
 
@@ -189,6 +238,8 @@ fn build_toml(
     agents: &BTreeMap<String, IrAgent>,
     tools: &BTreeMap<String, IrTool>,
     pipeline_steps: &[IrPipelineStep],
+    goals_items: &[IrGoal],
+    deliverables_items: &[IrDeliverable],
 ) -> String {
     let mut out = String::new();
 
@@ -239,6 +290,61 @@ fn build_toml(
         out.push_str(&format!("run = {}\n", toml_str(&step.run)));
         if let Some(input) = &step.input {
             out.push_str(&format!("input = {}\n", toml_str(input)));
+        }
+        out.push('\n');
+    }
+
+    for g in goals_items {
+        out.push_str(&format!("[goals.{}]\n", toml_key(&g.id)));
+        out.push_str(&format!("evaluates = {}\n", toml_str(&g.evaluates)));
+        out.push_str(&format!("check = {}\n", toml_str(&g.check)));
+        if let Some(p) = &g.pattern {
+            out.push_str(&format!("pattern = {}\n", toml_str(p)));
+        }
+        if let Some(e) = &g.equals {
+            out.push_str(&format!("equals = {}\n", toml_str(e)));
+        }
+        if let Some(m) = g.min {
+            out.push_str(&format!("min = {}\n", m));
+        }
+        if let Some(f) = &g.native_fn {
+            out.push_str(&format!("fn = {}\n", toml_str(f)));
+        }
+        if let Some(of) = &g.on_fail {
+            out.push_str(&format!("on_fail = {}\n", toml_str(of)));
+        }
+        if let Some(ma) = g.max_attempts {
+            out.push_str(&format!("max_attempts = {}\n", ma));
+        }
+        if let Some(rf) = &g.retry_from {
+            out.push_str(&format!("retry_from = {}\n", toml_str(rf)));
+        }
+        out.push('\n');
+    }
+
+    for d in deliverables_items {
+        out.push_str(&format!("[deliverables.{}]\n", toml_key(&d.id)));
+        if let Some(p) = &d.path {
+            out.push_str(&format!("path = {}\n", toml_str(p)));
+        }
+        if let Some(o) = &d.output {
+            out.push_str(&format!("output = {}\n", toml_str(o)));
+        }
+        out.push_str(&format!("must_satisfy = {}\n", toml_str(&d.must_satisfy)));
+        if let Some(j) = &d.judge {
+            out.push_str(&format!("judge = {}\n", toml_str(j)));
+        }
+        if let Some(jm) = &d.judge_model {
+            out.push_str(&format!("judge_model = {}\n", toml_str(jm)));
+        }
+        if let Some(of) = &d.on_fail {
+            out.push_str(&format!("on_fail = {}\n", toml_str(of)));
+        }
+        if let Some(ma) = d.max_attempts {
+            out.push_str(&format!("max_attempts = {}\n", ma));
+        }
+        if let Some(rf) = &d.retry_from {
+            out.push_str(&format!("retry_from = {}\n", toml_str(rf)));
         }
         out.push('\n');
     }
@@ -321,6 +427,26 @@ fn obj_props_with_shorthands(obj: &ObjectLit) -> Vec<(String, Option<&Expr>)> {
 fn get_string(props: &BTreeMap<String, &Expr>, key: &str) -> Option<String> {
     let expr = props.get(key)?;
     expr_as_string(expr)
+}
+
+/// Try to get a u64 from a numeric literal in the prop map.
+fn get_u64(props: &BTreeMap<String, &Expr>, key: &str) -> Option<u64> {
+    let expr = props.get(key)?;
+    if let Expr::Lit(swc_ecma_ast::Lit::Num(n)) = expr {
+        Some(n.value as u64)
+    } else {
+        None
+    }
+}
+
+/// Try to get a u32 from a numeric literal in the prop map.
+fn get_u32(props: &BTreeMap<String, &Expr>, key: &str) -> Option<u32> {
+    let expr = props.get(key)?;
+    if let Expr::Lit(swc_ecma_ast::Lit::Num(n)) = expr {
+        Some(n.value as u32)
+    } else {
+        None
+    }
 }
 
 /// Extract a string value from an `Expr::Lit(Lit::Str(...))`.
@@ -407,6 +533,181 @@ fn extract_pipeline_steps(
         steps.push(IrPipelineStep { id, run, input });
     }
     Ok(steps)
+}
+
+fn extract_goals(
+    arr: &ArrayLit,
+    source_path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> Result<Vec<IrGoal>, TsExtractError> {
+    let mut goals = Vec::new();
+    for (elem_idx, elem) in arr.elems.iter().enumerate() {
+        let elem: &ExprOrSpread = match elem {
+            Some(e) => e,
+            None => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    arr.span,
+                    &format!("goals entry {elem_idx}: array element must not be a hole"),
+                ));
+            }
+        };
+        if elem.spread.is_some() {
+            return Err(mk_err(
+                source_path,
+                sm,
+                elem.expr.span(),
+                &format!("goals entry {elem_idx}: spread elements are not supported"),
+            ));
+        }
+        let obj = match &*elem.expr {
+            Expr::Object(obj) => obj,
+            _ => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    elem.expr.span(),
+                    &format!("goals entry {elem_idx}: each element must be an object literal"),
+                ));
+            }
+        };
+        let props = obj_props(obj);
+        let id = get_string(&props, "id").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("goals entry {elem_idx}: missing required string field `id`"),
+            )
+        })?;
+        let evaluates = get_string(&props, "evaluates").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("goals entry {elem_idx}: missing required string field `evaluates`"),
+            )
+        })?;
+        let check = get_string(&props, "check").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("goals entry {elem_idx}: missing required string field `check`"),
+            )
+        })?;
+        let pattern = get_string(&props, "pattern");
+        let equals = get_string(&props, "equals");
+        let min = get_u64(&props, "min");
+        let native_fn = get_string(&props, "fn");
+        // camelCase TS → snake_case TOML mapping:
+        //   onFail → on_fail
+        //   maxAttempts → maxAttempts (TS) → max_attempts (TOML)
+        //   retryFrom → retry_from
+        let on_fail = get_string(&props, "onFail");
+        let max_attempts = get_u32(&props, "maxAttempts");
+        let retry_from = get_string(&props, "retryFrom");
+        goals.push(IrGoal {
+            id,
+            evaluates,
+            check,
+            pattern,
+            equals,
+            min,
+            native_fn,
+            on_fail,
+            max_attempts,
+            retry_from,
+        });
+    }
+    Ok(goals)
+}
+
+fn extract_deliverables(
+    arr: &ArrayLit,
+    source_path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> Result<Vec<IrDeliverable>, TsExtractError> {
+    let mut deliverables = Vec::new();
+    for (elem_idx, elem) in arr.elems.iter().enumerate() {
+        let elem: &ExprOrSpread = match elem {
+            Some(e) => e,
+            None => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    arr.span,
+                    &format!("deliverables entry {elem_idx}: array element must not be a hole"),
+                ));
+            }
+        };
+        if elem.spread.is_some() {
+            return Err(mk_err(
+                source_path,
+                sm,
+                elem.expr.span(),
+                &format!("deliverables entry {elem_idx}: spread elements are not supported"),
+            ));
+        }
+        let obj = match &*elem.expr {
+            Expr::Object(obj) => obj,
+            _ => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    elem.expr.span(),
+                    &format!(
+                        "deliverables entry {elem_idx}: each element must be an object literal"
+                    ),
+                ));
+            }
+        };
+        let props = obj_props(obj);
+        let id = get_string(&props, "id").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("deliverables entry {elem_idx}: missing required string field `id`"),
+            )
+        })?;
+        let must_satisfy = get_string(&props, "mustSatisfy").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!(
+                    "deliverables entry {elem_idx}: missing required string field `mustSatisfy`"
+                ),
+            )
+        })?;
+        let path = get_string(&props, "path");
+        let output = get_string(&props, "output");
+        let judge = get_string(&props, "judge");
+        let judge_model = get_string(&props, "judgeModel");
+        // camelCase TS → snake_case TOML mapping:
+        //   mustSatisfy → must_satisfy
+        //   judgeModel  → judge_model
+        //   onFail      → on_fail
+        //   maxAttempts → max_attempts
+        //   retryFrom   → retry_from
+        let on_fail = get_string(&props, "onFail");
+        let max_attempts = get_u32(&props, "maxAttempts");
+        let retry_from = get_string(&props, "retryFrom");
+        deliverables.push(IrDeliverable {
+            id,
+            path,
+            output,
+            must_satisfy,
+            judge,
+            judge_model,
+            on_fail,
+            max_attempts,
+            retry_from,
+        });
+    }
+    Ok(deliverables)
 }
 
 fn extract_tool(
@@ -549,7 +850,7 @@ fn extract_agent(
                                 until: "β.4".to_string(),
                             });
                         }
-                        Factory::Agent | Factory::Pipeline => {}
+                        Factory::Agent | Factory::Pipeline | Factory::Goals | Factory::Deliverables => {}
                     }
                 }
             }
