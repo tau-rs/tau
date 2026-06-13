@@ -104,7 +104,10 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
     //
     // For `.ts` projects `ts_project` is already parsed; pass it through so
     // `lower_ir` does not try to read a non-existent `tau.toml`.
-    let ir_payload = lower_ir(&project_root, &target, &mcp_cache_ir, ts_project.as_ref());
+    let LowerIrResult {
+        payload: ir_payload,
+        triggers: trigger_bindings,
+    } = lower_ir(&project_root, &target, &mcp_cache_ir, ts_project.as_ref());
 
     let opts = BuildOptions {
         project_root: project_root.clone(),
@@ -134,6 +137,9 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
                 }
             }
             emit_artifact(&artifact, output);
+            if let Some(adapter) = &args.emit_trigger {
+                emit_trigger_descriptors(adapter, &trigger_bindings, &artifact, output);
+            }
             Ok(())
         }
         Err(e) => {
@@ -323,6 +329,17 @@ fn schema_hash_json(v: &serde_json::Value) -> String {
     hex_lower(&h.finalize())
 }
 
+/// Result of [`lower_ir`]: the optional IR payload to embed in the bundle,
+/// plus the lowered trigger bindings (consumed by `--emit-trigger`).
+pub(crate) struct LowerIrResult {
+    /// `Some` when lowering succeeded; `None` when it failed (the bundle is
+    /// still built, just without an IR payload).
+    pub payload: Option<IrPayload>,
+    /// Trigger bindings lowered from the project config (empty when lowering
+    /// failed or the project declares no triggers).
+    pub triggers: Vec<tau_ir::trigger::TriggerBinding>,
+}
+
 /// Attempt to lower the project IR, returning `Some(IrPayload)` on
 /// success or `None` if lowering fails (non-fatal — the bundle is still
 /// built, but without an IR payload; a warning is logged).
@@ -345,7 +362,7 @@ pub(crate) fn lower_ir(
     target: &TargetTriple,
     mcp_cache: &BTreeMap<String, tau_ir::lower::ResolvedMcpContract>,
     preloaded_config: Option<&tau_pkg::project::ProjectConfig>,
-) -> Option<IrPayload> {
+) -> LowerIrResult {
     use tau_pkg::project::project::UncheckedProjectConfig;
 
     let config_owned;
@@ -357,21 +374,30 @@ pub(crate) fn lower_ir(
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("IR lowering: failed to read tau.toml: {e}");
-                return None;
+                return LowerIrResult {
+                    payload: None,
+                    triggers: Vec::new(),
+                };
             }
         };
         let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
             Ok(u) => u,
             Err(e) => {
                 tracing::warn!("IR lowering: failed to parse tau.toml: {e}");
-                return None;
+                return LowerIrResult {
+                    payload: None,
+                    triggers: Vec::new(),
+                };
             }
         };
         config_owned = match unchecked.validate() {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("IR lowering: project config validation failed: {e}");
-                return None;
+                return LowerIrResult {
+                    payload: None,
+                    triggers: Vec::new(),
+                };
             }
         };
         &config_owned
@@ -394,18 +420,22 @@ pub(crate) fn lower_ir(
         Ok(module) => {
             let bytes = tau_ir::to_canonical_bytes(&module);
             let hash_bytes = tau_ir::compute_hash(&module);
-            // Encode both as lowercase hex for TOML-safe storage.
-            let canonical_ir_hash = hex_lower(&hash_bytes);
-            let canonical_ir_bytes_hex = hex_lower(&bytes);
-            Some(IrPayload {
+            let payload = Some(IrPayload {
                 ir_format: module.ir_format.0.clone(),
-                canonical_ir_hash,
-                canonical_ir_bytes_hex,
-            })
+                canonical_ir_hash: hex_lower(&hash_bytes),
+                canonical_ir_bytes_hex: hex_lower(&bytes),
+            });
+            LowerIrResult {
+                payload,
+                triggers: module.triggers,
+            }
         }
         Err(e) => {
             tracing::warn!("IR lowering failed (bundle built without IR payload): {e}");
-            None
+            LowerIrResult {
+                payload: None,
+                triggers: Vec::new(),
+            }
         }
     }
 }
@@ -489,6 +519,63 @@ fn emit_artifact(artifact: &BundleArtifact, output: &mut Output) {
     }
 }
 
+/// Write host-adapter descriptors for the lowered cron triggers next to the
+/// bundle. Manual triggers and systemd-unconvertible cron schedules are noted
+/// and skipped. Errors writing a descriptor are surfaced but non-fatal — the
+/// bundle is already built.
+fn emit_trigger_descriptors(
+    adapter: &str,
+    bindings: &[tau_ir::trigger::TriggerBinding],
+    artifact: &BundleArtifact,
+    output: &mut Output,
+) {
+    use tau_ir::trigger::{emit_k8s, emit_systemd, TriggerKind};
+
+    let artifact_ref = artifact.path.display().to_string();
+    let descriptors = match adapter {
+        "systemd" => emit_systemd(bindings, &artifact_ref),
+        "k8s" => emit_k8s(bindings, &artifact_ref),
+        other => {
+            let _ = output.error(format!("unknown --emit-trigger adapter: {other}"));
+            return;
+        }
+    };
+
+    if descriptors.is_empty() {
+        let cron_count = bindings
+            .iter()
+            .filter(|b| b.kind == TriggerKind::Cron)
+            .count();
+        if cron_count == 0 {
+            let _ = output.status("No cron triggers to emit (manual triggers need no scheduler).");
+        } else {
+            let _ = output.status(format!(
+                "{cron_count} cron trigger(s) present but none were emittable for {adapter} \
+                 (systemd's OnCalendar supports only `*` and plain-integer cron fields; \
+                 ranges/lists/steps are skipped — use --emit-trigger=k8s for those)."
+            ));
+        }
+        return;
+    }
+
+    let dir = artifact
+        .path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    for (filename, content) in descriptors {
+        let path = dir.join(&filename);
+        match std::fs::write(&path, content.as_bytes()) {
+            Ok(()) => {
+                let _ = output.status(format!("Wrote trigger descriptor: {}", path.display()));
+            }
+            Err(e) => {
+                let _ = output.error(format!("failed to write {}: {e}", path.display()));
+            }
+        }
+    }
+}
+
 /// Maps a [`BuildError`] to its CLI exit code per spec §6.
 fn exit_code_for(err: &BuildError) -> u8 {
     match err {
@@ -520,6 +607,7 @@ mod tests {
             output: None,
             agents: vec![],
             offline: false,
+            emit_trigger: None,
         }
     }
 
@@ -684,7 +772,7 @@ capabilities = []
         let target = TargetTriple::PASSTHROUGH;
         // No MCP entries → empty cache.
         let mcp_cache = std::collections::BTreeMap::new();
-        let payload = lower_ir(project, &target, &mcp_cache, None);
+        let LowerIrResult { payload, .. } = lower_ir(project, &target, &mcp_cache, None);
         assert!(
             payload.is_some(),
             "lower_ir must return Some(IrPayload) for a project with a [tools.<x>] native = ... entry; \

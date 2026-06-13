@@ -606,6 +606,7 @@ fn verify_bundle_against_source(
         &empty_mcp_cache,
         None,
     )
+    .payload
     .map(|p| p.canonical_ir_hash);
 
     tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
@@ -820,6 +821,7 @@ capabilities = {caps}
     fn lower(root: &std::path::Path) -> IrPayload {
         let empty = BTreeMap::new();
         crate::cmd::build::lower_ir(root, &TargetTriple::host(), &empty, None)
+            .payload
             .expect("native-tool project must lower to Some(IrPayload)")
     }
 
