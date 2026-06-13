@@ -1,0 +1,15 @@
+name = "fs-write"
+version = "0.1.0"
+description = "Write or edit a single absolute path under fs.write capability scope."
+
+[plugin]
+provides = "tool"
+kind     = "rust-cargo"
+bin      = "fs-write-plugin"
+
+[[capabilities]]
+kind = "fs.write"
+paths = []
+
+[sandbox]
+required_tier = "strict"
