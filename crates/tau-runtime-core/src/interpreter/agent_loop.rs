@@ -617,6 +617,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: tau_ir::CapabilityTable(alloc::collections::BTreeMap::new()),
                 pipeline: None,
+                checks: alloc::collections::BTreeMap::new(),
             },
         });
         DispatcherTool {

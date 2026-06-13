@@ -25,7 +25,7 @@ pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
     /// Current IR format version emitted by this `tau-ir` crate.
-    pub const CURRENT: &'static str = "v1.1.0";
+    pub const CURRENT: &'static str = "v1.2.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -68,4 +68,40 @@ pub struct Workflow {
     /// Optional engine-sequenced pipeline. `None` preserves single-entry
     /// behavior (run the named entry agent). `Some` => `run_pipeline`.
     pub pipeline: Option<Pipeline>,
+    /// Postcondition checks, keyed by id. Positioned in the pipeline via
+    /// `StepRun::Check`.
+    #[serde(
+        default,
+        skip_serializing_if = "alloc::collections::BTreeMap::is_empty"
+    )]
+    pub checks: alloc::collections::BTreeMap<crate::ids::CheckId, crate::check::Check>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ir_format_version_is_v1_2_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v1.2.0");
+        assert_eq!(IrFormatVersion::current().0, "v1.2.0");
+    }
+
+    #[test]
+    fn default_workflow_has_empty_checks_and_serializes_without_checks_key() {
+        let wf = Workflow::default();
+        assert!(
+            wf.checks.is_empty(),
+            "default Workflow must have empty checks"
+        );
+
+        // Serialize and confirm "checks" key is absent (byte-stability).
+        let bytes = serde_json::to_vec(&wf).expect("serializes");
+        let obj: serde_json::Value = serde_json::from_slice(&bytes).expect("valid json");
+        assert!(
+            obj.get("checks").is_none(),
+            "empty checks must not appear in serialized Workflow; got: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
 }

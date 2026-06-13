@@ -319,6 +319,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
                 pipeline: None,
+                checks: BTreeMap::new(),
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
@@ -354,6 +355,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
                 pipeline: None,
+                checks: BTreeMap::new(),
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
