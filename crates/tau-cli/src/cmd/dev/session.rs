@@ -15,11 +15,12 @@ use tau_pkg::project::ProjectConfig;
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_ports::target::TargetTriple;
 use tau_runtime_core::builder::{DynLlmBackend, DynTool};
+use tau_runtime_core::interpreter::pipeline::run_pipeline;
 use tau_runtime_core::interpreter::run_ir;
 
 use crate::cmd::ir_dispatcher::{setup_mcp_runtime, ForwardingDispatcher};
 use crate::cmd::plugin_loader;
-use crate::cmd::run::render_outcome;
+use crate::cmd::run::{render_outcome, render_pipeline_result};
 
 /// All the long-lived state for one `tau dev` invocation.
 pub struct DevSession {
@@ -287,9 +288,13 @@ impl DevSession {
             _mcp_lifetime = Vec::new();
         }
 
-        // 6. Build dispatcher, append the user turn to history, and run IR.
+        // 6. Build dispatcher and append the user turn to history. The
+        //    dispatcher supplies `TokioClock`/`OsRandom`, so `run_agent`'s
+        //    "clock must be supplied" invariant holds on both the pipeline
+        //    and single-agent paths. It is rebuilt every turn (and reads
+        //    `self.ir` fresh), so `:reload` — which swaps `self.ir` — is
+        //    automatically reflected on the next turn.
         let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backend, tools_by_id));
-        let entry_id = AgentId(self.current_agent.clone());
         let initial = Message::new(
             Address::User,
             Address::Agent(AgentInstanceId::new()),
@@ -298,6 +303,39 @@ impl DevSession {
             },
         );
         self.history.push(initial);
+
+        // 6a. Pipeline dispatch — mirrors `cmd::run::try_run_pipeline`.
+        //     When the project lowered to an `IrModule` whose
+        //     `workflow.pipeline` is `Some` (a `[[pipeline.steps]]` block was
+        //     declared), sequence the whole pipeline via `run_pipeline`,
+        //     threading each step's output to later steps, and render the
+        //     LAST step's stored output. When no pipeline is declared (the
+        //     overwhelming majority of projects) this branch is skipped and
+        //     the single-agent path below runs unchanged.
+        if self.ir.workflow.pipeline.is_some() {
+            let module = Arc::new(self.ir.clone());
+            // The id of the LAST step — its stored output is the run result.
+            // An empty `steps` vec cannot lower to `Some(pipeline)` (the
+            // parser rejects it), but guard anyway rather than index blindly.
+            let last_step_id = module
+                .workflow
+                .pipeline
+                .as_ref()
+                .and_then(|p| p.steps.last())
+                .map(|s| s.id.0.clone());
+
+            let store_result = run_pipeline(module, prompt.to_string(), dispatcher).await;
+
+            drop(runtime);
+            plugin_loader::flush_recorders().await;
+
+            let store = store_result.context("running pipeline via IR interpreter")?;
+            let last_step_id = last_step_id.ok_or_else(|| anyhow!("pipeline declared no steps"))?;
+            return render_pipeline_result(&store, &last_step_id, output);
+        }
+
+        // 6b. Single-agent dispatch (default; unchanged).
+        let entry_id = AgentId(self.current_agent.clone());
         let history_snapshot = self.history.clone();
 
         let run_outcome = run_ir(
