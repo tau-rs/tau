@@ -442,6 +442,10 @@ async fn try_run_pipeline(
 /// `{"outcome":"completed", ...}` shape with the final step's text as
 /// `final_message` (token usage / turn counts are pipeline-level concepts
 /// not yet aggregated — reported as zero/empty at v0).
+///
+/// `pub(super)` so the bundle run path
+/// ([`crate::cmd::ir_dispatcher::run_via_ir`]) renders a bundled
+/// pipeline's final step identically to the cwd path.
 pub(super) fn render_pipeline_result(
     store: &tau_runtime_core::interpreter::output_store::OutputStore,
     last_step_id: &str,
