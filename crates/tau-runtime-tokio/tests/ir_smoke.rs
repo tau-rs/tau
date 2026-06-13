@@ -146,6 +146,7 @@ fn sample_module() -> IrModule {
             edges: Default::default(),
             capability_table: CapabilityTable(Default::default()),
             pipeline: None,
+            checks: BTreeMap::new(),
         },
     }
 }

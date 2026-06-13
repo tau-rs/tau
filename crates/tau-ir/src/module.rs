@@ -25,7 +25,7 @@ pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
     /// Current IR format version emitted by this `tau-ir` crate.
-    pub const CURRENT: &'static str = "v1.1.0";
+    pub const CURRENT: &'static str = "v1.2.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -68,4 +68,26 @@ pub struct Workflow {
     /// Optional engine-sequenced pipeline. `None` preserves single-entry
     /// behavior (run the named entry agent). `Some` => `run_pipeline`.
     pub pipeline: Option<Pipeline>,
+    /// Postcondition checks by id, positioned in the pipeline via
+    /// [`StepRun::Check`](crate::pipeline::StepRun::Check). `#[serde(default)]`
+    /// keeps pre-`v1.2.0` modules deserializable; the skip keeps
+    /// check-free modules byte-identical save the format bump.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub checks: BTreeMap<crate::ids::CheckId, crate::check::Check>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_checks_not_serialized() {
+        let wf = Workflow::default();
+        let bytes = serde_json::to_vec(&wf).expect("serializes");
+        let json = alloc::string::String::from_utf8(bytes).expect("valid utf-8");
+        assert!(
+            !json.contains("checks"),
+            "check-free Workflow should not contain 'checks' key; got: {json}"
+        );
+    }
 }

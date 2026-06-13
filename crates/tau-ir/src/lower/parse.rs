@@ -200,6 +200,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             edges,
             capability_table: CapabilityTable(capability_table),
             pipeline,
+            checks: BTreeMap::new(),
         },
     })
 }

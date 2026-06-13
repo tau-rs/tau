@@ -115,12 +115,14 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
             StepRun::Agent(a) => wf.agents.contains_key(a),
             StepRun::Tool(t) => wf.tools.contains_key(t),
             StepRun::Deterministic(s) => wf.steps.contains_key(s),
+            StepRun::Check(c) => wf.checks.contains_key(c),
         };
         if !exists {
             let target = match &step.run {
                 StepRun::Agent(a) => alloc::format!("agent:{}", a.0),
                 StepRun::Tool(t) => alloc::format!("tool:{}", t.0),
                 StepRun::Deterministic(s) => alloc::format!("deterministic:{}", s.0),
+                StepRun::Check(c) => alloc::format!("check:{}", c.0),
             };
             return Err(IrError::UnknownPipelineRun {
                 step: sid.into(),
@@ -318,6 +320,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
                 pipeline: None,
+                checks: BTreeMap::new(),
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
@@ -353,6 +356,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
                 pipeline: None,
+                checks: BTreeMap::new(),
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");

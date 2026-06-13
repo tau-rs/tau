@@ -147,6 +147,15 @@ where
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
+            StepRun::Check(check_id) => {
+                return Err(RuntimeError::Internal {
+                    message: alloc::format!(
+                        "pipeline step {} (check:{}) not yet implemented",
+                        step.id.0,
+                        check_id.0
+                    ),
+                });
+            }
         };
 
         store.insert(step.id.0.clone(), output);

@@ -36,12 +36,16 @@ pub enum StepRun {
     Tool(ToolId),
     /// Run a deterministic step node by id.
     Deterministic(StepId),
+    /// Evaluate a postcondition check by id. The referenced
+    /// [`CheckId`](crate::ids::CheckId) must exist in `workflow.checks`
+    /// (enforced by typecheck).
+    Check(crate::ids::CheckId),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::AgentId;
+    use crate::ids::{AgentId, CheckId};
 
     #[test]
     fn pipeline_serde_round_trips() {
@@ -55,5 +59,13 @@ mod tests {
         let bytes = serde_json::to_vec(&p).expect("serializes");
         let back: Pipeline = serde_json::from_slice(&bytes).expect("deserializes");
         assert_eq!(p, back);
+    }
+
+    #[test]
+    fn step_run_check_serde_round_trips() {
+        let run = StepRun::Check(CheckId("report-check".into()));
+        let bytes = serde_json::to_vec(&run).expect("serializes");
+        let back: StepRun = serde_json::from_slice(&bytes).expect("deserializes");
+        assert_eq!(run, back);
     }
 }
