@@ -225,6 +225,8 @@ pub enum PipelineRunRef {
     Tool(String),
     /// `deterministic:<id>`
     Deterministic(String),
+    /// `check:<id>` — explicitly position a postcondition check.
+    Check(String),
 }
 
 // ----- IR lowering structs (β.2.2) -----
@@ -1177,11 +1179,12 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
             Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
             Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
             Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
+            Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
             _ => {
                 return Err(ProjectConfigError::PipelineValidation {
                     id: s.id.clone(),
                     message: format!(
-                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\", got {:?}",
+                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {:?}",
                     s.run
                 ),
                 })
@@ -2330,6 +2333,21 @@ mod tests {
         assert_eq!(pipe.steps[0].id, "gather");
         assert_eq!(pipe.steps[0].run, PipelineRunRef::Agent("gather".into()));
         assert_eq!(pipe.steps[1].input, "${steps.gather.output}");
+    }
+
+    #[test]
+    fn parses_check_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "report"
+            run = "check:report"
+            input = "${input}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps[0].run, PipelineRunRef::Check("report".into()));
     }
 
     #[test]
