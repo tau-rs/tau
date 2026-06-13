@@ -72,6 +72,33 @@ fn extract_max_bytes(granted: &[Capability]) -> Option<u64> {
     caps.into_iter().flatten().max()
 }
 
+/// Result of applying an `edit` to a file's text.
+#[derive(Debug)]
+enum EditOutcome {
+    /// Replacement succeeded; carries the new file content.
+    Replaced(String),
+    /// `old_str` did not occur in the file.
+    NotFound,
+    /// `old_str` occurred N>=2 times and `replace_all` was false.
+    Ambiguous(usize),
+}
+
+/// Apply an `old_str`→`new_str` edit. Caller guarantees `old` is
+/// non-empty. `str::matches`, `replacen`, and `replace` all count
+/// non-overlapping occurrences left-to-right, so the count and the
+/// replacement stay consistent.
+fn apply_edit(haystack: &str, old: &str, new: &str, replace_all: bool) -> EditOutcome {
+    match haystack.matches(old).count() {
+        0 => EditOutcome::NotFound,
+        1 => EditOutcome::Replaced(haystack.replacen(old, new, 1)),
+        n if replace_all => {
+            let _ = n;
+            EditOutcome::Replaced(haystack.replace(old, new))
+        }
+        n => EditOutcome::Ambiguous(n),
+    }
+}
+
 /// Per-session state derived from the agent's granted capabilities.
 pub struct FsWriteSession {
     #[allow(dead_code)]
@@ -263,5 +290,35 @@ mod tests {
             cap(r#"{"kind":"fs.write","paths":["/b/**"],"max_bytes":4096}"#),
         ];
         assert_eq!(extract_max_bytes(&granted), Some(4096));
+    }
+
+    #[test]
+    fn apply_edit_single_match_replaces() {
+        let out = apply_edit("hello world", "world", "tau", false);
+        assert_matches::assert_matches!(out, EditOutcome::Replaced(s) if s == "hello tau");
+    }
+
+    #[test]
+    fn apply_edit_zero_matches_not_found() {
+        let out = apply_edit("hello world", "zzz", "q", false);
+        assert_matches::assert_matches!(out, EditOutcome::NotFound);
+    }
+
+    #[test]
+    fn apply_edit_multi_match_ambiguous_when_not_replace_all() {
+        let out = apply_edit("a x a x a", "a", "b", false);
+        assert_matches::assert_matches!(out, EditOutcome::Ambiguous(3));
+    }
+
+    #[test]
+    fn apply_edit_multi_match_replace_all() {
+        let out = apply_edit("a x a x a", "a", "b", true);
+        assert_matches::assert_matches!(out, EditOutcome::Replaced(s) if s == "b x b x b");
+    }
+
+    #[test]
+    fn apply_edit_new_str_empty_deletes() {
+        let out = apply_edit("keep DROP keep", " DROP", "", false);
+        assert_matches::assert_matches!(out, EditOutcome::Replaced(s) if s == "keep keep");
     }
 }
