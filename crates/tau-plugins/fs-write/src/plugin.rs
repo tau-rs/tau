@@ -6,7 +6,7 @@
 
 use serde::Deserialize;
 use std::sync::OnceLock;
-use tau_domain::{Capability, Value};
+use tau_domain::{Capability, FsCapability, Value};
 use tau_plugin_sdk::{ConfigError, Configure};
 use tau_ports::{
     fixtures::{make_tool_result, make_tool_spec},
@@ -41,6 +41,35 @@ fn parse_args(args: &Value) -> Result<WriteArgs, ToolError> {
     serde_json::from_value::<WriteArgs>(json).map_err(|e| ToolError::BadArgs {
         reason: format!("fs-write: {e}"),
     })
+}
+
+fn extract_fs_write_paths(granted: &[Capability]) -> Vec<String> {
+    granted
+        .iter()
+        .filter_map(|c| match c {
+            Capability::Filesystem(FsCapability::Write { paths, .. }) => Some(paths.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// Most-permissive `max_bytes` across all `fs.write` grants: `None`
+/// (uncapped) if any grant is uncapped, else the maximum present cap.
+/// `None` when there are no `fs.write` grants (the kernel gates
+/// presence; an empty allow-list then rejects every path anyway).
+fn extract_max_bytes(granted: &[Capability]) -> Option<u64> {
+    let caps: Vec<Option<u64>> = granted
+        .iter()
+        .filter_map(|c| match c {
+            Capability::Filesystem(FsCapability::Write { max_bytes, .. }) => Some(*max_bytes),
+            _ => None,
+        })
+        .collect();
+    if caps.is_empty() || caps.iter().any(Option::is_none) {
+        return None;
+    }
+    caps.into_iter().flatten().max()
 }
 
 /// Per-session state derived from the agent's granted capabilities.
@@ -183,5 +212,56 @@ mod tests {
     fn parse_rejects_missing_mode() {
         let args = val(serde_json::json!({ "path": "/p/a", "contents": "aGk=" }));
         assert!(parse_args(&args).is_err());
+    }
+
+    /// Deserialize a `Capability` from JSON (FsCapability is `#[non_exhaustive]`).
+    fn cap(json: &str) -> Capability {
+        serde_json::from_str(json).expect("test capability JSON must be valid")
+    }
+
+    #[test]
+    fn extract_paths_collects_from_multiple_write_grants() {
+        let granted = vec![
+            cap(r#"{"kind":"fs.write","paths":["/tmp/**"]}"#),
+            cap(r#"{"kind":"fs.write","paths":["/var/log/**","/etc/**"]}"#),
+            cap(r#"{"kind":"fs.read","paths":["/should/be/ignored/**"]}"#),
+        ];
+        assert_eq!(
+            extract_fs_write_paths(&granted),
+            vec![
+                "/tmp/**".to_string(),
+                "/var/log/**".to_string(),
+                "/etc/**".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_paths_empty_when_no_write_grants() {
+        assert!(extract_fs_write_paths(&[]).is_empty());
+    }
+
+    #[test]
+    fn extract_max_bytes_none_when_no_grants() {
+        assert_eq!(extract_max_bytes(&[]), None);
+    }
+
+    #[test]
+    fn extract_max_bytes_uncapped_grant_wins() {
+        // One grant has a cap, one is uncapped → uncapped (None) wins.
+        let granted = vec![
+            cap(r#"{"kind":"fs.write","paths":["/a/**"],"max_bytes":100}"#),
+            cap(r#"{"kind":"fs.write","paths":["/b/**"]}"#),
+        ];
+        assert_eq!(extract_max_bytes(&granted), None);
+    }
+
+    #[test]
+    fn extract_max_bytes_takes_max_of_present_caps() {
+        let granted = vec![
+            cap(r#"{"kind":"fs.write","paths":["/a/**"],"max_bytes":100}"#),
+            cap(r#"{"kind":"fs.write","paths":["/b/**"],"max_bytes":4096}"#),
+        ];
+        assert_eq!(extract_max_bytes(&granted), Some(4096));
     }
 }
