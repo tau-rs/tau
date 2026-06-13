@@ -53,7 +53,7 @@ pub struct IrModule {
     /// (triggers are about *how* tau is invoked, not the call graph).
     /// `skip_serializing_if` + `default` means a trigger-less module emits
     /// no `triggers` key and hashes identically to a pre-trigger module
-    /// (Option B / ADR-0042 §D1); older modules with no key read back as empty.
+    /// (Option B / ADR-0043 §D1); older modules with no key read back as empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<TriggerBinding>,
 }

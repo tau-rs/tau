@@ -1,7 +1,7 @@
 //! Trigger bindings — compiled, capability-safe metadata describing how
 //! tau is invoked. See the framing doc
 //! `docs/superpowers/specs/2026-06-13-trigger-ingress-and-serve-transport-framing.md`
-//! and ADR-0042.
+//! and ADR-0043.
 //!
 //! A trigger has two halves: the **substrate** (the scheduler/socket/queue,
 //! owned by the host) and the **binding** (declared once, compiled, portable —
@@ -76,7 +76,7 @@ pub struct RetryPolicy {
     /// Where a run that exhausts `max_attempts` is sent — a **sink
     /// reference** (`mcp:<name>` or an already-granted capability target),
     /// never a tau-owned queue. `None` ⇒ no dead-letter sink. The envelope
-    /// shape is a runtime concern not modelled in slice 1 (see ADR-0042 §D2).
+    /// shape is a runtime concern not modelled in slice 1 (see ADR-0043 §D2).
     pub dead_letter: Option<String>,
 }
 
