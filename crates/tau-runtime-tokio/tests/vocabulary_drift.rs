@@ -36,7 +36,7 @@ const OBSERVE_ONLY: &[&str] = &[
 /// addition lands AND the corresponding mirror or OBSERVE_ONLY entry is
 /// updated in the same change. Bumping just this number to silence the
 /// test is the failure mode this guard exists to prevent.
-const OBSERVE_TOTAL_EXPECTED: usize = 31;
+const OBSERVE_TOTAL_EXPECTED: usize = 34;
 
 #[test]
 fn kernel_mirror_values_match_observe() {
@@ -134,6 +134,9 @@ fn lookup_observe(ident: &str) -> Option<&'static str> {
         "EV_TOOL_SESSION_OPEN_FAILED" => o::EV_TOOL_SESSION_OPEN_FAILED,
         "EV_TOOL_SESSION_CLOSE_FAILED" => o::EV_TOOL_SESSION_CLOSE_FAILED,
         "EV_MESSAGE_ADDED" => o::EV_MESSAGE_ADDED,
+        "SPAN_PIPELINE_STEP" => o::SPAN_PIPELINE_STEP,
+        "EV_PIPELINE_STEP_STARTED" => o::EV_PIPELINE_STEP_STARTED,
+        "EV_PIPELINE_STEP_COMPLETED" => o::EV_PIPELINE_STEP_COMPLETED,
         _ => return None,
     })
 }
@@ -178,6 +181,9 @@ fn observe_constant_count() -> usize {
         "EV_TOOL_SESSION_OPEN_FAILED",
         "EV_TOOL_SESSION_CLOSE_FAILED",
         "EV_MESSAGE_ADDED",
+        "SPAN_PIPELINE_STEP",
+        "EV_PIPELINE_STEP_STARTED",
+        "EV_PIPELINE_STEP_COMPLETED",
     ];
     // Sanity check: lookup_observe must accept every IDENT.
     for ident in IDENTS {

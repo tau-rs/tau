@@ -1,10 +1,10 @@
-# 0043 — Trigger ingress, slice 1: cron + manual + retry policy
+# 0044 — Trigger ingress, slice 1: cron + manual + retry policy
 
 **Status:** Accepted
 
 **Date:** 2026-06-13
 
-**Relates to:** the framing doc `docs/superpowers/specs/2026-06-13-trigger-ingress-and-serve-transport-framing.md`, [ADR-0037](0037-workflow-ir.md) (workflow IR), the egress-only capability vocabulary, NG3 / NG5 / NG6.
+**Relates to:** the framing doc `docs/superpowers/specs/2026-06-13-trigger-ingress-and-serve-transport-framing.md`, [ADR-0043](0043-trigger-ingress.md) (the trigger-ingress stance), [ADR-0037](0037-workflow-ir.md) (workflow IR), the egress-only capability vocabulary, NG3 / NG5 / NG6.
 
 ## Context
 

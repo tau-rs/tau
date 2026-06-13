@@ -19,3 +19,12 @@ description = "Read the temperature sensor"
 [tools.set_fan]
 native = "SetFan"
 description = "Toggle the fan"
+
+[[pipeline.steps]]
+id = "check"
+run = "agent:fan_monitor"
+
+[[pipeline.steps]]
+id = "act"
+run = "agent:fan_monitor"
+input = "${steps.check.output}"

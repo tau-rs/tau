@@ -440,6 +440,16 @@ pub(crate) fn lower_ir(
     }
 }
 
+/// `Caches::native_tool`-shaped stand-in: `Some(SHA-256(name))`.
+///
+/// Shared by [`lower_ir`] (bundle build) and `cmd::run`'s pipeline
+/// lowering so both compute the SAME native-tool content hash — a drift
+/// between the two would make a pipeline's runtime IR diverge from its
+/// built bundle IR. Always `Some` (never the unknown-tool sentinel).
+pub(crate) fn native_tool_hash(name: &str) -> Option<[u8; 32]> {
+    Some(sha256_name(name))
+}
+
 /// Deterministic content-hash stand-in for a native tool's symbolic name.
 ///
 /// Returns `SHA-256(name.as_bytes())`. Used by [`lower_ir`]'s `Caches::native_tool`

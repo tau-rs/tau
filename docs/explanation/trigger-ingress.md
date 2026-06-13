@@ -77,5 +77,5 @@ stateless across invocations. `dead_letter` names a sink (an MCP contract or an
 already-granted capability target) — never a tau-owned queue. This keeps
 durable state out of tau's core.
 
-See [ADR-0043](../decisions/0043-trigger-ingress-slice-1.md) for the design
+See [ADR-0044](../decisions/0044-trigger-ingress-slice-1.md) for the design
 rationale.

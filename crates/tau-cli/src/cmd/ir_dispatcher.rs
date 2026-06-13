@@ -407,6 +407,23 @@ impl ToolDispatcher for ForwardingDispatcher {
     fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
         self.backend.clone()
     }
+
+    /// Supply the tokio host's wall-clock to the inner agent loop.
+    ///
+    /// `run_agent` (used by `run_ir` and `run_pipeline`) needs a real
+    /// `Clock` in a production build; the host shell owns one
+    /// (`TokioClock`) and hands it over here so the kernel doesn't have to
+    /// mint it. Without this, `run_agent` panics ("host shell must supply
+    /// a clock") in any non-`test-fixtures` binary.
+    fn clock(&self) -> Option<Arc<dyn tau_ports::Clock>> {
+        Some(Arc::new(tau_runtime_tokio::TokioClock))
+    }
+
+    /// Supply the tokio host's OS entropy source to the inner agent loop.
+    /// See [`Self::clock`] — same host-injection contract.
+    fn random(&self) -> Option<Arc<dyn tau_ports::RandomSource>> {
+        Some(Arc::new(tau_runtime_tokio::OsRandom))
+    }
 }
 
 // ---------------------------------------------------------------------------

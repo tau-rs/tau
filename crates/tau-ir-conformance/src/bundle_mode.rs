@@ -30,7 +30,7 @@ use tau_pkg::bundle::{build as build_bundle, BuildOptions, BundleManifest, IrPay
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::registry as target_registry;
 
-use crate::dev_mode::{drive_module, parse_mock_llm};
+use crate::dev_mode::{drive_module, drive_pipeline, parse_mock_llm, CONFORMANCE_PIPELINE_INPUT};
 use crate::{ConformanceReport, ExecutionMode};
 
 /// Bundle-mode runner: builds a bundle from the fixture, decodes the
@@ -209,8 +209,17 @@ impl ExecutionMode for BundleMode {
 
         match prepared {
             Ok((module, responses, entry_id)) => {
-                let entry = tau_ir::AgentId(entry_id);
-                drive_module(std::sync::Arc::new(module), &entry, responses).await
+                let module = std::sync::Arc::new(module);
+                // Mirror DevMode: pipeline workflows are engine-sequenced
+                // (no single entry agent loop). Both modes drive the same
+                // in-process `run_pipeline`, so the round-tripped bundle
+                // module produces the same report as the in-process lower.
+                if module.workflow.pipeline.is_some() {
+                    drive_pipeline(module, CONFORMANCE_PIPELINE_INPUT.to_string(), responses).await
+                } else {
+                    let entry = tau_ir::AgentId(entry_id);
+                    drive_module(module, &entry, responses).await
+                }
             }
             Err(refusal) => ConformanceReport::build_refused(refusal),
         }

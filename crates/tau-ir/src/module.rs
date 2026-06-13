@@ -9,6 +9,7 @@ use tau_ports::target::TargetTriple;
 use crate::capability::CapabilityTable;
 use crate::ids::{AgentId, StepId, ToolId};
 use crate::node::{Agent, Deterministic, Tool};
+use crate::pipeline::Pipeline;
 use crate::subflow::SubflowEdge;
 use crate::trigger::TriggerBinding;
 
@@ -25,7 +26,7 @@ pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
     /// Current IR format version emitted by this `tau-ir` crate.
-    pub const CURRENT: &'static str = "v1.0.0";
+    pub const CURRENT: &'static str = "v1.1.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -53,7 +54,7 @@ pub struct IrModule {
     /// (triggers are about *how* tau is invoked, not the call graph).
     /// `skip_serializing_if` + `default` means a trigger-less module emits
     /// no `triggers` key and hashes identically to a pre-trigger module
-    /// (Option B / ADR-0043 §D1); older modules with no key read back as empty.
+    /// (Option B / ADR-0044 §D1); older modules with no key read back as empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<TriggerBinding>,
 }
@@ -72,4 +73,7 @@ pub struct Workflow {
     /// Per-tool capability requirements. Derived from `tools` but
     /// stored explicitly for the bundle's `tau.caps` custom section.
     pub capability_table: CapabilityTable,
+    /// Optional engine-sequenced pipeline. `None` preserves single-entry
+    /// behavior (run the named entry agent). `Some` => `run_pipeline`.
+    pub pipeline: Option<Pipeline>,
 }

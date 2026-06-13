@@ -118,7 +118,7 @@ pub struct Caches<'a> {
 }
 
 fn build_module(parsed: crate::lower::parse::Parsed, target: &TargetTriple) -> IrModule {
-    // Option B (ADR-0043 §D1): ir_format is NOT bumped — it stays v1.0.0
+    // Option B (ADR-0044 §D1): ir_format is NOT bumped — it stays v1.0.0
     // whether or not the module carries triggers. The `triggers` field's
     // skip-empty serialization preserves trigger-less hashes; the appended
     // array differentiates trigger-bearing hashes on its own.

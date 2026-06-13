@@ -113,4 +113,49 @@ pub enum IrError {
         /// The unresolved entrypoint agent id.
         agent: AgentId,
     },
+
+    /// A pipeline step's `run` target does not exist in the workflow.
+    #[error("pipeline step {step:?}: run target {target} not found")]
+    UnknownPipelineRun {
+        /// The pipeline step id.
+        step: String,
+        /// The unresolved `kind:id` target, e.g. `agent:writer`.
+        target: String,
+    },
+
+    /// Two pipeline steps share an id.
+    #[error("pipeline step id {id:?} is declared more than once")]
+    DuplicatePipelineStepId {
+        /// The duplicated id.
+        id: String,
+    },
+
+    /// `${steps.x.output}` references a step that runs at or after this one.
+    #[error(
+        "pipeline step {step:?} references output of {referenced:?}, which is not an earlier step"
+    )]
+    ForwardOutputRef {
+        /// The referencing step.
+        step: String,
+        /// The referenced (later/self) step id.
+        referenced: String,
+    },
+
+    /// `${steps.x.output}` references a step id not in the pipeline.
+    #[error("pipeline step {step:?} references unknown step output {referenced:?}")]
+    UnknownOutputRef {
+        /// The referencing step.
+        step: String,
+        /// The unknown referenced id.
+        referenced: String,
+    },
+
+    /// A pipeline input template was malformed (unterminated/unrecognized).
+    #[error("pipeline step {step:?}: bad input template: {detail}")]
+    BadPipelineTemplate {
+        /// The step id.
+        step: String,
+        /// Human-readable template error.
+        detail: String,
+    },
 }
