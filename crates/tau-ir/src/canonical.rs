@@ -35,13 +35,16 @@ pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, serde_json::Error>
 #[cfg(test)]
 mod pipeline_canonical_tests {
     use super::*;
-    use crate::ids::{AgentId, PipelineStepId};
+    use crate::check::{Check, CheckVerify, JudgeRef, Locus, OnFail, RetryPolicy};
+    use crate::ids::{AgentId, CheckId, PipelineStepId};
     use crate::module::{IrFormatVersion, IrModule, Workflow};
     use crate::pipeline::{Pipeline, PipelineStep, StepRun};
+    use crate::GoalPredicate;
+    use alloc::collections::BTreeMap;
     use tau_ports::target::registry;
 
     #[test]
-    fn module_with_pipeline_round_trips_and_reports_v1_1() {
+    fn module_with_pipeline_round_trips_and_reports_v1_2() {
         let target = registry::list_available().next().unwrap().triple;
         let wf = Workflow {
             pipeline: Some(Pipeline {
@@ -60,9 +63,106 @@ mod pipeline_canonical_tests {
             workflow: wf,
             triggers: alloc::vec::Vec::new(),
         };
-        assert_eq!(m.ir_format.0, "v1.1.0");
+        assert_eq!(m.ir_format.0, "v1.2.0");
         let bytes = to_canonical_bytes(&m);
         let back = from_canonical_bytes(&bytes).expect("round-trips");
         assert_eq!(m, back);
+    }
+
+    #[test]
+    fn module_with_checks_round_trips_and_bytes_are_stable() {
+        let target = registry::list_available().next().unwrap().triple;
+
+        // One goal check: regex match predicate over a path locus.
+        let goal_check = Check {
+            id: CheckId("has_header".into()),
+            verify: CheckVerify::Goal {
+                evaluates: Locus::Path("/x".into()),
+                predicate: GoalPredicate::Matches("^#".into()),
+            },
+            retry: RetryPolicy {
+                on_fail: OnFail::Abort,
+                max_attempts: 1,
+                gate: PipelineStepId("writer".into()),
+            },
+        };
+
+        // One deliverable check: path locus, builtin judge with no model
+        // override.
+        let deliverable_check = Check {
+            id: CheckId("report".into()),
+            verify: CheckVerify::Deliverable {
+                locus: Locus::Path("/r.md".into()),
+                must_satisfy: "Must have sources section.".into(),
+                judge: JudgeRef::Builtin { model: None },
+            },
+            retry: RetryPolicy {
+                on_fail: OnFail::Abort,
+                max_attempts: 1,
+                gate: PipelineStepId("writer".into()),
+            },
+        };
+
+        let mut checks = BTreeMap::new();
+        checks.insert(CheckId("has_header".into()), goal_check);
+        checks.insert(CheckId("report".into()), deliverable_check);
+
+        let wf = Workflow {
+            pipeline: Some(Pipeline {
+                steps: alloc::vec![
+                    PipelineStep {
+                        id: PipelineStepId("writer".into()),
+                        run: StepRun::Agent(AgentId("writer".into())),
+                        input: "${input}".into(),
+                    },
+                    PipelineStep {
+                        id: PipelineStepId("check-has-header".into()),
+                        run: StepRun::Check(CheckId("has_header".into())),
+                        input: "${input}".into(),
+                    },
+                    PipelineStep {
+                        id: PipelineStepId("check-report".into()),
+                        run: StepRun::Check(CheckId("report".into())),
+                        input: "${input}".into(),
+                    },
+                ],
+            }),
+            checks,
+            ..Workflow::default()
+        };
+        let module = IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target,
+            workflow: wf,
+            triggers: alloc::vec::Vec::new(),
+        };
+
+        // --- structural round-trip via from_canonical_bytes ---
+        let bytes = to_canonical_bytes(&module);
+        let back: IrModule = serde_json::from_slice(&bytes).expect("round-trips");
+        assert_eq!(
+            module, back,
+            "structural round-trip must preserve all fields"
+        );
+
+        // --- byte-stability: two calls must yield identical bytes ---
+        let bytes2 = to_canonical_bytes(&module);
+        assert_eq!(
+            bytes, bytes2,
+            "to_canonical_bytes must be idempotent (same bytes on second call)"
+        );
+
+        // Confirm checks key is present in the serialized form.
+        let obj: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+        assert!(
+            obj["workflow"]["checks"].is_object(),
+            "serialized module must contain workflow.checks object"
+        );
+        assert_eq!(
+            obj["workflow"]["checks"].as_object().unwrap().len(),
+            2,
+            "expected 2 checks in serialized form"
+        );
     }
 }

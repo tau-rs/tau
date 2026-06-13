@@ -308,6 +308,19 @@ pub enum RuntimeError {
         reason: String,
     },
 
+    /// A postcondition check failed terminally (abort, or after max attempts).
+    #[error("check '{id}' ({kind}) failed after attempt {attempt}: {rationale}")]
+    CheckFailed {
+        /// The check id (from `[goals.*]` or `[deliverables.*]`).
+        id: String,
+        /// The check kind (`"goal"` or `"deliverable"`).
+        kind: String,
+        /// Human-readable rationale from the check evaluator.
+        rationale: String,
+        /// Which attempt number failed (1-based).
+        attempt: u32,
+    },
+
     /// Catch-all for invariant violations / unexpected states.
     /// See: [escape-hatches.md#runtimeerror-internal](../docs/explanation/escape-hatches.md#runtimeerror-internal).
     #[error("internal: {message}")]
@@ -616,5 +629,20 @@ mod tests {
         assert!(s.contains("input_schema"), "got: {s}");
         assert!(s.contains("Draft 7"), "got: {s}");
         assert!(s.contains("'objectt'"), "got: {s}");
+    }
+
+    #[test]
+    fn runtime_error_check_failed_display() {
+        let err = RuntimeError::CheckFailed {
+            id: "report".into(),
+            kind: "deliverable".into(),
+            rationale: "nope".into(),
+            attempt: 2,
+        };
+        let s = format!("{err}");
+        assert_eq!(
+            s, "check 'report' (deliverable) failed after attempt 2: nope",
+            "got: {s}"
+        );
     }
 }

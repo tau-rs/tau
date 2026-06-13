@@ -1,0 +1,41 @@
+[project]
+name = "fixture-09"
+
+[agents.gather]
+display_name = "Gather"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+produces     = ["steps.writer.output"]
+
+[[pipeline.steps]]
+id    = "gather"
+run   = "agent:gather"
+input = "${input}"
+
+[[pipeline.steps]]
+id    = "writer"
+run   = "agent:writer"
+input = "${steps.gather.output}"
+
+# A goal: deterministic predicate over the writer's named output.
+# `non_empty` reads steps.writer.output from the OutputStore (Output locus,
+# so no filesystem artifact reader is needed).
+[goals.report_present]
+evaluates = "steps.writer.output"
+check     = "non_empty"
+
+# A deliverable: the writer's named output, judged by tau's built-in judge.
+# Output locus binds to the `writer` agent (produces = ["steps.writer.output"])
+# and skips the fs-write capability check (no fs tool required).
+[deliverables.report]
+output       = "steps.writer.output"
+must_satisfy = "A coherent report of the gathered findings."

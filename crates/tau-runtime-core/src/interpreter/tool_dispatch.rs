@@ -84,4 +84,15 @@ pub trait ToolDispatcher {
     fn random(&self) -> Option<Arc<dyn tau_ports::RandomSource>> {
         None
     }
+
+    /// Optional reader for produced artifacts (checks). Default: none.
+    ///
+    /// Returning `None` means "this dispatcher does not support artifact
+    /// reading" — any check that needs to read a filesystem path will
+    /// surface as a [`crate::error::RuntimeError::Internal`] with a
+    /// clear diagnostic. The tokio host wires in a `std::fs`-backed
+    /// reader; tests wire in [`super::artifact::InMemoryArtifactReader`].
+    fn artifact_reader(&self) -> Option<Arc<dyn super::artifact::ArtifactReader>> {
+        None
+    }
 }

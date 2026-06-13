@@ -158,4 +158,24 @@ pub enum IrError {
         /// Human-readable template error.
         detail: String,
     },
+
+    /// A `StepRun::Check` references a check id absent from `workflow.checks`.
+    #[error("pipeline step '{step}' runs check '{check}' but no such check is defined")]
+    UnknownCheckRef {
+        /// The pipeline step id that contains the bad reference.
+        step: String,
+        /// The check id that was not found in `workflow.checks`.
+        check: String,
+    },
+
+    /// A check's `Locus::Output` references an unknown or later pipeline step.
+    #[error(
+        "check '{check}' evaluates output of '{output}' which is not an earlier pipeline step"
+    )]
+    UnknownCheckLocus {
+        /// The check id whose locus is invalid.
+        check: String,
+        /// The referenced step id that is missing or comes at/after the check step.
+        output: String,
+    },
 }

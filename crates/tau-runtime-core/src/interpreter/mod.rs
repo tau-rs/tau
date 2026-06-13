@@ -13,6 +13,8 @@
 //! supplies.
 
 pub mod agent_loop;
+pub mod artifact;
+pub mod check;
 pub mod deterministic;
 pub mod output_store;
 pub mod pipeline;

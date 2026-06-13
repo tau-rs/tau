@@ -36,12 +36,19 @@ pub enum StepRun {
     Tool(ToolId),
     /// Run a deterministic step node by id.
     Deterministic(StepId),
+    /// Evaluate a postcondition check by id.
+    ///
+    /// The referenced [`CheckId`](crate::ids::CheckId) must exist in
+    /// `workflow.checks`; this is enforced by the typecheck stage.
+    /// Runtime evaluation is implemented in `tau-runtime-core`'s
+    /// pipeline executor (Task 19).
+    Check(crate::ids::CheckId),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::AgentId;
+    use crate::ids::{AgentId, CheckId};
 
     #[test]
     fn pipeline_serde_round_trips() {
@@ -50,6 +57,20 @@ mod tests {
                 id: PipelineStepId("writer".into()),
                 run: StepRun::Agent(AgentId("writer".into())),
                 input: "${steps.gather.output}".into(),
+            }],
+        };
+        let bytes = serde_json::to_vec(&p).expect("serializes");
+        let back: Pipeline = serde_json::from_slice(&bytes).expect("deserializes");
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn check_step_serde_round_trips() {
+        let p = Pipeline {
+            steps: alloc::vec![PipelineStep {
+                id: PipelineStepId("check-report".into()),
+                run: StepRun::Check(CheckId("c".into())),
+                input: "${input}".into(),
             }],
         };
         let bytes = serde_json::to_vec(&p).expect("serializes");

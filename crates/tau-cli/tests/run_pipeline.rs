@@ -144,6 +144,174 @@ input = "${steps.gather.output}"
     dir
 }
 
+/// Same project layout as `setup_pipeline_project` but with a passing goal
+/// appended to the tau.toml. The goal evaluates the `writer` step's output
+/// with the `non_empty` predicate — which always passes because echo-llm
+/// emits a non-empty canned text. The goal is lowered to a `StepRun::Check`
+/// step appended after `writer`, making the pipeline look like:
+///   [gather(agent), writer(agent), report_present(check)]
+///
+/// Before the fix, `try_run_pipeline` selected `report_present` (the last
+/// step) as `last_step_id`, hit `store.get("report_present") → None`, and
+/// returned an error. After the fix it skips the trailing check step and
+/// renders `writer`'s output.
+fn setup_pipeline_project_with_goal() -> tempfile::TempDir {
+    let (echo_llm, _echo_tool) = common::echo_plugins::ensure_echo_plugins_built();
+    let dir = tempfile::tempdir().expect("tempdir for pipeline+goal project");
+    let root = dir.path();
+
+    std::fs::create_dir_all(root.join(".tau")).unwrap();
+    std::fs::write(
+        root.join(".tau").join("config.toml"),
+        r#"schema_version = 2
+kind = "project"
+created_at = "2026-05-01T00:00:00Z"
+created_by_tau_version = "0.0.0"
+
+[sandbox]
+required_tier = "none"
+"#,
+    )
+    .unwrap();
+
+    let pkg_dir = root
+        .join(".tau")
+        .join("packages")
+        .join("echo-llm")
+        .join("0.1.0");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("tau.toml"),
+        r#"name = "echo-llm"
+version = "0.1.0"
+description = "echo plugin fixture"
+authors = ["tester <test@example.com>"]
+source = "https://example.com/echo-llm.git"
+kind = "llm-backend"
+dependencies = []
+capabilities = []
+"#,
+    )
+    .unwrap();
+
+    let now = "2026-04-28T00:00:00Z";
+    let zero_sha = "0".repeat(40);
+    let llm_path = echo_llm
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    let lockfile = format!(
+        r#"schema_version = 4
+generated_by_tau_version = "0.0.0"
+generated_at = "{now}"
+
+[[package]]
+name = "echo-llm"
+active_version = "0.1.0"
+source = "https://example.com/echo-llm.git"
+
+[[package.versions]]
+version = "0.1.0"
+resolved_commit = "{zero_sha}"
+sha256 = ""
+installed_at = "{now}"
+
+[package.plugin]
+binary_path = "{llm_path}"
+built_at = "{now}"
+
+[package.plugin.manifest]
+provides = "llm_backend"
+kind = "rust-cargo"
+bin = "echo-llm"
+"#
+    );
+    std::fs::write(root.join("tau-lock.toml"), lockfile).unwrap();
+
+    // Same two-step pipeline as setup_pipeline_project PLUS a [goals.*]
+    // block. The goal is auto-appended by the lowerer as a StepRun::Check
+    // step at the pipeline tail: [gather, writer, report_present(check)].
+    // This is the shape that triggered the bug: last() returned
+    // "report_present", store.get("report_present") → None → error.
+    let project_toml = r#"[project]
+name = "pipeline-goal-demo"
+
+[agents.gather]
+display_name = "Gatherer"
+package      = "echo-llm@^0.1"
+llm_backend  = "echo-llm"
+
+[agents.gather.config]
+canned_text = "PIPELINE-FINAL-OUTPUT"
+
+[agents.writer]
+display_name = "Writer"
+package      = "echo-llm@^0.1"
+llm_backend  = "echo-llm"
+
+[agents.writer.config]
+canned_text = "PIPELINE-FINAL-OUTPUT"
+
+[pipeline]
+
+[[pipeline.steps]]
+id = "gather"
+run = "agent:gather"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "writer"
+run = "agent:writer"
+input = "${steps.gather.output}"
+
+# Goal: check that the writer step produced non-empty output.
+# Lowered to a StepRun::Check step appended AFTER `writer`.
+# This is the step that used to be incorrectly selected as last_step_id.
+[goals.report_present]
+evaluates = "steps.writer.output"
+check     = "non_empty"
+"#;
+    std::fs::write(root.join("tau.toml"), project_toml).unwrap();
+
+    dir
+}
+
+/// Regression test for the check-tail bug: when a project declares a goal,
+/// the lowerer appends a StepRun::Check step at the pipeline tail. Before
+/// the fix, try_run_pipeline selected that check step as last_step_id,
+/// called store.get("report_present") → None, and returned:
+///   "pipeline completed but the final step recorded no output"
+///
+/// After the fix, the last NON-check step (writer) is selected, and the
+/// run succeeds, rendering the writer's output.
+#[test]
+fn run_pipeline_with_trailing_goal_check_succeeds_and_renders_writer_output() {
+    let dir = setup_pipeline_project_with_goal();
+
+    let output = AssertCmd::cargo_bin("tau")
+        .unwrap()
+        .args(["run", "gather", "seed input"])
+        .current_dir(dir.path())
+        .env("TAU_HOME", dir.path().join("global"))
+        .env("TAU_TESTING_ALLOW_MOCK_SANDBOX", "1")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "pipeline with trailing goal-check must succeed (exit 0); \
+         stderr={}\nstdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("PIPELINE-FINAL-OUTPUT"),
+        "stdout must contain the writer step's output (not a check-no-output error); \
+         got: {stdout}"
+    );
+}
+
 #[test]
 fn run_drives_pipeline_and_renders_final_step_output() {
     let dir = setup_pipeline_project();

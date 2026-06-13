@@ -190,6 +190,7 @@ fn agent(id: &str) -> Agent {
         tool_refs: Vec::new(),
         context: None,
         budget: AgentBudget::default(),
+        produces: Vec::new(),
     }
 }
 
@@ -230,6 +231,7 @@ fn build_module() -> IrModule {
             edges: Vec::new(),
             capability_table: CapabilityTable(BTreeMap::new()),
             pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
         },
         triggers: Vec::new(),
     }
@@ -319,6 +321,7 @@ async fn pipeline_deterministic_step_upcase() {
             edges: Vec::new(),
             capability_table: CapabilityTable(BTreeMap::new()),
             pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
         },
         triggers: Vec::new(),
     });

@@ -4,10 +4,12 @@
 //! side effects under `DevMode`, and asserts cross-mode equivalence
 //! (DevMode vs BundleMode) per D-7a (multiset side-effect equivalence).
 //!
-//! All seven fixtures are live as of β.3 PR-6: `01_agent_native_tool`,
-//! `02_agent_mcp_tool`, `03_agent_denied_capability`,
+//! All eleven fixtures are live as of the deliverables-and-goals track:
+//! `01_agent_native_tool`, `02_agent_mcp_tool`, `03_agent_denied_capability`,
 //! `04_subflow_spawn_child`, `05_deterministic_step`,
-//! `06_multi_turn_history`, and `07_mcp_weather_cassette`.
+//! `06_multi_turn_history`, `07_mcp_weather_cassette`,
+//! `08_pipeline_sequence`, `09_deliverables_happy`,
+//! `10_deliverable_retry`, and `11_deliverable_no_producer`.
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -19,7 +21,8 @@ use tau_runtime_core::outcome::RunOutcome;
 
 /// Fixture directory names that the IR / interpreter cannot yet build
 /// or execute. Any future directory-scanning conformance test must skip
-/// these. Empty as of β.2.6.2 — all six fixtures are live.
+/// these. Empty as of the deliverables-and-goals track — all eleven
+/// fixtures are live.
 #[allow(dead_code)]
 pub const DEFERRED_FIXTURES: &[&str] = &[];
 
@@ -393,9 +396,196 @@ async fn fixture_08_cross_mode_conformance() {
     assert_conform(&dev, &bundle);
 }
 
+// ---------------------------------------------------------------------------
+// Fixture 09 — deliverables happy path (goal pass + deliverable pass)
+// ---------------------------------------------------------------------------
+
+/// Fixture 09: a `gather → writer` pipeline with a passing goal and a
+/// passing deliverable — the acceptance test for the deliverables-and-goals
+/// feature's happy path.
+///
+/// The lowering auto-appends two `StepRun::Check` steps at the pipeline
+/// tail (goals by id, then deliverables by id), so the executed sequence is
+/// `gather → writer → check:report_present (goal) → check:report (deliverable)`.
+///
+/// - **Goal** `report_present` (`check = "non_empty"`, Output locus
+///   `steps.writer.output`): the harness `DeterministicRegistry` answers
+///   `FN_BUILTIN_NON_EMPTY` by inspecting the `present`/`content` args the
+///   interpreter builds from the `OutputStore` — no filesystem reader needed.
+/// - **Deliverable** `report` (Output locus, built-in judge): the existence
+///   floor passes (writer produced output), then the built-in judge runs as
+///   a one-turn agent whose scripted LLM reply is `{"met": true, ...}`.
+///
+/// LLM call order consumed from `mock_llm.jsonl`: gather (turn 0), writer
+/// (turn 1), judge (turn 2). The goal check consumes no LLM call.
+///
+/// Expected: both checks pass, the pipeline reaches `RunOutcome::Completed`,
+/// and no tools are declared so `tool_calls` is empty.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_09_dev_mode_goal_and_deliverable_pass() {
+    let dir = fixture_dir("09_deliverables_happy");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed pipeline run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed (goal + deliverable both pass), got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 09 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 09: DevMode and BundleMode both drive
+/// the same `run_pipeline` (with the same check steps + scripted judge), so
+/// the side-effect reports must match.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_09_cross_mode_conformance() {
+    let dir = fixture_dir("09_deliverables_happy");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 10 — deliverable retry converges
+// ---------------------------------------------------------------------------
+
+/// Fixture 10: a `gather → writer` pipeline with a retrying deliverable that
+/// converges on the SECOND attempt — the acceptance test for the
+/// rewind-to-gate retry loop.
+///
+/// The deliverable `report` has `on_fail = "retry"`, `max_attempts = 3`,
+/// `retry_from = "writer"`. Lowering auto-appends one `StepRun::Check` for the
+/// deliverable at the pipeline tail, so the executed sequence is
+/// `gather → writer → check:report (deliverable)`.
+///
+/// **Convergence path.** The built-in judge rejects the writer's first draft
+/// (`{"met": false}`), so `run_pipeline` rewinds the index to the gate step
+/// `writer` and re-runs the forward slice — `gather` runs ONCE (it is before
+/// the gate), `writer` re-runs with the injected "Previous attempt rejected:
+/// …" feedback turn. The second draft is accepted (`{"met": true}`) and the
+/// pipeline completes.
+///
+/// **Scripted LLM call sequence** (the `SequencedLlm` is call-ordered — a flat
+/// queue popped in order, independent of which agent calls — so a rewound
+/// `writer` pops the NEXT scripted line, NOT a re-keyed one):
+///
+/// 1. `gather` (attempt 1)             → `"gathered: 42"`
+/// 2. `writer` (attempt 1)             → `"draft"` (BAD)
+/// 3. deliverable judge (attempt 1)    → `{"met": false, "rationale": "needs more detail"}`
+/// 4. `writer` (attempt 2, post-rewind)→ `"report: … (revised)"` (GOOD)
+/// 5. deliverable judge (attempt 2)    → `{"met": true, "rationale": "ok"}`
+///
+/// **Convergence assertion.** `ConformanceReport` does not capture trace
+/// events, so there is no `check.retry` to inspect directly. Instead, reaching
+/// `RunOutcome::Completed` is itself proof that attempt 2 ran: a single
+/// `{"met": false}` does NOT abort (`max_attempts = 3`), it rewinds — so the
+/// ONLY way to reach Completed is for the judge to eventually return
+/// `{"met": true}`, which is scripted as the 5th line and is reachable only
+/// after the writer re-runs (line 4). If the rewind had not occurred, the run
+/// would have stalled / consumed the script out of order. No tools are
+/// declared, so `tool_calls` is empty.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_10_dev_mode_deliverable_retry_converges() {
+    let dir = fixture_dir("10_deliverable_retry");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed pipeline run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed (deliverable converges on attempt 2), got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 10 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 10: DevMode and BundleMode both drive
+/// the same `run_pipeline` (with the same rewind-to-gate retry + scripted
+/// judge), so the side-effect reports must match.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_10_cross_mode_conformance() {
+    let dir = fixture_dir("10_deliverable_retry");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 11 — deliverable_no_producer (build refused)
+// ---------------------------------------------------------------------------
+
+/// Fixture 11: build-time `DeliverableNoProducer` refusal.
+///
+/// `[deliverables.report]` declares `path = "/workspace/report.md"` but
+/// neither the `gather` agent nor the `writer` agent carries a
+/// `produces = ["/workspace/report.md"]` entry. The `tau-pkg` validator's
+/// `validate_postconditions` detects the missing producer binding during
+/// `ProjectConfig::parse_str` (before `lower_project` runs) and returns
+/// `ProjectConfigError::DeliverableNoProducer`.
+///
+/// BOTH DevMode and BundleMode must surface this as a `build_refused`
+/// report (D-3b refusal symmetry). DevMode captures the `parse_str` error
+/// in its sync setup block and returns early; BundleMode captures it inside
+/// `build_ir_payload`. Neither surface hits the interpreter.
+///
+/// Expected: `build_refused` is `Some(_)`, the diagnostic contains
+/// `"no producer"`, and the multiset fields are empty.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_11_dev_mode_build_refused_no_producer() {
+    let dir = fixture_dir("11_deliverable_no_producer");
+    let report = DevMode.run(&dir).await;
+
+    let refused = report
+        .build_refused
+        .as_ref()
+        .expect("expected build_refused; got an executed-run report");
+    assert!(
+        refused.contains("no producer"),
+        "diagnostic should mention 'no producer'; got: {refused}"
+    );
+    assert!(
+        refused.contains("report"),
+        "diagnostic should name the deliverable id 'report'; got: {refused}"
+    );
+    assert!(report.tool_calls.is_empty());
+    assert!(report.message_added.is_empty());
+}
+
+/// Cross-mode conformance for fixture 11: both modes must refuse with the
+/// same diagnostic string (D-3b refusal symmetry). The `DeliverableNoProducer`
+/// error comes from `ProjectConfig::parse_str` in both paths, so the
+/// `Display` output is identical.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_11_cross_mode_conformance() {
+    let dir = fixture_dir("11_deliverable_no_producer");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 12 — pipeline final-message picks the last EXECUTED step (#337)
+// ---------------------------------------------------------------------------
+
 /// Regression lock for `drive_pipeline`'s final-message synthesis.
 ///
-/// Fixture 09's step ids are reverse-alphabetical relative to execution
+/// Fixture 12's step ids are reverse-alphabetical relative to execution
 /// order (`zzz_first` runs first, `aaa_last` runs last). The synthesized
 /// `final_message` must carry the LAST-executed step's output
 /// (`aaa_last` → "last-step-output"). The previous implementation keyed
@@ -404,11 +594,14 @@ async fn fixture_08_cross_mode_conformance() {
 /// `zzz_first`'s "first-step-output" instead. `assert_conform` never
 /// compares `final_message`, so this is the only test that pins the
 /// step-selection logic.
+///
+/// (Renumbered from 09 to 12 during the deliverables-and-goals merge, which
+/// claimed 09/10/11 for its own fixtures.)
 #[tokio::test(flavor = "current_thread")]
-async fn fixture_09_pipeline_picks_last_executed_step() {
+async fn fixture_12_pipeline_picks_last_executed_step() {
     use tau_domain::MessagePayload;
 
-    let dir = fixture_dir("09_pipeline_reverse_alpha");
+    let dir = fixture_dir("12_pipeline_reverse_alpha");
     let report = DevMode.run(&dir).await;
 
     let final_message = match report.run_outcome {

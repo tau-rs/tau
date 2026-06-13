@@ -11,14 +11,17 @@ use tau_pkg::project::{PipelineRunRef, ProjectConfig};
 use tau_pkg::{PromptEntry, ToolBody};
 
 use crate::capability::{CapabilityRequirements, CapabilityTable};
+use crate::check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail, RetryPolicy};
 use crate::error::IrError;
-use crate::ids::{AgentId, PipelineStepId, StepId, ToolId};
+use crate::ids::{AgentId, CheckId, PipelineStepId, StepId, ToolId};
 use crate::module::Workflow;
 use crate::node::{Agent, Deterministic, Tool, ToolSpec};
 use crate::pipeline::{Pipeline, PipelineStep, StepRun};
 use crate::subflow::SubflowEdge;
 use crate::tool_impl::{Hash256, NativeFnRef, ToolImpl};
-use crate::trigger::{Backoff, BackoffStrategy, RetryPolicy, TriggerBinding, TriggerKind};
+use crate::trigger::{
+    Backoff, BackoffStrategy, RetryPolicy as TriggerRetryPolicy, TriggerBinding, TriggerKind,
+};
 use crate::AgentBudget;
 
 /// Output of the parse stage.
@@ -117,6 +120,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                     max_turns: entry.max_turns,
                     max_tokens: entry.max_tokens,
                 },
+                produces: entry.produces.clone(),
             },
         );
     }
@@ -204,7 +208,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                         )));
                     }
                 };
-                Some(RetryPolicy {
+                Some(TriggerRetryPolicy {
                     max_attempts: r.max_attempts,
                     backoff: Backoff {
                         strategy,
@@ -230,7 +234,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
     }
 
     // --- Pipeline ---------------------------------------------------------
-    let pipeline = config.pipeline.as_ref().map(|p| Pipeline {
+    let mut pipeline = config.pipeline.as_ref().map(|p| Pipeline {
         steps: p
             .steps
             .iter()
@@ -240,11 +244,15 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                     PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
                     PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
                     PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
+                    PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
                 },
                 input: s.input.clone(),
             })
             .collect(),
     });
+
+    // --- Checks (goals + deliverables) -----------------------------------
+    let checks = lower_checks(config, &mut pipeline);
 
     Ok(Parsed {
         workflow: Workflow {
@@ -254,9 +262,159 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             edges,
             capability_table: CapabilityTable(capability_table),
             pipeline,
+            checks,
         },
         triggers,
     })
+}
+
+/// Lower `[goals.*]`/`[deliverables.*]` into IR [`Check`]s and position a
+/// `StepRun::Check` step for each.
+///
+/// Checks already placed explicitly via a `check:<id>` pipeline step keep
+/// that position; the rest are appended at the pipeline tail in
+/// deterministic order (all goals by id, then all deliverables by id). If
+/// the config has no pipeline but does declare checks, a fresh pipeline is
+/// synthesized to hold the appended check steps.
+///
+/// Producer binding and gate resolution were performed by tau-pkg's
+/// validator (`DeliverableEntry::producer` / `::gate`), so this is a pure
+/// structural copy — no re-derivation here.
+fn lower_checks(
+    config: &ProjectConfig,
+    pipeline: &mut Option<Pipeline>,
+) -> BTreeMap<CheckId, Check> {
+    let mut checks: BTreeMap<CheckId, Check> = BTreeMap::new();
+
+    // Build the checks map, goals first then deliverables (BTreeMap order).
+    for (id, goal) in config.goals.iter() {
+        checks.insert(
+            CheckId(id.clone()),
+            Check {
+                id: CheckId(id.clone()),
+                verify: CheckVerify::Goal {
+                    evaluates: lower_locus(&goal.evaluates),
+                    predicate: lower_predicate(&goal.predicate),
+                },
+                // Goals always abort on failure; the gate is unused but
+                // must be a valid step id — set it to the check's own id.
+                retry: RetryPolicy {
+                    on_fail: OnFail::Abort,
+                    max_attempts: 1,
+                    gate: PipelineStepId(id.clone()),
+                },
+            },
+        );
+    }
+    for (id, d) in config.deliverables.iter() {
+        // `gate` was resolved by tau-pkg validation (empty for abort);
+        // fall back to the check's own id so the field is always valid.
+        let gate = if d.gate.is_empty() {
+            id.clone()
+        } else {
+            d.gate.clone()
+        };
+        checks.insert(
+            CheckId(id.clone()),
+            Check {
+                id: CheckId(id.clone()),
+                verify: CheckVerify::Deliverable {
+                    locus: lower_locus(&d.locus),
+                    must_satisfy: d.must_satisfy.clone(),
+                    judge: lower_judge(&d.judge),
+                },
+                retry: RetryPolicy {
+                    on_fail: lower_on_fail(&d.on_fail),
+                    max_attempts: d.max_attempts,
+                    gate: PipelineStepId(gate),
+                },
+            },
+        );
+    }
+
+    if checks.is_empty() {
+        return checks;
+    }
+
+    // Collect the check ids that are already explicitly positioned via a
+    // `check:<id>` pipeline step — those are not auto-appended.
+    let mut placed: alloc::collections::BTreeSet<alloc::string::String> =
+        alloc::collections::BTreeSet::new();
+    if let Some(p) = pipeline.as_ref() {
+        for s in p.steps.iter() {
+            if let StepRun::Check(CheckId(id)) = &s.run {
+                placed.insert(id.clone());
+            }
+        }
+    }
+
+    // Append a synthetic check step for every check not already placed, in
+    // deterministic order: goals by id, then deliverables by id.
+    let mut appended: alloc::vec::Vec<PipelineStep> = alloc::vec::Vec::new();
+    for id in config.goals.keys().chain(config.deliverables.keys()) {
+        if placed.contains(id) {
+            continue;
+        }
+        appended.push(PipelineStep {
+            id: PipelineStepId(id.clone()),
+            run: StepRun::Check(CheckId(id.clone())),
+            input: "${input}".into(),
+        });
+    }
+
+    match pipeline {
+        Some(p) => p.steps.extend(appended),
+        None => *pipeline = Some(Pipeline { steps: appended }),
+    }
+
+    checks
+}
+
+/// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].
+fn lower_locus(locus: &tau_pkg::project::LocusConfig) -> Locus {
+    use tau_pkg::project::LocusConfig;
+    match locus {
+        LocusConfig::Path(p) => Locus::Path(p.clone()),
+        LocusConfig::Output(s) => Locus::Output(PipelineStepId(s.clone())),
+    }
+}
+
+/// Map a tau-pkg [`GoalPredicateConfig`] to an IR [`GoalPredicate`].
+fn lower_predicate(p: &tau_pkg::project::GoalPredicateConfig) -> GoalPredicate {
+    use tau_pkg::project::GoalPredicateConfig;
+    match p {
+        GoalPredicateConfig::Exists => GoalPredicate::Exists,
+        GoalPredicateConfig::NonEmpty => GoalPredicate::NonEmpty,
+        GoalPredicateConfig::Equals(s) => GoalPredicate::Equals(s.clone()),
+        GoalPredicateConfig::Matches(s) => GoalPredicate::Matches(s.clone()),
+        GoalPredicateConfig::MinCount(n) => GoalPredicate::MinCount(*n),
+        GoalPredicateConfig::SchemaValid(v) => GoalPredicate::SchemaValid(v.clone()),
+        // Mirror how `Deterministic.fn_ref` is built above:
+        // `NativeFnRef { name }`.
+        GoalPredicateConfig::NativeFn(name) => {
+            GoalPredicate::NativeFn(NativeFnRef { name: name.clone() })
+        }
+    }
+}
+
+/// Map a tau-pkg [`OnFailConfig`] to an IR [`OnFail`].
+fn lower_on_fail(o: &tau_pkg::project::OnFailConfig) -> OnFail {
+    use tau_pkg::project::OnFailConfig;
+    match o {
+        OnFailConfig::Abort => OnFail::Abort,
+        OnFailConfig::Retry => OnFail::Retry,
+    }
+}
+
+/// Map a tau-pkg [`JudgeConfig`] to an IR [`JudgeRef`].
+fn lower_judge(j: &tau_pkg::project::JudgeConfig) -> JudgeRef {
+    use tau_pkg::project::JudgeConfig;
+    match j {
+        JudgeConfig::Builtin { model } => JudgeRef::Builtin {
+            model: model.clone(),
+        },
+        JudgeConfig::Agent(n) => JudgeRef::Agent(AgentId(n.clone())),
+    }
 }
 
 #[cfg(test)]

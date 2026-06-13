@@ -109,6 +109,7 @@ fn sample_module() -> IrModule {
                 max_turns: Some(1),
                 max_tokens: None,
             },
+            produces: Vec::new(),
         },
     );
 
@@ -146,6 +147,7 @@ fn sample_module() -> IrModule {
             edges: Default::default(),
             capability_table: CapabilityTable(Default::default()),
             pipeline: None,
+            checks: Default::default(),
         },
         triggers: Vec::new(),
     }

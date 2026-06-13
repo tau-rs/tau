@@ -5,6 +5,7 @@
 //! resolves. Agent, tool, and deterministic steps are all supported.
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -12,6 +13,7 @@ use alloc::vec;
 
 use serde_json::Value;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
+use tau_ir::check::{CheckVerify, OnFail};
 use tau_ir::pipeline::StepRun;
 use tau_ir::IrModule;
 
@@ -19,10 +21,14 @@ use tracing::{info_span, Instrument};
 
 use crate::error::RuntimeError;
 use crate::interpreter::agent_loop::{last_assistant_text, run_agent};
+use crate::interpreter::check::{evaluate_deliverable, evaluate_goal};
 use crate::interpreter::output_store::OutputStore;
 use crate::interpreter::tool_dispatch::ToolDispatcher;
 use crate::outcome::RunOutcome;
-use crate::vocabulary::{EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED, SPAN_PIPELINE_STEP};
+use crate::vocabulary::{
+    EV_CHECK_EVALUATED, EV_CHECK_RETRY, EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED,
+    SPAN_PIPELINE_CHECK, SPAN_PIPELINE_STEP,
+};
 
 /// Drive an `IrModule`'s pipeline to completion, returning all step
 /// outputs.
@@ -33,8 +39,23 @@ use crate::vocabulary::{EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED, SP
 /// step, and records the step's output keyed by its pipeline-step id so
 /// later steps can reference it via `${steps.<id>.output}`.
 ///
-/// [`StepRun::Agent`], [`StepRun::Tool`], and
-/// [`StepRun::Deterministic`] steps are all supported.
+/// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`], and
+/// [`StepRun::Check`] steps are all supported. A `Check` step evaluates a
+/// postcondition (goal or deliverable) against the accumulated outputs.
+///
+/// # Failure handling: abort, or rewind-to-gate retry
+///
+/// On a failed check the [`RetryPolicy`](tau_ir::check::RetryPolicy)
+/// decides what happens. If `on_fail == Abort`, or the attempt count has
+/// reached `max_attempts`, the pipeline aborts with
+/// [`RuntimeError::CheckFailed`]. Otherwise the loop emits
+/// [`EV_CHECK_RETRY`], stashes the judge's rationale as `feedback`, and
+/// rewinds the loop index to the check's `gate` step so the forward slice
+/// re-runs. On the next pass through the gate's agent step the feedback is
+/// injected as a prior turn (`"Previous attempt rejected: <rationale>"`) so
+/// the agent sees *why* it was rejected. The feedback stays set until the
+/// check that caused the rewind resolves: a pass clears it; a fresh failure
+/// updates it.
 pub async fn run_pipeline<D>(
     module: Arc<IrModule>,
     input: String,
@@ -53,7 +74,143 @@ where
 
     let mut store = OutputStore::new();
 
-    for step in &pipeline.steps {
+    // Per-check attempt counter (1-based on first eval), keyed by check id.
+    let mut attempts: BTreeMap<String, u32> = BTreeMap::new();
+    // Rationale of the most recent failed check that triggered a rewind. It
+    // is injected as a prior turn at the gate's agent step and stays set
+    // until the originating check resolves (pass clears it, fail updates it).
+    let mut feedback: Option<String> = None;
+    // gate-id -> pipeline-step index, so a failed retryable check can rewind
+    // `i` to its gate without re-scanning the pipeline each time.
+    let gate_index: BTreeMap<&str, usize> = pipeline
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(idx, step)| (step.id.0.as_str(), idx))
+        .collect();
+
+    // Index loop (not `for`) so a failed retryable check can rewind `i` to a
+    // gate step. On the happy path `i` only ever advances by one.
+    let mut i = 0;
+    while i < pipeline.steps.len() {
+        let step = &pipeline.steps[i];
+
+        // Check steps have their own span/event vocabulary and store no
+        // output, so dispatch them before the Agent/Tool/Deterministic path.
+        if let StepRun::Check(check_id) = &step.run {
+            let check =
+                module
+                    .workflow
+                    .checks
+                    .get(check_id)
+                    .ok_or_else(|| RuntimeError::Internal {
+                        message: format!("unknown check {}", check_id.0),
+                    })?;
+
+            let check_span = info_span!(SPAN_PIPELINE_CHECK, id = check_id.0.as_str());
+
+            let (verdict, kind) = match &check.verify {
+                CheckVerify::Goal {
+                    evaluates,
+                    predicate,
+                } => {
+                    let reg = dispatcher.deterministic_registry().ok_or_else(|| {
+                        RuntimeError::Internal {
+                            message: format!("check {} needs a deterministic registry", check_id.0),
+                        }
+                    })?;
+                    // Bind the reader to a local so the `Arc` temporary lives
+                    // across the borrow passed to `evaluate_goal`.
+                    let reader = dispatcher.artifact_reader();
+                    let verdict = evaluate_goal(
+                        evaluates,
+                        predicate,
+                        &store,
+                        reader.as_ref().map(|a| a.as_ref()),
+                        reg.as_ref(),
+                    )?;
+                    (verdict, "goal")
+                }
+                CheckVerify::Deliverable {
+                    locus,
+                    must_satisfy,
+                    judge,
+                } => {
+                    let reader = dispatcher.artifact_reader();
+                    let verdict = Box::pin(evaluate_deliverable(
+                        module.clone(),
+                        locus,
+                        must_satisfy,
+                        judge,
+                        &store,
+                        reader.as_ref().map(|a| a.as_ref()),
+                        dispatcher.clone(),
+                    ))
+                    .instrument(check_span.clone())
+                    .await?;
+                    (verdict, "deliverable")
+                }
+            };
+
+            // Real (1-based) attempt count for this check.
+            let attempt = attempts.get(&check_id.0).copied().unwrap_or(0) + 1;
+            attempts.insert(check_id.0.clone(), attempt);
+
+            tracing::info!(
+                parent: &check_span,
+                name = EV_CHECK_EVALUATED,
+                id = check_id.0.as_str(),
+                kind = kind,
+                verdict = if verdict.met { "pass" } else { "fail" },
+                attempt = attempt,
+            );
+
+            if verdict.met {
+                // Passed: clear any feedback carried in from a prior rewind
+                // and advance. Checks store no output.
+                feedback = None;
+                i += 1;
+                continue;
+            }
+
+            // Failed. Abort if the policy says so, or if we've exhausted the
+            // attempt budget.
+            if check.retry.on_fail == OnFail::Abort || attempt >= check.retry.max_attempts {
+                return Err(RuntimeError::CheckFailed {
+                    id: check_id.0.clone(),
+                    kind: String::from(kind),
+                    rationale: verdict.rationale,
+                    attempt,
+                });
+            }
+
+            // Retryable with attempts remaining: rewind to the gate step.
+            let gate_idx = *gate_index.get(check.retry.gate.0.as_str()).ok_or_else(|| {
+                // Build-time integrity checks (tau-ir typecheck) guarantee the
+                // gate names an existing pipeline step, so reaching here is an
+                // invariant violation — surface it loudly rather than aborting
+                // the run as a plain check failure.
+                RuntimeError::Internal {
+                    message: format!(
+                        "check {} rewinds to unknown gate step {}",
+                        check_id.0, check.retry.gate.0
+                    ),
+                }
+            })?;
+
+            tracing::info!(
+                parent: &check_span,
+                name = EV_CHECK_RETRY,
+                id = check_id.0.as_str(),
+                rewind_to = check.retry.gate.0.as_str(),
+                next_attempt = attempt + 1,
+            );
+
+            feedback = Some(verdict.rationale);
+            i = gate_idx;
+            continue;
+        }
+
         // NOTE: we do NOT call `.entered()` here — `EnteredSpan` mutates a
         // thread-local span stack, and tokio's multi-thread scheduler can
         // move this task to a different worker thread at any `.await`,
@@ -80,7 +237,18 @@ where
                         agent: agent_id.0.clone(),
                     })?
                     .clone();
-                let initial = vec![user_message(&rendered)];
+                // When a prior check rewound to this gate, inject its
+                // rationale as a prior turn so the agent sees *why* it was
+                // rejected. `split_history` (agent_loop.rs) treats all-but-last
+                // as history and the last as the live turn, so the feedback
+                // becomes a prior turn and `rendered` stays the live prompt.
+                let initial = match &feedback {
+                    Some(fb) => vec![
+                        user_message(&format!("Previous attempt rejected: {fb}")),
+                        user_message(&rendered),
+                    ],
+                    None => vec![user_message(&rendered)],
+                };
                 let outcome = Box::pin(run_agent(
                     module.clone(),
                     &agent,
@@ -139,10 +307,15 @@ where
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
+            // `Check` steps are dispatched at the top of the loop and never
+            // reach this `match` (they store no output).
+            StepRun::Check(_) => unreachable!("check steps are handled before this match"),
         };
 
         store.insert(step.id.0.clone(), output);
         tracing::info!(parent: &step_span, name = EV_PIPELINE_STEP_COMPLETED, id = step.id.0.as_str());
+
+        i += 1;
     }
 
     Ok(store)
@@ -163,7 +336,10 @@ fn rendered_to_args(rendered: &str) -> Value {
 /// Mirrors the initial-message idiom in `tau-cli`'s `run` command: the
 /// recipient is a freshly-minted [`AgentInstanceId`] placeholder that the
 /// kernel replaces when it assigns the loop's own instance id.
-fn user_message(content: &str) -> Message {
+///
+/// Exposed as `pub(crate)` so `check.rs` can reuse it without a separate
+/// definition (single source of truth).
+pub(crate) fn user_message(content: &str) -> Message {
     Message::new(
         Address::User,
         Address::Agent(AgentInstanceId::new()),

@@ -388,11 +388,24 @@ async fn try_run_pipeline(
     // caller's existing flow runs unchanged.
     let pipeline = module.workflow.pipeline.as_ref()?;
 
-    // The id of the LAST pipeline step — its stored output is the run's
-    // final result. An empty `steps` vec cannot reach here: project
-    // validation (`validate_pipeline`) rejects an empty pipeline with
-    // `ProjectConfigError::EmptyPipeline`, but guard anyway.
-    let last_step_id = match pipeline.steps.last() {
+    // The id of the LAST NON-CHECK pipeline step — its stored output is the
+    // run's final result. Trailing `StepRun::Check` steps (auto-appended by
+    // the lowerer for every `[goals.*]` / `[deliverables.*]` declaration)
+    // evaluate postconditions but store NO output in `OutputStore`. Selecting
+    // one as `last_step_id` would make `render_pipeline_result` call
+    // `store.get(check_step_id) → None` and return the "interpreter invariant
+    // violated" error even when all checks pass. Skip trailing check steps and
+    // find the last step that actually produces output.
+    //
+    // An empty `steps` vec cannot reach here (project validation rejects an
+    // empty pipeline with `ProjectConfigError::EmptyPipeline`); a pipeline of
+    // ONLY check steps returns `None` to fall back to the single-agent path.
+    let last_step_id = match pipeline
+        .steps
+        .iter()
+        .rev()
+        .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
+    {
         Some(s) => s.id.0.clone(),
         None => return None,
     };
@@ -436,12 +449,18 @@ async fn try_run_pipeline(
     Some(render_pipeline_result(&store, &last_step_id, output))
 }
 
-/// Render the LAST pipeline step's output as the run result, matching the
-/// single-agent path's `RunOutcome::Completed` output style: human mode
-/// prints the value's text form; `--json` emits the same
+/// Render the LAST NON-CHECK pipeline step's output as the run result,
+/// matching the single-agent path's `RunOutcome::Completed` output style:
+/// human mode prints the value's text form; `--json` emits the same
 /// `{"outcome":"completed", ...}` shape with the final step's text as
 /// `final_message` (token usage / turn counts are pipeline-level concepts
 /// not yet aggregated — reported as zero/empty at v0).
+///
+/// Trailing `StepRun::Check` steps (lowered from `[goals.*]` /
+/// `[deliverables.*]`) evaluate postconditions but store no output — every
+/// caller (`try_run_pipeline` on the cwd path, `run_via_ir` on the bundle
+/// path) must pass the id of the last step that actually produced output
+/// (i.e., the last non-check step).
 ///
 /// `pub(super)` so the bundle run path
 /// ([`crate::cmd::ir_dispatcher::run_via_ir`]) renders a bundled

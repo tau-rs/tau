@@ -208,14 +208,23 @@ pub(crate) async fn run_via_ir(
     //    step's output); a bundle with NO pipeline keeps the
     //    single-entry-agent `run_ir` path below BYTE-FOR-BYTE unchanged.
     if module.workflow.pipeline.is_some() {
-        // The id of the LAST pipeline step — its stored output is the
-        // run's final result. The parser rejects an empty pipeline (see
+        // The id of the LAST NON-CHECK pipeline step — its stored output is
+        // the run's final result. Trailing `StepRun::Check` steps (lowered
+        // from `[goals.*]` / `[deliverables.*]`) evaluate postconditions but
+        // store NO output, so rendering one would hit the "no output" guard
+        // even when all checks pass — skip them and render the last
+        // output-producing step. The parser rejects an empty pipeline (see
         // `tau_pkg`), but guard anyway rather than index blindly.
         let last_step_id = module
             .workflow
             .pipeline
             .as_ref()
-            .and_then(|p| p.steps.last())
+            .and_then(|p| {
+                p.steps
+                    .iter()
+                    .rev()
+                    .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
+            })
             .map(|s| s.id.0.clone())
             .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
 
@@ -458,6 +467,29 @@ impl ToolDispatcher for ForwardingDispatcher {
     /// See [`Self::clock`] — same host-injection contract.
     fn random(&self) -> Option<Arc<dyn tau_ports::RandomSource>> {
         Some(Arc::new(tau_runtime_tokio::OsRandom))
+    }
+
+    /// Supply the built-in goal predicate registry to the interpreter.
+    ///
+    /// Returns the production [`BuiltinDeterministicRegistry`] so all six
+    /// `FN_BUILTIN_*` predicates are available during `run_pipeline` check
+    /// evaluation without additional configuration. User-registered native
+    /// fns are a future extension layered on top.
+    fn deterministic_registry(
+        &self,
+    ) -> Option<Arc<dyn tau_runtime_core::interpreter::deterministic::DeterministicRegistry>> {
+        Some(crate::cmd::builtin_registry::make_builtin_registry())
+    }
+
+    /// Supply the `std::fs`-backed artifact reader to the interpreter.
+    ///
+    /// Required by check evaluation (`evaluate_goal` with `Locus::Path`).
+    /// Without this, any check that reads a filesystem path would surface as
+    /// a [`RuntimeError::Internal`] with "check needs an artifact reader".
+    fn artifact_reader(
+        &self,
+    ) -> Option<Arc<dyn tau_runtime_core::interpreter::artifact::ArtifactReader>> {
+        Some(crate::cmd::builtin_registry::make_artifact_reader())
     }
 }
 

@@ -102,6 +102,37 @@ pub const EV_PIPELINE_STEP_STARTED: &str = "pipeline.step_started";
 #[doc(hidden)]
 pub const EV_PIPELINE_STEP_COMPLETED: &str = "pipeline.step_completed";
 
+// --- Check events and built-in goal predicate fn names ---
+
+/// Span wrapping a single check evaluation.
+#[doc(hidden)]
+pub const SPAN_PIPELINE_CHECK: &str = "pipeline.check";
+/// Event: a check produced a verdict.
+#[doc(hidden)]
+pub const EV_CHECK_EVALUATED: &str = "check.evaluated";
+/// Event: a failed check rewound to its gate.
+#[doc(hidden)]
+pub const EV_CHECK_RETRY: &str = "check.retry";
+
+/// Built-in goal predicate fn name: locus is present (non-absent).
+#[doc(hidden)]
+pub const FN_BUILTIN_EXISTS: &str = "__tau::goal::exists";
+/// Built-in goal predicate fn name: locus is present and non-empty.
+#[doc(hidden)]
+pub const FN_BUILTIN_NON_EMPTY: &str = "__tau::goal::non_empty";
+/// Built-in goal predicate fn name: content equals a given string.
+#[doc(hidden)]
+pub const FN_BUILTIN_EQUALS: &str = "__tau::goal::equals";
+/// Built-in goal predicate fn name: content matches a regex pattern.
+#[doc(hidden)]
+pub const FN_BUILTIN_MATCHES: &str = "__tau::goal::matches";
+/// Built-in goal predicate fn name: content item count meets a minimum.
+#[doc(hidden)]
+pub const FN_BUILTIN_MIN_COUNT: &str = "__tau::goal::min_count";
+/// Built-in goal predicate fn name: content is valid per a JSON schema.
+#[doc(hidden)]
+pub const FN_BUILTIN_SCHEMA_VALID: &str = "__tau::goal::schema_valid";
+
 /// All `(identifier, value)` pairs in this mirror, in declaration order.
 ///
 /// Consumed by the cross-crate drift test in `tau-runtime-tokio`. The
@@ -109,6 +140,10 @@ pub const EV_PIPELINE_STEP_COMPLETED: &str = "pipeline.step_completed";
 /// matching constant in `tau_observe::vocabulary`); the value strings are
 /// the runtime span/event names. Doc-hidden because this is an internal
 /// integration-test surface, not a stability commitment.
+///
+/// Note: the `FN_BUILTIN_*` constants are built-in goal predicate registry
+/// names, not tracing vocabulary — they are intentionally excluded from
+/// `PAIRS` and are not mirrored in `tau_observe::vocabulary`.
 #[doc(hidden)]
 pub const PAIRS: &[(&str, &str)] = &[
     ("SPAN_RUNTIME_AGENT_RUN", SPAN_RUNTIME_AGENT_RUN),
@@ -148,4 +183,29 @@ pub const PAIRS: &[(&str, &str)] = &[
     ("SPAN_PIPELINE_STEP", SPAN_PIPELINE_STEP),
     ("EV_PIPELINE_STEP_STARTED", EV_PIPELINE_STEP_STARTED),
     ("EV_PIPELINE_STEP_COMPLETED", EV_PIPELINE_STEP_COMPLETED),
+    ("SPAN_PIPELINE_CHECK", SPAN_PIPELINE_CHECK),
+    ("EV_CHECK_EVALUATED", EV_CHECK_EVALUATED),
+    ("EV_CHECK_RETRY", EV_CHECK_RETRY),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_span_and_event_constants_equal_their_literals() {
+        assert_eq!(SPAN_PIPELINE_CHECK, "pipeline.check");
+        assert_eq!(EV_CHECK_EVALUATED, "check.evaluated");
+        assert_eq!(EV_CHECK_RETRY, "check.retry");
+    }
+
+    #[test]
+    fn builtin_fn_name_constants_equal_their_literals() {
+        assert_eq!(FN_BUILTIN_EXISTS, "__tau::goal::exists");
+        assert_eq!(FN_BUILTIN_NON_EMPTY, "__tau::goal::non_empty");
+        assert_eq!(FN_BUILTIN_EQUALS, "__tau::goal::equals");
+        assert_eq!(FN_BUILTIN_MATCHES, "__tau::goal::matches");
+        assert_eq!(FN_BUILTIN_MIN_COUNT, "__tau::goal::min_count");
+        assert_eq!(FN_BUILTIN_SCHEMA_VALID, "__tau::goal::schema_valid");
+    }
+}

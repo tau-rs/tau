@@ -31,6 +31,12 @@ pub struct UncheckedProjectConfig {
     /// Optional `[pipeline]` table with ordered `[[pipeline.steps]]`.
     #[serde(default)]
     pub pipeline: Option<UncheckedPipeline>,
+    /// Map of goal id → unchecked goal definition.
+    #[serde(default)]
+    pub goals: BTreeMap<String, UncheckedGoal>,
+    /// Map of deliverable id → unchecked deliverable definition.
+    #[serde(default)]
+    pub deliverables: BTreeMap<String, UncheckedDeliverable>,
 }
 
 /// `[project]` table.
@@ -81,6 +87,11 @@ pub struct UncheckedAgent {
     /// Maximum tokens (input + output) across the entire run.
     #[serde(default)]
     pub max_tokens: Option<u64>,
+    /// Artifact paths / named outputs this agent declares it produces.
+    /// Cross-checked against `fs-write` capabilities at validation time
+    /// and bound to `[deliverables.*]`/`[goals.*]` loci.
+    #[serde(default)]
+    pub produces: Vec<String>,
 }
 
 /// `[agents.<id>.requires]` sub-table.
@@ -218,6 +229,8 @@ pub enum PipelineRunRef {
     Tool(String),
     /// `deterministic:<id>`
     Deterministic(String),
+    /// `check:<id>` — explicitly position a postcondition check.
+    Check(String),
 }
 
 // ----- IR lowering structs (β.2.2) -----
@@ -436,6 +449,158 @@ pub struct RetryEntry {
 
 // ----- Validated shapes -----
 
+/// Raw `[goals.<id>]` table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedGoal {
+    /// Read locus: a filesystem path or `steps.<id>.output`.
+    pub evaluates: String,
+    /// Menu predicate name (mutually exclusive with `fn`).
+    #[serde(default)]
+    pub check: Option<String>,
+    /// Regex for `check = "matches"`.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Expected value for `check = "equals"`.
+    #[serde(default)]
+    pub equals: Option<String>,
+    /// Threshold for `check = "min_count"`.
+    #[serde(default)]
+    pub min_count: Option<u64>,
+    /// JSON schema for `check = "schema_valid"`.
+    #[serde(default)]
+    pub schema: Option<serde_json::Value>,
+    /// Native-fn escape hatch (`<crate>::<path>`), mutually exclusive with `check`.
+    #[serde(default, rename = "fn")]
+    pub r#fn: Option<String>,
+}
+
+/// A read locus: a filesystem path or a named step output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocusConfig {
+    /// Filesystem path.
+    Path(String),
+    /// `steps.<id>.output` → the step id.
+    Output(String),
+}
+
+/// Validated goal predicate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GoalPredicateConfig {
+    /// Locus resolves to something.
+    Exists,
+    /// Resolves and is non-empty.
+    NonEmpty,
+    /// Equals the given literal.
+    Equals(String),
+    /// Matches the given regex.
+    Matches(String),
+    /// At least N items (lines/array entries).
+    MinCount(u64),
+    /// Validates against the given JSON schema.
+    SchemaValid(serde_json::Value),
+    /// Registered native fn (`<crate>::<path>`).
+    NativeFn(String),
+}
+
+/// Validated `[goals.<id>]` entry.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct GoalEntry {
+    /// Goal id (table key).
+    pub id: String,
+    /// Read locus.
+    pub evaluates: LocusConfig,
+    /// Verification predicate.
+    pub predicate: GoalPredicateConfig,
+}
+
+/// Raw `[deliverables.<id>]` table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedDeliverable {
+    /// Filesystem path locus (mutually exclusive with `output`).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Step output locus (mutually exclusive with `path`). Use the form
+    /// `steps.<id>.output`.
+    #[serde(default)]
+    pub output: Option<String>,
+    /// Natural-language acceptance criterion evaluated by the judge.
+    pub must_satisfy: String,
+    /// Failure handling: `"abort"` (default) or `"retry"`.
+    #[serde(default)]
+    pub on_fail: Option<String>,
+    /// Maximum check evaluations (default: 1 for abort, 3 for retry).
+    #[serde(default)]
+    pub max_attempts: Option<u32>,
+    /// Pipeline step id to rewind to on retry. Defaults to the producer
+    /// step when absent.
+    #[serde(default)]
+    pub retry_from: Option<String>,
+    /// Model override for the built-in judge (runtime no-op in v1).
+    /// Mutually exclusive with `judge`.
+    #[serde(default)]
+    pub judge_model: Option<String>,
+    /// Custom judge agent id (`[agents.<id>]`). Mutually exclusive with
+    /// `judge_model`.
+    #[serde(default)]
+    pub judge: Option<String>,
+}
+
+/// Failure handling for a deliverable check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnFailConfig {
+    /// Exit non-zero on first failure.
+    Abort,
+    /// Rewind to the gate step and re-run.
+    Retry,
+}
+
+/// Who evaluates a deliverable's content.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JudgeConfig {
+    /// tau's built-in minimalist judge, optionally on a chosen model.
+    Builtin {
+        /// `judge_model` override (runtime no-op in v1).
+        model: Option<String>,
+    },
+    /// A user `[agents.*]` used as judge.
+    Agent(String),
+}
+
+/// Validated `[deliverables.<id>]` entry.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliverableEntry {
+    /// Deliverable id (table key).
+    pub id: String,
+    /// Produced locus.
+    pub locus: LocusConfig,
+    /// Natural-language acceptance criterion.
+    pub must_satisfy: String,
+    /// Failure handling strategy.
+    pub on_fail: OnFailConfig,
+    /// Maximum check evaluations (>= 1).
+    pub max_attempts: u32,
+    /// Rewind point step id (None = default to producer step).
+    pub retry_from: Option<String>,
+    /// Who judges the content.
+    pub judge: JudgeConfig,
+    /// Resolved producing agent id (filled by validation).
+    ///
+    /// Empty string before `validate_postconditions` runs; afterwards
+    /// always holds the unique agent id whose `produces` list covers
+    /// this deliverable's locus.
+    pub producer: String,
+    /// Resolved retry gate step id (filled by validation; empty for abort).
+    ///
+    /// For `on_fail = "retry"` deliverables, holds the pipeline step id
+    /// the runtime rewinds to on failure. Set by `validate_postconditions`;
+    /// always empty for `on_fail = "abort"` deliverables.
+    pub gate: String,
+}
+
 /// Validated project config. Constructed via
 /// [`UncheckedProjectConfig::validate`] only.
 #[non_exhaustive]
@@ -455,6 +620,10 @@ pub struct ProjectConfig {
     pub triggers: BTreeMap<String, TriggerEntry>,
     /// Optional validated pipeline.
     pub pipeline: Option<PipelineConfig>,
+    /// Map of goal id → validated goal entry.
+    pub goals: BTreeMap<String, GoalEntry>,
+    /// Map of deliverable id → validated deliverable entry.
+    pub deliverables: BTreeMap<String, DeliverableEntry>,
 }
 
 /// Validated entry for a single agent.
@@ -510,6 +679,10 @@ pub struct AgentEntry {
     pub max_turns: Option<u32>,
     /// Maximum tokens (IR lowering use).
     pub max_tokens: Option<u64>,
+    /// Artifact paths / named outputs this agent declares it produces.
+    /// Cross-checked against `fs-write` capabilities at validation time
+    /// and bound to `[deliverables.*]`/`[goals.*]` loci.
+    pub produces: Vec<String>,
 }
 
 impl AgentEntry {
@@ -540,6 +713,7 @@ impl AgentEntry {
             tool_refs: Vec::new(),
             max_turns: None,
             max_tokens: None,
+            produces: Vec::new(),
         }
     }
 }
@@ -739,6 +913,120 @@ pub enum ProjectConfigError {
         /// Offending URL.
         url: String,
     },
+
+    /// A `[goals.<id>]` entry failed semantic validation.
+    #[error("goal {id:?}: {message}")]
+    GoalValidation {
+        /// Goal id that failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
+    /// A `[deliverables.<id>]` entry failed semantic validation.
+    #[error("deliverable {id:?}: {message}")]
+    DeliverableValidation {
+        /// Deliverable id that failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
+    /// `judge` and `judge_model` were both set on a deliverable.
+    #[error(
+        "deliverable '{id}' sets both judge_model and judge — a custom judge brings its own model"
+    )]
+    JudgeAndModelConflict {
+        /// Deliverable id that had the conflict.
+        id: String,
+    },
+
+    // --- Task 4: producer binding + capability coverage ---
+    /// A deliverable declares a locus no agent's `produces` covers.
+    #[error("deliverable '{id}' has no producer: no step declares produces = [{locus:?}]")]
+    DeliverableNoProducer {
+        /// Deliverable id.
+        id: String,
+        /// The locus string (path or output ref) that was unmatched.
+        locus: String,
+    },
+
+    /// More than one agent claims to produce the deliverable's locus.
+    #[error(
+        "deliverable '{id}' is produced by multiple agents ({agents:?}); a deliverable must bind to exactly one producer"
+    )]
+    DeliverableAmbiguousProducer {
+        /// Deliverable id.
+        id: String,
+        /// Sorted agent ids that all claim the same locus.
+        agents: Vec<String>,
+    },
+
+    /// The producing agent holds no fs-write capability covering the path.
+    #[error(
+        "step '{agent}' declares it produces '{path}' but holds no fs-write capability covering that path"
+    )]
+    DeliverableProducerLacksCapability {
+        /// Deliverable id.
+        id: String,
+        /// Agent id that declared the `produces` entry.
+        agent: String,
+        /// The path the agent claims to produce.
+        path: String,
+    },
+
+    // --- Task 5: gate-position + retry-span guarantees ---
+    /// `retry_from` names a step that runs after the producer step.
+    #[error(
+        "deliverable '{id}' has retry_from = \"{gate}\" but '{gate}' runs after producer '{producer}' \
+        — the gate must be at or before the producer"
+    )]
+    GateAfterProducer {
+        /// Deliverable id.
+        id: String,
+        /// The gate step id named in `retry_from`.
+        gate: String,
+        /// The producer agent id whose pipeline step is the upper bound.
+        producer: String,
+    },
+
+    /// The retry span contains no non-deterministic (agent) step.
+    #[error(
+        "deliverable '{id}' sets on_fail = \"retry\" but the retry span contains no \
+        non-deterministic step; retrying cannot change the result"
+    )]
+    RetrySpanNoLlm {
+        /// Deliverable id.
+        id: String,
+    },
+
+    /// `retry_from` names a step id that does not exist in the pipeline.
+    #[error("deliverable '{id}' has retry_from = \"{gate}\" but no pipeline step has that id")]
+    UnknownRetryFrom {
+        /// Deliverable id.
+        id: String,
+        /// The unknown step id from `retry_from`.
+        gate: String,
+    },
+
+    // --- Task 6: regex compiles + judge resolution ---
+    /// A `check = "matches"` goal has a pattern that is not a valid regex.
+    #[error("goal '{id}' has check = \"matches\" but its pattern is not a valid regex: {message}")]
+    BadGoalRegex {
+        /// Goal id.
+        id: String,
+        /// The regex error message.
+        message: String,
+    },
+
+    /// A deliverable's `judge` names an agent that is not defined.
+    #[error("deliverable '{id}' sets judge = \"{judge}\" but no [agents.{judge}] is defined")]
+    UnknownJudgeAgent {
+        /// Deliverable id.
+        id: String,
+        /// The unknown agent id named as judge.
+        judge: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -790,7 +1078,17 @@ impl UncheckedProjectConfig {
             None => None,
         };
 
-        Ok(ProjectConfig {
+        let mut goals = BTreeMap::new();
+        for (id, raw) in self.goals {
+            goals.insert(id.clone(), validate_goal(id, raw)?);
+        }
+
+        let mut deliverables = BTreeMap::new();
+        for (id, raw) in self.deliverables {
+            deliverables.insert(id.clone(), validate_deliverable(id, raw)?);
+        }
+
+        let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
             agents,
@@ -798,7 +1096,13 @@ impl UncheckedProjectConfig {
             steps,
             triggers,
             pipeline,
-        })
+            goals,
+            deliverables,
+        };
+
+        validate_postconditions(&mut result)?;
+
+        Ok(result)
     }
 }
 
@@ -907,6 +1211,7 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         tool_refs: raw.tool_refs,
         max_turns: raw.max_turns,
         max_tokens: raw.max_tokens,
+        produces: raw.produces,
     })
 }
 
@@ -1116,11 +1421,12 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
             Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
             Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
             Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
+            Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
             _ => {
                 return Err(ProjectConfigError::PipelineValidation {
                     id: s.id.clone(),
                     message: format!(
-                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\", got {:?}",
+                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {:?}",
                     s.run
                 ),
                 })
@@ -1133,6 +1439,384 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
         });
     }
     Ok(PipelineConfig { steps })
+}
+
+/// Parse a locus string into a [`LocusConfig`].
+///
+/// A value of the form `steps.<id>.output` resolves to `Output("<id>")`;
+/// everything else resolves to `Path(s)`.
+pub fn parse_locus(s: &str) -> LocusConfig {
+    // Match "steps.<id>.output"
+    if let Some(rest) = s.strip_prefix("steps.") {
+        if let Some(id) = rest.strip_suffix(".output") {
+            if !id.is_empty() {
+                return LocusConfig::Output(id.to_string());
+            }
+        }
+    }
+    LocusConfig::Path(s.to_string())
+}
+
+fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectConfigError> {
+    let evaluates = parse_locus(&raw.evaluates);
+
+    // fn and check are mutually exclusive
+    match (&raw.r#fn, &raw.check) {
+        (Some(_), Some(_)) => {
+            return Err(ProjectConfigError::GoalValidation {
+                id,
+                message: "only one of `fn` or `check` may be set".into(),
+            });
+        }
+        (None, None) => {
+            return Err(ProjectConfigError::GoalValidation {
+                id,
+                message: "one of `fn` or `check` must be set".into(),
+            });
+        }
+        (Some(fn_name), None) => {
+            return Ok(GoalEntry {
+                id,
+                evaluates,
+                predicate: GoalPredicateConfig::NativeFn(fn_name.clone()),
+            });
+        }
+        (None, Some(_)) => {} // fall through to check dispatch below
+    }
+
+    let check = raw.check.as_deref().unwrap();
+    let predicate = match check {
+        "exists" => GoalPredicateConfig::Exists,
+        "non_empty" => GoalPredicateConfig::NonEmpty,
+        "equals" => match raw.equals {
+            Some(v) => GoalPredicateConfig::Equals(v),
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"equals\" requires the `equals` field".into(),
+                });
+            }
+        },
+        "matches" => match raw.pattern {
+            Some(p) => {
+                // Validate the regex compiles at build time.
+                if let Err(e) = regex::Regex::new(&p) {
+                    return Err(ProjectConfigError::BadGoalRegex {
+                        id,
+                        message: e.to_string(),
+                    });
+                }
+                GoalPredicateConfig::Matches(p)
+            }
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"matches\" requires the `pattern` field".into(),
+                });
+            }
+        },
+        "min_count" => match raw.min_count {
+            Some(n) => GoalPredicateConfig::MinCount(n),
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"min_count\" requires the `min_count` field".into(),
+                });
+            }
+        },
+        "schema_valid" => match raw.schema {
+            Some(s) => GoalPredicateConfig::SchemaValid(s),
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"schema_valid\" requires the `schema` field".into(),
+                });
+            }
+        },
+        other => {
+            return Err(ProjectConfigError::GoalValidation {
+                id,
+                message: format!("unknown check {other:?}; valid values: exists, non_empty, equals, matches, min_count, schema_valid"),
+            });
+        }
+    };
+
+    Ok(GoalEntry {
+        id,
+        evaluates,
+        predicate,
+    })
+}
+
+fn validate_deliverable(
+    id: String,
+    raw: UncheckedDeliverable,
+) -> Result<DeliverableEntry, ProjectConfigError> {
+    // Exactly one of path/output must be set.
+    let locus = match (raw.path, raw.output) {
+        (Some(p), None) => parse_locus(&p),
+        (None, Some(o)) => parse_locus(&o),
+        (Some(_), Some(_)) => {
+            return Err(ProjectConfigError::DeliverableValidation {
+                id,
+                message: "exactly one of `path` or `output` must be set, not both".into(),
+            });
+        }
+        (None, None) => {
+            return Err(ProjectConfigError::DeliverableValidation {
+                id,
+                message: "one of `path` or `output` must be set".into(),
+            });
+        }
+    };
+
+    // judge and judge_model are mutually exclusive — check BEFORE collapsing.
+    if raw.judge.is_some() && raw.judge_model.is_some() {
+        return Err(ProjectConfigError::JudgeAndModelConflict { id });
+    }
+
+    // on_fail: default "abort", only "abort"/"retry" accepted.
+    let on_fail = match raw.on_fail.as_deref() {
+        None | Some("abort") => OnFailConfig::Abort,
+        Some("retry") => OnFailConfig::Retry,
+        Some(other) => {
+            return Err(ProjectConfigError::DeliverableValidation {
+                id,
+                message: format!("on_fail must be \"abort\" or \"retry\", got {other:?}"),
+            });
+        }
+    };
+
+    // max_attempts defaults: 1 for abort, 3 for retry.
+    let max_attempts = match raw.max_attempts {
+        Some(n) => n,
+        None => match on_fail {
+            OnFailConfig::Abort => 1,
+            OnFailConfig::Retry => 3,
+        },
+    };
+
+    // max_attempts must be >= 1 (the field doc says so; guard it here).
+    if max_attempts == 0 {
+        return Err(ProjectConfigError::DeliverableValidation {
+            id,
+            message: "max_attempts must be >= 1".into(),
+        });
+    }
+
+    // Collapse judge fields.
+    let judge = match raw.judge {
+        Some(agent_id) => JudgeConfig::Agent(agent_id),
+        None => JudgeConfig::Builtin {
+            model: raw.judge_model,
+        },
+    };
+
+    Ok(DeliverableEntry {
+        id,
+        locus,
+        must_satisfy: raw.must_satisfy,
+        on_fail,
+        max_attempts,
+        retry_from: raw.retry_from,
+        judge,
+        producer: String::new(),
+        gate: String::new(),
+    })
+}
+
+/// Run cross-entity postcondition checks on an otherwise-valid [`ProjectConfig`].
+///
+/// Resolves each deliverable's producer agent (the unique agent whose `produces`
+/// list contains a locus matching the deliverable) and checks that the producer
+/// holds an `fs.write` capability covering the declared path (for
+/// `LocusConfig::Path` loci). Also validates gate-position, retry-span-has-LLM,
+/// and unknown-retry-from for RETRY deliverables.
+/// Fills `DeliverableEntry::producer` and `DeliverableEntry::gate` as side-effects.
+fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigError> {
+    use crate::capability_override::glob_subset::is_glob_subset;
+    use tau_domain::FsCapability;
+
+    // First pass: resolve producers, run capability checks, and for RETRY
+    // deliverables run gate-position + retry-span guarantees (all immutable
+    // borrows of agents/tools/pipeline). Collect
+    // (deliverable_id, resolved_producer_id, resolved_gate_id) triples.
+    let mut resolved: Vec<(String, String, String)> = Vec::new();
+
+    for (deliverable_id, deliverable) in &cfg.deliverables {
+        // Collect agent ids whose `produces` contains a locus equal to this
+        // deliverable's locus (after running each entry through parse_locus).
+        let mut producers: Vec<String> = cfg
+            .agents
+            .iter()
+            .filter(|(_, agent)| {
+                agent
+                    .produces
+                    .iter()
+                    .any(|p| parse_locus(p) == deliverable.locus)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        producers.sort();
+
+        let producer_id = match producers.len() {
+            0 => {
+                // Derive a display string for the locus.
+                let locus_str = match &deliverable.locus {
+                    LocusConfig::Path(p) => p.clone(),
+                    LocusConfig::Output(o) => format!("steps.{o}.output"),
+                };
+                return Err(ProjectConfigError::DeliverableNoProducer {
+                    id: deliverable_id.clone(),
+                    locus: locus_str,
+                });
+            }
+            1 => producers.remove(0),
+            _ => {
+                return Err(ProjectConfigError::DeliverableAmbiguousProducer {
+                    id: deliverable_id.clone(),
+                    agents: producers,
+                });
+            }
+        };
+
+        // Capability check only for path loci.
+        if let LocusConfig::Path(path) = &deliverable.locus {
+            let agent = cfg.agents.get(&producer_id).expect("producer agent exists");
+
+            // Collect all write paths from tools the producer references.
+            let write_paths: Vec<String> = agent
+                .tool_refs
+                .iter()
+                .filter_map(|tool_name| cfg.tools.get(tool_name))
+                .flat_map(|tool| {
+                    tool.capabilities.iter().filter_map(|cap| {
+                        if let tau_domain::Capability::Filesystem(FsCapability::Write {
+                            paths,
+                            ..
+                        }) = cap
+                        {
+                            Some(paths.clone())
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .flatten()
+                .collect();
+
+            let covered = write_paths
+                .iter()
+                .any(|cap_path| is_glob_subset(path, cap_path));
+            if !covered {
+                return Err(ProjectConfigError::DeliverableProducerLacksCapability {
+                    id: deliverable_id.clone(),
+                    agent: producer_id,
+                    path: path.clone(),
+                });
+            }
+        }
+
+        // Gate checks: only for RETRY deliverables.
+        let gate_id = if deliverable.on_fail == OnFailConfig::Retry {
+            // A retry needs a pipeline with the producer in it.
+            let steps = match &cfg.pipeline {
+                Some(p) => &p.steps,
+                None => {
+                    // No pipeline → no sequence to rewind.
+                    return Err(ProjectConfigError::RetrySpanNoLlm {
+                        id: deliverable_id.clone(),
+                    });
+                }
+            };
+
+            // Find the producer step index: the step whose run is
+            // PipelineRunRef::Agent(producer_id).
+            let producer_step_index = steps
+                .iter()
+                .position(|s| s.run == PipelineRunRef::Agent(producer_id.clone()));
+
+            let producer_step_index = match producer_step_index {
+                Some(i) => i,
+                None => {
+                    // Producer agent not in the pipeline → no sequence to rewind.
+                    return Err(ProjectConfigError::RetrySpanNoLlm {
+                        id: deliverable_id.clone(),
+                    });
+                }
+            };
+
+            // Determine the gate step.
+            let (gate_step_id, gate_step_index) = match &deliverable.retry_from {
+                Some(g) => {
+                    // Explicit retry_from: find its index.
+                    match steps.iter().position(|s| &s.id == g) {
+                        Some(i) => (g.clone(), i),
+                        None => {
+                            return Err(ProjectConfigError::UnknownRetryFrom {
+                                id: deliverable_id.clone(),
+                                gate: g.clone(),
+                            });
+                        }
+                    }
+                }
+                None => {
+                    // Default gate = the producer step itself.
+                    let producer_step_id = steps[producer_step_index].id.clone();
+                    (producer_step_id, producer_step_index)
+                }
+            };
+
+            // Guarantee 1: gate_index <= producer_index.
+            if gate_step_index > producer_step_index {
+                return Err(ProjectConfigError::GateAfterProducer {
+                    id: deliverable_id.clone(),
+                    gate: gate_step_id,
+                    producer: producer_id,
+                });
+            }
+
+            // Guarantee 2: at least one agent step in [gate_index..=producer_index].
+            let span_has_llm = steps[gate_step_index..=producer_step_index]
+                .iter()
+                .any(|s| matches!(s.run, PipelineRunRef::Agent(_)));
+            if !span_has_llm {
+                return Err(ProjectConfigError::RetrySpanNoLlm {
+                    id: deliverable_id.clone(),
+                });
+            }
+
+            gate_step_id
+        } else {
+            // ABORT deliverables: gate field stays empty.
+            String::new()
+        };
+
+        resolved.push((deliverable_id.clone(), producer_id, gate_id));
+    }
+
+    // Second pass: fill in the `producer` and `gate` fields on each deliverable.
+    for (deliverable_id, producer_id, gate_id) in resolved {
+        if let Some(deliverable) = cfg.deliverables.get_mut(&deliverable_id) {
+            deliverable.producer = producer_id;
+            deliverable.gate = gate_id;
+        }
+    }
+
+    // Third pass: judge-agent existence check.
+    // JudgeConfig::Agent(a) where `a` is not a key in cfg.agents → UnknownJudgeAgent.
+    for (deliverable_id, deliverable) in &cfg.deliverables {
+        if let JudgeConfig::Agent(judge_id) = &deliverable.judge {
+            if !cfg.agents.contains_key(judge_id) {
+                return Err(ProjectConfigError::UnknownJudgeAgent {
+                    id: deliverable_id.clone(),
+                    judge: judge_id.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn unchecked_to_capability_override(
@@ -2175,6 +2859,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_check_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "report"
+            run = "check:report"
+            input = "${input}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps[0].run, PipelineRunRef::Check("report".into()));
+    }
+
+    #[test]
     fn rejects_unknown_run_kind() {
         let toml = r#"
             [project]
@@ -2214,6 +2913,478 @@ mod tests {
         "#;
         let cfg = ProjectConfig::parse_str(toml).unwrap();
         assert_eq!(cfg.pipeline.unwrap().steps[0].input, "${input}");
+    }
+
+    // --- Task 2: [goals.*] tests ---
+
+    #[test]
+    fn goal_matches_parses_path_locus_and_regex_predicate() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.has_sources]
+evaluates = "/workspace/report.md"
+check     = "matches"
+pattern   = "(?m)^## Sources"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        let v = cfg.validate().unwrap();
+        let g = &v.goals["has_sources"];
+        assert_eq!(
+            g.evaluates,
+            LocusConfig::Path("/workspace/report.md".into())
+        );
+        assert_eq!(
+            g.predicate,
+            GoalPredicateConfig::Matches("(?m)^## Sources".into())
+        );
+    }
+
+    #[test]
+    fn goal_fn_escape_hatch_parses_output_locus() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.link_health]
+evaluates = "steps.writer.output"
+fn        = "research_checks::all_links_resolve"
+"#;
+        let v: ProjectConfig = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap();
+        let g = &v.goals["link_health"];
+        assert_eq!(g.evaluates, LocusConfig::Output("writer".into()));
+        assert_eq!(
+            g.predicate,
+            GoalPredicateConfig::NativeFn("research_checks::all_links_resolve".into())
+        );
+    }
+
+    #[test]
+    fn goal_matches_without_pattern_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.bad]
+evaluates = "/x"
+check     = "matches"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::GoalValidation { .. }));
+    }
+
+    // --- Task 3: [deliverables.*] tests ---
+
+    #[test]
+    fn deliverable_path_locus_retry_parses() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[[pipeline.steps]]
+id = "writer"
+run = "agent:writer"
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "A coherent summary."
+on_fail      = "retry"
+max_attempts = 3
+retry_from   = "writer"
+"#;
+        let v = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap();
+        let d = &v.deliverables["report"];
+        assert_eq!(d.locus, LocusConfig::Path("/workspace/report.md".into()));
+        assert_eq!(d.on_fail, OnFailConfig::Retry);
+        assert_eq!(d.max_attempts, 3);
+        assert_eq!(d.retry_from.as_deref(), Some("writer"));
+        assert_eq!(d.judge, JudgeConfig::Builtin { model: None });
+    }
+
+    #[test]
+    fn deliverable_rejects_both_path_and_output() {
+        let toml = r#"
+[project]
+name = "p"
+[deliverables.bad]
+path         = "/x"
+output       = "steps.writer.output"
+must_satisfy = "x"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::DeliverableValidation { .. }
+        ));
+    }
+
+    #[test]
+    fn deliverable_judge_and_model_conflict_rejected_early() {
+        let toml = r#"
+[project]
+name = "p"
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+judge        = "critic"
+judge_model  = "claude-haiku-4-5"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::JudgeAndModelConflict { id } if id == "report"));
+    }
+
+    #[test]
+    fn agent_produces_parses_and_validates() {
+        let toml = r#"
+[project]
+name = "p"
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+llm_backend  = "anthropic"
+model        = "claude-haiku-4-5"
+produces     = ["/workspace/report.md"]
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).expect("parse");
+        let validated = cfg.validate().expect("validate");
+        assert_eq!(
+            validated.agents["writer"].produces,
+            vec!["/workspace/report.md".to_string()]
+        );
+    }
+
+    // --- Task 4: producer binding + capability coverage ---
+
+    #[test]
+    fn deliverable_without_producer_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::DeliverableNoProducer { id, .. } if id == "report")
+        );
+    }
+
+    #[test]
+    fn producer_lacking_fs_write_capability_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/other/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::DeliverableProducerLacksCapability { .. }
+        ));
+    }
+
+    #[test]
+    fn producer_with_covering_capability_validates() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        assert!(toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn producer_field_is_filled_after_successful_validate() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert_eq!(cfg.deliverables["report"].producer, "writer");
+    }
+
+    // --- Task 5: gate position + retry-span + unknown retry_from ---
+
+    fn cfg_with_pipeline(retry_from: &str, polish_after: bool) -> String {
+        // gather -> writer (producer) -> [polish], deliverable retries from `retry_from`
+        let polish_step = if polish_after {
+            "[[pipeline.steps]]\nid=\"polish\"\nrun=\"agent:polish\"\ninput=\"${steps.writer.output}\"\n"
+        } else {
+            ""
+        };
+        let polish_agent = if polish_after {
+            "[agents.polish]\ndisplay_name=\"P\"\npackage=\"d@^0.1\"\nllm_backend=\"anthropic\"\nmodel=\"m\"\n"
+        } else {
+            ""
+        };
+        format!(
+            r#"
+[project]
+name = "p"
+[agents.gather]
+display_name="G"
+package="d@^0.1"
+llm_backend="anthropic"
+model="m"
+[agents.writer]
+display_name="W"
+package="d@^0.1"
+llm_backend="anthropic"
+model="m"
+produces=["/workspace/report.md"]
+tool_refs=["write_file"]
+{polish_agent}[tools.write_file]
+native="WriteFile"
+capabilities=[{{ kind="fs.write", paths=["/workspace/**"] }}]
+[[pipeline.steps]]
+id="gather"
+run="agent:gather"
+input="${{input}}"
+[[pipeline.steps]]
+id="writer"
+run="agent:writer"
+input="${{steps.gather.output}}"
+{polish_step}[deliverables.report]
+path="/workspace/report.md"
+must_satisfy="x"
+on_fail="retry"
+max_attempts=3
+retry_from="{retry_from}"
+"#
+        )
+    }
+
+    #[test]
+    fn retry_gate_before_producer_validates() {
+        assert!(
+            toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("gather", false))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn retry_gate_after_producer_is_rejected() {
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("polish", true))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::GateAfterProducer { .. }));
+    }
+
+    #[test]
+    fn retry_from_unknown_step_is_rejected() {
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("nope", false))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::UnknownRetryFrom { .. }));
+    }
+
+    #[test]
+    fn max_attempts_zero_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+max_attempts = 0
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::DeliverableValidation { id, .. } if id == "report"
+        ));
+    }
+
+    #[test]
+    fn retry_span_no_llm_is_rejected() {
+        // A pipeline with only deterministic steps between gate and producer step.
+        // We simulate this by having the "writer" step (producer) be the same
+        // step as the gate step via retry_from pointing to it — but then
+        // using a pipeline with only a tool step in-between.
+        // Actually, the scenario: the gate IS the producer step, and there's
+        // no agent step in between — but a single agent step (writer itself)
+        // IS the span. So RetrySpanNoLlm fires when the producer has no
+        // pipeline step (on_fail=retry but no pipeline present).
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+on_fail      = "retry"
+max_attempts = 3
+"#;
+        // No pipeline → no sequence to rewind → RetrySpanNoLlm
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::RetrySpanNoLlm { id } if id == "report"
+        ));
+    }
+
+    #[test]
+    fn gate_field_is_filled_after_successful_validate() {
+        let cfg = toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("gather", false))
+            .unwrap()
+            .validate()
+            .unwrap();
+        // gate defaults to retry_from value ("gather") for a RETRY deliverable
+        assert_eq!(cfg.deliverables["report"].gate, "gather");
+    }
+
+    // --- Task 6: regex compiles + judge resolution ---
+
+    #[test]
+    fn goal_bad_regex_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.g]
+evaluates = "/x"
+check     = "matches"
+pattern   = "("
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::BadGoalRegex { .. }));
+    }
+
+    #[test]
+    fn deliverable_unknown_judge_agent_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name="W"
+package="d@^0.1"
+llm_backend="anthropic"
+model="m"
+produces=["/workspace/report.md"]
+tool_refs=["write_file"]
+[tools.write_file]
+native="WriteFile"
+capabilities=[{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path="/workspace/report.md"
+must_satisfy="x"
+judge="ghost"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::UnknownJudgeAgent { id, judge } if id=="report" && judge=="ghost")
+        );
     }
 }
 
@@ -2257,6 +3428,7 @@ mod proptests {
                         tool_refs: Vec::new(),
                         max_turns: None,
                         max_tokens: None,
+                        produces: Vec::new(),
                     },
                 )
             })
@@ -2289,6 +3461,8 @@ mod proptests {
                 steps: BTreeMap::new(),
                 triggers: BTreeMap::new(),
                 pipeline: None,
+                goals: BTreeMap::new(),
+                deliverables: BTreeMap::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();

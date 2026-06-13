@@ -125,17 +125,57 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
             StepRun::Agent(a) => wf.agents.contains_key(a),
             StepRun::Tool(t) => wf.tools.contains_key(t),
             StepRun::Deterministic(s) => wf.steps.contains_key(s),
+            StepRun::Check(c) => wf.checks.contains_key(c),
         };
         if !exists {
+            // For Check steps, emit the more precise UnknownCheckRef error.
+            if let StepRun::Check(check_id) = &step.run {
+                return Err(IrError::UnknownCheckRef {
+                    step: sid.into(),
+                    check: check_id.0.clone(),
+                });
+            }
             let target = match &step.run {
                 StepRun::Agent(a) => alloc::format!("agent:{}", a.0),
                 StepRun::Tool(t) => alloc::format!("tool:{}", t.0),
                 StepRun::Deterministic(s) => alloc::format!("deterministic:{}", s.0),
+                StepRun::Check(c) => alloc::format!("check:{}", c.0),
             };
             return Err(IrError::UnknownPipelineRun {
                 step: sid.into(),
                 target,
             });
+        }
+
+        // For Check steps, validate the check's locus integrity:
+        // if the check has a Locus::Output referencing a step, that step must
+        // appear strictly BEFORE the current check step in the pipeline.
+        if let StepRun::Check(check_id) = &step.run {
+            if let Some(check) = wf.checks.get(check_id) {
+                use crate::check::{CheckVerify, Locus};
+                let locus = match &check.verify {
+                    CheckVerify::Goal { evaluates, .. } => Some(evaluates),
+                    CheckVerify::Deliverable { locus, .. } => Some(locus),
+                };
+                if let Some(Locus::Output(ref_step_id)) = locus {
+                    // seen_ids holds exactly the steps strictly BEFORE current
+                    // (current step's id was just inserted above, so we check
+                    // using the pre-insertion state — but since we check
+                    // whether the referenced id is in seen_ids BEFORE we
+                    // process the current step's template refs, we need to
+                    // check whether ref_step_id was inserted strictly before
+                    // sid). seen_ids already has sid, so we check ≠ sid AND
+                    // seen_ids contains the ref (modulo the current step).
+                    let is_earlier =
+                        ref_step_id.0 != sid && seen_ids.contains(ref_step_id.0.as_str());
+                    if !is_earlier {
+                        return Err(IrError::UnknownCheckLocus {
+                            check: check_id.0.clone(),
+                            output: ref_step_id.0.clone(),
+                        });
+                    }
+                }
+            }
         }
 
         let refs = extract_refs(&step.input).map_err(|e| IrError::BadPipelineTemplate {
@@ -197,6 +237,7 @@ mod tests {
                 max_turns: None,
                 max_tokens: None,
             },
+            produces: alloc::vec::Vec::new(),
         }
     }
 
@@ -328,6 +369,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
                 pipeline: None,
+                checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
         };
@@ -336,6 +378,105 @@ mod tests {
             matches!(err, IrError::UnknownSubflowToolTarget { ref tool, ref agent }
                 if tool.0 == "call_ghost" && agent.0 == "ghost"),
             "expected UnknownSubflowToolTarget; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_step_with_unknown_check_id_is_rejected() {
+        // A pipeline step runs StepRun::Check("ghost") but workflow.checks
+        // has no entry for "ghost" → should return UnknownCheckRef.
+        use crate::capability::CapabilityTable;
+        use crate::ids::{CheckId, PipelineStepId};
+        use crate::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let check_id = CheckId("ghost".to_string());
+        // No entry in workflow.checks for "ghost".
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("step-a".to_string()),
+                        run: StepRun::Check(check_id),
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(), // empty — "ghost" is not here
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject unknown check ref");
+        assert!(
+            matches!(err, IrError::UnknownCheckRef { ref step, ref check }
+                if step == "step-a" && check == "ghost"),
+            "expected UnknownCheckRef; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_locus_output_referencing_later_step_is_rejected() {
+        // A check whose Locus::Output names a step that comes AFTER the check
+        // step in the pipeline → should return UnknownCheckLocus.
+        use crate::capability::CapabilityTable;
+        use crate::check::{Check, CheckVerify, GoalPredicate, Locus, OnFail, RetryPolicy};
+        use crate::ids::{CheckId, PipelineStepId};
+        use crate::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let check_id = CheckId("my-check".to_string());
+        // The check evaluates Locus::Output("later") but "later" runs after
+        // the check step in the pipeline.
+        let check = Check {
+            id: check_id.clone(),
+            verify: CheckVerify::Goal {
+                evaluates: Locus::Output(PipelineStepId("later".to_string())),
+                predicate: GoalPredicate::Exists,
+            },
+            retry: RetryPolicy {
+                on_fail: OnFail::Abort,
+                max_attempts: 1,
+                gate: PipelineStepId("check-step".to_string()),
+            },
+        };
+
+        let mut checks = BTreeMap::new();
+        checks.insert(check_id.clone(), check);
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![
+                        // check-step runs first, but it references "later" which is after
+                        PipelineStep {
+                            id: PipelineStepId("check-step".to_string()),
+                            run: StepRun::Check(check_id),
+                            input: "${input}".to_string(),
+                        },
+                        // "later" comes after the check step — invalid forward reference
+                        PipelineStep {
+                            id: PipelineStepId("later".to_string()),
+                            run: StepRun::Tool(crate::ids::ToolId("some-tool".to_string())),
+                            input: "${input}".to_string(),
+                        },
+                    ],
+                }),
+                checks,
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject forward-referencing check locus");
+        assert!(
+            matches!(err, IrError::UnknownCheckLocus { ref check, ref output }
+                if check == "my-check" && output == "later"),
+            "expected UnknownCheckLocus; got {err:?}"
         );
     }
 
@@ -364,6 +505,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
                 pipeline: None,
+                checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
         };
