@@ -14,7 +14,10 @@
 //! enforce). The enums are `#[non_exhaustive]` so adding those kinds later is
 //! a minor change.
 
+use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::AgentId;
@@ -102,6 +105,140 @@ pub struct TriggerBinding {
     pub retry: Option<RetryPolicy>,
 }
 
+/// Day-of-week names systemd's `OnCalendar` expects, indexed by cron dow
+/// (0 and 7 both = Sunday).
+const DOW_NAMES: [&str; 8] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// Translate a 5-field cron expression to a systemd `OnCalendar` value, for
+/// the slice-1 subset where each field is `*` or a plain non-negative
+/// integer. Returns `None` for any field using ranges (`-`), lists (`,`), or
+/// steps (`/`) — the caller skips the systemd timer for such triggers and
+/// logs a warning (k8s still emits the cron verbatim).
+pub fn cron_to_oncalendar(schedule: &str) -> Option<String> {
+    let f: Vec<&str> = schedule.split_whitespace().collect();
+    if f.len() != 5 {
+        return None;
+    }
+    // Each field must be `*` or all-ASCII-digits.
+    fn field(s: &str) -> Option<Option<u8>> {
+        if s == "*" {
+            Some(None)
+        } else if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
+            s.parse::<u8>().ok().map(Some)
+        } else {
+            None // ranges / lists / steps → unsupported
+        }
+    }
+    let min = field(f[0])?;
+    let hour = field(f[1])?;
+    let dom = field(f[2])?;
+    let month = field(f[3])?;
+    let dow = field(f[4])?;
+
+    let two = |v: Option<u8>| match v {
+        None => "*".to_string(),
+        Some(n) => format!("{n:02}"),
+    };
+    // OnCalendar date+time: `[DOW ]YYYY-MM-DD HH:MM:SS` with `*` wildcards.
+    let date = format!("*-{}-{}", two(month), two(dom));
+    let time = format!("{}:{}:00", two(hour), two(min));
+    let body = format!("{date} {time}");
+    match dow {
+        None => Some(body),
+        Some(d) if (d as usize) < DOW_NAMES.len() => {
+            Some(format!("{} {}", DOW_NAMES[d as usize], body))
+        }
+        Some(_) => None, // out-of-range dow
+    }
+}
+
+/// Emit systemd `.service` + `.timer` descriptors for each **cron** trigger.
+/// `artifact_ref` is the path the unit invokes (the built `.tau` bundle).
+/// Manual triggers and cron schedules outside the converter subset produce
+/// no output (the caller logs the skip). Returns `(filename, content)` pairs.
+pub fn emit_systemd(bindings: &[TriggerBinding], artifact_ref: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for b in bindings {
+        if b.kind != TriggerKind::Cron {
+            continue;
+        }
+        let Some(schedule) = b.schedule.as_deref() else {
+            continue;
+        };
+        let Some(oncalendar) = cron_to_oncalendar(schedule) else {
+            continue; // caller warns
+        };
+        // The .service has no [Install] section: it is activated by the
+        // paired .timer (systemd matches same-prefix units), not enabled directly.
+        let service = format!(
+            "[Unit]\n\
+             Description=tau trigger '{name}' (agent {agent})\n\n\
+             [Service]\n\
+             Type=oneshot\n\
+             ExecStart=tau run --bundle {artifact} --agent {agent}\n",
+            name = b.name,
+            agent = b.agent.0,
+            artifact = artifact_ref,
+        );
+        let timer = format!(
+            "[Unit]\n\
+             Description=tau trigger '{name}' schedule ({schedule})\n\n\
+             [Timer]\n\
+             OnCalendar={oncalendar}\n\
+             Persistent=true\n\n\
+             [Install]\n\
+             WantedBy=timers.target\n",
+            name = b.name,
+            schedule = schedule,
+            oncalendar = oncalendar,
+        );
+        out.push((format!("tau-{}.service", b.name), service));
+        out.push((format!("tau-{}.timer", b.name), timer));
+    }
+    out
+}
+
+/// Emit a k8s `CronJob` manifest for each **cron** trigger. k8s consumes
+/// 5-field cron verbatim, so every cron trigger emits exactly one manifest.
+/// Manual triggers produce no output.
+pub fn emit_k8s(bindings: &[TriggerBinding], artifact_ref: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for b in bindings {
+        if b.kind != TriggerKind::Cron {
+            continue;
+        }
+        let Some(schedule) = b.schedule.as_deref() else {
+            continue;
+        };
+        // `\x20` is a literal space: the `\`-newline string continuation
+        // strips leading source indentation, so YAML nesting spaces are
+        // written explicitly here.
+        let manifest = format!(
+            "apiVersion: batch/v1\n\
+             kind: CronJob\n\
+             metadata:\n\
+             \x20\x20name: tau-{name}\n\
+             spec:\n\
+             \x20\x20schedule: \"{schedule}\"\n\
+             \x20\x20jobTemplate:\n\
+             \x20\x20\x20\x20spec:\n\
+             \x20\x20\x20\x20\x20\x20template:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20spec:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20restartPolicy: Never\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20containers:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20- name: tau\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20image: tau:latest\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20args: [\"run\", \"--bundle\", \"{artifact}\", \"--agent\", \"{agent}\"]\n",
+            name = b.name,
+            schedule = schedule,
+            artifact = artifact_ref,
+            agent = b.agent.0,
+        );
+        out.push((format!("tau-{}.cronjob.yaml", b.name), manifest));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +310,128 @@ mod tests {
         );
         let back: TriggerBinding = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(b, back);
+    }
+
+    #[test]
+    fn k8s_emits_cronjob_with_verbatim_schedule() {
+        let bindings = alloc::vec![cron_binding()];
+        let out = emit_k8s(&bindings, "/srv/app.tau");
+        assert_eq!(out.len(), 1);
+        let (fname, content) = &out[0];
+        assert!(fname.ends_with("nightly.cronjob.yaml"), "got {fname}");
+        assert!(content.contains("kind: CronJob"), "got {content}");
+        assert!(content.contains("schedule: \"0 3 * * *\""), "got {content}");
+        assert!(content.contains("summarizer"), "got {content}");
+        assert!(
+            content.contains("/srv/app.tau"),
+            "artifact ref must appear in args: {content}"
+        );
+    }
+
+    #[test]
+    fn systemd_emits_timer_and_service_for_simple_cron() {
+        let bindings = alloc::vec![cron_binding()];
+        let out = emit_systemd(&bindings, "/srv/app.tau");
+        assert_eq!(out.len(), 2);
+        let names: alloc::vec::Vec<&str> = out.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.iter().any(|n| n.ends_with("nightly.service")),
+            "got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.ends_with("nightly.timer")),
+            "got {names:?}"
+        );
+        let timer = &out.iter().find(|(n, _)| n.ends_with(".timer")).unwrap().1;
+        assert!(timer.contains("OnCalendar=*-*-* 03:00:00"), "got {timer}");
+        let service = &out.iter().find(|(n, _)| n.ends_with(".service")).unwrap().1;
+        assert!(
+            service.contains("ExecStart=tau run --bundle /srv/app.tau --agent summarizer"),
+            "got {service}"
+        );
+    }
+
+    #[test]
+    fn manual_trigger_emits_nothing() {
+        let bindings = alloc::vec![TriggerBinding {
+            name: "m".into(),
+            kind: TriggerKind::Manual,
+            agent: AgentId("a".into()),
+            schedule: None,
+            timezone: None,
+            retry: None,
+        }];
+        assert!(emit_systemd(&bindings, "/srv/app.tau").is_empty());
+        assert!(emit_k8s(&bindings, "/srv/app.tau").is_empty());
+    }
+
+    #[test]
+    fn systemd_skips_unconvertible_cron() {
+        let bindings = alloc::vec![TriggerBinding {
+            name: "fast".into(),
+            kind: TriggerKind::Cron,
+            agent: AgentId("a".into()),
+            schedule: Some("*/5 * * * *".into()),
+            timezone: Some("UTC".into()),
+            retry: None,
+        }];
+        // systemd skips it (returns empty); k8s still emits it verbatim.
+        assert!(emit_systemd(&bindings, "/srv/app.tau").is_empty());
+        assert_eq!(emit_k8s(&bindings, "/srv/app.tau").len(), 1);
+    }
+
+    #[test]
+    fn cron_to_oncalendar_handles_dom_month_dow() {
+        // "30 4 1 6 *" → minute 30, hour 04, dom 01, month 06, any dow.
+        assert_eq!(
+            cron_to_oncalendar("30 4 1 6 *").as_deref(),
+            Some("*-06-01 04:30:00")
+        );
+        // dow Monday (1), all-* date → "Mon *-*-* HH:MM:SS"
+        assert_eq!(
+            cron_to_oncalendar("0 9 * * 1").as_deref(),
+            Some("Mon *-*-* 09:00:00")
+        );
+        // unsupported step form → None
+        assert_eq!(cron_to_oncalendar("*/5 * * * *"), None);
+        // simple daily → "*-*-* 03:00:00"
+        assert_eq!(
+            cron_to_oncalendar("0 3 * * *").as_deref(),
+            Some("*-*-* 03:00:00")
+        );
+        assert_eq!(
+            cron_to_oncalendar("0 0 * * 0").as_deref(),
+            Some("Sun *-*-* 00:00:00")
+        );
+        assert_eq!(
+            cron_to_oncalendar("0 0 * * 7").as_deref(),
+            Some("Sun *-*-* 00:00:00")
+        );
+    }
+
+    #[test]
+    fn emits_only_cron_from_mixed_bindings() {
+        let bindings = alloc::vec![
+            cron_binding(),
+            TriggerBinding {
+                name: "m".into(),
+                kind: TriggerKind::Manual,
+                agent: AgentId("a".into()),
+                schedule: None,
+                timezone: None,
+                retry: None,
+            },
+            TriggerBinding {
+                name: "evening".into(),
+                kind: TriggerKind::Cron,
+                agent: AgentId("b".into()),
+                schedule: Some("0 18 * * *".into()),
+                timezone: Some("UTC".into()),
+                retry: None,
+            },
+        ];
+        // 2 cron triggers → k8s 2 files, systemd 4 files; the manual is ignored.
+        assert_eq!(emit_k8s(&bindings, "/srv/app.tau").len(), 2);
+        assert_eq!(emit_systemd(&bindings, "/srv/app.tau").len(), 4);
     }
 }
