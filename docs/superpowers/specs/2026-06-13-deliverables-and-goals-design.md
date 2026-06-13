@@ -1,11 +1,47 @@
 # Deliverables & Goals: build-time-checked postcondition steps
 
 **Date:** 2026-06-13
-**Status:** Design approved; implementation plan pending.
+**Status:** Design approved. **Blocked on a prerequisite** (see *Prerequisite*
+below); split into two implementation plans.
 **Scope:** Add two postcondition primitives — `goal` (deterministic predicate)
 and `deliverable` (produced artifact + LLM-judged content) — to the canonical
 `tau.toml` → IR surface, checked at both build time and runtime, with an
 opt-in self-correcting retry loop.
+
+## Prerequisite: an IR sequential pipeline executor (Plan 1)
+
+This design assumes a **sequence of steps the engine controls** — *"the previous
+pipeline produces the deliverable → the check validates → on fail rewind to the
+gate and re-run forward."* The IR runtime as of 2026-06-13 **does not have this**:
+
+- `run_ir` (`crates/tau-runtime-core/src/interpreter/mod.rs:38`) takes a **single
+  `entry` agent** and runs its loop. It does not iterate a step sequence.
+- `IrModule.workflow.edges` (the would-be DAG) is **reserved and unused** in v0.
+- There is **no `steps.<id>.output` store** — a step's output is an ephemeral
+  tool-result in the conversation, not an addressable value. So
+  `evaluates = "steps.writer.output"` has nothing to bind to today.
+- The only iteration that exists is an agent's own loop; multi-step pipelines are
+  otherwise either the legacy `tau-workflow` runner (no IR → no build-time check)
+  or LLM-driven sub-agent spawning (not engine-sequenced).
+
+The engine-enforced gate/rewind control flow this feature needs therefore has no
+substrate yet. Resolving it by handing control flow back to the LLM (a check the
+agent *chooses* to retry) was rejected: it contradicts the deterministic,
+build-time-checked control flow that motivated choosing IR over the legacy runner
+in the first place.
+
+**Consequence — two sub-projects, implemented in order:**
+
+1. **Plan 1 — IR sequential pipeline executor** (foundational): declarative
+   multi-step sequencing in the IR (activate/define step ordering + edges), a
+   step-output store with `steps.<id>.output` resolution, and trace events for
+   step entry/exit. Unblocks much more than this feature.
+2. **Plan 2 — Deliverables & Goals** (this document): the two node kinds,
+   build-time producer binding, the swappable judge, and rewind-to-gate retry —
+   all built on Plan 1.
+
+Everything below is the **Plan 2** design and is written as if Plan 1 exists
+(engine-sequenced steps + an addressable `steps.<id>.output`).
 
 ## Problem
 
