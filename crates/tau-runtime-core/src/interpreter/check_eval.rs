@@ -93,8 +93,8 @@ where
     let initial = vec![user_message_judge(&user_turn)];
     let outcome = alloc::boxed::Box::pin(run_agent(module.clone(), &agent, dispatcher, initial)).await?;
     let usage = match &outcome {
-        RunOutcome::Completed { token_usage, .. } => token_usage.clone(),
-        RunOutcome::Failed { token_usage, .. } => token_usage.clone(),
+        RunOutcome::Completed { token_usage, .. } => *token_usage,
+        RunOutcome::Failed { token_usage, .. } => *token_usage,
     };
     let text = last_assistant_text(&outcome);
     Ok((parse_verdict(&text), usage))
