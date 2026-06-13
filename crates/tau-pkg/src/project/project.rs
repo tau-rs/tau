@@ -77,6 +77,11 @@ pub struct UncheckedAgent {
     /// Maximum tokens (input + output) across the entire run.
     #[serde(default)]
     pub max_tokens: Option<u64>,
+    /// Artifact paths / named outputs this agent declares it produces.
+    /// Cross-checked against `fs-write` capabilities at validation time
+    /// and bound to `[deliverables.*]`/`[goals.*]` loci.
+    #[serde(default)]
+    pub produces: Vec<String>,
 }
 
 /// `[agents.<id>.requires]` sub-table.
@@ -417,6 +422,10 @@ pub struct AgentEntry {
     pub max_turns: Option<u32>,
     /// Maximum tokens (IR lowering use).
     pub max_tokens: Option<u64>,
+    /// Artifact paths / named outputs this agent declares it produces.
+    /// Cross-checked against `fs-write` capabilities at validation time
+    /// and bound to `[deliverables.*]`/`[goals.*]` loci.
+    pub produces: Vec<String>,
 }
 
 impl AgentEntry {
@@ -447,6 +456,7 @@ impl AgentEntry {
             tool_refs: Vec::new(),
             max_turns: None,
             max_tokens: None,
+            produces: Vec::new(),
         }
     }
 }
@@ -793,6 +803,7 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         tool_refs: raw.tool_refs,
         max_turns: raw.max_turns,
         max_tokens: raw.max_tokens,
+        produces: raw.produces,
     })
 }
 
@@ -1675,6 +1686,27 @@ mod tests {
         let cfg = ProjectConfig::parse_str(toml).unwrap();
         assert_eq!(cfg.pipeline.unwrap().steps[0].input, "${input}");
     }
+
+    #[test]
+    fn agent_produces_parses_and_validates() {
+        let toml = r#"
+[project]
+name = "p"
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+llm_backend  = "anthropic"
+model        = "claude-haiku-4-5"
+produces     = ["/workspace/report.md"]
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).expect("parse");
+        let validated = cfg.validate().expect("validate");
+        assert_eq!(
+            validated.agents["writer"].produces,
+            vec!["/workspace/report.md".to_string()]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1717,6 +1749,7 @@ mod proptests {
                         tool_refs: Vec::new(),
                         max_turns: None,
                         max_tokens: None,
+                        produces: Vec::new(),
                     },
                 )
             })
