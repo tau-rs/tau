@@ -118,6 +118,61 @@ pub enum PipelineStatus {
     },
 }
 
+/// Test-fixture constructors for [`PipelineOutcome`] and
+/// [`PipelineStatus`]. Gated on `test-fixtures` (and `tool-validation`,
+/// which gates the `OutputStore` dependency) so production callers
+/// never see these.
+#[cfg(all(feature = "tool-validation", any(test, feature = "test-fixtures")))]
+pub mod fixtures {
+    use alloc::string::ToString;
+    use tau_domain::AgentStatus;
+
+    use crate::interpreter::output_store::OutputStore;
+    use crate::options::TokenUsage;
+    use crate::outcome::{PipelineOutcome, PipelineStatus};
+
+    /// A `PipelineOutcome` with `PipelineStatus::Completed`, one output
+    /// entry `(step_id, Value::String(text))`, and the given token usage.
+    pub fn completed_outcome(
+        step_id: &str,
+        text: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) -> PipelineOutcome {
+        let mut outputs = OutputStore::new();
+        outputs.insert(step_id, serde_json::Value::String(text.to_string()));
+        PipelineOutcome {
+            outputs,
+            token_usage: TokenUsage { input_tokens, output_tokens, total_tokens: None },
+            status: PipelineStatus::Completed,
+        }
+    }
+
+    /// A `PipelineOutcome` with `PipelineStatus::CheckAborted`.
+    pub fn check_aborted_outcome(check: &str, rationale: &str) -> PipelineOutcome {
+        PipelineOutcome {
+            outputs: OutputStore::new(),
+            token_usage: TokenUsage::default(),
+            status: PipelineStatus::CheckAborted {
+                check: check.to_string(),
+                rationale: rationale.to_string(),
+            },
+        }
+    }
+
+    /// A `PipelineOutcome` with `PipelineStatus::AgentFailed`.
+    pub fn agent_failed_outcome(step: &str, status: AgentStatus) -> PipelineOutcome {
+        PipelineOutcome {
+            outputs: OutputStore::new(),
+            token_usage: TokenUsage::default(),
+            status: PipelineStatus::AgentFailed {
+                step: step.to_string(),
+                status,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

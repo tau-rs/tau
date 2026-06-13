@@ -431,20 +431,91 @@ async fn try_run_pipeline(
         Ok(o) => o,
         Err(e) => return Some(Err(anyhow::Error::new(e).context("running pipeline"))),
     };
-    // TODO(PR-D): surface PipelineStatus (AgentFailed / CheckAborted) to the caller.
-    let store = pipeline_outcome.outputs;
 
-    Some(render_pipeline_result(&store, &last_step_id, output))
+    Some(pipeline_outcome_to_result(pipeline_outcome, &last_step_id, output))
+}
+
+/// Map a [`tau_runtime_core::outcome::PipelineOutcome`] to a CLI result,
+/// mirroring the single-agent failure convention in [`render_outcome`]:
+///
+/// - `Completed` → render the final step's output and return `Ok(())`.
+/// - `AgentFailed` → emit a structured diagnostic then return
+///   `Err(AgentFailed)` so `run_main` maps it to `ExitCode::AgentFailed`
+///   (exit code 1) without printing a generic "error:" prefix.
+/// - `CheckAborted` → same: emit diagnostic then `Err(AgentFailed)`.
+///
+/// Both failure arms use the `AgentFailed` marker (exit 1) rather than a
+/// generic `anyhow!` error (exit 2) because both are graceful run-level
+/// outcomes, not kernel / CLI breakage — exactly the ADR-0006 dichotomy.
+///
+/// This function is `pub(crate)` so it can be unit-tested without
+/// constructing a full runtime.
+pub(crate) fn pipeline_outcome_to_result(
+    outcome: tau_runtime_core::outcome::PipelineOutcome,
+    last_step_id: &str,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    use tau_runtime_core::outcome::PipelineStatus;
+
+    match outcome.status {
+        PipelineStatus::Completed => {
+            render_pipeline_result(&outcome.outputs, &outcome.token_usage, last_step_id, output)
+        }
+        PipelineStatus::AgentFailed { step, status } => {
+            if output.is_json() {
+                let payload = serde_json::json!({
+                    "outcome": "failed",
+                    "kind": "agent_failed",
+                    "step": step,
+                    "status": format!("{status:?}"),
+                    "token_usage": {
+                        "input_tokens": outcome.token_usage.input_tokens,
+                        "output_tokens": outcome.token_usage.output_tokens,
+                    },
+                });
+                output.json(&payload)?;
+            } else {
+                output.error(format!(
+                    "pipeline step '{step}' agent failed: {status:?}"
+                ))?;
+            }
+            Err(AgentFailed.into())
+        }
+        PipelineStatus::CheckAborted { check, rationale } => {
+            if output.is_json() {
+                let payload = serde_json::json!({
+                    "outcome": "failed",
+                    "kind": "check_aborted",
+                    "check": check,
+                    "rationale": rationale,
+                    "token_usage": {
+                        "input_tokens": outcome.token_usage.input_tokens,
+                        "output_tokens": outcome.token_usage.output_tokens,
+                    },
+                });
+                output.json(&payload)?;
+            } else {
+                output.error(format!(
+                    "check '{check}' failed: {rationale}"
+                ))?;
+            }
+            Err(AgentFailed.into())
+        }
+        // PipelineStatus is `#[non_exhaustive]`; treat unknown variants as
+        // kernel errors (exit 2) so we never silently claim success.
+        _ => Err(anyhow::anyhow!("unknown PipelineStatus variant")),
+    }
 }
 
 /// Render the LAST pipeline step's output as the run result, matching the
 /// single-agent path's `RunOutcome::Completed` output style: human mode
 /// prints the value's text form; `--json` emits the same
 /// `{"outcome":"completed", ...}` shape with the final step's text as
-/// `final_message` (token usage / turn counts are pipeline-level concepts
-/// not yet aggregated — reported as zero/empty at v0).
+/// `final_message`. Token usage is now aggregated from the pipeline outcome
+/// and threaded in to match the single-agent JSON shape.
 fn render_pipeline_result(
     store: &tau_runtime_core::interpreter::output_store::OutputStore,
+    token_usage: &tau_runtime_core::options::TokenUsage,
     last_step_id: &str,
     output: &mut Output,
 ) -> anyhow::Result<()> {
@@ -466,6 +537,10 @@ fn render_pipeline_result(
         let payload = serde_json::json!({
             "outcome": "completed",
             "final_message": text,
+            "token_usage": {
+                "input_tokens": token_usage.input_tokens,
+                "output_tokens": token_usage.output_tokens,
+            },
         });
         output.json(&payload)?;
     } else {
@@ -922,6 +997,183 @@ mod tests {
         let err: anyhow::Error = AgentFailed.into();
         let s = format!("{err}");
         assert!(s.contains("agent failed"), "got: {s}");
+    }
+
+    // ---- pipeline_outcome_to_result unit tests ----------------------------------
+    //
+    // Uses Output::with_writers (test-only) to capture human / JSON output
+    // without touching a real terminal or spawning a runtime.
+
+    /// Build a minimal `PipelineOutcome` for testing via the test-fixtures
+    /// constructors in `tau_runtime_core::outcome::fixtures`.
+    fn make_completed_outcome(last_step_id: &str, text: &str) -> tau_runtime_core::outcome::PipelineOutcome {
+        tau_runtime_core::outcome::fixtures::completed_outcome(last_step_id, text, 10, 5)
+    }
+
+    fn make_check_aborted_outcome() -> tau_runtime_core::outcome::PipelineOutcome {
+        tau_runtime_core::outcome::fixtures::check_aborted_outcome(
+            "goal_quality",
+            "output did not meet quality threshold",
+        )
+    }
+
+    fn make_agent_failed_outcome() -> tau_runtime_core::outcome::PipelineOutcome {
+        tau_runtime_core::outcome::fixtures::agent_failed_outcome(
+            "step_summarise",
+            tau_domain::AgentStatus::Stopped,
+        )
+    }
+
+    #[test]
+    fn pipeline_outcome_completed_returns_ok_and_renders_text() {
+        use std::sync::{Arc, Mutex};
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let out = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let err = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut output = Output::with_writers(
+            Box::new(Sink(out.clone())),
+            Box::new(Sink(err.clone())),
+            false, false, crate::output::ColorChoice::Never,
+        );
+
+        let outcome = make_completed_outcome("step_1", "hello pipeline");
+        let result = pipeline_outcome_to_result(outcome, "step_1", &mut output);
+        assert!(result.is_ok(), "Completed must return Ok, got: {result:?}");
+        let written = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        assert!(written.contains("hello pipeline"), "stdout must contain the step output, got: {written:?}");
+    }
+
+    #[test]
+    fn pipeline_outcome_check_aborted_returns_err_agent_failed() {
+        use std::sync::{Arc, Mutex};
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let out = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let err = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut output = Output::with_writers(
+            Box::new(Sink(out.clone())),
+            Box::new(Sink(err.clone())),
+            false, false, crate::output::ColorChoice::Never,
+        );
+
+        let outcome = make_check_aborted_outcome();
+        let result = pipeline_outcome_to_result(outcome, "step_1", &mut output);
+        assert!(result.is_err(), "CheckAborted must return Err");
+        // Must be the AgentFailed marker (exit 1), not a generic error (exit 2).
+        let err_val = result.unwrap_err();
+        assert!(
+            err_val.downcast_ref::<AgentFailed>().is_some(),
+            "CheckAborted must produce AgentFailed marker, got: {err_val:?}"
+        );
+        // Diagnostic must mention the check name and rationale.
+        let stderr_text = String::from_utf8(err.lock().unwrap().clone()).unwrap();
+        assert!(stderr_text.contains("goal_quality"), "stderr must mention check name, got: {stderr_text:?}");
+        assert!(stderr_text.contains("quality threshold"), "stderr must mention rationale, got: {stderr_text:?}");
+    }
+
+    #[test]
+    fn pipeline_outcome_agent_failed_returns_err_agent_failed() {
+        use std::sync::{Arc, Mutex};
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let out = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let err = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut output = Output::with_writers(
+            Box::new(Sink(out.clone())),
+            Box::new(Sink(err.clone())),
+            false, false, crate::output::ColorChoice::Never,
+        );
+
+        let outcome = make_agent_failed_outcome();
+        let result = pipeline_outcome_to_result(outcome, "step_1", &mut output);
+        assert!(result.is_err(), "AgentFailed status must return Err");
+        let err_val = result.unwrap_err();
+        assert!(
+            err_val.downcast_ref::<AgentFailed>().is_some(),
+            "AgentFailed pipeline status must produce AgentFailed marker, got: {err_val:?}"
+        );
+        // Diagnostic must mention the step name.
+        let stderr_text = String::from_utf8(err.lock().unwrap().clone()).unwrap();
+        assert!(stderr_text.contains("step_summarise"), "stderr must mention step name, got: {stderr_text:?}");
+    }
+
+    #[test]
+    fn pipeline_outcome_check_aborted_json_shape() {
+        use std::sync::{Arc, Mutex};
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let out = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let err_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut output = Output::with_writers(
+            Box::new(Sink(out.clone())),
+            Box::new(Sink(err_buf.clone())),
+            /*json=*/ true, false, crate::output::ColorChoice::Never,
+        );
+
+        let outcome = make_check_aborted_outcome();
+        let result = pipeline_outcome_to_result(outcome, "step_1", &mut output);
+        assert!(result.is_err());
+        let json_text = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(json_text.trim()).expect("must be valid json");
+        assert_eq!(v["outcome"], "failed");
+        assert_eq!(v["kind"], "check_aborted");
+        assert_eq!(v["check"], "goal_quality");
+        assert!(v["rationale"].as_str().unwrap().contains("quality threshold"));
+    }
+
+    #[test]
+    fn pipeline_outcome_completed_json_includes_token_usage() {
+        use std::sync::{Arc, Mutex};
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let out = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let err_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut output = Output::with_writers(
+            Box::new(Sink(out.clone())),
+            Box::new(Sink(err_buf.clone())),
+            /*json=*/ true, false, crate::output::ColorChoice::Never,
+        );
+
+        let outcome = make_completed_outcome("step_1", "result text");
+        let result = pipeline_outcome_to_result(outcome, "step_1", &mut output);
+        assert!(result.is_ok());
+        let json_text = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(json_text.trim()).expect("must be valid json");
+        assert_eq!(v["outcome"], "completed");
+        assert_eq!(v["final_message"], "result text");
+        assert_eq!(v["token_usage"]["input_tokens"], 10);
+        assert_eq!(v["token_usage"]["output_tokens"], 5);
     }
 }
 
