@@ -95,10 +95,7 @@ fn apply_edit(haystack: &str, old: &str, new: &str, replace_all: bool) -> EditOu
     match haystack.matches(old).count() {
         0 => EditOutcome::NotFound,
         1 => EditOutcome::Replaced(haystack.replacen(old, new, 1)),
-        n if replace_all => {
-            let _ = n;
-            EditOutcome::Replaced(haystack.replace(old, new))
-        }
+        _ if replace_all => EditOutcome::Replaced(haystack.replace(old, new)),
         n => EditOutcome::Ambiguous(n),
     }
 }
