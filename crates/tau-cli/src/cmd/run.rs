@@ -236,9 +236,24 @@ pub async fn run(
         // happy without leaking implementation detail.
         Address::Agent(AgentInstanceId::new()),
         MessagePayload::Text {
-            content: prompt_text,
+            content: prompt_text.clone(),
         },
     );
+
+    // ---- Pipeline dispatch (Plan 1 Task 11) ---------------------------------
+    //
+    // Trigger: the project lowers to an `IrModule` whose
+    // `workflow.pipeline` is `Some`. When a `[[pipeline.steps]]` block is
+    // declared, the engine sequences the whole pipeline via
+    // `run_pipeline`, threading each step's output to later steps. When no
+    // pipeline is declared (the overwhelming majority of projects), this
+    // returns `None` and the single-agent path below runs BYTE-FOR-BYTE
+    // unchanged.
+    if let Some(result) = try_run_pipeline(&project, &runtime, prompt_text, output).await {
+        drop(runtime);
+        plugin_loader::flush_recorders().await;
+        return result;
+    }
 
     // ---- Multi-agent dispatch -----------------------------------------------
     //
@@ -321,6 +336,140 @@ pub async fn run(
 
         render_outcome(outcome, output)
     }
+}
+
+/// If `project` declares a `[[pipeline.steps]]` block, drive the whole
+/// pipeline and render the final step's output; otherwise return `None`
+/// so the caller falls through to the single-agent path unchanged.
+///
+/// Lowering the cwd project to an `IrModule` is what makes the pipeline
+/// addressable: `module.workflow.pipeline` is `Some` exactly when the
+/// project declares pipeline steps. A project that does NOT declare a
+/// pipeline (or that fails to lower for any reason) returns `None`, so
+/// the legacy multi-agent / streaming / batch flow is byte-for-byte
+/// preserved as the default.
+///
+/// The dispatcher reuses the SAME plugin `runtime` the single-agent path
+/// built (one `echo-llm`-style backend + the tools recorded in the
+/// lockfile), forwarding `invoke(tool_id, args)` to the host's plugin
+/// registry via [`crate::cmd::ir_dispatcher::ForwardingDispatcher`]. The
+/// run input is the SAME `prompt_text` the single-agent path feeds its
+/// initial message.
+async fn try_run_pipeline(
+    project: &tau_pkg::project::ProjectConfig,
+    runtime: &tau_runtime_tokio::Runtime,
+    prompt_text: String,
+    output: &mut Output,
+) -> Option<anyhow::Result<()>> {
+    // Lower the cwd project to an IR module so we can inspect its
+    // `workflow.pipeline`. Mirror `build::lower_ir`'s caches: a SHA-256
+    // stand-in for native-tool content hashes, an empty MCP cache, and
+    // no skill resolution. A lowering failure is NOT fatal here — it just
+    // means "no pipeline path", so we fall through to the legacy flow
+    // (which has its own, independent validation/errors).
+    let caches = tau_ir::lower::Caches {
+        native_tool: &crate::cmd::build::native_tool_hash,
+        mcp_contract: &|_url| None,
+        skill: &|_name| None,
+    };
+    let module = match tau_ir::lower::lower_project(
+        project,
+        &tau_ports::target::TargetTriple::host(),
+        &caches,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!("pipeline lowering skipped (project did not lower): {e}");
+            return None;
+        }
+    };
+
+    // No `[[pipeline.steps]]` → single-agent path. Return `None` so the
+    // caller's existing flow runs unchanged.
+    let pipeline = module.workflow.pipeline.as_ref()?;
+
+    // The id of the LAST pipeline step — its stored output is the run's
+    // final result. An empty `steps` vec cannot reach here: the parser
+    // (Task 3) rejects an empty pipeline, but guard anyway.
+    let last_step_id = match pipeline.steps.last() {
+        Some(s) => s.id.0.clone(),
+        None => return None,
+    };
+
+    // Build the forwarding dispatcher from the runtime the single-agent
+    // path already built: one LLM backend + every tool the IR references
+    // that the runtime actually loaded. Mirrors `ir_dispatcher::run_via_ir`
+    // steps 5/5b (minus MCP, which pipeline v0 does not wire).
+    let llm_backend = match runtime.llm_backends().values().next().cloned() {
+        Some(b) => b,
+        None => {
+            return Some(Err(anyhow::anyhow!(
+                "runtime has no LLM backend after plugin load (pipeline run)"
+            )))
+        }
+    };
+    let mut tools_by_id = std::collections::BTreeMap::new();
+    for ir_tool_id in module.workflow.tools.keys() {
+        if let Some(handle) = runtime.tools().get(&ir_tool_id.0) {
+            tools_by_id.insert(ir_tool_id.clone(), handle.clone());
+        }
+    }
+    let dispatcher = std::sync::Arc::new(crate::cmd::ir_dispatcher::ForwardingDispatcher::new(
+        llm_backend,
+        tools_by_id,
+    ));
+
+    // Drive the pipeline, reusing the SAME input (`prompt_text`) and the
+    // SAME dispatcher.
+    let store = match tau_runtime_core::interpreter::pipeline::run_pipeline(
+        std::sync::Arc::new(module),
+        prompt_text,
+        dispatcher,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => return Some(Err(anyhow::Error::new(e).context("running pipeline"))),
+    };
+
+    Some(render_pipeline_result(&store, &last_step_id, output))
+}
+
+/// Render the LAST pipeline step's output as the run result, matching the
+/// single-agent path's `RunOutcome::Completed` output style: human mode
+/// prints the value's text form; `--json` emits the same
+/// `{"outcome":"completed", ...}` shape with the final step's text as
+/// `final_message` (token usage / turn counts are pipeline-level concepts
+/// not yet aggregated — reported as zero/empty at v0).
+fn render_pipeline_result(
+    store: &tau_runtime_core::interpreter::output_store::OutputStore,
+    last_step_id: &str,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    let value = store.get(last_step_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "pipeline completed but the final step {last_step_id:?} recorded no output \
+             (interpreter invariant violated)"
+        )
+    })?;
+    // A `Value::String` renders as its inner text (the agent's assistant
+    // text / a tool's plain-text output); any structured value renders as
+    // compact JSON — symmetric with `OutputStore::template_map`.
+    let text = match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+
+    if output.is_json() {
+        let payload = serde_json::json!({
+            "outcome": "completed",
+            "final_message": text,
+        });
+        output.json(&payload)?;
+    } else {
+        output.human(&text)?;
+    }
+    Ok(())
 }
 
 /// Render a [`RunOutcome`] from the batch (non-streaming) path.

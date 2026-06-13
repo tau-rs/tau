@@ -62,4 +62,26 @@ pub trait ToolDispatcher {
     ) -> Option<Arc<dyn super::deterministic::DeterministicRegistry>> {
         None
     }
+
+    /// Optional host [`tau_ports::Clock`] for the inner agent loop.
+    ///
+    /// `run_agent` builds the inner agent loop's `RunOptions`; in a
+    /// production (non-`test-fixtures`) build it has no way to mint a
+    /// real wall-clock itself (the kernel is `no_std`). The host shell —
+    /// which owns the executor and therefore a concrete `Clock` (e.g.
+    /// `TokioClock`) — supplies it here. Returning `None` (the default)
+    /// is only safe under the `test-fixtures` feature, where `run_agent`
+    /// injects a `MockClock`; otherwise `run_agent` panics with a clear
+    /// "host shell must supply a clock" diagnostic.
+    fn clock(&self) -> Option<Arc<dyn tau_ports::Clock>> {
+        None
+    }
+
+    /// Optional host [`tau_ports::RandomSource`] for the inner agent loop.
+    ///
+    /// See [`Self::clock`] — same host-injection contract, for the
+    /// entropy source the agent loop uses to mint session ids / ULIDs.
+    fn random(&self) -> Option<Arc<dyn tau_ports::RandomSource>> {
+        None
+    }
 }

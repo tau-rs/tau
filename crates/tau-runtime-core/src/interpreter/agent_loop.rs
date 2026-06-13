@@ -463,11 +463,25 @@ where
     if let Some(max_turns) = agent.budget.max_turns {
         run_options.max_turns = max_turns;
     }
-    // Inject test-fixture clock/random when the host shell has not provided
-    // them (e.g. tau-ir-conformance drives run_ir directly without the tokio
-    // shell drive entry). Production callers supply real implementations via
-    // their shell. The test-fixtures feature is the sanctioned escape hatch;
-    // matching the spawn_root_agent_inner pattern in run.rs.
+    // Prefer the host shell's clock/random, supplied through the
+    // dispatcher (e.g. tau-cli's `ForwardingDispatcher` returns
+    // `TokioClock` / `OsRandom`). This is how a production
+    // (non-`test-fixtures`) build of `run_ir` / `run_pipeline` obtains a
+    // real wall-clock and entropy source — the kernel is `no_std` and
+    // cannot mint them itself. Dispatchers that don't override these
+    // return `None` (the trait default), in which case the test-fixtures
+    // injection below applies, or the panic guard fires.
+    if run_options.clock.is_none() {
+        run_options.clock = dispatcher.clock();
+    }
+    if run_options.random.is_none() {
+        run_options.random = dispatcher.random();
+    }
+    // Inject test-fixture clock/random when neither the host shell nor the
+    // dispatcher provided them (e.g. tau-ir-conformance drives run_ir
+    // directly without the tokio shell drive entry). The test-fixtures
+    // feature is the sanctioned escape hatch; matching the
+    // spawn_root_agent_inner pattern in run.rs.
     #[cfg(feature = "test-fixtures")]
     {
         if run_options.clock.is_none() {
