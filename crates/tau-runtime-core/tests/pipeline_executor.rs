@@ -12,7 +12,7 @@
 //! `llm_backend()` hook matters.
 
 use std::boxed::Box;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -28,14 +28,15 @@ use tracing_subscriber::Layer;
 
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::CapabilityTable;
-use tau_ir::check::{Check, CheckVerify, Locus, Predicate};
+use tau_ir::check::{Check, CheckVerify, JudgeRef, Locus, OnFail, Predicate, Retry};
 use tau_ir::ids::{AgentId, CheckId, PipelineStepId, StepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::{Agent, Deterministic};
 use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
 use tau_ir::NativeFnRef;
 use tau_ports::{
-    CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError, LlmProviderMessage,
+    batch_to_stream, CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError,
+    LlmProviderMessage,
 };
 
 use tau_runtime_core::builder::DynLlmBackend;
@@ -592,6 +593,452 @@ async fn goal_check_aborts_when_predicate_does_not_match() {
     assert!(
         matches!(&outcome.status, PipelineStatus::CheckAborted { check, .. } if check == "has_sources"),
         "predicate failed -> pipeline should abort with CheckAborted; got: {:?}",
+        outcome.status
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Deliverable check + rewind-to-gate retry (C2.3)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A scripted LLM backend that pops responses from a queue on each `stream()`
+/// call. This lets us drive multi-turn pipelines where the writer agent and
+/// the judge agent see DIFFERENT responses across attempts.
+struct ScriptedLlmBackend {
+    /// Remaining responses (popped FIFO).
+    queue: Mutex<VecDeque<CompletionResponse>>,
+    /// Count of stream() invocations, for assertion.
+    call_count: Mutex<usize>,
+    /// Text of every last-user-turn message received, for assertion.
+    received_last_user_turns: Mutex<Vec<String>>,
+}
+
+impl ScriptedLlmBackend {
+    fn new(responses: Vec<CompletionResponse>) -> Self {
+        Self {
+            queue: Mutex::new(VecDeque::from(responses)),
+            call_count: Mutex::new(0),
+            received_last_user_turns: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        *self.call_count.lock().expect("call_count mutex poisoned")
+    }
+
+    fn received_last_user_turns(&self) -> Vec<String> {
+        self.received_last_user_turns
+            .lock()
+            .expect("received_last_user_turns mutex poisoned")
+            .clone()
+    }
+}
+
+impl LlmBackend for ScriptedLlmBackend {
+    fn name(&self) -> &str {
+        "scripted-llm"
+    }
+
+    async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        // The kernel always calls stream(); this path is a fallback.
+        Err(LlmError::Provider {
+            message: "ScriptedLlmBackend: complete() should not be called; use stream()".into(),
+        })
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+    ) -> Result<tau_ports::CompletionStream, LlmError> {
+        // Record the last user turn text for later assertions.
+        let last_user_text = req
+            .messages
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                LlmProviderMessage::User { content } => {
+                    let joined: String = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text(t) => Some(t.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    Some(joined)
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        {
+            let mut turns = self
+                .received_last_user_turns
+                .lock()
+                .expect("received_last_user_turns mutex poisoned");
+            turns.push(last_user_text);
+        }
+
+        *self.call_count.lock().expect("call_count mutex poisoned") += 1;
+
+        let resp = self
+            .queue
+            .lock()
+            .expect("ScriptedLlmBackend queue mutex poisoned")
+            .pop_front()
+            .expect("ScriptedLlmBackend: ran out of scripted responses");
+
+        Ok(batch_to_stream(resp))
+    }
+}
+
+/// Dispatcher that wires a `ScriptedLlmBackend` (shared Arc) into the pipeline.
+struct ScriptedDispatcher {
+    backend: Arc<ScriptedLlmBackend>,
+}
+
+impl ToolDispatcher for ScriptedDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a tau_ir::ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "ScriptedDispatcher::invoke should never be called (no tools)".into(),
+            })
+        })
+    }
+
+    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
+        self.backend.clone()
+    }
+}
+
+/// Build a `CompletionResponse` carrying `text` as its assistant text.
+fn scripted_response(text: &str) -> CompletionResponse {
+    serde_json::from_value(serde_json::json!({
+        "text": text,
+        "tool_uses": [],
+        "stop_reason": "EndTurn",
+        "usage": null,
+    }))
+    .expect("canned CompletionResponse deserializes")
+}
+
+/// Build an `IrModule` with a deliverable-check pipeline:
+///
+/// ```text
+/// [writer (Agent)] -> [verify (Check:Deliverable, judge=Builtin)]
+/// ```
+///
+/// The writer echoes its input. The check evaluates `steps.writer.output`
+/// via the LLM judge with `must_satisfy = "must have at least 2 sources"`.
+///
+/// `retry` configures how `verify` handles failure; pass `None` for abort-only.
+fn build_deliverable_check_module(retry: Option<Retry>) -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("writer".into()), agent("writer"));
+
+    let check_id = CheckId("verify".into());
+    let mut checks = BTreeMap::new();
+    checks.insert(
+        check_id.clone(),
+        Check {
+            id: check_id.clone(),
+            verify: CheckVerify::Deliverable {
+                locus: Locus::Output(PipelineStepId("writer".into())),
+                must_satisfy: "must have at least 2 sources".to_string(),
+                judge: JudgeRef::Builtin { model: None },
+            },
+            retry,
+        },
+    );
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("writer".into()),
+                run: StepRun::Agent(AgentId("writer".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("verify".into()),
+                run: StepRun::Check(check_id),
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks,
+        },
+    }
+}
+
+/// The retry struct used in retry tests.
+fn retry_config(max_attempts: u32) -> Retry {
+    Retry {
+        on_fail: OnFail::Retry,
+        max_attempts,
+        gate: PipelineStepId("writer".into()),
+        producer: PipelineStepId("writer".into()),
+    }
+}
+
+/// Deliverable check with a judge that fails on attempt 1, passes on attempt 2.
+///
+/// Asserts:
+/// - `PipelineStatus::Completed`
+/// - Backend received exactly 4 stream() calls (writer1 + judge-fail + writer2 + judge-pass)
+/// - The 2nd writer invocation received the rejection rationale in its last user turn
+///   ("previous attempt was rejected" + "only 1 source")
+/// - The check.retry tracing event was emitted exactly once
+#[tokio::test]
+async fn deliverable_retry_then_pass() {
+    // Stream call order:
+    //   1. writer (attempt 1) -> "Draft with 1 source only"
+    //   2. judge  (attempt 1) -> met=false, "only 1 source"  (causes rewind)
+    //   3. writer (attempt 2) -> "Draft with 2 sources: A, B"
+    //   4. judge  (attempt 2) -> met=true, "ok"              (passes)
+    let responses = vec![
+        scripted_response("Draft with 1 source only"),
+        scripted_response(r#"{"met": false, "rationale": "only 1 source"}"#),
+        scripted_response("Draft with 2 sources: A, B"),
+        scripted_response(r#"{"met": true, "rationale": "ok"}"#),
+    ];
+
+    let backend = Arc::new(ScriptedLlmBackend::new(responses));
+    let module = Arc::new(build_deliverable_check_module(Some(retry_config(3))));
+
+    // Capture check.retry events.
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let dispatcher = Arc::new(ScriptedDispatcher { backend: backend.clone() });
+    let outcome =
+        run_pipeline(module, "write a report".to_string(), dispatcher).await.expect("no kernel error");
+
+    // Pipeline must complete.
+    assert_eq!(
+        outcome.status,
+        PipelineStatus::Completed,
+        "judge passed on 2nd attempt => Completed; got: {:?}",
+        outcome.status
+    );
+
+    // Exactly 4 stream() calls (writer × 2 + judge × 2).
+    assert_eq!(
+        backend.call_count(),
+        4,
+        "expected 4 stream() calls (writer×2 + judge×2); got {}",
+        backend.call_count()
+    );
+
+    // The 2nd writer call (index 2, the third stream() call overall) must
+    // have received the rejection rationale. The ScriptedDispatcher records
+    // the last user turn of every call; call index 2 (0-based) is the 3rd.
+    let turns = backend.received_last_user_turns();
+    assert!(
+        turns.len() >= 3,
+        "expected at least 3 recorded last-user-turns; got {}: {turns:?}",
+        turns.len()
+    );
+    // The 3rd call is the writer on retry (index 2). Its last user turn is
+    // the retry-feedback message injected by the pipeline executor.
+    let retry_turn = &turns[2];
+    assert!(
+        retry_turn.contains("previous attempt was rejected"),
+        "retry writer turn should contain 'previous attempt was rejected'; got: {retry_turn:?}"
+    );
+    assert!(
+        retry_turn.contains("only 1 source"),
+        "retry writer turn should contain the judge rationale 'only 1 source'; got: {retry_turn:?}"
+    );
+
+    // Exactly one check.retry event was emitted.
+    let events = captured.0.lock().expect("poisoned").clone();
+    let retry_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.contains("check.retry"))
+        .collect();
+    assert_eq!(
+        retry_events.len(),
+        1,
+        "expected exactly 1 check.retry event; got: {retry_events:?}"
+    );
+}
+
+/// Deliverable check whose judge always fails; max_attempts=2 exhausts all
+/// retries and the pipeline ends with `CheckAborted`.
+///
+/// Asserts:
+/// - `PipelineStatus::CheckAborted { check: "verify", .. }`
+/// - Backend received exactly 4 stream() calls (writer1 + judge-fail1 + writer2 + judge-fail2)
+/// - Two check.retry events (none — only 1 rewind then abort on 2nd failure)
+///   Actually: 1 rewind (after attempt 1) then abort (attempt 2 >= max_attempts=2)
+#[tokio::test]
+async fn deliverable_retry_exhausts() {
+    // Stream call order:
+    //   1. writer (attempt 1) -> "Draft A"
+    //   2. judge  (attempt 1) -> met=false, "missing sources"  => rewind (attempt 1 < 2)
+    //   3. writer (attempt 2) -> "Draft B"
+    //   4. judge  (attempt 2) -> met=false, "still missing"    => abort  (attempt 2 >= 2)
+    let responses = vec![
+        scripted_response("Draft A"),
+        scripted_response(r#"{"met": false, "rationale": "missing sources"}"#),
+        scripted_response("Draft B"),
+        scripted_response(r#"{"met": false, "rationale": "still missing"}"#),
+    ];
+
+    let backend = Arc::new(ScriptedLlmBackend::new(responses));
+    let module = Arc::new(build_deliverable_check_module(Some(retry_config(2))));
+
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let dispatcher = Arc::new(ScriptedDispatcher { backend: backend.clone() });
+    let outcome =
+        run_pipeline(module, "write a report".to_string(), dispatcher).await.expect("no kernel error");
+
+    // Pipeline must abort after all attempts fail.
+    assert!(
+        matches!(&outcome.status, PipelineStatus::CheckAborted { check, rationale }
+            if check == "verify" && rationale.contains("still missing")),
+        "judge always fails => CheckAborted with last rationale; got: {:?}",
+        outcome.status
+    );
+
+    // Exactly 4 stream() calls (writer×2 + judge×2).
+    assert_eq!(
+        backend.call_count(),
+        4,
+        "expected 4 stream() calls (writer×2 + judge×2); got {}",
+        backend.call_count()
+    );
+
+    // Exactly one check.retry event (fired after attempt 1; attempt 2 aborts).
+    let events = captured.0.lock().expect("poisoned").clone();
+    let retry_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.contains("check.retry"))
+        .collect();
+    assert_eq!(
+        retry_events.len(),
+        1,
+        "expected exactly 1 check.retry event (after attempt 1); got: {retry_events:?}"
+    );
+}
+
+/// Deliverable check that passes on the first attempt (no retry needed).
+///
+/// Ensures the happy path works without any rewind.
+#[tokio::test]
+async fn deliverable_check_passes_first_attempt() {
+    // Stream call order:
+    //   1. writer  -> "Draft with 2 sources: A, B"
+    //   2. judge   -> met=true, "ok"
+    let responses = vec![
+        scripted_response("Draft with 2 sources: A, B"),
+        scripted_response(r#"{"met": true, "rationale": "ok"}"#),
+    ];
+
+    let backend = Arc::new(ScriptedLlmBackend::new(responses));
+    let module = Arc::new(build_deliverable_check_module(None));
+    let dispatcher = Arc::new(ScriptedDispatcher { backend: backend.clone() });
+
+    let outcome =
+        run_pipeline(module, "write a report".to_string(), dispatcher).await.expect("no kernel error");
+
+    assert_eq!(
+        outcome.status,
+        PipelineStatus::Completed,
+        "judge passed first try => Completed; got: {:?}",
+        outcome.status
+    );
+    assert_eq!(
+        backend.call_count(),
+        2,
+        "expected 2 stream() calls (writer + judge); got {}",
+        backend.call_count()
+    );
+    // check step stores Bool(true).
+    assert_eq!(
+        outcome.outputs.get("verify"),
+        Some(&serde_json::Value::Bool(true)),
+        "passing deliverable check stores Bool(true)"
+    );
+}
+
+/// Deliverable check with abort-only (no retry struct): judge fails =>
+/// `CheckAborted` immediately (no rewind).
+#[tokio::test]
+async fn deliverable_check_aborts_without_retry() {
+    // Stream call order:
+    //   1. writer  -> "Draft with 0 sources"
+    //   2. judge   -> met=false, "no sources found"
+    let responses = vec![
+        scripted_response("Draft with 0 sources"),
+        scripted_response(r#"{"met": false, "rationale": "no sources found"}"#),
+    ];
+
+    let backend = Arc::new(ScriptedLlmBackend::new(responses));
+    let module = Arc::new(build_deliverable_check_module(None));
+    let dispatcher = Arc::new(ScriptedDispatcher { backend: backend.clone() });
+
+    let outcome =
+        run_pipeline(module, "write a report".to_string(), dispatcher).await.expect("no kernel error");
+
+    assert!(
+        matches!(&outcome.status, PipelineStatus::CheckAborted { check, rationale }
+            if check == "verify" && rationale.contains("no sources found")),
+        "judge fails + no retry => CheckAborted; got: {:?}",
+        outcome.status
+    );
+    assert_eq!(
+        backend.call_count(),
+        2,
+        "expected 2 stream() calls (writer + judge); got {}",
+        backend.call_count()
+    );
+}
+
+/// Deliverable check with empty artifact: the pipeline executor catches this
+/// BEFORE calling the judge (existence floor) and aborts immediately.
+/// No judge call at all.
+#[tokio::test]
+async fn deliverable_check_aborts_on_empty_artifact() {
+    // The writer outputs an empty string (the echo backend echoes its rendered input).
+    // We use EchoBackend here since the writer is the only call.
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    let module = Arc::new(build_deliverable_check_module(None));
+    let dispatcher = Arc::new(EchoDispatcher { backend });
+
+    // Pass an empty string so the writer echoes "" which the check sees as empty.
+    let outcome = run_pipeline(module, String::new(), dispatcher).await.expect("no kernel error");
+
+    assert!(
+        matches!(&outcome.status, PipelineStatus::CheckAborted { check, rationale }
+            if check == "verify" && rationale.contains("empty")),
+        "empty artifact => CheckAborted with 'empty' rationale; got: {:?}",
         outcome.status
     );
 }
