@@ -450,3 +450,75 @@ async fn fixture_09_cross_mode_conformance() {
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
 }
+
+// ---------------------------------------------------------------------------
+// Fixture 10 — deliverable retry converges
+// ---------------------------------------------------------------------------
+
+/// Fixture 10: a `gather → writer` pipeline with a retrying deliverable that
+/// converges on the SECOND attempt — the acceptance test for the
+/// rewind-to-gate retry loop.
+///
+/// The deliverable `report` has `on_fail = "retry"`, `max_attempts = 3`,
+/// `retry_from = "writer"`. Lowering auto-appends one `StepRun::Check` for the
+/// deliverable at the pipeline tail, so the executed sequence is
+/// `gather → writer → check:report (deliverable)`.
+///
+/// **Convergence path.** The built-in judge rejects the writer's first draft
+/// (`{"met": false}`), so `run_pipeline` rewinds the index to the gate step
+/// `writer` and re-runs the forward slice — `gather` runs ONCE (it is before
+/// the gate), `writer` re-runs with the injected "Previous attempt rejected:
+/// …" feedback turn. The second draft is accepted (`{"met": true}`) and the
+/// pipeline completes.
+///
+/// **Scripted LLM call sequence** (the `SequencedLlm` is call-ordered — a flat
+/// queue popped in order, independent of which agent calls — so a rewound
+/// `writer` pops the NEXT scripted line, NOT a re-keyed one):
+///
+/// 1. `gather` (attempt 1)             → `"gathered: 42"`
+/// 2. `writer` (attempt 1)             → `"draft"` (BAD)
+/// 3. deliverable judge (attempt 1)    → `{"met": false, "rationale": "needs more detail"}`
+/// 4. `writer` (attempt 2, post-rewind)→ `"report: … (revised)"` (GOOD)
+/// 5. deliverable judge (attempt 2)    → `{"met": true, "rationale": "ok"}`
+///
+/// **Convergence assertion.** `ConformanceReport` does not capture trace
+/// events, so there is no `check.retry` to inspect directly. Instead, reaching
+/// `RunOutcome::Completed` is itself proof that attempt 2 ran: a single
+/// `{"met": false}` does NOT abort (`max_attempts = 3`), it rewinds — so the
+/// ONLY way to reach Completed is for the judge to eventually return
+/// `{"met": true}`, which is scripted as the 5th line and is reachable only
+/// after the writer re-runs (line 4). If the rewind had not occurred, the run
+/// would have stalled / consumed the script out of order. No tools are
+/// declared, so `tool_calls` is empty.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_10_dev_mode_deliverable_retry_converges() {
+    let dir = fixture_dir("10_deliverable_retry");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed pipeline run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed (deliverable converges on attempt 2), got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 10 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 10: DevMode and BundleMode both drive
+/// the same `run_pipeline` (with the same rewind-to-gate retry + scripted
+/// judge), so the side-effect reports must match.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_10_cross_mode_conformance() {
+    let dir = fixture_dir("10_deliverable_retry");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
