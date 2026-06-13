@@ -421,16 +421,18 @@ async fn try_run_pipeline(
 
     // Drive the pipeline, reusing the SAME input (`prompt_text`) and the
     // SAME dispatcher.
-    let store = match tau_runtime_core::interpreter::pipeline::run_pipeline(
+    let pipeline_outcome = match tau_runtime_core::interpreter::pipeline::run_pipeline(
         std::sync::Arc::new(module),
         prompt_text,
         dispatcher,
     )
     .await
     {
-        Ok(s) => s,
+        Ok(o) => o,
         Err(e) => return Some(Err(anyhow::Error::new(e).context("running pipeline"))),
     };
+    // TODO(PR-D): surface PipelineStatus (AgentFailed / CheckAborted) to the caller.
+    let store = pipeline_outcome.outputs;
 
     Some(render_pipeline_result(&store, &last_step_id, output))
 }

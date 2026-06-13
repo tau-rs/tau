@@ -242,7 +242,8 @@ async fn pipeline_threads_step_output_through_template() {
 
     let store = run_pipeline(Arc::new(module), "SEED".to_string(), dispatcher)
         .await
-        .expect("pipeline runs to completion");
+        .expect("pipeline runs to completion")
+        .outputs;
 
     // Step `a` rendered `${input}` -> "SEED"; the echo backend returns it
     // as final assistant text.
@@ -329,7 +330,8 @@ async fn pipeline_deterministic_step_upcase() {
 
     let store = run_pipeline(module, "hello".to_string(), dispatcher)
         .await
-        .expect("pipeline runs to completion");
+        .expect("pipeline runs to completion")
+        .outputs;
 
     // Agent step `a` echoes its rendered input "hello".
     assert_eq!(

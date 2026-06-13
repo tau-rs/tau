@@ -21,7 +21,8 @@ use crate::error::RuntimeError;
 use crate::interpreter::agent_loop::{last_assistant_text, run_agent};
 use crate::interpreter::output_store::OutputStore;
 use crate::interpreter::tool_dispatch::ToolDispatcher;
-use crate::outcome::RunOutcome;
+use crate::options::TokenUsage;
+use crate::outcome::{PipelineOutcome, PipelineStatus, RunOutcome};
 use crate::vocabulary::{EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED, SPAN_PIPELINE_STEP};
 
 /// Drive an `IrModule`'s pipeline to completion, returning all step
@@ -39,7 +40,7 @@ pub async fn run_pipeline<D>(
     module: Arc<IrModule>,
     input: String,
     dispatcher: Arc<D>,
-) -> Result<OutputStore, RuntimeError>
+) -> Result<PipelineOutcome, RuntimeError>
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
@@ -52,6 +53,7 @@ where
         })?;
 
     let mut store = OutputStore::new();
+    let mut total_usage = TokenUsage::default();
 
     for step in &pipeline.steps {
         // NOTE: we do NOT call `.entered()` here — `EnteredSpan` mutates a
@@ -89,16 +91,22 @@ where
                 ))
                 .instrument(step_span.clone())
                 .await?;
-                match outcome {
-                    RunOutcome::Failed { status, .. } => {
-                        return Err(RuntimeError::Internal {
-                            message: format!(
-                                "pipeline step {} (agent {}) failed: {status:?}",
-                                step.id.0, agent_id.0
-                            ),
-                        })
+                match &outcome {
+                    RunOutcome::Failed { status, token_usage, .. } => {
+                        total_usage.add(token_usage);
+                        return Ok(PipelineOutcome {
+                            outputs: store,
+                            token_usage: total_usage,
+                            status: PipelineStatus::AgentFailed {
+                                step: step.id.0.clone(),
+                                status: status.clone(),
+                            },
+                        });
                     }
-                    _ => Value::String(last_assistant_text(&outcome)),
+                    RunOutcome::Completed { token_usage, .. } => {
+                        total_usage.add(token_usage);
+                        Value::String(last_assistant_text(&outcome))
+                    }
                 }
             }
             StepRun::Tool(tool_id) => {
@@ -145,7 +153,7 @@ where
         tracing::info!(parent: &step_span, name = EV_PIPELINE_STEP_COMPLETED, id = step.id.0.as_str());
     }
 
-    Ok(store)
+    Ok(PipelineOutcome { outputs: store, token_usage: total_usage, status: PipelineStatus::Completed })
 }
 
 /// Turn a rendered template string into the `Value` a tool/deterministic
