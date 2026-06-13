@@ -7,7 +7,8 @@
 use std::fmt::Write;
 
 use crate::bundle::manifest::{
-    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundlePackage, IrPayload,
+    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundlePackage,
+    BundleTrigger, IrPayload,
 };
 
 /// Emit the canonical TOML serialization of a `BundleManifest`.
@@ -53,6 +54,14 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
         out.push('\n');
         out.push_str("[[agents]]\n");
         write_agent(&mut out, agent);
+    }
+
+    // [[trigger]] — emitted when present so the bindings participate in the
+    // self-hash. Order is the struct's Vec order (lowering sorts by name).
+    for trigger in &manifest.triggers {
+        out.push('\n');
+        out.push_str("[[trigger]]\n");
+        write_trigger(&mut out, trigger);
     }
 
     // [ir_payload] — emitted when present so the bytes participate in the self-hash.
@@ -102,6 +111,35 @@ fn write_agent(out: &mut String, agent: &BundleAgent) {
     if !agent.effective_capabilities.is_empty() {
         out.push_str("\n[agents.effective_capabilities]\n");
         write_effective_capabilities(out, &agent.effective_capabilities);
+    }
+}
+
+fn write_trigger(out: &mut String, t: &BundleTrigger) {
+    write_str_kv(out, "name", &t.name);
+    write_str_kv(out, "kind", &t.kind);
+    write_str_kv(out, "agent", &t.agent);
+    if let Some(s) = &t.schedule {
+        write_str_kv(out, "schedule", s);
+    }
+    if let Some(tz) = &t.timezone {
+        write_str_kv(out, "timezone", tz);
+    }
+    if let Some(r) = &t.retry {
+        // Inline sub-table for stable single-line emission.
+        out.push_str("retry = { ");
+        write!(out, "max_attempts = {}", r.max_attempts).unwrap();
+        write!(
+            out,
+            ", backoff_strategy = {}",
+            toml_string(&r.backoff_strategy)
+        )
+        .unwrap();
+        write!(out, ", backoff_base = {}", toml_string(&r.backoff_base)).unwrap();
+        write!(out, ", backoff_max = {}", toml_string(&r.backoff_max)).unwrap();
+        if let Some(dl) = &r.dead_letter {
+            write!(out, ", dead_letter = {}", toml_string(dl)).unwrap();
+        }
+        out.push_str(" }\n");
     }
 }
 
@@ -312,6 +350,46 @@ mod tests {
         assert!(
             !out_none.contains("selected_agents"),
             "selected_agents must be omitted when None:\n{out_none}"
+        );
+    }
+
+    #[test]
+    fn fixed_field_order_in_trigger_table() {
+        use crate::bundle::manifest::{BundleRetry, BundleTrigger};
+        let mut m = sample_manifest();
+        m.schema_version = 3;
+        m.triggers = vec![BundleTrigger {
+            name: "nightly".into(),
+            kind: "cron".into(),
+            agent: "summarizer".into(),
+            schedule: Some("0 3 * * *".into()),
+            timezone: Some("UTC".into()),
+            retry: Some(BundleRetry {
+                max_attempts: 3,
+                backoff_strategy: "exponential".into(),
+                backoff_base: "30s".into(),
+                backoff_max: "10m".into(),
+                dead_letter: Some("dlq-sink".into()),
+            }),
+        }];
+        let out = to_canonical_toml(&m);
+        // Scope all searches to the [[trigger]] section to avoid false matches
+        // against `kind =` inside the `[[agents]]` backend inline-table.
+        let trigger_start = out.find("[[trigger]]").expect("[[trigger]] header");
+        let trigger_section = &out[trigger_start..];
+        let p_name = trigger_section.find("name =").expect("name");
+        let p_kind = trigger_section.find("kind =").expect("kind");
+        let p_agent = trigger_section.find("agent =").expect("agent");
+        let p_sched = trigger_section.find("schedule =").expect("schedule");
+        let p_tz = trigger_section.find("timezone =").expect("timezone");
+        let p_retry = trigger_section.find("retry =").expect("retry");
+        assert!(
+            p_name < p_kind
+                && p_kind < p_agent
+                && p_agent < p_sched
+                && p_sched < p_tz
+                && p_tz < p_retry,
+            "trigger fields out of canonical order:\n{out}"
         );
     }
 

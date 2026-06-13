@@ -224,6 +224,12 @@ pub struct BuildArgs {
     /// out if any pinned file is missing.
     #[arg(long)]
     pub offline: bool,
+    /// Also emit host-adapter descriptors for the project's cron triggers.
+    /// `systemd` writes `.timer` + `.service` units; `k8s` writes `CronJob`
+    /// manifests. Files are written next to the bundle. Manual triggers and
+    /// cron schedules systemd can't auto-translate are skipped with a note.
+    #[arg(long = "emit-trigger", value_name = "ADAPTER", value_parser = ["systemd", "k8s"])]
+    pub emit_trigger: Option<String>,
 }
 
 /// `tau plugin <action>` — debug-tier helpers per spec §9.

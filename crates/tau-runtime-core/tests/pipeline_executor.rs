@@ -237,6 +237,7 @@ fn build_module() -> IrModule {
             pipeline: Some(pipeline),
             checks: BTreeMap::new(),
         },
+        triggers: Vec::new(),
     }
 }
 
@@ -327,6 +328,7 @@ async fn pipeline_deterministic_step_upcase() {
             pipeline: Some(pipeline),
             checks: BTreeMap::new(),
         },
+        triggers: Vec::new(),
     });
 
     let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
@@ -535,6 +537,7 @@ fn build_goal_check_module(pattern: &str) -> IrModule {
         ir_format: IrFormatVersion::current(),
         tau_version: env!("CARGO_PKG_VERSION").into(),
         target,
+        triggers: Vec::new(),
         workflow: Workflow {
             agents,
             tools: std::collections::BTreeMap::new(),
@@ -780,6 +783,7 @@ fn build_deliverable_check_module(retry: Option<Retry>) -> IrModule {
         ir_format: IrFormatVersion::current(),
         tau_version: env!("CARGO_PKG_VERSION").into(),
         target,
+        triggers: Vec::new(),
         workflow: Workflow {
             agents,
             tools: BTreeMap::new(),

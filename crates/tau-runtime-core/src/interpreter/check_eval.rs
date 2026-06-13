@@ -342,6 +342,7 @@ mod run_judge_tests {
             ir_format: IrFormatVersion::current(),
             tau_version: env!("CARGO_PKG_VERSION").into(),
             target,
+            triggers: alloc::vec::Vec::new(),
             workflow: Workflow {
                 agents: BTreeMap::new(),
                 tools: BTreeMap::new(),

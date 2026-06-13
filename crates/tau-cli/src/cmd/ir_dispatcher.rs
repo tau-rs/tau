@@ -3,10 +3,13 @@
 //! When a verified bundle carries an [`tau_pkg::bundle::manifest::IrPayload`]
 //! ("v2" bundle), this module decodes the canonical IR bytes, builds a
 //! forwarding [`ToolDispatcher`] over the host's plugin registry, and
-//! drives [`tau_runtime_core::interpreter::run_ir`] to completion. The
-//! result is mapped to stdout / [`crate::cmd::run::AgentFailed`] using
-//! the same shape the cwd-based path uses, so callers see identical
-//! exit-code semantics regardless of which path executed the run.
+//! drives the IR to completion: a bundled `[[pipeline.steps]]` block runs
+//! through [`tau_runtime_core::interpreter::pipeline::run_pipeline`], while
+//! a pipeline-less bundle runs its single entry agent via
+//! [`tau_runtime_core::interpreter::run_ir`]. Either result is mapped to
+//! stdout / [`crate::cmd::run::AgentFailed`] using the same shape the
+//! cwd-based path uses, so callers see identical exit-code semantics
+//! regardless of which path executed the run.
 //!
 //! Legacy v1 bundles (no `ir_payload`) continue to use the cwd-based
 //! agent path — see [`crate::cmd::run::run`].
@@ -36,9 +39,14 @@ use crate::output::Output;
 
 /// Run a verified v2 bundle through the IR interpreter.
 ///
-/// Picks the first agent in the IR module's `BTreeMap` (alphabetical
-/// order) as the entry per the β.2 v0 contract. Future v0.x will infer
-/// the entry from a `[workflow]` block.
+/// When the bundle's IR carries a `[[pipeline.steps]]` block
+/// (`module.workflow.pipeline.is_some()`), the engine sequences the whole
+/// pipeline via [`tau_runtime_core::interpreter::pipeline::run_pipeline`],
+/// threading each step's output to later steps and rendering the LAST
+/// step's output — symmetric with the cwd path's `try_run_pipeline` (see
+/// [`crate::cmd::run`]). Otherwise it picks the first agent in the IR
+/// module's `BTreeMap` (alphabetical order) as the entry per the β.2 v0
+/// contract and runs that single agent's loop unchanged.
 ///
 /// Returns `Ok(())` on a `RunOutcome::Completed`, `Err(AgentFailed)` on
 /// `RunOutcome::Failed`, and any other kernel/CLI error as a wrapped
@@ -181,7 +189,7 @@ pub(crate) async fn run_via_ir(
 
     let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backend, tools_by_id));
 
-    // 6. Build the initial message vec from --prompt / stdin.
+    // 6. Build the initial prompt text from --prompt / stdin.
     let prompt_text = match &args.prompt {
         Some(s) => s.clone(),
         None => {
@@ -192,6 +200,42 @@ pub(crate) async fn run_via_ir(
             buf
         }
     };
+
+    let module = std::sync::Arc::new(module);
+
+    // 7. Drive the IR. A bundle whose IR carries a `[[pipeline.steps]]`
+    //    block is engine-sequenced via `run_pipeline` (rendering the LAST
+    //    step's output); a bundle with NO pipeline keeps the
+    //    single-entry-agent `run_ir` path below BYTE-FOR-BYTE unchanged.
+    if module.workflow.pipeline.is_some() {
+        // The id of the LAST pipeline step — its stored output is the
+        // run's final result. The parser rejects an empty pipeline (see
+        // `tau_pkg`), but guard anyway rather than index blindly.
+        let last_step_id = module
+            .workflow
+            .pipeline
+            .as_ref()
+            .and_then(|p| p.steps.last())
+            .map(|s| s.id.0.clone())
+            .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
+
+        let store =
+            tau_runtime_core::interpreter::pipeline::run_pipeline(module, prompt_text, dispatcher)
+                .await;
+
+        // Drop runtime + flush recorders before rendering, identical to
+        // the single-agent path's discipline below so plugin processes are
+        // reaped and recording files are flushed before the process exits.
+        drop(runtime);
+        plugin_loader::flush_recorders().await;
+
+        let outcome = store.context("running pipeline via IR interpreter")?;
+        // Route through the shared status-aware renderer so check aborts /
+        // agent failures surface (and exit non-zero) for `tau run --bundle`
+        // exactly as they do for the cwd `tau run` path.
+        return crate::cmd::run::pipeline_outcome_to_result(outcome, &last_step_id, output);
+    }
+
     let initial = Message::new(
         Address::User,
         Address::Agent(AgentInstanceId::new()),
@@ -200,16 +244,10 @@ pub(crate) async fn run_via_ir(
         },
     );
 
-    // 7. Drive the IR interpreter.
-    let run_outcome = run_ir(
-        std::sync::Arc::new(module),
-        &entry_agent_id,
-        dispatcher,
-        vec![initial],
-    )
-    .await;
+    // 8. Drive the single entry agent (today's path, unchanged).
+    let run_outcome = run_ir(module, &entry_agent_id, dispatcher, vec![initial]).await;
 
-    // 8. Drop runtime + flush recorders before rendering, identical to
+    // 9. Drop runtime + flush recorders before rendering, identical to
     //    the cwd path's discipline so plugin processes are reaped and
     //    recording files are flushed before the process exits.
     drop(runtime);

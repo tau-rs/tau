@@ -58,6 +58,7 @@
 - [Serve mode](explanation/serve-mode.md)
 - [Testing strategy](explanation/testing-strategy.md)
 - [Two-layer skills](explanation/two-layer-skills.md)
+- [Trigger ingress](explanation/trigger-ingress.md)
 - [Workflows](explanation/workflows.md)
 - [Goals and deliverables](explanation/checks.md)
 
@@ -108,6 +109,7 @@
 - [ADR-0040 — `tau dev` REPL + β.7/β.7.5 split](decisions/0040-tau-dev-repl.md)
 - [ADR-0041 — β.8 TS authoring surface: declarations-only via static AST analysis](decisions/0041-ts-authoring-declarations-only.md)
 - [ADR-0042 — Cross-repo CI template sync (tau = source of truth)](decisions/0042-cross-repo-ci-template-sync.md)
+- [ADR-0044 — Trigger ingress, slice 1](decisions/0044-trigger-ingress-slice-1.md)
 - [ADR-0043 — Trigger ingress: compile the trigger, delegate the substrate](decisions/0043-trigger-ingress.md)
 
 # Retrospectives

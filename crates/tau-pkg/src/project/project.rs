@@ -24,6 +24,10 @@ pub struct UncheckedProjectConfig {
     /// Map of step name → unchecked deterministic step definition (IR lowering, β.2.2).
     #[serde(default)]
     pub steps: BTreeMap<String, UncheckedStep>,
+    /// Map of trigger name → unchecked trigger definition (slice 1).
+    /// The TOML key is `[trigger.<name>]` (singular), matching the spec.
+    #[serde(default, rename = "trigger")]
+    pub triggers: BTreeMap<String, UncheckedTrigger>,
     /// Optional `[pipeline]` table with ordered `[[pipeline.steps]]`.
     #[serde(default)]
     pub pipeline: Option<UncheckedPipeline>,
@@ -458,6 +462,58 @@ pub struct UncheckedTool {
     pub roots: Vec<std::path::PathBuf>,
 }
 
+/// Unchecked `[trigger.<name>]` table (slice 1).
+///
+/// `#[serde(deny_unknown_fields)]` catches typos. Slice-2 fields (`path`,
+/// `methods`, `source`) are intentionally absent — a webhook/queue trigger
+/// declared today fails fast (either on the unknown field or on the
+/// unsupported-kind check in `validate_trigger`).
+#[non_exhaustive]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedTrigger {
+    /// `cron` | `manual` (slice 1).
+    pub kind: String,
+    /// Entrypoint agent id.
+    pub agent: String,
+    /// 5-field cron expression (cron only).
+    #[serde(default)]
+    pub schedule: Option<String>,
+    /// IANA timezone name (cron only; defaults to `UTC`).
+    #[serde(default)]
+    pub timezone: Option<String>,
+    /// Re-invocation policy.
+    #[serde(default)]
+    pub retry: Option<UncheckedRetry>,
+}
+
+/// Unchecked `[trigger.<name>.retry]` sub-table.
+#[non_exhaustive]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedRetry {
+    /// Total attempts including the first.
+    pub max_attempts: u32,
+    /// Backoff parameters.
+    pub backoff: UncheckedBackoff,
+    /// Sink reference for exhausted runs.
+    #[serde(default)]
+    pub dead_letter: Option<String>,
+}
+
+/// Unchecked `backoff` inline table.
+#[non_exhaustive]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedBackoff {
+    /// `fixed` | `exponential`.
+    pub strategy: String,
+    /// Base delay, duration string.
+    pub base: String,
+    /// Max delay, duration string.
+    pub max: String,
+}
+
 /// Validated `[tools.<name>]` entry produced by `validate()`.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -511,6 +567,41 @@ pub struct StepEntry {
     pub output_schema: serde_json::Value,
 }
 
+/// Validated `[trigger.<name>]` entry produced by `validate()`.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct TriggerEntry {
+    /// Trigger name (the TOML table key).
+    pub name: String,
+    /// `cron` | `manual`.
+    pub kind: String,
+    /// Entrypoint agent id (existence checked at IR lowering, not here).
+    pub agent: String,
+    /// 5-field cron expression (cron only).
+    pub schedule: Option<String>,
+    /// IANA timezone (defaults to `UTC` for cron; empty string for manual).
+    /// Callers distinguish "no timezone" via `.is_empty()` (manual triggers).
+    pub timezone: String,
+    /// Re-invocation policy.
+    pub retry: Option<RetryEntry>,
+}
+
+/// Validated `[trigger.<name>.retry]` entry.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct RetryEntry {
+    /// Total attempts including the first.
+    pub max_attempts: u32,
+    /// `fixed` | `exponential`.
+    pub backoff_strategy: String,
+    /// Base delay, duration string.
+    pub backoff_base: String,
+    /// Max delay, duration string.
+    pub backoff_max: String,
+    /// Sink reference for exhausted runs.
+    pub dead_letter: Option<String>,
+}
+
 // ----- Validated shapes -----
 
 /// Validated project config. Constructed via
@@ -528,6 +619,8 @@ pub struct ProjectConfig {
     pub tools: BTreeMap<String, ToolEntry>,
     /// Map of step name → validated step entry (IR lowering, β.2.2).
     pub steps: BTreeMap<String, StepEntry>,
+    /// Map of trigger name → validated trigger entry (slice 1).
+    pub triggers: BTreeMap<String, TriggerEntry>,
     /// Optional validated pipeline.
     pub pipeline: Option<PipelineConfig>,
     /// Map of goal id → validated goal entry.
@@ -789,6 +882,21 @@ pub enum ProjectConfigError {
         message: String,
     },
 
+    /// A `[trigger.<name>]` entry failed validation.
+    #[error("trigger {name:?}: {message}")]
+    TriggerValidation {
+        /// Trigger name that failed.
+        name: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
+    /// A `[pipeline]` table was declared with no `[[pipeline.steps]]`
+    /// entries. An empty pipeline is rejected at build time rather than
+    /// silently falling through to the single-agent path.
+    #[error("pipeline must declare at least one step")]
+    EmptyPipeline,
+
     /// A `[[pipeline.steps]]` entry failed validation.
     #[error("pipeline step {id:?}: {message}")]
     PipelineValidation {
@@ -874,6 +982,11 @@ impl UncheckedProjectConfig {
             steps.insert(name.clone(), validate_step(name, raw)?);
         }
 
+        let mut triggers = BTreeMap::new();
+        for (name, raw) in self.triggers {
+            triggers.insert(name.clone(), validate_trigger(name, raw)?);
+        }
+
         let pipeline = match &self.pipeline {
             Some(p) => Some(validate_pipeline(p)?),
             None => None,
@@ -890,6 +1003,7 @@ impl UncheckedProjectConfig {
             agents,
             tools,
             steps,
+            triggers,
             pipeline,
             goals,
             deliverables,
@@ -1070,7 +1184,135 @@ fn validate_step(name: String, raw: UncheckedStep) -> Result<StepEntry, ProjectC
     })
 }
 
+fn validate_trigger(
+    name: String,
+    raw: UncheckedTrigger,
+) -> Result<TriggerEntry, ProjectConfigError> {
+    let err = |message: String| ProjectConfigError::TriggerValidation {
+        name: name.clone(),
+        message,
+    };
+
+    if raw.agent.trim().is_empty() {
+        return Err(err("agent must be non-empty".into()));
+    }
+
+    // Slice 1 supports cron + manual only.
+    match raw.kind.as_str() {
+        "cron" => {}
+        "manual" => {
+            if raw.schedule.is_some() {
+                return Err(err("manual triggers take no schedule".into()));
+            }
+            if raw.timezone.is_some() {
+                return Err(err("manual triggers take no timezone".into()));
+            }
+        }
+        "webhook" | "queue" => {
+            return Err(err(format!(
+                "kind {:?} is not supported yet (slice 1 supports cron and manual); \
+                 webhook/queue arrive in slice 2",
+                raw.kind
+            )));
+        }
+        other => {
+            return Err(err(format!(
+                "unknown kind {other:?}; expected cron or manual"
+            )));
+        }
+    }
+
+    // cron-specific validation.
+    let (schedule, timezone) = if raw.kind == "cron" {
+        let sched = raw
+            .schedule
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| err("cron triggers require a non-empty schedule".to_string()))?;
+        let field_count = sched.split_whitespace().count();
+        if field_count != 5 {
+            return Err(err(format!(
+                "cron schedule must have 5 whitespace-separated fields, found {field_count}"
+            )));
+        }
+        // Build-time enforcement: range-check any field that is a plain
+        // non-negative integer. Fields using `*`, ranges (`-`), lists (`,`),
+        // or steps (`/`) are passed through for the host scheduler to
+        // interpret (the full cron grammar is the host's job) — but a bare
+        // out-of-range integer like hour `25` is a build-time-detectable
+        // mistake, so we reject it here.
+        const CRON_RANGES: [(&str, u32, u32); 5] = [
+            ("minute", 0, 59),
+            ("hour", 0, 23),
+            ("day-of-month", 1, 31),
+            ("month", 1, 12),
+            ("day-of-week", 0, 7),
+        ];
+        for (field, (fname, lo, hi)) in sched.split_whitespace().zip(CRON_RANGES.iter()) {
+            if !field.is_empty() && field.bytes().all(|b| b.is_ascii_digit()) {
+                let v: u32 = field.parse().map_err(|_| {
+                    err(format!(
+                        "cron {fname} field {field:?} is not a valid integer"
+                    ))
+                })?;
+                if v < *lo || v > *hi {
+                    return Err(err(format!(
+                        "cron {fname} field {v} is out of range {lo}..={hi}"
+                    )));
+                }
+            }
+        }
+        let tz = raw.timezone.unwrap_or_else(|| "UTC".to_string());
+        (Some(sched.to_string()), tz)
+    } else {
+        (None, String::new())
+    };
+
+    // retry validation.
+    let retry = match raw.retry {
+        None => None,
+        Some(r) => {
+            if r.max_attempts < 1 {
+                return Err(err("retry.max_attempts must be >= 1".into()));
+            }
+            match r.backoff.strategy.as_str() {
+                "fixed" | "exponential" => {}
+                other => {
+                    return Err(err(format!(
+                        "retry.backoff.strategy {other:?} must be fixed or exponential"
+                    )));
+                }
+            }
+            // Durations are host-honoured; validate they parse so a typo
+            // is caught at build time (Rust-class build-time enforcement).
+            humantime::parse_duration(&r.backoff.base)
+                .map_err(|e| err(format!("retry.backoff.base is not a valid duration: {e}")))?;
+            humantime::parse_duration(&r.backoff.max)
+                .map_err(|e| err(format!("retry.backoff.max is not a valid duration: {e}")))?;
+            Some(RetryEntry {
+                max_attempts: r.max_attempts,
+                backoff_strategy: r.backoff.strategy,
+                backoff_base: r.backoff.base,
+                backoff_max: r.backoff.max,
+                dead_letter: r.dead_letter,
+            })
+        }
+    };
+
+    Ok(TriggerEntry {
+        name,
+        kind: raw.kind,
+        agent: raw.agent,
+        schedule,
+        timezone,
+        retry,
+    })
+}
+
 fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectConfigError> {
+    if raw.steps.is_empty() {
+        return Err(ProjectConfigError::EmptyPipeline);
+    }
     let mut seen = std::collections::BTreeSet::new();
     let mut steps = Vec::with_capacity(raw.steps.len());
     for s in &raw.steps {
@@ -2034,6 +2276,287 @@ mod tests {
         }
     }
 
+    // --- Trigger slice-1 tests ---
+
+    #[test]
+    fn parse_cron_trigger_with_retry() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [agents.summarizer]
+            display_name = "Summarizer"
+            package      = "p@^0.1"
+            llm_backend  = "anthropic"
+
+            [trigger.nightly]
+            kind     = "cron"
+            agent    = "summarizer"
+            schedule = "0 3 * * *"
+
+            [trigger.nightly.retry]
+            max_attempts = 3
+            backoff      = { strategy = "exponential", base = "30s", max = "10m" }
+            dead_letter  = "dlq-sink"
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let t = cfg.triggers.get("nightly").expect("trigger present");
+        assert_eq!(t.kind, "cron");
+        assert_eq!(t.agent, "summarizer");
+        assert_eq!(t.schedule.as_deref(), Some("0 3 * * *"));
+        assert_eq!(t.timezone, "UTC"); // defaulted
+        let r = t.retry.as_ref().expect("retry present");
+        assert_eq!(r.max_attempts, 3);
+        assert_eq!(r.backoff_strategy, "exponential");
+        assert_eq!(r.dead_letter.as_deref(), Some("dlq-sink"));
+    }
+
+    #[test]
+    fn parse_manual_trigger() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [agents.summarizer]
+            display_name = "S"
+            package      = "p@^0.1"
+            llm_backend  = "anthropic"
+
+            [trigger.manual]
+            kind  = "manual"
+            agent = "summarizer"
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let t = cfg.triggers.get("manual").unwrap();
+        assert_eq!(t.kind, "manual");
+        assert!(t.schedule.is_none());
+        assert!(t.retry.is_none());
+    }
+
+    #[test]
+    fn validate_rejects_cron_without_schedule() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { name, message }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert_eq!(name, "t");
+        assert!(message.contains("schedule"), "got: {message}");
+    }
+
+    #[test]
+    fn validate_rejects_manual_with_schedule() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "manual"
+            agent = "a"
+            schedule = "0 3 * * *"
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(message.contains("manual"), "got: {message}");
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_kind() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "webhook"
+            agent = "a"
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(
+            message.contains("webhook") || message.contains("not supported"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_bad_cron_field_count() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "0 3 * *"
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(message.contains("5"), "got: {message}");
+    }
+
+    #[test]
+    fn validate_rejects_bad_backoff_duration() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "0 3 * * *"
+            [trigger.t.retry]
+            max_attempts = 2
+            backoff = { strategy = "fixed", base = "not-a-duration", max = "10m" }
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(
+            message.contains("duration") || message.contains("base"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn no_trigger_table_keeps_triggers_empty() {
+        let cfg = parse("[project]\nname = \"x\"\n").unwrap();
+        assert!(cfg.triggers.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_max_attempts_zero() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "0 3 * * *"
+            [trigger.t.retry]
+            max_attempts = 0
+            backoff = { strategy = "fixed", base = "30s", max = "10m" }
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(message.contains("max_attempts"), "got: {message}");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_kind_non_webhook() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "event"
+            agent = "a"
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(message.contains("unknown kind"), "got: {message}");
+    }
+
+    #[test]
+    fn validate_rejects_bad_backoff_max_duration() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "0 3 * * *"
+            [trigger.t.retry]
+            max_attempts = 2
+            backoff = { strategy = "fixed", base = "30s", max = "not-a-duration" }
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(
+            message.contains("max") || message.contains("duration"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_cron_hour() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "0 25 * * *"
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(
+            message.contains("hour") && message.contains("range"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_star_range_step_list_cron_fields() {
+        // `*`, ranges, lists, and steps pass through — the host validates the
+        // full cron grammar; tau only range-checks bare integers.
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "*/5 1-3 * * 1,3,5"
+        "#;
+        parse(toml_str).expect("non-integer cron fields must pass through");
+    }
+
     #[test]
     fn parses_pipeline_steps() {
         let toml = r#"
@@ -2066,6 +2589,23 @@ mod tests {
             run = "wizard:x"
         "#;
         assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_pipeline() {
+        // A `[pipeline]` table with no `[[pipeline.steps]]` entries must
+        // fail at build time rather than silently falling through to the
+        // single-agent path.
+        let toml = r#"
+            [project]
+            name = "demo"
+            [pipeline]
+        "#;
+        let result = ProjectConfig::parse_str(toml);
+        assert!(
+            matches!(result, Err(ProjectConfigError::EmptyPipeline)),
+            "expected EmptyPipeline, got: {result:?}"
+        );
     }
 
     #[test]
@@ -2325,6 +2865,7 @@ mod proptests {
                 agents: agent_map.clone(),
                 tools: BTreeMap::new(),
                 steps: BTreeMap::new(),
+                triggers: BTreeMap::new(),
                 pipeline: None,
                 goals: BTreeMap::new(),
                 deliverables: BTreeMap::new(),

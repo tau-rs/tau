@@ -95,7 +95,17 @@ pub(super) fn typecheck(parsed: &mut Parsed) -> Result<(), IrError> {
         }
     }
 
-    // 6. Pipeline checks: run targets exist, no dup ids, no forward refs,
+    // 6. Each trigger's entrypoint agent must exist.
+    for trigger in parsed.triggers.iter() {
+        if !parsed.workflow.agents.contains_key(&trigger.agent) {
+            return Err(IrError::UnknownTriggerAgent {
+                trigger: trigger.name.clone(),
+                agent: trigger.agent.clone(),
+            });
+        }
+    }
+
+    // 7. Pipeline checks: run targets exist, no dup ids, no forward refs,
     //    and Check loci reference only earlier pipeline steps.
     check_pipeline(&parsed.workflow)?;
 
@@ -578,6 +588,7 @@ mod tests {
             },
             produces: BTreeMap::new(),
             retry_intent: BTreeMap::new(),
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&mut parsed).expect_err("typecheck should reject");
         assert!(
@@ -616,6 +627,7 @@ mod tests {
             },
             produces: BTreeMap::new(),
             retry_intent: BTreeMap::new(),
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&mut parsed).expect_err("typecheck should reject");
         assert!(

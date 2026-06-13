@@ -495,3 +495,38 @@ fn fixture_09_build_time_lowers_checks() {
         "producer must be writer (writer declares produces = [\"/workspace/report.md\"])"
     );
 }
+
+/// Regression lock for `drive_pipeline`'s final-message synthesis.
+///
+/// Fixture 09's step ids are reverse-alphabetical relative to execution
+/// order (`zzz_first` runs first, `aaa_last` runs last). The synthesized
+/// `final_message` must carry the LAST-executed step's output
+/// (`aaa_last` → "last-step-output"). The previous implementation keyed
+/// off `OutputStore::template_map().into_values().next_back()` — the
+/// alphabetically-last id — which on this fixture would harvest
+/// `zzz_first`'s "first-step-output" instead. `assert_conform` never
+/// compares `final_message`, so this is the only test that pins the
+/// step-selection logic.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_09_pipeline_picks_last_executed_step() {
+    use tau_domain::MessagePayload;
+
+    let dir = fixture_dir("09_pipeline_reverse_alpha");
+    let report = DevMode.run(&dir).await;
+
+    let final_message = match report.run_outcome {
+        Some(RunOutcome::Completed {
+            ref final_message, ..
+        }) => final_message.clone(),
+        other => panic!("expected RunOutcome::Completed, got: {other:?}"),
+    };
+
+    match final_message.payload {
+        MessagePayload::Text { content } => assert_eq!(
+            content, "last-step-output",
+            "final_message must come from the last-EXECUTED step (aaa_last), \
+             not the alphabetically-last step id (zzz_first)"
+        ),
+        other => panic!("expected a Text payload, got: {other:?}"),
+    }
+}

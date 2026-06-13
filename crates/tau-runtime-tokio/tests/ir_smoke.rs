@@ -148,5 +148,6 @@ fn sample_module() -> IrModule {
             pipeline: None,
             checks: BTreeMap::new(),
         },
+        triggers: Vec::new(),
     }
 }

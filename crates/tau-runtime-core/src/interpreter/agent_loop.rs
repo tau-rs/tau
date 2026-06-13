@@ -619,6 +619,7 @@ mod tests {
                 pipeline: None,
                 checks: alloc::collections::BTreeMap::new(),
             },
+            triggers: alloc::vec::Vec::new(),
         });
         DispatcherTool {
             tool_name: "fixed".to_string(),

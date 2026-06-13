@@ -295,6 +295,34 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         }
     };
 
+    // Step 5.6: gather trigger bindings (slice 1). One entry per validated
+    // [trigger.<name>]. BTreeMap iteration is sorted by name.
+    let triggers: Vec<crate::bundle::manifest::BundleTrigger> = project_config
+        .triggers
+        .values()
+        .map(|t| crate::bundle::manifest::BundleTrigger {
+            name: t.name.clone(),
+            kind: t.kind.clone(),
+            agent: t.agent.clone(),
+            schedule: t.schedule.clone(),
+            timezone: if t.timezone.is_empty() {
+                None
+            } else {
+                Some(t.timezone.clone())
+            },
+            retry: t
+                .retry
+                .as_ref()
+                .map(|r| crate::bundle::manifest::BundleRetry {
+                    max_attempts: r.max_attempts,
+                    backoff_strategy: r.backoff_strategy.clone(),
+                    backoff_base: r.backoff_base.clone(),
+                    backoff_max: r.backoff_max.clone(),
+                    dead_letter: r.dead_letter.clone(),
+                }),
+        })
+        .collect();
+
     // Step 6: Assemble the manifest.
     //
     // The `tau.toml` schema does not currently carry a `[project]
@@ -310,7 +338,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     let tau_toml_sha256 = sha256_hex(&tau_toml_bytes);
 
     let mut manifest = BundleManifest {
-        schema_version: 2,
+        schema_version: if triggers.is_empty() { 2 } else { 3 },
         bundle: BundleMeta {
             // Placeholder — filled below after self-hash compute.
             sha256: String::new(),
@@ -327,6 +355,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         packages,
         agents,
         ir_payload: opts.ir_payload,
+        triggers,
     };
 
     // Compute and fill the self-hash. `compute_self_hash` zeros out
@@ -1368,5 +1397,60 @@ allow_paths = ["/data/**"]
         std::fs::write(&pkg_manifest, body).unwrap();
         let caps = read_agent_caps(tmp.path());
         assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);
+    }
+
+    #[test]
+    fn build_emits_v3_bundle_with_trigger_section() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("tau.toml"),
+            r#"
+[project]
+name = "trig"
+version = "0.1.0"
+
+[agents.summarizer]
+display_name = "S"
+package = "p@^0.1"
+llm_backend = "anthropic"
+
+[agents.summarizer.prompt]
+system = "hi"
+
+[trigger.nightly]
+kind = "cron"
+agent = "summarizer"
+schedule = "0 3 * * *"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let artifact = build(opts(tmp.path())).expect("build");
+        let m = crate::bundle::manifest::BundleManifest::parse_str(
+            &std::fs::read_to_string(&artifact.path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(m.schema_version, 3);
+        assert_eq!(m.triggers.len(), 1);
+        assert_eq!(m.triggers[0].name, "nightly");
+        crate::bundle::hash::verify_self_hash(&m).expect("self-hash verifies");
+    }
+
+    #[test]
+    fn build_trigger_less_stays_v2() {
+        let tmp = tempdir().unwrap();
+        happy_path_project(tmp.path());
+        let artifact = build(opts(tmp.path())).expect("build");
+        let m = crate::bundle::manifest::BundleManifest::parse_str(
+            &std::fs::read_to_string(&artifact.path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(m.schema_version, 2);
+        assert!(m.triggers.is_empty());
     }
 }

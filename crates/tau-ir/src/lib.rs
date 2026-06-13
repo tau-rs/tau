@@ -35,6 +35,7 @@ pub mod pipeline;
 pub mod subflow;
 pub mod template;
 pub mod tool_impl;
+pub mod trigger;
 
 // Re-exports of the canonical public API surface.
 pub use budget::AgentBudget;
@@ -52,3 +53,4 @@ pub use pipeline::{Pipeline, PipelineStep, StepRun};
 pub use subflow::SubflowKind;
 pub use template::{extract_refs, resolve, TemplateError, TemplateRef};
 pub use tool_impl::{Hash256, NativeFnRef, ToolImpl};
+pub use trigger::{Backoff, BackoffStrategy, RetryPolicy, TriggerBinding, TriggerKind};

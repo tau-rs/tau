@@ -389,8 +389,9 @@ async fn try_run_pipeline(
     let pipeline = module.workflow.pipeline.as_ref()?;
 
     // The id of the LAST pipeline step — its stored output is the run's
-    // final result. An empty `steps` vec cannot reach here: the parser
-    // (Task 3) rejects an empty pipeline, but guard anyway.
+    // final result. An empty `steps` vec cannot reach here: project
+    // validation (`validate_pipeline`) rejects an empty pipeline with
+    // `ProjectConfigError::EmptyPipeline`, but guard anyway.
     let last_step_id = match pipeline.steps.last() {
         Some(s) => s.id.0.clone(),
         None => return None,
@@ -513,7 +514,11 @@ pub(crate) fn pipeline_outcome_to_result(
 /// `{"outcome":"completed", ...}` shape with the final step's text as
 /// `final_message`. Token usage is now aggregated from the pipeline outcome
 /// and threaded in to match the single-agent JSON shape.
-fn render_pipeline_result(
+///
+/// `pub(super)` so the bundle run path
+/// ([`crate::cmd::ir_dispatcher::run_via_ir`]) renders a bundled
+/// pipeline's final step identically to the cwd path.
+pub(super) fn render_pipeline_result(
     store: &tau_runtime_core::interpreter::output_store::OutputStore,
     token_usage: &tau_runtime_core::options::TokenUsage,
     last_step_id: &str,
@@ -832,6 +837,7 @@ fn verify_bundle_against_source(
         &empty_mcp_cache,
         None,
     )
+    .payload
     .map(|p| p.canonical_ir_hash);
 
     tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
@@ -1223,6 +1229,7 @@ capabilities = {caps}
     fn lower(root: &std::path::Path) -> IrPayload {
         let empty = BTreeMap::new();
         crate::cmd::build::lower_ir(root, &TargetTriple::host(), &empty, None)
+            .payload
             .expect("native-tool project must lower to Some(IrPayload)")
     }
 

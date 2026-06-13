@@ -1,0 +1,32 @@
+[project]
+name = "fixture-09"
+
+[agents.gather]
+display_name = "Gather"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+
+# Step ids are deliberately REVERSE-alphabetical relative to execution
+# order: `zzz_first` runs first, `aaa_last` runs last. The run's final
+# result must come from `aaa_last` (the last-executed step), but a
+# BTreeMap-keyed projection (`template_map().into_values().next_back()`)
+# would pick `zzz_first` (the alphabetically-last id) — the wrong step.
+# This locks `drive_pipeline` to `pipeline.steps.last()`.
+[[pipeline.steps]]
+id    = "zzz_first"
+run   = "agent:gather"
+input = "${input}"
+
+[[pipeline.steps]]
+id    = "aaa_last"
+run   = "agent:writer"
+input = "${steps.zzz_first.output}"
