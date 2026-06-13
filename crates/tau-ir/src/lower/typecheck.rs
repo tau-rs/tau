@@ -162,6 +162,7 @@ mod tests {
                 steps: BTreeMap::new(),
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: None,
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
@@ -196,6 +197,7 @@ mod tests {
                 steps: BTreeMap::new(), // empty → "missing-step" not present
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: None,
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");

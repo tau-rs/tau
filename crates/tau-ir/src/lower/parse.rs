@@ -181,6 +181,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             steps,
             edges,
             capability_table: CapabilityTable(capability_table),
+            pipeline: None,
         },
     })
 }
