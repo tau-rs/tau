@@ -144,9 +144,7 @@ where
             // while the check evaluation machinery is being built.
             StepRun::Check(_) => {
                 return Err(crate::error::RuntimeError::Internal {
-                    message: alloc::string::String::from(
-                        "StepRun::Check not yet wired (Task 19)",
-                    ),
+                    message: alloc::string::String::from("StepRun::Check not yet wired (Task 19)"),
                 });
             }
         };
@@ -173,7 +171,10 @@ fn rendered_to_args(rendered: &str) -> Value {
 /// Mirrors the initial-message idiom in `tau-cli`'s `run` command: the
 /// recipient is a freshly-minted [`AgentInstanceId`] placeholder that the
 /// kernel replaces when it assigns the loop's own instance id.
-fn user_message(content: &str) -> Message {
+///
+/// Exposed as `pub(crate)` so `check.rs` can reuse it without a separate
+/// definition (single source of truth).
+pub(crate) fn user_message(content: &str) -> Message {
     Message::new(
         Address::User,
         Address::Agent(AgentInstanceId::new()),
