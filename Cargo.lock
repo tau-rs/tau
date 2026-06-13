@@ -4085,6 +4085,7 @@ dependencies = [
  "tau-ir",
  "tau-pkg",
  "tau-ports",
+ "tau-runtime-core",
  "thiserror 2.0.18",
  "tokio",
  "toml",

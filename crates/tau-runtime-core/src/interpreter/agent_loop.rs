@@ -63,7 +63,7 @@ fn json_to_domain_value(v: serde_json::Value) -> tau_domain::Value {
 /// match on the outcome variant separately to decide whether to surface the
 /// result as a success or error — this function alone does not distinguish
 /// between them.
-fn last_assistant_text(outcome: &RunOutcome) -> String {
+pub(crate) fn last_assistant_text(outcome: &RunOutcome) -> String {
     // Note: `RunOutcome` is `#[non_exhaustive]` but we're in the defining
     // crate, so the compiler sees all variants. No `_` arm needed here;
     // adding one would generate an `unreachable_patterns` warning. Future

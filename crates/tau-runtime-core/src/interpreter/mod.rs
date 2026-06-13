@@ -15,6 +15,7 @@
 pub mod agent_loop;
 pub mod deterministic;
 pub mod output_store;
+pub mod pipeline;
 pub mod subflow;
 pub mod tool_dispatch;
 
