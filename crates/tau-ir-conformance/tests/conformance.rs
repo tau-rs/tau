@@ -392,3 +392,106 @@ async fn fixture_08_cross_mode_conformance() {
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
 }
+
+// ---------------------------------------------------------------------------
+// Fixture 09 — 09_checks (build-time only)
+// ---------------------------------------------------------------------------
+
+/// Fixture 09: build-time lowering of the goals/deliverables worked example.
+///
+/// Verifies that the canonical two-agent research workflow with one
+/// `[goals.has_sources]` (deterministic predicate) and one
+/// `[deliverables.report]` (LLM-judged, on_fail=retry) lowers to an
+/// `IrModule` with exactly two checks, correct producer/gate bindings on
+/// the `report` deliverable, and the `has_sources` goal lowered as
+/// `CheckVerify::Goal`.
+///
+/// Build-time only: no `mock_llm.jsonl` cassette, no runtime execution.
+/// The runtime execution test (judge invocation + rewind-to-gate retry)
+/// is in task D2.
+///
+/// Native tool `WriteFile` is resolved via a stub cache returning
+/// `Some([1u8; 32])`, which is all the typecheck stage needs to confirm
+/// the tool is "known".
+#[test]
+fn fixture_09_build_time_lowers_checks() {
+    use tau_ir::check::{CheckVerify, OnFail};
+    use tau_ir::ids::CheckId;
+    use tau_ir::lower::{lower_project, Caches};
+    use tau_ports::target::registry;
+    use tau_pkg::project::ProjectConfig;
+
+    let dir = fixture_dir("09_checks");
+    let toml_path = dir.join("workflow.toml");
+    let config = ProjectConfig::from_path(&toml_path)
+        .unwrap_or_else(|e| panic!("failed to parse fixture 09 workflow.toml: {e}"));
+
+    let target = registry::list_available()
+        .next()
+        .expect("at least one target available")
+        .triple;
+
+    // Stub native-tool cache: WriteFile resolves to a non-zero sentinel hash
+    // so the typecheck stage's UnknownNativeTool guard does not fire.
+    let caches = Caches {
+        native_tool: &|_| Some([1u8; 32]),
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+    };
+
+    let module = lower_project(&config, &target, &caches)
+        .unwrap_or_else(|e| panic!("lower_project failed for fixture 09: {e}"));
+
+    // Two checks must be present: `report` (Deliverable) and `has_sources` (Goal).
+    assert_eq!(
+        module.workflow.checks.len(),
+        2,
+        "expected exactly 2 checks; got {:?}",
+        module.workflow.checks.keys().collect::<Vec<_>>()
+    );
+
+    // --- has_sources: Goal/Matches, no retry (on_fail defaults to abort) ---
+    let has_sources = module
+        .workflow
+        .checks
+        .get(&CheckId("has_sources".to_string()))
+        .expect("has_sources check must be present");
+    assert!(
+        matches!(
+            &has_sources.verify,
+            CheckVerify::Goal { .. }
+        ),
+        "has_sources must be a Goal check; got {:?}",
+        has_sources.verify
+    );
+    assert!(
+        has_sources.retry.is_none(),
+        "has_sources on_fail defaults to abort; retry must be None"
+    );
+
+    // --- report: Deliverable, retry with gate=writer, producer=writer ---
+    let report = module
+        .workflow
+        .checks
+        .get(&CheckId("report".to_string()))
+        .expect("report check must be present");
+    assert!(
+        matches!(&report.verify, CheckVerify::Deliverable { .. }),
+        "report must be a Deliverable check; got {:?}",
+        report.verify
+    );
+    let retry = report
+        .retry
+        .as_ref()
+        .expect("report has on_fail=retry; retry must be resolved");
+    assert_eq!(retry.on_fail, OnFail::Retry);
+    assert_eq!(retry.max_attempts, 3);
+    assert_eq!(
+        retry.gate.0, "writer",
+        "gate must be writer (retry_from = \"writer\")"
+    );
+    assert_eq!(
+        retry.producer.0, "writer",
+        "producer must be writer (writer declares produces = [\"/workspace/report.md\"])"
+    );
+}
