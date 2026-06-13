@@ -234,8 +234,11 @@ fn build_ir_payload(
     workflow_toml: &str,
     target: &tau_ports::target::TargetTriple,
 ) -> Result<IrPayload, String> {
-    let config = ProjectConfig::parse_str(workflow_toml)
-        .map_err(|e| format!("bundle mode: workflow.toml parse failed: {e}"))?;
+    // Project-config validation errors (e.g. `DeliverableNoProducer`) are
+    // surfaced here. The error string is formatted WITHOUT a "bundle mode:"
+    // prefix so both DevMode and BundleMode emit the same diagnostic and
+    // `assert_conform` can compare them byte-for-byte (D-3b refusal symmetry).
+    let config = ProjectConfig::parse_str(workflow_toml).map_err(|e| format!("{e}"))?;
 
     let caches = Caches {
         native_tool: &|name: &str| Some(crate::sha256_name(name)),

@@ -4,10 +4,12 @@
 //! side effects under `DevMode`, and asserts cross-mode equivalence
 //! (DevMode vs BundleMode) per D-7a (multiset side-effect equivalence).
 //!
-//! All seven fixtures are live as of β.3 PR-6: `01_agent_native_tool`,
-//! `02_agent_mcp_tool`, `03_agent_denied_capability`,
+//! All eleven fixtures are live as of the deliverables-and-goals track:
+//! `01_agent_native_tool`, `02_agent_mcp_tool`, `03_agent_denied_capability`,
 //! `04_subflow_spawn_child`, `05_deterministic_step`,
-//! `06_multi_turn_history`, and `07_mcp_weather_cassette`.
+//! `06_multi_turn_history`, `07_mcp_weather_cassette`,
+//! `08_pipeline_sequence`, `09_deliverables_happy`,
+//! `10_deliverable_retry`, and `11_deliverable_no_producer`.
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -19,7 +21,8 @@ use tau_runtime_core::outcome::RunOutcome;
 
 /// Fixture directory names that the IR / interpreter cannot yet build
 /// or execute. Any future directory-scanning conformance test must skip
-/// these. Empty as of β.2.6.2 — all six fixtures are live.
+/// these. Empty as of the deliverables-and-goals track — all eleven
+/// fixtures are live.
 #[allow(dead_code)]
 pub const DEFERRED_FIXTURES: &[&str] = &[];
 
@@ -518,6 +521,59 @@ async fn fixture_10_dev_mode_deliverable_retry_converges() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_10_cross_mode_conformance() {
     let dir = fixture_dir("10_deliverable_retry");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 11 — deliverable_no_producer (build refused)
+// ---------------------------------------------------------------------------
+
+/// Fixture 11: build-time `DeliverableNoProducer` refusal.
+///
+/// `[deliverables.report]` declares `path = "/workspace/report.md"` but
+/// neither the `gather` agent nor the `writer` agent carries a
+/// `produces = ["/workspace/report.md"]` entry. The `tau-pkg` validator's
+/// `validate_postconditions` detects the missing producer binding during
+/// `ProjectConfig::parse_str` (before `lower_project` runs) and returns
+/// `ProjectConfigError::DeliverableNoProducer`.
+///
+/// BOTH DevMode and BundleMode must surface this as a `build_refused`
+/// report (D-3b refusal symmetry). DevMode captures the `parse_str` error
+/// in its sync setup block and returns early; BundleMode captures it inside
+/// `build_ir_payload`. Neither surface hits the interpreter.
+///
+/// Expected: `build_refused` is `Some(_)`, the diagnostic contains
+/// `"no producer"`, and the multiset fields are empty.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_11_dev_mode_build_refused_no_producer() {
+    let dir = fixture_dir("11_deliverable_no_producer");
+    let report = DevMode.run(&dir).await;
+
+    let refused = report
+        .build_refused
+        .as_ref()
+        .expect("expected build_refused; got an executed-run report");
+    assert!(
+        refused.contains("no producer"),
+        "diagnostic should mention 'no producer'; got: {refused}"
+    );
+    assert!(
+        refused.contains("report"),
+        "diagnostic should name the deliverable id 'report'; got: {refused}"
+    );
+    assert!(report.tool_calls.is_empty());
+    assert!(report.message_added.is_empty());
+}
+
+/// Cross-mode conformance for fixture 11: both modes must refuse with the
+/// same diagnostic string (D-3b refusal symmetry). The `DeliverableNoProducer`
+/// error comes from `ProjectConfig::parse_str` in both paths, so the
+/// `Display` output is identical.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_11_cross_mode_conformance() {
+    let dir = fixture_dir("11_deliverable_no_producer");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

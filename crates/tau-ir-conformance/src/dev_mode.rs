@@ -266,8 +266,19 @@ impl ExecutionMode for DevMode {
             // 1. Load workflow.toml.
             let workflow_toml = std::fs::read_to_string(fixture_dir.join("workflow.toml"))
                 .expect("fixture must contain workflow.toml");
-            let config = ProjectConfig::parse_str(&workflow_toml)
-                .expect("workflow.toml must parse as a valid ProjectConfig");
+            // Parse + validate: project-config validation errors (e.g.
+            // `DeliverableNoProducer`) surface here as `Err`, not at the
+            // `lower_project` stage — capture them symmetrically with
+            // BundleMode so build-refused fixtures compare correctly.
+            let config = match ProjectConfig::parse_str(&workflow_toml) {
+                Ok(c) => c,
+                Err(e) => {
+                    // Move the mock_llm.jsonl read out of scope (it is only
+                    // consumed when the run actually executes), then early-
+                    // exit with the refusal string — no lowering needed.
+                    return ConformanceReport::build_refused(format!("{e}"));
+                }
+            };
 
             // 2. Lower to IrModule. Caches are stack-only closures that don't
             //    cross the await point — they are dropped at the end of this block.
