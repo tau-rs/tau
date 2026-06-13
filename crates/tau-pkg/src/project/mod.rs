@@ -14,6 +14,7 @@ pub mod project;
 
 pub use agent::{build_agent_definition, AgentResolutionError};
 pub use project::{
-    AgentEntry, PipelineConfig, PipelineRunRef, PipelineStepConfig, ProjectConfig,
-    ProjectConfigError, PromptEntry, RequiresEntry, StepEntry, ToolBody, ToolEntry,
+    AgentEntry, CheckOnFail, DeliverableConfig, DeliverableLocus, GoalConfig,
+    GoalPredicateConfig, JudgeConfig, PipelineConfig, PipelineRunRef, PipelineStepConfig,
+    ProjectConfig, ProjectConfigError, PromptEntry, RequiresEntry, StepEntry, ToolBody, ToolEntry,
 };

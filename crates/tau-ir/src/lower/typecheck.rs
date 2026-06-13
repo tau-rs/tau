@@ -322,6 +322,8 @@ mod tests {
                 pipeline: None,
                 checks: BTreeMap::new(),
             },
+            produces: BTreeMap::new(),
+            retry_intent: BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
@@ -358,6 +360,8 @@ mod tests {
                 pipeline: None,
                 checks: BTreeMap::new(),
             },
+            produces: BTreeMap::new(),
+            retry_intent: BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
