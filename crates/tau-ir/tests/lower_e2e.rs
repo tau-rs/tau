@@ -159,3 +159,90 @@ fn lowering_refuses_on_capability_fit_mismatch() {
     let err = lower_project(&config, &target, &caches).unwrap_err();
     assert!(matches!(err, IrError::CapabilityFitFailed { .. }));
 }
+
+#[test]
+fn lowers_goals_and_deliverables_into_checks() {
+    use tau_ir::pipeline::StepRun;
+    use tau_ir::{AgentId, CheckId, OnFail, PipelineStepId};
+
+    // Worked example: gather -> writer pipeline; writer produces the
+    // report and holds a covering fs.write capability; one goal
+    // (regex match) and one deliverable (path locus, retry from writer).
+    let toml = r#"
+        [project]
+        name = "research"
+
+        [agents.gather]
+        display_name = "Gather"
+        package      = "research@^0.1"
+        llm_backend  = "anthropic"
+        model        = "claude-haiku-4-5"
+
+        [agents.writer]
+        display_name = "Writer"
+        package      = "research@^0.1"
+        llm_backend  = "anthropic"
+        model        = "claude-haiku-4-5"
+        produces     = ["/workspace/report.md"]
+        tool_refs    = ["write_file"]
+
+        [tools.write_file]
+        native = "WriteFile"
+        capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+
+        [[pipeline.steps]]
+        id    = "gather"
+        run   = "agent:gather"
+        input = "${input}"
+
+        [[pipeline.steps]]
+        id    = "writer"
+        run   = "agent:writer"
+        input = "${steps.gather.output}"
+
+        [goals.has_sources]
+        evaluates = "/workspace/report.md"
+        check     = "matches"
+        pattern   = "(?m)^## Sources"
+
+        [deliverables.report]
+        path         = "/workspace/report.md"
+        must_satisfy = "A coherent summary."
+        on_fail      = "retry"
+        max_attempts = 3
+        retry_from   = "writer"
+    "#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec!["WriteFile".into()], vec![]);
+    let ir = lower_project(&config, &target, &caches).expect("lower");
+
+    // produces copied onto the IR Agent.
+    assert_eq!(
+        ir.workflow.agents[&AgentId("writer".into())].produces,
+        vec!["/workspace/report.md".to_string()]
+    );
+
+    // two checks present.
+    assert_eq!(ir.workflow.checks.len(), 2);
+
+    // checks appended after writer, in order: goal(has_sources) then
+    // deliverable(report).
+    let pipe = ir.workflow.pipeline.as_ref().expect("pipeline present");
+    let tail: Vec<_> = pipe.steps.iter().rev().take(2).map(|s| &s.run).collect();
+    assert!(
+        matches!(tail[1], StepRun::Check(CheckId(ref s)) if s == "has_sources"),
+        "expected has_sources before report; got {:?}",
+        pipe.steps.iter().map(|s| &s.run).collect::<Vec<_>>()
+    );
+    assert!(
+        matches!(tail[0], StepRun::Check(CheckId(ref s)) if s == "report"),
+        "expected report last; got {:?}",
+        pipe.steps.iter().map(|s| &s.run).collect::<Vec<_>>()
+    );
+
+    // gate resolves to the producer step; on_fail is Retry.
+    let report = &ir.workflow.checks[&CheckId("report".into())];
+    assert_eq!(report.retry.gate, PipelineStepId("writer".into()));
+    assert_eq!(report.retry.on_fail, OnFail::Retry);
+}
