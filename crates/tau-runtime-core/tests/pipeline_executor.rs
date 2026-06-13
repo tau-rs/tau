@@ -126,9 +126,9 @@ impl ToolDispatcher for EchoDispatcher {
 /// A `DeterministicRegistry` that upper-cases its string input.
 ///
 /// Accepts `Value::String(s)` and returns `Value::String(s.to_uppercase())`.
-struct UpaseRegistry;
+struct UpcaseRegistry;
 
-impl DeterministicRegistry for UpaseRegistry {
+impl DeterministicRegistry for UpcaseRegistry {
     fn invoke(&self, fn_name: &str, args: &Value) -> Result<Value, RuntimeError> {
         match fn_name {
             "upcase" => {
@@ -138,16 +138,16 @@ impl DeterministicRegistry for UpaseRegistry {
                 Ok(Value::String(s.to_uppercase()))
             }
             other => Err(RuntimeError::Internal {
-                message: format!("UpaseRegistry: unknown fn {other:?}"),
+                message: format!("UpcaseRegistry: unknown fn {other:?}"),
             }),
         }
     }
 }
 
-/// Dispatcher variant that wires the `UpaseRegistry` into the interpreter.
+/// Dispatcher variant that wires the `UpcaseRegistry` into the interpreter.
 struct EchoWithRegistryDispatcher {
     backend: Arc<dyn DynLlmBackend>,
-    registry: Arc<UpaseRegistry>,
+    registry: Arc<UpcaseRegistry>,
 }
 
 impl ToolDispatcher for EchoWithRegistryDispatcher {
@@ -317,7 +317,7 @@ async fn pipeline_deterministic_step_upcase() {
     let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
     let dispatcher = Arc::new(EchoWithRegistryDispatcher {
         backend,
-        registry: Arc::new(UpaseRegistry),
+        registry: Arc::new(UpcaseRegistry),
     });
 
     let store = run_pipeline(module, "hello".to_string(), dispatcher)

@@ -125,6 +125,10 @@ where
 
 /// Turn a rendered template string into the `Value` a tool/deterministic
 /// step receives: parse it as JSON if it parses, else wrap as a string.
+///
+/// Footgun: a rendered string that happens to be a bare JSON scalar
+/// (`42`, `true`, `null`) parses to that scalar rather than wrapping as a
+/// string. Author tool/deterministic `input` templates accordingly.
 fn rendered_to_args(rendered: &str) -> Value {
     serde_json::from_str::<Value>(rendered).unwrap_or_else(|_| Value::String(rendered.to_string()))
 }
