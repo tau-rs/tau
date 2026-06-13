@@ -10,6 +10,8 @@ pub enum Factory {
     Mcp,
     ContextManager,
     Pipeline,
+    Goals,
+    Deliverables,
 }
 
 /// If `expr` is a tau factory call like `agent({...})`, return the
@@ -24,6 +26,8 @@ pub fn recognize_factory_call(expr: &Expr) -> Option<(Factory, &CallExpr)> {
                     "mcp" => Factory::Mcp,
                     "contextManager" => Factory::ContextManager,
                     "pipeline" => Factory::Pipeline,
+                    "goals" => Factory::Goals,
+                    "deliverables" => Factory::Deliverables,
                     _ => return None,
                 };
                 return Some((factory, call));

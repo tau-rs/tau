@@ -32,6 +32,7 @@ struct IrAgent {
     model: Option<String>,
     prompt_system: Option<String>,
     tool_refs: Vec<String>,
+    produces: Vec<String>,
 }
 
 enum IrToolBody {
@@ -39,15 +40,48 @@ enum IrToolBody {
     Mcp(String),
 }
 
+/// A single capability declaration extracted from a tool object.
+struct IrCapability {
+    kind: String,
+    paths: Vec<String>,
+}
+
 struct IrTool {
     body: IrToolBody,
     description: String,
+    capabilities: Vec<IrCapability>,
 }
 
 struct IrPipelineStep {
     id: String,
     run: String,
     input: Option<String>,
+}
+
+/// A single goal extracted from `goals([...])`.
+struct IrGoal {
+    id: String,
+    evaluates: String,
+    /// Menu predicate name (e.g. `"matches"`, `"exists"`). None if `fn` is set.
+    check: Option<String>,
+    pattern: Option<String>,
+    equals: Option<String>,
+    min_count: Option<u64>,
+    /// Native-fn escape hatch. None if `check` is set.
+    fn_name: Option<String>,
+}
+
+/// A single deliverable extracted from `deliverables([...])`.
+struct IrDeliverable {
+    id: String,
+    path: Option<String>,
+    output: Option<String>,
+    must_satisfy: String,
+    on_fail: Option<String>,
+    max_attempts: Option<u64>,
+    retry_from: Option<String>,
+    judge_model: Option<String>,
+    judge: Option<String>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -93,8 +127,10 @@ pub fn build_project_config(
     let mut agents: BTreeMap<String, IrAgent> = BTreeMap::new();
     let mut tools: BTreeMap<String, IrTool> = BTreeMap::new();
     let mut pipeline_steps: Vec<IrPipelineStep> = Vec::new();
+    let mut goals: Vec<IrGoal> = Vec::new();
+    let mut deliverables: Vec<IrDeliverable> = Vec::new();
 
-    // First pass — collect tools/mcp (so agent `tools: { ref }` can resolve them).
+    // First pass — collect tools/mcp/goals/deliverables (so agent `tools: { ref }` can resolve them).
     for (name, expr) in names {
         let resolved = resolve_ref(expr, names);
         if let Some((factory, call)) = recognize_factory_call(resolved) {
@@ -125,6 +161,7 @@ pub fn build_project_config(
                         IrTool {
                             body: IrToolBody::Mcp(url),
                             description: String::new(),
+                            capabilities: Vec::new(),
                         },
                     );
                 }
@@ -151,6 +188,28 @@ pub fn build_project_config(
                     })?;
                     pipeline_steps = extract_pipeline_steps(arr, source_path, sm)?;
                 }
+                Factory::Goals => {
+                    let arr = arg_as_array(call, 0).ok_or_else(|| {
+                        mk_err(
+                            source_path,
+                            sm,
+                            call.span(),
+                            "`goals(...)`: first argument must be an array literal",
+                        )
+                    })?;
+                    goals = extract_goals(arr, source_path, sm)?;
+                }
+                Factory::Deliverables => {
+                    let arr = arg_as_array(call, 0).ok_or_else(|| {
+                        mk_err(
+                            source_path,
+                            sm,
+                            call.span(),
+                            "`deliverables(...)`: first argument must be an array literal",
+                        )
+                    })?;
+                    deliverables = extract_deliverables(arr, source_path, sm)?;
+                }
                 Factory::Agent => {} // second pass
             }
         }
@@ -176,7 +235,14 @@ pub fn build_project_config(
     }
 
     // Serialize to TOML and parse through the standard validation path.
-    let toml = build_toml(&project_name, &agents, &tools, &pipeline_steps);
+    let toml = build_toml(
+        &project_name,
+        &agents,
+        &tools,
+        &pipeline_steps,
+        &goals,
+        &deliverables,
+    );
     ProjectConfig::parse_str(&toml).map_err(|e| map_config_err(e, source_path, sm))
 }
 
@@ -189,6 +255,8 @@ fn build_toml(
     agents: &BTreeMap<String, IrAgent>,
     tools: &BTreeMap<String, IrTool>,
     pipeline_steps: &[IrPipelineStep],
+    goals: &[IrGoal],
+    deliverables: &[IrDeliverable],
 ) -> String {
     let mut out = String::new();
 
@@ -208,6 +276,21 @@ fn build_toml(
         if !tool.description.is_empty() {
             out.push_str(&format!("description = {}\n", toml_str(&tool.description)));
         }
+        if !tool.capabilities.is_empty() {
+            let cap_entries: Vec<String> = tool
+                .capabilities
+                .iter()
+                .map(|cap| {
+                    let paths: Vec<String> = cap.paths.iter().map(|p| toml_str(p)).collect();
+                    format!(
+                        "{{ kind = {}, paths = [{}] }}",
+                        toml_str(&cap.kind),
+                        paths.join(", ")
+                    )
+                })
+                .collect();
+            out.push_str(&format!("capabilities = [{}]\n", cap_entries.join(", ")));
+        }
         out.push('\n');
     }
 
@@ -226,6 +309,10 @@ fn build_toml(
             let refs: Vec<String> = agent.tool_refs.iter().map(|r| toml_str(r)).collect();
             out.push_str(&format!("tool_refs = [{}]\n", refs.join(", ")));
         }
+        if !agent.produces.is_empty() {
+            let prods: Vec<String> = agent.produces.iter().map(|p| toml_str(p)).collect();
+            out.push_str(&format!("produces = [{}]\n", prods.join(", ")));
+        }
         if let Some(sys) = &agent.prompt_system {
             out.push_str(&format!("[agents.{}.prompt]\n", toml_key(name)));
             out.push_str(&format!("system = {}\n", toml_str(sys)));
@@ -239,6 +326,57 @@ fn build_toml(
         out.push_str(&format!("run = {}\n", toml_str(&step.run)));
         if let Some(input) = &step.input {
             out.push_str(&format!("input = {}\n", toml_str(input)));
+        }
+        out.push('\n');
+    }
+
+    for goal in goals {
+        out.push_str(&format!("[goals.{}]\n", toml_key(&goal.id)));
+        out.push_str(&format!("evaluates = {}\n", toml_str(&goal.evaluates)));
+        if let Some(check) = &goal.check {
+            out.push_str(&format!("check = {}\n", toml_str(check)));
+        }
+        if let Some(pattern) = &goal.pattern {
+            out.push_str(&format!("pattern = {}\n", toml_str(pattern)));
+        }
+        if let Some(equals) = &goal.equals {
+            out.push_str(&format!("equals = {}\n", toml_str(equals)));
+        }
+        if let Some(min_count) = goal.min_count {
+            out.push_str(&format!("min_count = {min_count}\n"));
+        }
+        if let Some(fn_name) = &goal.fn_name {
+            out.push_str(&format!("fn = {}\n", toml_str(fn_name)));
+        }
+        out.push('\n');
+    }
+
+    for deliverable in deliverables {
+        out.push_str(&format!("[deliverables.{}]\n", toml_key(&deliverable.id)));
+        if let Some(path) = &deliverable.path {
+            out.push_str(&format!("path = {}\n", toml_str(path)));
+        }
+        if let Some(output) = &deliverable.output {
+            out.push_str(&format!("output = {}\n", toml_str(output)));
+        }
+        out.push_str(&format!(
+            "must_satisfy = {}\n",
+            toml_str(&deliverable.must_satisfy)
+        ));
+        if let Some(on_fail) = &deliverable.on_fail {
+            out.push_str(&format!("on_fail = {}\n", toml_str(on_fail)));
+        }
+        if let Some(max_attempts) = deliverable.max_attempts {
+            out.push_str(&format!("max_attempts = {max_attempts}\n"));
+        }
+        if let Some(retry_from) = &deliverable.retry_from {
+            out.push_str(&format!("retry_from = {}\n", toml_str(retry_from)));
+        }
+        if let Some(judge_model) = &deliverable.judge_model {
+            out.push_str(&format!("judge_model = {}\n", toml_str(judge_model)));
+        }
+        if let Some(judge) = &deliverable.judge {
+            out.push_str(&format!("judge = {}\n", toml_str(judge)));
         }
         out.push('\n');
     }
@@ -459,8 +597,86 @@ fn extract_tool(
     };
 
     let description = get_string(&props_kv, "description").unwrap_or_default();
+    let capabilities = if let Some(cap_expr) = props_kv.get("capabilities") {
+        if let Expr::Array(arr) = cap_expr {
+            extract_tool_capabilities(arr, name, source_path, sm)?
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
-    Ok(IrTool { body, description })
+    Ok(IrTool {
+        body,
+        description,
+        capabilities,
+    })
+}
+
+/// Extract an array of capability objects from a tool's `capabilities` field.
+fn extract_tool_capabilities(
+    arr: &ArrayLit,
+    tool_name: &str,
+    source_path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> Result<Vec<IrCapability>, TsExtractError> {
+    let mut caps = Vec::new();
+    for (idx, elem) in arr.elems.iter().enumerate() {
+        let elem = match elem {
+            Some(e) => e,
+            None => continue,
+        };
+        if elem.spread.is_some() {
+            return Err(mk_err(
+                source_path,
+                sm,
+                elem.expr.span(),
+                &format!("tool({tool_name}) capabilities[{idx}]: spread not supported"),
+            ));
+        }
+        let obj = match &*elem.expr {
+            Expr::Object(obj) => obj,
+            _ => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    elem.expr.span(),
+                    &format!(
+                        "tool({tool_name}) capabilities[{idx}]: each element must be an object"
+                    ),
+                ));
+            }
+        };
+        let props = obj_props(obj);
+        let kind = get_string(&props, "kind").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!(
+                    "tool({tool_name}) capabilities[{idx}]: missing required string field `kind`"
+                ),
+            )
+        })?;
+        let paths = if let Some(paths_expr) = props.get("paths") {
+            if let Expr::Array(paths_arr) = paths_expr {
+                let mut path_strs = Vec::new();
+                for path_elem in paths_arr.elems.iter().flatten() {
+                    if let Some(s) = expr_as_string(&path_elem.expr) {
+                        path_strs.push(s);
+                    }
+                }
+                path_strs
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        caps.push(IrCapability { kind, paths });
+    }
+    Ok(caps)
 }
 
 fn extract_agent(
@@ -533,6 +749,7 @@ fn extract_agent(
                                     IrTool {
                                         body: IrToolBody::Mcp(url),
                                         description: String::new(),
+                                        capabilities: Vec::new(),
                                     },
                                 );
                             }
@@ -549,12 +766,30 @@ fn extract_agent(
                                 until: "β.4".to_string(),
                             });
                         }
-                        Factory::Agent | Factory::Pipeline => {}
+                        Factory::Agent
+                        | Factory::Pipeline
+                        | Factory::Goals
+                        | Factory::Deliverables => {}
                     }
                 }
             }
         }
     }
+
+    // Extract `produces: [...]` string array.
+    let produces = if let Some(prod_expr) = props.get("produces") {
+        if let Expr::Array(arr) = prod_expr {
+            arr.elems
+                .iter()
+                .flatten()
+                .filter_map(|e| expr_as_string(&e.expr))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
     let agent = IrAgent {
         display_name,
@@ -563,9 +798,175 @@ fn extract_agent(
         model,
         prompt_system,
         tool_refs,
+        produces,
     };
 
     Ok((agent, extra_tools))
+}
+
+/// Extract a non-negative integer from a numeric literal expression.
+fn expr_as_u64(expr: &Expr) -> Option<u64> {
+    if let Expr::Lit(Lit::Num(n)) = expr {
+        if n.value >= 0.0 && n.value.fract() == 0.0 {
+            return Some(n.value as u64);
+        }
+    }
+    None
+}
+
+/// Try to get a u64 value from the prop map.
+fn get_u64(props: &BTreeMap<String, &Expr>, key: &str) -> Option<u64> {
+    let expr = props.get(key)?;
+    expr_as_u64(expr)
+}
+
+fn extract_goals(
+    arr: &ArrayLit,
+    source_path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> Result<Vec<IrGoal>, TsExtractError> {
+    let mut goals = Vec::new();
+    for (idx, elem) in arr.elems.iter().enumerate() {
+        let elem = match elem {
+            Some(e) => e,
+            None => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    arr.span,
+                    &format!("goals: element {idx} must not be a hole"),
+                ));
+            }
+        };
+        if elem.spread.is_some() {
+            return Err(mk_err(
+                source_path,
+                sm,
+                elem.expr.span(),
+                &format!("goals: element {idx}: spread elements are not supported"),
+            ));
+        }
+        let obj = match &*elem.expr {
+            Expr::Object(obj) => obj,
+            _ => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    elem.expr.span(),
+                    &format!("goals: element {idx}: each element must be an object literal"),
+                ));
+            }
+        };
+        let props = obj_props(obj);
+        let id = get_string(&props, "id").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("goals[{idx}]: missing required string field `id`"),
+            )
+        })?;
+        let evaluates = get_string(&props, "evaluates").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("goals[{idx}] ({id}): missing required string field `evaluates`"),
+            )
+        })?;
+        let check = get_string(&props, "check");
+        let pattern = get_string(&props, "pattern");
+        let equals = get_string(&props, "equals");
+        let min_count = get_u64(&props, "minCount");
+        let fn_name = get_string(&props, "fn");
+        goals.push(IrGoal {
+            id,
+            evaluates,
+            check,
+            pattern,
+            equals,
+            min_count,
+            fn_name,
+        });
+    }
+    Ok(goals)
+}
+
+fn extract_deliverables(
+    arr: &ArrayLit,
+    source_path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> Result<Vec<IrDeliverable>, TsExtractError> {
+    let mut deliverables = Vec::new();
+    for (idx, elem) in arr.elems.iter().enumerate() {
+        let elem = match elem {
+            Some(e) => e,
+            None => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    arr.span,
+                    &format!("deliverables: element {idx} must not be a hole"),
+                ));
+            }
+        };
+        if elem.spread.is_some() {
+            return Err(mk_err(
+                source_path,
+                sm,
+                elem.expr.span(),
+                &format!("deliverables: element {idx}: spread elements are not supported"),
+            ));
+        }
+        let obj = match &*elem.expr {
+            Expr::Object(obj) => obj,
+            _ => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    elem.expr.span(),
+                    &format!("deliverables: element {idx}: each element must be an object literal"),
+                ));
+            }
+        };
+        let props = obj_props(obj);
+        let id = get_string(&props, "id").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("deliverables[{idx}]: missing required string field `id`"),
+            )
+        })?;
+        let must_satisfy = get_string(&props, "mustSatisfy").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("deliverables[{idx}] ({id}): missing required string field `mustSatisfy`"),
+            )
+        })?;
+        let path = get_string(&props, "path");
+        let output = get_string(&props, "output");
+        // camelCase → snake_case mappings
+        let on_fail = get_string(&props, "onFail");
+        let max_attempts = get_u64(&props, "maxAttempts");
+        let retry_from = get_string(&props, "retryFrom");
+        let judge_model = get_string(&props, "judgeModel");
+        let judge = get_string(&props, "judge");
+        deliverables.push(IrDeliverable {
+            id,
+            path,
+            output,
+            must_satisfy,
+            on_fail,
+            max_attempts,
+            retry_from,
+            judge_model,
+            judge,
+        });
+    }
+    Ok(deliverables)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
