@@ -25,7 +25,7 @@ pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
     /// Current IR format version emitted by this `tau-ir` crate.
-    pub const CURRENT: &'static str = "v1.0.0";
+    pub const CURRENT: &'static str = "v1.1.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
