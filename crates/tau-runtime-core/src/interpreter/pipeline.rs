@@ -139,6 +139,16 @@ where
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
+            // TODO(Task 19): real check evaluation (evaluate_goal / evaluate_deliverable +
+            // rewind-to-gate retry loop). This placeholder keeps the workspace compiling
+            // while the check evaluation machinery is being built.
+            StepRun::Check(_) => {
+                return Err(crate::error::RuntimeError::Internal {
+                    message: alloc::string::String::from(
+                        "StepRun::Check not yet wired (Task 19)",
+                    ),
+                });
+            }
         };
 
         store.insert(step.id.0.clone(), output);
