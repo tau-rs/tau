@@ -287,24 +287,41 @@ impl DeterministicRegistry for MapBackedDeterministicRegistry {
 
 /// The canonical conformance-fixture registry used by the test suite.
 ///
-/// Currently registers:
+/// Registers:
 ///
 /// - `parse_celsius`: `{"raw": "<digits>"}` → `{"celsius": <int>}`.
 ///   Used by fixture 05 (`05_deterministic_step`).
+/// - `FN_BUILTIN_NON_EMPTY` (`__tau::goal::non_empty`): the built-in `non_empty`
+///   goal predicate. Used by fixture 09 (`09_deliverables_happy`).
+///
+/// conformance-local predicate registry — production predicates live in
+/// tau-cli and are unit-tested there (Task 22); this exercises the
+/// interpreter's check-dispatch + retry e2e. The same registry answers both
+/// deterministic-step fns and built-in goal-predicate fns, since the
+/// interpreter resolves both through `DeterministicRegistry::invoke`.
 pub fn fixture_deterministic_registry() -> Arc<MapBackedDeterministicRegistry> {
-    Arc::new(MapBackedDeterministicRegistry::default().with(
-        "parse_celsius",
-        |args: &serde_json::Value| {
-            let raw =
-                args.get("raw")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| RuntimeError::Internal {
+    use tau_runtime_core::vocabulary::FN_BUILTIN_NON_EMPTY;
+
+    Arc::new(
+        MapBackedDeterministicRegistry::default()
+            .with("parse_celsius", |args: &serde_json::Value| {
+                let raw = args.get("raw").and_then(|v| v.as_str()).ok_or_else(|| {
+                    RuntimeError::Internal {
                         message: "parse_celsius: `raw` must be a string".into(),
-                    })?;
-            let celsius: i64 = raw.trim().parse().map_err(|e| RuntimeError::Internal {
-                message: format!("parse_celsius: not an integer: {e}"),
-            })?;
-            Ok(serde_json::json!({ "celsius": celsius }))
-        },
-    ))
+                    }
+                })?;
+                let celsius: i64 = raw.trim().parse().map_err(|e| RuntimeError::Internal {
+                    message: format!("parse_celsius: not an integer: {e}"),
+                })?;
+                Ok(serde_json::json!({ "celsius": celsius }))
+            })
+            .with(FN_BUILTIN_NON_EMPTY, |args: &serde_json::Value| {
+                // `non_empty`: the locus resolved to present, non-blank content.
+                // The interpreter injects `present` (bool) and `content`
+                // (string|null) into the args object (see evaluate_goal).
+                let present = args["present"].as_bool().unwrap_or(false);
+                let content = args["content"].as_str().unwrap_or("");
+                Ok(serde_json::json!(present && !content.trim().is_empty()))
+            }),
+    )
 }

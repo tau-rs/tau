@@ -392,3 +392,61 @@ async fn fixture_08_cross_mode_conformance() {
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
 }
+
+// ---------------------------------------------------------------------------
+// Fixture 09 — deliverables happy path (goal pass + deliverable pass)
+// ---------------------------------------------------------------------------
+
+/// Fixture 09: a `gather → writer` pipeline with a passing goal and a
+/// passing deliverable — the acceptance test for the deliverables-and-goals
+/// feature's happy path.
+///
+/// The lowering auto-appends two `StepRun::Check` steps at the pipeline
+/// tail (goals by id, then deliverables by id), so the executed sequence is
+/// `gather → writer → check:report_present (goal) → check:report (deliverable)`.
+///
+/// - **Goal** `report_present` (`check = "non_empty"`, Output locus
+///   `steps.writer.output`): the harness `DeterministicRegistry` answers
+///   `FN_BUILTIN_NON_EMPTY` by inspecting the `present`/`content` args the
+///   interpreter builds from the `OutputStore` — no filesystem reader needed.
+/// - **Deliverable** `report` (Output locus, built-in judge): the existence
+///   floor passes (writer produced output), then the built-in judge runs as
+///   a one-turn agent whose scripted LLM reply is `{"met": true, ...}`.
+///
+/// LLM call order consumed from `mock_llm.jsonl`: gather (turn 0), writer
+/// (turn 1), judge (turn 2). The goal check consumes no LLM call.
+///
+/// Expected: both checks pass, the pipeline reaches `RunOutcome::Completed`,
+/// and no tools are declared so `tool_calls` is empty.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_09_dev_mode_goal_and_deliverable_pass() {
+    let dir = fixture_dir("09_deliverables_happy");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed pipeline run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed (goal + deliverable both pass), got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 09 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 09: DevMode and BundleMode both drive
+/// the same `run_pipeline` (with the same check steps + scripted judge), so
+/// the side-effect reports must match.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_09_cross_mode_conformance() {
+    let dir = fixture_dir("09_deliverables_happy");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
