@@ -374,8 +374,7 @@ mod tests {
     fn check_step_with_unknown_check_id_is_rejected() {
         // A pipeline step runs StepRun::Check("ghost") but workflow.checks
         // has no entry for "ghost" → should return UnknownCheckRef.
-        use crate::capability::{CapabilityRequirements, CapabilityTable};
-        use crate::check::{Check, CheckVerify, GoalPredicate, Locus, OnFail, RetryPolicy};
+        use crate::capability::CapabilityTable;
         use crate::ids::{CheckId, PipelineStepId};
         use crate::pipeline::{Pipeline, PipelineStep, StepRun};
 
@@ -410,7 +409,7 @@ mod tests {
     fn check_locus_output_referencing_later_step_is_rejected() {
         // A check whose Locus::Output names a step that comes AFTER the check
         // step in the pipeline → should return UnknownCheckLocus.
-        use crate::capability::{CapabilityRequirements, CapabilityTable};
+        use crate::capability::CapabilityTable;
         use crate::check::{Check, CheckVerify, GoalPredicate, Locus, OnFail, RetryPolicy};
         use crate::ids::{CheckId, PipelineStepId};
         use crate::pipeline::{Pipeline, PipelineStep, StepRun};
