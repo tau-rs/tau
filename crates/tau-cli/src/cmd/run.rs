@@ -388,10 +388,24 @@ async fn try_run_pipeline(
     // caller's existing flow runs unchanged.
     let pipeline = module.workflow.pipeline.as_ref()?;
 
-    // The id of the LAST pipeline step — its stored output is the run's
-    // final result. An empty `steps` vec cannot reach here: the parser
-    // (Task 3) rejects an empty pipeline, but guard anyway.
-    let last_step_id = match pipeline.steps.last() {
+    // The id of the LAST NON-CHECK pipeline step — its stored output is the
+    // run's final result. Trailing `StepRun::Check` steps (auto-appended by
+    // the lowerer for every `[goals.*]` / `[deliverables.*]` declaration)
+    // evaluate postconditions but store NO output in `OutputStore`. Selecting
+    // one as `last_step_id` would make `render_pipeline_result` call
+    // `store.get(check_step_id) → None` and return the "interpreter invariant
+    // violated" error even when all checks pass. Skip trailing check steps and
+    // find the last step that actually produces output.
+    //
+    // If the pipeline consists entirely of check steps (unusual but possible),
+    // return `None` to fall back to the single-agent path — there is no
+    // output to render.
+    let last_step_id = match pipeline
+        .steps
+        .iter()
+        .rev()
+        .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
+    {
         Some(s) => s.id.0.clone(),
         None => return None,
     };
@@ -435,12 +449,17 @@ async fn try_run_pipeline(
     Some(render_pipeline_result(&store, &last_step_id, output))
 }
 
-/// Render the LAST pipeline step's output as the run result, matching the
-/// single-agent path's `RunOutcome::Completed` output style: human mode
-/// prints the value's text form; `--json` emits the same
+/// Render the LAST NON-CHECK pipeline step's output as the run result,
+/// matching the single-agent path's `RunOutcome::Completed` output style:
+/// human mode prints the value's text form; `--json` emits the same
 /// `{"outcome":"completed", ...}` shape with the final step's text as
 /// `final_message` (token usage / turn counts are pipeline-level concepts
 /// not yet aggregated — reported as zero/empty at v0).
+///
+/// Trailing `StepRun::Check` steps (lowered from `[goals.*]` /
+/// `[deliverables.*]`) evaluate postconditions but store no output — the
+/// caller (`try_run_pipeline`) is responsible for passing the id of the last
+/// step that actually produced output (i.e., the last non-check step).
 fn render_pipeline_result(
     store: &tau_runtime_core::interpreter::output_store::OutputStore,
     last_step_id: &str,
