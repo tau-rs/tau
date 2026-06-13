@@ -1002,6 +1002,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs-write"
+version = "0.0.0"
+dependencies = [
+ "assert_matches",
+ "base64",
+ "globset",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tau-domain",
+ "tau-plugin-protocol",
+ "tau-plugin-sdk",
+ "tau-ports",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "fs4"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
