@@ -76,9 +76,52 @@ pub enum RunOutcome {
     },
 }
 
+/// Outcome of a `run_pipeline` call (D1).
+///
+/// Richer than the bare `OutputStore` Plan 1 returned: it carries the
+/// step outputs, aggregated token usage across every step *and retry
+/// attempt*, and a terminal status that distinguishes an agent-level
+/// failure (ADR-0006) and a check abort from a clean completion. Kernel
+/// / dispatch errors remain `Err(RuntimeError)` and never appear here.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct PipelineOutcome {
+    /// Every pipeline step's output, keyed by pipeline-step id.
+    pub outputs: crate::interpreter::output_store::OutputStore,
+    /// Token usage summed across all steps and all retry attempts.
+    pub token_usage: TokenUsage,
+    /// How the pipeline terminated.
+    pub status: PipelineStatus,
+}
+
+/// Terminal status of a pipeline run.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub enum PipelineStatus {
+    /// Every step (and any checks) passed.
+    Completed,
+    /// An agent step failed via a typed `AgentStatus::Failed` (ADR-0006).
+    /// This is NOT a kernel error.
+    AgentFailed {
+        /// The pipeline-step id that failed.
+        step: alloc::string::String,
+        /// The agent's typed failure status.
+        status: tau_domain::AgentStatus,
+    },
+    /// A check failed and its `on_fail` policy (or exhausted retries)
+    /// aborted the run.
+    CheckAborted {
+        /// The check id that aborted the run.
+        check: alloc::string::String,
+        /// The final verdict rationale / diagnostic.
+        rationale: alloc::string::String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::TokenUsage;
     use tau_domain::fixtures;
 
     // AgentStatus::Failed is variant-level #[non_exhaustive] (E0639), so
@@ -155,5 +198,14 @@ mod tests {
         };
         assert_eq!(total_turns, 2);
         assert_eq!(all_messages.len(), 1);
+    }
+
+    #[test]
+    fn token_usage_add_saturates_and_sums() {
+        let mut a = TokenUsage { input_tokens: 10, output_tokens: 5, total_tokens: Some(15) };
+        a.add(&TokenUsage { input_tokens: 1, output_tokens: 2, total_tokens: Some(3) });
+        assert_eq!(a.input_tokens, 11);
+        assert_eq!(a.output_tokens, 7);
+        assert_eq!(a.total_tokens, Some(18));
     }
 }

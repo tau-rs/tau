@@ -129,6 +129,18 @@ pub struct RunOptions {
     pub scope_root: Option<String>,
 }
 
+impl TokenUsage {
+    /// Accumulate another usage into this one (saturating).
+    pub fn add(&mut self, other: &TokenUsage) {
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.total_tokens = match (self.total_tokens, other.total_tokens) {
+            (Some(a), Some(b)) => Some(a.saturating_add(b)),
+            (a, b) => a.or(b),
+        };
+    }
+}
+
 impl core::fmt::Debug for RunOptions {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RunOptions")
