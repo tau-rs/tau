@@ -30,10 +30,12 @@ use tau_ir::budget::AgentBudget;
 use tau_ir::capability::CapabilityTable;
 use tau_ir::check::{Check, CheckVerify, JudgeRef, Locus, OnFail, Predicate, Retry};
 use tau_ir::ids::{AgentId, CheckId, PipelineStepId, StepId};
+use tau_ir::lower::{lower_project, Caches};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::{Agent, Deterministic};
 use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
 use tau_ir::NativeFnRef;
+use tau_pkg::project::ProjectConfig;
 use tau_ports::{
     batch_to_stream, CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError,
     LlmProviderMessage,
@@ -1018,6 +1020,201 @@ async fn deliverable_check_aborts_without_retry() {
         2,
         "expected 2 stream() calls (writer + judge); got {}",
         backend.call_count()
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// D2: End-to-end authoring→lowering→runtime test (judge-fail → retry → pass)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// End-to-end test: author a tau.toml worked example, lower it via
+/// `lower_project` (the full parse→resolve→typecheck pipeline), then drive
+/// `run_pipeline` with a scripted LLM backend that:
+///
+/// 1. gather   → "gathered some notes"
+/// 2. writer#1 → "Draft report without sources"   (no ## Sources header)
+/// 3. judge#1  → `{"met": false, "rationale": "only 1 source cited"}`
+///               ↳ judge sees locus=Output(writer) → rewind to writer
+/// 4. writer#2 → "Draft report\n## Sources\n- Source A\n- Source B"
+///               ↳ now contains "## Sources" → has_sources goal will pass
+/// 5. judge#2  → `{"met": true, "rationale": "two sources cited"}`
+///
+/// Asserts:
+/// - `PipelineStatus::Completed` (both deliverable + goal checks pass)
+/// - exactly 5 `stream()` calls (gather + writer×2 + judge×2)
+/// - exactly 1 `check.retry` tracing event fired during the run
+///
+/// Uses **Output loci** (`output = "steps.writer.output"`) for BOTH
+/// the deliverable and the goal — so no filesystem, no `WriteFile` tool,
+/// and no `produces` declarations are needed. The fixture lowers cleanly
+/// with the SHA-256-of-name native-tool cache that the conformance harness
+/// uses (but here there are no native tools at all).
+#[tokio::test]
+async fn e2e_through_lowering_judge_fail_retry_pass() {
+    // ── 1. Author the TOML worked example ──────────────────────────────────
+    //
+    // Two agents (gather + writer), no tools.
+    // Deliverable: Output locus on writer's output, LLM-judged, retry allowed.
+    // Goal: Output locus on writer's output, regex predicate (## Sources header).
+    //
+    // Pipeline:
+    //   gather -> writer -> verify_report (Deliverable check) -> verify_sources (Goal check)
+    let toml = r#"
+[project]
+name = "research"
+
+[agents.gather]
+display_name = "Gather"
+package      = "research@^0.1"
+llm_backend  = "mock-llm"
+model        = "claude-haiku-4-5"
+max_turns    = 1
+
+[agents.gather.prompt]
+system = "Research the question; collect sources."
+
+[agents.writer]
+display_name = "Writer"
+package      = "research@^0.1"
+llm_backend  = "mock-llm"
+model        = "claude-haiku-4-5"
+max_turns    = 1
+
+[agents.writer.prompt]
+system = "Write the report from the notes."
+
+[deliverables.report]
+output       = "steps.writer.output"
+must_satisfy = "A coherent summary that cites at least two sources."
+on_fail      = "retry"
+max_attempts = 3
+retry_from   = "writer"
+
+[goals.has_sources]
+evaluates = "steps.writer.output"
+check     = "matches"
+pattern   = "(?m)^## Sources"
+
+[[pipeline.steps]]
+id    = "gather"
+run   = "agent:gather"
+input = "${input}"
+
+[[pipeline.steps]]
+id    = "writer"
+run   = "agent:writer"
+input = "${steps.gather.output}"
+
+[[pipeline.steps]]
+id    = "verify_report"
+run   = "check:report"
+input = "${steps.writer.output}"
+
+[[pipeline.steps]]
+id    = "verify_sources"
+run   = "check:has_sources"
+input = "${steps.writer.output}"
+"#;
+
+    // ── 2. Lower via the full authoring → IR path ──────────────────────────
+    //
+    // Uses the SHA-256-of-name cache (same as the CLI and conformance harness).
+    // No native tools declared → cache is never invoked, so mcp_contract/skill
+    // stubs are fine.
+    let config = ProjectConfig::parse_str(toml)
+        .expect("worked-example TOML must parse as a valid ProjectConfig");
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one target triple available")
+        .triple;
+
+    // No native tools in this fixture → the native_tool cache closure is
+    // never invoked. Using a panic stub documents that intent and catches
+    // any accidental native-tool lookup at test time.
+    let module = {
+        let caches = Caches {
+            native_tool: &|name: &str| {
+                panic!("e2e_through_lowering: unexpected native_tool lookup for {name:?}; fixture declares no native tools")
+            },
+            mcp_contract: &|_| None,
+            skill: &|_| None,
+        };
+        lower_project(&config, &target, &caches)
+    }
+    .expect("lower_project must succeed for the Output-locus worked example");
+
+    // Confirm the lowered module has exactly 2 checks (report + has_sources).
+    assert_eq!(
+        module.workflow.checks.len(),
+        2,
+        "lowered module must have exactly 2 checks; got: {:?}",
+        module.workflow.checks.keys().collect::<Vec<_>>()
+    );
+
+    // ── 3. Script the LLM responses ────────────────────────────────────────
+    //
+    // Stream call order:
+    //   0. gather   → "gathered some notes"
+    //   1. writer#1 → "Draft report without sources"   (no ## Sources → judge fails)
+    //   2. judge#1  → {"met": false, "rationale": "only 1 source cited"}  → rewind
+    //   3. writer#2 → "Draft report\n## Sources\n- Source A\n- Source B"
+    //   4. judge#2  → {"met": true, "rationale": "two sources cited"}     → pass
+    //
+    // The has_sources Goal check reads writer's output from the OutputStore AFTER
+    // judge#2 passes; the store holds writer#2's output which contains "## Sources".
+    let responses = vec![
+        scripted_response("gathered some notes"),
+        scripted_response("Draft report without sources"),
+        scripted_response(r#"{"met": false, "rationale": "only 1 source cited"}"#),
+        scripted_response("Draft report\n## Sources\n- Source A\n- Source B"),
+        scripted_response(r#"{"met": true, "rationale": "two sources cited"}"#),
+    ];
+
+    let backend = Arc::new(ScriptedLlmBackend::new(responses));
+
+    // ── 4. Capture trace events ─────────────────────────────────────────────
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let dispatcher = Arc::new(ScriptedDispatcher {
+        backend: backend.clone(),
+    });
+
+    // ── 5. Run the pipeline ─────────────────────────────────────────────────
+    let outcome = run_pipeline(Arc::new(module), "write a report".to_string(), dispatcher)
+        .await
+        .expect("run_pipeline must not return a kernel error for the worked example");
+
+    // ── 6. Assert Completed ─────────────────────────────────────────────────
+    assert_eq!(
+        outcome.status,
+        PipelineStatus::Completed,
+        "judge passed on 2nd attempt + goal matched => Completed; got: {:?}",
+        outcome.status
+    );
+
+    // ── 7. Assert exactly 5 LLM stream() calls ─────────────────────────────
+    //  gather + writer#1 + judge#1 + writer#2 + judge#2
+    assert_eq!(
+        backend.call_count(),
+        5,
+        "expected 5 stream() calls (gather + writer×2 + judge×2); got {}",
+        backend.call_count()
+    );
+
+    // ── 8. Assert exactly 1 check.retry event ──────────────────────────────
+    let events = captured.0.lock().expect("captured-events mutex poisoned").clone();
+    let retry_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.contains("check.retry"))
+        .collect();
+    assert_eq!(
+        retry_events.len(),
+        1,
+        "expected exactly 1 check.retry event (after judge#1 fails); got: {retry_events:?}"
     );
 }
 
