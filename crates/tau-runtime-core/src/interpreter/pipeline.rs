@@ -2,9 +2,7 @@
 //!
 //! Runs `IrModule.workflow.pipeline` steps in order, threading each
 //! step's output through an [`OutputStore`] so `${steps.<id>.output}`
-//! resolves. For now only **agent** steps execute; tool and
-//! deterministic steps (Task 9) hit an explicit not-yet-supported error
-//! arm.
+//! resolves. Agent, tool, and deterministic steps are all supported.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -32,9 +30,8 @@ use crate::outcome::RunOutcome;
 /// step, and records the step's output keyed by its pipeline-step id so
 /// later steps can reference it via `${steps.<id>.output}`.
 ///
-/// Only [`StepRun::Agent`] steps execute today; [`StepRun::Tool`] and
-/// [`StepRun::Deterministic`] return a not-yet-supported
-/// [`RuntimeError::Internal`] (Task 9).
+/// [`StepRun::Agent`], [`StepRun::Tool`], and
+/// [`StepRun::Deterministic`] steps are all supported.
 pub async fn run_pipeline<D>(
     module: Arc<IrModule>,
     input: String,
@@ -83,12 +80,40 @@ where
                     _ => Value::String(last_assistant_text(&outcome)),
                 }
             }
-            other => {
-                return Err(RuntimeError::Internal {
-                    message: format!(
-                        "pipeline run target not yet supported (Task 9): {other:?}"
-                    ),
-                })
+            StepRun::Tool(tool_id) => {
+                let args = rendered_to_args(&rendered);
+                let result = dispatcher.invoke(tool_id, &args).await?;
+                match (result.body, result.error) {
+                    (Some(body), _) => body,
+                    (None, Some(err)) => {
+                        return Err(RuntimeError::Internal {
+                            message: alloc::format!(
+                                "pipeline step {} (tool {}) errored: {err}",
+                                step.id.0, tool_id.0
+                            ),
+                        })
+                    }
+                    (None, None) => Value::Null,
+                }
+            }
+            StepRun::Deterministic(step_node_id) => {
+                let registry = dispatcher.deterministic_registry().ok_or_else(|| {
+                    RuntimeError::Internal {
+                        message: alloc::format!(
+                            "pipeline step {} needs a deterministic registry, none provided",
+                            step.id.0
+                        ),
+                    }
+                })?;
+                let node = module
+                    .workflow
+                    .steps
+                    .get(step_node_id)
+                    .ok_or_else(|| RuntimeError::Internal {
+                        message: alloc::format!("unknown deterministic step {}", step_node_id.0),
+                    })?;
+                let args = rendered_to_args(&rendered);
+                crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
         };
 
@@ -96,6 +121,12 @@ where
     }
 
     Ok(store)
+}
+
+/// Turn a rendered template string into the `Value` a tool/deterministic
+/// step receives: parse it as JSON if it parses, else wrap as a string.
+fn rendered_to_args(rendered: &str) -> Value {
+    serde_json::from_str::<Value>(rendered).unwrap_or_else(|_| Value::String(rendered.to_string()))
 }
 
 /// Build a user-turn [`Message`] carrying `content` as its text payload.
