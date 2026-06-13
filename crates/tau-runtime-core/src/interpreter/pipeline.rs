@@ -5,6 +5,7 @@
 //! resolves. Agent, tool, and deterministic steps are all supported.
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -12,7 +13,7 @@ use alloc::vec;
 
 use serde_json::Value;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
-use tau_ir::check::CheckVerify;
+use tau_ir::check::{CheckVerify, OnFail};
 use tau_ir::pipeline::StepRun;
 use tau_ir::IrModule;
 
@@ -25,8 +26,8 @@ use crate::interpreter::output_store::OutputStore;
 use crate::interpreter::tool_dispatch::ToolDispatcher;
 use crate::outcome::RunOutcome;
 use crate::vocabulary::{
-    EV_CHECK_EVALUATED, EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED, SPAN_PIPELINE_CHECK,
-    SPAN_PIPELINE_STEP,
+    EV_CHECK_EVALUATED, EV_CHECK_RETRY, EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED,
+    SPAN_PIPELINE_CHECK, SPAN_PIPELINE_STEP,
 };
 
 /// Drive an `IrModule`'s pipeline to completion, returning all step
@@ -40,9 +41,21 @@ use crate::vocabulary::{
 ///
 /// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`], and
 /// [`StepRun::Check`] steps are all supported. A `Check` step evaluates a
-/// postcondition (goal or deliverable) against the accumulated outputs and,
-/// on failure, aborts with [`RuntimeError::CheckFailed`] (retry is added in a
-/// later task).
+/// postcondition (goal or deliverable) against the accumulated outputs.
+///
+/// # Failure handling: abort, or rewind-to-gate retry
+///
+/// On a failed check the [`RetryPolicy`](tau_ir::check::RetryPolicy)
+/// decides what happens. If `on_fail == Abort`, or the attempt count has
+/// reached `max_attempts`, the pipeline aborts with
+/// [`RuntimeError::CheckFailed`]. Otherwise the loop emits
+/// [`EV_CHECK_RETRY`], stashes the judge's rationale as `feedback`, and
+/// rewinds the loop index to the check's `gate` step so the forward slice
+/// re-runs. On the next pass through the gate's agent step the feedback is
+/// injected as a prior turn (`"Previous attempt rejected: <rationale>"`) so
+/// the agent sees *why* it was rejected. The feedback stays set until the
+/// check that caused the rewind resolves: a pass clears it; a fresh failure
+/// updates it.
 pub async fn run_pipeline<D>(
     module: Arc<IrModule>,
     input: String,
@@ -61,8 +74,23 @@ where
 
     let mut store = OutputStore::new();
 
-    // Index loop (not `for`) so Task 20 can rewind `i` to a gate step on a
-    // failed retryable check. In Task 19 `i` only ever advances by one.
+    // Per-check attempt counter (1-based on first eval), keyed by check id.
+    let mut attempts: BTreeMap<String, u32> = BTreeMap::new();
+    // Rationale of the most recent failed check that triggered a rewind. It
+    // is injected as a prior turn at the gate's agent step and stays set
+    // until the originating check resolves (pass clears it, fail updates it).
+    let mut feedback: Option<String> = None;
+    // gate-id -> pipeline-step index, so a failed retryable check can rewind
+    // `i` to its gate without re-scanning the pipeline each time.
+    let gate_index: BTreeMap<&str, usize> = pipeline
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(idx, step)| (step.id.0.as_str(), idx))
+        .collect();
+
+    // Index loop (not `for`) so a failed retryable check can rewind `i` to a
+    // gate step. On the happy path `i` only ever advances by one.
     let mut i = 0;
     while i < pipeline.steps.len() {
         let step = &pipeline.steps[i];
@@ -124,8 +152,10 @@ where
                 }
             };
 
-            // Task 20 makes `attempt` reflect the real retry count.
-            let attempt = 1u32;
+            // Real (1-based) attempt count for this check.
+            let attempt = attempts.get(&check_id.0).copied().unwrap_or(0) + 1;
+            attempts.insert(check_id.0.clone(), attempt);
+
             tracing::info!(
                 parent: &check_span,
                 name = EV_CHECK_EVALUATED,
@@ -135,7 +165,17 @@ where
                 attempt = attempt,
             );
 
-            if !verdict.met {
+            if verdict.met {
+                // Passed: clear any feedback carried in from a prior rewind
+                // and advance. Checks store no output.
+                feedback = None;
+                i += 1;
+                continue;
+            }
+
+            // Failed. Abort if the policy says so, or if we've exhausted the
+            // attempt budget.
+            if check.retry.on_fail == OnFail::Abort || attempt >= check.retry.max_attempts {
                 return Err(RuntimeError::CheckFailed {
                     id: check_id.0.clone(),
                     kind: String::from(kind),
@@ -144,8 +184,30 @@ where
                 });
             }
 
-            // Checks store no output.
-            i += 1;
+            // Retryable with attempts remaining: rewind to the gate step.
+            let gate_idx = *gate_index.get(check.retry.gate.0.as_str()).ok_or_else(|| {
+                // Build-time integrity checks (tau-ir typecheck) guarantee the
+                // gate names an existing pipeline step, so reaching here is an
+                // invariant violation — surface it loudly rather than aborting
+                // the run as a plain check failure.
+                RuntimeError::Internal {
+                    message: format!(
+                        "check {} rewinds to unknown gate step {}",
+                        check_id.0, check.retry.gate.0
+                    ),
+                }
+            })?;
+
+            tracing::info!(
+                parent: &check_span,
+                name = EV_CHECK_RETRY,
+                id = check_id.0.as_str(),
+                rewind_to = check.retry.gate.0.as_str(),
+                next_attempt = attempt + 1,
+            );
+
+            feedback = Some(verdict.rationale);
+            i = gate_idx;
             continue;
         }
 
@@ -175,7 +237,18 @@ where
                         agent: agent_id.0.clone(),
                     })?
                     .clone();
-                let initial = vec![user_message(&rendered)];
+                // When a prior check rewound to this gate, inject its
+                // rationale as a prior turn so the agent sees *why* it was
+                // rejected. `split_history` (agent_loop.rs) treats all-but-last
+                // as history and the last as the live turn, so the feedback
+                // becomes a prior turn and `rendered` stays the live prompt.
+                let initial = match &feedback {
+                    Some(fb) => vec![
+                        user_message(&format!("Previous attempt rejected: {fb}")),
+                        user_message(&rendered),
+                    ],
+                    None => vec![user_message(&rendered)],
+                };
                 let outcome = Box::pin(run_agent(
                     module.clone(),
                     &agent,
