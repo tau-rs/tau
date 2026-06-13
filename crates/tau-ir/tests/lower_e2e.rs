@@ -246,3 +246,114 @@ fn lowers_goals_and_deliverables_into_checks() {
     assert_eq!(report.retry.gate, PipelineStepId("writer".into()));
     assert_eq!(report.retry.on_fail, OnFail::Retry);
 }
+
+#[test]
+fn explicit_check_placement_is_not_double_appended() {
+    use tau_ir::pipeline::StepRun;
+    use tau_ir::{AgentId, CheckId, PipelineStepId};
+
+    // gather → writer pipeline that ALSO contains an explicit
+    // `run = "check:report"` step BEFORE the tail.
+    // The deliverable check must appear EXACTLY ONCE at the explicitly
+    // declared position, not also auto-appended at the end.
+    let toml = r#"
+        [project]
+        name = "explicit-check"
+
+        [agents.gather]
+        display_name = "Gather"
+        package      = "research@^0.1"
+        llm_backend  = "anthropic"
+        model        = "claude-haiku-4-5"
+
+        [agents.writer]
+        display_name = "Writer"
+        package      = "research@^0.1"
+        llm_backend  = "anthropic"
+        model        = "claude-haiku-4-5"
+        produces     = ["/workspace/report.md"]
+        tool_refs    = ["write_file"]
+
+        [tools.write_file]
+        native = "WriteFile"
+        capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+
+        [[pipeline.steps]]
+        id    = "gather"
+        run   = "agent:gather"
+        input = "${input}"
+
+        [[pipeline.steps]]
+        id    = "writer"
+        run   = "agent:writer"
+        input = "${steps.gather.output}"
+
+        [[pipeline.steps]]
+        id    = "check-report"
+        run   = "check:report"
+        input = "${input}"
+
+        [[pipeline.steps]]
+        id    = "gather2"
+        run   = "agent:gather"
+        input = "${steps.check-report.output}"
+
+        [deliverables.report]
+        path         = "/workspace/report.md"
+        must_satisfy = "A coherent summary."
+        on_fail      = "abort"
+    "#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec!["WriteFile".into()], vec![]);
+    let ir = lower_project(&config, &target, &caches).expect("lower");
+
+    let pipe = ir.workflow.pipeline.as_ref().expect("pipeline present");
+
+    // Count occurrences of StepRun::Check(CheckId("report")) in the pipeline.
+    let check_report_positions: Vec<usize> = pipe
+        .steps
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            if matches!(&s.run, StepRun::Check(CheckId(id)) if id == "report") {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        check_report_positions.len(),
+        1,
+        "check:report must appear exactly once; got positions {:?} in steps: {:?}",
+        check_report_positions,
+        pipe.steps.iter().map(|s| &s.run).collect::<Vec<_>>()
+    );
+
+    // Assert it is at the explicitly-declared position (index 2, after
+    // gather and writer, before gather2).
+    assert_eq!(
+        check_report_positions[0],
+        2,
+        "check:report must be at the explicitly-declared position (index 2); \
+         got index {}; steps: {:?}",
+        check_report_positions[0],
+        pipe.steps.iter().map(|s| &s.run).collect::<Vec<_>>()
+    );
+
+    // And confirm the step after is gather2 (not another check).
+    assert!(
+        matches!(&pipe.steps[3].run, StepRun::Agent(AgentId(id)) if id == "gather"),
+        "step after the explicit check must be gather2 (agent:gather); got {:?}",
+        &pipe.steps[3].run
+    );
+
+    // The PipelineStepId at position 2 is the one declared in TOML ("check-report").
+    assert_eq!(
+        pipe.steps[2].id,
+        PipelineStepId("check-report".into()),
+        "step id at position 2 must be 'check-report'"
+    );
+}
