@@ -1,0 +1,2 @@
+{"turn": 0, "response": {"text": "gathered: 42", "stop_reason": "end_turn"}}
+{"turn": 1, "response": {"text": "report: gathered: 42", "stop_reason": "end_turn"}}

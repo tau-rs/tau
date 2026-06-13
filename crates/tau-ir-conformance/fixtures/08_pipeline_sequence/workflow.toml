@@ -1,0 +1,26 @@
+[project]
+name = "fixture-08"
+
+[agents.gather]
+display_name = "Gather"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+
+[[pipeline.steps]]
+id    = "gather"
+run   = "agent:gather"
+input = "${input}"
+
+[[pipeline.steps]]
+id    = "writer"
+run   = "agent:writer"
+input = "${steps.gather.output}"
