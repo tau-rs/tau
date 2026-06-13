@@ -84,4 +84,15 @@ pub trait ToolDispatcher {
     fn random(&self) -> Option<Arc<dyn tau_ports::RandomSource>> {
         None
     }
+
+    /// Read a deliverable/goal artifact by filesystem path for engine-side
+    /// check evaluation (D3). Trusted-kernel: the path was producer-
+    /// capability-checked at build time, so this is not capability-gated.
+    ///
+    /// Returns `None` if the dispatcher provides no host filesystem (core /
+    /// test dispatchers). `Some(Ok(None))` means "no such artifact"
+    /// (existence-floor failure); `Some(Ok(Some(bytes)))` is the content.
+    fn read_artifact(&self, _path: &str) -> Option<Result<Option<alloc::vec::Vec<u8>>, RuntimeError>> {
+        None
+    }
 }

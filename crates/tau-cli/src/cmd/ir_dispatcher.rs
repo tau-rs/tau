@@ -424,6 +424,19 @@ impl ToolDispatcher for ForwardingDispatcher {
     fn random(&self) -> Option<Arc<dyn tau_ports::RandomSource>> {
         Some(Arc::new(tau_runtime_tokio::OsRandom))
     }
+
+    /// Read an artifact from the host filesystem for engine-side check
+    /// evaluation (D3). The path was capability-checked at build time so
+    /// this is not capability-gated — it is a trusted-kernel read.
+    fn read_artifact(&self, path: &str) -> Option<Result<Option<Vec<u8>>, RuntimeError>> {
+        match std::fs::read(path) {
+            Ok(bytes) => Some(Ok(Some(bytes))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Ok(None)),
+            Err(e) => Some(Err(RuntimeError::Internal {
+                message: format!("read_artifact({path}): {e}"),
+            })),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -793,6 +806,69 @@ mod wired_handlers_tests {
         let roots = h.roots().await.expect("ok");
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].uri, "file:///tmp/mcp-cache");
+    }
+}
+
+#[cfg(test)]
+mod read_artifact_tests {
+    use std::collections::BTreeMap;
+    use std::io::Write;
+
+    use tau_ports::fixtures::MockLlmBackend;
+    use tau_runtime_core::interpreter::tool_dispatch::ToolDispatcher;
+
+    use super::{ForwardingDispatcher, RuntimeError};
+
+    fn make_dispatcher() -> ForwardingDispatcher {
+        let backend = std::sync::Arc::new(MockLlmBackend::new("stub"));
+        ForwardingDispatcher::new(backend, BTreeMap::new())
+    }
+
+    #[test]
+    fn read_artifact_returns_file_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("artifact.md");
+        let content = b"# report\nhello world\n";
+        std::fs::File::create(&path)
+            .expect("create")
+            .write_all(content)
+            .expect("write");
+
+        let disp = make_dispatcher();
+        let result = disp
+            .read_artifact(path.to_str().expect("utf8"))
+            .expect("dispatcher returns Some");
+        let bytes = result
+            .expect("Ok")
+            .expect("artifact exists → Some(bytes)");
+        assert_eq!(bytes, content);
+    }
+
+    #[test]
+    fn read_artifact_missing_path_returns_ok_none() {
+        let disp = make_dispatcher();
+        let result = disp
+            .read_artifact("/nonexistent/path/that/cannot/exist/artifact.md")
+            .expect("dispatcher returns Some");
+        let opt = result.expect("Ok(None) for missing file");
+        assert!(opt.is_none(), "missing artifact must be Ok(None)");
+    }
+
+    #[test]
+    fn read_artifact_io_error_returns_internal_error() {
+        // Pass a path that exists as a directory — reading a directory
+        // produces an io::Error that is NOT NotFound, exercising the
+        // RuntimeError::Internal arm.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let disp = make_dispatcher();
+        let result = disp
+            .read_artifact(dir.path().to_str().expect("utf8"))
+            .expect("dispatcher returns Some");
+        let err = result.expect_err("reading a directory must error");
+        assert!(
+            matches!(err, RuntimeError::Internal { .. }),
+            "expected Internal error, got {err:?}"
+        );
     }
 }
 
