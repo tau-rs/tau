@@ -4100,6 +4100,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "jsonschema",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "tau-domain",
