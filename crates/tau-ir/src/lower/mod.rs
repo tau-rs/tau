@@ -123,5 +123,6 @@ fn build_module(parsed: crate::lower::parse::Parsed, target: &TargetTriple) -> I
         tau_version: env!("CARGO_PKG_VERSION").into(),
         target: *target,
         workflow: parsed.workflow,
+        triggers: alloc::vec::Vec::new(),
     }
 }
