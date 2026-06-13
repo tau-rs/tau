@@ -40,6 +40,7 @@ pub mod tool_impl;
 pub use budget::AgentBudget;
 pub use canonical::{from_canonical_bytes, to_canonical_bytes};
 pub use capability::{CapabilityRequirements, CapabilityTable};
+pub use check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail, RetryPolicy};
 pub use context::ContextConfig;
 pub use error::IrError;
 pub use hash::compute_hash;
