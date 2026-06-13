@@ -85,14 +85,14 @@ pub trait ToolDispatcher {
         None
     }
 
-    /// Read a deliverable/goal artifact by filesystem path for engine-side
-    /// check evaluation (D3). Trusted-kernel: the path was producer-
-    /// capability-checked at build time, so this is not capability-gated.
+    /// Optional reader for produced artifacts (checks). Default: none.
     ///
-    /// Returns `None` if the dispatcher provides no host filesystem (core /
-    /// test dispatchers). `Some(Ok(None))` means "no such artifact"
-    /// (existence-floor failure); `Some(Ok(Some(bytes)))` is the content.
-    fn read_artifact(&self, _path: &str) -> Option<Result<Option<alloc::vec::Vec<u8>>, RuntimeError>> {
+    /// Returning `None` means "this dispatcher does not support artifact
+    /// reading" — any check that needs to read a filesystem path will
+    /// surface as a [`crate::error::RuntimeError::Internal`] with a
+    /// clear diagnostic. The tokio host wires in a `std::fs`-backed
+    /// reader; tests wire in [`super::artifact::InMemoryArtifactReader`].
+    fn artifact_reader(&self) -> Option<Arc<dyn super::artifact::ArtifactReader>> {
         None
     }
 }

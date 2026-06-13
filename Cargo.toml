@@ -90,6 +90,7 @@ assert_matches  = "1"
 rstest          = "0.26"
 walkdir         = "2"
 globset         = "0.4"
+regex           = "1"
 jsonschema      = "0.46"
 foldhash     = { version = "0.2", default-features = false }
 futures-core    = "0.3"
@@ -121,4 +122,3 @@ libc         = "0.2"
 nix          = { version = "0.31", default-features = false, features = ["sched", "user", "process", "fs"] }
 seccompiler  = "0.5"
 ulid         = "1"
-regex        = "1"

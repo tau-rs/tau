@@ -57,6 +57,10 @@ tempfile           = { workspace = true }
 # SHA-256 over the native-tool symbolic name in `cmd::build::lower_ir`
 # until a real native-tool registry lands in `tau-pkg`.
 sha2               = { workspace = true }
+# Regex matching for the `FN_BUILTIN_MATCHES` goal predicate (Task 22).
+regex              = { workspace = true }
+# JSON Schema validation for the `FN_BUILTIN_SCHEMA_VALID` goal predicate (Task 22).
+jsonschema         = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -70,8 +74,6 @@ url        = { workspace = true }
 walkdir    = { workspace = true }
 # test-fixtures feature needed by tests/common/mock_llm.rs (T9: orchestration pattern tests).
 tau-ports  = { workspace = true, features = ["test-fixtures", "serde"] }
-# test-fixtures enables fixture constructors for PipelineOutcome (used in cmd/run.rs unit tests).
-tau-runtime-core = { workspace = true, features = ["test-fixtures"] }
 
 [features]
 # Production `tau` binary ships with OTLP support enabled out of the box.

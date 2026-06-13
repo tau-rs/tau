@@ -266,8 +266,19 @@ impl ExecutionMode for DevMode {
             // 1. Load workflow.toml.
             let workflow_toml = std::fs::read_to_string(fixture_dir.join("workflow.toml"))
                 .expect("fixture must contain workflow.toml");
-            let config = ProjectConfig::parse_str(&workflow_toml)
-                .expect("workflow.toml must parse as a valid ProjectConfig");
+            // Parse + validate: project-config validation errors (e.g.
+            // `DeliverableNoProducer`) surface here as `Err`, not at the
+            // `lower_project` stage — capture them symmetrically with
+            // BundleMode so build-refused fixtures compare correctly.
+            let config = match ProjectConfig::parse_str(&workflow_toml) {
+                Ok(c) => c,
+                Err(e) => {
+                    // Move the mock_llm.jsonl read out of scope (it is only
+                    // consumed when the run actually executes), then early-
+                    // exit with the refusal string — no lowering needed.
+                    return ConformanceReport::build_refused(format!("{e}"));
+                }
+            };
 
             // 2. Lower to IrModule. Caches are stack-only closures that don't
             //    cross the await point — they are dropped at the end of this block.
@@ -401,8 +412,8 @@ pub(crate) async fn drive_module(
 /// built bundle); both feed identical `(module, responses)` for the same
 /// fixture so the emitted reports compare under `assert_conform`.
 ///
-/// `run_pipeline` returns a `PipelineOutcome` (not a bare `OutputStore`);
-/// the per-agent `RunOutcome`s and message histories are not surfaced, so:
+/// `run_pipeline` returns only the per-step output store (it discards the
+/// internal per-agent `RunOutcome`s and message histories), so:
 ///
 /// - **Tool calls** are still captured: each pipeline agent runs through
 ///   the SAME shared `RecordingDispatcher`, so any tool the agents invoke
@@ -411,12 +422,10 @@ pub(crate) async fn drive_module(
 ///   surface them — so `message_added` stays empty. Cross-mode
 ///   conformance still holds because BOTH modes drive the same
 ///   `run_pipeline` and observe the same (empty) message multiset.
-/// - **Outcome** is synthesized as `RunOutcome::Completed` on `Ok` with
-///   `PipelineStatus::Completed`, or `RunOutcome::Failed` on `Ok` with
-///   `PipelineStatus::AgentFailed` (ADR-0006: agent failures are outcomes,
-///   not kernel errors). Kernel/dispatch errors remain `Err(RuntimeError)`
-///   and are also mapped to `RunOutcome::Failed` so both modes report
-///   a failed pipeline symmetrically.
+/// - **Outcome** is synthesized as `RunOutcome::Completed` on `Ok`. A
+///   pipeline-step failure surfaces as `Err(RuntimeError)` from
+///   `run_pipeline`, which we map to `RunOutcome::Failed` so both modes
+///   report a failed pipeline symmetrically.
 pub(crate) async fn drive_pipeline(
     module: Arc<IrModule>,
     input: String,
@@ -453,32 +462,18 @@ pub(crate) async fn drive_pipeline(
         .map(|step| step.id.0.clone());
 
     match run_pipeline(module, input, dispatcher).await {
-        Ok(pipeline_outcome) => {
-            use tau_runtime_core::outcome::PipelineStatus;
-            // Agent-level failures (ADR-0006) now surface as
-            // PipelineStatus::AgentFailed inside an Ok — map to
-            // RunOutcome::Failed so both modes report symmetrically.
-            if let PipelineStatus::AgentFailed { status, .. } = pipeline_outcome.status {
-                return ConformanceReport::new(RunOutcome::Failed {
-                    status,
-                    all_messages: Vec::new(),
-                    total_turns: 0,
-                    token_usage: Default::default(),
-                });
-            }
+        Ok(store) => {
             // Synthesize a Completed outcome carrying the last step's
             // output text as the final message (the pipeline executor
             // does not return a RunOutcome of its own). The message
             // multiset stays empty — the pipeline executor surfaces no
             // message history — but tool calls recorded by the shared
             // dispatcher are harvested below.
-            let store = pipeline_outcome.outputs;
             //
             // A `Value::String` renders as its inner text; any structured
             // value renders as compact JSON — symmetric with
             // `OutputStore::template_map` and production
-            // `render_pipeline_result`. Key off the LAST-EXECUTED step
-            // (pipeline order), not the alphabetically-last id (#337).
+            // `render_pipeline_result`.
             let final_text = last_step_id
                 .as_deref()
                 .and_then(|id| store.get(id))
@@ -501,8 +496,8 @@ pub(crate) async fn drive_pipeline(
             }
             report
         }
-        // Kernel/dispatch errors remain Err(RuntimeError). Map to Failed
-        // so both modes report a failed pipeline symmetrically
+        // A pipeline-step failure surfaces as Err here. Map it to a
+        // Failed outcome so both modes report the failure symmetrically
         // (assert_conform compares the RunOutcome *discriminant*; the `e`
         // detail is not part of the compared key, matching how the
         // single-agent path discards per-run nondeterminism).

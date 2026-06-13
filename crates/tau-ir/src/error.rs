@@ -159,77 +159,23 @@ pub enum IrError {
         detail: String,
     },
 
-    /// A `StepRun::Check` references an id absent from `workflow.checks`.
-    #[error("pipeline step {step:?} runs check {check:?} but no such check is defined")]
+    /// A `StepRun::Check` references a check id absent from `workflow.checks`.
+    #[error("pipeline step '{step}' runs check '{check}' but no such check is defined")]
     UnknownCheckRef {
-        /// The pipeline step id.
+        /// The pipeline step id that contains the bad reference.
         step: String,
-        /// The missing check id.
+        /// The check id that was not found in `workflow.checks`.
         check: String,
     },
 
-    /// A check's `Output` locus names a non-earlier pipeline step.
-    #[error("check {check:?} evaluates output {output:?}, which is not an earlier pipeline step")]
+    /// A check's `Locus::Output` references an unknown or later pipeline step.
+    #[error(
+        "check '{check}' evaluates output of '{output}' which is not an earlier pipeline step"
+    )]
     UnknownCheckLocus {
-        /// The check id.
+        /// The check id whose locus is invalid.
         check: String,
-        /// The referenced (missing or non-earlier) step output.
+        /// The referenced step id that is missing or comes at/after the check step.
         output: String,
-    },
-
-    /// A check needing a producer has no pipeline step writing its locus.
-    #[error("check {check:?} has no producer: no step writes/declares {locus:?}")]
-    DeliverableNoProducer {
-        /// The check id.
-        check: String,
-        /// The unresolvable locus (path or step output).
-        locus: String,
-    },
-
-    /// `retry_from` names a step that is not in the pipeline.
-    #[error("check {check:?} retry_from {retry_from:?} is not a pipeline step")]
-    UnknownRetryFrom {
-        /// The check id.
-        check: String,
-        /// The unresolved `retry_from` step id.
-        retry_from: String,
-    },
-
-    /// `retry_from` runs after the producer (Guarantee 1).
-    #[error("check {check:?} retry_from {gate:?} runs after producer {producer:?} — the gate must be at or before the producer")]
-    GateAfterProducer {
-        /// The check id.
-        check: String,
-        /// The gate step id.
-        gate: String,
-        /// The producer step id.
-        producer: String,
-    },
-
-    /// The retry span has no non-deterministic (agent) step (Guarantee 2).
-    #[error("check {check:?} on_fail=retry but the retry span ({span}) contains no agent step; retrying cannot change the result")]
-    RetrySpanDeterministic {
-        /// The check id.
-        check: String,
-        /// Human-readable span description (e.g. `"gather -> writer"`).
-        span: String,
-    },
-
-    /// Two retry spans overlap (D7).
-    #[error("retry spans of checks {a:?} and {b:?} overlap; v1 requires disjoint retry spans")]
-    OverlappingRetrySpans {
-        /// The first check id.
-        a: String,
-        /// The second check id.
-        b: String,
-    },
-
-    /// A custom judge agent is not defined.
-    #[error("deliverable {check:?} sets judge {judge:?} but no [agents.{judge}] is defined")]
-    UnknownJudgeAgent {
-        /// The deliverable check id.
-        check: String,
-        /// The unresolved judge agent id.
-        judge: String,
     },
 }

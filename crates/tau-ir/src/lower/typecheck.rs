@@ -1,19 +1,13 @@
 //! Third lowering stage: workflow-shape invariants.
 
-use crate::check::{CheckVerify, JudgeRef, Locus, OnFail, Retry};
 use crate::error::IrError;
-use crate::ids::{CheckId, PipelineStepId};
-use crate::pipeline::StepRun;
 use crate::subflow::SubflowKind;
 use crate::tool_impl::ToolImpl;
 
 use super::parse::Parsed;
 
 /// Run the typecheck stage on a `Parsed` value.
-///
-/// Mutates `parsed` to write resolved `Retry` bindings into
-/// `workflow.checks` after producer / gate analysis.
-pub(super) fn typecheck(parsed: &mut Parsed) -> Result<(), IrError> {
+pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
     // 1. Each Agent::tool_refs entry must exist in `tools`.
     for (agent_id, agent) in parsed.workflow.agents.iter() {
         for tool_ref in agent.tool_refs.iter() {
@@ -105,18 +99,14 @@ pub(super) fn typecheck(parsed: &mut Parsed) -> Result<(), IrError> {
         }
     }
 
-    // 7. Pipeline checks: run targets exist, no dup ids, no forward refs,
-    //    and Check loci reference only earlier pipeline steps.
+    // 7. Pipeline checks: run targets exist, no dup ids, no forward refs.
     check_pipeline(&parsed.workflow)?;
-
-    // 7. Resolve retry intents, enforce guarantees G1+G2, D7 overlap,
-    //    and verify custom judge agents exist.
-    resolve_retries_and_guarantees(parsed)?;
 
     Ok(())
 }
 
 fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
+    use crate::pipeline::StepRun;
     use crate::template::{extract_refs, TemplateRef};
     use alloc::collections::BTreeSet;
 
@@ -138,6 +128,13 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
             StepRun::Check(c) => wf.checks.contains_key(c),
         };
         if !exists {
+            // For Check steps, emit the more precise UnknownCheckRef error.
+            if let StepRun::Check(check_id) = &step.run {
+                return Err(IrError::UnknownCheckRef {
+                    step: sid.into(),
+                    check: check_id.0.clone(),
+                });
+            }
             let target = match &step.run {
                 StepRun::Agent(a) => alloc::format!("agent:{}", a.0),
                 StepRun::Tool(t) => alloc::format!("tool:{}", t.0),
@@ -150,44 +147,31 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
             });
         }
 
-        // For a Check step: if its locus is Output(ref_step), verify that
-        // ref_step is a strictly-earlier pipeline step (seen_ids holds all
-        // steps visited so far, NOT including the current one yet — but we
-        // inserted sid above before this block, so we need to check strictly
-        // before the current step, i.e., seen_ids contains the step AND it
-        // is not the current sid).
-        if let StepRun::Check(c) = &step.run {
-            // exists is already verified above; retrieve the check.
-            if let Some(check) = wf.checks.get(c) {
-                let locus_step_id: Option<&str> = match &check.verify {
-                    crate::check::CheckVerify::Goal { evaluates, .. } => {
-                        if let Locus::Output(ref s) = evaluates {
-                            Some(s.0.as_str())
-                        } else {
-                            None
-                        }
-                    }
-                    crate::check::CheckVerify::Deliverable { locus, .. } => {
-                        if let Locus::Output(ref s) = locus {
-                            Some(s.0.as_str())
-                        } else {
-                            None
-                        }
-                    }
+        // For Check steps, validate the check's locus integrity:
+        // if the check has a Locus::Output referencing a step, that step must
+        // appear strictly BEFORE the current check step in the pipeline.
+        if let StepRun::Check(check_id) = &step.run {
+            if let Some(check) = wf.checks.get(check_id) {
+                use crate::check::{CheckVerify, Locus};
+                let locus = match &check.verify {
+                    CheckVerify::Goal { evaluates, .. } => Some(evaluates),
+                    CheckVerify::Deliverable { locus, .. } => Some(locus),
                 };
-                if let Some(ref_step) = locus_step_id {
-                    // Must be a strictly-earlier pipeline step (already in seen_ids
-                    // before the current sid was inserted, i.e., seen_ids contains
-                    // it but it is not sid itself — self-reference also fails).
-                    // seen_ids now contains sid (inserted above), so exclude it.
-                    let is_earlier = ref_step != sid && seen_ids.contains(ref_step);
-                    // Also confirm it's actually a pipeline step at all.
-                    let is_pipeline_step =
-                        pipeline.steps.iter().any(|s| s.id.0.as_str() == ref_step);
-                    if !is_pipeline_step || !is_earlier {
+                if let Some(Locus::Output(ref_step_id)) = locus {
+                    // seen_ids holds exactly the steps strictly BEFORE current
+                    // (current step's id was just inserted above, so we check
+                    // using the pre-insertion state — but since we check
+                    // whether the referenced id is in seen_ids BEFORE we
+                    // process the current step's template refs, we need to
+                    // check whether ref_step_id was inserted strictly before
+                    // sid). seen_ids already has sid, so we check ≠ sid AND
+                    // seen_ids contains the ref (modulo the current step).
+                    let is_earlier =
+                        ref_step_id.0 != sid && seen_ids.contains(ref_step_id.0.as_str());
+                    if !is_earlier {
                         return Err(IrError::UnknownCheckLocus {
-                            check: c.0.clone(),
-                            output: alloc::string::String::from(ref_step),
+                            check: check_id.0.clone(),
+                            output: ref_step_id.0.clone(),
                         });
                     }
                 }
@@ -224,206 +208,6 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
     Ok(())
 }
 
-/// Resolve retry intents into `Check.retry`, enforce Guarantees G1+G2, detect
-/// D7 span overlaps, and verify custom judge agents exist.
-fn resolve_retries_and_guarantees(parsed: &mut Parsed) -> Result<(), IrError> {
-    use alloc::collections::BTreeMap;
-    use alloc::vec::Vec;
-
-    // D7 custom judge existence: independent of retry; iterate all checks.
-    for (cid, check) in parsed.workflow.checks.iter() {
-        if let CheckVerify::Deliverable {
-            judge: JudgeRef::Agent(ref agent_id),
-            ..
-        } = &check.verify
-        {
-            if !parsed.workflow.agents.contains_key(agent_id) {
-                return Err(IrError::UnknownJudgeAgent {
-                    check: cid.0.clone(),
-                    judge: agent_id.0.clone(),
-                });
-            }
-        }
-    }
-
-    // Build pipeline index map: step_id -> (index, &PipelineStep).
-    // If no pipeline, any retry-enabled check will fail with DeliverableNoProducer.
-    let pipeline_index: BTreeMap<&str, (usize, &crate::pipeline::PipelineStep)> =
-        match parsed.workflow.pipeline.as_ref() {
-            Some(p) => p
-                .steps
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (s.id.0.as_str(), (i, s)))
-                .collect(),
-            None => BTreeMap::new(),
-        };
-
-    let pipeline_steps: &[crate::pipeline::PipelineStep] = match parsed.workflow.pipeline.as_ref()
-    {
-        Some(p) => &p.steps,
-        None => &[],
-    };
-
-    // For each retry-enabled check, resolve producer + gate, verify G1+G2.
-    // Collect resolved retries into a Vec first to satisfy the borrow checker
-    // (we cannot simultaneously hold an immutable reference to `checks` and
-    // a mutable one for get_mut).
-    let mut resolved_retries: Vec<(CheckId, Retry)> = Vec::new();
-
-    // Also collect span intervals for D7 overlap check: (check_id, gi, check_pos_in_pipeline).
-    // check_pos is the index of the StepRun::Check step in the pipeline (if positioned).
-    let mut span_intervals: Vec<(alloc::string::String, usize, usize)> = Vec::new();
-
-    for (cid, raw) in parsed.retry_intent.iter() {
-        // Only resolve for on_fail == Retry.
-        if raw.on_fail != OnFail::Retry {
-            continue;
-        }
-
-        // Retrieve the check's locus (cloned to avoid borrow conflict).
-        let locus: Locus = match parsed.workflow.checks.get(cid) {
-            Some(check) => match &check.verify {
-                CheckVerify::Goal { evaluates, .. } => evaluates.clone(),
-                CheckVerify::Deliverable { locus, .. } => locus.clone(),
-            },
-            None => {
-                // Should never happen (parse stage creates all checks before retry_intent).
-                continue;
-            }
-        };
-
-        // --- Decision 2: find the producer step ---
-        let producer_id: PipelineStepId = match &locus {
-            Locus::Output(ref step_id) => {
-                // The locus references a pipeline step output directly.
-                if pipeline_index.contains_key(step_id.0.as_str()) {
-                    step_id.clone()
-                } else {
-                    return Err(IrError::DeliverableNoProducer {
-                        check: cid.0.clone(),
-                        locus: alloc::format!("steps.{}.output", step_id.0),
-                    });
-                }
-            }
-            Locus::Path(ref path) => {
-                // Find the FIRST pipeline step that is Agent(a) where a declares `path`.
-                let found = pipeline_steps.iter().find(|s| {
-                    if let StepRun::Agent(ref a) = s.run {
-                        if let Some(paths) = parsed.produces.get(a) {
-                            return paths.iter().any(|p| p == path);
-                        }
-                    }
-                    false
-                });
-                match found {
-                    Some(s) => s.id.clone(),
-                    None => {
-                        return Err(IrError::DeliverableNoProducer {
-                            check: cid.0.clone(),
-                            locus: path.clone(),
-                        });
-                    }
-                }
-            }
-        };
-
-        // --- Decision 3: find the gate step ---
-        let gate_id: PipelineStepId = match &raw.retry_from {
-            Some(ref from_str) => {
-                // Named step must exist in the pipeline.
-                if pipeline_index.contains_key(from_str.as_str()) {
-                    PipelineStepId(from_str.clone())
-                } else {
-                    return Err(IrError::UnknownRetryFrom {
-                        check: cid.0.clone(),
-                        retry_from: from_str.clone(),
-                    });
-                }
-            }
-            None => producer_id.clone(),
-        };
-
-        // --- Decision 4: Guarantee 1 (gate <= producer) ---
-        let gi = pipeline_index[gate_id.0.as_str()].0;
-        let pi = pipeline_index[producer_id.0.as_str()].0;
-        if gi > pi {
-            return Err(IrError::GateAfterProducer {
-                check: cid.0.clone(),
-                gate: gate_id.0.clone(),
-                producer: producer_id.0.clone(),
-            });
-        }
-
-        // --- Decision 5: Guarantee 2 (span has at least one agent step) ---
-        let span_steps = &pipeline_steps[gi..=pi];
-        let has_agent = span_steps
-            .iter()
-            .any(|s| matches!(s.run, StepRun::Agent(_)));
-        if !has_agent {
-            // Build human-readable span string.
-            let span = if gi == pi {
-                pipeline_steps[gi].id.0.clone()
-            } else {
-                let first = pipeline_steps[gi].id.0.as_str();
-                let last = pipeline_steps[pi].id.0.as_str();
-                alloc::format!("{first} -> {last}")
-            };
-            return Err(IrError::RetrySpanDeterministic {
-                check: cid.0.clone(),
-                span,
-            });
-        }
-
-        // Find the check's own position in the pipeline (the StepRun::Check step for this cid).
-        // This is used for D7 overlap calculation.
-        let check_pos: Option<usize> = pipeline_steps.iter().position(|s| {
-            matches!(&s.run, StepRun::Check(ref c) if c == cid)
-        });
-
-        // Queue the resolved retry for writing.
-        resolved_retries.push((
-            cid.clone(),
-            Retry {
-                on_fail: OnFail::Retry,
-                max_attempts: raw.max_attempts,
-                gate: gate_id.clone(),
-                producer: producer_id.clone(),
-            },
-        ));
-
-        // Register span interval for D7 if the check is positioned in the pipeline.
-        if let Some(ci) = check_pos {
-            span_intervals.push((cid.0.clone(), gi, ci));
-        }
-    }
-
-    // Write resolved retries into workflow.checks.
-    for (cid, retry) in resolved_retries {
-        if let Some(check) = parsed.workflow.checks.get_mut(&cid) {
-            check.retry = Some(retry);
-        }
-    }
-
-    // --- Decision 6: D7 overlap detection ---
-    // For each pair of positioned retry spans, check if they overlap.
-    for i in 0..span_intervals.len() {
-        for j in (i + 1)..span_intervals.len() {
-            let (ref a_id, a_start, a_end) = span_intervals[i];
-            let (ref b_id, b_start, b_end) = span_intervals[j];
-            // Overlap: a.start <= b.end && b.start <= a.end
-            if a_start <= b_end && b_start <= a_end {
-                return Err(IrError::OverlappingRetrySpans {
-                    a: a_id.clone(),
-                    b: b_id.clone(),
-                });
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +237,7 @@ mod tests {
                 max_turns: None,
                 max_tokens: None,
             },
+            produces: alloc::vec::Vec::new(),
         }
     }
 
@@ -479,8 +264,8 @@ mod tests {
             run = "agent:ghost"
         "#;
         let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        let err = typecheck(&mut parsed).unwrap_err();
+        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let err = typecheck(&parsed).unwrap_err();
         assert!(
             matches!(err, IrError::UnknownPipelineRun { .. }),
             "got {err:?}"
@@ -515,8 +300,8 @@ mod tests {
             run = "agent:b"
         "#;
         let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        let err = typecheck(&mut parsed).unwrap_err();
+        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let err = typecheck(&parsed).unwrap_err();
         assert!(
             matches!(err, IrError::ForwardOutputRef { .. }),
             "got {err:?}"
@@ -551,9 +336,9 @@ mod tests {
             input = "${steps.a.output}"
         "#;
         let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let parsed = crate::lower::parse::parse(&cfg).unwrap();
         assert!(
-            typecheck(&mut parsed).is_ok(),
+            typecheck(&parsed).is_ok(),
             "valid backward reference should be accepted"
         );
     }
@@ -576,7 +361,7 @@ mod tests {
                 },
             ),
         );
-        let mut parsed = Parsed {
+        let parsed = Parsed {
             workflow: Workflow {
                 agents,
                 tools,
@@ -586,15 +371,112 @@ mod tests {
                 pipeline: None,
                 checks: BTreeMap::new(),
             },
-            produces: BTreeMap::new(),
-            retry_intent: BTreeMap::new(),
             triggers: alloc::vec::Vec::new(),
         };
-        let err = typecheck(&mut parsed).expect_err("typecheck should reject");
+        let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
             matches!(err, IrError::UnknownSubflowToolTarget { ref tool, ref agent }
                 if tool.0 == "call_ghost" && agent.0 == "ghost"),
             "expected UnknownSubflowToolTarget; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_step_with_unknown_check_id_is_rejected() {
+        // A pipeline step runs StepRun::Check("ghost") but workflow.checks
+        // has no entry for "ghost" → should return UnknownCheckRef.
+        use crate::capability::CapabilityTable;
+        use crate::ids::{CheckId, PipelineStepId};
+        use crate::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let check_id = CheckId("ghost".to_string());
+        // No entry in workflow.checks for "ghost".
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("step-a".to_string()),
+                        run: StepRun::Check(check_id),
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(), // empty — "ghost" is not here
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject unknown check ref");
+        assert!(
+            matches!(err, IrError::UnknownCheckRef { ref step, ref check }
+                if step == "step-a" && check == "ghost"),
+            "expected UnknownCheckRef; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_locus_output_referencing_later_step_is_rejected() {
+        // A check whose Locus::Output names a step that comes AFTER the check
+        // step in the pipeline → should return UnknownCheckLocus.
+        use crate::capability::CapabilityTable;
+        use crate::check::{Check, CheckVerify, GoalPredicate, Locus, OnFail, RetryPolicy};
+        use crate::ids::{CheckId, PipelineStepId};
+        use crate::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let check_id = CheckId("my-check".to_string());
+        // The check evaluates Locus::Output("later") but "later" runs after
+        // the check step in the pipeline.
+        let check = Check {
+            id: check_id.clone(),
+            verify: CheckVerify::Goal {
+                evaluates: Locus::Output(PipelineStepId("later".to_string())),
+                predicate: GoalPredicate::Exists,
+            },
+            retry: RetryPolicy {
+                on_fail: OnFail::Abort,
+                max_attempts: 1,
+                gate: PipelineStepId("check-step".to_string()),
+            },
+        };
+
+        let mut checks = BTreeMap::new();
+        checks.insert(check_id.clone(), check);
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![
+                        // check-step runs first, but it references "later" which is after
+                        PipelineStep {
+                            id: PipelineStepId("check-step".to_string()),
+                            run: StepRun::Check(check_id),
+                            input: "${input}".to_string(),
+                        },
+                        // "later" comes after the check step — invalid forward reference
+                        PipelineStep {
+                            id: PipelineStepId("later".to_string()),
+                            run: StepRun::Tool(crate::ids::ToolId("some-tool".to_string())),
+                            input: "${input}".to_string(),
+                        },
+                    ],
+                }),
+                checks,
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject forward-referencing check locus");
+        assert!(
+            matches!(err, IrError::UnknownCheckLocus { ref check, ref output }
+                if check == "my-check" && output == "later"),
+            "expected UnknownCheckLocus; got {err:?}"
         );
     }
 
@@ -615,7 +497,7 @@ mod tests {
                 },
             ),
         );
-        let mut parsed = Parsed {
+        let parsed = Parsed {
             workflow: Workflow {
                 agents,
                 tools,
@@ -625,284 +507,13 @@ mod tests {
                 pipeline: None,
                 checks: BTreeMap::new(),
             },
-            produces: BTreeMap::new(),
-            retry_intent: BTreeMap::new(),
             triggers: alloc::vec::Vec::new(),
         };
-        let err = typecheck(&mut parsed).expect_err("typecheck should reject");
+        let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
             matches!(err, IrError::UnknownStepToolTarget { ref tool, ref step }
                 if tool.0 == "normalize" && step.0 == "missing-step"),
             "expected UnknownStepToolTarget; got {err:?}"
         );
-    }
-
-    // ---- New A6 tests ----
-
-    #[test]
-    fn rejects_deliverable_with_no_producing_step() {
-        // A deliverable with `on_fail=retry` but no agent declares the path.
-        let toml = r#"
-[project]
-name = "demo"
-
-[agents.gather]
-display_name = "G"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[deliverables.report]
-path = "/workspace/report.md"
-must_satisfy = "good"
-on_fail = "retry"
-max_attempts = 3
-
-[[pipeline.steps]]
-id = "gather"
-run = "agent:gather"
-"#;
-        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        let err = typecheck(&mut parsed).unwrap_err();
-        assert!(
-            matches!(err, IrError::DeliverableNoProducer { .. }),
-            "expected DeliverableNoProducer; got {err:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_gate_after_producer() {
-        // retry_from names a step AFTER the producer.
-        let toml = r#"
-[project]
-name = "demo"
-
-[agents.gather]
-display_name = "G"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[agents.writer]
-display_name = "W"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-# Output locus => producer is the emitting step `gather` (index 0).
-# retry_from = "writer" (index 1) is AFTER the producer => GateAfterProducer.
-[deliverables.report]
-output = "steps.gather.output"
-must_satisfy = "good"
-on_fail = "retry"
-max_attempts = 3
-retry_from = "writer"
-
-[[pipeline.steps]]
-id = "gather"
-run = "agent:gather"
-
-[[pipeline.steps]]
-id = "writer"
-run = "agent:writer"
-input = "${steps.gather.output}"
-
-[[pipeline.steps]]
-id = "verify"
-run = "check:report"
-input = "${steps.writer.output}"
-"#;
-        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        let err = typecheck(&mut parsed).unwrap_err();
-        assert!(
-            matches!(err, IrError::GateAfterProducer { .. }),
-            "expected GateAfterProducer; got {err:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_retry_span_fully_deterministic() {
-        // G2: a retry span containing no agent step must be rejected.
-        // A pipeline of [deterministic-step, check-step] with an Output
-        // locus on the deterministic step and retry_from = that step yields
-        // a span [normalize..=normalize] with no agent → RetrySpanDeterministic.
-        let toml2 = r#"
-[project]
-name = "demo"
-
-[steps.normalize]
-deterministic = "parse_celsius"
-
-[goals.has_output]
-evaluates = "steps.normalize.output"
-check = "exists"
-on_fail = "retry"
-max_attempts = 3
-
-[[pipeline.steps]]
-id = "normalize"
-run = "deterministic:normalize"
-
-[[pipeline.steps]]
-id = "verify"
-run = "check:has_output"
-input = "${steps.normalize.output}"
-"#;
-        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml2).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        // typecheck would first hit UnknownDeterministicFn (check #3 equivalent
-        // for steps, but that's UnknownNativeTool)... actually UnknownDeterministicFn
-        // is set at resolve stage, not typecheck. Typecheck only checks that the
-        // native content_hash is non-zero. Deterministic steps don't have a
-        // content_hash, so this passes check #3.
-        // But wait — ToolImpl::Step doesn't have a content_hash. Check #3 only
-        // rejects ToolImpl::Native with zero hash. So this should reach G2.
-        let err = typecheck(&mut parsed).unwrap_err();
-        assert!(
-            matches!(err, IrError::RetrySpanDeterministic { .. }),
-            "expected RetrySpanDeterministic; got {err:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_overlapping_retry_spans() {
-        // Two positioned retry checks with overlapping spans. Both use an
-        // Output locus on `writer`, so each producer is `writer` (index 1)
-        // and each gate defaults to `writer`:
-        //   check1: span [writer..=verify1] = [1, 2]
-        //   check2: span [writer..=verify2] = [1, 3] — overlaps check1
-        let toml = r#"
-[project]
-name = "demo"
-
-[agents.gather]
-display_name = "G"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[agents.writer]
-display_name = "W"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[deliverables.check1]
-output = "steps.writer.output"
-must_satisfy = "good"
-on_fail = "retry"
-max_attempts = 2
-
-[deliverables.check2]
-output = "steps.writer.output"
-must_satisfy = "good"
-on_fail = "retry"
-max_attempts = 2
-
-[[pipeline.steps]]
-id = "gather"
-run = "agent:gather"
-
-[[pipeline.steps]]
-id = "writer"
-run = "agent:writer"
-input = "${steps.gather.output}"
-
-[[pipeline.steps]]
-id = "verify1"
-run = "check:check1"
-input = "${steps.writer.output}"
-
-[[pipeline.steps]]
-id = "verify2"
-run = "check:check2"
-input = "${steps.writer.output}"
-"#;
-        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        let err = typecheck(&mut parsed).unwrap_err();
-        assert!(
-            matches!(err, IrError::OverlappingRetrySpans { .. }),
-            "expected OverlappingRetrySpans; got {err:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_judge_agent() {
-        // Deliverable with judge = "ghost" but no [agents.ghost].
-        let toml = r#"
-[project]
-name = "demo"
-
-[agents.gather]
-display_name = "G"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[deliverables.report]
-path = "/workspace/report.md"
-must_satisfy = "good"
-judge = "ghost"
-"#;
-        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        let err = typecheck(&mut parsed).unwrap_err();
-        assert!(
-            matches!(err, IrError::UnknownJudgeAgent { ref check, ref judge }
-                if check == "report" && judge == "ghost"),
-            "expected UnknownJudgeAgent{{report, ghost}}; got {err:?}"
-        );
-    }
-
-    #[test]
-    fn valid_retry_resolves_producer_and_gate() {
-        // Full valid case: gather -> writer -> verify (check:report).
-        // Output locus on `writer` => producer is the `writer` step;
-        // gate defaults to the producer. on_fail=retry, retry_from=writer.
-        let toml = r#"
-[project]
-name = "demo"
-
-[agents.gather]
-display_name = "G"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[agents.writer]
-display_name = "W"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[deliverables.report]
-output = "steps.writer.output"
-must_satisfy = "good"
-on_fail = "retry"
-max_attempts = 3
-retry_from = "writer"
-
-[[pipeline.steps]]
-id = "gather"
-run = "agent:gather"
-
-[[pipeline.steps]]
-id = "writer"
-run = "agent:writer"
-input = "${steps.gather.output}"
-
-[[pipeline.steps]]
-id = "verify"
-run = "check:report"
-input = "${steps.writer.output}"
-"#;
-        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let mut parsed = crate::lower::parse::parse(&cfg).unwrap();
-        typecheck(&mut parsed).expect("should be valid");
-        let check = parsed
-            .workflow
-            .checks
-            .get(&crate::ids::CheckId("report".to_string()))
-            .expect("check present");
-        let retry = check.retry.as_ref().expect("retry should be resolved");
-        assert_eq!(retry.gate.0, "writer", "gate should be writer");
-        assert_eq!(retry.producer.0, "writer", "producer should be writer");
-        assert_eq!(retry.max_attempts, 3);
-        assert_eq!(retry.on_fail, crate::check::OnFail::Retry);
     }
 }

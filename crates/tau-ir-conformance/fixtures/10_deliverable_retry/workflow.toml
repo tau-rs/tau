@@ -1,0 +1,40 @@
+[project]
+name = "fixture-10"
+
+[agents.gather]
+display_name = "Gather"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 1
+produces     = ["steps.writer.output"]
+
+[[pipeline.steps]]
+id    = "gather"
+run   = "agent:gather"
+input = "${input}"
+
+[[pipeline.steps]]
+id    = "writer"
+run   = "agent:writer"
+input = "${steps.gather.output}"
+
+# A deliverable with a rewind-to-gate retry loop. The built-in judge rejects
+# the writer's first draft (`met: false`), so the engine rewinds to the gate
+# (`retry_from = "writer"`, an agent step — Guarantee-2 holds) and re-runs the
+# writer. The second draft is accepted (`met: true`) and the run converges.
+# Output locus binds to the `writer` agent (produces = ["steps.writer.output"])
+# and skips the fs-write capability check (no fs tool required).
+[deliverables.report]
+output       = "steps.writer.output"
+must_satisfy = "A coherent report of the gathered findings."
+on_fail      = "retry"
+max_attempts = 3
+retry_from   = "writer"

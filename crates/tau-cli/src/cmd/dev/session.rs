@@ -20,7 +20,7 @@ use tau_runtime_core::interpreter::run_ir;
 
 use crate::cmd::ir_dispatcher::{setup_mcp_runtime, ForwardingDispatcher};
 use crate::cmd::plugin_loader;
-use crate::cmd::run::render_outcome;
+use crate::cmd::run::{render_outcome, render_pipeline_result};
 
 /// All the long-lived state for one `tau dev` invocation.
 pub struct DevSession {
@@ -329,12 +329,9 @@ impl DevSession {
             drop(runtime);
             plugin_loader::flush_recorders().await;
 
-            let outcome = store_result.context("running pipeline via IR interpreter")?;
+            let store = store_result.context("running pipeline via IR interpreter")?;
             let last_step_id = last_step_id.ok_or_else(|| anyhow!("pipeline declared no steps"))?;
-            // Route through the shared status-aware renderer so check
-            // aborts / agent failures surface (and exit non-zero) in `tau
-            // dev` exactly as they do in `tau run`.
-            return crate::cmd::run::pipeline_outcome_to_result(outcome, &last_step_id, output);
+            return render_pipeline_result(&store, &last_step_id, output);
         }
 
         // 6b. Single-agent dispatch (default; unchanged).

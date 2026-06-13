@@ -27,6 +27,7 @@
 - [Export a skill](how-to/export-a-skill.md)
 - [Install a skill](how-to/install-a-skill.md)
 - [Use MCP servers](how-to/mcp-servers.md)
+- [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
 - [Write a tool plugin](how-to/write-a-tool-plugin.md)
@@ -60,7 +61,6 @@
 - [Two-layer skills](explanation/two-layer-skills.md)
 - [Trigger ingress](explanation/trigger-ingress.md)
 - [Workflows](explanation/workflows.md)
-- [Goals and deliverables](explanation/checks.md)
 
 # Architecture decisions
 
@@ -111,6 +111,7 @@
 - [ADR-0042 — Cross-repo CI template sync (tau = source of truth)](decisions/0042-cross-repo-ci-template-sync.md)
 - [ADR-0044 — Trigger ingress, slice 1](decisions/0044-trigger-ingress-slice-1.md)
 - [ADR-0043 — Trigger ingress: compile the trigger, delegate the substrate](decisions/0043-trigger-ingress.md)
+- [ADR-0044 — Deliverables & goals: build-time-checked postcondition steps](decisions/0044-deliverables-and-goals.md)
 
 # Retrospectives
 

@@ -13,9 +13,9 @@
 //! supplies.
 
 pub mod agent_loop;
-pub(crate) mod check_eval;
+pub mod artifact;
+pub mod check;
 pub mod deterministic;
-pub(crate) mod verdict;
 pub mod output_store;
 pub mod pipeline;
 pub mod subflow;

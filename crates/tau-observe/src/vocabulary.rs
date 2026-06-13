@@ -98,12 +98,12 @@ pub const EV_PIPELINE_STEP_COMPLETED: &str = "pipeline.step_completed";
 
 // --- Check events ---
 
-/// A check evaluation completed (pass or fail).
+/// Span wrapping a single check evaluation.
+pub const SPAN_PIPELINE_CHECK: &str = "pipeline.check";
+/// Emitted when a check produces a verdict.
 pub const EV_CHECK_EVALUATED: &str = "check.evaluated";
-/// A failed check rewound to its gate to retry.
+/// Emitted when a failed check rewound to its gate for retry.
 pub const EV_CHECK_RETRY: &str = "check.retry";
-/// Span wrapping one check evaluation.
-pub const SPAN_CHECK: &str = "check";
 
 #[cfg(test)]
 mod tests {
@@ -176,9 +176,9 @@ mod tests {
     }
 
     #[test]
-    fn check_events_match_adr_0006_section_3_9() {
+    fn check_events_match_spec() {
+        assert_eq!(SPAN_PIPELINE_CHECK, "pipeline.check");
         assert_eq!(EV_CHECK_EVALUATED, "check.evaluated");
         assert_eq!(EV_CHECK_RETRY, "check.retry");
-        assert_eq!(SPAN_CHECK, "check");
     }
 }

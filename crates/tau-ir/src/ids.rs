@@ -28,7 +28,6 @@ pub struct SubflowId(pub String);
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct PipelineStepId(pub String);
 
-/// Identifier for a postcondition [`Check`](crate::check::Check). Referenced
-/// from the pipeline by [`StepRun::Check`](crate::pipeline::StepRun::Check).
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+/// Identifier for a postcondition [`Check`](crate::check::Check).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CheckId(pub String);

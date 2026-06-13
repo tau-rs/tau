@@ -137,9 +137,9 @@ fn lookup_observe(ident: &str) -> Option<&'static str> {
         "SPAN_PIPELINE_STEP" => o::SPAN_PIPELINE_STEP,
         "EV_PIPELINE_STEP_STARTED" => o::EV_PIPELINE_STEP_STARTED,
         "EV_PIPELINE_STEP_COMPLETED" => o::EV_PIPELINE_STEP_COMPLETED,
+        "SPAN_PIPELINE_CHECK" => o::SPAN_PIPELINE_CHECK,
         "EV_CHECK_EVALUATED" => o::EV_CHECK_EVALUATED,
         "EV_CHECK_RETRY" => o::EV_CHECK_RETRY,
-        "SPAN_CHECK" => o::SPAN_CHECK,
         _ => return None,
     })
 }
@@ -187,9 +187,9 @@ fn observe_constant_count() -> usize {
         "SPAN_PIPELINE_STEP",
         "EV_PIPELINE_STEP_STARTED",
         "EV_PIPELINE_STEP_COMPLETED",
+        "SPAN_PIPELINE_CHECK",
         "EV_CHECK_EVALUATED",
         "EV_CHECK_RETRY",
-        "SPAN_CHECK",
     ];
     // Sanity check: lookup_observe must accept every IDENT.
     for ident in IDENTS {
