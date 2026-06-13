@@ -494,6 +494,12 @@ pub struct DeliverableEntry {
     pub retry_from: Option<String>,
     /// Who judges the content.
     pub judge: JudgeConfig,
+    /// Resolved producing agent id (filled by validation).
+    ///
+    /// Empty string before `validate_postconditions` runs; afterwards
+    /// always holds the unique agent id whose `produces` list covers
+    /// this deliverable's locus.
+    pub producer: String,
 }
 
 /// Validated project config. Constructed via
@@ -818,6 +824,40 @@ pub enum ProjectConfigError {
         /// Deliverable id that had the conflict.
         id: String,
     },
+
+    // --- Task 4: producer binding + capability coverage ---
+    /// A deliverable declares a locus no agent's `produces` covers.
+    #[error("deliverable '{id}' has no producer: no step declares produces = [{locus:?}]")]
+    DeliverableNoProducer {
+        /// Deliverable id.
+        id: String,
+        /// The locus string (path or output ref) that was unmatched.
+        locus: String,
+    },
+
+    /// More than one agent claims to produce the deliverable's locus.
+    #[error(
+        "deliverable '{id}' is produced by multiple agents ({agents:?}); a deliverable must bind to exactly one producer"
+    )]
+    DeliverableAmbiguousProducer {
+        /// Deliverable id.
+        id: String,
+        /// Sorted agent ids that all claim the same locus.
+        agents: Vec<String>,
+    },
+
+    /// The producing agent holds no fs-write capability covering the path.
+    #[error(
+        "step '{agent}' declares it produces '{path}' but holds no fs-write capability covering that path"
+    )]
+    DeliverableProducerLacksCapability {
+        /// Deliverable id.
+        id: String,
+        /// Agent id that declared the `produces` entry.
+        agent: String,
+        /// The path the agent claims to produce.
+        path: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -874,7 +914,7 @@ impl UncheckedProjectConfig {
             deliverables.insert(id.clone(), validate_deliverable(id, raw)?);
         }
 
-        Ok(ProjectConfig {
+        let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
             agents,
@@ -883,7 +923,11 @@ impl UncheckedProjectConfig {
             pipeline,
             goals,
             deliverables,
-        })
+        };
+
+        validate_postconditions(&mut result)?;
+
+        Ok(result)
     }
 }
 
@@ -1255,7 +1299,109 @@ fn validate_deliverable(
         max_attempts,
         retry_from: raw.retry_from,
         judge,
+        producer: String::new(),
     })
+}
+
+/// Run cross-entity postcondition checks on an otherwise-valid [`ProjectConfig`].
+///
+/// Resolves each deliverable's producer agent (the unique agent whose `produces`
+/// list contains a locus matching the deliverable) and checks that the producer
+/// holds an `fs.write` capability covering the declared path (for
+/// `LocusConfig::Path` loci). Fills `DeliverableEntry::producer` as a side-effect.
+fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigError> {
+    use crate::capability_override::glob_subset::is_glob_subset;
+    use tau_domain::FsCapability;
+
+    // First pass: resolve producers and run capability checks (immutable borrows
+    // of agents/tools). Collect (deliverable_id, resolved_producer_id) pairs.
+    let mut resolved: Vec<(String, String)> = Vec::new();
+
+    for (deliverable_id, deliverable) in &cfg.deliverables {
+        // Collect agent ids whose `produces` contains a locus equal to this
+        // deliverable's locus (after running each entry through parse_locus).
+        let mut producers: Vec<String> = cfg
+            .agents
+            .iter()
+            .filter(|(_, agent)| {
+                agent
+                    .produces
+                    .iter()
+                    .any(|p| parse_locus(p) == deliverable.locus)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        producers.sort();
+
+        let producer_id = match producers.len() {
+            0 => {
+                // Derive a display string for the locus.
+                let locus_str = match &deliverable.locus {
+                    LocusConfig::Path(p) => p.clone(),
+                    LocusConfig::Output(o) => format!("steps.{o}.output"),
+                };
+                return Err(ProjectConfigError::DeliverableNoProducer {
+                    id: deliverable_id.clone(),
+                    locus: locus_str,
+                });
+            }
+            1 => producers.remove(0),
+            _ => {
+                return Err(ProjectConfigError::DeliverableAmbiguousProducer {
+                    id: deliverable_id.clone(),
+                    agents: producers,
+                });
+            }
+        };
+
+        // Capability check only for path loci.
+        if let LocusConfig::Path(path) = &deliverable.locus {
+            let agent = cfg.agents.get(&producer_id).expect("producer agent exists");
+
+            // Collect all write paths from tools the producer references.
+            let write_paths: Vec<String> = agent
+                .tool_refs
+                .iter()
+                .filter_map(|tool_name| cfg.tools.get(tool_name))
+                .flat_map(|tool| {
+                    tool.capabilities.iter().filter_map(|cap| {
+                        if let tau_domain::Capability::Filesystem(FsCapability::Write {
+                            paths,
+                            ..
+                        }) = cap
+                        {
+                            Some(paths.clone())
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .flatten()
+                .collect();
+
+            let covered = write_paths
+                .iter()
+                .any(|cap_path| is_glob_subset(path, cap_path));
+            if !covered {
+                return Err(ProjectConfigError::DeliverableProducerLacksCapability {
+                    id: deliverable_id.clone(),
+                    agent: producer_id,
+                    path: path.clone(),
+                });
+            }
+        }
+
+        resolved.push((deliverable_id.clone(), producer_id));
+    }
+
+    // Second pass: fill in the `producer` field on each deliverable.
+    for (deliverable_id, producer_id) in resolved {
+        if let Some(deliverable) = cfg.deliverables.get_mut(&deliverable_id) {
+            deliverable.producer = producer_id;
+        }
+    }
+
+    Ok(())
 }
 
 fn unchecked_to_capability_override(
@@ -2110,6 +2256,16 @@ check     = "matches"
         let toml = r#"
 [project]
 name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
 [deliverables.report]
 path         = "/workspace/report.md"
 must_satisfy = "A coherent summary."
@@ -2186,6 +2342,111 @@ produces     = ["/workspace/report.md"]
             validated.agents["writer"].produces,
             vec!["/workspace/report.md".to_string()]
         );
+    }
+
+    // --- Task 4: producer binding + capability coverage ---
+
+    #[test]
+    fn deliverable_without_producer_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::DeliverableNoProducer { id, .. } if id == "report")
+        );
+    }
+
+    #[test]
+    fn producer_lacking_fs_write_capability_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/other/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::DeliverableProducerLacksCapability { .. }
+        ));
+    }
+
+    #[test]
+    fn producer_with_covering_capability_validates() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        assert!(toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn producer_field_is_filled_after_successful_validate() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert_eq!(cfg.deliverables["report"].producer, "writer");
     }
 }
 
