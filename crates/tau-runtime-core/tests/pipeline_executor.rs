@@ -28,7 +28,8 @@ use tracing_subscriber::Layer;
 
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::CapabilityTable;
-use tau_ir::ids::{AgentId, PipelineStepId, StepId};
+use tau_ir::check::{Check, CheckVerify, Locus, Predicate};
+use tau_ir::ids::{AgentId, CheckId, PipelineStepId, StepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::{Agent, Deterministic};
 use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
@@ -42,6 +43,7 @@ use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::deterministic::DeterministicRegistry;
 use tau_runtime_core::interpreter::pipeline::run_pipeline;
 use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
+use tau_runtime_core::outcome::PipelineStatus;
 
 /// LLM backend that echoes the last user-message text back as its final
 /// assistant text (no tool calls -> the agent loop completes in one turn).
@@ -476,5 +478,120 @@ async fn pipeline_emits_step_started_and_completed_events() {
     assert!(
         completed_events.contains(&&"event:pipeline.step_completed:b".to_string()),
         "expected pipeline.step_completed with id='b'; got: {completed_events:?}"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Goal-check evaluation tests (C1.3)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Build a module with:
+///   step "writer" (Agent) — echoes the run input
+///   step "chk"    (Check → check "has_sources") — Matches predicate on writer's output
+///
+/// `pattern` is the regex passed to Predicate::Matches.
+fn build_goal_check_module(pattern: &str) -> IrModule {
+    let mut agents = std::collections::BTreeMap::new();
+    agents.insert(AgentId("writer".into()), agent("writer"));
+
+    let check_id = CheckId("has_sources".into());
+    let mut checks = std::collections::BTreeMap::new();
+    checks.insert(
+        check_id.clone(),
+        Check {
+            id: check_id.clone(),
+            verify: CheckVerify::Goal {
+                evaluates: Locus::Output(PipelineStepId("writer".into())),
+                predicate: Predicate::Matches(pattern.to_string()),
+            },
+            retry: None,
+        },
+    );
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("writer".into()),
+                run: StepRun::Agent(AgentId("writer".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("chk".into()),
+                run: StepRun::Check(check_id),
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: std::collections::BTreeMap::new(),
+            steps: std::collections::BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(std::collections::BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks,
+        },
+    }
+}
+
+#[tokio::test]
+async fn goal_check_passes_when_predicate_matches() {
+    // The agent echoes "## Sources\nfoo" (injected as run input).
+    // The check uses Matches("(?m)^## Sources") which matches -> Completed.
+    let module = build_goal_check_module("(?m)^## Sources");
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    let dispatcher = Arc::new(EchoDispatcher { backend });
+
+    let outcome = run_pipeline(
+        Arc::new(module),
+        "## Sources\nfoo".to_string(),
+        dispatcher,
+    )
+    .await
+    .expect("pipeline runs without kernel error");
+
+    assert_eq!(
+        outcome.status,
+        PipelineStatus::Completed,
+        "predicate matched -> pipeline should complete; got: {:?}",
+        outcome.status
+    );
+    // The check step stores Bool(true) for a passing check.
+    assert_eq!(
+        outcome.outputs.get("chk"),
+        Some(&serde_json::Value::Bool(true)),
+        "passing check step stores Bool(true)"
+    );
+}
+
+#[tokio::test]
+async fn goal_check_aborts_when_predicate_does_not_match() {
+    // Same module, but the run input has no "## Sources" header.
+    let module = build_goal_check_module("(?m)^## Sources");
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    let dispatcher = Arc::new(EchoDispatcher { backend });
+
+    let outcome = run_pipeline(
+        Arc::new(module),
+        "no header here".to_string(),
+        dispatcher,
+    )
+    .await
+    .expect("run_pipeline returns Ok even on check abort");
+
+    assert!(
+        matches!(&outcome.status, PipelineStatus::CheckAborted { check, .. } if check == "has_sources"),
+        "predicate failed -> pipeline should abort with CheckAborted; got: {:?}",
+        outcome.status
     );
 }

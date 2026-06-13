@@ -23,7 +23,9 @@ use crate::interpreter::output_store::OutputStore;
 use crate::interpreter::tool_dispatch::ToolDispatcher;
 use crate::options::TokenUsage;
 use crate::outcome::{PipelineOutcome, PipelineStatus, RunOutcome};
-use crate::vocabulary::{EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED, SPAN_PIPELINE_STEP};
+use crate::vocabulary::{
+    EV_CHECK_EVALUATED, EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED, SPAN_PIPELINE_STEP,
+};
 
 /// Drive an `IrModule`'s pipeline to completion, returning all step
 /// outputs.
@@ -148,13 +150,134 @@ where
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
             StepRun::Check(check_id) => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                        "pipeline step {} (check:{}) not yet implemented",
-                        step.id.0,
-                        check_id.0
-                    ),
-                });
+                let check =
+                    module.workflow.checks.get(check_id).ok_or_else(|| RuntimeError::Internal {
+                        message: alloc::format!(
+                            "pipeline step {} runs unknown check {}",
+                            step.id.0,
+                            check_id.0
+                        ),
+                    })?;
+
+                // Clone the parts we need so the borrow on `module` doesn't
+                // span the mutable `store` operations below.
+                let evaluates = check.verify.clone();
+
+                match evaluates {
+                    tau_ir::check::CheckVerify::Goal { evaluates, predicate } => {
+                        // Materialize the locus to bytes.
+                        let bytes: Option<alloc::vec::Vec<u8>> = match &evaluates {
+                            tau_ir::check::Locus::Output(step_id) => {
+                                store.get(&step_id.0).map(|v| match v {
+                                    serde_json::Value::String(s) => {
+                                        s.clone().into_bytes()
+                                    }
+                                    other => other.to_string().into_bytes(),
+                                })
+                            }
+                            tau_ir::check::Locus::Path(p) => {
+                                match dispatcher.read_artifact(p) {
+                                    Some(Ok(opt)) => opt,
+                                    Some(Err(e)) => return Err(e),
+                                    None => {
+                                        return Err(RuntimeError::Internal {
+                                            message: "check evaluates a filesystem path but \
+                                                      the dispatcher provides no host filesystem"
+                                                .into(),
+                                        })
+                                    }
+                                }
+                            }
+                        };
+
+                        // Evaluate the predicate. NativeFn routes through the
+                        // deterministic registry; all other predicates use
+                        // eval_predicate directly.
+                        let (passed, rationale) = match &predicate {
+                            tau_ir::check::Predicate::NativeFn(name) => {
+                                let registry =
+                                    dispatcher.deterministic_registry().ok_or_else(|| {
+                                        RuntimeError::Internal {
+                                            message: alloc::format!(
+                                                "check {} uses native fn {name} but no \
+                                                 deterministic registry is available",
+                                                check_id.0
+                                            ),
+                                        }
+                                    })?;
+                                // Pass the locus value as args (JSON). Absent locus -> Null.
+                                let args = match &bytes {
+                                    Some(b) => serde_json::from_slice::<serde_json::Value>(b)
+                                        .unwrap_or_else(|_| {
+                                            serde_json::Value::String(
+                                                String::from_utf8_lossy(b).into_owned(),
+                                            )
+                                        }),
+                                    None => serde_json::Value::Null,
+                                };
+                                let result =
+                                    registry.invoke(name, &args).map_err(|e| {
+                                        RuntimeError::Internal {
+                                            message: alloc::format!(
+                                                "check {} native fn {name} failed: {e}",
+                                                check_id.0
+                                            ),
+                                        }
+                                    })?;
+                                let ok = result.as_bool().unwrap_or(false);
+                                let why = if ok {
+                                    "native predicate passed".into()
+                                } else {
+                                    alloc::format!(
+                                        "native predicate {name} returned {result}"
+                                    )
+                                };
+                                (ok, why)
+                            }
+                            other => {
+                                crate::interpreter::check_eval::eval_predicate(
+                                    other,
+                                    bytes.as_deref(),
+                                )
+                            }
+                        };
+
+                        // Emit the verdict event.
+                        let verdict = if passed { "pass" } else { "fail" };
+                        tracing::info!(
+                            parent: &step_span,
+                            name = EV_CHECK_EVALUATED,
+                            id = check_id.0.as_str(),
+                            kind = "goal",
+                            verdict = verdict,
+                            attempt = 1u32,
+                            rationale = rationale.as_str(),
+                        );
+
+                        if passed {
+                            serde_json::Value::Bool(true)
+                        } else {
+                            // C1: abort on failure (retry lands in C2).
+                            return Ok(PipelineOutcome {
+                                outputs: store,
+                                token_usage: total_usage,
+                                status: PipelineStatus::CheckAborted {
+                                    check: check_id.0.clone(),
+                                    rationale,
+                                },
+                            });
+                        }
+                    }
+                    tau_ir::check::CheckVerify::Deliverable { .. } => {
+                        // Deliverable judge + retry land in Task C2.
+                        return Err(RuntimeError::Internal {
+                            message: alloc::format!(
+                                "deliverable check {} evaluation lands in C2",
+                                check_id.0
+                            ),
+                        });
+                    }
+                }
             }
         };
 
