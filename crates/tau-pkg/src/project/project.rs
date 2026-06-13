@@ -27,6 +27,9 @@ pub struct UncheckedProjectConfig {
     /// Optional `[pipeline]` table with ordered `[[pipeline.steps]]`.
     #[serde(default)]
     pub pipeline: Option<UncheckedPipeline>,
+    /// Map of goal id → unchecked goal definition.
+    #[serde(default)]
+    pub goals: BTreeMap<String, UncheckedGoal>,
 }
 
 /// `[project]` table.
@@ -350,6 +353,72 @@ pub struct StepEntry {
 
 // ----- Validated shapes -----
 
+/// Raw `[goals.<id>]` table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedGoal {
+    /// Read locus: a filesystem path or `steps.<id>.output`.
+    pub evaluates: String,
+    /// Menu predicate name (mutually exclusive with `fn`).
+    #[serde(default)]
+    pub check: Option<String>,
+    /// Regex for `check = "matches"`.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Expected value for `check = "equals"`.
+    #[serde(default)]
+    pub equals: Option<String>,
+    /// Threshold for `check = "min_count"`.
+    #[serde(default)]
+    pub min_count: Option<u64>,
+    /// JSON schema for `check = "schema_valid"`.
+    #[serde(default)]
+    pub schema: Option<serde_json::Value>,
+    /// Native-fn escape hatch (`<crate>::<path>`), mutually exclusive with `check`.
+    #[serde(default, rename = "fn")]
+    pub r#fn: Option<String>,
+}
+
+/// A read locus: a filesystem path or a named step output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocusConfig {
+    /// Filesystem path.
+    Path(String),
+    /// `steps.<id>.output` → the step id.
+    Output(String),
+}
+
+/// Validated goal predicate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GoalPredicateConfig {
+    /// Locus resolves to something.
+    Exists,
+    /// Resolves and is non-empty.
+    NonEmpty,
+    /// Equals the given literal.
+    Equals(String),
+    /// Matches the given regex.
+    Matches(String),
+    /// At least N items (lines/array entries).
+    MinCount(u64),
+    /// Validates against the given JSON schema.
+    SchemaValid(serde_json::Value),
+    /// Registered native fn (`<crate>::<path>`).
+    NativeFn(String),
+}
+
+/// Validated `[goals.<id>]` entry.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct GoalEntry {
+    /// Goal id (table key).
+    pub id: String,
+    /// Read locus.
+    pub evaluates: LocusConfig,
+    /// Verification predicate.
+    pub predicate: GoalPredicateConfig,
+}
+
 /// Validated project config. Constructed via
 /// [`UncheckedProjectConfig::validate`] only.
 #[non_exhaustive]
@@ -367,6 +436,8 @@ pub struct ProjectConfig {
     pub steps: BTreeMap<String, StepEntry>,
     /// Optional validated pipeline.
     pub pipeline: Option<PipelineConfig>,
+    /// Map of goal id → validated goal entry.
+    pub goals: BTreeMap<String, GoalEntry>,
 }
 
 /// Validated entry for a single agent.
@@ -641,6 +712,15 @@ pub enum ProjectConfigError {
         /// Offending URL.
         url: String,
     },
+
+    /// A `[goals.<id>]` entry failed semantic validation.
+    #[error("goal {id:?}: {message}")]
+    GoalValidation {
+        /// Goal id that failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -687,6 +767,11 @@ impl UncheckedProjectConfig {
             None => None,
         };
 
+        let mut goals = BTreeMap::new();
+        for (id, raw) in self.goals {
+            goals.insert(id.clone(), validate_goal(id, raw)?);
+        }
+
         Ok(ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -694,6 +779,7 @@ impl UncheckedProjectConfig {
             tools,
             steps,
             pipeline,
+            goals,
         })
     }
 }
@@ -902,6 +988,104 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
         });
     }
     Ok(PipelineConfig { steps })
+}
+
+/// Parse a locus string into a [`LocusConfig`].
+///
+/// A value of the form `steps.<id>.output` resolves to `Output("<id>")`;
+/// everything else resolves to `Path(s)`.
+pub fn parse_locus(s: &str) -> LocusConfig {
+    // Match "steps.<id>.output"
+    if let Some(rest) = s.strip_prefix("steps.") {
+        if let Some(id) = rest.strip_suffix(".output") {
+            if !id.is_empty() {
+                return LocusConfig::Output(id.to_string());
+            }
+        }
+    }
+    LocusConfig::Path(s.to_string())
+}
+
+fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectConfigError> {
+    let evaluates = parse_locus(&raw.evaluates);
+
+    // fn and check are mutually exclusive
+    match (&raw.r#fn, &raw.check) {
+        (Some(_), Some(_)) => {
+            return Err(ProjectConfigError::GoalValidation {
+                id,
+                message: "only one of `fn` or `check` may be set".into(),
+            });
+        }
+        (None, None) => {
+            return Err(ProjectConfigError::GoalValidation {
+                id,
+                message: "one of `fn` or `check` must be set".into(),
+            });
+        }
+        (Some(fn_name), None) => {
+            return Ok(GoalEntry {
+                id,
+                evaluates,
+                predicate: GoalPredicateConfig::NativeFn(fn_name.clone()),
+            });
+        }
+        (None, Some(_)) => {} // fall through to check dispatch below
+    }
+
+    let check = raw.check.as_deref().unwrap();
+    let predicate = match check {
+        "exists" => GoalPredicateConfig::Exists,
+        "non_empty" => GoalPredicateConfig::NonEmpty,
+        "equals" => match raw.equals {
+            Some(v) => GoalPredicateConfig::Equals(v),
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"equals\" requires the `equals` field".into(),
+                });
+            }
+        },
+        "matches" => match raw.pattern {
+            Some(p) => GoalPredicateConfig::Matches(p),
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"matches\" requires the `pattern` field".into(),
+                });
+            }
+        },
+        "min_count" => match raw.min_count {
+            Some(n) => GoalPredicateConfig::MinCount(n),
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"min_count\" requires the `min_count` field".into(),
+                });
+            }
+        },
+        "schema_valid" => match raw.schema {
+            Some(s) => GoalPredicateConfig::SchemaValid(s),
+            None => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id,
+                    message: "check = \"schema_valid\" requires the `schema` field".into(),
+                });
+            }
+        },
+        other => {
+            return Err(ProjectConfigError::GoalValidation {
+                id,
+                message: format!("unknown check {other:?}; valid values: exists, non_empty, equals, matches, min_count, schema_valid"),
+            });
+        }
+    };
+
+    Ok(GoalEntry {
+        id,
+        evaluates,
+        predicate,
+    })
 }
 
 fn unchecked_to_capability_override(
@@ -1687,6 +1871,68 @@ mod tests {
         assert_eq!(cfg.pipeline.unwrap().steps[0].input, "${input}");
     }
 
+    // --- Task 2: [goals.*] tests ---
+
+    #[test]
+    fn goal_matches_parses_path_locus_and_regex_predicate() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.has_sources]
+evaluates = "/workspace/report.md"
+check     = "matches"
+pattern   = "(?m)^## Sources"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        let v = cfg.validate().unwrap();
+        let g = &v.goals["has_sources"];
+        assert_eq!(
+            g.evaluates,
+            LocusConfig::Path("/workspace/report.md".into())
+        );
+        assert_eq!(
+            g.predicate,
+            GoalPredicateConfig::Matches("(?m)^## Sources".into())
+        );
+    }
+
+    #[test]
+    fn goal_fn_escape_hatch_parses_output_locus() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.link_health]
+evaluates = "steps.writer.output"
+fn        = "research_checks::all_links_resolve"
+"#;
+        let v: ProjectConfig = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap();
+        let g = &v.goals["link_health"];
+        assert_eq!(g.evaluates, LocusConfig::Output("writer".into()));
+        assert_eq!(
+            g.predicate,
+            GoalPredicateConfig::NativeFn("research_checks::all_links_resolve".into())
+        );
+    }
+
+    #[test]
+    fn goal_matches_without_pattern_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.bad]
+evaluates = "/x"
+check     = "matches"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::GoalValidation { .. }));
+    }
+
     #[test]
     fn agent_produces_parses_and_validates() {
         let toml = r#"
@@ -1781,6 +2027,7 @@ mod proptests {
                 tools: BTreeMap::new(),
                 steps: BTreeMap::new(),
                 pipeline: None,
+                goals: BTreeMap::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();
