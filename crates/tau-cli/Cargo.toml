@@ -57,6 +57,10 @@ tempfile           = { workspace = true }
 # SHA-256 over the native-tool symbolic name in `cmd::build::lower_ir`
 # until a real native-tool registry lands in `tau-pkg`.
 sha2               = { workspace = true }
+# Regex matching for the `FN_BUILTIN_MATCHES` goal predicate (Task 22).
+regex              = { workspace = true }
+# JSON Schema validation for the `FN_BUILTIN_SCHEMA_VALID` goal predicate (Task 22).
+jsonschema         = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2"

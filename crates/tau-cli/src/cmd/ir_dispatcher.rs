@@ -424,6 +424,29 @@ impl ToolDispatcher for ForwardingDispatcher {
     fn random(&self) -> Option<Arc<dyn tau_ports::RandomSource>> {
         Some(Arc::new(tau_runtime_tokio::OsRandom))
     }
+
+    /// Supply the built-in goal predicate registry to the interpreter.
+    ///
+    /// Returns the production [`BuiltinDeterministicRegistry`] so all six
+    /// `FN_BUILTIN_*` predicates are available during `run_pipeline` check
+    /// evaluation without additional configuration. User-registered native
+    /// fns are a future extension layered on top.
+    fn deterministic_registry(
+        &self,
+    ) -> Option<Arc<dyn tau_runtime_core::interpreter::deterministic::DeterministicRegistry>> {
+        Some(crate::cmd::builtin_registry::make_builtin_registry())
+    }
+
+    /// Supply the `std::fs`-backed artifact reader to the interpreter.
+    ///
+    /// Required by check evaluation (`evaluate_goal` with `Locus::Path`).
+    /// Without this, any check that reads a filesystem path would surface as
+    /// a [`RuntimeError::Internal`] with "check needs an artifact reader".
+    fn artifact_reader(
+        &self,
+    ) -> Option<Arc<dyn tau_runtime_core::interpreter::artifact::ArtifactReader>> {
+        Some(crate::cmd::builtin_registry::make_artifact_reader())
+    }
 }
 
 // ---------------------------------------------------------------------------
