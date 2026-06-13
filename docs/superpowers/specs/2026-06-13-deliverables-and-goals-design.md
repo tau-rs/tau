@@ -1,8 +1,10 @@
 # Deliverables & Goals: build-time-checked postcondition steps
 
 **Date:** 2026-06-13
-**Status:** Design approved. **Blocked on a prerequisite** (see *Prerequisite*
-below); split into two implementation plans.
+**Status:** Design approved; **Plan 1 prerequisite shipped (PR #335,
+2026-06-13)**. Reconciled against Plan 1's shipped substrate — see
+*Reconciliation with Plan 1 (post-#335)* below, which is authoritative where it
+refines the original design. Ready for the Plan 2 implementation plan.
 **Scope:** Add two postcondition primitives — `goal` (deterministic predicate)
 and `deliverable` (produced artifact + LLM-judged content) — to the canonical
 `tau.toml` → IR surface, checked at both build time and runtime, with an
@@ -42,6 +44,144 @@ in the first place.
 
 Everything below is the **Plan 2** design and is written as if Plan 1 exists
 (engine-sequenced steps + an addressable `steps.<id>.output`).
+
+## Reconciliation with Plan 1 (post-#335)
+
+Plan 1 shipped a *thinner* substrate than this spec assumed. The reconciliation
+below is **authoritative** where it refines the body; the body has been patched
+to remove the two claims Plan 1's reality contradicts (budget, judge
+`output_schema` warn). Seven decisions (D1–D7), all locked.
+
+**What Plan 1 actually shipped** (`crates/tau-runtime-core/src/interpreter/pipeline.rs`):
+`run_pipeline(module, input, dispatcher) -> Result<OutputStore, RuntimeError>`.
+A `Vec<PipelineStep>` where `StepRun ∈ {Agent, Tool, Deterministic}`, each
+positioned by a `[[pipeline.steps]]` entry (`run = "kind:id"`). An `OutputStore`
+(`BTreeMap<String, Value>`, `insert` overwrites). Agent steps go through
+`run_agent -> RunOutcome`; the pipeline keeps only `last_assistant_text` and
+**discards token usage + turn counts**, and maps `RunOutcome::Failed ->
+RuntimeError::Internal` (the ADR-0006 conflation, Plan-1 follow-up #5). No
+structured output exists anywhere; the IR `Agent` node has **no `output_schema`
+field**. `run_pipeline` is wired into `tau run` (local) only — `tau dev` and
+`tau run --bundle` still call single-agent `run_ir` (Plan-1 follow-ups #1/#2).
+
+### D1 — Introduce `PipelineOutcome`; fold in Plan-1 follow-up #5
+
+The retry loop cannot be built on a bare `OutputStore`: it needs per-attempt
+token usage (to bound the loop) and must distinguish an *agent* failure from a
+*kernel* error. Plan 2 introduces
+
+```rust
+// tau-runtime-core
+pub struct PipelineOutcome {
+    pub outputs: OutputStore,
+    pub token_usage: TokenUsage,          // aggregated across all steps + retries
+    pub status: PipelineStatus,           // Completed | AgentFailed { .. } | CheckAborted { .. }
+}
+```
+
+and stops mapping `RunOutcome::Failed -> RuntimeError::Internal` — an agent
+failure becomes `PipelineStatus::AgentFailed` (ADR-0006-honest), kernel/dispatch
+errors stay `Err(RuntimeError)`. This is not scope creep; it is the substrate the
+retry loop requires, and it pays down follow-up #5. `run_pipeline`'s return type
+changes from `OutputStore` to `PipelineOutcome` (consumers updated in D6).
+
+### D2 — A check is `StepRun::Check(CheckId)` + a `workflow.checks` table
+
+The original spec never said *how* `[deliverables.report]` lands at a position in
+the sequence. The only fit with Plan-1's grammar: `[goals.*]` / `[deliverables.*]`
+tables **define** a check; a pipeline step **positions** it.
+
+```toml
+[[pipeline.steps]]
+id  = "verify_report"
+run = "check:report"        # NEW 4th StepRun variant -> references [deliverables.report]
+```
+
+```rust
+// tau-ir
+pub enum StepRun { Agent(AgentId), Tool(ToolId), Deterministic(StepId), Check(CheckId) }
+
+// workflow gets a checks table, symmetric with agents/tools/steps
+pub checks: BTreeMap<CheckId, Check>,
+pub struct Check { pub id: CheckId, pub kind: CheckKind, pub retry: Option<Retry> }
+pub enum CheckKind {
+    Goal { locus: Locus, predicate: Predicate },
+    Deliverable { locus: Locus, must_satisfy: String, judge: JudgeRef },
+}
+```
+
+This makes "checkpoints anywhere / multiple checks" (the *Placement* section) fall
+out for free, and reuses Plan-1's earlier-only reference scope analysis verbatim.
+The IR-representation section below is updated accordingly.
+
+### D3 — Engine-side artifact read is a trusted dispatcher capability
+
+`tau-runtime-core` is `no_std` and cannot read `/workspace/report.md`. Both the
+deterministic existence floor and the judge's content read need it; Plan 1 never
+hit this (agents touch fs via their own tools). Add an optional method to the
+`ToolDispatcher` trait, mirroring `clock()` / `random()` / `deterministic_registry()`:
+
+```rust
+fn read_artifact(&self, locus: &Locus) -> Option<Result<Option<Vec<u8>>, RuntimeError>>;
+// None in core/tests; real host-fs impl in tau-cli's ForwardingDispatcher.
+```
+
+Named-output loci (`steps.x.output`) need no fs — they read from `OutputStore`.
+**Locked: the engine read is trusted-kernel, not capability-gated.** The path is
+already producer-capability-checked at build time; the engine reading its own
+declared deliverable is a kernel operation, not an agent action, so it introduces
+no new gated surface.
+
+### D4 — Budget across retries: honest restatement (no span budget in v1)
+
+`AgentBudget` is **per-agent and resets every `run_agent` call**. The real bound
+is `max_attempts × per-attempt AgentBudget`, not a single authoritative cap. The
+body's *Budget bounding* paragraph is patched to say this. A cumulative
+cross-attempt token cap (accumulate each attempt's `TokenUsage` via D1's
+`PipelineOutcome`, abort the loop early) is a clean follow-up — **not v1**.
+
+### D5 — Drop the `output_schema` judge warn; verdict is runtime-parse-enforced
+
+No agent has an `output_schema` field, so the body's
+`warn: agent ... declares an output_schema incompatible with { met, rationale }`
+is unbuildable and has been removed. The judge runs one-shot via `run_agent`; its
+final assistant text is parsed into `Verdict { met: bool, rationale: String }`
+(a new tiny type + parse helper in `tau-runtime-core`). The contract is
+**prompt-enforced** (the canonical judge prompt instructs the JSON shape), not
+schema-enforced. **Parse-failure semantics (locked):** an unparseable verdict is
+treated as `met = false` with `rationale = "judge returned unparseable verdict:
+<text>"`, so a flaky judge re-prompts on retry rather than becoming a hard kernel
+error, and only aborts at `max_attempts`. A first-class agent `output_schema` is a
+larger separate feature, out of scope.
+
+### D6 — Runtime checks are `tau run` (local) only in v1; build-time checks universal
+
+`tau dev` and `tau run --bundle` do not run pipelines at all yet (follow-ups
+#1/#2), so runtime check *evaluation* there is moot until those land. But the
+IR/bundle changes are surface-complete (a bundle built today carries the `Check`
+IR and will evaluate once bundle pipeline dispatch ships), and the headline —
+`tau check` / `tau build` validating goals/deliverables — is pure lowering and
+therefore **works on every surface**.
+
+### D7 — Retry spans may not overlap (build-time rule)
+
+Two retry-enabled checks whose `[gate..check]` spans overlap create ambiguous
+attempt-counting and re-validation-of-passed-checks semantics. v1 rejects
+overlapping retry spans at `tau check`. A single retry check, or disjoint spans,
+is fine. Overlapping/nested retry is deferred (materially harder).
+
+### Implementation order (locked: sequential)
+
+Five PRs, B→A→C1→C2→D. A and B touch disjoint crates and may be parallelized if
+wall-clock matters, converging at C.
+
+| PR | Decisions | Crates |
+|----|-----------|--------|
+| **B** | D1 `PipelineOutcome` + #5, D3 `read_artifact` | tau-runtime-core, tau-cli |
+| **A** | D2 `Check`/`StepRun::Check`/`workflow.checks`, D7, Guarantee 1/2 lowering, `ir_format` MINOR bump | tau-ir, tau-pkg, ts-extract, ir-conformance |
+| **C1** | goal predicate eval + abort + `check.evaluated` trace | tau-runtime-core |
+| **C2** | D4 budget, D5 `Verdict` + judge, rewind-to-gate retry, `check.retry` trace | tau-runtime-core |
+| **D** | D6 wire `PipelineOutcome` through `tau run` + e2e conformance | tau-cli, ir-conformance |
 
 ## Problem
 
@@ -219,13 +359,17 @@ checks for the judge:
 ```
 error: deliverable 'report' sets judge = "house_critic" but no [agents.house_critic] is defined
 error: deliverable 'report' sets both judge_model and judge — a custom judge brings its own model
-warn:  agent 'house_critic' used as a judge declares an output_schema incompatible with
-       the verdict contract { met, rationale } — its rejections won't carry a usable "why"
 ```
 
+(Per **Reconciliation D5**: there is no agent `output_schema` field to check at
+build time, so the verdict contract is enforced at *runtime* — the judge's final
+text is parsed into `Verdict { met, rationale }`, and an unparseable verdict is
+treated as `met = false` with a diagnostic rationale.)
+
 The judge reads the **actual produced artifact** (the file contents, or the
-named output value), not merely an in-memory reference — it judges the real
-deliverable.
+named output value) via the engine's trusted `read_artifact` dispatcher
+capability (**Reconciliation D3**), not merely an in-memory reference — it judges
+the real deliverable.
 
 ## Failure handling: abort, or rewind-to-gate retry
 
@@ -281,9 +425,14 @@ After `max_attempts`, the run aborts non-zero with the final rationale.
 
 ### Budget bounding
 
-The retry loop is bounded by `max_attempts` **and** by the existing
-`AgentBudget` — a stubborn judge or producer cannot burn unbounded tokens. The
-budget cap is authoritative even below `max_attempts`.
+The retry loop is bounded by `max_attempts`, and each attempt's agents are
+independently capped by the existing per-agent `AgentBudget` (`max_turns` /
+`max_tokens`). The real bound is therefore `max_attempts × per-attempt
+AgentBudget`: a stubborn judge or producer cannot burn unbounded tokens, but —
+per **Reconciliation D4** — the per-agent budget *resets each attempt* (today's
+`run_agent` is constructed fresh per call). A cumulative cross-attempt token cap
+(accumulate each attempt's `TokenUsage`, now surfaced by `PipelineOutcome`, and
+abort the loop early) is a clean follow-up, not v1.
 
 ## Placement
 
@@ -325,9 +474,11 @@ The full retry history — with the *why* at each step — is durably in the tra
 The single genuinely new engine capability is **bounded, budget-capped
 iteration** from a check back to its gate; today's interpreter is acyclic.
 Everything else reuses existing parts: capability binding, the
-`DeterministicRegistry`, the agent loop, and the tracing layer. Whether the IR
-carries one `Check` node or two (goal/deliverable) is a plan-phase decision; the
-behavior in this document is what is fixed.
+`DeterministicRegistry`, the agent loop, and the tracing layer. Per
+**Reconciliation D2** the IR carries **one** `Check` node (a `CheckKind` enum
+distinguishes goal vs deliverable) stored in a `workflow.checks` table and
+positioned in the sequence by a `StepRun::Check(CheckId)` pipeline step — not two
+node kinds.
 
 Adding a node kind is cross-cutting: it touches the node enum, lowering
 (`lower/typecheck.rs`, `lower/capability_fit.rs`), the interpreter, the
