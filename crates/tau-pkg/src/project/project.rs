@@ -27,6 +27,12 @@ pub struct UncheckedProjectConfig {
     /// Optional `[pipeline]` table with ordered `[[pipeline.steps]]`.
     #[serde(default)]
     pub pipeline: Option<UncheckedPipeline>,
+    /// Map of goal id → unchecked goal definition.
+    #[serde(default)]
+    pub goals: BTreeMap<String, UncheckedGoal>,
+    /// Map of deliverable id → unchecked deliverable definition.
+    #[serde(default)]
+    pub deliverables: BTreeMap<String, UncheckedDeliverable>,
 }
 
 /// `[project]` table.
@@ -77,6 +83,10 @@ pub struct UncheckedAgent {
     /// Maximum tokens (input + output) across the entire run.
     #[serde(default)]
     pub max_tokens: Option<u64>,
+    /// Paths or step-output references this agent promises to produce.
+    /// Used by the goals/deliverables postcondition checker.
+    #[serde(default)]
+    pub produces: Vec<String>,
 }
 
 /// `[agents.<id>.requires]` sub-table.
@@ -166,6 +176,68 @@ pub struct UncheckedCapabilityOverride {
 
 // ----- Pipeline structs (β.2.x) -----
 
+/// Raw `[goals.<id>]` table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UncheckedGoal {
+    /// Path or step-output reference this goal evaluates (e.g. `"steps.write.output"`).
+    pub evaluates: String,
+    /// Predicate kind: `"exists"` | `"non_empty"` | `"equals"` | `"matches"` |
+    /// `"min_count"` | `"schema_valid"` | `"fn"`.
+    pub check: String,
+    /// Regex or glob pattern (required for `matches` and `min_count`).
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Expected string (required for `equals`).
+    #[serde(default)]
+    pub equals: Option<String>,
+    /// Minimum match count (required for `min_count`).
+    #[serde(default)]
+    pub min: Option<u64>,
+    /// JSON Schema value (required for `schema_valid`).
+    #[serde(default)]
+    pub schema: Option<serde_json::Value>,
+    /// Native Rust fn path (required for `fn`).
+    #[serde(default, rename = "fn")]
+    pub native_fn: Option<String>,
+    /// Failure policy: `"abort"` (default) | `"retry"`.
+    #[serde(default)]
+    pub on_fail: Option<String>,
+    /// Maximum evaluation attempts (default 1).
+    #[serde(default)]
+    pub max_attempts: Option<u32>,
+    /// Step id to retry from on failure (only meaningful when `on_fail = "retry"`).
+    #[serde(default)]
+    pub retry_from: Option<String>,
+}
+
+/// Raw `[deliverables.<id>]` table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UncheckedDeliverable {
+    /// Filesystem path the deliverable must exist at.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Step-output reference (e.g. `"steps.write.output"`).
+    #[serde(default)]
+    pub output: Option<String>,
+    /// Natural-language or structured criterion the deliverable must satisfy.
+    pub must_satisfy: String,
+    /// Agent id used as the judge; absent = built-in LLM judge.
+    #[serde(default)]
+    pub judge: Option<String>,
+    /// Model for the built-in judge (mutually exclusive with `judge`).
+    #[serde(default)]
+    pub judge_model: Option<String>,
+    /// Failure policy: `"abort"` (default) | `"retry"`.
+    #[serde(default)]
+    pub on_fail: Option<String>,
+    /// Maximum evaluation attempts (default 1).
+    #[serde(default)]
+    pub max_attempts: Option<u32>,
+    /// Step id to retry from on failure.
+    #[serde(default)]
+    pub retry_from: Option<String>,
+}
+
 /// Raw `[pipeline]` table (pre-validation).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UncheckedPipeline {
@@ -214,6 +286,100 @@ pub enum PipelineRunRef {
     Tool(String),
     /// `deterministic:<id>`
     Deterministic(String),
+}
+
+// ----- Goals / Deliverables validated shapes -----
+
+/// Validated goal entry.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct GoalConfig {
+    /// Goal id (the TOML table key).
+    pub id: String,
+    /// Path or step-output reference to evaluate.
+    pub evaluates: String,
+    /// Normalised predicate.
+    pub predicate: GoalPredicateConfig,
+    /// What to do when the check fails.
+    pub on_fail: CheckOnFail,
+    /// Maximum number of evaluation attempts (default 1).
+    pub max_attempts: u32,
+    /// Step id to retry from when `on_fail = Retry`.
+    pub retry_from: Option<String>,
+}
+
+/// Validated deliverable entry.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct DeliverableConfig {
+    /// Deliverable id (the TOML table key).
+    pub id: String,
+    /// Where the deliverable lives.
+    pub locus: DeliverableLocus,
+    /// Natural-language or structured satisfaction criterion.
+    pub must_satisfy: String,
+    /// Who judges the deliverable.
+    pub judge: JudgeConfig,
+    /// What to do when the check fails.
+    pub on_fail: CheckOnFail,
+    /// Maximum number of evaluation attempts (default 1).
+    pub max_attempts: u32,
+    /// Step id to retry from when `on_fail = Retry`.
+    pub retry_from: Option<String>,
+}
+
+/// Normalised goal predicate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GoalPredicateConfig {
+    /// The target path or output must exist.
+    Exists,
+    /// The target must be non-empty.
+    NonEmpty,
+    /// The target must equal the given string exactly.
+    Equals(String),
+    /// The target must match the given regex/glob pattern.
+    Matches(String),
+    /// The target must contain at least `min` occurrences of `pattern`.
+    MinCount {
+        /// Regex or glob pattern to count occurrences of.
+        pattern: String,
+        /// Minimum required occurrence count.
+        min: u64,
+    },
+    /// The target must be a JSON value that validates against the schema.
+    SchemaValid(serde_json::Value),
+    /// A statically linked native Rust function (path `crate::module::fn`).
+    NativeFn(String),
+}
+
+/// Where a deliverable lives (path on disk vs step output).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeliverableLocus {
+    /// Filesystem path.
+    Path(String),
+    /// Step-output reference (e.g. `"steps.write.output"`).
+    Output(String),
+}
+
+/// Who judges a deliverable.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JudgeConfig {
+    /// Built-in LLM judge with an optional model override.
+    Builtin {
+        /// Optional model identifier for the built-in judge.
+        model: Option<String>,
+    },
+    /// Delegate to an agent identified by id.
+    Agent(String),
+}
+
+/// Check failure policy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CheckOnFail {
+    /// Abort the pipeline immediately.
+    Abort,
+    /// Retry from `retry_from` (up to `max_attempts`).
+    Retry,
 }
 
 // ----- IR lowering structs (β.2.2) -----
@@ -362,6 +528,10 @@ pub struct ProjectConfig {
     pub steps: BTreeMap<String, StepEntry>,
     /// Optional validated pipeline.
     pub pipeline: Option<PipelineConfig>,
+    /// Map of goal id → validated goal entry.
+    pub goals: BTreeMap<String, GoalConfig>,
+    /// Map of deliverable id → validated deliverable entry.
+    pub deliverables: BTreeMap<String, DeliverableConfig>,
 }
 
 /// Validated entry for a single agent.
@@ -417,6 +587,8 @@ pub struct AgentEntry {
     pub max_turns: Option<u32>,
     /// Maximum tokens (IR lowering use).
     pub max_tokens: Option<u64>,
+    /// Paths or step-output references this agent promises to produce.
+    pub produces: Vec<String>,
 }
 
 impl AgentEntry {
@@ -447,6 +619,7 @@ impl AgentEntry {
             tool_refs: Vec::new(),
             max_turns: None,
             max_tokens: None,
+            produces: Vec::new(),
         }
     }
 }
@@ -623,6 +796,24 @@ pub enum ProjectConfigError {
         message: String,
     },
 
+    /// A `[goals.<id>]` entry failed validation.
+    #[error("goal {id:?}: {message}")]
+    GoalValidation {
+        /// Goal id that failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
+    /// A `[deliverables.<id>]` entry failed validation.
+    #[error("deliverable {id:?}: {message}")]
+    DeliverableValidation {
+        /// Deliverable id that failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
     /// `[tools.<name>] mcp = "..."` URL has an unsupported scheme.
     #[error("tool {tool:?}: unsupported MCP URL scheme: {url:?}")]
     UnsupportedMcpUrl {
@@ -677,6 +868,9 @@ impl UncheckedProjectConfig {
             None => None,
         };
 
+        let goals = validate_goals(&self.goals)?;
+        let deliverables = validate_deliverables(&self.deliverables)?;
+
         Ok(ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -684,6 +878,8 @@ impl UncheckedProjectConfig {
             tools,
             steps,
             pipeline,
+            goals,
+            deliverables,
         })
     }
 }
@@ -793,6 +989,7 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         tool_refs: raw.tool_refs,
         max_turns: raw.max_turns,
         max_tokens: raw.max_tokens,
+        produces: raw.produces,
     })
 }
 
@@ -891,6 +1088,166 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
         });
     }
     Ok(PipelineConfig { steps })
+}
+
+fn parse_on_fail(raw: &Option<String>, id: &str, kind: &str) -> Result<CheckOnFail, ProjectConfigError> {
+    match raw.as_deref() {
+        None | Some("abort") => Ok(CheckOnFail::Abort),
+        Some("retry") => Ok(CheckOnFail::Retry),
+        Some(other) => {
+            let msg = format!("on_fail must be \"abort\" or \"retry\", got {other:?}");
+            if kind == "goal" {
+                Err(ProjectConfigError::GoalValidation { id: id.to_string(), message: msg })
+            } else {
+                Err(ProjectConfigError::DeliverableValidation { id: id.to_string(), message: msg })
+            }
+        }
+    }
+}
+
+fn validate_goals(
+    raw: &BTreeMap<String, UncheckedGoal>,
+) -> Result<BTreeMap<String, GoalConfig>, ProjectConfigError> {
+    let mut out = BTreeMap::new();
+    for (id, g) in raw {
+        let predicate = match g.check.as_str() {
+            "exists" => {
+                if g.pattern.is_some() || g.equals.is_some() || g.min.is_some()
+                    || g.schema.is_some() || g.native_fn.is_some()
+                {
+                    return Err(ProjectConfigError::GoalValidation {
+                        id: id.clone(),
+                        message: "check=\"exists\" takes no extra fields (pattern/equals/min/schema/fn)".into(),
+                    });
+                }
+                GoalPredicateConfig::Exists
+            }
+            "non_empty" => {
+                if g.pattern.is_some() || g.equals.is_some() || g.min.is_some()
+                    || g.schema.is_some() || g.native_fn.is_some()
+                {
+                    return Err(ProjectConfigError::GoalValidation {
+                        id: id.clone(),
+                        message: "check=\"non_empty\" takes no extra fields (pattern/equals/min/schema/fn)".into(),
+                    });
+                }
+                GoalPredicateConfig::NonEmpty
+            }
+            "equals" => {
+                let s = g.equals.clone().ok_or_else(|| ProjectConfigError::GoalValidation {
+                    id: id.clone(),
+                    message: "check=\"equals\" requires `equals`".into(),
+                })?;
+                GoalPredicateConfig::Equals(s)
+            }
+            "matches" => {
+                let p = g.pattern.clone().ok_or_else(|| ProjectConfigError::GoalValidation {
+                    id: id.clone(),
+                    message: "check=\"matches\" requires `pattern`".into(),
+                })?;
+                GoalPredicateConfig::Matches(p)
+            }
+            "min_count" => {
+                let p = g.pattern.clone().ok_or_else(|| ProjectConfigError::GoalValidation {
+                    id: id.clone(),
+                    message: "check=\"min_count\" requires `pattern`".into(),
+                })?;
+                let m = g.min.ok_or_else(|| ProjectConfigError::GoalValidation {
+                    id: id.clone(),
+                    message: "check=\"min_count\" requires `min`".into(),
+                })?;
+                GoalPredicateConfig::MinCount { pattern: p, min: m }
+            }
+            "schema_valid" => {
+                let v = g.schema.clone().ok_or_else(|| ProjectConfigError::GoalValidation {
+                    id: id.clone(),
+                    message: "check=\"schema_valid\" requires `schema`".into(),
+                })?;
+                GoalPredicateConfig::SchemaValid(v)
+            }
+            "fn" => {
+                let f = g.native_fn.clone().ok_or_else(|| ProjectConfigError::GoalValidation {
+                    id: id.clone(),
+                    message: "check=\"fn\" requires `fn`".into(),
+                })?;
+                GoalPredicateConfig::NativeFn(f)
+            }
+            other => {
+                return Err(ProjectConfigError::GoalValidation {
+                    id: id.clone(),
+                    message: format!("unknown check kind {other:?}"),
+                });
+            }
+        };
+
+        let on_fail = parse_on_fail(&g.on_fail, id, "goal")?;
+        let max_attempts = g.max_attempts.unwrap_or(1);
+
+        out.insert(
+            id.clone(),
+            GoalConfig {
+                id: id.clone(),
+                evaluates: g.evaluates.clone(),
+                predicate,
+                on_fail,
+                max_attempts,
+                retry_from: g.retry_from.clone(),
+            },
+        );
+    }
+    Ok(out)
+}
+
+fn validate_deliverables(
+    raw: &BTreeMap<String, UncheckedDeliverable>,
+) -> Result<BTreeMap<String, DeliverableConfig>, ProjectConfigError> {
+    let mut out = BTreeMap::new();
+    for (id, d) in raw {
+        let locus = match (&d.path, &d.output) {
+            (Some(p), None) => DeliverableLocus::Path(p.clone()),
+            (None, Some(o)) => DeliverableLocus::Output(o.clone()),
+            (Some(_), Some(_)) => {
+                return Err(ProjectConfigError::DeliverableValidation {
+                    id: id.clone(),
+                    message: "set both path and output; exactly one is required".into(),
+                });
+            }
+            (None, None) => {
+                return Err(ProjectConfigError::DeliverableValidation {
+                    id: id.clone(),
+                    message: "set neither path nor output; exactly one is required".into(),
+                });
+            }
+        };
+
+        let judge = match (&d.judge, &d.judge_model) {
+            (Some(_), Some(_)) => {
+                return Err(ProjectConfigError::DeliverableValidation {
+                    id: id.clone(),
+                    message: "a custom judge brings its own model; remove judge_model".into(),
+                });
+            }
+            (Some(agent_id), None) => JudgeConfig::Agent(agent_id.clone()),
+            (None, model) => JudgeConfig::Builtin { model: model.clone() },
+        };
+
+        let on_fail = parse_on_fail(&d.on_fail, id, "deliverable")?;
+        let max_attempts = d.max_attempts.unwrap_or(1);
+
+        out.insert(
+            id.clone(),
+            DeliverableConfig {
+                id: id.clone(),
+                locus,
+                must_satisfy: d.must_satisfy.clone(),
+                judge,
+                on_fail,
+                max_attempts,
+                retry_from: d.retry_from.clone(),
+            },
+        );
+    }
+    Ok(out)
 }
 
 fn unchecked_to_capability_override(
@@ -1675,6 +2032,100 @@ mod tests {
         let cfg = ProjectConfig::parse_str(toml).unwrap();
         assert_eq!(cfg.pipeline.unwrap().steps[0].input, "${input}");
     }
+
+    // --- goals / deliverables / produces tests (D2) ---
+
+    #[test]
+    fn deliverable_with_both_path_and_output_is_rejected() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [deliverables.report]
+            path = "/out/report.md"
+            output = "steps.write.output"
+            must_satisfy = "must be a valid report"
+        "#;
+        let err = ProjectConfig::parse_str(toml).expect_err("should reject both path+output");
+        assert!(
+            matches!(err, ProjectConfigError::DeliverableValidation { .. }),
+            "expected DeliverableValidation, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn deliverable_with_judge_and_judge_model_is_rejected() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [deliverables.report]
+            path = "/out/report.md"
+            must_satisfy = "must be complete"
+            judge = "reviewer-agent"
+            judge_model = "claude-haiku-4-5"
+        "#;
+        let err = ProjectConfig::parse_str(toml).expect_err("should reject judge+judge_model");
+        assert!(
+            matches!(err, ProjectConfigError::DeliverableValidation { .. }),
+            "expected DeliverableValidation, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn goal_with_matches_check_and_pattern_parses() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [goals.check_output]
+            evaluates = "steps.write.output"
+            check = "matches"
+            pattern = "^Done:"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("should parse");
+        let goal = cfg.goals.get("check_output").expect("goal present");
+        assert_eq!(goal.id, "check_output");
+        assert_eq!(goal.evaluates, "steps.write.output");
+        assert!(
+            matches!(&goal.predicate, GoalPredicateConfig::Matches(p) if p == "^Done:"),
+            "expected Matches predicate, got: {:?}", goal.predicate
+        );
+    }
+
+    #[test]
+    fn goal_with_matches_check_without_pattern_is_rejected() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [goals.check_output]
+            evaluates = "steps.write.output"
+            check = "matches"
+        "#;
+        let err = ProjectConfig::parse_str(toml).expect_err("should reject matches without pattern");
+        assert!(
+            matches!(err, ProjectConfigError::GoalValidation { .. }),
+            "expected GoalValidation, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_produces_field_parses_and_is_stored() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [agents.writer]
+            display_name = "Writer"
+            package = "writer@^0.1"
+            llm_backend = "anthropic"
+            produces = ["/workspace/report.md"]
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("should parse");
+        let agent = cfg.agents.get("writer").expect("agent present");
+        assert_eq!(agent.produces, vec!["/workspace/report.md"]);
+    }
 }
 
 #[cfg(test)]
@@ -1717,6 +2168,7 @@ mod proptests {
                         tool_refs: Vec::new(),
                         max_turns: None,
                         max_tokens: None,
+                        produces: Vec::new(),
                     },
                 )
             })
@@ -1748,6 +2200,8 @@ mod proptests {
                 tools: BTreeMap::new(),
                 steps: BTreeMap::new(),
                 pipeline: None,
+                goals: BTreeMap::new(),
+                deliverables: BTreeMap::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();

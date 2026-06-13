@@ -347,6 +347,7 @@ mod tests {
             tool_refs: Vec::new(),
             max_turns: None,
             max_tokens: None,
+            produces: Vec::new(),
         };
         mutate(&mut e);
         e
