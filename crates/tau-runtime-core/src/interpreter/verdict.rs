@@ -8,7 +8,6 @@ use alloc::string::String;
 use serde::Deserialize;
 
 /// A judge's structured verdict.
-#[allow(dead_code)] // used by C2.2
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct Verdict {
     /// Did the artifact satisfy the criterion?
@@ -21,7 +20,6 @@ pub(crate) struct Verdict {
 /// surrounding prose: extracts the first balanced top-level `{...}` and
 /// parses it. On any failure returns a `met = false` verdict carrying the
 /// raw text as the rationale.
-#[allow(dead_code)] // used by C2.2
 pub(crate) fn parse_verdict(text: &str) -> Verdict {
     if let Some(json) = first_json_object(text) {
         if let Ok(v) = serde_json::from_str::<Verdict>(json) {
