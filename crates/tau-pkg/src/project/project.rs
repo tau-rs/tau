@@ -824,6 +824,15 @@ pub enum ProjectConfigError {
         /// Offending URL.
         url: String,
     },
+
+    /// An agent declares `produces` a path it has no fs-write capability for.
+    #[error("step {agent:?} declares it produces {path:?} but holds no fs-write capability covering that path")]
+    ProducerNotPermitted {
+        /// Agent id whose `produces` declaration failed.
+        agent: String,
+        /// The path that is not covered by any fs-write capability.
+        path: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -872,6 +881,8 @@ impl UncheckedProjectConfig {
 
         let goals = validate_goals(&self.goals)?;
         let deliverables = validate_deliverables(&self.deliverables)?;
+
+        check_producers_permitted(&agents, &tools)?;
 
         Ok(ProjectConfig {
             project_name: self.project.name,
@@ -1251,6 +1262,40 @@ fn validate_deliverables(
         );
     }
     Ok(out)
+}
+
+/// Build-time guarantee: every `produces` path an agent declares must be
+/// covered by an `fs-write` capability glob on one of the agent's tools.
+fn check_producers_permitted(
+    agents: &BTreeMap<String, AgentEntry>,
+    tools: &BTreeMap<String, ToolEntry>,
+) -> Result<(), ProjectConfigError> {
+    use tau_domain::package::capability::FsCapability;
+    use crate::capability_override::glob_subset::is_glob_subset;
+
+    for (agent_id, agent) in agents {
+        for path in &agent.produces {
+            let mut covered = false;
+            'outer: for tref in &agent.tool_refs {
+                let Some(tool) = tools.get(tref) else { continue };
+                for cap in &tool.capabilities {
+                    if let Capability::Filesystem(FsCapability::Write { paths, .. }) = cap {
+                        if paths.iter().any(|g| is_glob_subset(path, g)) {
+                            covered = true;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if !covered {
+                return Err(ProjectConfigError::ProducerNotPermitted {
+                    agent: agent_id.clone(),
+                    path: path.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn unchecked_to_capability_override(
@@ -2096,6 +2141,79 @@ mod tests {
         );
     }
 
+    // --- A7: producer-permitted cross-check tests ---
+
+    #[test]
+    fn producer_permitted_when_fs_write_glob_covers_path() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [tools.write_file]
+            native = "WriteFile"
+            capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+
+            [agents.writer]
+            display_name = "Writer"
+            package = "writer@^0.1"
+            llm_backend = "anthropic"
+            tool_refs = ["write_file"]
+            produces = ["/workspace/report.md"]
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("should validate Ok");
+        let agent = cfg.agents.get("writer").expect("agent present");
+        assert_eq!(agent.produces, vec!["/workspace/report.md"]);
+    }
+
+    #[test]
+    fn producer_rejected_when_fs_write_glob_does_not_cover_path() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [tools.write_file]
+            native = "WriteFile"
+            capabilities = [{ kind = "fs.write", paths = ["/other/**"] }]
+
+            [agents.writer]
+            display_name = "Writer"
+            package = "writer@^0.1"
+            llm_backend = "anthropic"
+            tool_refs = ["write_file"]
+            produces = ["/workspace/report.md"]
+        "#;
+        let err = ProjectConfig::parse_str(toml).expect_err("should reject");
+        let ProjectConfigError::ProducerNotPermitted { agent, path } = err else {
+            panic!("expected ProducerNotPermitted, got: {err:?}");
+        };
+        assert_eq!(agent, "writer");
+        assert_eq!(path, "/workspace/report.md");
+    }
+
+    #[test]
+    fn producer_rejected_when_no_tool_has_fs_write_cap() {
+        let toml = r#"
+            [project]
+            name = "x"
+
+            [tools.read_only]
+            native = "ReadOnly"
+            capabilities = [{ kind = "fs.read", paths = ["/workspace/**"] }]
+
+            [agents.writer]
+            display_name = "Writer"
+            package = "writer@^0.1"
+            llm_backend = "anthropic"
+            tool_refs = ["read_only"]
+            produces = ["/workspace/report.md"]
+        "#;
+        let err = ProjectConfig::parse_str(toml).expect_err("should reject");
+        assert!(
+            matches!(err, ProjectConfigError::ProducerNotPermitted { .. }),
+            "expected ProducerNotPermitted, got: {err:?}"
+        );
+    }
+
     #[test]
     fn goal_with_matches_check_without_pattern_is_rejected() {
         let toml = r#"
@@ -2119,10 +2237,15 @@ mod tests {
             [project]
             name = "x"
 
+            [tools.write_file]
+            native = "WriteFile"
+            capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+
             [agents.writer]
             display_name = "Writer"
             package = "writer@^0.1"
             llm_backend = "anthropic"
+            tool_refs = ["write_file"]
             produces = ["/workspace/report.md"]
         "#;
         let cfg = ProjectConfig::parse_str(toml).expect("should parse");
