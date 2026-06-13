@@ -618,6 +618,7 @@ mod tests {
                 capability_table: tau_ir::CapabilityTable(alloc::collections::BTreeMap::new()),
                 pipeline: None,
             },
+            triggers: alloc::vec::Vec::new(),
         });
         DispatcherTool {
             tool_name: "fixed".to_string(),

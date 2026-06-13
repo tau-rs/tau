@@ -388,7 +388,7 @@ fn run_reproducibility_check(
         // empty cache; the reproduce check compares manifests field-by-field and
         // MCP entries are expected to match via pinned contracts already on disk.
         let empty_mcp_cache = std::collections::BTreeMap::new();
-        crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target, &empty_mcp_cache, None)
+        crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target, &empty_mcp_cache, None).payload
     } else {
         None
     };

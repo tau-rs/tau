@@ -231,6 +231,7 @@ fn build_module() -> IrModule {
             capability_table: CapabilityTable(BTreeMap::new()),
             pipeline: Some(pipeline),
         },
+        triggers: Vec::new(),
     }
 }
 
@@ -319,6 +320,7 @@ async fn pipeline_deterministic_step_upcase() {
             capability_table: CapabilityTable(BTreeMap::new()),
             pipeline: Some(pipeline),
         },
+        triggers: Vec::new(),
     });
 
     let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);

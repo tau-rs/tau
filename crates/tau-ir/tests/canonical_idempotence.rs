@@ -13,6 +13,7 @@ fn sample_module() -> IrModule {
             .expect("at least one available target")
             .triple,
         workflow: Workflow::default(),
+        triggers: Vec::new(),
     }
 }
 

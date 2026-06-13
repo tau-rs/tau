@@ -147,5 +147,6 @@ fn sample_module() -> IrModule {
             capability_table: CapabilityTable(Default::default()),
             pipeline: None,
         },
+        triggers: Vec::new(),
     }
 }

@@ -24,6 +24,11 @@ Options:
       --offline
           Use pinned `.tau/mcp/<entry>.contract.json` files for MCP contracts; never reach out to live MCP servers. Build errors out if any pinned file is missing
 
+      --emit-trigger <ADAPTER>
+          Also emit host-adapter descriptors for the project's cron triggers. `systemd` writes `.timer` + `.service` units; `k8s` writes `CronJob` manifests. Files are written next to the bundle. Manual triggers and cron schedules systemd can't auto-translate are skipped with a note
+          
+          [possible values: systemd, k8s]
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

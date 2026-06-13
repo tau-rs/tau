@@ -104,6 +104,16 @@ pub enum IrError {
         subflow: SubflowId,
     },
 
+    /// A trigger binding names an entrypoint agent that is not present in
+    /// the workflow.
+    #[error("trigger {trigger:?} references unknown agent {agent:?}")]
+    UnknownTriggerAgent {
+        /// The trigger name.
+        trigger: String,
+        /// The unresolved entrypoint agent id.
+        agent: AgentId,
+    },
+
     /// A pipeline step's `run` target does not exist in the workflow.
     #[error("pipeline step {step:?}: run target {target} not found")]
     UnknownPipelineRun {

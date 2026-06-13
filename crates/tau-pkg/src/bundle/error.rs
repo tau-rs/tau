@@ -23,6 +23,14 @@ pub enum BundleParseError {
         /// The schema_version found in the manifest.
         found: u32,
     },
+    /// A bundle declares `[[trigger]]` entries but its `schema_version` is
+    /// below 3. Triggers require schema_version 3 (an old tau must reject a
+    /// trigger-bearing bundle rather than silently drop the bindings).
+    #[error("bundle declares triggers but schema_version is {schema_version} (triggers require schema_version >= 3)")]
+    TriggerSchemaVersionMismatch {
+        /// The bundle's declared schema_version.
+        schema_version: u32,
+    },
 }
 
 /// Errors raised when reading + parsing a bundle from disk.

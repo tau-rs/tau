@@ -58,6 +58,7 @@ mod pipeline_canonical_tests {
             tau_version: "0.0.0".into(),
             target,
             workflow: wf,
+            triggers: alloc::vec::Vec::new(),
         };
         assert_eq!(m.ir_format.0, "v1.1.0");
         let bytes = to_canonical_bytes(&m);
