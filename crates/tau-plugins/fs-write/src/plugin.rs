@@ -347,7 +347,10 @@ mod tests {
         let parsed = parse_args(&args).expect("edit parses");
         assert_matches::assert_matches!(
             parsed,
-            WriteArgs::Edit { replace_all: false, .. }
+            WriteArgs::Edit {
+                replace_all: false,
+                ..
+            }
         );
     }
 
@@ -358,7 +361,13 @@ mod tests {
             "replace_all": true
         }));
         let parsed = parse_args(&args).expect("edit parses");
-        assert_matches::assert_matches!(parsed, WriteArgs::Edit { replace_all: true, .. });
+        assert_matches::assert_matches!(
+            parsed,
+            WriteArgs::Edit {
+                replace_all: true,
+                ..
+            }
+        );
     }
 
     #[test]

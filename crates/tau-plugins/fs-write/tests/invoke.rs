@@ -138,7 +138,14 @@ fn spawn_plugin() -> (
     let (peer, mut sut_reader, mut sut_writer) = FakeStdioPeer::new();
     let plugin = FsWritePlugin::from_config(Default::default()).unwrap();
     let runner = tokio::spawn(async move {
-        run_tool_with_io(&mut sut_reader, &mut sut_writer, plugin, "fs-write", "0.1.0").await
+        run_tool_with_io(
+            &mut sut_reader,
+            &mut sut_writer,
+            plugin,
+            "fs-write",
+            "0.1.0",
+        )
+        .await
     });
     (peer, runner)
 }
@@ -261,7 +268,10 @@ async fn integration_edit_single_match_succeeds() {
     let result = recv_tool_response(&mut peer).await.expect("Ok response");
 
     assert!(!result.is_error, "got {result:?}");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() { run(); }\n");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "fn main() { run(); }\n"
+    );
 
     shutdown(&mut peer).await;
     drop(peer);
@@ -316,11 +326,18 @@ async fn integration_edit_ambiguous_is_error_then_replace_all_succeeds() {
     )
     .await;
     let result = recv_tool_response(&mut peer).await.expect("Ok response");
-    assert!(result.is_error, "expected ambiguity is_error; got {result:?}");
+    assert!(
+        result.is_error,
+        "expected ambiguity is_error; got {result:?}"
+    );
     shutdown(&mut peer).await;
     drop(peer);
     let _ = runner.await;
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\na\n", "file untouched");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "a\na\n",
+        "file untouched"
+    );
 
     // Then: replace_all true → all replaced, success.
     let (mut peer, runner) = spawn_plugin();
