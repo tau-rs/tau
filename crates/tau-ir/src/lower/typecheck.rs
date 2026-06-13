@@ -89,6 +89,16 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
         }
     }
 
+    // 6. Each trigger's entrypoint agent must exist.
+    for trigger in parsed.triggers.iter() {
+        if !parsed.workflow.agents.contains_key(&trigger.agent) {
+            return Err(IrError::UnknownTriggerAgent {
+                trigger: trigger.name.clone(),
+                agent: trigger.agent.clone(),
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -163,6 +173,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
             },
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
@@ -197,6 +208,7 @@ mod tests {
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
             },
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(

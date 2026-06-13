@@ -103,4 +103,14 @@ pub enum IrError {
         /// The offending subflow.
         subflow: SubflowId,
     },
+
+    /// A trigger binding names an entrypoint agent that is not present in
+    /// the workflow.
+    #[error("trigger {trigger:?} references unknown agent {agent:?}")]
+    UnknownTriggerAgent {
+        /// The trigger name.
+        trigger: String,
+        /// The unresolved entrypoint agent id.
+        agent: AgentId,
+    },
 }
