@@ -716,6 +716,12 @@ pub enum ProjectConfigError {
         message: String,
     },
 
+    /// A `[pipeline]` table was declared with no `[[pipeline.steps]]`
+    /// entries. An empty pipeline is rejected at build time rather than
+    /// silently falling through to the single-agent path.
+    #[error("pipeline must declare at least one step")]
+    EmptyPipeline,
+
     /// A `[[pipeline.steps]]` entry failed validation.
     #[error("pipeline step {id:?}: {message}")]
     PipelineValidation {
@@ -1094,6 +1100,9 @@ fn validate_trigger(
 }
 
 fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectConfigError> {
+    if raw.steps.is_empty() {
+        return Err(ProjectConfigError::EmptyPipeline);
+    }
     let mut seen = std::collections::BTreeSet::new();
     let mut steps = Vec::with_capacity(raw.steps.len());
     for s in &raw.steps {
@@ -2175,6 +2184,23 @@ mod tests {
             run = "wizard:x"
         "#;
         assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_pipeline() {
+        // A `[pipeline]` table with no `[[pipeline.steps]]` entries must
+        // fail at build time rather than silently falling through to the
+        // single-agent path.
+        let toml = r#"
+            [project]
+            name = "demo"
+            [pipeline]
+        "#;
+        let result = ProjectConfig::parse_str(toml);
+        assert!(
+            matches!(result, Err(ProjectConfigError::EmptyPipeline)),
+            "expected EmptyPipeline, got: {result:?}"
+        );
     }
 
     #[test]

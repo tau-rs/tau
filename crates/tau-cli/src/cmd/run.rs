@@ -389,8 +389,9 @@ async fn try_run_pipeline(
     let pipeline = module.workflow.pipeline.as_ref()?;
 
     // The id of the LAST pipeline step — its stored output is the run's
-    // final result. An empty `steps` vec cannot reach here: the parser
-    // (Task 3) rejects an empty pipeline, but guard anyway.
+    // final result. An empty `steps` vec cannot reach here: project
+    // validation (`validate_pipeline`) rejects an empty pipeline with
+    // `ProjectConfigError::EmptyPipeline`, but guard anyway.
     let last_step_id = match pipeline.steps.last() {
         Some(s) => s.id.0.clone(),
         None => return None,
@@ -441,6 +442,10 @@ async fn try_run_pipeline(
 /// `{"outcome":"completed", ...}` shape with the final step's text as
 /// `final_message` (token usage / turn counts are pipeline-level concepts
 /// not yet aggregated — reported as zero/empty at v0).
+///
+/// `pub(super)` so the bundle run path
+/// ([`crate::cmd::ir_dispatcher::run_via_ir`]) renders a bundled
+/// pipeline's final step identically to the cwd path.
 pub(super) fn render_pipeline_result(
     store: &tau_runtime_core::interpreter::output_store::OutputStore,
     last_step_id: &str,
