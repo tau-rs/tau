@@ -446,3 +446,78 @@ async fn deliverable_retry_exhausts_and_aborts() {
         "no check.retry event may fire when attempts are exhausted; got: {events:?}"
     );
 }
+
+/// Characterization test: a producer agent with `budget.max_turns = Some(0)` exhausts its
+/// budget before the check is ever evaluated. The retry loop is irrelevant because
+/// `run_agent` returns `RunOutcome::Failed { OutOfResources }` and the `StepRun::Agent`
+/// arm converts that immediately to `RuntimeError::Internal` — the pipeline aborts on the
+/// very first writer step, well before any check or retry logic runs.
+///
+/// WHY this is expected to be GREEN immediately (given Task 20's code): budget enforcement
+/// lives inside `run_agent` (via `RunOptions.max_turns`), which is called by the
+/// `StepRun::Agent` arm BEFORE the pipeline ever reaches `StepRun::Check`. The retry
+/// loop in `run_pipeline` therefore never sees the budget failure — it surfaces as a plain
+/// `Err(RuntimeError::Internal)` from the writer step, not from any check evaluation.
+/// `max_attempts = 3` is never consulted because the check step is never reached.
+#[tokio::test]
+async fn budget_cap_is_authoritative_below_max_attempts() {
+    // The backend script is irrelevant: with max_turns = Some(0) the agent
+    // loop will immediately return Failed without making any LLM calls.
+    let backend = Arc::new(SeqLlmBackend::new(vec![
+        response("this text will never be seen"), // placeholder; never consumed
+    ]));
+
+    let dispatcher = Arc::new(RetryDispatcher {
+        backend: backend.clone(),
+        reader: Arc::new(InMemoryArtifactReader::new()),
+    });
+
+    // Build a retry-enabled pipeline (max_attempts = 3, gate = writer) but
+    // give the writer a budget of max_turns = 0.
+    let mut module = build_module(RetryPolicy {
+        on_fail: OnFail::Retry,
+        max_attempts: 3,
+        gate: PipelineStepId("writer".into()),
+    });
+
+    // Override the writer agent's budget: max_turns = Some(0) forces the
+    // agent loop to fail immediately with OutOfResources before producing output.
+    let writer_id = AgentId("writer".into());
+    if let Some(agent) = module.workflow.agents.get_mut(&writer_id) {
+        agent.budget = AgentBudget {
+            max_turns: Some(0),
+            max_tokens: None,
+        };
+    } else {
+        panic!("writer agent not found in module");
+    }
+
+    let err = run_pipeline(Arc::new(module), "draft a report".to_string(), dispatcher)
+        .await
+        .expect_err("budget-exhausted agent must abort the run");
+
+    // The StepRun::Agent arm converts RunOutcome::Failed to RuntimeError::Internal
+    // with a message mentioning the step id and agent id.
+    match &err {
+        RuntimeError::Internal { message } => {
+            assert!(
+                message.contains("writer"),
+                "error message must mention the failing agent/step id; got: {message:?}"
+            );
+            assert!(
+                message.contains("failed"),
+                "error message must contain 'failed'; got: {message:?}"
+            );
+        }
+        other => panic!("expected RuntimeError::Internal (budget abort), got: {other:?}"),
+    }
+
+    // The backend was never invoked (budget = 0 turns → no LLM call at all).
+    let requests = backend.requests();
+    assert_eq!(
+        requests.len(),
+        0,
+        "no LLM call should have been made; backend received {} requests",
+        requests.len()
+    );
+}
