@@ -30,6 +30,9 @@ pub struct UncheckedProjectConfig {
     /// Map of goal id → unchecked goal definition.
     #[serde(default)]
     pub goals: BTreeMap<String, UncheckedGoal>,
+    /// Map of deliverable id → unchecked deliverable definition.
+    #[serde(default)]
+    pub deliverables: BTreeMap<String, UncheckedDeliverable>,
 }
 
 /// `[project]` table.
@@ -419,6 +422,80 @@ pub struct GoalEntry {
     pub predicate: GoalPredicateConfig,
 }
 
+/// Raw `[deliverables.<id>]` table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedDeliverable {
+    /// Filesystem path locus (mutually exclusive with `output`).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Step output locus (mutually exclusive with `path`). Use the form
+    /// `steps.<id>.output`.
+    #[serde(default)]
+    pub output: Option<String>,
+    /// Natural-language acceptance criterion evaluated by the judge.
+    pub must_satisfy: String,
+    /// Failure handling: `"abort"` (default) or `"retry"`.
+    #[serde(default)]
+    pub on_fail: Option<String>,
+    /// Maximum check evaluations (default: 1 for abort, 3 for retry).
+    #[serde(default)]
+    pub max_attempts: Option<u32>,
+    /// Pipeline step id to rewind to on retry. Defaults to the producer
+    /// step when absent.
+    #[serde(default)]
+    pub retry_from: Option<String>,
+    /// Model override for the built-in judge (runtime no-op in v1).
+    /// Mutually exclusive with `judge`.
+    #[serde(default)]
+    pub judge_model: Option<String>,
+    /// Custom judge agent id (`[agents.<id>]`). Mutually exclusive with
+    /// `judge_model`.
+    #[serde(default)]
+    pub judge: Option<String>,
+}
+
+/// Failure handling for a deliverable check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnFailConfig {
+    /// Exit non-zero on first failure.
+    Abort,
+    /// Rewind to the gate step and re-run.
+    Retry,
+}
+
+/// Who evaluates a deliverable's content.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JudgeConfig {
+    /// tau's built-in minimalist judge, optionally on a chosen model.
+    Builtin {
+        /// `judge_model` override (runtime no-op in v1).
+        model: Option<String>,
+    },
+    /// A user `[agents.*]` used as judge.
+    Agent(String),
+}
+
+/// Validated `[deliverables.<id>]` entry.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliverableEntry {
+    /// Deliverable id (table key).
+    pub id: String,
+    /// Produced locus.
+    pub locus: LocusConfig,
+    /// Natural-language acceptance criterion.
+    pub must_satisfy: String,
+    /// Failure handling strategy.
+    pub on_fail: OnFailConfig,
+    /// Maximum check evaluations (>= 1).
+    pub max_attempts: u32,
+    /// Rewind point step id (None = default to producer step).
+    pub retry_from: Option<String>,
+    /// Who judges the content.
+    pub judge: JudgeConfig,
+}
+
 /// Validated project config. Constructed via
 /// [`UncheckedProjectConfig::validate`] only.
 #[non_exhaustive]
@@ -438,6 +515,8 @@ pub struct ProjectConfig {
     pub pipeline: Option<PipelineConfig>,
     /// Map of goal id → validated goal entry.
     pub goals: BTreeMap<String, GoalEntry>,
+    /// Map of deliverable id → validated deliverable entry.
+    pub deliverables: BTreeMap<String, DeliverableEntry>,
 }
 
 /// Validated entry for a single agent.
@@ -721,6 +800,24 @@ pub enum ProjectConfigError {
         /// Human-readable reason.
         message: String,
     },
+
+    /// A `[deliverables.<id>]` entry failed semantic validation.
+    #[error("deliverable {id:?}: {message}")]
+    DeliverableValidation {
+        /// Deliverable id that failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
+    /// `judge` and `judge_model` were both set on a deliverable.
+    #[error(
+        "deliverable '{id}' sets both judge_model and judge — a custom judge brings its own model"
+    )]
+    JudgeAndModelConflict {
+        /// Deliverable id that had the conflict.
+        id: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -772,6 +869,11 @@ impl UncheckedProjectConfig {
             goals.insert(id.clone(), validate_goal(id, raw)?);
         }
 
+        let mut deliverables = BTreeMap::new();
+        for (id, raw) in self.deliverables {
+            deliverables.insert(id.clone(), validate_deliverable(id, raw)?);
+        }
+
         Ok(ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -780,6 +882,7 @@ impl UncheckedProjectConfig {
             steps,
             pipeline,
             goals,
+            deliverables,
         })
     }
 }
@@ -1085,6 +1188,73 @@ fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectCon
         id,
         evaluates,
         predicate,
+    })
+}
+
+fn validate_deliverable(
+    id: String,
+    raw: UncheckedDeliverable,
+) -> Result<DeliverableEntry, ProjectConfigError> {
+    // Exactly one of path/output must be set.
+    let locus = match (raw.path, raw.output) {
+        (Some(p), None) => parse_locus(&p),
+        (None, Some(o)) => parse_locus(&o),
+        (Some(_), Some(_)) => {
+            return Err(ProjectConfigError::DeliverableValidation {
+                id,
+                message: "exactly one of `path` or `output` must be set, not both".into(),
+            });
+        }
+        (None, None) => {
+            return Err(ProjectConfigError::DeliverableValidation {
+                id,
+                message: "one of `path` or `output` must be set".into(),
+            });
+        }
+    };
+
+    // judge and judge_model are mutually exclusive — check BEFORE collapsing.
+    if raw.judge.is_some() && raw.judge_model.is_some() {
+        return Err(ProjectConfigError::JudgeAndModelConflict { id });
+    }
+
+    // on_fail: default "abort", only "abort"/"retry" accepted.
+    let on_fail = match raw.on_fail.as_deref() {
+        None | Some("abort") => OnFailConfig::Abort,
+        Some("retry") => OnFailConfig::Retry,
+        Some(other) => {
+            return Err(ProjectConfigError::DeliverableValidation {
+                id,
+                message: format!("on_fail must be \"abort\" or \"retry\", got {other:?}"),
+            });
+        }
+    };
+
+    // max_attempts defaults: 1 for abort, 3 for retry.
+    let max_attempts = match raw.max_attempts {
+        Some(n) => n,
+        None => match on_fail {
+            OnFailConfig::Abort => 1,
+            OnFailConfig::Retry => 3,
+        },
+    };
+
+    // Collapse judge fields.
+    let judge = match raw.judge {
+        Some(agent_id) => JudgeConfig::Agent(agent_id),
+        None => JudgeConfig::Builtin {
+            model: raw.judge_model,
+        },
+    };
+
+    Ok(DeliverableEntry {
+        id,
+        locus,
+        must_satisfy: raw.must_satisfy,
+        on_fail,
+        max_attempts,
+        retry_from: raw.retry_from,
+        judge,
     })
 }
 
@@ -1933,6 +2103,70 @@ check     = "matches"
         assert!(matches!(err, ProjectConfigError::GoalValidation { .. }));
     }
 
+    // --- Task 3: [deliverables.*] tests ---
+
+    #[test]
+    fn deliverable_path_locus_retry_parses() {
+        let toml = r#"
+[project]
+name = "p"
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "A coherent summary."
+on_fail      = "retry"
+max_attempts = 3
+retry_from   = "writer"
+"#;
+        let v = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap();
+        let d = &v.deliverables["report"];
+        assert_eq!(d.locus, LocusConfig::Path("/workspace/report.md".into()));
+        assert_eq!(d.on_fail, OnFailConfig::Retry);
+        assert_eq!(d.max_attempts, 3);
+        assert_eq!(d.retry_from.as_deref(), Some("writer"));
+        assert_eq!(d.judge, JudgeConfig::Builtin { model: None });
+    }
+
+    #[test]
+    fn deliverable_rejects_both_path_and_output() {
+        let toml = r#"
+[project]
+name = "p"
+[deliverables.bad]
+path         = "/x"
+output       = "steps.writer.output"
+must_satisfy = "x"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::DeliverableValidation { .. }
+        ));
+    }
+
+    #[test]
+    fn deliverable_judge_and_model_conflict_rejected_early() {
+        let toml = r#"
+[project]
+name = "p"
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+judge        = "critic"
+judge_model  = "claude-haiku-4-5"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::JudgeAndModelConflict { id } if id == "report"));
+    }
+
     #[test]
     fn agent_produces_parses_and_validates() {
         let toml = r#"
@@ -2028,6 +2262,7 @@ mod proptests {
                 steps: BTreeMap::new(),
                 pipeline: None,
                 goals: BTreeMap::new(),
+                deliverables: BTreeMap::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();
