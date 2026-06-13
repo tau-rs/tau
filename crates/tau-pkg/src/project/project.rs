@@ -500,6 +500,12 @@ pub struct DeliverableEntry {
     /// always holds the unique agent id whose `produces` list covers
     /// this deliverable's locus.
     pub producer: String,
+    /// Resolved retry gate step id (filled by validation; empty for abort).
+    ///
+    /// For `on_fail = "retry"` deliverables, holds the pipeline step id
+    /// the runtime rewinds to on failure. Set by `validate_postconditions`;
+    /// always empty for `on_fail = "abort"` deliverables.
+    pub gate: String,
 }
 
 /// Validated project config. Constructed via
@@ -857,6 +863,40 @@ pub enum ProjectConfigError {
         agent: String,
         /// The path the agent claims to produce.
         path: String,
+    },
+
+    // --- Task 5: gate-position + retry-span guarantees ---
+    /// `retry_from` names a step that runs after the producer step.
+    #[error(
+        "deliverable '{id}' has retry_from = \"{gate}\" but '{gate}' runs after producer '{producer}' \
+        — the gate must be at or before the producer"
+    )]
+    GateAfterProducer {
+        /// Deliverable id.
+        id: String,
+        /// The gate step id named in `retry_from`.
+        gate: String,
+        /// The producer agent id whose pipeline step is the upper bound.
+        producer: String,
+    },
+
+    /// The retry span contains no non-deterministic (agent) step.
+    #[error(
+        "deliverable '{id}' sets on_fail = \"retry\" but the retry span contains no \
+        non-deterministic step; retrying cannot change the result"
+    )]
+    RetrySpanNoLlm {
+        /// Deliverable id.
+        id: String,
+    },
+
+    /// `retry_from` names a step id that does not exist in the pipeline.
+    #[error("deliverable '{id}' has retry_from = \"{gate}\" but no pipeline step has that id")]
+    UnknownRetryFrom {
+        /// Deliverable id.
+        id: String,
+        /// The unknown step id from `retry_from`.
+        gate: String,
     },
 }
 
@@ -1283,6 +1323,14 @@ fn validate_deliverable(
         },
     };
 
+    // max_attempts must be >= 1 (the field doc says so; guard it here).
+    if max_attempts == 0 {
+        return Err(ProjectConfigError::DeliverableValidation {
+            id,
+            message: "max_attempts must be >= 1".into(),
+        });
+    }
+
     // Collapse judge fields.
     let judge = match raw.judge {
         Some(agent_id) => JudgeConfig::Agent(agent_id),
@@ -1300,6 +1348,7 @@ fn validate_deliverable(
         retry_from: raw.retry_from,
         judge,
         producer: String::new(),
+        gate: String::new(),
     })
 }
 
@@ -1308,14 +1357,18 @@ fn validate_deliverable(
 /// Resolves each deliverable's producer agent (the unique agent whose `produces`
 /// list contains a locus matching the deliverable) and checks that the producer
 /// holds an `fs.write` capability covering the declared path (for
-/// `LocusConfig::Path` loci). Fills `DeliverableEntry::producer` as a side-effect.
+/// `LocusConfig::Path` loci). Also validates gate-position, retry-span-has-LLM,
+/// and unknown-retry-from for RETRY deliverables.
+/// Fills `DeliverableEntry::producer` and `DeliverableEntry::gate` as side-effects.
 fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigError> {
     use crate::capability_override::glob_subset::is_glob_subset;
     use tau_domain::FsCapability;
 
-    // First pass: resolve producers and run capability checks (immutable borrows
-    // of agents/tools). Collect (deliverable_id, resolved_producer_id) pairs.
-    let mut resolved: Vec<(String, String)> = Vec::new();
+    // First pass: resolve producers, run capability checks, and for RETRY
+    // deliverables run gate-position + retry-span guarantees (all immutable
+    // borrows of agents/tools/pipeline). Collect
+    // (deliverable_id, resolved_producer_id, resolved_gate_id) triples.
+    let mut resolved: Vec<(String, String, String)> = Vec::new();
 
     for (deliverable_id, deliverable) in &cfg.deliverables {
         // Collect agent ids whose `produces` contains a locus equal to this
@@ -1391,13 +1444,89 @@ fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigE
             }
         }
 
-        resolved.push((deliverable_id.clone(), producer_id));
+        // Gate checks: only for RETRY deliverables.
+        let gate_id = if deliverable.on_fail == OnFailConfig::Retry {
+            // A retry needs a pipeline with the producer in it.
+            let steps = match &cfg.pipeline {
+                Some(p) => &p.steps,
+                None => {
+                    // No pipeline → no sequence to rewind.
+                    return Err(ProjectConfigError::RetrySpanNoLlm {
+                        id: deliverable_id.clone(),
+                    });
+                }
+            };
+
+            // Find the producer step index: the step whose run is
+            // PipelineRunRef::Agent(producer_id).
+            let producer_step_index = steps
+                .iter()
+                .position(|s| s.run == PipelineRunRef::Agent(producer_id.clone()));
+
+            let producer_step_index = match producer_step_index {
+                Some(i) => i,
+                None => {
+                    // Producer agent not in the pipeline → no sequence to rewind.
+                    return Err(ProjectConfigError::RetrySpanNoLlm {
+                        id: deliverable_id.clone(),
+                    });
+                }
+            };
+
+            // Determine the gate step.
+            let (gate_step_id, gate_step_index) = match &deliverable.retry_from {
+                Some(g) => {
+                    // Explicit retry_from: find its index.
+                    match steps.iter().position(|s| &s.id == g) {
+                        Some(i) => (g.clone(), i),
+                        None => {
+                            return Err(ProjectConfigError::UnknownRetryFrom {
+                                id: deliverable_id.clone(),
+                                gate: g.clone(),
+                            });
+                        }
+                    }
+                }
+                None => {
+                    // Default gate = the producer step itself.
+                    let producer_step_id = steps[producer_step_index].id.clone();
+                    (producer_step_id, producer_step_index)
+                }
+            };
+
+            // Guarantee 1: gate_index <= producer_index.
+            if gate_step_index > producer_step_index {
+                return Err(ProjectConfigError::GateAfterProducer {
+                    id: deliverable_id.clone(),
+                    gate: gate_step_id,
+                    producer: producer_id,
+                });
+            }
+
+            // Guarantee 2: at least one agent step in [gate_index..=producer_index].
+            let span_has_llm = steps[gate_step_index..=producer_step_index]
+                .iter()
+                .any(|s| matches!(s.run, PipelineRunRef::Agent(_)));
+            if !span_has_llm {
+                return Err(ProjectConfigError::RetrySpanNoLlm {
+                    id: deliverable_id.clone(),
+                });
+            }
+
+            gate_step_id
+        } else {
+            // ABORT deliverables: gate field stays empty.
+            String::new()
+        };
+
+        resolved.push((deliverable_id.clone(), producer_id, gate_id));
     }
 
-    // Second pass: fill in the `producer` field on each deliverable.
-    for (deliverable_id, producer_id) in resolved {
+    // Second pass: fill in the `producer` and `gate` fields on each deliverable.
+    for (deliverable_id, producer_id, gate_id) in resolved {
         if let Some(deliverable) = cfg.deliverables.get_mut(&deliverable_id) {
             deliverable.producer = producer_id;
+            deliverable.gate = gate_id;
         }
     }
 
@@ -2266,6 +2395,9 @@ tool_refs = ["write_file"]
 [tools.write_file]
 native = "WriteFile"
 capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[[pipeline.steps]]
+id = "writer"
+run = "agent:writer"
 [deliverables.report]
 path         = "/workspace/report.md"
 must_satisfy = "A coherent summary."
@@ -2447,6 +2579,165 @@ must_satisfy = "x"
             .validate()
             .unwrap();
         assert_eq!(cfg.deliverables["report"].producer, "writer");
+    }
+
+    // --- Task 5: gate position + retry-span + unknown retry_from ---
+
+    fn cfg_with_pipeline(retry_from: &str, polish_after: bool) -> String {
+        // gather -> writer (producer) -> [polish], deliverable retries from `retry_from`
+        let polish_step = if polish_after {
+            "[[pipeline.steps]]\nid=\"polish\"\nrun=\"agent:polish\"\ninput=\"${steps.writer.output}\"\n"
+        } else {
+            ""
+        };
+        let polish_agent = if polish_after {
+            "[agents.polish]\ndisplay_name=\"P\"\npackage=\"d@^0.1\"\nllm_backend=\"anthropic\"\nmodel=\"m\"\n"
+        } else {
+            ""
+        };
+        format!(
+            r#"
+[project]
+name = "p"
+[agents.gather]
+display_name="G"
+package="d@^0.1"
+llm_backend="anthropic"
+model="m"
+[agents.writer]
+display_name="W"
+package="d@^0.1"
+llm_backend="anthropic"
+model="m"
+produces=["/workspace/report.md"]
+tool_refs=["write_file"]
+{polish_agent}[tools.write_file]
+native="WriteFile"
+capabilities=[{{ kind="fs.write", paths=["/workspace/**"] }}]
+[[pipeline.steps]]
+id="gather"
+run="agent:gather"
+input="${{input}}"
+[[pipeline.steps]]
+id="writer"
+run="agent:writer"
+input="${{steps.gather.output}}"
+{polish_step}[deliverables.report]
+path="/workspace/report.md"
+must_satisfy="x"
+on_fail="retry"
+max_attempts=3
+retry_from="{retry_from}"
+"#
+        )
+    }
+
+    #[test]
+    fn retry_gate_before_producer_validates() {
+        assert!(
+            toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("gather", false))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn retry_gate_after_producer_is_rejected() {
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("polish", true))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::GateAfterProducer { .. }));
+    }
+
+    #[test]
+    fn retry_from_unknown_step_is_rejected() {
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("nope", false))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::UnknownRetryFrom { .. }));
+    }
+
+    #[test]
+    fn max_attempts_zero_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+max_attempts = 0
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::DeliverableValidation { id, .. } if id == "report"
+        ));
+    }
+
+    #[test]
+    fn retry_span_no_llm_is_rejected() {
+        // A pipeline with only deterministic steps between gate and producer step.
+        // We simulate this by having the "writer" step (producer) be the same
+        // step as the gate step via retry_from pointing to it — but then
+        // using a pipeline with only a tool step in-between.
+        // Actually, the scenario: the gate IS the producer step, and there's
+        // no agent step in between — but a single agent step (writer itself)
+        // IS the span. So RetrySpanNoLlm fires when the producer has no
+        // pipeline step (on_fail=retry but no pipeline present).
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name = "W"
+package = "d@^0.1"
+llm_backend = "anthropic"
+model = "m"
+produces  = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "x"
+on_fail      = "retry"
+max_attempts = 3
+"#;
+        // No pipeline → no sequence to rewind → RetrySpanNoLlm
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::RetrySpanNoLlm { id } if id == "report"
+        ));
+    }
+
+    #[test]
+    fn gate_field_is_filled_after_successful_validate() {
+        let cfg = toml::from_str::<UncheckedProjectConfig>(&cfg_with_pipeline("gather", false))
+            .unwrap()
+            .validate()
+            .unwrap();
+        // gate defaults to retry_from value ("gather") for a RETRY deliverable
+        assert_eq!(cfg.deliverables["report"].gate, "gather");
     }
 }
 
