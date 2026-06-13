@@ -898,6 +898,25 @@ pub enum ProjectConfigError {
         /// The unknown step id from `retry_from`.
         gate: String,
     },
+
+    // --- Task 6: regex compiles + judge resolution ---
+    /// A `check = "matches"` goal has a pattern that is not a valid regex.
+    #[error("goal '{id}' has check = \"matches\" but its pattern is not a valid regex: {message}")]
+    BadGoalRegex {
+        /// Goal id.
+        id: String,
+        /// The regex error message.
+        message: String,
+    },
+
+    /// A deliverable's `judge` names an agent that is not defined.
+    #[error("deliverable '{id}' sets judge = \"{judge}\" but no [agents.{judge}] is defined")]
+    UnknownJudgeAgent {
+        /// Deliverable id.
+        id: String,
+        /// The unknown agent id named as judge.
+        judge: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -1234,7 +1253,16 @@ fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectCon
             }
         },
         "matches" => match raw.pattern {
-            Some(p) => GoalPredicateConfig::Matches(p),
+            Some(p) => {
+                // Validate the regex compiles at build time.
+                if let Err(e) = regex::Regex::new(&p) {
+                    return Err(ProjectConfigError::BadGoalRegex {
+                        id,
+                        message: e.to_string(),
+                    });
+                }
+                GoalPredicateConfig::Matches(p)
+            }
             None => {
                 return Err(ProjectConfigError::GoalValidation {
                     id,
@@ -1527,6 +1555,19 @@ fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigE
         if let Some(deliverable) = cfg.deliverables.get_mut(&deliverable_id) {
             deliverable.producer = producer_id;
             deliverable.gate = gate_id;
+        }
+    }
+
+    // Third pass: judge-agent existence check.
+    // JudgeConfig::Agent(a) where `a` is not a key in cfg.agents → UnknownJudgeAgent.
+    for (deliverable_id, deliverable) in &cfg.deliverables {
+        if let JudgeConfig::Agent(judge_id) = &deliverable.judge {
+            if !cfg.agents.contains_key(judge_id) {
+                return Err(ProjectConfigError::UnknownJudgeAgent {
+                    id: deliverable_id.clone(),
+                    judge: judge_id.clone(),
+                });
+            }
         }
     }
 
@@ -2738,6 +2779,54 @@ max_attempts = 3
             .unwrap();
         // gate defaults to retry_from value ("gather") for a RETRY deliverable
         assert_eq!(cfg.deliverables["report"].gate, "gather");
+    }
+
+    // --- Task 6: regex compiles + judge resolution ---
+
+    #[test]
+    fn goal_bad_regex_is_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[goals.g]
+evaluates = "/x"
+check     = "matches"
+pattern   = "("
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, ProjectConfigError::BadGoalRegex { .. }));
+    }
+
+    #[test]
+    fn deliverable_unknown_judge_agent_rejected() {
+        let toml = r#"
+[project]
+name = "p"
+[agents.writer]
+display_name="W"
+package="d@^0.1"
+llm_backend="anthropic"
+model="m"
+produces=["/workspace/report.md"]
+tool_refs=["write_file"]
+[tools.write_file]
+native="WriteFile"
+capabilities=[{ kind = "fs.write", paths = ["/workspace/**"] }]
+[deliverables.report]
+path="/workspace/report.md"
+must_satisfy="x"
+judge="ghost"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::UnknownJudgeAgent { id, judge } if id=="report" && judge=="ghost")
+        );
     }
 }
 

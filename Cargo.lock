@@ -3971,6 +3971,7 @@ dependencies = [
  "humantime",
  "humantime-serde",
  "proptest",
+ "regex",
  "rmp-serde",
  "semver",
  "serde",
