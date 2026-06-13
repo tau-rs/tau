@@ -11,14 +11,14 @@ use std::path::Path;
 
 use swc_common::{sync::Lrc, SourceMap, Spanned};
 use swc_ecma_ast::{
-    Expr, KeyValueProp, Lit, Module, ModuleDecl, ModuleItem, ObjectLit, Prop, PropName,
-    PropOrSpread,
+    ArrayLit, Expr, ExprOrSpread, KeyValueProp, Lit, Module, ModuleDecl, ModuleItem, ObjectLit,
+    Prop, PropName, PropOrSpread,
 };
 
 use tau_pkg::project::project::ProjectConfig;
 
 use crate::error::{Position, TsExtractError};
-use crate::factory::{arg_as_object, arg_as_string, recognize_factory_call, Factory};
+use crate::factory::{arg_as_array, arg_as_object, arg_as_string, recognize_factory_call, Factory};
 use crate::scope::NameMap;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -42,6 +42,12 @@ enum IrToolBody {
 struct IrTool {
     body: IrToolBody,
     description: String,
+}
+
+struct IrPipelineStep {
+    id: String,
+    run: String,
+    input: Option<String>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -86,6 +92,7 @@ pub fn build_project_config(
 
     let mut agents: BTreeMap<String, IrAgent> = BTreeMap::new();
     let mut tools: BTreeMap<String, IrTool> = BTreeMap::new();
+    let mut pipeline_steps: Vec<IrPipelineStep> = Vec::new();
 
     // First pass — collect tools/mcp (so agent `tools: { ref }` can resolve them).
     for (name, expr) in names {
@@ -133,6 +140,17 @@ pub fn build_project_config(
                         until: "β.4".to_string(),
                     });
                 }
+                Factory::Pipeline => {
+                    let arr = arg_as_array(call, 0).ok_or_else(|| {
+                        mk_err(
+                            source_path,
+                            sm,
+                            call.span(),
+                            "`pipeline(...)`: first argument must be an array literal",
+                        )
+                    })?;
+                    pipeline_steps = extract_pipeline_steps(arr, source_path, sm)?;
+                }
                 Factory::Agent => {} // second pass
             }
         }
@@ -158,7 +176,7 @@ pub fn build_project_config(
     }
 
     // Serialize to TOML and parse through the standard validation path.
-    let toml = build_toml(&project_name, &agents, &tools);
+    let toml = build_toml(&project_name, &agents, &tools, &pipeline_steps);
     ProjectConfig::parse_str(&toml).map_err(|e| map_config_err(e, source_path, sm))
 }
 
@@ -170,6 +188,7 @@ fn build_toml(
     project_name: &str,
     agents: &BTreeMap<String, IrAgent>,
     tools: &BTreeMap<String, IrTool>,
+    pipeline_steps: &[IrPipelineStep],
 ) -> String {
     let mut out = String::new();
 
@@ -210,6 +229,16 @@ fn build_toml(
         if let Some(sys) = &agent.prompt_system {
             out.push_str(&format!("[agents.{}.prompt]\n", toml_key(name)));
             out.push_str(&format!("system = {}\n", toml_str(sys)));
+        }
+        out.push('\n');
+    }
+
+    for step in pipeline_steps {
+        out.push_str("[[pipeline.steps]]\n");
+        out.push_str(&format!("id = {}\n", toml_str(&step.id)));
+        out.push_str(&format!("run = {}\n", toml_str(&step.run)));
+        if let Some(input) = &step.input {
+            out.push_str(&format!("input = {}\n", toml_str(input)));
         }
         out.push('\n');
     }
@@ -319,6 +348,66 @@ fn resolve_ref<'a>(expr: &'a Expr, names: &'a NameMap<'a>) -> &'a Expr {
 // ──────────────────────────────────────────────────────────────────────────────
 // Factory extractors
 // ──────────────────────────────────────────────────────────────────────────────
+
+fn extract_pipeline_steps(
+    arr: &ArrayLit,
+    source_path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> Result<Vec<IrPipelineStep>, TsExtractError> {
+    let mut steps = Vec::new();
+    for (elem_idx, elem) in arr.elems.iter().enumerate() {
+        let elem: &ExprOrSpread = match elem {
+            Some(e) => e,
+            None => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    arr.span,
+                    &format!("pipeline step {elem_idx}: array element must not be a hole"),
+                ));
+            }
+        };
+        if elem.spread.is_some() {
+            return Err(mk_err(
+                source_path,
+                sm,
+                elem.expr.span(),
+                &format!("pipeline step {elem_idx}: spread elements are not supported"),
+            ));
+        }
+        let obj = match &*elem.expr {
+            Expr::Object(obj) => obj,
+            _ => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    elem.expr.span(),
+                    &format!("pipeline step {elem_idx}: each element must be an object literal"),
+                ));
+            }
+        };
+        let props = obj_props(obj);
+        let id = get_string(&props, "id").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("pipeline step {elem_idx}: missing required string field `id`"),
+            )
+        })?;
+        let run = get_string(&props, "run").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                obj.span(),
+                &format!("pipeline step {elem_idx}: missing required string field `run`"),
+            )
+        })?;
+        let input = get_string(&props, "input");
+        steps.push(IrPipelineStep { id, run, input });
+    }
+    Ok(steps)
+}
 
 fn extract_tool(
     name: &str,
@@ -460,7 +549,7 @@ fn extract_agent(
                                 until: "β.4".to_string(),
                             });
                         }
-                        Factory::Agent => {}
+                        Factory::Agent | Factory::Pipeline => {}
                     }
                 }
             }

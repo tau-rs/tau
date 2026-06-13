@@ -16,3 +16,8 @@ export const fan_monitor = agent({
     prompt: { system: "Watch the temperature; turn on the fan if above 30°C." },
     tools: { read_temp, set_fan },
 });
+
+export const fan_pipeline = pipeline([
+    { id: "check", run: "agent:fan_monitor" },
+    { id: "act", run: "agent:fan_monitor", input: "${steps.check.output}" },
+]);
