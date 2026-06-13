@@ -102,6 +102,18 @@ pub const EV_PIPELINE_STEP_STARTED: &str = "pipeline.step_started";
 #[doc(hidden)]
 pub const EV_PIPELINE_STEP_COMPLETED: &str = "pipeline.step_completed";
 
+// --- Check events ---
+
+/// A check evaluation completed (pass or fail).
+#[doc(hidden)]
+pub const EV_CHECK_EVALUATED: &str = "check.evaluated";
+/// A failed check rewound to its gate to retry.
+#[doc(hidden)]
+pub const EV_CHECK_RETRY: &str = "check.retry";
+/// Span wrapping one check evaluation.
+#[doc(hidden)]
+pub const SPAN_CHECK: &str = "check";
+
 /// All `(identifier, value)` pairs in this mirror, in declaration order.
 ///
 /// Consumed by the cross-crate drift test in `tau-runtime-tokio`. The
@@ -148,4 +160,7 @@ pub const PAIRS: &[(&str, &str)] = &[
     ("SPAN_PIPELINE_STEP", SPAN_PIPELINE_STEP),
     ("EV_PIPELINE_STEP_STARTED", EV_PIPELINE_STEP_STARTED),
     ("EV_PIPELINE_STEP_COMPLETED", EV_PIPELINE_STEP_COMPLETED),
+    ("EV_CHECK_EVALUATED", EV_CHECK_EVALUATED),
+    ("EV_CHECK_RETRY", EV_CHECK_RETRY),
+    ("SPAN_CHECK", SPAN_CHECK),
 ];
