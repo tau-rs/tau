@@ -947,6 +947,33 @@ fn validate_trigger(
                 "cron schedule must have 5 whitespace-separated fields, found {field_count}"
             )));
         }
+        // Build-time enforcement: range-check any field that is a plain
+        // non-negative integer. Fields using `*`, ranges (`-`), lists (`,`),
+        // or steps (`/`) are passed through for the host scheduler to
+        // interpret (the full cron grammar is the host's job) — but a bare
+        // out-of-range integer like hour `25` is a build-time-detectable
+        // mistake, so we reject it here.
+        const CRON_RANGES: [(&str, u32, u32); 5] = [
+            ("minute", 0, 59),
+            ("hour", 0, 23),
+            ("day-of-month", 1, 31),
+            ("month", 1, 12),
+            ("day-of-week", 0, 7),
+        ];
+        for (field, (fname, lo, hi)) in sched.split_whitespace().zip(CRON_RANGES.iter()) {
+            if !field.is_empty() && field.bytes().all(|b| b.is_ascii_digit()) {
+                let v: u32 = field.parse().map_err(|_| {
+                    err(format!(
+                        "cron {fname} field {field:?} is not a valid integer"
+                    ))
+                })?;
+                if v < *lo || v > *hi {
+                    return Err(err(format!(
+                        "cron {fname} field {v} is out of range {lo}..={hi}"
+                    )));
+                }
+            }
+        }
         let tz = raw.timezone.unwrap_or_else(|| "UTC".to_string());
         (Some(sched.to_string()), tz)
     } else {
@@ -1967,6 +1994,48 @@ mod tests {
             message.contains("max") || message.contains("duration"),
             "got: {message}"
         );
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_cron_hour() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "0 25 * * *"
+        "#;
+        let Err(ProjectConfigError::TriggerValidation { message, .. }) = parse(toml_str) else {
+            panic!("expected TriggerValidation");
+        };
+        assert!(
+            message.contains("hour") && message.contains("range"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_star_range_step_list_cron_fields() {
+        // `*`, ranges, lists, and steps pass through — the host validates the
+        // full cron grammar; tau only range-checks bare integers.
+        let toml_str = r#"
+            [project]
+            name = "x"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            llm_backend = "anthropic"
+            [trigger.t]
+            kind = "cron"
+            agent = "a"
+            schedule = "*/5 1-3 * * 1,3,5"
+        "#;
+        parse(toml_str).expect("non-integer cron fields must pass through");
     }
 }
 
