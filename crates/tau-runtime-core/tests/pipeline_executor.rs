@@ -190,6 +190,7 @@ fn agent(id: &str) -> Agent {
         tool_refs: Vec::new(),
         context: None,
         budget: AgentBudget::default(),
+        produces: Vec::new(),
     }
 }
 

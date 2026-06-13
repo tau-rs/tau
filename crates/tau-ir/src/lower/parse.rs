@@ -114,6 +114,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                     max_turns: entry.max_turns,
                     max_tokens: entry.max_tokens,
                 },
+                produces: entry.produces.clone(),
             },
         );
     }

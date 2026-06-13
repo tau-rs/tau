@@ -109,6 +109,7 @@ fn sample_module() -> IrModule {
                 max_turns: Some(1),
                 max_tokens: None,
             },
+            produces: Vec::new(),
         },
     );
 

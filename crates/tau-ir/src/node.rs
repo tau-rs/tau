@@ -40,6 +40,9 @@ pub struct Agent {
     pub context: Option<ContextConfig>,
     /// Execution budget.
     pub budget: AgentBudget,
+    /// Artifact loci this agent declares it produces (deliverable binding).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub produces: alloc::vec::Vec<alloc::string::String>,
 }
 
 /// A tool node.
@@ -86,3 +89,53 @@ pub struct Deterministic {
 
 /// `Subflow` re-exported as a `Node` payload (alias).
 pub type Subflow = SubflowEdge;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::budget::AgentBudget;
+    use crate::ids::AgentId;
+
+    /// An `Agent` with `produces` set round-trips through serde without loss.
+    #[test]
+    fn agent_produces_round_trips() {
+        let agent = Agent {
+            id: AgentId("writer".into()),
+            prompt: "You write reports.".into(),
+            model: "claude-haiku-4-5".into(),
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
+            produces: alloc::vec!["/x".into()],
+        };
+        let json = serde_json::to_string(&agent).expect("serialize");
+        let back: Agent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(agent, back);
+    }
+
+    /// An `Agent` with empty `produces` serializes WITHOUT a `"produces"` key
+    /// (guards byte-stability for produce-less agents).
+    #[test]
+    fn agent_empty_produces_omitted_from_json() {
+        let agent = Agent {
+            id: AgentId("gatherer".into()),
+            prompt: alloc::string::String::new(),
+            model: "claude-haiku-4-5".into(),
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
+            produces: alloc::vec::Vec::new(),
+        };
+        let json = serde_json::to_string(&agent).expect("serialize");
+        assert!(
+            !json.contains("\"produces\""),
+            "expected 'produces' key to be absent for empty vec; got: {json}"
+        );
+    }
+}

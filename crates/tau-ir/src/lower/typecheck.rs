@@ -187,6 +187,7 @@ mod tests {
                 max_turns: None,
                 max_tokens: None,
             },
+            produces: alloc::vec::Vec::new(),
         }
     }
 
