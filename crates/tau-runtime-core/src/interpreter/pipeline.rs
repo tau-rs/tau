@@ -15,7 +15,7 @@ use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_ir::pipeline::StepRun;
 use tau_ir::IrModule;
 
-use tracing::info_span;
+use tracing::{info_span, Instrument};
 
 use crate::error::RuntimeError;
 use crate::interpreter::agent_loop::{last_assistant_text, run_agent};
@@ -54,8 +54,16 @@ where
     let mut store = OutputStore::new();
 
     for step in &pipeline.steps {
-        let _span = info_span!(SPAN_PIPELINE_STEP, id = step.id.0.as_str()).entered();
-        tracing::info!(name = EV_PIPELINE_STEP_STARTED, id = step.id.0.as_str());
+        // NOTE: we do NOT call `.entered()` here — `EnteredSpan` mutates a
+        // thread-local span stack, and tokio's multi-thread scheduler can
+        // move this task to a different worker thread at any `.await`,
+        // leaving the guard on the wrong thread and mis-parenting child
+        // spans/events. Instead every event uses `parent: &step_span`
+        // explicitly, and every awaited future is wrapped with
+        // `.instrument(step_span.clone())`. See stream.rs:273-283 for the
+        // same idiom applied to the runtime turn span.
+        let step_span = info_span!(SPAN_PIPELINE_STEP, id = step.id.0.as_str());
+        tracing::info!(parent: &step_span, name = EV_PIPELINE_STEP_STARTED, id = step.id.0.as_str());
 
         let rendered = tau_ir::template::resolve(&step.input, &input, &store.template_map())
             .map_err(|e| RuntimeError::Internal {
@@ -79,6 +87,7 @@ where
                     dispatcher.clone(),
                     initial,
                 ))
+                .instrument(step_span.clone())
                 .await?;
                 match outcome {
                     RunOutcome::Failed { status, .. } => {
@@ -94,7 +103,10 @@ where
             }
             StepRun::Tool(tool_id) => {
                 let args = rendered_to_args(&rendered);
-                let result = dispatcher.invoke(tool_id, &args).await?;
+                let result = dispatcher
+                    .invoke(tool_id, &args)
+                    .instrument(step_span.clone())
+                    .await?;
                 match (result.body, result.error) {
                     (Some(body), _) => body,
                     (None, Some(err)) => {
@@ -130,7 +142,7 @@ where
         };
 
         store.insert(step.id.0.clone(), output);
-        tracing::info!(name = EV_PIPELINE_STEP_COMPLETED, id = step.id.0.as_str());
+        tracing::info!(parent: &step_span, name = EV_PIPELINE_STEP_COMPLETED, id = step.id.0.as_str());
     }
 
     Ok(store)

@@ -367,9 +367,16 @@ impl<S: Subscriber> Layer<S> for CapturedEvents {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = NameVisitor::default();
         event.record(&mut visitor);
-        let label = visitor
-            .0
+        let name = visitor
+            .name
             .unwrap_or_else(|| event.metadata().name().to_string());
+        // Include the `id` field so the test can assert per-step ids are
+        // propagated on both pipeline.step_started and pipeline.step_completed
+        // events (rather than only asserting counts).
+        let label = match visitor.id {
+            Some(id) => format!("{name}:{id}"),
+            None => name,
+        };
         self.0
             .lock()
             .expect("captured-events mutex poisoned")
@@ -377,21 +384,31 @@ impl<S: Subscriber> Layer<S> for CapturedEvents {
     }
 }
 
-/// Visitor that extracts the `name` field value from a tracing event.
-/// Accepts both `record_str` and the debug-formatted `record_debug` form.
+/// Visitor that extracts the `name` and `id` field values from a tracing
+/// event. Accepts both `record_str` and the debug-formatted `record_debug`
+/// form. The `name` field is used as the event label; `id` is captured so
+/// callers can assert per-step ids are propagated correctly.
 #[derive(Default)]
-struct NameVisitor(Option<String>);
+struct NameVisitor {
+    name: Option<String>,
+    id: Option<String>,
+}
 
 impl Visit for NameVisitor {
     fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "name" {
-            self.0 = Some(value.to_string());
+        match field.name() {
+            "name" => self.name = Some(value.to_string()),
+            "id" => self.id = Some(value.to_string()),
+            _ => {}
         }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if field.name() == "name" {
-            let raw = format!("{value:?}");
-            self.0 = Some(raw.trim_matches('"').to_string());
+        let raw = format!("{value:?}");
+        let cleaned = raw.trim_matches('"').to_string();
+        match field.name() {
+            "name" => self.name = Some(cleaned),
+            "id" => self.id = Some(cleaned),
+            _ => {}
         }
     }
 }
@@ -419,7 +436,7 @@ async fn pipeline_emits_step_started_and_completed_events() {
         "expected 'span:pipeline.step' to be captured; got: {events:?}"
     );
 
-    // Assert step_started for both step ids.
+    // Assert step_started for both step ids — label is "<ev_name>:<step_id>".
     let started_events: Vec<_> = events
         .iter()
         .filter(|e| e.starts_with("event:pipeline.step_started"))
@@ -429,8 +446,16 @@ async fn pipeline_emits_step_started_and_completed_events() {
         2,
         "expected two pipeline.step_started events (one per step); got: {events:?}"
     );
+    assert!(
+        started_events.contains(&&"event:pipeline.step_started:a".to_string()),
+        "expected pipeline.step_started with id='a'; got: {started_events:?}"
+    );
+    assert!(
+        started_events.contains(&&"event:pipeline.step_started:b".to_string()),
+        "expected pipeline.step_started with id='b'; got: {started_events:?}"
+    );
 
-    // Assert step_completed for both step ids.
+    // Assert step_completed for both step ids — label is "<ev_name>:<step_id>".
     let completed_events: Vec<_> = events
         .iter()
         .filter(|e| e.starts_with("event:pipeline.step_completed"))
@@ -439,5 +464,13 @@ async fn pipeline_emits_step_started_and_completed_events() {
         completed_events.len(),
         2,
         "expected two pipeline.step_completed events (one per step); got: {events:?}"
+    );
+    assert!(
+        completed_events.contains(&&"event:pipeline.step_completed:a".to_string()),
+        "expected pipeline.step_completed with id='a'; got: {completed_events:?}"
+    );
+    assert!(
+        completed_events.contains(&&"event:pipeline.step_completed:b".to_string()),
+        "expected pipeline.step_completed with id='b'; got: {completed_events:?}"
     );
 }
