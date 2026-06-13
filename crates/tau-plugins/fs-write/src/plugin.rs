@@ -4,7 +4,10 @@
 //! capability scope. Two modes: `write` (full base64 contents) and
 //! `edit` (`old_str`→`new_str`).
 
+use base64::Engine as _;
 use serde::Deserialize;
+use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use tau_domain::{Capability, FsCapability, Value};
 use tau_plugin_sdk::{ConfigError, Configure};
@@ -14,6 +17,7 @@ use tau_ports::{
 };
 
 use crate::config::FsWriteConfig;
+use crate::path_check::{admit_with_deny, validate_path, BadArgs};
 
 /// Tool arguments, discriminated on `mode`. The single source of
 /// truth that the JSON schema in [`FsWritePlugin::schema`] mirrors.
@@ -99,19 +103,37 @@ fn apply_edit(haystack: &str, old: &str, new: &str, replace_all: bool) -> EditOu
     }
 }
 
+/// Build the success `ToolResult` for a write/edit: `{bytes_written, path}`.
+fn wrote_result(path: &str, bytes_written: i64) -> ToolResult {
+    let mut map: BTreeMap<String, Value> = BTreeMap::new();
+    map.insert("bytes_written".into(), Value::Integer(bytes_written));
+    map.insert("path".into(), Value::String(path.to_string()));
+    make_tool_result(
+        vec![ToolContent::Json {
+            data: Value::Object(map),
+        }],
+        false,
+    )
+}
+
+/// Build a Tier ② semantic error (`is_error: true`) the LLM may retry.
+fn semantic_error(text: String) -> ToolResult {
+    make_tool_result(vec![ToolContent::Text { text }], true)
+}
+
 /// Per-session state derived from the agent's granted capabilities.
 pub struct FsWriteSession {
-    #[allow(dead_code)]
+    /// Glob patterns from `FsCapability::Write.paths` (flattened).
     allowed_globs: Vec<String>,
-    #[allow(dead_code)]
+    /// Globs to subtract, from `deny_entries["fs.write"]`. Deny wins.
     denied_globs: Vec<String>,
-    #[allow(dead_code)]
+    /// Most-permissive `max_bytes` across grants; `None` = uncapped.
     max_bytes: Option<u64>,
 }
 
 /// fs-write Tool plugin.
 pub struct FsWritePlugin {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // reserved for future config knobs
     config: FsWriteConfig,
 }
 
@@ -131,11 +153,48 @@ impl Tool for FsWritePlugin {
     }
 
     fn schema(&self) -> ToolSpec {
-        // Real schema lands in Task 5.
+        let schema_json = json!({
+            "type": "object",
+            "oneOf": [
+                {
+                    "title": "write",
+                    "properties": {
+                        "path": { "type": "string",
+                            "description": "Absolute path. No `..` segments. Created or truncated." },
+                        "mode": { "const": "write" },
+                        "contents": { "type": "string",
+                            "description": "Base64-encoded file bytes." }
+                    },
+                    "required": ["path", "mode", "contents"],
+                    "additionalProperties": false
+                },
+                {
+                    "title": "edit",
+                    "properties": {
+                        "path": { "type": "string",
+                            "description": "Absolute path. No `..` segments. File must already exist." },
+                        "mode": { "const": "edit" },
+                        "old_str": { "type": "string",
+                            "description": "Exact substring to replace. Non-empty." },
+                        "new_str": { "type": "string",
+                            "description": "Replacement text. May be empty to delete." },
+                        "replace_all": { "type": "boolean", "default": false,
+                            "description": "Replace every occurrence. Default false requires old_str to match exactly once." }
+                    },
+                    "required": ["path", "mode", "old_str", "new_str"],
+                    "additionalProperties": false
+                }
+            ]
+        });
+        let schema_value: Value = serde_json::from_str(
+            &serde_json::to_string(&schema_json).expect("static JSON schema serializes"),
+        )
+        .expect("static JSON schema round-trips through tau_domain::Value");
         make_tool_spec(
             "fs-write".to_string(),
-            "Write or edit a file at an absolute path.".to_string(),
-            Value::Object(std::collections::BTreeMap::new()),
+            "Write (full base64 contents) or edit (old_str->new_str) a file at an absolute path."
+                .to_string(),
+            schema_value,
         )
     }
 
@@ -148,25 +207,109 @@ impl Tool for FsWritePlugin {
         })
     }
 
-    async fn init(&self, _ctx: SessionContext) -> Result<Self::Session, ToolError> {
+    async fn init(&self, ctx: SessionContext) -> Result<Self::Session, ToolError> {
+        let allowed_globs = extract_fs_write_paths(&ctx.granted_capabilities);
+        let denied_globs = ctx
+            .deny_entries
+            .iter()
+            .find(|e| e.kind == "fs.write")
+            .map(|e| e.deny.clone())
+            .unwrap_or_default();
+        let max_bytes = extract_max_bytes(&ctx.granted_capabilities);
         Ok(FsWriteSession {
-            allowed_globs: Vec::new(),
-            denied_globs: Vec::new(),
-            max_bytes: None,
+            allowed_globs,
+            denied_globs,
+            max_bytes,
         })
     }
 
     async fn invoke(
         &self,
-        _session: &mut Self::Session,
-        _args: Value,
+        session: &mut Self::Session,
+        args: Value,
     ) -> Result<ToolResult, ToolError> {
-        Ok(make_tool_result(
-            vec![ToolContent::Text {
-                text: "fs-write: unimplemented".to_string(),
-            }],
-            true,
-        ))
+        match parse_args(&args)? {
+            WriteArgs::Write { path, contents } => {
+                let path =
+                    validate_path(&path).map_err(|e| ToolError::BadArgs { reason: e.reason() })?;
+                if !admit_with_deny(path, &session.allowed_globs, &session.denied_globs) {
+                    return Err(ToolError::BadArgs {
+                        reason: BadArgs::NotInScope.reason(),
+                    });
+                }
+                // base64 decode failure is a Tier ② (retryable) outcome.
+                let bytes = match base64::engine::general_purpose::STANDARD.decode(&contents) {
+                    Ok(b) => b,
+                    Err(e) => return Ok(semantic_error(format!("fs-write: invalid base64: {e}"))),
+                };
+                if let Some(cap) = session.max_bytes {
+                    if bytes.len() as u64 > cap {
+                        return Err(ToolError::BadArgs {
+                            reason: format!(
+                                "fs-write: write of {} bytes exceeds max_bytes cap of {cap}",
+                                bytes.len()
+                            ),
+                        });
+                    }
+                }
+                match tokio::fs::write(path, &bytes).await {
+                    Ok(()) => Ok(wrote_result(path, bytes.len() as i64)),
+                    Err(io_err) => Ok(semantic_error(format!("fs-write: {io_err}"))),
+                }
+            }
+            WriteArgs::Edit {
+                path,
+                old_str,
+                new_str,
+                replace_all,
+            } => {
+                let path =
+                    validate_path(&path).map_err(|e| ToolError::BadArgs { reason: e.reason() })?;
+                if !admit_with_deny(path, &session.allowed_globs, &session.denied_globs) {
+                    return Err(ToolError::BadArgs {
+                        reason: BadArgs::NotInScope.reason(),
+                    });
+                }
+                if old_str.is_empty() {
+                    return Err(ToolError::BadArgs {
+                        reason: "fs-write: old_str must not be empty".to_string(),
+                    });
+                }
+                // Edit requires an existing, UTF-8 file; both failures
+                // are Tier ② (retryable) outcomes.
+                let current = match tokio::fs::read_to_string(path).await {
+                    Ok(s) => s,
+                    Err(io_err) => return Ok(semantic_error(format!("fs-write: {io_err}"))),
+                };
+                let new_content = match apply_edit(&current, &old_str, &new_str, replace_all) {
+                    EditOutcome::Replaced(s) => s,
+                    EditOutcome::NotFound => {
+                        return Ok(semantic_error(format!(
+                            "fs-write: old_str not found in {path}"
+                        )))
+                    }
+                    EditOutcome::Ambiguous(n) => {
+                        return Ok(semantic_error(format!(
+                            "fs-write: old_str matched {n} times; add context to disambiguate or set replace_all"
+                        )))
+                    }
+                };
+                if let Some(cap) = session.max_bytes {
+                    if new_content.len() as u64 > cap {
+                        return Err(ToolError::BadArgs {
+                            reason: format!(
+                                "fs-write: edit result of {} bytes exceeds max_bytes cap of {cap}",
+                                new_content.len()
+                            ),
+                        });
+                    }
+                }
+                match tokio::fs::write(path, new_content.as_bytes()).await {
+                    Ok(()) => Ok(wrote_result(path, new_content.len() as i64)),
+                    Err(io_err) => Ok(semantic_error(format!("fs-write: {io_err}"))),
+                }
+            }
+        }
     }
 
     async fn teardown(&self, _session: Self::Session) -> Result<(), ToolError> {
