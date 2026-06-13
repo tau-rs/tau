@@ -669,15 +669,16 @@ name = "demo"
 display_name = "G"
 package = "demo@^0.1"
 llm_backend = "mock-llm"
-produces = ["/workspace/report.md"]
 
 [agents.writer]
 display_name = "W"
 package = "demo@^0.1"
 llm_backend = "mock-llm"
 
+# Output locus => producer is the emitting step `gather` (index 0).
+# retry_from = "writer" (index 1) is AFTER the producer => GateAfterProducer.
 [deliverables.report]
-path = "/workspace/report.md"
+output = "steps.gather.output"
 must_satisfy = "good"
 on_fail = "retry"
 max_attempts = 3
@@ -752,9 +753,11 @@ input = "${steps.normalize.output}"
 
     #[test]
     fn rejects_overlapping_retry_spans() {
-        // Two positioned retry checks with overlapping spans.
-        // check1: span [gather..=verify1] (gi=0, ci=2)
-        // check2: span [gather..=verify2] (gi=0, ci=3) — overlaps with check1
+        // Two positioned retry checks with overlapping spans. Both use an
+        // Output locus on `writer`, so each producer is `writer` (index 1)
+        // and each gate defaults to `writer`:
+        //   check1: span [writer..=verify1] = [1, 2]
+        //   check2: span [writer..=verify2] = [1, 3] — overlaps check1
         let toml = r#"
 [project]
 name = "demo"
@@ -763,7 +766,6 @@ name = "demo"
 display_name = "G"
 package = "demo@^0.1"
 llm_backend = "mock-llm"
-produces = ["/workspace/out1.md", "/workspace/out2.md"]
 
 [agents.writer]
 display_name = "W"
@@ -771,13 +773,13 @@ package = "demo@^0.1"
 llm_backend = "mock-llm"
 
 [deliverables.check1]
-path = "/workspace/out1.md"
+output = "steps.writer.output"
 must_satisfy = "good"
 on_fail = "retry"
 max_attempts = 2
 
 [deliverables.check2]
-path = "/workspace/out2.md"
+output = "steps.writer.output"
 must_satisfy = "good"
 on_fail = "retry"
 max_attempts = 2
@@ -839,8 +841,9 @@ judge = "ghost"
 
     #[test]
     fn valid_retry_resolves_producer_and_gate() {
-        // Full valid case: gather (no produces) -> writer (produces path) ->
-        // verify (check:report). on_fail=retry, retry_from=writer.
+        // Full valid case: gather -> writer -> verify (check:report).
+        // Output locus on `writer` => producer is the `writer` step;
+        // gate defaults to the producer. on_fail=retry, retry_from=writer.
         let toml = r#"
 [project]
 name = "demo"
@@ -854,10 +857,9 @@ llm_backend = "mock-llm"
 display_name = "W"
 package = "demo@^0.1"
 llm_backend = "mock-llm"
-produces = ["/workspace/report.md"]
 
 [deliverables.report]
-path = "/workspace/report.md"
+output = "steps.writer.output"
 must_satisfy = "good"
 on_fail = "retry"
 max_attempts = 3
