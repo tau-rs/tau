@@ -24,6 +24,9 @@ pub struct UncheckedProjectConfig {
     /// Map of step name → unchecked deterministic step definition (IR lowering, β.2.2).
     #[serde(default)]
     pub steps: BTreeMap<String, UncheckedStep>,
+    /// Optional `[pipeline]` table with ordered `[[pipeline.steps]]`.
+    #[serde(default)]
+    pub pipeline: Option<UncheckedPipeline>,
 }
 
 /// `[project]` table.
@@ -159,6 +162,58 @@ pub struct UncheckedCapabilityOverride {
     /// Narrowed `max_bytes` (only meaningful for `fs.write`).
     #[serde(default)]
     pub max_bytes: Option<u64>,
+}
+
+// ----- Pipeline structs (β.2.x) -----
+
+/// Raw `[pipeline]` table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UncheckedPipeline {
+    /// Ordered steps from `[[pipeline.steps]]`.
+    #[serde(default)]
+    pub steps: Vec<UncheckedPipelineStep>,
+}
+
+/// Raw `[[pipeline.steps]]` entry (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UncheckedPipelineStep {
+    /// Step handle.
+    pub id: String,
+    /// `"agent:<id>"` | `"tool:<id>"` | `"deterministic:<id>"`.
+    pub run: String,
+    /// Input template; defaults to `"${input}"` when omitted.
+    pub input: Option<String>,
+}
+
+/// Validated pipeline.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct PipelineConfig {
+    /// Ordered, validated steps.
+    pub steps: Vec<PipelineStepConfig>,
+}
+
+/// Validated pipeline step.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct PipelineStepConfig {
+    /// Step handle.
+    pub id: String,
+    /// Resolved run target.
+    pub run: PipelineRunRef,
+    /// Input template (defaulted to `"${input}"`).
+    pub input: String,
+}
+
+/// A validated `run = "<kind>:<id>"` reference.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PipelineRunRef {
+    /// `agent:<id>`
+    Agent(String),
+    /// `tool:<id>`
+    Tool(String),
+    /// `deterministic:<id>`
+    Deterministic(String),
 }
 
 // ----- IR lowering structs (β.2.2) -----
@@ -305,6 +360,8 @@ pub struct ProjectConfig {
     pub tools: BTreeMap<String, ToolEntry>,
     /// Map of step name → validated step entry (IR lowering, β.2.2).
     pub steps: BTreeMap<String, StepEntry>,
+    /// Optional validated pipeline.
+    pub pipeline: Option<PipelineConfig>,
 }
 
 /// Validated entry for a single agent.
@@ -557,6 +614,15 @@ pub enum ProjectConfigError {
         message: String,
     },
 
+    /// A `[[pipeline.steps]]` entry failed validation.
+    #[error("pipeline step {id:?}: {message}")]
+    PipelineValidation {
+        /// Step id that failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
+
     /// `[tools.<name>] mcp = "..."` URL has an unsupported scheme.
     #[error("tool {tool:?}: unsupported MCP URL scheme: {url:?}")]
     UnsupportedMcpUrl {
@@ -606,12 +672,18 @@ impl UncheckedProjectConfig {
             steps.insert(name.clone(), validate_step(name, raw)?);
         }
 
+        let pipeline = match &self.pipeline {
+            Some(p) => Some(validate_pipeline(p)?),
+            None => None,
+        };
+
         Ok(ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
             agents,
             tools,
             steps,
+            pipeline,
         })
     }
 }
@@ -786,6 +858,39 @@ fn validate_step(name: String, raw: UncheckedStep) -> Result<StepEntry, ProjectC
         input_schema: raw.input_schema,
         output_schema: raw.output_schema,
     })
+}
+
+fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectConfigError> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut steps = Vec::with_capacity(raw.steps.len());
+    for s in &raw.steps {
+        if !seen.insert(s.id.clone()) {
+            return Err(ProjectConfigError::PipelineValidation {
+                id: s.id.clone(),
+                message: format!("step id {:?} declared more than once", s.id),
+            });
+        }
+        let run = match s.run.split_once(':') {
+            Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
+            Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
+            Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
+            _ => {
+                return Err(ProjectConfigError::PipelineValidation {
+                    id: s.id.clone(),
+                    message: format!(
+                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\", got {:?}",
+                    s.run
+                ),
+                })
+            }
+        };
+        steps.push(PipelineStepConfig {
+            id: s.id.clone(),
+            run,
+            input: s.input.clone().unwrap_or_else(|| "${input}".to_string()),
+        });
+    }
+    Ok(PipelineConfig { steps })
 }
 
 fn unchecked_to_capability_override(
@@ -1523,6 +1628,53 @@ mod tests {
             other => panic!("expected Mcp body, got {other:?}"),
         }
     }
+
+    #[test]
+    fn parses_pipeline_steps() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "gather"
+            run = "agent:gather"
+            input = "${input}"
+            [[pipeline.steps]]
+            id = "writer"
+            run = "agent:writer"
+            input = "${steps.gather.output}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps.len(), 2);
+        assert_eq!(pipe.steps[0].id, "gather");
+        assert_eq!(pipe.steps[0].run, PipelineRunRef::Agent("gather".into()));
+        assert_eq!(pipe.steps[1].input, "${steps.gather.output}");
+    }
+
+    #[test]
+    fn rejects_unknown_run_kind() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "x"
+            run = "wizard:x"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn defaults_pipeline_input_to_top_level() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "x"
+            run = "agent:x"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).unwrap();
+        assert_eq!(cfg.pipeline.unwrap().steps[0].input, "${input}");
+    }
 }
 
 #[cfg(test)]
@@ -1595,6 +1747,7 @@ mod proptests {
                 agents: agent_map.clone(),
                 tools: BTreeMap::new(),
                 steps: BTreeMap::new(),
+                pipeline: None,
             };
 
             let toml_str = toml::to_string(&original).unwrap();
