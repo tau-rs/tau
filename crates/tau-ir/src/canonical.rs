@@ -43,14 +43,16 @@ mod pipeline_canonical_tests {
     #[test]
     fn module_with_pipeline_round_trips_and_reports_v1_1() {
         let target = registry::list_available().next().unwrap().triple;
-        let mut wf = Workflow::default();
-        wf.pipeline = Some(Pipeline {
-            steps: alloc::vec![PipelineStep {
-                id: PipelineStepId("a".into()),
-                run: StepRun::Agent(AgentId("a".into())),
-                input: "${input}".into(),
-            }],
-        });
+        let wf = Workflow {
+            pipeline: Some(Pipeline {
+                steps: alloc::vec![PipelineStep {
+                    id: PipelineStepId("a".into()),
+                    run: StepRun::Agent(AgentId("a".into())),
+                    input: "${input}".into(),
+                }],
+            }),
+            ..Workflow::default()
+        };
         let m = IrModule {
             ir_format: IrFormatVersion::current(),
             tau_version: "0.0.0".into(),

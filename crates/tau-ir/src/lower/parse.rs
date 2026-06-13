@@ -7,14 +7,15 @@
 //! filled with zero bytes (the `resolve` stage fills them).
 
 use alloc::collections::BTreeMap;
-use tau_pkg::project::ProjectConfig;
+use tau_pkg::project::{PipelineRunRef, ProjectConfig};
 use tau_pkg::{PromptEntry, ToolBody};
 
 use crate::capability::{CapabilityRequirements, CapabilityTable};
 use crate::error::IrError;
-use crate::ids::{AgentId, StepId, ToolId};
+use crate::ids::{AgentId, PipelineStepId, StepId, ToolId};
 use crate::module::Workflow;
 use crate::node::{Agent, Deterministic, Tool, ToolSpec};
+use crate::pipeline::{Pipeline, PipelineStep, StepRun};
 use crate::subflow::SubflowEdge;
 use crate::tool_impl::{Hash256, NativeFnRef, ToolImpl};
 use crate::AgentBudget;
@@ -174,6 +175,23 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
         );
     }
 
+    // --- Pipeline ---------------------------------------------------------
+    let pipeline = config.pipeline.as_ref().map(|p| Pipeline {
+        steps: p
+            .steps
+            .iter()
+            .map(|s| PipelineStep {
+                id: PipelineStepId(s.id.clone()),
+                run: match &s.run {
+                    PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
+                    PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
+                    PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
+                },
+                input: s.input.clone(),
+            })
+            .collect(),
+    });
+
     Ok(Parsed {
         workflow: Workflow {
             agents,
@@ -181,7 +199,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             steps,
             edges,
             capability_table: CapabilityTable(capability_table),
-            pipeline: None,
+            pipeline,
         },
     })
 }
@@ -304,6 +322,30 @@ deterministic = "do_foo"
             }
             other => panic!("expected IrError::Parse; got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lowers_pipeline_steps_in_order() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "a"
+run = "agent:a"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "b"
+run = "agent:b"
+input = "${steps.a.output}"
+"#;
+        let config = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = parse(&config).expect("parses");
+        let pipe = parsed.workflow.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps.len(), 2);
+        assert_eq!(pipe.steps[0].id.0, "a");
+        assert_eq!(pipe.steps[1].input, "${steps.a.output}");
     }
 
     #[test]
