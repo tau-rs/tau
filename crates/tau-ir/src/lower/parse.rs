@@ -233,6 +233,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                     PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
                     PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
                     PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
+                    PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
                 },
                 input: s.input.clone(),
             })

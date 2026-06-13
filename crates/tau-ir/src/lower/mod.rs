@@ -93,8 +93,8 @@ pub fn lower_project(
     caches: &Caches,
 ) -> Result<IrModule, IrError> {
     let parsed = parse::parse(config)?;
-    let resolved = resolve::resolve(parsed, caches)?;
-    typecheck::typecheck(&resolved)?;
+    let mut resolved = resolve::resolve(parsed, caches)?;
+    typecheck::typecheck(&mut resolved)?;
     capability_fit::check(&resolved, target)?;
     Ok(build_module(resolved, target))
 }

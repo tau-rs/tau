@@ -286,6 +286,8 @@ pub enum PipelineRunRef {
     Tool(String),
     /// `deterministic:<id>`
     Deterministic(String),
+    /// `check:<id>`
+    Check(String),
 }
 
 // ----- Goals / Deliverables validated shapes -----
@@ -1071,11 +1073,12 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
             Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
             Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
             Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
+            Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
             _ => {
                 return Err(ProjectConfigError::PipelineValidation {
                     id: s.id.clone(),
                     message: format!(
-                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\", got {:?}",
+                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {:?}",
                     s.run
                 ),
                 })
