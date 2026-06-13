@@ -318,7 +318,7 @@ at an earlier checkpoint by inserting an explicit step:
 [[pipeline.steps]]
 id  = "mid_check"
 run = "check:has_sources"
-input = "${steps.gather.output}"    # unused by checks; required by the schema
+input = "${steps.gather.output}"    # unused by checks; optional (defaults to "${input}")
 ```
 
 An explicitly-placed check is not appended again.
