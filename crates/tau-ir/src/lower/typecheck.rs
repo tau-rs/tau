@@ -708,85 +708,10 @@ input = "${steps.writer.output}"
 
     #[test]
     fn rejects_retry_span_fully_deterministic() {
-        // Retry span [tool..=tool] contains only tool/deterministic steps — no agent.
-        // We set retry_from = gather (tool agent) intentionally, and the only
-        // step in the span that writes the locus is not an agent step.
-        // Actually — for simplicity, we test a scenario where the span
-        // [gather..=gather] is an agent (can't easily make a fully-deterministic
-        // span with the path-based producer, since Path requires an agent).
-        //
-        // Instead: use an Output locus (steps.gather.output) with retry_from=gather,
-        // so the span is [gather..=gather] which IS an agent. That would pass G2.
-        //
-        // The only way to trigger RetrySpanDeterministic is if retry_from and
-        // producer are both non-agent steps (e.g., tool step). But StepRun::Tool
-        // does not produce "produces" paths, so we'd need Output locus.
-        //
-        // Use an Output locus pointing to a Tool step, with retry_from=that Tool step.
-        // A Tool step is NOT an Agent step, so G2 fails.
-        let toml = r#"
-[project]
-name = "demo"
-
-[agents.gather]
-display_name = "G"
-package = "demo@^0.1"
-llm_backend = "mock-llm"
-
-[goals.has_output]
-evaluates = "steps.transform.output"
-check = "exists"
-on_fail = "retry"
-max_attempts = 3
-retry_from = "transform"
-
-[[pipeline.steps]]
-id = "gather"
-run = "agent:gather"
-
-[[pipeline.steps]]
-id = "transform"
-run = "tool:my-tool"
-
-[[pipeline.steps]]
-id = "verify"
-run = "check:has_output"
-input = "${steps.transform.output}"
-
-[tools.my-tool]
-native = "my_fn"
-description = "transforms"
-capabilities = []
-"#;
-        // Note: native tools need content_hash resolution; skip via empty pipeline
-        // Actually this goes through parse only (not resolve), so content_hash
-        // stays as zero sentinel. typecheck will hit UnknownNativeTool before G2.
-        // Use a simpler approach: agent step spans but with retry_from forcing
-        // us to span ONLY a Tool step that exists. Actually,
-        // let's use a subflow tool that doesn't need content_hash resolution.
-        // Subflow tools are not rejected by check #3 (they don't have content_hash).
-        // But they also pass through fine. The problem: we need a non-agent step
-        // in the pipeline span. Let's use a Deterministic step.
-        // Deterministic steps only exist if there's a [steps.<name>] entry, which
-        // also registers a Tool. We need them as pipeline steps:
-        // run = "deterministic:transform"
-        //
-        // But we still need the Output locus to point to it.
-        // Let's try with just an agent + a deterministic step, where the locus
-        // is Output(transform) and retry_from = gather (but gather comes BEFORE
-        // transform in the pipeline) - that would pass G1 but...
-        // Actually the simplest: single step that is an agent-based pipeline,
-        // but retry_from points to a tool-only step. Not easy.
-        //
-        // Simplest deterministic-only scenario:
-        // pipeline = [deterministic-step, check-step]
-        // locus = Output(det-step), retry_from = det-step
-        // span = [det-step..=det-step] => no agent => RetrySpanDeterministic
-        //
-        // We need a deterministic step in the pipeline. run = "deterministic:normalize".
-        // That requires [steps.normalize] and also [agents.gatherer] but that's for
-        // the pipeline... Actually we don't need agents at all. A pipeline can contain
-        // only deterministic + check steps.
+        // G2: a retry span containing no agent step must be rejected.
+        // A pipeline of [deterministic-step, check-step] with an Output
+        // locus on the deterministic step and retry_from = that step yields
+        // a span [normalize..=normalize] with no agent → RetrySpanDeterministic.
         let toml2 = r#"
 [project]
 name = "demo"
