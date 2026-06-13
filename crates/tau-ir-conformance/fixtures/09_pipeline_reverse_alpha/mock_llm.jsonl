@@ -1,0 +1,2 @@
+{"turn": 0, "response": {"text": "first-step-output", "stop_reason": "end_turn"}}
+{"turn": 1, "response": {"text": "last-step-output", "stop_reason": "end_turn"}}
