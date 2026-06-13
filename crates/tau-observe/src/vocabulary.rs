@@ -87,6 +87,15 @@ pub const EV_TOOL_SESSION_CLOSE_FAILED: &str = "tool.session_close_failed";
 /// Emitted when a message is appended to the run history.
 pub const EV_MESSAGE_ADDED: &str = "message.added";
 
+// --- Pipeline events ---
+
+/// Span wrapping one pipeline step's execution.
+pub const SPAN_PIPELINE_STEP: &str = "pipeline.step";
+/// Emitted when a pipeline step begins.
+pub const EV_PIPELINE_STEP_STARTED: &str = "pipeline.step_started";
+/// Emitted when a pipeline step completes successfully.
+pub const EV_PIPELINE_STEP_COMPLETED: &str = "pipeline.step_completed";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +157,12 @@ mod tests {
     #[test]
     fn message_events_match_adr_0006_section_3_9() {
         assert_eq!(EV_MESSAGE_ADDED, "message.added");
+    }
+
+    #[test]
+    fn pipeline_events_match_adr_0006_section_3_9() {
+        assert_eq!(SPAN_PIPELINE_STEP, "pipeline.step");
+        assert_eq!(EV_PIPELINE_STEP_STARTED, "pipeline.step_started");
+        assert_eq!(EV_PIPELINE_STEP_COMPLETED, "pipeline.step_completed");
     }
 }

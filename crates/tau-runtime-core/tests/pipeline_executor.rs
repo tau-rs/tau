@@ -13,22 +13,29 @@
 
 use std::boxed::Box;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
+use tracing::field::{Field, Visit};
+use tracing::span::Attributes;
+use tracing::{Event, Id, Subscriber};
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::Layer;
 
-use tau_ports::{
-    CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError, LlmProviderMessage,
-};
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::CapabilityTable;
 use tau_ir::ids::{AgentId, PipelineStepId, StepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::{Agent, Deterministic};
 use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
-use tau_ir::{NativeFnRef};
+use tau_ir::NativeFnRef;
+use tau_ports::{
+    CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError, LlmProviderMessage,
+};
 
 use tau_runtime_core::builder::DynLlmBackend;
 use tau_runtime_core::error::RuntimeError;
@@ -336,5 +343,101 @@ async fn pipeline_deterministic_step_upcase() {
         store.get("b").and_then(Value::as_str),
         Some("HELLO"),
         "step b (upcase) should upper-case step a's output"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Trace-event capture harness (mirrors tau-runtime-tokio's tracing_emission.rs)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Layer that records spans as `"span:<name>"` and events as
+/// `"event:<name-field>"`, matching the emit form used in the pipeline
+/// executor (`info!(name = EV_PIPELINE_STEP_STARTED, …)`).
+#[derive(Default, Clone)]
+struct CapturedEvents(Arc<Mutex<Vec<String>>>);
+
+impl<S: Subscriber> Layer<S> for CapturedEvents {
+    fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+        self.0
+            .lock()
+            .expect("captured-events mutex poisoned")
+            .push(format!("span:{}", attrs.metadata().name()));
+    }
+
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = NameVisitor::default();
+        event.record(&mut visitor);
+        let label = visitor
+            .0
+            .unwrap_or_else(|| event.metadata().name().to_string());
+        self.0
+            .lock()
+            .expect("captured-events mutex poisoned")
+            .push(format!("event:{label}"));
+    }
+}
+
+/// Visitor that extracts the `name` field value from a tracing event.
+/// Accepts both `record_str` and the debug-formatted `record_debug` form.
+#[derive(Default)]
+struct NameVisitor(Option<String>);
+
+impl Visit for NameVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "name" {
+            self.0 = Some(value.to_string());
+        }
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if field.name() == "name" {
+            let raw = format!("{value:?}");
+            self.0 = Some(raw.trim_matches('"').to_string());
+        }
+    }
+}
+
+#[tokio::test]
+async fn pipeline_emits_step_started_and_completed_events() {
+    let captured = CapturedEvents::default();
+    let _guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let module = build_module(); // two-step (a, b) agent pipeline
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    let dispatcher = Arc::new(EchoDispatcher { backend });
+
+    run_pipeline(Arc::new(module), "TRACE_INPUT".to_string(), dispatcher)
+        .await
+        .expect("pipeline runs to completion");
+
+    let events = captured.0.lock().expect("poisoned").clone();
+
+    // Assert spans opened for each step.
+    assert!(
+        events.contains(&"span:pipeline.step".to_string()),
+        "expected 'span:pipeline.step' to be captured; got: {events:?}"
+    );
+
+    // Assert step_started for both step ids.
+    let started_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.starts_with("event:pipeline.step_started"))
+        .collect();
+    assert_eq!(
+        started_events.len(),
+        2,
+        "expected two pipeline.step_started events (one per step); got: {events:?}"
+    );
+
+    // Assert step_completed for both step ids.
+    let completed_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.starts_with("event:pipeline.step_completed"))
+        .collect();
+    assert_eq!(
+        completed_events.len(),
+        2,
+        "expected two pipeline.step_completed events (one per step); got: {events:?}"
     );
 }

@@ -15,11 +15,14 @@ use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_ir::pipeline::StepRun;
 use tau_ir::IrModule;
 
+use tracing::info_span;
+
 use crate::error::RuntimeError;
 use crate::interpreter::agent_loop::{last_assistant_text, run_agent};
 use crate::interpreter::output_store::OutputStore;
 use crate::interpreter::tool_dispatch::ToolDispatcher;
 use crate::outcome::RunOutcome;
+use crate::vocabulary::{EV_PIPELINE_STEP_COMPLETED, EV_PIPELINE_STEP_STARTED, SPAN_PIPELINE_STEP};
 
 /// Drive an `IrModule`'s pipeline to completion, returning all step
 /// outputs.
@@ -40,15 +43,20 @@ pub async fn run_pipeline<D>(
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
-    let pipeline = module.workflow.pipeline.clone().ok_or_else(|| {
-        RuntimeError::Internal {
+    let pipeline = module
+        .workflow
+        .pipeline
+        .clone()
+        .ok_or_else(|| RuntimeError::Internal {
             message: "run_pipeline called on a module without a pipeline".to_string(),
-        }
-    })?;
+        })?;
 
     let mut store = OutputStore::new();
 
     for step in &pipeline.steps {
+        let _span = info_span!(SPAN_PIPELINE_STEP, id = step.id.0.as_str()).entered();
+        tracing::info!(name = EV_PIPELINE_STEP_STARTED, id = step.id.0.as_str());
+
         let rendered = tau_ir::template::resolve(&step.input, &input, &store.template_map())
             .map_err(|e| RuntimeError::Internal {
                 message: format!("pipeline step {}: {e}", step.id.0),
@@ -65,9 +73,13 @@ where
                     })?
                     .clone();
                 let initial = vec![user_message(&rendered)];
-                let outcome =
-                    Box::pin(run_agent(module.clone(), &agent, dispatcher.clone(), initial))
-                        .await?;
+                let outcome = Box::pin(run_agent(
+                    module.clone(),
+                    &agent,
+                    dispatcher.clone(),
+                    initial,
+                ))
+                .await?;
                 match outcome {
                     RunOutcome::Failed { status, .. } => {
                         return Err(RuntimeError::Internal {
@@ -89,7 +101,8 @@ where
                         return Err(RuntimeError::Internal {
                             message: alloc::format!(
                                 "pipeline step {} (tool {}) errored: {err}",
-                                step.id.0, tool_id.0
+                                step.id.0,
+                                tool_id.0
                             ),
                         })
                     }
@@ -97,27 +110,27 @@ where
                 }
             }
             StepRun::Deterministic(step_node_id) => {
-                let registry = dispatcher.deterministic_registry().ok_or_else(|| {
+                let registry =
+                    dispatcher
+                        .deterministic_registry()
+                        .ok_or_else(|| RuntimeError::Internal {
+                            message: alloc::format!(
+                                "pipeline step {} needs a deterministic registry, none provided",
+                                step.id.0
+                            ),
+                        })?;
+                let node = module.workflow.steps.get(step_node_id).ok_or_else(|| {
                     RuntimeError::Internal {
-                        message: alloc::format!(
-                            "pipeline step {} needs a deterministic registry, none provided",
-                            step.id.0
-                        ),
+                        message: alloc::format!("unknown deterministic step {}", step_node_id.0),
                     }
                 })?;
-                let node = module
-                    .workflow
-                    .steps
-                    .get(step_node_id)
-                    .ok_or_else(|| RuntimeError::Internal {
-                        message: alloc::format!("unknown deterministic step {}", step_node_id.0),
-                    })?;
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
         };
 
         store.insert(step.id.0.clone(), output);
+        tracing::info!(name = EV_PIPELINE_STEP_COMPLETED, id = step.id.0.as_str());
     }
 
     Ok(store)

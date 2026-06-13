@@ -90,6 +90,18 @@ pub const EV_TOOL_SESSION_CLOSE_FAILED: &str = "tool.session_close_failed";
 #[doc(hidden)]
 pub const EV_MESSAGE_ADDED: &str = "message.added";
 
+// --- Pipeline events ---
+
+/// Span wrapping one pipeline step's execution.
+#[doc(hidden)]
+pub const SPAN_PIPELINE_STEP: &str = "pipeline.step";
+/// Emitted when a pipeline step begins.
+#[doc(hidden)]
+pub const EV_PIPELINE_STEP_STARTED: &str = "pipeline.step_started";
+/// Emitted when a pipeline step completes successfully.
+#[doc(hidden)]
+pub const EV_PIPELINE_STEP_COMPLETED: &str = "pipeline.step_completed";
+
 /// All `(identifier, value)` pairs in this mirror, in declaration order.
 ///
 /// Consumed by the cross-crate drift test in `tau-runtime-tokio`. The
@@ -133,4 +145,7 @@ pub const PAIRS: &[(&str, &str)] = &[
     ("EV_TOOL_SESSION_OPEN_FAILED", EV_TOOL_SESSION_OPEN_FAILED),
     ("EV_TOOL_SESSION_CLOSE_FAILED", EV_TOOL_SESSION_CLOSE_FAILED),
     ("EV_MESSAGE_ADDED", EV_MESSAGE_ADDED),
+    ("SPAN_PIPELINE_STEP", SPAN_PIPELINE_STEP),
+    ("EV_PIPELINE_STEP_STARTED", EV_PIPELINE_STEP_STARTED),
+    ("EV_PIPELINE_STEP_COMPLETED", EV_PIPELINE_STEP_COMPLETED),
 ];

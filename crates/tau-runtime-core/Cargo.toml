@@ -71,3 +71,5 @@ async-stream   = { workspace = true }
 # `pipeline_executor.rs` drives `run_pipeline` -> `run_agent`, which
 # panics unless test-fixtures is enabled.
 tau-runtime-core = { workspace = true, features = ["test-fixtures"] }
+# tracing-subscriber: captured-events layer for pipeline trace-event tests.
+tracing-subscriber = { workspace = true }
