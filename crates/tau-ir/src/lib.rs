@@ -32,6 +32,7 @@ pub mod module;
 pub mod node;
 pub mod subflow;
 pub mod tool_impl;
+pub mod trigger;
 
 // Re-exports of the canonical public API surface.
 pub use budget::AgentBudget;
@@ -46,3 +47,4 @@ pub use module::{IrFormatVersion, IrModule, Workflow};
 pub use node::{Agent, Deterministic, Node, Subflow, Tool};
 pub use subflow::SubflowKind;
 pub use tool_impl::{Hash256, NativeFnRef, ToolImpl};
+pub use trigger::{Backoff, BackoffStrategy, RetryPolicy, TriggerBinding, TriggerKind};
