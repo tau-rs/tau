@@ -59,6 +59,7 @@
 - [Testing strategy](explanation/testing-strategy.md)
 - [Two-layer skills](explanation/two-layer-skills.md)
 - [Workflows](explanation/workflows.md)
+- [Goals and deliverables](explanation/checks.md)
 
 # Architecture decisions
 
