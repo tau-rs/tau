@@ -311,13 +311,27 @@ impl ExecutionMode for DevMode {
 
         match lowered {
             Ok((module, responses, entry_id)) => {
-                let entry = tau_ir::AgentId(entry_id);
-                drive_module(Arc::new(module), &entry, responses).await
+                let module = Arc::new(module);
+                // Pipeline workflows are engine-sequenced: there is no
+                // single entry agent loop. Branch to the pipeline driver
+                // when the lowered module declares one; otherwise keep the
+                // single-entry `run_ir` path unchanged (fixtures 01-07).
+                if module.workflow.pipeline.is_some() {
+                    drive_pipeline(module, CONFORMANCE_PIPELINE_INPUT.to_string(), responses).await
+                } else {
+                    let entry = tau_ir::AgentId(entry_id);
+                    drive_module(module, &entry, responses).await
+                }
             }
             Err(refusal) => ConformanceReport::build_refused(refusal),
         }
     }
 }
+
+/// Fixed run input fed to a pipeline's first step (`${input}`). Held
+/// constant so DevMode and BundleMode render the same step templates and
+/// produce byte-identical reports under `assert_conform`.
+pub(crate) const CONFORMANCE_PIPELINE_INPUT: &str = "conformance-input";
 
 /// Drive the IR interpreter for a (decoded) module with a scripted LLM
 /// backend, recording side effects into a `ConformanceReport`.
@@ -375,4 +389,105 @@ pub(crate) async fn drive_module(
     }
 
     report
+}
+
+/// Drive an `IrModule`'s engine-sequenced pipeline with a scripted LLM
+/// backend, recording side effects into a `ConformanceReport`.
+///
+/// Used instead of [`drive_module`] when the lowered module declares a
+/// `workflow.pipeline` (the single-entry agent loop does not exist for
+/// pipeline workflows — the engine sequences the steps). Shared by
+/// DevMode (in-process lowering) and BundleMode (round-tripped through a
+/// built bundle); both feed identical `(module, responses)` for the same
+/// fixture so the emitted reports compare under `assert_conform`.
+///
+/// `run_pipeline` returns only the per-step output store (it discards the
+/// internal per-agent `RunOutcome`s and message histories), so:
+///
+/// - **Tool calls** are still captured: each pipeline agent runs through
+///   the SAME shared `RecordingDispatcher`, so any tool the agents invoke
+///   is recorded exactly as in `drive_module`.
+/// - **Messages** are NOT observable here — the pipeline executor does not
+///   surface them — so `message_added` stays empty. Cross-mode
+///   conformance still holds because BOTH modes drive the same
+///   `run_pipeline` and observe the same (empty) message multiset.
+/// - **Outcome** is synthesized as `RunOutcome::Completed` on `Ok`. A
+///   pipeline-step failure surfaces as `Err(RuntimeError)` from
+///   `run_pipeline`, which we map to `RunOutcome::Failed` so both modes
+///   report a failed pipeline symmetrically.
+pub(crate) async fn drive_pipeline(
+    module: Arc<IrModule>,
+    input: String,
+    responses: Vec<CompletionResponse>,
+) -> ConformanceReport {
+    use tau_runtime_core::interpreter::pipeline::run_pipeline;
+
+    // Build a name→name map for RecordingDispatcher (ToolId == tool name in v0).
+    let tool_names: std::collections::BTreeMap<String, String> = module
+        .workflow
+        .tools
+        .keys()
+        .map(|id| (id.0.clone(), id.0.clone()))
+        .collect();
+
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(SequencedLlm::new("mock-llm", responses));
+    let dispatcher = Arc::new(RecordingDispatcher::new(backend, tool_names));
+    let records_handle = dispatcher.records();
+
+    match run_pipeline(module, input, dispatcher).await {
+        Ok(store) => {
+            // Synthesize a Completed outcome carrying the last step's
+            // output text as the final message (the pipeline executor
+            // does not return a RunOutcome of its own). The message
+            // multiset stays empty — the pipeline executor surfaces no
+            // message history — but tool calls recorded by the shared
+            // dispatcher are harvested below.
+            let final_text = store
+                .template_map()
+                .into_values()
+                .next_back()
+                .unwrap_or_default();
+            let final_message = pipeline_final_message(&final_text);
+            let outcome = RunOutcome::Completed {
+                final_message,
+                all_messages: Vec::new(),
+                total_turns: 0,
+                token_usage: Default::default(),
+            };
+            let mut report = ConformanceReport::new(outcome);
+            let records = records_handle.lock().expect("records mutex poisoned");
+            for rec in records.iter() {
+                report.record_tool_call(rec.tool_name.clone(), rec.args_canonical.clone());
+            }
+            report
+        }
+        // A pipeline-step failure surfaces as Err here. Map it to a
+        // Failed outcome so both modes report the failure symmetrically
+        // (assert_conform compares the RunOutcome *discriminant*; the `e`
+        // detail is not part of the compared key, matching how the
+        // single-agent path discards per-run nondeterminism).
+        Err(_e) => ConformanceReport::new(RunOutcome::Failed {
+            status: tau_domain::AgentStatus::Stopped,
+            all_messages: Vec::new(),
+            total_turns: 0,
+            token_usage: Default::default(),
+        }),
+    }
+}
+
+/// Build the synthetic `final_message` for a completed pipeline run from
+/// the last step's output text. Uses the same `Message::new` /
+/// `Address::User → Address::System` shape so the value is canonicalizable
+/// by `canonical_message_bytes` if a caller ever records it; the pipeline
+/// path leaves `message_added` empty, so this only populates the outcome's
+/// `final_message` slot.
+fn pipeline_final_message(text: &str) -> tau_domain::Message {
+    use tau_domain::{Address, Message, MessagePayload};
+    Message::new(
+        Address::System,
+        Address::User,
+        MessagePayload::Text {
+            content: text.to_string(),
+        },
+    )
 }

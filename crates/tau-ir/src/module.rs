@@ -9,6 +9,7 @@ use tau_ports::target::TargetTriple;
 use crate::capability::CapabilityTable;
 use crate::ids::{AgentId, StepId, ToolId};
 use crate::node::{Agent, Deterministic, Tool};
+use crate::pipeline::Pipeline;
 use crate::subflow::SubflowEdge;
 
 /// Semver-shaped IR format version (D-6).
@@ -24,7 +25,7 @@ pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
     /// Current IR format version emitted by this `tau-ir` crate.
-    pub const CURRENT: &'static str = "v1.0.0";
+    pub const CURRENT: &'static str = "v1.1.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -64,4 +65,7 @@ pub struct Workflow {
     /// Per-tool capability requirements. Derived from `tools` but
     /// stored explicitly for the bundle's `tau.caps` custom section.
     pub capability_table: CapabilityTable,
+    /// Optional engine-sequenced pipeline. `None` preserves single-entry
+    /// behavior (run the named entry agent). `Some` => `run_pipeline`.
+    pub pipeline: Option<Pipeline>,
 }

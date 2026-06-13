@@ -1,6 +1,6 @@
 //! Tau factory call recognizer.
 
-use swc_ecma_ast::{CallExpr, Callee, Expr, Lit, ObjectLit};
+use swc_ecma_ast::{ArrayLit, CallExpr, Callee, Expr, Lit, ObjectLit};
 
 /// Which tau factory a call expression invokes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +9,7 @@ pub enum Factory {
     Tool,
     Mcp,
     ContextManager,
+    Pipeline,
 }
 
 /// If `expr` is a tau factory call like `agent({...})`, return the
@@ -22,6 +23,7 @@ pub fn recognize_factory_call(expr: &Expr) -> Option<(Factory, &CallExpr)> {
                     "tool" => Factory::Tool,
                     "mcp" => Factory::Mcp,
                     "contextManager" => Factory::ContextManager,
+                    "pipeline" => Factory::Pipeline,
                     _ => return None,
                 };
                 return Some((factory, call));
@@ -51,6 +53,18 @@ pub fn arg_as_object(call: &CallExpr, idx: usize) -> Option<&ObjectLit> {
     }
     if let Expr::Object(obj) = &*arg.expr {
         return Some(obj);
+    }
+    None
+}
+
+/// Return the argument at `idx` as an array literal, if present and not spread.
+pub fn arg_as_array(call: &CallExpr, idx: usize) -> Option<&ArrayLit> {
+    let arg = call.args.get(idx)?;
+    if arg.spread.is_some() {
+        return None;
+    }
+    if let Expr::Array(arr) = &*arg.expr {
+        return Some(arr);
     }
     None
 }

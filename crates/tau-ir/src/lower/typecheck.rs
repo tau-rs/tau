@@ -89,6 +89,72 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
         }
     }
 
+    // 6. Pipeline checks: run targets exist, no dup ids, no forward refs.
+    check_pipeline(&parsed.workflow)?;
+
+    Ok(())
+}
+
+fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
+    use crate::pipeline::StepRun;
+    use crate::template::{extract_refs, TemplateRef};
+    use alloc::collections::BTreeSet;
+
+    let Some(pipeline) = &wf.pipeline else {
+        return Ok(());
+    };
+
+    let mut seen_ids: BTreeSet<&str> = BTreeSet::new();
+    for step in &pipeline.steps {
+        let sid = step.id.0.as_str();
+        if !seen_ids.insert(sid) {
+            return Err(IrError::DuplicatePipelineStepId { id: sid.into() });
+        }
+
+        let exists = match &step.run {
+            StepRun::Agent(a) => wf.agents.contains_key(a),
+            StepRun::Tool(t) => wf.tools.contains_key(t),
+            StepRun::Deterministic(s) => wf.steps.contains_key(s),
+        };
+        if !exists {
+            let target = match &step.run {
+                StepRun::Agent(a) => alloc::format!("agent:{}", a.0),
+                StepRun::Tool(t) => alloc::format!("tool:{}", t.0),
+                StepRun::Deterministic(s) => alloc::format!("deterministic:{}", s.0),
+            };
+            return Err(IrError::UnknownPipelineRun {
+                step: sid.into(),
+                target,
+            });
+        }
+
+        let refs = extract_refs(&step.input).map_err(|e| IrError::BadPipelineTemplate {
+            step: sid.into(),
+            detail: alloc::format!("{e}"),
+        })?;
+        for r in refs {
+            if let TemplateRef::StepOutput(ref_id) = r {
+                let exists_anywhere = pipeline.steps.iter().any(|s| s.id.0 == ref_id);
+                if !exists_anywhere {
+                    return Err(IrError::UnknownOutputRef {
+                        step: sid.into(),
+                        referenced: ref_id,
+                    });
+                }
+                // seen_ids currently holds exactly the steps at-or-before this one
+                // (the current step's id was just inserted above).
+                // A reference is valid only to a STRICTLY earlier step.
+                // Guard self-reference explicitly; !seen_ids.contains catches
+                // forward references (later steps not yet inserted).
+                if ref_id == sid || !seen_ids.contains(ref_id.as_str()) {
+                    return Err(IrError::ForwardOutputRef {
+                        step: sid.into(),
+                        referenced: ref_id,
+                    });
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -138,6 +204,95 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unknown_run_target() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "a"
+            run = "agent:ghost"
+        "#;
+        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let err = typecheck(&parsed).unwrap_err();
+        assert!(
+            matches!(err, IrError::UnknownPipelineRun { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_forward_output_reference() {
+        let toml = r#"
+            [project]
+            name = "demo"
+
+            [agents.a]
+            display_name = "A"
+            package      = "demo@^0.1"
+            llm_backend  = "mock-llm"
+            tool_refs    = []
+
+            [agents.b]
+            display_name = "B"
+            package      = "demo@^0.1"
+            llm_backend  = "mock-llm"
+            tool_refs    = []
+
+            [[pipeline.steps]]
+            id = "a"
+            run = "agent:a"
+            input = "${steps.b.output}"
+
+            [[pipeline.steps]]
+            id = "b"
+            run = "agent:b"
+        "#;
+        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let err = typecheck(&parsed).unwrap_err();
+        assert!(
+            matches!(err, IrError::ForwardOutputRef { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_valid_backward_reference() {
+        let toml = r#"
+            [project]
+            name = "demo"
+
+            [agents.a]
+            display_name = "A"
+            package      = "demo@^0.1"
+            llm_backend  = "mock-llm"
+            tool_refs    = []
+
+            [agents.b]
+            display_name = "B"
+            package      = "demo@^0.1"
+            llm_backend  = "mock-llm"
+            tool_refs    = []
+
+            [[pipeline.steps]]
+            id = "a"
+            run = "agent:a"
+
+            [[pipeline.steps]]
+            id = "b"
+            run = "agent:b"
+            input = "${steps.a.output}"
+        "#;
+        let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        assert!(
+            typecheck(&parsed).is_ok(),
+            "valid backward reference should be accepted"
+        );
+    }
+
+    #[test]
     fn typecheck_rejects_subflow_tool_pointing_at_missing_agent() {
         let mut agents = BTreeMap::new();
         // Only `parent` exists — subflow points at `ghost`.
@@ -162,6 +317,7 @@ mod tests {
                 steps: BTreeMap::new(),
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: None,
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
@@ -196,6 +352,7 @@ mod tests {
                 steps: BTreeMap::new(), // empty → "missing-step" not present
                 edges: alloc::vec::Vec::new(),
                 capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: None,
             },
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");

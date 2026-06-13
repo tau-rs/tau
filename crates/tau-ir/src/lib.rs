@@ -30,7 +30,9 @@ pub mod lower;
 pub mod message;
 pub mod module;
 pub mod node;
+pub mod pipeline;
 pub mod subflow;
+pub mod template;
 pub mod tool_impl;
 
 // Re-exports of the canonical public API surface.
@@ -40,9 +42,11 @@ pub use capability::{CapabilityRequirements, CapabilityTable};
 pub use context::ContextConfig;
 pub use error::IrError;
 pub use hash::compute_hash;
-pub use ids::{AgentId, StepId, SubflowId, ToolId};
+pub use ids::{AgentId, PipelineStepId, StepId, SubflowId, ToolId};
 pub use message::{Message, MessagePayload};
 pub use module::{IrFormatVersion, IrModule, Workflow};
 pub use node::{Agent, Deterministic, Node, Subflow, Tool};
+pub use pipeline::{Pipeline, PipelineStep, StepRun};
 pub use subflow::SubflowKind;
+pub use template::{extract_refs, resolve, TemplateError, TemplateRef};
 pub use tool_impl::{Hash256, NativeFnRef, ToolImpl};

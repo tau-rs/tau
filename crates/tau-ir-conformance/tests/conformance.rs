@@ -343,3 +343,52 @@ async fn fixture_07_cross_mode_conformance() {
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
 }
+
+// ---------------------------------------------------------------------------
+// Fixture 08 — pipeline_sequence
+// ---------------------------------------------------------------------------
+
+/// Fixture 08: a 2-step engine-sequenced pipeline.
+///
+/// `[[pipeline.steps]]` runs `agent:gather` (input `${input}`) then
+/// `agent:writer` (input `${steps.gather.output}`). Both agents have no
+/// tools and `max_turns = 1`; each ends its single turn with a scripted
+/// text response. The harness drives `run_pipeline` (not the single-entry
+/// `run_ir`) because the lowered module declares `workflow.pipeline`.
+///
+/// Expected: the pipeline runs both steps to completion, threading
+/// `gather`'s output into `writer`'s input, and the synthesized outcome is
+/// `RunOutcome::Completed`. No tools are declared, so `tool_calls` is empty
+/// — the assertion is the run reaching Completed (proving both steps ran).
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_08_dev_mode_runs_pipeline() {
+    let dir = fixture_dir("08_pipeline_sequence");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed pipeline run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed for the 2-step pipeline, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 08 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 08: DevMode (in-process lower) and
+/// BundleMode (round-trip through a built bundle) both drive the same
+/// `run_pipeline`, so the side-effect reports must match.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_08_cross_mode_conformance() {
+    let dir = fixture_dir("08_pipeline_sequence");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}

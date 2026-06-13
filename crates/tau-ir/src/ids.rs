@@ -22,3 +22,8 @@ pub struct StepId(pub String);
 /// Identifier for a [`crate::Subflow`] edge within a [`crate::Workflow`].
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct SubflowId(pub String);
+
+/// Identifier for a [`crate::pipeline::PipelineStep`] within a
+/// [`crate::Workflow`]'s pipeline. Addressable as `steps.<id>.output`.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct PipelineStepId(pub String);
