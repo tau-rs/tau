@@ -121,3 +121,4 @@ libc         = "0.2"
 nix          = { version = "0.31", default-features = false, features = ["sched", "user", "process", "fs"] }
 seccompiler  = "0.5"
 ulid         = "1"
+regex        = "1"

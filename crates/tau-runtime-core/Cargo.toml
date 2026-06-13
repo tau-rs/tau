@@ -33,6 +33,7 @@ globset      = { workspace = true }
 # Optional: used by the `tool-validation` feature (jsonschema-based tool
 # args pre-compilation). Both are std-only so they gate behind the feature.
 jsonschema   = { workspace = true, optional = true }
+regex        = { workspace = true, optional = true }
 
 [features]
 # `process` makes ProcessCapabilityGate wire-up available; pulled in via
@@ -42,7 +43,7 @@ process            = ["tau-ports/process"]
 capability-override = []
 # `tool-validation` enables ADR-0010 jsonschema-based tool args validation
 # (jsonschema is std-only).
-tool-validation    = ["dep:jsonschema"]
+tool-validation    = ["dep:jsonschema", "dep:regex"]
 # `host-fs` enables code paths that consume std::path::PathBuf scope-roots
 # and read skill markdown via std::fs. Embassy ships without this feature.
 host-fs            = []
