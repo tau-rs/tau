@@ -251,6 +251,7 @@ fn build_module(retry: RetryPolicy) -> IrModule {
             pipeline: Some(pipeline),
             checks,
         },
+        triggers: Vec::new(),
     }
 }
 

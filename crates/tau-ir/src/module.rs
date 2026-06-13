@@ -11,6 +11,7 @@ use crate::ids::{AgentId, StepId, ToolId};
 use crate::node::{Agent, Deterministic, Tool};
 use crate::pipeline::Pipeline;
 use crate::subflow::SubflowEdge;
+use crate::trigger::TriggerBinding;
 
 /// Semver-shaped IR format version (D-6).
 ///
@@ -49,6 +50,13 @@ pub struct IrModule {
     pub target: TargetTriple,
     /// The workflow itself.
     pub workflow: Workflow,
+    /// Trigger bindings — invocation metadata, a SIBLING of `workflow`
+    /// (triggers are about *how* tau is invoked, not the call graph).
+    /// `skip_serializing_if` + `default` means a trigger-less module emits
+    /// no `triggers` key and hashes identically to a pre-trigger module
+    /// (Option B / ADR-0044 §D1); older modules with no key read back as empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<TriggerBinding>,
 }
 
 /// The set of nodes + edges that make up one workflow.

@@ -213,6 +213,7 @@ fn build_module() -> IrModule {
             pipeline: Some(pipeline),
             checks,
         },
+        triggers: Vec::new(),
     }
 }
 

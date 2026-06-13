@@ -86,8 +86,9 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, HexDecodeError> {
 /// Top-level bundle manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BundleManifest {
-    /// Major schema version. v1 is the legacy line; v2 adds `ir_payload`.
-    /// v3+ would be a breaking change (consumer rejects loudly).
+    /// Major schema version. v1 is the legacy line; v2 adds `ir_payload`;
+    /// v3 adds the `[[trigger]]` section (emitted only when the project
+    /// declares triggers). v4+ is rejected by `parse_str` until supported.
     pub schema_version: u32,
     /// Bundle-level metadata (sha + timestamp + tau version + target).
     pub bundle: BundleMeta,
@@ -104,6 +105,13 @@ pub struct BundleManifest {
     /// The canonical_ir_bytes are hashed into the bundle's self-hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ir_payload: Option<IrPayload>,
+    /// Trigger bindings (slice 1). Present only when the project declared
+    /// triggers; the bundle's `schema_version` is `3` whenever this is
+    /// non-empty. Hashed into the bundle self-hash via the canonical TOML.
+    /// The TOML key is `[[trigger]]` (singular) to mirror the tau.toml
+    /// `[trigger.<name>]` convention.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "trigger")]
+    pub triggers: Vec<BundleTrigger>,
 }
 
 /// Bundle-level metadata.
@@ -164,6 +172,47 @@ pub struct BundlePackage {
     /// Capability shapes this package's plugin needs the host to enforce.
     #[serde(default)]
     pub required_shapes: Vec<CapabilityShape>,
+}
+
+/// One trigger binding carried in a v3 bundle's `[[trigger]]` section.
+///
+/// A host-readable mirror of the trigger metadata already inside the IR
+/// payload, so an operator's host adapter can read trigger bindings without
+/// decoding the canonical IR hex. Present only in `schema_version >= 3`
+/// bundles (i.e. bundles whose project declared >=1 trigger).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleTrigger {
+    /// Trigger name.
+    pub name: String,
+    /// `cron` | `manual`.
+    pub kind: String,
+    /// Entrypoint agent id.
+    pub agent: String,
+    /// 5-field cron expression (cron only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    /// IANA timezone (cron only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    /// Re-invocation policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<BundleRetry>,
+}
+
+/// Retry policy carried in a `[[trigger]]`'s `retry` sub-table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleRetry {
+    /// Total attempts including the first.
+    pub max_attempts: u32,
+    /// `fixed` | `exponential`.
+    pub backoff_strategy: String,
+    /// Base delay, duration string.
+    pub backoff_base: String,
+    /// Max delay, duration string.
+    pub backoff_max: String,
+    /// Sink reference for exhausted runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dead_letter: Option<String>,
 }
 
 /// One agent's compiled deployment record.
@@ -299,9 +348,18 @@ impl BundleManifest {
     /// ```
     pub fn parse_str(s: &str) -> Result<Self, BundleParseError> {
         let manifest: BundleManifest = toml::from_str(s)?;
-        if manifest.schema_version != 1 && manifest.schema_version != 2 {
+        if manifest.schema_version < 1 || manifest.schema_version > 3 {
             return Err(BundleParseError::UnsupportedSchemaVersion {
                 found: manifest.schema_version,
+            });
+        }
+        // Load-bearing invariant: a trigger-bearing bundle MUST declare
+        // schema_version >= 3 so an old tau rejects it rather than silently
+        // dropping the bindings. (The reverse — v3 with no triggers — is
+        // harmless and left permissive.)
+        if !manifest.triggers.is_empty() && manifest.schema_version < 3 {
+            return Err(BundleParseError::TriggerSchemaVersionMismatch {
+                schema_version: manifest.schema_version,
             });
         }
         Ok(manifest)
@@ -464,6 +522,7 @@ pub(crate) mod tests_helpers {
                 },
             }],
             ir_payload: None,
+            triggers: Vec::new(),
         }
     }
 }
@@ -523,13 +582,43 @@ tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     }
 
     #[test]
-    fn parse_str_rejects_schema_version_3() {
+    fn parse_str_accepts_schema_version_3() {
         let toml_str = r#"
 schema_version = 3
 
 [bundle]
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-created_at = "2026-05-19T13:42:11Z"
+created_at = "2026-06-13T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[trigger]]
+name = "nightly"
+kind = "cron"
+agent = "summarizer"
+schedule = "0 3 * * *"
+timezone = "UTC"
+"#;
+        let m = BundleManifest::parse_str(toml_str).expect("v3 must parse");
+        assert_eq!(m.schema_version, 3);
+        assert_eq!(m.triggers.len(), 1);
+        assert_eq!(m.triggers[0].name, "nightly");
+        assert_eq!(m.triggers[0].schedule.as_deref(), Some("0 3 * * *"));
+    }
+
+    #[test]
+    fn parse_str_rejects_schema_version_4() {
+        let toml_str = r#"
+schema_version = 4
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-06-13T00:00:00Z"
 tau_version = "0.1.0"
 target = "passthrough"
 
@@ -538,11 +627,42 @@ name = "x"
 version = "0.1.0"
 tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "#;
-        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v3");
+        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v4");
         match err {
-            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 3),
+            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 4),
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn trigger_bearing_manifest_round_trips_canonical() {
+        let mut m = sample_manifest();
+        m.schema_version = 3;
+        m.triggers = vec![BundleTrigger {
+            name: "nightly".into(),
+            kind: "cron".into(),
+            agent: "summarizer".into(),
+            schedule: Some("0 3 * * *".into()),
+            timezone: Some("UTC".into()),
+            retry: Some(BundleRetry {
+                max_attempts: 3,
+                backoff_strategy: "exponential".into(),
+                backoff_base: "30s".into(),
+                backoff_max: "10m".into(),
+                dead_letter: Some("dlq-sink".into()),
+            }),
+        }];
+        let toml = m.to_canonical_toml();
+        let parsed = BundleManifest::parse_str(&toml).expect("round-trip");
+        assert_eq!(parsed.triggers, m.triggers);
+        assert_eq!(parsed.schema_version, 3);
+    }
+
+    #[test]
+    fn trigger_less_manifest_omits_trigger_section() {
+        let m = sample_manifest(); // no triggers, schema_version 2
+        let toml = m.to_canonical_toml();
+        assert!(!toml.contains("[[trigger]]"), "got: {toml}");
     }
 
     #[test]
@@ -767,6 +887,81 @@ effective_capabilities = { allow_fs_read = ["/a/**"], allow_some_future_shape = 
             m.agents[0].effective_capabilities.allow_fs_read,
             vec!["/a/**".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_str_rejects_triggers_at_schema_version_2() {
+        let toml_str = r#"
+schema_version = 2
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-06-13T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[trigger]]
+name = "nightly"
+kind = "cron"
+agent = "summarizer"
+schedule = "0 3 * * *"
+"#;
+        let err = BundleManifest::parse_str(toml_str).expect_err("v2 + triggers must be rejected");
+        match err {
+            BundleParseError::TriggerSchemaVersionMismatch { schema_version } => {
+                assert_eq!(schema_version, 2);
+            }
+            other => panic!("expected TriggerSchemaVersionMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn manual_trigger_round_trips_canonical() {
+        let mut m = sample_manifest();
+        m.schema_version = 3;
+        m.triggers = vec![BundleTrigger {
+            name: "manual".into(),
+            kind: "manual".into(),
+            agent: "summarizer".into(),
+            schedule: None,
+            timezone: None,
+            retry: None,
+        }];
+        let toml = m.to_canonical_toml();
+        // None optional fields must be omitted, not emitted as empty.
+        assert!(!toml.contains("schedule"), "got: {toml}");
+        assert!(!toml.contains("timezone"), "got: {toml}");
+        let parsed = BundleManifest::parse_str(&toml).expect("round-trip");
+        assert_eq!(parsed.triggers, m.triggers);
+    }
+
+    #[test]
+    fn retry_without_dead_letter_round_trips_canonical() {
+        let mut m = sample_manifest();
+        m.schema_version = 3;
+        m.triggers = vec![BundleTrigger {
+            name: "nightly".into(),
+            kind: "cron".into(),
+            agent: "summarizer".into(),
+            schedule: Some("0 3 * * *".into()),
+            timezone: Some("UTC".into()),
+            retry: Some(BundleRetry {
+                max_attempts: 2,
+                backoff_strategy: "fixed".into(),
+                backoff_base: "30s".into(),
+                backoff_max: "10m".into(),
+                dead_letter: None,
+            }),
+        }];
+        let toml = m.to_canonical_toml();
+        assert!(!toml.contains("dead_letter"), "got: {toml}");
+        let parsed = BundleManifest::parse_str(&toml).expect("round-trip");
+        assert_eq!(parsed.triggers, m.triggers);
     }
 
     #[test]

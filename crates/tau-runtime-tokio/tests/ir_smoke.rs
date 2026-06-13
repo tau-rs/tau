@@ -149,5 +149,6 @@ fn sample_module() -> IrModule {
             pipeline: None,
             checks: Default::default(),
         },
+        triggers: Vec::new(),
     }
 }

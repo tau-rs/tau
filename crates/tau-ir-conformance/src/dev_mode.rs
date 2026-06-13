@@ -445,6 +445,22 @@ pub(crate) async fn drive_pipeline(
     let dispatcher = Arc::new(RecordingDispatcher::new(backend, tool_names));
     let records_handle = dispatcher.records();
 
+    // The id of the LAST pipeline step in execution order — its stored
+    // output is the run's final result. Captured before `module` is moved
+    // into `run_pipeline`. Mirrors production `render_pipeline_result`
+    // (tau-cli::cmd::run), which keys off `pipeline.steps.last()` rather
+    // than the alphabetically-last id surfaced by `template_map().into_values()`:
+    // the BTreeMap projection only coincidentally yields the last-executed
+    // step when step ids sort in execution order (fixture 08: `gather` <
+    // `writer`). A reverse-alphabetical fixture would silently harvest the
+    // wrong step.
+    let last_step_id: Option<String> = module
+        .workflow
+        .pipeline
+        .as_ref()
+        .and_then(|p| p.steps.last())
+        .map(|step| step.id.0.clone());
+
     match run_pipeline(module, input, dispatcher).await {
         Ok(store) => {
             // Synthesize a Completed outcome carrying the last step's
@@ -453,10 +469,18 @@ pub(crate) async fn drive_pipeline(
             // multiset stays empty — the pipeline executor surfaces no
             // message history — but tool calls recorded by the shared
             // dispatcher are harvested below.
-            let final_text = store
-                .template_map()
-                .into_values()
-                .next_back()
+            //
+            // A `Value::String` renders as its inner text; any structured
+            // value renders as compact JSON — symmetric with
+            // `OutputStore::template_map` and production
+            // `render_pipeline_result`.
+            let final_text = last_step_id
+                .as_deref()
+                .and_then(|id| store.get(id))
+                .map(|value| match value {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
                 .unwrap_or_default();
             let final_message = pipeline_final_message(&final_text);
             let outcome = RunOutcome::Completed {

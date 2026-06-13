@@ -89,7 +89,17 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
         }
     }
 
-    // 6. Pipeline checks: run targets exist, no dup ids, no forward refs.
+    // 6. Each trigger's entrypoint agent must exist.
+    for trigger in parsed.triggers.iter() {
+        if !parsed.workflow.agents.contains_key(&trigger.agent) {
+            return Err(IrError::UnknownTriggerAgent {
+                trigger: trigger.name.clone(),
+                agent: trigger.agent.clone(),
+            });
+        }
+    }
+
+    // 7. Pipeline checks: run targets exist, no dup ids, no forward refs.
     check_pipeline(&parsed.workflow)?;
 
     Ok(())
@@ -361,6 +371,7 @@ mod tests {
                 pipeline: None,
                 checks: BTreeMap::new(),
             },
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
@@ -396,6 +407,7 @@ mod tests {
                 }),
                 checks: BTreeMap::new(), // empty — "ghost" is not here
             },
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&parsed).expect_err("should reject unknown check ref");
         assert!(
@@ -458,6 +470,7 @@ mod tests {
                 }),
                 checks,
             },
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&parsed).expect_err("should reject forward-referencing check locus");
         assert!(
@@ -494,6 +507,7 @@ mod tests {
                 pipeline: None,
                 checks: BTreeMap::new(),
             },
+            triggers: alloc::vec::Vec::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(

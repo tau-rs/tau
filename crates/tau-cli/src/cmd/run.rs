@@ -397,9 +397,9 @@ async fn try_run_pipeline(
     // violated" error even when all checks pass. Skip trailing check steps and
     // find the last step that actually produces output.
     //
-    // If the pipeline consists entirely of check steps (unusual but possible),
-    // return `None` to fall back to the single-agent path — there is no
-    // output to render.
+    // An empty `steps` vec cannot reach here (project validation rejects an
+    // empty pipeline with `ProjectConfigError::EmptyPipeline`); a pipeline of
+    // ONLY check steps returns `None` to fall back to the single-agent path.
     let last_step_id = match pipeline
         .steps
         .iter()
@@ -457,10 +457,15 @@ async fn try_run_pipeline(
 /// not yet aggregated — reported as zero/empty at v0).
 ///
 /// Trailing `StepRun::Check` steps (lowered from `[goals.*]` /
-/// `[deliverables.*]`) evaluate postconditions but store no output — the
-/// caller (`try_run_pipeline`) is responsible for passing the id of the last
-/// step that actually produced output (i.e., the last non-check step).
-fn render_pipeline_result(
+/// `[deliverables.*]`) evaluate postconditions but store no output — every
+/// caller (`try_run_pipeline` on the cwd path, `run_via_ir` on the bundle
+/// path) must pass the id of the last step that actually produced output
+/// (i.e., the last non-check step).
+///
+/// `pub(super)` so the bundle run path
+/// ([`crate::cmd::ir_dispatcher::run_via_ir`]) renders a bundled
+/// pipeline's final step identically to the cwd path.
+pub(super) fn render_pipeline_result(
     store: &tau_runtime_core::interpreter::output_store::OutputStore,
     last_step_id: &str,
     output: &mut Output,
@@ -774,6 +779,7 @@ fn verify_bundle_against_source(
         &empty_mcp_cache,
         None,
     )
+    .payload
     .map(|p| p.canonical_ir_hash);
 
     tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
@@ -988,6 +994,7 @@ capabilities = {caps}
     fn lower(root: &std::path::Path) -> IrPayload {
         let empty = BTreeMap::new();
         crate::cmd::build::lower_ir(root, &TargetTriple::host(), &empty, None)
+            .payload
             .expect("native-tool project must lower to Some(IrPayload)")
     }
 

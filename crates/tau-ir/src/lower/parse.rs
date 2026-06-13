@@ -19,6 +19,9 @@ use crate::node::{Agent, Deterministic, Tool, ToolSpec};
 use crate::pipeline::{Pipeline, PipelineStep, StepRun};
 use crate::subflow::SubflowEdge;
 use crate::tool_impl::{Hash256, NativeFnRef, ToolImpl};
+use crate::trigger::{
+    Backoff, BackoffStrategy, RetryPolicy as TriggerRetryPolicy, TriggerBinding, TriggerKind,
+};
 use crate::AgentBudget;
 
 /// Output of the parse stage.
@@ -26,6 +29,8 @@ use crate::AgentBudget;
 pub(super) struct Parsed {
     /// Partially-populated workflow (content hashes are zero pending `resolve`).
     pub(super) workflow: Workflow,
+    /// Trigger bindings, canonically ordered by name (BTreeMap iteration).
+    pub(super) triggers: alloc::vec::Vec<TriggerBinding>,
 }
 
 /// Run the parse stage on a `ProjectConfig`.
@@ -177,6 +182,57 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
         );
     }
 
+    // --- Triggers (slice 1) --------------------------------------------
+    let mut triggers: alloc::vec::Vec<TriggerBinding> = alloc::vec::Vec::new();
+    for (name, entry) in config.triggers.iter() {
+        let kind = match entry.kind.as_str() {
+            "cron" => TriggerKind::Cron,
+            "manual" => TriggerKind::Manual,
+            // validate_trigger already rejected anything else; defensive.
+            other => {
+                return Err(IrError::Parse(alloc::format!(
+                    "trigger {name:?}: unsupported kind {other:?} reached lowering"
+                )));
+            }
+        };
+        let retry = match entry.retry.as_ref() {
+            None => None,
+            Some(r) => {
+                let strategy = match r.backoff_strategy.as_str() {
+                    "fixed" => BackoffStrategy::Fixed,
+                    "exponential" => BackoffStrategy::Exponential,
+                    // validate_trigger already rejected anything else; defensive.
+                    other => {
+                        return Err(IrError::Parse(alloc::format!(
+                            "trigger {name:?}: unsupported backoff strategy {other:?} reached lowering"
+                        )));
+                    }
+                };
+                Some(TriggerRetryPolicy {
+                    max_attempts: r.max_attempts,
+                    backoff: Backoff {
+                        strategy,
+                        base: r.backoff_base.clone(),
+                        max: r.backoff_max.clone(),
+                    },
+                    dead_letter: r.dead_letter.clone(),
+                })
+            }
+        };
+        triggers.push(TriggerBinding {
+            name: name.clone(),
+            kind,
+            agent: AgentId(entry.agent.clone()),
+            schedule: entry.schedule.clone(),
+            timezone: if entry.timezone.is_empty() {
+                None
+            } else {
+                Some(entry.timezone.clone())
+            },
+            retry,
+        });
+    }
+
     // --- Pipeline ---------------------------------------------------------
     let mut pipeline = config.pipeline.as_ref().map(|p| Pipeline {
         steps: p
@@ -208,6 +264,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             pipeline,
             checks,
         },
+        triggers,
     })
 }
 

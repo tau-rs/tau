@@ -368,6 +368,7 @@ mod tests {
                     pipeline: None,
                     checks: BTreeMap::new(),
                 },
+                triggers: alloc::vec::Vec::new(),
             })
         }
 

@@ -61,6 +61,7 @@ mod pipeline_canonical_tests {
             tau_version: "0.0.0".into(),
             target,
             workflow: wf,
+            triggers: alloc::vec::Vec::new(),
         };
         assert_eq!(m.ir_format.0, "v1.2.0");
         let bytes = to_canonical_bytes(&m);
@@ -134,6 +135,7 @@ mod pipeline_canonical_tests {
             tau_version: "0.0.0".into(),
             target,
             workflow: wf,
+            triggers: alloc::vec::Vec::new(),
         };
 
         // --- structural round-trip via from_canonical_bytes ---

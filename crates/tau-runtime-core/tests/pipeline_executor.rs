@@ -233,6 +233,7 @@ fn build_module() -> IrModule {
             pipeline: Some(pipeline),
             checks: BTreeMap::new(),
         },
+        triggers: Vec::new(),
     }
 }
 
@@ -322,6 +323,7 @@ async fn pipeline_deterministic_step_upcase() {
             pipeline: Some(pipeline),
             checks: BTreeMap::new(),
         },
+        triggers: Vec::new(),
     });
 
     let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);

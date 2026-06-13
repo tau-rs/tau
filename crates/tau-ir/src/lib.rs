@@ -35,12 +35,16 @@ pub mod pipeline;
 pub mod subflow;
 pub mod template;
 pub mod tool_impl;
+pub mod trigger;
 
 // Re-exports of the canonical public API surface.
 pub use budget::AgentBudget;
 pub use canonical::{from_canonical_bytes, to_canonical_bytes};
 pub use capability::{CapabilityRequirements, CapabilityTable};
-pub use check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail, RetryPolicy};
+// NB: `check::RetryPolicy` is intentionally NOT re-exported at the crate root
+// to avoid clashing with `trigger::RetryPolicy`. Both are reached via their
+// module path (`tau_ir::check::RetryPolicy` / `tau_ir::trigger::RetryPolicy`).
+pub use check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail};
 pub use context::ContextConfig;
 pub use error::IrError;
 pub use hash::compute_hash;
@@ -52,3 +56,4 @@ pub use pipeline::{Pipeline, PipelineStep, StepRun};
 pub use subflow::SubflowKind;
 pub use template::{extract_refs, resolve, TemplateError, TemplateRef};
 pub use tool_impl::{Hash256, NativeFnRef, ToolImpl};
+pub use trigger::{Backoff, BackoffStrategy, RetryPolicy, TriggerBinding, TriggerKind};

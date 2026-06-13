@@ -597,14 +597,9 @@ fn extract_tool(
     };
 
     let description = get_string(&props_kv, "description").unwrap_or_default();
-    let capabilities = if let Some(cap_expr) = props_kv.get("capabilities") {
-        if let Expr::Array(arr) = cap_expr {
-            extract_tool_capabilities(arr, name, source_path, sm)?
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
+    let capabilities = match props_kv.get("capabilities") {
+        Some(Expr::Array(arr)) => extract_tool_capabilities(arr, name, source_path, sm)?,
+        _ => Vec::new(),
     };
 
     Ok(IrTool {
@@ -659,8 +654,8 @@ fn extract_tool_capabilities(
                 ),
             )
         })?;
-        let paths = if let Some(paths_expr) = props.get("paths") {
-            if let Expr::Array(paths_arr) = paths_expr {
+        let paths = match props.get("paths") {
+            Some(Expr::Array(paths_arr)) => {
                 let mut path_strs = Vec::new();
                 for path_elem in paths_arr.elems.iter().flatten() {
                     if let Some(s) = expr_as_string(&path_elem.expr) {
@@ -668,11 +663,8 @@ fn extract_tool_capabilities(
                     }
                 }
                 path_strs
-            } else {
-                Vec::new()
             }
-        } else {
-            Vec::new()
+            _ => Vec::new(),
         };
         caps.push(IrCapability { kind, paths });
     }
@@ -777,18 +769,14 @@ fn extract_agent(
     }
 
     // Extract `produces: [...]` string array.
-    let produces = if let Some(prod_expr) = props.get("produces") {
-        if let Expr::Array(arr) = prod_expr {
-            arr.elems
-                .iter()
-                .flatten()
-                .filter_map(|e| expr_as_string(&e.expr))
-                .collect()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
+    let produces = match props.get("produces") {
+        Some(Expr::Array(arr)) => arr
+            .elems
+            .iter()
+            .flatten()
+            .filter_map(|e| expr_as_string(&e.expr))
+            .collect(),
+        _ => Vec::new(),
     };
 
     let agent = IrAgent {
