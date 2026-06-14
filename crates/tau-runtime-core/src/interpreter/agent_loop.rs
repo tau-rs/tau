@@ -376,18 +376,37 @@ fn stub_manifest() -> PackageManifest {
 // run_agent — the main entry
 // ---------------------------------------------------------------------------
 
-/// Execute one `Agent` node end-to-end through the existing kernel agent loop.
+/// Construct everything needed to drive one `Agent` node through the kernel
+/// agent loop, returning the pieces instead of running them.
 ///
-/// Constructs a `Runtime` from the dispatcher's LLM backend + the agent's
-/// tool refs (each wrapped as a thin dispatcher-delegating `Tool`), then
-/// calls `run_with_history` with a synthesised `AgentDefinition` and
-/// `PackageManifest`.
-pub async fn run_agent<D>(
+/// This is the single shared construction path for both the batch entry
+/// ([`run_agent`], via `Runtime::run_with_history`) and the streaming entry
+/// ([`run_agent_streaming`], via `Runtime::run_streaming_with_history`). The
+/// two MUST NOT drift: any change to backend wiring, tool registration,
+/// `AgentDefinition` synthesis, `RunOptions` (clock/random injection + the
+/// β.4 context pipeline), or history splitting belongs here so both callers
+/// inherit it identically.
+///
+/// Behaviour is identical to the former inline body of `run_agent`; this is a
+/// pure extraction (steps 1–7), with the final `rt.run_with_history(...)`
+/// call left to the caller.
+#[allow(clippy::type_complexity)]
+fn prepare_agent_run<D>(
     module: alloc::sync::Arc<IrModule>,
     agent: &Agent,
     dispatcher: Arc<D>,
     initial_messages: Vec<Message>,
-) -> Result<RunOutcome, RuntimeError>
+) -> Result<
+    (
+        Runtime,
+        AgentDefinition,
+        PackageManifest,
+        Vec<Message>,
+        Message,
+        RunOptions,
+    ),
+    RuntimeError,
+>
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
@@ -531,8 +550,65 @@ where
         (Vec::new(), placeholder)
     });
 
-    // 8. Run through the kernel agent loop.
+    // 8. Hand the constructed pieces back to the caller, which drives the
+    //    kernel agent loop (batch via `run_with_history`, streaming via
+    //    `run_streaming_with_history`).
+    Ok((
+        rt,
+        agent_def,
+        manifest,
+        history,
+        initial_message,
+        run_options,
+    ))
+}
+
+/// Execute one `Agent` node end-to-end through the existing kernel agent loop.
+///
+/// Constructs a `Runtime` from the dispatcher's LLM backend + the agent's
+/// tool refs (each wrapped as a thin dispatcher-delegating `Tool`), then
+/// calls `run_with_history` with a synthesised `AgentDefinition` and
+/// `PackageManifest`. Construction is shared with [`run_agent_streaming`] via
+/// [`prepare_agent_run`] so the batch and streaming paths cannot drift.
+pub async fn run_agent<D>(
+    module: alloc::sync::Arc<IrModule>,
+    agent: &Agent,
+    dispatcher: Arc<D>,
+    initial_messages: Vec<Message>,
+) -> Result<RunOutcome, RuntimeError>
+where
+    D: ToolDispatcher + Send + Sync + 'static,
+{
+    let (rt, agent_def, manifest, history, initial_message, run_options) =
+        prepare_agent_run(module, agent, dispatcher, initial_messages)?;
     rt.run_with_history(agent_def, manifest, history, initial_message, run_options)
+        .await
+}
+
+/// Execute one `Agent` node through the kernel agent loop, returning the
+/// uncollapsed [`crate::stream::RunEvent`] stream instead of a collapsed
+/// [`RunOutcome`].
+///
+/// Construction is shared with [`run_agent`] via [`prepare_agent_run`] so the
+/// batch and streaming paths cannot drift. The conformance dev profile drives
+/// this to observe the per-event run (TextDelta / ToolCall* / TurnCompleted /
+/// RunCompleted) rather than the collapsed terminal outcome.
+///
+/// The returned stream is `'static`: `Runtime::run_streaming_with_history`
+/// snapshots its tool registry and backend into Arc-clones that the stream
+/// owns, so the `Runtime` built here may be dropped after this call returns.
+pub async fn run_agent_streaming<D>(
+    module: alloc::sync::Arc<IrModule>,
+    agent: &Agent,
+    dispatcher: Arc<D>,
+    initial_messages: Vec<Message>,
+) -> Result<impl futures_core::Stream<Item = crate::stream::RunEvent> + 'static, RuntimeError>
+where
+    D: ToolDispatcher + Send + Sync + 'static,
+{
+    let (rt, agent_def, manifest, history, initial_message, run_options) =
+        prepare_agent_run(module, agent, dispatcher, initial_messages)?;
+    rt.run_streaming_with_history(agent_def, manifest, history, initial_message, run_options)
         .await
 }
 
