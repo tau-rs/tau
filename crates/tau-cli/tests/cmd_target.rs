@@ -20,6 +20,7 @@ fn list_default_shows_only_available() {
     let stdout = String::from_utf8(out.stdout).expect("utf8");
     assert!(stdout.contains("linux-native-strict"));
     assert!(stdout.contains("passthrough"));
+    assert!(stdout.contains("any-wasi-strict"), "any-wasi-strict should appear in available list");
     assert!(
         !stdout.contains("windows-native-strict"),
         "Reserved should be hidden by default"
@@ -48,8 +49,8 @@ fn list_json_emits_one_event_per_triple() {
     let lines: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(
         lines.len(),
-        6,
-        "expected 6 entries (5 Available + 1 Reserved), got {} — stdout: {stdout}",
+        7,
+        "expected 7 entries (6 Available + 1 Reserved), got {} — stdout: {stdout}",
         lines.len()
     );
     for l in &lines {
