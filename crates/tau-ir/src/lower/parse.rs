@@ -115,7 +115,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                 prompt,
                 model: entry.model.clone(),
                 tool_refs,
-                context: None, // β.4 fills this in when its config table exists
+                context: lower_context(entry),
                 budget: AgentBudget {
                     max_turns: entry.max_turns,
                     max_tokens: entry.max_tokens,
@@ -368,6 +368,42 @@ fn lower_checks(
     }
 
     checks
+}
+
+/// Lower a tau-pkg [`AgentEntry`]'s `[agents.<id>.context]` pipeline into an
+/// IR [`ContextConfig`]. Returns `None` when no context pipeline is declared
+/// (the default behaviour — the agent loop applies no context transforms).
+///
+/// tau-pkg's validator already shape-checked the determinism strings and
+/// custom-node `(source, package)` pairs, so this is a pure structural copy.
+fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<crate::context::ContextConfig> {
+    use crate::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
+    if entry.context.is_empty() {
+        return None;
+    }
+    let pipeline = entry
+        .context
+        .iter()
+        .map(|s| ContextStep {
+            transformer: s.transformer.clone(),
+            determinism: match s.determinism.as_str() {
+                "llm_backed" => DeterminismClass::LlmBacked,
+                "stateful" => DeterminismClass::Stateful,
+                _ => DeterminismClass::Pure,
+            },
+            kind: match &s.custom {
+                Some((source, package)) => ContextNodeKind::Custom {
+                    source: source.clone(),
+                    package: package.clone(),
+                },
+                None => ContextNodeKind::Builtin,
+            },
+            config: s.config.clone(),
+        })
+        .collect();
+    let mut cfg = ContextConfig::default();
+    cfg.pipeline = pipeline;
+    Some(cfg)
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].

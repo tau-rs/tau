@@ -248,6 +248,43 @@ fn lowers_goals_and_deliverables_into_checks() {
 }
 
 #[test]
+fn lowers_context_pipeline_onto_agent() {
+    let toml = r#"
+[project]
+name = "ctx-lower"
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "m"
+
+[[agents.a.context.pipeline]]
+transformer = "trim_old"
+[agents.a.context.steps.trim_old]
+keep_last_turns = 4
+
+[[agents.a.context.pipeline]]
+transformer = "fit_budget"
+[agents.a.context.steps.fit_budget]
+max_tokens = 4000
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches).expect("lower");
+    let agent = module
+        .workflow
+        .agents
+        .get(&tau_ir::AgentId("a".into()))
+        .unwrap();
+    let ctx = agent.context.as_ref().expect("context present");
+    assert_eq!(ctx.pipeline.len(), 2);
+    assert_eq!(ctx.pipeline[0].transformer, "trim_old");
+    assert_eq!(ctx.pipeline[1].transformer, "fit_budget");
+}
+
+#[test]
 fn explicit_check_placement_is_not_double_appended() {
     use tau_ir::pipeline::StepRun;
     use tau_ir::{AgentId, CheckId, PipelineStepId};
