@@ -5,14 +5,101 @@
 //! the slot so adding β.4's struct later is a `MINOR` `ir_format`
 //! bump (additive optional field), not a `MAJOR` one.
 
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-/// Placeholder for β.4's context-manager configuration.
+/// β.4 context-manager configuration attached to an [`crate::node::Agent`].
 ///
-/// v0 keeps the struct empty and `#[non_exhaustive]` so β.4 can add
-/// fields additively without forcing every existing IR module to
-/// re-emit.
+/// `None` on the agent means "no context management" (full history every
+/// turn — pre-β.4 behavior). An empty `pipeline` serializes to `{}` so a
+/// `Some(ContextConfig::default())` is byte-identical to the legacy empty
+/// placeholder.
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContextConfig {}
+pub struct ContextConfig {
+    /// Ordered transformers, applied top-to-bottom each turn. The last
+    /// step must be the builtin `fit_budget` (typecheck-enforced).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pipeline: Vec<ContextStep>,
+}
+
+/// One node in a context pipeline.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ContextStep {
+    /// Transformer name. For builtins: `trim_old`, `compact_tool_outputs`,
+    /// `fit_budget`. For custom nodes: the user-chosen step name.
+    pub transformer: String,
+    /// Author-declared determinism class. Gates β.6 conformance and what
+    /// `TransformCx` exposes at runtime.
+    pub determinism: DeterminismClass,
+    /// Whether this is a builtin or a user-supplied custom node.
+    #[serde(default)]
+    pub kind: ContextNodeKind,
+    /// Per-node config (e.g. `keep_last_turns`, `max_bytes`, `max_tokens`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config: BTreeMap<String, Value>,
+}
+
+/// Determinism class shared by the IR (this enum) and the runtime trait
+/// (`tau_runtime_core::context::ContextTransformer::determinism`).
+/// Defined here so both crates use one definition (no drift).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum DeterminismClass {
+    /// Pure function of (messages, config); v1's three transformers.
+    Pure,
+    /// Calls an `LlmBackend` (β.4.3); conformance-gated via cassette replay.
+    LlmBacked,
+    /// Reads/writes a memory store (β.4.4); excluded from the conformance gate.
+    Stateful,
+}
+
+/// Delivery vehicle for a context node.
+#[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
+pub enum ContextNodeKind {
+    /// A tau-provided builtin transformer.
+    #[default]
+    Builtin,
+    /// A user-supplied node resolved at runtime. `source` selects the lane.
+    ///
+    /// See: [escape-hatches.md#contextnodekind-custom](../../docs/explanation/escape-hatches.md#contextnodekind-custom).
+    Custom {
+        /// `native` (v1) | `wasm` (later) | `mcp` (later).
+        source: String,
+        /// Package reference providing the node (e.g. `my-nodes@^0.1`).
+        package: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn empty_context_config_serializes_to_empty_object() {
+        // Backward-compat: a ContextConfig with no steps must serialize
+        // identically to the pre-β.4 empty placeholder ({}), so existing
+        // bundles hash unchanged.
+        let cfg = ContextConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn pipeline_roundtrips() {
+        let cfg = ContextConfig {
+            pipeline: alloc::vec![ContextStep {
+                transformer: "fit_budget".to_string(),
+                determinism: DeterminismClass::Pure,
+                kind: ContextNodeKind::Builtin,
+                config: Default::default(),
+            }],
+        };
+        let json = serde_json::to_vec(&cfg).unwrap();
+        let back: ContextConfig = serde_json::from_slice(&json).unwrap();
+        assert_eq!(cfg, back);
+    }
+}
