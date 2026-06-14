@@ -102,6 +102,56 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
     // 7. Pipeline checks: run targets exist, no dup ids, no forward refs.
     check_pipeline(&parsed.workflow)?;
 
+    // 8. Context-pipeline structural checks.
+    check_context(&parsed.workflow)?;
+
+    Ok(())
+}
+
+/// Structural validation of every agent's context pipeline.
+///
+/// Builtins: `trim_old`, `compact_tool_outputs`, `fit_budget`. Custom nodes
+/// (`ContextNodeKind::Custom`) are accepted structurally here; their
+/// capability grants are checked in tau-pkg. Rules:
+/// - the last step must be the builtin `fit_budget` (guarantees a ceiling);
+/// - no transformer name repeats;
+/// - a `Builtin`-kind step must be a known builtin name.
+fn check_context(wf: &crate::module::Workflow) -> Result<(), IrError> {
+    use crate::context::ContextNodeKind;
+    use alloc::collections::BTreeSet;
+
+    const BUILTINS: [&str; 3] = ["trim_old", "compact_tool_outputs", "fit_budget"];
+
+    for (id, agent) in wf.agents.iter() {
+        let Some(ctx) = &agent.context else { continue };
+        if ctx.pipeline.is_empty() {
+            continue;
+        }
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for step in &ctx.pipeline {
+            if !seen.insert(step.transformer.as_str()) {
+                return Err(crate::error::IrError::DuplicateContextTransformer {
+                    agent: id.0.clone(),
+                    transformer: step.transformer.clone(),
+                });
+            }
+            if matches!(step.kind, ContextNodeKind::Builtin)
+                && !BUILTINS.contains(&step.transformer.as_str())
+            {
+                return Err(crate::error::IrError::UnknownContextTransformer {
+                    agent: id.0.clone(),
+                    transformer: step.transformer.clone(),
+                });
+            }
+        }
+        let last = ctx.pipeline.last().expect("non-empty checked above");
+        if last.transformer != "fit_budget" {
+            return Err(crate::error::IrError::ContextFitBudgetNotLast {
+                agent: id.0.clone(),
+                last: last.transformer.clone(),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -478,6 +528,72 @@ mod tests {
                 if check == "my-check" && output == "later"),
             "expected UnknownCheckLocus; got {err:?}"
         );
+    }
+
+    // ── check_context tests ──────────────────────────────────────────────────
+
+    use crate::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
+
+    fn agent_with_context(steps: alloc::vec::Vec<&str>) -> crate::module::Workflow {
+        let pipeline = steps
+            .into_iter()
+            .map(|t| ContextStep {
+                transformer: t.into(),
+                determinism: DeterminismClass::Pure,
+                kind: ContextNodeKind::Builtin,
+                config: Default::default(),
+            })
+            .collect();
+        let mut wf = crate::module::Workflow::default();
+        wf.agents.insert(
+            AgentId("a".into()),
+            Agent {
+                id: AgentId("a".into()),
+                prompt: "p".into(),
+                model: "m".into(),
+                tool_refs: alloc::vec![],
+                context: Some(ContextConfig { pipeline }),
+                budget: crate::AgentBudget {
+                    max_turns: None,
+                    max_tokens: None,
+                },
+                produces: alloc::vec![],
+            },
+        );
+        wf
+    }
+
+    #[test]
+    fn context_ok_when_fit_budget_last() {
+        let wf = agent_with_context(alloc::vec!["trim_old", "fit_budget"]);
+        assert!(check_context(&wf).is_ok());
+    }
+
+    #[test]
+    fn context_rejects_unknown_transformer() {
+        let wf = agent_with_context(alloc::vec!["bogus", "fit_budget"]);
+        assert!(matches!(
+            check_context(&wf),
+            Err(crate::error::IrError::UnknownContextTransformer { .. })
+        ));
+    }
+
+    #[test]
+    fn context_rejects_fit_budget_not_last() {
+        let wf = agent_with_context(alloc::vec!["fit_budget", "trim_old"]);
+        assert!(matches!(
+            check_context(&wf),
+            Err(crate::error::IrError::ContextFitBudgetNotLast { .. })
+        ));
+    }
+
+    #[test]
+    fn context_rejects_duplicate() {
+        let wf = agent_with_context(alloc::vec!["trim_old", "trim_old", "fit_budget"]);
+        assert!(matches!(
+            check_context(&wf),
+            Err(crate::error::IrError::DuplicateContextTransformer { .. })
+        ));
     }
 
     #[test]
