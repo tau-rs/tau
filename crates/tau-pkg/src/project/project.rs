@@ -72,6 +72,9 @@ pub struct UncheckedAgent {
     /// Optional `[agents.<id>.prompt]` sub-table.
     #[serde(default)]
     pub prompt: Option<UncheckedPrompt>,
+    /// Optional `[agents.<id>.context]` sub-table (β.4).
+    #[serde(default)]
+    pub context: Option<UncheckedContext>,
     // --- IR lowering fields (β.2.2) ---
     /// LLM model identifier (e.g. `"claude-haiku-4-5"`). Used by the IR
     /// lowering pass; ignored by the existing agent-resolution path.
@@ -136,6 +139,36 @@ pub struct UncheckedPrompt {
     /// Path to a system prompt file; mutually exclusive with `system`.
     #[serde(default)]
     pub system_file: Option<PathBuf>,
+}
+
+/// `[agents.<id>.context]` sub-table.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UncheckedContext {
+    /// Ordered `[[agents.<id>.context.pipeline]]` entries.
+    #[serde(default)]
+    pub pipeline: Vec<UncheckedContextStep>,
+    /// Per-node config tables: `[agents.<id>.context.steps.<name>]`.
+    #[serde(default)]
+    pub steps: Option<toml::Table>,
+}
+
+/// One `[[agents.<id>.context.pipeline]]` entry.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UncheckedContextStep {
+    /// Transformer name (builtin or custom).
+    pub transformer: String,
+    /// `builtin` (default) | `custom`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// For custom nodes: `native` | `wasm` | `mcp`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// For custom nodes: providing package ref.
+    #[serde(default)]
+    pub package: Option<String>,
+    /// For custom nodes: declared determinism (`pure` default).
+    #[serde(default)]
+    pub determinism: Option<String>,
 }
 
 /// Single `[[agents.<id>.capabilities]]` array-of-tables entry.
@@ -626,6 +659,19 @@ pub struct ProjectConfig {
     pub deliverables: BTreeMap<String, DeliverableEntry>,
 }
 
+/// Validated context-pipeline step.
+#[derive(Debug, Clone)]
+pub struct ContextStepEntry {
+    /// Transformer name.
+    pub transformer: String,
+    /// `pure` | `llm_backed` | `stateful`.
+    pub determinism: String,
+    /// `Some((source, package))` for custom nodes, else `None` (builtin).
+    pub custom: Option<(String, String)>,
+    /// Per-node config from `[...context.steps.<name>]`, as serde_json values.
+    pub config: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
 /// Validated entry for a single agent.
 ///
 /// # Example
@@ -683,6 +729,9 @@ pub struct AgentEntry {
     /// Cross-checked against `fs-write` capabilities at validation time
     /// and bound to `[deliverables.*]`/`[goals.*]` loci.
     pub produces: Vec<String>,
+    /// Validated `[agents.<id>.context]` pipeline (β.4). Empty = no
+    /// context-management pipeline declared (default behaviour).
+    pub context: Vec<ContextStepEntry>,
 }
 
 impl AgentEntry {
@@ -714,6 +763,7 @@ impl AgentEntry {
             max_turns: None,
             max_tokens: None,
             produces: Vec::new(),
+            context: Vec::new(),
         }
     }
 }
@@ -1198,6 +1248,77 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         .map(|t| t.into_iter().collect::<BTreeMap<_, _>>())
         .unwrap_or_default();
 
+    // β.4: validate the optional context pipeline. Per-node config is
+    // stored as serde_json::Value so Task 4 lowering into
+    // tau_ir::context::ContextStep.config is a trivial clone.
+    let context: Vec<ContextStepEntry> = match raw.context {
+        None => Vec::new(),
+        Some(ctx) => {
+            let steps_tbl = ctx.steps.unwrap_or_default();
+            let mut out = Vec::with_capacity(ctx.pipeline.len());
+            for s in ctx.pipeline {
+                let determinism = s.determinism.unwrap_or_else(|| "pure".into());
+                let custom = match s.kind.as_deref() {
+                    Some("custom") => {
+                        let source = s.source.clone().ok_or_else(|| {
+                            ProjectConfigError::AgentValidation {
+                                id: id.clone(),
+                                message: format!(
+                                    "context custom node {:?} needs `source`",
+                                    s.transformer
+                                ),
+                            }
+                        })?;
+                        let package = s.package.clone().ok_or_else(|| {
+                            ProjectConfigError::AgentValidation {
+                                id: id.clone(),
+                                message: format!(
+                                    "context custom node {:?} needs `package`",
+                                    s.transformer
+                                ),
+                            }
+                        })?;
+                        if source != "native" {
+                            return Err(ProjectConfigError::AgentValidation {
+                                id: id.clone(),
+                                message: format!(
+                                    "context node {:?}: source {source:?} not supported in v1 (only `native`)",
+                                    s.transformer
+                                ),
+                            });
+                        }
+                        // TODO(β.4.x): custom-node capability subset check —
+                        // custom nodes may declare capabilities that must be a
+                        // subset of the agent's grants. Task 13 adds the
+                        // rejection test. v1 builtins declare none.
+                        Some((source, package))
+                    }
+                    _ => None,
+                };
+                let node_cfg: std::collections::BTreeMap<String, serde_json::Value> = steps_tbl
+                    .get(&s.transformer)
+                    .and_then(|v| v.as_table())
+                    .map(|t| {
+                        t.iter()
+                            .filter_map(|(k, v)| {
+                                serde_json::to_value(v.clone())
+                                    .ok()
+                                    .map(|jv| (k.clone(), jv))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(ContextStepEntry {
+                    transformer: s.transformer,
+                    determinism,
+                    custom,
+                    config: node_cfg,
+                });
+            }
+            out
+        }
+    };
+
     Ok(AgentEntry {
         id,
         display_name: raw.display_name,
@@ -1212,6 +1333,7 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         max_turns: raw.max_turns,
         max_tokens: raw.max_tokens,
         produces: raw.produces,
+        context,
     })
 }
 
@@ -2084,6 +2206,93 @@ mod tests {
         let cfg = parse(toml_str).unwrap();
         let agent = cfg.agents.get("r").unwrap();
         assert!(matches!(&agent.prompt, PromptEntry::Inline(s) if s == "be helpful"));
+    }
+
+    #[test]
+    fn parses_agent_context_pipeline() {
+        let toml_str = r#"
+            [project]
+            name = "p"
+
+            [agents.a]
+            display_name = "A"
+            package = "demo@^0.1"
+            llm_backend = "mock-llm"
+
+            [[agents.a.context.pipeline]]
+            transformer = "trim_old"
+
+            [agents.a.context.steps.trim_old]
+            keep_last_turns = 4
+
+            [[agents.a.context.pipeline]]
+            transformer = "fit_budget"
+
+            [agents.a.context.steps.fit_budget]
+            max_tokens = 4000
+        "#;
+        let cfg = parse(toml_str).unwrap();
+        let agent = cfg.agents.get("a").unwrap();
+        assert_eq!(agent.context.len(), 2);
+        assert_eq!(agent.context[0].transformer, "trim_old");
+        assert_eq!(agent.context[0].determinism, "pure");
+        assert!(agent.context[0].custom.is_none());
+        assert_eq!(
+            agent.context[0]
+                .config
+                .get("keep_last_turns")
+                .and_then(|v| v.as_u64()),
+            Some(4)
+        );
+        assert_eq!(agent.context[1].transformer, "fit_budget");
+        assert_eq!(
+            agent.context[1]
+                .config
+                .get("max_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(4000)
+        );
+    }
+
+    #[test]
+    fn rejects_custom_context_node_missing_source() {
+        let toml_str = r#"
+            [project]
+            name = "p"
+
+            [agents.a]
+            display_name = "A"
+            package = "demo@^0.1"
+            llm_backend = "mock-llm"
+
+            [[agents.a.context.pipeline]]
+            transformer = "my_custom"
+            kind = "custom"
+            package = "pkg@^0.1"
+        "#;
+        let err = parse(toml_str).expect_err("missing source should reject");
+        assert!(matches!(err, ProjectConfigError::AgentValidation { .. }));
+    }
+
+    #[test]
+    fn rejects_custom_context_node_non_native_source() {
+        let toml_str = r#"
+            [project]
+            name = "p"
+
+            [agents.a]
+            display_name = "A"
+            package = "demo@^0.1"
+            llm_backend = "mock-llm"
+
+            [[agents.a.context.pipeline]]
+            transformer = "my_custom"
+            kind = "custom"
+            source = "wasm"
+            package = "pkg@^0.1"
+        "#;
+        let err = parse(toml_str).expect_err("non-native source should reject in v1");
+        assert!(matches!(err, ProjectConfigError::AgentValidation { .. }));
     }
 
     #[test]
@@ -3424,6 +3633,7 @@ mod proptests {
                         capabilities: Vec::new(),
                         config: None,
                         prompt: None,
+                        context: None,
                         model: None,
                         tool_refs: Vec::new(),
                         max_turns: None,
