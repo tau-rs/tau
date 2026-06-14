@@ -29,6 +29,7 @@ mechanically.
 | <a id="uninstallerror-internal"></a>`uninstallerror-internal` | `UninstallError::Internal { message }` | catch-all for uninstall failures not yet covered by typed variants | promote when 2+ distinct contexts surface | 3 |
 | <a id="builderror-internal"></a>`builderror-internal` | `BuildError::Internal { message }` | catch-all for invariant violations during `RuntimeBuilder::build()` not yet covered by typed variants | promote when 2+ distinct contexts surface | 4 |
 | <a id="runtimeerror-internal"></a>`runtimeerror-internal` | `RuntimeError::Internal { message }` | catch-all for kernel-level invariant violations during `Runtime::run` not yet covered by typed variants | promote when 2+ distinct contexts surface | 4 |
+| <a id="contextnodekind-custom"></a>`contextnodekind-custom` | `ContextNodeKind::Custom { source, package }` | β.4 v1 ships only builtin transformers; `Custom` is reserved for future native/wasm/mcp extension points that are not yet typed. | When tau-context ships its first non-builtin delivery lane (native plugin or wasm), promote to a typed `Native`/`Wasm`/`Mcp` variant family. | β.4 |
 
 ## Promoted escape hatches
 

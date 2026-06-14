@@ -348,6 +348,7 @@ mod tests {
             max_turns: None,
             max_tokens: None,
             produces: Vec::new(),
+            context: Vec::new(),
         };
         mutate(&mut e);
         e

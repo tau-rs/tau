@@ -168,6 +168,34 @@ pub enum IrError {
         check: String,
     },
 
+    /// A context pipeline names a transformer that is neither a known
+    /// builtin nor a declared custom node.
+    #[error("agent '{agent}': context transformer '{transformer}' is not a known builtin or custom node")]
+    UnknownContextTransformer {
+        /// The agent id whose context pipeline is invalid.
+        agent: String,
+        /// The offending transformer name.
+        transformer: String,
+    },
+
+    /// A context pipeline's last step is not the builtin `fit_budget`.
+    #[error("agent '{agent}': the last context step must be `fit_budget` (found '{last}')")]
+    ContextFitBudgetNotLast {
+        /// The agent id whose context pipeline is invalid.
+        agent: String,
+        /// The actual last transformer name.
+        last: String,
+    },
+
+    /// A context pipeline repeats a transformer name.
+    #[error("agent '{agent}': duplicate context transformer '{transformer}'")]
+    DuplicateContextTransformer {
+        /// The agent id whose context pipeline is invalid.
+        agent: String,
+        /// The repeated transformer name.
+        transformer: String,
+    },
+
     /// A check's `Locus::Output` references an unknown or later pipeline step.
     #[error(
         "check '{check}' evaluates output of '{output}' which is not an earlier pipeline step"

@@ -37,12 +37,13 @@ use crate::options::RunOptions;
 use crate::outcome::RunOutcome;
 use crate::tool_args::ToolArgsValidator;
 use crate::vocabulary::{
-    EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED, EV_LLM_STOP_REASON,
-    EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_MESSAGE_ADDED, EV_RUNTIME_COMPLETED,
-    EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED, EV_RUNTIME_MAX_TURNS_REACHED,
-    EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED, EV_TOOL_INVOKE_FAILED,
-    EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED, SPAN_DISPATCH_TOOL,
-    SPAN_RUNTIME_TURN, SPAN_TOOL_INVOKE, SPAN_TOOL_SESSION_CLOSE, SPAN_TOOL_SESSION_OPEN,
+    EV_CONTEXT_STEP_RAN, EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED,
+    EV_LLM_STOP_REASON, EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_MESSAGE_ADDED,
+    EV_RUNTIME_COMPLETED, EV_RUNTIME_FAILED, EV_RUNTIME_LOOP_TERMINATED,
+    EV_RUNTIME_MAX_TURNS_REACHED, EV_RUNTIME_RUN_STARTED, EV_RUNTIME_TURN_STARTED,
+    EV_TOOL_INVOKE_FAILED, EV_TOOL_SESSION_CLOSE_FAILED, EV_TOOL_SESSION_OPEN_FAILED,
+    SPAN_DISPATCH_TOOL, SPAN_RUNTIME_TURN, SPAN_TOOL_INVOKE, SPAN_TOOL_SESSION_CLOSE,
+    SPAN_TOOL_SESSION_OPEN,
 };
 
 /// Return the `Clock` from `RunOptions`, panicking if absent.
@@ -290,7 +291,50 @@ pub fn run_streaming_inner(
 
             let mut request = CompletionRequest::new(agent_def.llm_backend.as_str().into());
             request.system = agent_def.system_prompt.clone();
-            request.messages = crate::run::agent_messages_to_provider_messages(&messages);
+            // β.4: derive a budgeted per-turn VIEW; stored `messages`
+            // (full conversation) is never mutated.
+            let provider_messages = if options.context_pipeline.is_empty() {
+                crate::run::agent_messages_to_provider_messages(&messages)
+            } else {
+                let cx = crate::context::TransformCx::pure(
+                    options.token_estimator.as_ref(),
+                    agent_def.system_prompt.as_deref(),
+                );
+                let mut view = messages.clone();
+                let mut pipeline_failed: Option<alloc::string::String> = None;
+                for t in &options.context_pipeline {
+                    let before: u32 = view.iter().map(|m| cx.estimate_tokens(m)).sum();
+                    match t.transform(&cx, view).await {
+                        Ok(next) => {
+                            let after: u32 = next.iter().map(|m| cx.estimate_tokens(m)).sum();
+                            debug!(
+                                parent: &turn_span,
+                                name = EV_CONTEXT_STEP_RAN,
+                                step = t.name(),
+                                tokens_in = before,
+                                tokens_out = after,
+                            );
+                            view = next;
+                        }
+                        Err(e) => {
+                            pipeline_failed = Some(alloc::format!("{e}"));
+                            view = alloc::vec::Vec::new();
+                            break;
+                        }
+                    }
+                }
+                if let Some(detail) = pipeline_failed {
+                    // Terminal kernel error: mirror the make_*_fatal_error
+                    // family (e.g. make_llm_fatal_error at the LLM-open seam
+                    // just below). FatalError is the batch drainer's signal
+                    // to reconstruct Err(RuntimeError::ContextPipeline).
+                    warn!(parent: &turn_span, name = EV_RUNTIME_FAILED, detail = %detail);
+                    yield make_context_pipeline_fatal_error(detail);
+                    return;
+                }
+                crate::run::agent_messages_to_provider_messages(&view)
+            };
+            request.messages = provider_messages;
             request.tools = tool_specs.clone();
             debug!(
                 parent: &turn_span,
@@ -1521,6 +1565,18 @@ fn make_llm_fatal_error(llm_err: LlmError) -> RunEvent {
     RunEvent::FatalError {
         kind: "Llm".to_string(),
         detail: format!("{llm_err}"),
+        context_json: None,
+        tool_error_variant: None,
+    }
+}
+
+/// Context-pipeline fatal error (a transformer failed or the budget was
+/// unsatisfiable). Drainer converts to
+/// `Err(RuntimeError::ContextPipeline { detail })`.
+fn make_context_pipeline_fatal_error(detail: String) -> RunEvent {
+    RunEvent::FatalError {
+        kind: "ContextPipeline".to_string(),
+        detail,
         context_json: None,
         tool_error_variant: None,
     }

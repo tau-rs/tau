@@ -435,6 +435,7 @@ impl Runtime {
                             };
                             RuntimeError::Tool(tool_err)
                         }
+                        "ContextPipeline" => RuntimeError::ContextPipeline { detail },
                         _ => RuntimeError::Internal { message: detail },
                     });
                 }

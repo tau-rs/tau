@@ -1,0 +1,29 @@
+[project]
+name = "fixture-13"
+
+[agents.mono]
+display_name = "Mono"
+package      = "demo@^0.1"
+llm_backend  = "mock-llm"
+model        = "mock-1"
+max_turns    = 2
+
+# A 3-step context pipeline. The last step MUST be `fit_budget` (typecheck
+# rule). The transformers run per-turn against the agent's message history;
+# on this single-turn fixture the history is short, so trim/compact/fit are
+# all no-ops — the point is that the TOML→IR→runtime context path lowers,
+# typechecks, and runs identically under DevMode and BundleMode.
+[[agents.mono.context.pipeline]]
+transformer = "trim_old"
+[agents.mono.context.steps.trim_old]
+keep_last_turns = 4
+
+[[agents.mono.context.pipeline]]
+transformer = "compact_tool_outputs"
+[agents.mono.context.steps.compact_tool_outputs]
+max_bytes = 256
+
+[[agents.mono.context.pipeline]]
+transformer = "fit_budget"
+[agents.mono.context.steps.fit_budget]
+max_tokens = 4000

@@ -4,12 +4,13 @@
 //! side effects under `DevMode`, and asserts cross-mode equivalence
 //! (DevMode vs BundleMode) per D-7a (multiset side-effect equivalence).
 //!
-//! All eleven fixtures are live as of the deliverables-and-goals track:
+//! All fixtures are live:
 //! `01_agent_native_tool`, `02_agent_mcp_tool`, `03_agent_denied_capability`,
 //! `04_subflow_spawn_child`, `05_deterministic_step`,
 //! `06_multi_turn_history`, `07_mcp_weather_cassette`,
 //! `08_pipeline_sequence`, `09_deliverables_happy`,
-//! `10_deliverable_retry`, and `11_deliverable_no_producer`.
+//! `10_deliverable_retry`, `11_deliverable_no_producer`,
+//! `12_pipeline_reverse_alpha`, and `13_context_pipeline`.
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -619,4 +620,66 @@ async fn fixture_12_pipeline_picks_last_executed_step() {
         ),
         other => panic!("expected a Text payload, got: {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 13 — context pipeline runs identically dev vs bundle (β.4)
+// ---------------------------------------------------------------------------
+
+/// Fixture 13: a single agent (`mono`) carrying a 3-step context pipeline,
+/// driven through a single end_turn turn — the end-to-end acceptance test
+/// for the β.4 context-manager TOML→IR→runtime path.
+///
+/// The agent declares `[agents.mono.context.pipeline]` with three
+/// transformers (`trim_old` → `compact_tool_outputs` → `fit_budget`, the
+/// last step is `fit_budget` as the typecheck rule requires) plus their
+/// per-step config tables. Lowering parses + typechecks the pipeline,
+/// embeds it in the IR `Agent`, and the agent loop applies the transformers
+/// to the message history before each turn.
+///
+/// This fixture has no pipeline block and no tools, so it runs through the
+/// single-entry `run_ir` path (like fixtures 01-07) with `mono` auto-selected
+/// as the alphabetically-first (and only) agent. On this single-turn run the
+/// history is short, so the transformers are effectively no-ops — the value
+/// is proving the context path lowers, typechecks, and executes WITHOUT
+/// diverging between DevMode (in-process lower) and BundleMode (round-trip
+/// through a built bundle).
+///
+/// Expected: `RunOutcome::Completed`, no tool calls, and cross-mode
+/// equivalence under `assert_conform`. If the context path had an
+/// integration defect (panic in `build_context_pipeline`, a typecheck
+/// rejection of this valid pipeline, or transformer application breaking the
+/// loop), this fixture would surface it as a failed/refused run here.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_13_dev_mode_completed() {
+    let dir = fixture_dir("13_context_pipeline");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 13 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 13: DevMode (in-process lower of the
+/// context pipeline) and BundleMode (the lowered context pipeline round-trips
+/// through the canonical bundle encoder/decoder) must drive the agent loop
+/// identically, so the side-effect reports compare byte-for-byte.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_13_cross_mode_conformance() {
+    let dir = fixture_dir("13_context_pipeline");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
 }

@@ -105,6 +105,11 @@ pub const EV_CHECK_EVALUATED: &str = "check.evaluated";
 /// Emitted when a failed check rewound to its gate for retry.
 pub const EV_CHECK_RETRY: &str = "check.retry";
 
+// --- Context-manager events (β.4) ---
+
+/// Emitted once per context transformer per turn.
+pub const EV_CONTEXT_STEP_RAN: &str = "runtime.context_step_ran";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +185,10 @@ mod tests {
         assert_eq!(SPAN_PIPELINE_CHECK, "pipeline.check");
         assert_eq!(EV_CHECK_EVALUATED, "check.evaluated");
         assert_eq!(EV_CHECK_RETRY, "check.retry");
+    }
+
+    #[test]
+    fn context_events_match_spec() {
+        assert_eq!(EV_CONTEXT_STEP_RAN, "runtime.context_step_ran");
     }
 }

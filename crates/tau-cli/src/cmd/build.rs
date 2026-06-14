@@ -107,7 +107,16 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
     let LowerIrResult {
         payload: ir_payload,
         triggers: trigger_bindings,
+        lower_error,
     } = lower_ir(&project_root, &target, &mcp_cache_ir, ts_project.as_ref());
+
+    // A typecheck/lowering error (e.g. an invalid context pipeline where
+    // `fit_budget` is not the last step) is a hard build failure: surface
+    // the diagnostic and exit 2 rather than silently dropping the IR payload.
+    if let Some(e) = lower_error {
+        let _ = output.error(format!("{e}"));
+        std::process::exit(2);
+    }
 
     let opts = BuildOptions {
         project_root: project_root.clone(),
@@ -338,6 +347,13 @@ pub(crate) struct LowerIrResult {
     /// Trigger bindings lowered from the project config (empty when lowering
     /// failed or the project declares no triggers).
     pub triggers: Vec<tau_ir::trigger::TriggerBinding>,
+    /// `Some` when `lower_project` returned a typecheck/lowering error. The
+    /// payload is `None` in that case. Callers that treat lowering as a
+    /// best-effort enrichment (verify, run, dev) ignore this; `tau build`
+    /// inspects it and rejects the build (exit 2) so a typecheck failure —
+    /// e.g. an invalid context pipeline — is surfaced at build time rather
+    /// than silently dropped (see ADR: build-time enforcement discipline).
+    pub lower_error: Option<tau_ir::error::IrError>,
 }
 
 /// Attempt to lower the project IR, returning `Some(IrPayload)` on
@@ -377,6 +393,7 @@ pub(crate) fn lower_ir(
                 return LowerIrResult {
                     payload: None,
                     triggers: Vec::new(),
+                    lower_error: None,
                 };
             }
         };
@@ -387,6 +404,7 @@ pub(crate) fn lower_ir(
                 return LowerIrResult {
                     payload: None,
                     triggers: Vec::new(),
+                    lower_error: None,
                 };
             }
         };
@@ -397,6 +415,7 @@ pub(crate) fn lower_ir(
                 return LowerIrResult {
                     payload: None,
                     triggers: Vec::new(),
+                    lower_error: None,
                 };
             }
         };
@@ -428,13 +447,15 @@ pub(crate) fn lower_ir(
             LowerIrResult {
                 payload,
                 triggers: module.triggers,
+                lower_error: None,
             }
         }
         Err(e) => {
-            tracing::warn!("IR lowering failed (bundle built without IR payload): {e}");
+            tracing::warn!("IR lowering failed: {e}");
             LowerIrResult {
                 payload: None,
                 triggers: Vec::new(),
+                lower_error: Some(e),
             }
         }
     }
