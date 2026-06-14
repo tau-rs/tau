@@ -2,8 +2,10 @@
 //! conversation, applied before history is projected to the LLM.
 
 pub mod estimator;
+pub mod transformers;
 
 pub use estimator::{HeuristicEstimator, TokenEstimator};
+pub use transformers::{CompactToolOutputs, FitBudget, TrimOld};
 
 use alloc::boxed::Box;
 use alloc::string::String;
