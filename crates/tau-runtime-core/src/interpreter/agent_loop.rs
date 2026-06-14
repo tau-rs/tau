@@ -503,6 +503,19 @@ where
         }
     }
 
+    // 6b. β.4: build the per-turn context pipeline from the IR agent's
+    //     config. `run_agent` is the single shared agent-loop entry for
+    //     all three drive paths (run_ir, run_pipeline, check), so wiring
+    //     here covers `tau dev`, `tau run --bundle`, pipeline steps, and
+    //     deliverable checks. Custom nodes resolve via the dispatcher's
+    //     optional registry; builtins resolve regardless. Agents without
+    //     a `context` config keep the empty default pipeline.
+    if let Some(ctx_cfg) = agent.context.as_ref() {
+        let registry = dispatcher.context_transformer_registry();
+        run_options.context_pipeline =
+            crate::context::build_context_pipeline(ctx_cfg, registry.as_deref())?;
+    }
+
     // 7. Split initial_messages into history + initial_message.
     //    The kernel requires exactly one initial_message; if the caller
     //    provided none, synthesise a placeholder so the run loop has

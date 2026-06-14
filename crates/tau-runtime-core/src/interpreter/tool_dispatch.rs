@@ -95,4 +95,20 @@ pub trait ToolDispatcher {
     fn artifact_reader(&self) -> Option<Arc<dyn super::artifact::ArtifactReader>> {
         None
     }
+
+    /// Optional registry of user-supplied native context nodes (β.4).
+    ///
+    /// The interpreter calls this when building the per-turn context
+    /// pipeline for an agent whose IR config references a
+    /// `ContextNodeKind::Custom` node. Returning `None` (the default)
+    /// means "this dispatcher supplies no custom context nodes" — a
+    /// config that references a custom node against a `None` registry
+    /// surfaces as a [`crate::error::RuntimeError::Internal`] from
+    /// [`crate::context::build_context_pipeline`]. Configs that use only
+    /// builtins resolve regardless of the registry.
+    fn context_transformer_registry(
+        &self,
+    ) -> Option<Arc<dyn crate::context::ContextTransformerRegistry>> {
+        None
+    }
 }
