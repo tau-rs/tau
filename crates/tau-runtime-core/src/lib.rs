@@ -29,6 +29,7 @@ pub mod run;
 pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime, RuntimeBuilder};
 
 pub mod capability;
+pub mod context;
 pub mod dispatch;
 pub mod options;
 pub mod orchestration;
