@@ -304,9 +304,9 @@ jobs:
           with-sccache: true
           with-mold: true
       - name: Credential port tests (tau-ports)
-        run: cargo nextest run --profile ci -p tau-ports credential
+        run: cargo nextest run --profile ci -p tau-ports -E 'test(/credential/)'
       - name: Credential provider tests (tau-runtime-tokio)
-        run: cargo nextest run --profile ci -p tau-runtime-tokio credentials
+        run: cargo nextest run --profile ci -p tau-runtime-tokio -E 'test(/credentials/)'
 
   feature-flag-matrix:
     name: feature-flag-matrix / linux

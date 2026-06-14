@@ -10,12 +10,20 @@ use tau_ports::CredentialError;
 
 /// Resolves a credential by reading a file from a secrets directory.
 /// The `key_map` maps a logical credential id to a filename in `dir`.
+///
+/// Asymmetry note: unlike the env provider (which treats an empty value as
+/// absent → `Ok(None)`), `FileProvider` treats a present-but-empty file as a
+/// present (empty) secret → `Ok(Some(..))`.
 pub struct FileProvider {
     dir: PathBuf,
     key_map: BTreeMap<String, String>,
 }
 
 impl FileProvider {
+    /// Provider name — single source of truth for both `name()` and the
+    /// `source` field on resolved credentials, so the two can't drift.
+    const NAME: &str = "file";
+
     /// Construct from a directory and an id→filename map.
     pub fn new(dir: PathBuf, key_map: BTreeMap<String, String>) -> Self {
         Self { dir, key_map }
@@ -36,7 +44,7 @@ fn trim_trailing_newline(mut bytes: Vec<u8>) -> Vec<u8> {
 
 impl CredentialProvider for FileProvider {
     fn name(&self) -> &str {
-        "file"
+        Self::NAME
     }
 
     async fn resolve(
@@ -50,7 +58,7 @@ impl CredentialProvider for FileProvider {
         match tokio::fs::read(&path).await {
             Ok(bytes) => Ok(Some(ResolvedCredential::new(
                 Secret::from_bytes(trim_trailing_newline(bytes)),
-                "file",
+                Self::NAME,
             ))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(CredentialError::Io {
@@ -101,6 +109,40 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn non_notfound_io_error_surfaces_as_io() {
+        // Create a regular file, then use it as the "dir" so <file>/<filename>
+        // resolves through a non-directory => ENOTDIR (not NotFound).
+        let tmp = tempfile::tempdir().unwrap();
+        let not_a_dir = tmp.path().join("iam_a_file");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+        let p = FileProvider::new(not_a_dir, key_map());
+        let res = p.resolve(&req("anthropic_api_key")).await;
+        assert!(
+            matches!(res, Err(tau_ports::CredentialError::Io { .. })),
+            "got {:?}",
+            res.map(|opt| opt.map(|c| c.source))
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_file_yields_empty_secret_not_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("anthropic-key"), b"").unwrap();
+        let p = FileProvider::new(dir.path().to_path_buf(), key_map());
+        let got = p.resolve(&req("anthropic_api_key")).await.unwrap().unwrap();
+        assert!(got.secret.is_empty());
+    }
+
+    #[tokio::test]
+    async fn newline_only_file_yields_empty_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("anthropic-key"), b"\n").unwrap();
+        let p = FileProvider::new(dir.path().to_path_buf(), key_map());
+        let got = p.resolve(&req("anthropic_api_key")).await.unwrap().unwrap();
+        assert!(got.secret.is_empty());
     }
 
     #[tokio::test]

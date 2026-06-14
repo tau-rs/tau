@@ -30,12 +30,18 @@ where
     }
 }
 
+impl<F> EnvProvider<F> {
+    /// Provider name — single source of truth for both `name()` and the
+    /// `source` field on resolved credentials, so the two can't drift.
+    const NAME: &str = "env";
+}
+
 impl<F> CredentialProvider for EnvProvider<F>
 where
     F: Fn(&str) -> Option<String> + Send + Sync,
 {
     fn name(&self) -> &str {
-        "env"
+        Self::NAME
     }
 
     async fn resolve(
@@ -48,7 +54,7 @@ where
         match (self.lookup)(var) {
             Some(v) if !v.is_empty() => Ok(Some(ResolvedCredential::new(
                 Secret::from_bytes(v.into_bytes()),
-                "env",
+                Self::NAME,
             ))),
             _ => Ok(None),
         }
