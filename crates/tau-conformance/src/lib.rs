@@ -7,5 +7,6 @@
 
 pub mod differ;
 pub mod event;
+pub mod normalize;
 
 pub use event::{ConformanceEvent, CONFORMANCE_EVENT_VERSION};

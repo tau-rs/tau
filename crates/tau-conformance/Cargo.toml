@@ -14,7 +14,7 @@ tau-ports         = { workspace = true, features = ["serde", "test-fixtures"] }
 tau-pkg           = { workspace = true }
 tau-runtime-core  = { workspace = true, features = ["test-fixtures"] }
 tau-runtime-tokio = { workspace = true }
-tau-observe       = { workspace = true }
+tau-observe       = { workspace = true, features = ["test-fixtures"] }
 tau-mcp           = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio     = { workspace = true }
 serde             = { workspace = true }
