@@ -102,6 +102,13 @@ pub const EV_PIPELINE_STEP_STARTED: &str = "pipeline.step_started";
 #[doc(hidden)]
 pub const EV_PIPELINE_STEP_COMPLETED: &str = "pipeline.step_completed";
 
+// --- Context-pipeline events (β.4) ---
+
+/// Emitted once per context-pipeline transformer applied within a turn,
+/// carrying the step name plus token counts before/after the step.
+#[doc(hidden)]
+pub const EV_CONTEXT_STEP_RAN: &str = "runtime.context_step_ran";
+
 // --- Check events and built-in goal predicate fn names ---
 
 /// Span wrapping a single check evaluation.
@@ -180,6 +187,7 @@ pub const PAIRS: &[(&str, &str)] = &[
     ("EV_TOOL_SESSION_OPEN_FAILED", EV_TOOL_SESSION_OPEN_FAILED),
     ("EV_TOOL_SESSION_CLOSE_FAILED", EV_TOOL_SESSION_CLOSE_FAILED),
     ("EV_MESSAGE_ADDED", EV_MESSAGE_ADDED),
+    ("EV_CONTEXT_STEP_RAN", EV_CONTEXT_STEP_RAN),
     ("SPAN_PIPELINE_STEP", SPAN_PIPELINE_STEP),
     ("EV_PIPELINE_STEP_STARTED", EV_PIPELINE_STEP_STARTED),
     ("EV_PIPELINE_STEP_COMPLETED", EV_PIPELINE_STEP_COMPLETED),
