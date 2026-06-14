@@ -50,7 +50,6 @@ impl CredentialProvider for BakedProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
 
     fn id(s: &str) -> CredentialId {
         CredentialId::parse(s).unwrap()
@@ -84,10 +83,5 @@ mod tests {
         let req = CredentialRequest::new(id("k"));
         let got = chain.resolve(&req).await.unwrap().unwrap();
         assert_eq!(got.secret.expose_bytes(), b"v");
-    }
-
-    #[test]
-    fn touch_vec_import() {
-        let _v: Vec<u8> = vec![1, 2, 3];
     }
 }

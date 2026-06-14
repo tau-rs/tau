@@ -104,3 +104,61 @@ impl CredentialProvider for CredentialChain {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credential::{BakedProvider, CredentialId, CredentialProvider, CredentialRequest};
+    use crate::error::CredentialError;
+    use alloc::sync::Arc;
+
+    /// Provider that always errors — to test fail-fast.
+    struct ErringProvider;
+    impl CredentialProvider for ErringProvider {
+        fn name(&self) -> &str {
+            "erring"
+        }
+        async fn resolve(
+            &self,
+            _req: &CredentialRequest,
+        ) -> Result<Option<ResolvedCredential>, CredentialError> {
+            Err(CredentialError::ProviderUnavailable {
+                reason: "boom".into(),
+                provider: "erring".into(),
+            })
+        }
+    }
+
+    fn id(s: &str) -> CredentialId {
+        CredentialId::parse(s).unwrap()
+    }
+
+    #[tokio::test]
+    async fn chain_fails_fast_on_err_and_skips_later_providers() {
+        // A provider after the erroring one that WOULD satisfy the request.
+        let after = BakedProvider::new().with(id("k"), b"should-not-be-reached".to_vec());
+        let chain = CredentialChain::new()
+            .with(Arc::new(ErringProvider))
+            .with(Arc::new(after));
+        let req = CredentialRequest::new(id("k"));
+        let result = CredentialProvider::resolve(&chain, &req).await;
+        assert!(
+            matches!(result, Err(CredentialError::ProviderUnavailable { .. })),
+            "chain must fail-fast on the erroring provider and never reach `after`",
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_returns_first_match_not_later() {
+        let first = BakedProvider::new().with(id("k"), b"first".to_vec());
+        let second = BakedProvider::new().with(id("k"), b"second".to_vec());
+        let chain = CredentialChain::new()
+            .with(Arc::new(first))
+            .with(Arc::new(second));
+        let got = CredentialProvider::resolve(&chain, &CredentialRequest::new(id("k")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.secret.expose_bytes(), b"first");
+    }
+}

@@ -28,8 +28,8 @@ use crate::error::CredentialError;
 pub struct CredentialRequest {
     /// The logical credential id the chain resolves.
     pub id: CredentialId,
-    /// The environment-variable name to read, used by [`crate`]'s env
-    /// provider. Other providers ignore it.
+    /// The environment-variable name to read, used by the host's env
+    /// provider (β.5 PR-2). Other providers ignore it.
     pub env_name: Option<String>,
 }
 
