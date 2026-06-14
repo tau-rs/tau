@@ -5,6 +5,7 @@
 //! Modules are added incrementally per implementation task (event,
 //! differ, normalize, sequenced_llm, dispatcher, scenario, profile).
 
+pub mod differ;
 pub mod event;
 
 pub use event::{ConformanceEvent, CONFORMANCE_EVENT_VERSION};
