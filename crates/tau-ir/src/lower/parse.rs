@@ -401,9 +401,7 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<crate::context:
             config: s.config.clone(),
         })
         .collect();
-    let mut cfg = ContextConfig::default();
-    cfg.pipeline = pipeline;
-    Some(cfg)
+    Some(ContextConfig { pipeline })
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].
