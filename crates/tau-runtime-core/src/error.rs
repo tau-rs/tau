@@ -321,6 +321,13 @@ pub enum RuntimeError {
         attempt: u32,
     },
 
+    /// A context-pipeline transformer failed or the budget was unsatisfiable.
+    #[error("context pipeline failed: {detail}")]
+    ContextPipeline {
+        /// Human-readable detail (from `ContextError`).
+        detail: String,
+    },
+
     /// Catch-all for invariant violations / unexpected states.
     /// See: [escape-hatches.md#runtimeerror-internal](../docs/explanation/escape-hatches.md#runtimeerror-internal).
     #[error("internal: {message}")]

@@ -127,6 +127,13 @@ pub struct RunOptions {
     /// alloc` shells with no `std::path`. Tokio host code wraps/unwraps
     /// via `PathBuf::from` / `Path::to_str`.
     pub scope_root: Option<String>,
+
+    /// β.4 per-turn context pipeline. Empty = no context management
+    /// (full history every turn — pre-β.4 behavior).
+    pub context_pipeline: Vec<Arc<dyn crate::context::ContextTransformer>>,
+
+    /// Token estimator used by `fit_budget`. Defaults to the heuristic.
+    pub token_estimator: Arc<dyn crate::context::TokenEstimator>,
 }
 
 impl core::fmt::Debug for RunOptions {
@@ -156,6 +163,11 @@ impl core::fmt::Debug for RunOptions {
                 &self.orchestration_runtime.as_ref().map(|_| "<Runtime>"),
             )
             .field("scope_root", &self.scope_root)
+            .field(
+                "context_pipeline",
+                &alloc::format!("<{} transformers>", self.context_pipeline.len()),
+            )
+            .field("token_estimator", &"<TokenEstimator>")
             .finish()
     }
 }
@@ -172,6 +184,8 @@ impl Default for RunOptions {
             orchestration_state: None,
             orchestration_runtime: None,
             scope_root: None,
+            context_pipeline: Vec::new(),
+            token_estimator: Arc::new(crate::context::HeuristicEstimator),
         }
     }
 }
