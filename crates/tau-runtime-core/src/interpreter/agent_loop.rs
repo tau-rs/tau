@@ -515,10 +515,10 @@ where
     #[cfg(not(feature = "test-fixtures"))]
     {
         if run_options.clock.is_none() {
-            panic!("run_agent: clock must be supplied unless test-fixtures is enabled");
+            panic!("prepare_agent_run: clock must be supplied unless test-fixtures is enabled");
         }
         if run_options.random.is_none() {
-            panic!("run_agent: random must be supplied unless test-fixtures is enabled");
+            panic!("prepare_agent_run: random must be supplied unless test-fixtures is enabled");
         }
     }
 
