@@ -1,0 +1,32 @@
+[package]
+name = "tau-conformance"
+description = "Cross-profile (dev vs wasm) conformance gate for the canonical fan-monitor scenario. Internal test crate; not published."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish = false
+
+[dependencies]
+tau-domain        = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-ir            = { workspace = true }
+tau-ports         = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-pkg           = { workspace = true }
+tau-runtime-core  = { workspace = true, features = ["test-fixtures"] }
+tau-runtime-tokio = { workspace = true }
+tau-observe       = { workspace = true }
+tau-mcp           = { workspace = true, features = ["with-std-adapters"] }
+tau-mcp-tokio     = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+tokio             = { workspace = true }
+async-trait       = { workspace = true }
+futures           = { workspace = true }
+sha2              = { workspace = true }
+
+[dev-dependencies]
+tokio             = { workspace = true, features = ["macros", "rt"] }
+tempfile          = { workspace = true }
+
+[features]
+default = []
