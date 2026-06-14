@@ -20,7 +20,10 @@ fn list_default_shows_only_available() {
     let stdout = String::from_utf8(out.stdout).expect("utf8");
     assert!(stdout.contains("linux-native-strict"));
     assert!(stdout.contains("passthrough"));
-    assert!(stdout.contains("any-wasi-strict"), "any-wasi-strict should appear in available list");
+    assert!(
+        stdout.contains("any-wasi-strict"),
+        "any-wasi-strict should appear in available list"
+    );
     assert!(
         !stdout.contains("windows-native-strict"),
         "Reserved should be hidden by default"
@@ -76,6 +79,25 @@ fn show_known_triple_prints_matrix() {
     assert!(stdout.contains("status:"));
     assert!(stdout.contains("platform: linux"));
     assert!(stdout.contains("adapter:  native"));
+    assert!(stdout.contains("tier:     strict"));
+}
+
+#[test]
+fn show_any_wasi_strict_prints_matrix() {
+    let out = Command::new(tau_bin())
+        .args(["target", "show", "any-wasi-strict"])
+        .output()
+        .expect("spawn");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+    assert!(stdout.contains("any-wasi-strict"));
+    assert!(stdout.contains("status:"));
+    assert!(stdout.contains("platform: any"));
+    assert!(stdout.contains("adapter:  wasi"));
     assert!(stdout.contains("tier:     strict"));
 }
 
