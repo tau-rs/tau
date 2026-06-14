@@ -1,9 +1,11 @@
 //! β.4 context-manager primitive: per-turn transformers over the
 //! conversation, applied before history is projected to the LLM.
 
+pub mod build;
 pub mod estimator;
 pub mod transformers;
 
+pub use build::{build_context_pipeline, ContextTransformerRegistry};
 pub use estimator::{HeuristicEstimator, TokenEstimator};
 pub use transformers::{CompactToolOutputs, FitBudget, TrimOld};
 
