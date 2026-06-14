@@ -49,8 +49,11 @@ pub enum ConformanceEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ToolOutcome {
-    Ok { body: Value },
-    Err, // canonical marker; error text is modulo (provider-specific)
+    /// Tool ran. `is_error` is the runtime's semantic-error flag
+    /// (Ok(ToolResult{is_error:true})); `body` is the extracted content.
+    Ok { body: Value, is_error: bool },
+    /// Transport/dispatch error (Result::Err). Error text is modulo.
+    Err,
 }
 
 #[cfg(test)]
@@ -66,6 +69,6 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         let back: ConformanceEvent = serde_json::from_str(&s).unwrap();
         assert_eq!(ev, back);
-        assert!(CONFORMANCE_EVENT_VERSION >= 1);
+        const { assert!(CONFORMANCE_EVENT_VERSION >= 1) };
     }
 }

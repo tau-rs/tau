@@ -134,6 +134,7 @@ pub fn map_runevent(ev: RunEvent, st: &mut NormState) -> Option<ConformanceEvent
             let outcome = match result {
                 Ok(tr) => ToolOutcome::Ok {
                     body: tool_result_to_json(&tr),
+                    is_error: tr.is_error,
                 },
                 Err(_) => ToolOutcome::Err,
             };
@@ -358,7 +359,8 @@ mod tests {
         assert_eq!(
             result,
             ToolOutcome::Ok {
-                body: serde_json::Value::String("21.5C".into())
+                body: serde_json::Value::String("21.5C".into()),
+                is_error: false,
             }
         );
     }
@@ -382,5 +384,44 @@ mod tests {
     fn non_whitelisted_runevents_are_none() {
         let mut st = NormState::default();
         assert!(map_runevent(RunEvent::TextDelta { delta: "x".into() }, &mut st).is_none());
+    }
+
+    #[test]
+    fn token_usage_without_prior_inference_is_noop() {
+        let mut out = Vec::new();
+        let mut st = NormState::default();
+        map_tracing(
+            &captured(
+                "llm.token_usage",
+                &[("input_tokens", "9"), ("output_tokens", "3")],
+            ),
+            &mut st,
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn tool_completed_semantic_error_is_ok_with_is_error_true() {
+        let mut st = NormState::default();
+        let tr = ToolResult::new(
+            vec![ToolContent::Text {
+                text: "sensor offline".into(),
+            }],
+            true,
+        );
+        let ev = RunEvent::ToolCallCompleted {
+            id: "id".into(),
+            name: "read_temp".into(),
+            result: Ok(tr),
+        };
+        let completed = map_runevent(ev, &mut st);
+        let Some(ConformanceEvent::ToolCallCompleted { result, .. }) = completed else {
+            panic!("expected ToolCallCompleted");
+        };
+        assert!(matches!(
+            result,
+            ToolOutcome::Ok { is_error: true, .. }
+        ));
     }
 }
