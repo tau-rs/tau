@@ -478,3 +478,48 @@ mod tests {
         assert_eq!(format!("{e}"), "sandbox proxy: proxy task spawn failed");
     }
 }
+
+/// Errors raised while resolving a credential through a provider or chain.
+///
+/// Chain walk semantics distinguish `Ok(None)` ("not here, try the next
+/// provider") from `Err` ("this provider owns the request but failed").
+/// The chain fails fast on any `Err`.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum CredentialError {
+    /// The whole chain was walked and no provider held the credential.
+    #[error("credential not found: {id}")]
+    NotFound {
+        /// The logical credential id that was not found.
+        id: String,
+    },
+    /// A configured provider could not be reached (e.g. Vault down).
+    #[error("credential provider {provider} unavailable: {reason}")]
+    ProviderUnavailable {
+        /// Provider name.
+        provider: String,
+        /// Human-readable reason.
+        reason: String,
+    },
+    /// A provider found the credential but its content was malformed.
+    #[error("credential {id} malformed: {reason}")]
+    Malformed {
+        /// The logical credential id.
+        id: String,
+        /// Human-readable reason.
+        reason: String,
+    },
+    /// An I/O error occurred while resolving (e.g. unreadable secret file).
+    #[error("credential I/O error: {reason}")]
+    Io {
+        /// Human-readable reason.
+        reason: String,
+    },
+    /// An unexpected internal error.
+    #[error("internal credential error: {reason}")]
+    Internal {
+        /// Human-readable reason.
+        reason: String,
+    },
+}
