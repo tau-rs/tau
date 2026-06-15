@@ -1,10 +1,9 @@
-//! End-to-end: a File-mounted secret reaches an unmodified child process
-//! under its declared env var. Uses a tiny inline "plugin" that echoes a
-//! requested env var to stdout, proving the resolve-then-inject bridge
-//! without depending on a real LLM plugin binary.
+//! Verifies the chain resolves the value the host would inject into a
+//! child's env, and that `build_chain` assembles the configured
+//! providers. Does not spawn a child process — it asserts the resolution
+//! and wiring that the resolve-then-inject bridge depends on.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tau_ports::credential::{CredentialChain, CredentialId, CredentialProvider, CredentialRequest};
@@ -50,6 +49,5 @@ async fn file_secret_resolves_for_injection() {
             },
         ],
     };
-    let _built: PathBuf = dir.path().to_path_buf();
     assert_eq!(build_chain(&cfg).len(), 2);
 }

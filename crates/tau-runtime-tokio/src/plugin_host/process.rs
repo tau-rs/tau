@@ -345,13 +345,24 @@ impl PluginProcess {
         // Resolve declared credentials through the chain and inject them
         // into the child's env, AFTER the env scrub and BEFORE sandbox
         // wrap_spawn. Backward-compatible: no chain / no decls = no-op.
-        let _injected = inject_credentials(
+        let injected = inject_credentials(
             &mut command,
             credential_chain,
             agent_credentials,
             &plugin_name,
         )
         .await?;
+        // Audit trail: record WHICH env names a secret was injected
+        // under (names only, never values) so a security-relevant
+        // injection leaves a trace.
+        if !injected.is_empty() {
+            tracing::debug!(
+                target: "tau_runtime_tokio::plugin_host",
+                plugin = plugin_name.as_str(),
+                injected = ?injected,
+                "plugin_host.credentials_injected"
+            );
+        }
 
         // Layer 3 + 4: sandbox validation and enforcement.
         //
@@ -1094,5 +1105,65 @@ mod credential_inject_tests {
             .await
             .unwrap();
         assert!(injected.is_empty());
+    }
+
+    /// A resolved secret whose bytes aren't valid UTF-8 must surface as
+    /// `RuntimeError::CredentialResolution` rather than panicking or
+    /// silently dropping the credential.
+    #[tokio::test]
+    async fn non_utf8_secret_is_credential_resolution_error() {
+        let chain = CredentialChain::new().with(Arc::new(
+            BakedProvider::new().with(CredentialId::parse("k").unwrap(), vec![0xff, 0xfe]),
+        ));
+        let decls = vec![AgentCredential {
+            id: CredentialId::parse("k").unwrap(),
+            env: "MY_KEY".to_string(),
+        }];
+        let mut cmd = tokio::process::Command::new("true");
+        let err = inject_credentials(&mut cmd, Some(&chain), &decls, "test")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::CredentialResolution { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// A provider that owns the request but returns `Err` must surface
+    /// as `RuntimeError::CredentialResolution` (the chain fails fast).
+    #[tokio::test]
+    async fn provider_error_is_credential_resolution_error() {
+        use tau_ports::credential::{CredentialProvider, CredentialRequest, ResolvedCredential};
+        use tau_ports::CredentialError;
+
+        struct Erring;
+        impl CredentialProvider for Erring {
+            fn name(&self) -> &str {
+                "erring"
+            }
+            async fn resolve(
+                &self,
+                _req: &CredentialRequest,
+            ) -> Result<Option<ResolvedCredential>, CredentialError> {
+                Err(CredentialError::ProviderUnavailable {
+                    provider: "erring".into(),
+                    reason: "boom".into(),
+                })
+            }
+        }
+
+        let chain = CredentialChain::new().with(Arc::new(Erring));
+        let decls = vec![AgentCredential {
+            id: CredentialId::parse("k").unwrap(),
+            env: "MY_KEY".to_string(),
+        }];
+        let mut cmd = tokio::process::Command::new("true");
+        let err = inject_credentials(&mut cmd, Some(&chain), &decls, "test")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::CredentialResolution { .. }),
+            "got {err:?}"
+        );
     }
 }

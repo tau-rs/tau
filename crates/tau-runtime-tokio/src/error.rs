@@ -371,6 +371,19 @@ mod tests {
     }
 
     #[test]
+    fn credential_resolution_display_includes_plugin_id_and_reason() {
+        let err = RuntimeError::CredentialResolution {
+            plugin: "echo-llm".into(),
+            id: "anthropic_api_key".into(),
+            reason: "resolved secret is not valid UTF-8".into(),
+        };
+        let s = format!("{err}");
+        assert!(s.contains("echo-llm"), "got: {s}");
+        assert!(s.contains("anthropic_api_key"), "got: {s}");
+        assert!(s.contains("resolved secret is not valid UTF-8"), "got: {s}");
+    }
+
+    #[test]
     fn sandbox_validation_failed_display_includes_all_errors() {
         use crate::process_gate::SandboxValidationError;
 
