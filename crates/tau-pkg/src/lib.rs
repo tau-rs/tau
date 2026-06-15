@@ -31,6 +31,7 @@ pub mod registry;
 pub mod resolve;
 pub mod sandbox_check;
 pub mod scope;
+pub mod scope_credentials;
 pub mod skill_check;
 pub mod skill_resolve;
 pub mod source_list;

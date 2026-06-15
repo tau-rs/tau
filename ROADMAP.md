@@ -404,6 +404,12 @@ is the `tau-ports` `no_std` sweep — every `std::collections::HashMap` →
 - **DoD:** at least one provider beyond `Env` ships and is exercised by
   CI (likely `File` mounted-secret); existing plugin credential paths
   unchanged.
+- **Status (2026-06-14):** Shipped. Port + `CredentialChain` in `tau-ports`;
+  Env/File/Baked providers; host resolve-then-inject bridge; per-agent
+  declaration + scope-level chain config; `test (credential-chain / linux)`
+  CI lane green. The five plugins are **unchanged** — the bridge injects
+  resolved secrets into their existing env vars; per-plugin migration stays
+  coupled to in-tree `LlmBackend` extraction.
 
 ### β.6 — Cross-target conformance gate
 

@@ -291,6 +291,23 @@ jobs:
         # behind `test-fixtures`, so its doctests only compile here.
         run: cargo test --doc -p tau-ports --features test-fixtures
 
+  test-credential-chain:
+    name: test-credential-chain / linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Credential port tests (tau-ports)
+        run: cargo nextest run --profile ci -p tau-ports -E 'test(/credential/)'
+      - name: Credential provider tests (tau-runtime-tokio)
+        run: cargo nextest run --profile ci -p tau-runtime-tokio -E 'test(/credentials/)'
+
   feature-flag-matrix:
     name: feature-flag-matrix / linux
     runs-on: ubuntu-latest

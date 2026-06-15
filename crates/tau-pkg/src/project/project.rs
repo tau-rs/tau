@@ -95,6 +95,27 @@ pub struct UncheckedAgent {
     /// and bound to `[deliverables.*]`/`[goals.*]` loci.
     #[serde(default)]
     pub produces: Vec<String>,
+    /// `[[agents.<id>.credentials]]` declarations; default empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<UncheckedAgentCredential>,
+}
+
+/// `[[agents.<id>.credentials]]` entry — unchecked deserialization.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UncheckedAgentCredential {
+    /// Logical credential id the chain resolves (e.g. `anthropic_api_key`).
+    pub id: String,
+    /// Environment-variable name the host injects the resolved secret into.
+    pub env: String,
+}
+
+/// Validated per-agent credential declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCredential {
+    /// Validated logical credential id.
+    pub id: tau_ports::CredentialId,
+    /// Validated environment-variable name (`[A-Z_][A-Z0-9_]*`).
+    pub env: String,
 }
 
 /// `[agents.<id>.requires]` sub-table.
@@ -732,6 +753,8 @@ pub struct AgentEntry {
     /// Validated `[agents.<id>.context]` pipeline (β.4). Empty = no
     /// context-management pipeline declared (default behaviour).
     pub context: Vec<ContextStepEntry>,
+    /// Validated credential declarations (β.5).
+    pub credentials: Vec<AgentCredential>,
 }
 
 impl AgentEntry {
@@ -764,6 +787,7 @@ impl AgentEntry {
             max_tokens: None,
             produces: Vec::new(),
             context: Vec::new(),
+            credentials: Vec::new(),
         }
     }
 }
@@ -1077,6 +1101,15 @@ pub enum ProjectConfigError {
         /// The unknown agent id named as judge.
         judge: String,
     },
+
+    /// A credential declaration on an agent failed validation.
+    #[error("agent {id:?}: credential declaration invalid: {message}")]
+    CredentialDeclaration {
+        /// Agent id whose credential declaration failed.
+        id: String,
+        /// Human-readable reason.
+        message: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -1319,6 +1352,37 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         }
     };
 
+    // β.5: validate credential declarations.
+    let mut credentials = Vec::with_capacity(raw.credentials.len());
+    let mut seen_envs = std::collections::BTreeSet::new();
+    for cred in raw.credentials {
+        let cid = tau_ports::CredentialId::parse(cred.id.clone()).map_err(|e| {
+            ProjectConfigError::CredentialDeclaration {
+                id: id.clone(),
+                message: format!("invalid id {:?}: {}", cred.id, e.reason),
+            }
+        })?;
+        if !is_valid_env_name(&cred.env) {
+            return Err(ProjectConfigError::CredentialDeclaration {
+                id: id.clone(),
+                message: format!(
+                    "invalid env var name {:?} (must match [A-Z_][A-Z0-9_]*)",
+                    cred.env
+                ),
+            });
+        }
+        if !seen_envs.insert(cred.env.clone()) {
+            return Err(ProjectConfigError::CredentialDeclaration {
+                id: id.clone(),
+                message: format!("duplicate env var {:?}", cred.env),
+            });
+        }
+        credentials.push(AgentCredential {
+            id: cid,
+            env: cred.env,
+        });
+    }
+
     Ok(AgentEntry {
         id,
         display_name: raw.display_name,
@@ -1334,7 +1398,18 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         max_tokens: raw.max_tokens,
         produces: raw.produces,
         context,
+        credentials,
     })
+}
+
+/// Returns true if `name` is a valid POSIX-ish env var name: `[A-Z_][A-Z0-9_]*`.
+fn is_valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_uppercase() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn validate_tool(name: String, raw: UncheckedTool) -> Result<ToolEntry, ProjectConfigError> {
@@ -3595,6 +3670,142 @@ judge="ghost"
             matches!(err, ProjectConfigError::UnknownJudgeAgent { id, judge } if id=="report" && judge=="ghost")
         );
     }
+
+    #[test]
+    fn agent_credentials_validate_ok() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+
+[agents.assistant]
+display_name = "A"
+package = "anthropic@^1"
+llm_backend = "anthropic"
+
+[[agents.assistant.credentials]]
+id = "anthropic_api_key"
+env = "ANTHROPIC_API_KEY"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        let validated = cfg.validate().unwrap();
+        let agent = validated.agents.get("assistant").unwrap();
+        assert_eq!(agent.credentials.len(), 1);
+        assert_eq!(agent.credentials[0].id.as_str(), "anthropic_api_key");
+        assert_eq!(agent.credentials[0].env, "ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn agent_credentials_reject_bad_id() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+[agents.a]
+display_name = "A"
+package = "x@^1"
+llm_backend = "x"
+[[agents.a.credentials]]
+id = "Bad Id"
+env = "X"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_credentials_reject_bad_env_name() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+[agents.a]
+display_name = "A"
+package = "x@^1"
+llm_backend = "x"
+[[agents.a.credentials]]
+id = "ok_id"
+env = "lower_case"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_credentials_reject_env_name_with_leading_digit() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+[agents.a]
+display_name = "A"
+package = "x@^1"
+llm_backend = "x"
+[[agents.a.credentials]]
+id = "ok_id"
+env = "1KEY"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_credentials_multiple_distinct_envs_ok() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+[agents.a]
+display_name = "A"
+package = "x@^1"
+llm_backend = "x"
+[[agents.a.credentials]]
+id = "openai_api_key"
+env = "OPENAI_API_KEY"
+[[agents.a.credentials]]
+id = "openai_org"
+env = "OPENAI_ORG"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        let validated = cfg.validate().unwrap();
+        let agent = validated.agents.get("a").unwrap();
+        assert_eq!(agent.credentials.len(), 2);
+        assert_eq!(agent.credentials[0].env, "OPENAI_API_KEY");
+        assert_eq!(agent.credentials[1].env, "OPENAI_ORG");
+    }
+
+    #[test]
+    fn agent_credentials_reject_duplicate_env() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+[agents.a]
+display_name = "A"
+package = "x@^1"
+llm_backend = "x"
+[[agents.a.credentials]]
+id = "id_one"
+env = "SAME"
+[[agents.a.credentials]]
+id = "id_two"
+env = "SAME"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -3639,6 +3850,7 @@ mod proptests {
                         max_turns: None,
                         max_tokens: None,
                         produces: Vec::new(),
+                        credentials: Vec::new(),
                     },
                 )
             })

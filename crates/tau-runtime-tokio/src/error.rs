@@ -96,6 +96,17 @@ pub enum RuntimeError {
         #[source]
         source: tau_ports::CapabilityError,
     },
+
+    /// Resolving a declared credential through the chain failed.
+    #[error("plugin {plugin}: credential {id} resolution failed: {reason}")]
+    CredentialResolution {
+        /// Plugin name (from `LockedPlugin::manifest.bin`).
+        plugin: String,
+        /// The logical credential id that failed to resolve.
+        id: String,
+        /// Human-readable failure reason.
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -357,6 +368,19 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("fs.read"));
         assert!(msg.contains("not a subset"));
+    }
+
+    #[test]
+    fn credential_resolution_display_includes_plugin_id_and_reason() {
+        let err = RuntimeError::CredentialResolution {
+            plugin: "echo-llm".into(),
+            id: "anthropic_api_key".into(),
+            reason: "resolved secret is not valid UTF-8".into(),
+        };
+        let s = format!("{err}");
+        assert!(s.contains("echo-llm"), "got: {s}");
+        assert!(s.contains("anthropic_api_key"), "got: {s}");
+        assert!(s.contains("resolved secret is not valid UTF-8"), "got: {s}");
     }
 
     #[test]

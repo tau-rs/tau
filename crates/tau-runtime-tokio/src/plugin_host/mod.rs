@@ -140,6 +140,9 @@ pub async fn describe_plugin(
         // No sandbox for the describe path — this is a one-shot introspection
         // call that doesn't exercise plugin capabilities.
         None,
+        // No credential injection for describe — introspection has no agent.
+        None,
+        &[],
         |reader, writer| {
             Box::pin(async move {
                 handshake::drive_handshake(
@@ -296,6 +299,22 @@ pub struct PluginHostOptions {
     /// (other than passthrough). When `Some`, the resolver instantiates and
     /// probes ONLY that kind. `None` = normal multi-adapter resolution.
     pub force_adapter_kind: Option<crate::process_gate::registry::RegistryKind>,
+
+    /// Resolved credential chain (β.5). Behind `Arc` because
+    /// [`CredentialChain`] is not `Clone` and `PluginHostOptions` is.
+    /// `None` (default) = legacy embedders without a chain; declared
+    /// credentials then fall back to today's env passthrough.
+    /// Populated by `tau-cli::cmd::plugin_loader::load_plugins` from the
+    /// scope's `[credentials]` config.
+    ///
+    /// [`CredentialChain`]: tau_ports::credential::CredentialChain
+    pub credential_chain: Option<Arc<tau_ports::credential::CredentialChain>>,
+
+    /// The active agent's `[[credentials]]` declarations (β.5). Each is
+    /// resolved through [`Self::credential_chain`] and injected into the
+    /// plugin child's env at spawn time. Default empty = no injection.
+    /// Populated from `AgentEntry::credentials` by `load_plugins`.
+    pub agent_credentials: Arc<[tau_pkg::project::project::AgentCredential]>,
 }
 
 impl Default for PluginHostOptions {
@@ -311,6 +330,8 @@ impl Default for PluginHostOptions {
             sandbox_adapter: None,
             force_passthrough: false,
             force_adapter_kind: None,
+            credential_chain: None,
+            agent_credentials: Arc::from(Vec::new()),
         }
     }
 }
@@ -370,6 +391,8 @@ pub async fn load_llm_backend(
         options.shutdown_timeout,
         recorder,
         sandbox,
+        options.credential_chain.as_deref(),
+        &options.agent_credentials,
         |reader, writer| {
             Box::pin(async move {
                 handshake::drive_handshake(
@@ -442,6 +465,8 @@ pub async fn load_tool(
         options.shutdown_timeout,
         recorder,
         sandbox,
+        options.credential_chain.as_deref(),
+        &options.agent_credentials,
         |reader, writer| {
             Box::pin(async move {
                 handshake::drive_handshake(
@@ -540,6 +565,8 @@ pub async fn load_storage(
         options.shutdown_timeout,
         recorder,
         sandbox,
+        options.credential_chain.as_deref(),
+        &options.agent_credentials,
         |reader, writer| {
             Box::pin(async move {
                 handshake::drive_handshake(
