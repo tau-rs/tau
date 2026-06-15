@@ -8,9 +8,11 @@
 pub mod differ;
 pub mod event;
 pub mod normalize;
+pub mod profile;
 pub mod scenario;
 
 mod dispatcher;
 mod sequenced_llm;
 
 pub use event::{ConformanceEvent, CONFORMANCE_EVENT_VERSION};
+pub use profile::{DevProfile, Profile, ProfileError, WasmProfile};
