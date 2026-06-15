@@ -356,7 +356,7 @@ impl PluginProcess {
         // under (names only, never values) so a security-relevant
         // injection leaves a trace.
         if !injected.is_empty() {
-            tracing::debug!(
+            tracing::info!(
                 target: "tau_runtime_tokio::plugin_host",
                 plugin = plugin_name.as_str(),
                 injected = ?injected,
