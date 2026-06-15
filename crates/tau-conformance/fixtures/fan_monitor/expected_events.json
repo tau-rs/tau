@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "kind": "RunStarted"
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "trim_old",
+      "tokens_in": 4,
+      "tokens_out": 4
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "compact_tool_outputs",
+      "tokens_in": 4,
+      "tokens_out": 4
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "fit_budget",
+      "tokens_in": 4,
+      "tokens_out": 4
+    },
+    {
+      "kind": "InferenceCallStarted"
+    },
+    {
+      "kind": "ToolCallStarted",
+      "name": "read_temp",
+      "args": {},
+      "call": "tc#0"
+    },
+    {
+      "kind": "InferenceCallCompleted",
+      "stop_reason": "ToolUse",
+      "tokens_in": 0,
+      "tokens_out": 0
+    },
+    {
+      "kind": "ToolCallCompleted",
+      "name": "read_temp",
+      "result": {
+        "status": "ok",
+        "body": "32",
+        "is_error": false
+      },
+      "call": "tc#0"
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "trim_old",
+      "tokens_in": 18,
+      "tokens_out": 18
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "compact_tool_outputs",
+      "tokens_in": 18,
+      "tokens_out": 18
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "fit_budget",
+      "tokens_in": 18,
+      "tokens_out": 18
+    },
+    {
+      "kind": "InferenceCallStarted"
+    },
+    {
+      "kind": "ToolCallStarted",
+      "name": "weather",
+      "args": {},
+      "call": "tc#1"
+    },
+    {
+      "kind": "InferenceCallCompleted",
+      "stop_reason": "ToolUse",
+      "tokens_in": 0,
+      "tokens_out": 0
+    },
+    {
+      "kind": "ToolCallCompleted",
+      "name": "weather",
+      "result": {
+        "status": "ok",
+        "body": "Hot and humid, 36°C outside",
+        "is_error": false
+      },
+      "call": "tc#1"
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "trim_old",
+      "tokens_in": 38,
+      "tokens_out": 38
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "compact_tool_outputs",
+      "tokens_in": 38,
+      "tokens_out": 38
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "fit_budget",
+      "tokens_in": 38,
+      "tokens_out": 38
+    },
+    {
+      "kind": "InferenceCallStarted"
+    },
+    {
+      "kind": "ToolCallStarted",
+      "name": "set_fan",
+      "args": {
+        "on": true
+      },
+      "call": "tc#2"
+    },
+    {
+      "kind": "InferenceCallCompleted",
+      "stop_reason": "ToolUse",
+      "tokens_in": 0,
+      "tokens_out": 0
+    },
+    {
+      "kind": "ToolCallCompleted",
+      "name": "set_fan",
+      "result": {
+        "status": "ok",
+        "body": "{\"ok\":true}",
+        "is_error": false
+      },
+      "call": "tc#2"
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "trim_old",
+      "tokens_in": 57,
+      "tokens_out": 57
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "compact_tool_outputs",
+      "tokens_in": 57,
+      "tokens_out": 57
+    },
+    {
+      "kind": "ContextStepRan",
+      "step": "fit_budget",
+      "tokens_in": 57,
+      "tokens_out": 57
+    },
+    {
+      "kind": "InferenceCallStarted"
+    },
+    {
+      "kind": "InferenceCallCompleted",
+      "stop_reason": "EndTurn",
+      "tokens_in": 0,
+      "tokens_out": 0
+    },
+    {
+      "kind": "RunCompleted",
+      "outcome": "Success"
+    }
+  ]
+}
