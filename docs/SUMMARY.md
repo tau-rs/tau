@@ -30,11 +30,13 @@
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
+- [Use a mounted secret as a credential](how-to/use-mounted-secrets.md)
 - [Write a tool plugin](how-to/write-a-tool-plugin.md)
 
 # Reference
 
 - [Overview](reference/README.md)
+- [Credential providers](reference/credential-providers.md)
 - [Glossary](reference/glossary.md)
 - [Package manifest schema](reference/package-manifest-schema.md)
 - [Project manifest schema](reference/project-manifest-schema.md)
