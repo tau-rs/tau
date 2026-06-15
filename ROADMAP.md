@@ -502,6 +502,10 @@ decision + the β.7/β.7.5 split rationale.
 ballooned after β.3 PR-6 expanded the MCP surface — the in-wasm
 MCP-facilitator path deserves its own ADR and conformance scope.)*
 
+> Implementation status (2026-06-14): spec + plan landed; PR-1
+> (`any-wasi-strict` triple + `tau build wasm` skeleton) in progress.
+> ADR-0046 (Proposed); ADR-0047 forthcoming (Phase 5).
+
 ### β.8 — TypeScript minimal authoring surface
 
 The philosophy argues for Vercel-DX-like authoring, and deferring TS
