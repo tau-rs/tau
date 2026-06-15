@@ -1,0 +1,40 @@
+[project]
+name = "fan-monitor"
+
+[agents.fan-monitor]
+display_name = "Fan Monitor"
+package      = "fan-monitor@^0.1"
+llm_backend  = "mock-llm"
+model        = "claude-haiku-4-5"
+tool_refs    = ["read_temp", "weather", "set_fan"]
+max_turns    = 6
+
+[[agents.fan-monitor.context.pipeline]]
+transformer = "trim_old"
+[agents.fan-monitor.context.steps.trim_old]
+keep_last_turns = 8
+
+[[agents.fan-monitor.context.pipeline]]
+transformer = "compact_tool_outputs"
+[agents.fan-monitor.context.steps.compact_tool_outputs]
+max_bytes = 1024
+
+[[agents.fan-monitor.context.pipeline]]
+transformer = "fit_budget"
+[agents.fan-monitor.context.steps.fit_budget]
+max_tokens = 8192
+
+[tools.read_temp]
+native      = "ReadTemp"
+description = "Read the current temperature."
+capabilities = []
+
+[tools.set_fan]
+native      = "SetFan"
+description = "Set the fan on or off."
+capabilities = []
+
+[tools.weather]
+mcp         = "cassette:./weather.cassette.jsonl"
+description = "Look up current weather via cassette replay."
+capabilities = [{ kind = "net.http" }]

@@ -1,0 +1,4 @@
+{"turn": 0, "response": {"tool_uses": [{"id": "t0", "name": "read_temp", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 1, "response": {"tool_uses": [{"id": "t1", "name": "weather", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 2, "response": {"tool_uses": [{"id": "t2", "name": "set_fan", "input": {"on": true}}], "stop_reason": "tool_use"}}
+{"turn": 3, "response": {"text": "Fan is on.", "stop_reason": "end_turn"}}

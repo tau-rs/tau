@@ -62,3 +62,35 @@ where
     let agent_node = agent_node.clone();
     agent_loop::run_agent(module, &agent_node, dispatcher, initial_messages).await
 }
+
+/// Drive an `IrModule` from its single entry agent, returning the
+/// uncollapsed [`crate::stream::RunEvent`] stream instead of a collapsed
+/// [`RunOutcome`].
+///
+/// Streaming counterpart of [`run_ir`]: identical entry-agent lookup, but
+/// delegates to [`agent_loop::run_agent_streaming`] so the conformance dev
+/// profile can observe the per-event run (the stream terminates with exactly
+/// one `RunEvent::RunCompleted`). The returned stream is `'static` (see
+/// [`agent_loop::run_agent_streaming`]).
+pub async fn run_ir_streaming<D>(
+    module: alloc::sync::Arc<IrModule>,
+    entry: &AgentId,
+    dispatcher: Arc<D>,
+    initial_messages: Vec<Message>,
+) -> Result<impl futures_core::Stream<Item = crate::stream::RunEvent> + 'static, RuntimeError>
+where
+    D: tool_dispatch::ToolDispatcher + Send + Sync + 'static,
+{
+    let agent_node =
+        module
+            .workflow
+            .agents
+            .get(entry)
+            .ok_or_else(|| RuntimeError::AgentNotFound {
+                agent: entry.0.clone(),
+            })?;
+    // Clone the Agent node out of the Arc so the borrow doesn't escape
+    // (same rationale as `run_ir`).
+    let agent_node = agent_node.clone();
+    agent_loop::run_agent_streaming(module, &agent_node, dispatcher, initial_messages).await
+}

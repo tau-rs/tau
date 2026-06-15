@@ -430,6 +430,36 @@ is the `tau-ports` `no_std` sweep — every `std::collections::HashMap` →
   count, same ordering, same payload modulo timestamps + IDs. Diff a
   single event → CI fails.
 
+- **Status — scaffolding shipped (2026-06-15).** The `tau-conformance`
+  crate, the canonical fan-monitor fixture, the `DevProfile` runner, the
+  channel normalizer + ordered differ, and the `conformance / linux`
+  Tier-1 CI lane are all live. The dev profile produces the documented
+  bit-identical `ConformanceEvent` stream (golden-checked). Design spec:
+  `docs/superpowers/specs/2026-06-14-beta-6-conformance-gate-design.md`;
+  ADR-0048 (the dual-channel `ConformanceEvent` contract — the ROADMAP's
+  illustrative event stream is a conceptual union of the typed `RunEvent`
+  enum and the tracing vocabulary, not any single channel, so the gate
+  sources from both and interleaves at the engine's generator yield
+  barrier).
+  - **`WasmProfile` is stubbed** (`unimplemented!`) and its assertion
+    (`fan_monitor_dev_matches_wasm`) is `#[ignore]`d. The full β.6 DoD
+    (both profiles agree) is **NOT yet met**.
+  - **β.7.5 unstub follow-up (tracked):** implement `WasmProfile::run`
+    against `tau build wasm`'s artifact (run in wasmtime, harvest the
+    guest's `ConformanceEvent` stream across the component boundary) and
+    flip `fan_monitor_dev_matches_wasm` from `#[ignore]` to live. The
+    `ConformanceEvent` contract is frozen (`CONFORMANCE_EVENT_VERSION`)
+    so β.7.5 only has to *produce* the stream, not *design* it.
+  - **Known minor follow-ups:** (1) the MCP weather cassette hardcodes
+    `clientInfo.version` to the workspace version (`0.0.0`); a version
+    bump will break the strict-match handshake with a cryptic
+    `no cassette entry matches "initialize"` — make the matcher
+    version-agnostic for `clientInfo.version` when convenient. (2)
+    `ToolOutcome::Ok` carries an `is_error` flag (a refinement over the
+    spec's original "Err→canonical marker only" framing) so semantic
+    tool failures (`Ok(ToolResult{is_error:true})`) are compared across
+    profiles, not silently equated with success.
+
 #### The canonical β.6 scenario (the "fan-monitor")
 
 The one workflow every β change must keep green. Concrete enough to be
@@ -503,7 +533,7 @@ decision + the β.7/β.7.5 split rationale.
   `ConformanceReport` equal to `tau dev`'s (dev↔wasm parity via
   `assert_conform`, the D-7a multiset observable). A literal byte-identical
   `RunEvent` stream is deferred to β.6, where the cross-target conformance
-  gate lives (see ADR-0046 Decision 2).
+  gate lives (see ADR-0048 Decision 2).
 - **Sized:** ~4–8 weeks. Wasm component model integration is the hard part.
 
 *(This sub-project was originally folded into β.7 via the β.2 footnote

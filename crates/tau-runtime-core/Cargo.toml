@@ -62,6 +62,9 @@ tau-ports      = { workspace = true, features = ["test-fixtures"] }
 serde_json     = { workspace = true }
 # futures-executor: Task 3.8 executor-agnostic smoke test.
 futures-executor = "0.3"
+# futures-util: StreamExt for collecting run_ir_streaming's RunEvent stream
+# in tests/run_ir_streaming.rs.
+futures-util = "0.3"
 # tokio: stream.rs tests use #[tokio::test] for async-stream consumption.
 tokio          = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 # async-stream macro reused in tests for synthesizing LLM streams.
