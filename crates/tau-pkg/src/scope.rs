@@ -234,6 +234,9 @@ pub struct ScopeConfig {
     /// empty `required_shapes` (auto-derive at resolution time).
     #[serde(default, deserialize_with = "deserialize_sandbox_with_migration")]
     pub sandbox: SandboxRequirements,
+    /// `[credentials]` chain configuration (β.5). Absent → env-only default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<crate::scope_credentials::UncheckedCredentialsConfig>,
 }
 
 impl ScopeConfig {
@@ -258,6 +261,7 @@ impl ScopeConfig {
             created_by_tau_version: env!("CARGO_PKG_VERSION").to_owned(),
             defaults: BTreeMap::new(),
             sandbox: SandboxRequirements::default(),
+            credentials: None,
         }
     }
 

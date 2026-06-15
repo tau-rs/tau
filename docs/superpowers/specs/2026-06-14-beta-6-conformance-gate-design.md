@@ -3,7 +3,7 @@
 **Status:** Approved (scaffolding phase)
 **Date:** 2026-06-14
 **ROADMAP:** Phase β.6; Phase β success criterion
-**ADR:** 0046
+**ADR:** 0048
 **Depends on (unstub):** β.7.5 (`tau build wasm`) for the second profile arm
 
 ## Summary
@@ -311,7 +311,7 @@ In scope (this phase):
 - `WasmProfile` stub + `#[ignore]`d `(b)` test,
 - `run_ir_streaming` in `tau-runtime-core`,
 - the `conformance (linux)` Tier 1 CI lane (running only the live tests),
-- ADR-0046, ROADMAP β.6 status update noting the β.7.5 unstub.
+- ADR-0048, ROADMAP β.6 status update noting the β.7.5 unstub.
 
 Out of scope (β.7.5 follow-up, tracked):
 
@@ -333,4 +333,4 @@ run` against `tau build wasm`'s artifact and flip
 `fan_monitor_dev_matches_wasm` from `#[ignore]` to live. The
 `ConformanceEvent` contract is frozen this phase precisely so β.7.5 only
 has to *produce* the stream from the guest, not *design* it. This
-dependency is recorded in ADR-0046 and the ROADMAP β.6 entry.
+dependency is recorded in ADR-0048 and the ROADMAP β.6 entry.

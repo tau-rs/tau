@@ -349,6 +349,7 @@ mod tests {
             max_tokens: None,
             produces: Vec::new(),
             context: Vec::new(),
+            credentials: Vec::new(),
         };
         mutate(&mut e);
         e

@@ -1,4 +1,4 @@
-//! Channel normalizer (ADR-0046).
+//! Channel normalizer (ADR-0048).
 //!
 //! Maps the two raw runtime channels into [`ConformanceEvent`]:
 //!
@@ -32,7 +32,7 @@ use crate::event::{ConformanceEvent, ToolOutcome};
 
 /// Per-run normalization state. Canonicalizes provider-specific tool-call
 /// ids to first-seen ordinals (`"tc#0"`, `"tc#1"`, …) so the comparison
-/// is independent of provider id strings (which are modulo per ADR-0046).
+/// is independent of provider id strings (which are modulo per ADR-0048).
 #[derive(Default)]
 pub struct NormState {
     tool_ids: BTreeMap<String, String>,

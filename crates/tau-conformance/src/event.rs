@@ -1,5 +1,5 @@
 //! The versioned, crate-owned conformance event model. The authoritative
-//! comparison contract (ADR-0046). Each variant is sourced from exactly
+//! comparison contract (ADR-0048). Each variant is sourced from exactly
 //! one runtime channel during normalization (see `normalize.rs`).
 
 use serde::{Deserialize, Serialize};

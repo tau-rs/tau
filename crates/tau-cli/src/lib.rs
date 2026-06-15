@@ -198,7 +198,12 @@ async fn dispatch(cli: cli::Cli, workflow_run_id: Option<String>) -> anyhow::Res
         }
         cli::Command::Serve(args) => cmd::serve::run(&args).await,
         cli::Command::Check(args) => cmd::check::run(args).await,
-        cli::Command::Build(args) => cmd::build::run(&args, &mut output).await,
+        cli::Command::Build(build_cmd) => match build_cmd.subcommand {
+            Some(cli::BuildSubcommand::Wasm(ref wasm_args)) => {
+                cmd::build_wasm::run(wasm_args, &mut output).await
+            }
+            None => cmd::build::run(&build_cmd.args, &mut output).await,
+        },
         cli::Command::Mcp(sub) => cmd::mcp::dispatch(sub, &mut output).await,
     }
 }

@@ -140,18 +140,42 @@ pub(crate) async fn load_plugins(
         .with_context(|| format!("loading lockfile {}", scope.lockfile_path().display()))?;
 
     // ---- Resolve sandbox adapter ----
-    // Read the scope's [sandbox] config; fall back to defaults if config.toml
-    // doesn't exist yet (e.g. freshly-created scope without an explicit config).
+    // Read the scope's [sandbox] + [credentials] config; fall back to
+    // defaults if config.toml doesn't exist yet (e.g. freshly-created scope
+    // without an explicit config).
+    //
+    // The credential chain is validated EAGERLY here (build-time-enforcement
+    // principle — an invalid `[credentials]` block fails the load, never
+    // defers to runtime resolution). Absent `[credentials]` →
+    // `CredentialsChainConfig::default()` (env-only), which preserves
+    // today's behavior: the env provider reads the same var the plugin
+    // would have inherited.
     let config_path = scope.config_path();
-    let mut sandbox_requirements = if config_path.exists() {
+    let (mut sandbox_requirements, chain_config) = if config_path.exists() {
         let text = std::fs::read_to_string(&config_path)
             .with_context(|| format!("reading scope config at {config_path:?}"))?;
         let scope_config = ScopeConfig::read_from_str(&text)
             .with_context(|| format!("parsing scope config at {config_path:?}"))?;
-        scope_config.sandbox
+        let chain_config = scope_config
+            .credentials
+            .map(|c| c.validate())
+            .transpose()
+            .context("invalid [credentials] config")?
+            .unwrap_or_default();
+        (scope_config.sandbox, chain_config)
     } else {
-        tau_pkg::scope::SandboxRequirements::default()
+        (
+            tau_pkg::scope::SandboxRequirements::default(),
+            tau_pkg::scope_credentials::CredentialsChainConfig::default(),
+        )
     };
+
+    // Build the runnable chain + carry the agent's declarations so the
+    // plugin host can resolve-then-inject each declared credential.
+    host_options.credential_chain = Some(Arc::new(tau_runtime_tokio::credentials::build_chain(
+        &chain_config,
+    )));
+    host_options.agent_credentials = Arc::from(entry.credentials.clone());
 
     // Honor --no-sandbox / --sandbox passthrough: force required_tier=None
     // so the resolver can pick passthrough, bypassing plugin-tier floors.

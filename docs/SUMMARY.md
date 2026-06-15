@@ -30,11 +30,13 @@
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
+- [Use a mounted secret as a credential](how-to/use-mounted-secrets.md)
 - [Write a tool plugin](how-to/write-a-tool-plugin.md)
 
 # Reference
 
 - [Overview](reference/README.md)
+- [Credential providers](reference/credential-providers.md)
 - [Glossary](reference/glossary.md)
 - [Package manifest schema](reference/package-manifest-schema.md)
 - [Project manifest schema](reference/project-manifest-schema.md)
@@ -113,6 +115,8 @@
 - [ADR-0043 — Trigger ingress: compile the trigger, delegate the substrate](decisions/0043-trigger-ingress.md)
 - [ADR-0044 — Deliverables & goals: build-time-checked postcondition steps](decisions/0044-deliverables-and-goals.md)
 - [ADR-0045 — Context-manager primitive (β.4)](decisions/0045-context-manager.md)
+- [ADR-0046 — Wasm AOT artifact + WIT world (β.7.5)](decisions/0046-wasm-aot-artifact.md)
+- [ADR-0047 — Credential provider chain (β.5)](decisions/0047-credential-provider-chain.md)
 
 # Retrospectives
 

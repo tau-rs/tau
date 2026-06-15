@@ -64,7 +64,7 @@ async fn dev_profile_is_deterministic() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "TODO(β.7.5): WasmProfile needs `tau build wasm`; see ADR-0046"]
+#[ignore = "TODO(β.7.5): WasmProfile needs `tau build wasm`; see ADR-0048"]
 async fn fan_monitor_dev_matches_wasm() {
     let s = Scenario::load(Scenario::fixture_dir("fan_monitor")).expect("load");
     let dev = DevProfile.run(&s).await.expect("dev runs");

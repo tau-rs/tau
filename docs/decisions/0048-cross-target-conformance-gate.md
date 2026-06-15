@@ -1,4 +1,4 @@
-# ADR-0046: β.6 cross-target conformance gate — dual-channel `ConformanceEvent` contract
+# ADR-0048: β.6 cross-target conformance gate — dual-channel `ConformanceEvent` contract
 
 **Status:** Accepted
 **Date:** 2026-06-14

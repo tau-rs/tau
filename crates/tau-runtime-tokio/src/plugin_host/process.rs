@@ -196,6 +196,63 @@ fn configure_plugin_command_env(
     }
 }
 
+/// Resolve each declared credential through `chain` and set it on the
+/// command's environment under the declaration's env name. Returns the
+/// env names actually injected (for assertability + tracing).
+///
+/// Resolution outcomes:
+/// * `Ok(Some(_))` → inject under `decl.env` (UTF-8 secrets only;
+///   non-UTF-8 surfaces [`RuntimeError::CredentialResolution`]).
+/// * `Ok(None)` → not found anywhere; leave whatever
+///   `configure_plugin_command_env` already set (today's env passthrough).
+///   Backward-compatible.
+/// * `Err(_)` → a provider owned the request and failed; surfaces
+///   [`RuntimeError::CredentialResolution`].
+///
+/// `chain == None` is a no-op (legacy embedders without a chain).
+async fn inject_credentials(
+    command: &mut tokio::process::Command,
+    chain: Option<&tau_ports::credential::CredentialChain>,
+    credentials: &[tau_pkg::project::project::AgentCredential],
+    plugin_name: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    use tau_ports::credential::{CredentialProvider, CredentialRequest};
+    let Some(chain) = chain else {
+        return Ok(Vec::new());
+    };
+    let mut injected = Vec::new();
+    for decl in credentials {
+        let req = CredentialRequest::new(decl.id.clone()).with_env_name(decl.env.clone());
+        // Disambiguate: both `CredentialChain::resolve` (inherent via the
+        // `CredentialProvider` impl) and the `DynCredentialProvider::resolve`
+        // blanket method are in scope; qualify through `CredentialProvider`.
+        match CredentialProvider::resolve(chain, &req).await {
+            Ok(Some(resolved)) => match resolved.secret.expose_str() {
+                Ok(s) => {
+                    command.env(&decl.env, s);
+                    injected.push(decl.env.clone());
+                }
+                Err(_) => {
+                    return Err(RuntimeError::CredentialResolution {
+                        plugin: plugin_name.to_string(),
+                        id: decl.id.to_string(),
+                        reason: "resolved secret is not valid UTF-8".to_string(),
+                    })
+                }
+            },
+            Ok(None) => {} // not found anywhere: leave today's env passthrough.
+            Err(e) => {
+                return Err(RuntimeError::CredentialResolution {
+                    plugin: plugin_name.to_string(),
+                    id: decl.id.to_string(),
+                    reason: e.to_string(),
+                })
+            }
+        }
+    }
+    Ok(injected)
+}
+
 impl PluginProcess {
     /// Spawn a plugin subprocess and install the framer, dispatch
     /// read loop, and stderr re-emit task. The handshake is **not**
@@ -243,6 +300,13 @@ impl PluginProcess {
         //    exit. When `None`, the spawn proceeds without sandboxing (test
         //    paths; use `MockSandbox` for behavioral tests instead).
         sandbox: Option<(&CapabilityPlan, &SandboxAdapter)>,
+        // Resolved credential chain + the agent's credential declarations.
+        // For each declaration, the resolved secret is injected into the
+        // child's env under the declared name, AFTER the env scrub and
+        // BEFORE sandbox wrap_spawn. `None` chain (or empty decls) is a
+        // no-op preserving today's env passthrough.
+        credential_chain: Option<&tau_ports::credential::CredentialChain>,
+        agent_credentials: &[tau_pkg::project::project::AgentCredential],
         pre_handshake: F,
     ) -> Result<(Arc<PluginProcess>, T), RuntimeError>
     where
@@ -277,6 +341,28 @@ impl PluginProcess {
         // PATH, and the secret-env allowlist (so env-provided keys like
         // ANTHROPIC_API_KEY reach the plugin without plaintext config).
         configure_plugin_command_env(&mut command, run_id, agent_id, |n| std::env::var(n).ok());
+
+        // Resolve declared credentials through the chain and inject them
+        // into the child's env, AFTER the env scrub and BEFORE sandbox
+        // wrap_spawn. Backward-compatible: no chain / no decls = no-op.
+        let injected = inject_credentials(
+            &mut command,
+            credential_chain,
+            agent_credentials,
+            &plugin_name,
+        )
+        .await?;
+        // Audit trail: record WHICH env names a secret was injected
+        // under (names only, never values) so a security-relevant
+        // injection leaves a trace.
+        if !injected.is_empty() {
+            tracing::info!(
+                target: "tau_runtime_tokio::plugin_host",
+                plugin = plugin_name.as_str(),
+                injected = ?injected,
+                "plugin_host.credentials_injected"
+            );
+        }
 
         // Layer 3 + 4: sandbox validation and enforcement.
         //
@@ -909,6 +995,8 @@ mod tests {
             Duration::from_secs(2),
             None,
             Some((&plan, &adapter)),
+            None,
+            &[],
             |_reader, _writer| Box::pin(async { Ok(()) }),
         )
         .await;
@@ -947,6 +1035,8 @@ mod tests {
             Duration::from_secs(2),
             None,
             Some((&plan, &adapter)),
+            None,
+            &[],
             |_reader, _writer| Box::pin(async { Ok(()) }),
         )
         .await;
@@ -963,5 +1053,117 @@ mod tests {
             }
             Ok(_) => panic!("expected Err, got Ok"),
         }
+    }
+}
+
+#[cfg(test)]
+mod credential_inject_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tau_pkg::project::project::AgentCredential;
+    use tau_ports::credential::{BakedProvider, CredentialChain, CredentialId};
+
+    #[tokio::test]
+    async fn injects_resolved_secret() {
+        let chain = CredentialChain::new().with(Arc::new(
+            BakedProvider::new().with(CredentialId::parse("k").unwrap(), b"v".to_vec()),
+        ));
+        let decls = vec![AgentCredential {
+            id: CredentialId::parse("k").unwrap(),
+            env: "MY_KEY".to_string(),
+        }];
+        let mut cmd = tokio::process::Command::new("true");
+        let injected = inject_credentials(&mut cmd, Some(&chain), &decls, "test")
+            .await
+            .unwrap();
+        assert_eq!(injected, vec!["MY_KEY".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn no_chain_injects_nothing() {
+        let decls = vec![AgentCredential {
+            id: CredentialId::parse("k").unwrap(),
+            env: "MY_KEY".to_string(),
+        }];
+        let mut cmd = tokio::process::Command::new("true");
+        let injected = inject_credentials(&mut cmd, None, &decls, "test")
+            .await
+            .unwrap();
+        assert!(injected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_credential_injects_nothing_and_is_ok() {
+        // Empty chain (no provider holds "k") => Ok(None) walk => no injection, no error.
+        let chain = CredentialChain::new().with(Arc::new(BakedProvider::new()));
+        let decls = vec![AgentCredential {
+            id: CredentialId::parse("k").unwrap(),
+            env: "MY_KEY".to_string(),
+        }];
+        let mut cmd = tokio::process::Command::new("true");
+        let injected = inject_credentials(&mut cmd, Some(&chain), &decls, "test")
+            .await
+            .unwrap();
+        assert!(injected.is_empty());
+    }
+
+    /// A resolved secret whose bytes aren't valid UTF-8 must surface as
+    /// `RuntimeError::CredentialResolution` rather than panicking or
+    /// silently dropping the credential.
+    #[tokio::test]
+    async fn non_utf8_secret_is_credential_resolution_error() {
+        let chain = CredentialChain::new().with(Arc::new(
+            BakedProvider::new().with(CredentialId::parse("k").unwrap(), vec![0xff, 0xfe]),
+        ));
+        let decls = vec![AgentCredential {
+            id: CredentialId::parse("k").unwrap(),
+            env: "MY_KEY".to_string(),
+        }];
+        let mut cmd = tokio::process::Command::new("true");
+        let err = inject_credentials(&mut cmd, Some(&chain), &decls, "test")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::CredentialResolution { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// A provider that owns the request but returns `Err` must surface
+    /// as `RuntimeError::CredentialResolution` (the chain fails fast).
+    #[tokio::test]
+    async fn provider_error_is_credential_resolution_error() {
+        use tau_ports::credential::{CredentialProvider, CredentialRequest, ResolvedCredential};
+        use tau_ports::CredentialError;
+
+        struct Erring;
+        impl CredentialProvider for Erring {
+            fn name(&self) -> &str {
+                "erring"
+            }
+            async fn resolve(
+                &self,
+                _req: &CredentialRequest,
+            ) -> Result<Option<ResolvedCredential>, CredentialError> {
+                Err(CredentialError::ProviderUnavailable {
+                    provider: "erring".into(),
+                    reason: "boom".into(),
+                })
+            }
+        }
+
+        let chain = CredentialChain::new().with(Arc::new(Erring));
+        let decls = vec![AgentCredential {
+            id: CredentialId::parse("k").unwrap(),
+            env: "MY_KEY".to_string(),
+        }];
+        let mut cmd = tokio::process::Command::new("true");
+        let err = inject_credentials(&mut cmd, Some(&chain), &decls, "test")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::CredentialResolution { .. }),
+            "got {err:?}"
+        );
     }
 }

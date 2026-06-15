@@ -1,5 +1,5 @@
 //! Execution profiles. A profile produces a normalized [`ConformanceEvent`]
-//! stream from a [`Scenario`]. See ADR-0046.
+//! stream from a [`Scenario`]. See ADR-0048.
 //!
 //! Two profiles exist:
 //!
