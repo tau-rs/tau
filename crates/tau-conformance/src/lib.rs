@@ -8,6 +8,7 @@
 pub mod differ;
 pub mod event;
 pub mod normalize;
+pub mod scenario;
 
 mod dispatcher;
 mod sequenced_llm;
