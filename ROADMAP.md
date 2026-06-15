@@ -493,8 +493,11 @@ decision + the β.7/β.7.5 split rationale.
   linked native tools to a runnable wasm component (WASI 0.2). The artifact
   runs in wasmtime; γ.1 extends to Spin + browser hosts.
 - **DoD:** `tau build wasm <project>` produces a wasm component that executes
-  the simplified-fan-monitor scenario in wasmtime, with the same observable
-  `RunEvent` stream as `tau dev` produced.
+  the simplified-fan-monitor scenario in wasmtime and returns a
+  `ConformanceReport` equal to `tau dev`'s (dev↔wasm parity via
+  `assert_conform`, the D-7a multiset observable). A literal byte-identical
+  `RunEvent` stream is deferred to β.6, where the cross-target conformance
+  gate lives (see ADR-0046 Decision 2).
 - **Sized:** ~4–8 weeks. Wasm component model integration is the hard part.
 
 *(This sub-project was originally folded into β.7 via the β.2 footnote
