@@ -96,6 +96,17 @@ pub enum RuntimeError {
         #[source]
         source: tau_ports::CapabilityError,
     },
+
+    /// Resolving a declared credential through the chain failed.
+    #[error("plugin {plugin}: credential {id} resolution failed: {reason}")]
+    CredentialResolution {
+        /// Plugin name (from `LockedPlugin::manifest.bin`).
+        plugin: String,
+        /// The logical credential id that failed to resolve.
+        id: String,
+        /// Human-readable failure reason.
+        reason: String,
+    },
 }
 
 #[cfg(test)]

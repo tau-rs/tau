@@ -85,6 +85,18 @@ impl Default for CredentialChain {
     }
 }
 
+impl core::fmt::Debug for CredentialChain {
+    /// Lists member provider names only — never any resolved secret.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CredentialChain")
+            .field(
+                "members",
+                &self.members.iter().map(|m| m.name()).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
 impl CredentialProvider for CredentialChain {
     fn name(&self) -> &str {
         "chain"
