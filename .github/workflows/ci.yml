@@ -291,6 +291,24 @@ jobs:
         # behind `test-fixtures`, so its doctests only compile here.
         run: cargo test --doc -p tau-ports --features test-fixtures
 
+  conformance:
+    name: conformance / linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Run β.6 conformance gate (dev profile)
+        # The #[ignore]'d wasm-profile test is skipped by nextest until
+        # β.7.5 ships `tau build wasm`. See ADR-0046.
+        run: cargo nextest run --profile ci -p tau-conformance
+
   feature-flag-matrix:
     name: feature-flag-matrix / linux
     runs-on: ubuntu-latest
