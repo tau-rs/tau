@@ -32,7 +32,11 @@ async fn fan_monitor_dev_matches_golden() {
             version: CONFORMANCE_EVENT_VERSION,
             events: actual.clone(),
         };
-        std::fs::write(golden_path(&s.dir), serde_json::to_string_pretty(&g).unwrap()).unwrap();
+        std::fs::write(
+            golden_path(&s.dir),
+            serde_json::to_string_pretty(&g).unwrap(),
+        )
+        .unwrap();
         eprintln!("blessed {} events", actual.len());
         return;
     }
@@ -53,7 +57,10 @@ async fn dev_profile_is_deterministic() {
     let s = Scenario::load(Scenario::fixture_dir("fan_monitor")).expect("load");
     let a = DevProfile.run(&s).await.expect("run 1");
     let b = DevProfile.run(&s).await.expect("run 2");
-    assert!(differ::diff(&a, &b).is_none(), "dev profile is nondeterministic");
+    assert!(
+        differ::diff(&a, &b).is_none(),
+        "dev profile is nondeterministic"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

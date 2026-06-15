@@ -108,7 +108,9 @@ pub fn map_tracing(c: &CapturedEvent, _st: &mut NormState, out: &mut Vec<Conform
         }),
         "llm.request_built" => out.push(ConformanceEvent::InferenceCallStarted),
         "llm.response_received" => out.push(ConformanceEvent::InferenceCallCompleted {
-            stop_reason: clean_stop_reason(strip_quotes(field(c, "stop_reason").unwrap_or_default())),
+            stop_reason: clean_stop_reason(strip_quotes(
+                field(c, "stop_reason").unwrap_or_default(),
+            )),
             tokens_in: 0,
             tokens_out: 0,
         }),
@@ -256,7 +258,11 @@ mod tests {
         map_tracing(
             &captured(
                 "runtime.context_step_ran",
-                &[("step", "trim_old"), ("tokens_in", "40"), ("tokens_out", "30")],
+                &[
+                    ("step", "trim_old"),
+                    ("tokens_in", "40"),
+                    ("tokens_out", "30"),
+                ],
             ),
             &mut st,
             &mut out,
@@ -490,9 +496,6 @@ mod tests {
         let Some(ConformanceEvent::ToolCallCompleted { result, .. }) = completed else {
             panic!("expected ToolCallCompleted");
         };
-        assert!(matches!(
-            result,
-            ToolOutcome::Ok { is_error: true, .. }
-        ));
+        assert!(matches!(result, ToolOutcome::Ok { is_error: true, .. }));
     }
 }

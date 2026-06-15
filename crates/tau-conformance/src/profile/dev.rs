@@ -154,11 +154,13 @@ capabilities = []
             events.last()
         );
         assert!(
-            events.iter().any(|e| matches!(e, ConformanceEvent::ToolCallStarted{name, ..} if name=="read_temp")),
+            events.iter().any(
+                |e| matches!(e, ConformanceEvent::ToolCallStarted{name, ..} if name=="read_temp")
+            ),
             "expected read_temp ToolCallStarted; got {events:#?}"
         );
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, ConformanceEvent::ToolCallCompleted{name, ..} if name=="read_temp")));
+        assert!(events.iter().any(
+            |e| matches!(e, ConformanceEvent::ToolCallCompleted{name, ..} if name=="read_temp")
+        ));
     }
 }
