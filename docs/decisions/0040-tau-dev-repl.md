@@ -19,7 +19,7 @@ a moving target; no prior art for agent harnesses).
 1. **Split β.7 into two sub-projects:**
    - **β.7 (this ADR):** REPL only — `tau dev <project>` over the existing
      β.3 runtime path. ~2 weeks.
-   - **β.7.5 (separate, ADR-0041 forthcoming):** IR-to-wasm AOT compiler.
+   - **β.7.5 (separate, ADR-0046 + ADR-0047):** IR-to-wasm AOT compiler.
      ~4–8 weeks.
 
 2. **REPL uses explicit `:reload`, not auto-reload by default.** Industry

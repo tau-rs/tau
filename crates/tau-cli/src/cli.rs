@@ -184,8 +184,9 @@ pub enum Command {
     /// packages, sandbox, plugins, skills, mcp-contracts). Aggregates
     /// existing validators into one CI/IDE-friendly verb.
     Check(CheckArgs),
-    /// Build a deployment bundle from this project (Phase 2 §C.2).
-    Build(BuildArgs),
+    /// Build a deployment bundle from this project (Phase 2 §C.2),
+    /// or compile a workflow to WebAssembly (`tau build wasm <project>`).
+    Build(BuildCommand),
     /// Manage Model Context Protocol (MCP) server contracts.
     #[command(subcommand)]
     Mcp(McpSubcommand),
@@ -197,7 +198,50 @@ pub enum Command {
     Dev(DevArgs),
 }
 
-/// Arguments for `tau build`.
+/// Top-level arguments for `tau build [wasm] [...]`.
+///
+/// When `subcommand` is `Some(BuildSubcommand::Wasm(...))` the command
+/// compiles the workflow IR to a WebAssembly module (β.7.5). When
+/// `subcommand` is `None`, the flattened [`BuildArgs`] fields apply and
+/// the bundle pipeline runs unchanged.
+#[derive(Args, Debug)]
+pub struct BuildCommand {
+    /// Optional subcommand (`wasm`). When present the remaining args are
+    /// parsed by [`BuildWasmArgs`]; when absent, the flattened bundle args apply.
+    #[command(subcommand)]
+    pub subcommand: Option<BuildSubcommand>,
+
+    /// Bundle arguments (only meaningful when `subcommand` is `None`).
+    #[command(flatten)]
+    pub args: BuildArgs,
+}
+
+/// Optional subcommands under `tau build`.
+#[derive(Subcommand, Debug)]
+pub enum BuildSubcommand {
+    /// Compile this project's workflow IR to a WebAssembly module (β.7.5).
+    ///
+    /// Phase 1 (PR-1): parses successfully but returns a "not yet implemented"
+    /// error. The IR-lowering → cargo (`wasm32-wasip2`) → `.wasm` pipeline
+    /// lands in β.7.5 Phase 4.
+    Wasm(BuildWasmArgs),
+}
+
+/// Arguments for `tau build wasm` (β.7.5 AOT compiler — Phase 1 skeleton).
+#[derive(Args, Debug)]
+pub struct BuildWasmArgs {
+    /// Path to the project to compile. May be a directory (containing
+    /// `tau.toml`) or a `.ts` source file. Defaults to the current working
+    /// directory.
+    #[arg(value_name = "PROJECT")]
+    pub project: Option<std::path::PathBuf>,
+    /// Output path for the produced `.wasm` module
+    /// (default: `<project>/<name>-<version>.wasm`).
+    #[arg(long, short = 'o', value_name = "PATH")]
+    pub output: Option<std::path::PathBuf>,
+}
+
+/// Arguments for `tau build` (bundle — Phase 2 §C.2).
 #[derive(Args, Debug)]
 pub struct BuildArgs {
     /// Path to the project to build. May be a directory (containing
@@ -1232,5 +1276,36 @@ mod tests {
         assert_eq!(args.from, Some(1.5));
         assert_eq!(args.to, Some(2.5));
         assert!(args.json);
+    }
+
+    #[test]
+    fn build_wasm_subcommand_parses_with_project() {
+        let cli = Cli::try_parse_from(["tau", "build", "wasm", "examples/fan-monitor"]).unwrap();
+        let Command::Build(cmd) = cli.command else {
+            panic!("expected Build variant")
+        };
+        let Some(BuildSubcommand::Wasm(wasm_args)) = cmd.subcommand else {
+            panic!("expected Wasm subcommand")
+        };
+        assert_eq!(
+            wasm_args.project.as_deref(),
+            Some(std::path::Path::new("examples/fan-monitor")),
+        );
+    }
+
+    #[test]
+    fn bare_build_still_parses_as_bundle() {
+        let cli = Cli::try_parse_from(["tau", "build", "examples/fan-monitor"]).unwrap();
+        let Command::Build(cmd) = cli.command else {
+            panic!("expected Build variant")
+        };
+        assert!(
+            cmd.subcommand.is_none(),
+            "bare `tau build` must NOT route to wasm subcommand"
+        );
+        assert_eq!(
+            cmd.args.project.as_deref(),
+            Some(std::path::Path::new("examples/fan-monitor")),
+        );
     }
 }

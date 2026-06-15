@@ -159,6 +159,20 @@ mod tests {
         // be a superset of the triple's required shapes. This guards
         // against drift between the two registries.
         for entry in tau_ports::target::list_available() {
+            // Wasm/WASI triples enforce capabilities at the WASI boundary
+            // (the wasm host), not via an OS process-gate adapter.
+            // `AdapterFamily::Wasi` has no `RegistryKind` by design (see
+            // `kind_to_family`), so an Available Wasi triple legitimately has
+            // no process-gate registration. Assert that intent explicitly.
+            if matches!(entry.triple.adapter_family, AdapterFamily::Wasi) {
+                assert!(
+                    registration_for_triple(&entry.triple).is_none(),
+                    "Wasi triple {} must NOT have a process-gate adapter — \
+                     capability enforcement is at the WASI boundary",
+                    entry.triple
+                );
+                continue;
+            }
             let Some(adapter) = registration_for_triple(&entry.triple) else {
                 panic!(
                     "Available triple {} has no satisfying adapter — shipping a triple with no impl is forbidden",

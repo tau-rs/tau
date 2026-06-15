@@ -1,7 +1,7 @@
 # β.5 — Credential provider chain (design spec)
 
 **Status:** approved (brainstorm 2026-06-14)
-**ADR:** [0046-credential-provider-chain](../../decisions/0046-credential-provider-chain.md)
+**ADR:** [0047-credential-provider-chain](../../decisions/0047-credential-provider-chain.md)
 **ROADMAP:** §β.5; per-plugin migration triggers (anthropic/ollama/openai row); CI gate `test (credential-chain / linux)`.
 
 ## 1. Problem
@@ -274,7 +274,7 @@ Spec → plan → subagent-execute, matching the β.7 / β.8 flow.
 1. **PR-1 — port (`tau-ports`).** `Secret`, `CredentialId`,
    `CredentialRequest`, `ResolvedCredential`, `CredentialProvider`,
    `CredentialChain`, `CredentialError`, `BakedProvider` fixture, `zeroize`
-   dep. Pure; no wiring. **+ ADR-0046.**
+   dep. Pure; no wiring. **+ ADR-0047.**
 2. **PR-2 — adapters (`tau-runtime-tokio`).** `EnvProvider`, `FileProvider`,
    `build_chain`. Unit + File integration tests. **Adds the CI lane.**
 3. **PR-3 — config (`tau-pkg`).** Per-agent `[[…credentials]]` (project,
@@ -301,4 +301,4 @@ in any PR.
 - Existing `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_BEARER_TOKEN` paths
   unchanged — verified by the no-declaration / no-chain byte-identical fallback
   tests.
-- ADR-0046 records the durable decisions; docs published.
+- ADR-0047 records the durable decisions; docs published.

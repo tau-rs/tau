@@ -499,14 +499,21 @@ decision + the β.7/β.7.5 split rationale.
   linked native tools to a runnable wasm component (WASI 0.2). The artifact
   runs in wasmtime; γ.1 extends to Spin + browser hosts.
 - **DoD:** `tau build wasm <project>` produces a wasm component that executes
-  the simplified-fan-monitor scenario in wasmtime, with the same observable
-  `RunEvent` stream as `tau dev` produced.
+  the simplified-fan-monitor scenario in wasmtime and returns a
+  `ConformanceReport` equal to `tau dev`'s (dev↔wasm parity via
+  `assert_conform`, the D-7a multiset observable). A literal byte-identical
+  `RunEvent` stream is deferred to β.6, where the cross-target conformance
+  gate lives (see ADR-0046 Decision 2).
 - **Sized:** ~4–8 weeks. Wasm component model integration is the hard part.
 
 *(This sub-project was originally folded into β.7 via the β.2 footnote
 "AOT lands in β.7"; split out 2026-06-10 because wasm AOT complexity
 ballooned after β.3 PR-6 expanded the MCP surface — the in-wasm
 MCP-facilitator path deserves its own ADR and conformance scope.)*
+
+> Implementation status (2026-06-14): spec + plan landed; PR-1
+> (`any-wasi-strict` triple + `tau build wasm` skeleton) in progress.
+> ADR-0046 (Proposed); ADR-0047 forthcoming (Phase 5).
 
 ### β.8 — TypeScript minimal authoring surface
 

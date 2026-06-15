@@ -1,4 +1,4 @@
-# ADR-0046: Credential provider chain (β.5)
+# ADR-0047: Credential provider chain (β.5)
 
 **Status:** Accepted
 **Date:** 2026-06-14

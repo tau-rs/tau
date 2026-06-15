@@ -6,6 +6,7 @@
 //! returning an "unimplemented" error.
 
 pub mod build;
+pub mod build_wasm;
 pub(crate) mod builtin_registry;
 pub mod chat;
 pub mod check;
