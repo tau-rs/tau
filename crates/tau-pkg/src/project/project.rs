@@ -3710,7 +3710,10 @@ id = "Bad Id"
 env = "X"
 "#;
         let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
-        assert!(cfg.validate().is_err());
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
     }
 
     #[test]
@@ -3728,7 +3731,56 @@ id = "ok_id"
 env = "lower_case"
 "#;
         let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
-        assert!(cfg.validate().is_err());
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_credentials_reject_env_name_with_leading_digit() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+[agents.a]
+display_name = "A"
+package = "x@^1"
+llm_backend = "x"
+[[agents.a.credentials]]
+id = "ok_id"
+env = "1KEY"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
+    }
+
+    #[test]
+    fn agent_credentials_multiple_distinct_envs_ok() {
+        let toml = r#"
+[project]
+name = "p"
+description = "d"
+[agents.a]
+display_name = "A"
+package = "x@^1"
+llm_backend = "x"
+[[agents.a.credentials]]
+id = "openai_api_key"
+env = "OPENAI_API_KEY"
+[[agents.a.credentials]]
+id = "openai_org"
+env = "OPENAI_ORG"
+"#;
+        let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
+        let validated = cfg.validate().unwrap();
+        let agent = validated.agents.get("a").unwrap();
+        assert_eq!(agent.credentials.len(), 2);
+        assert_eq!(agent.credentials[0].env, "OPENAI_API_KEY");
+        assert_eq!(agent.credentials[1].env, "OPENAI_ORG");
     }
 
     #[test]
@@ -3749,7 +3801,10 @@ id = "id_two"
 env = "SAME"
 "#;
         let cfg: UncheckedProjectConfig = toml::from_str(toml).unwrap();
-        assert!(cfg.validate().is_err());
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            ProjectConfigError::CredentialDeclaration { .. }
+        ));
     }
 }
 

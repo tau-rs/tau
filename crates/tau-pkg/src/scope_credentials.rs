@@ -138,6 +138,14 @@ mod tests {
     }
 
     #[test]
+    fn explicit_env_chain_without_provider_def_short_circuits() {
+        let toml = r#"chain = ["env"]"#;
+        let unchecked: UncheckedCredentialsConfig = toml::from_str(toml).unwrap();
+        let cfg = unchecked.validate().unwrap();
+        assert_eq!(cfg.chain, vec![ProviderConfig::Env]);
+    }
+
+    #[test]
     fn env_then_file_validates() {
         let toml = r#"
 chain = ["env", "file"]
