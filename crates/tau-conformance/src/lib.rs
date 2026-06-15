@@ -9,4 +9,6 @@ pub mod differ;
 pub mod event;
 pub mod normalize;
 
+mod sequenced_llm;
+
 pub use event::{ConformanceEvent, CONFORMANCE_EVENT_VERSION};
