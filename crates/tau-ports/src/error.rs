@@ -517,6 +517,8 @@ pub enum CredentialError {
         reason: String,
     },
     /// An unexpected internal error.
+    ///
+    /// See: [escape-hatches.md#credentialerror-internal](../docs/explanation/escape-hatches.md#credentialerror-internal).
     #[error("internal credential error: {reason}")]
     Internal {
         /// Human-readable reason.
