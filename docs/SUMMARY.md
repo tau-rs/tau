@@ -113,6 +113,7 @@
 - [ADR-0043 — Trigger ingress: compile the trigger, delegate the substrate](decisions/0043-trigger-ingress.md)
 - [ADR-0044 — Deliverables & goals: build-time-checked postcondition steps](decisions/0044-deliverables-and-goals.md)
 - [ADR-0045 — Context-manager primitive (β.4)](decisions/0045-context-manager.md)
+- [ADR-0046 — Wasm AOT artifact + WIT world (β.7.5)](decisions/0046-wasm-aot-artifact.md)
 
 # Retrospectives
 

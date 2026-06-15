@@ -47,6 +47,14 @@ fn fs_rw_exec_net() -> CapabilityShapeSet {
     s
 }
 
+fn fs_rw_net() -> CapabilityShapeSet {
+    let mut s = CapabilityShapeSet::new();
+    s.insert(CapabilityShape::FilesystemRead);
+    s.insert(CapabilityShape::FilesystemWrite);
+    s.insert(CapabilityShape::NetworkHttp);
+    s
+}
+
 fn all_shapes() -> CapabilityShapeSet {
     let mut s = CapabilityShapeSet::new();
     s.insert(CapabilityShape::FilesystemRead);
@@ -106,6 +114,15 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
     },
     TargetTripleEntry {
         triple: TargetTriple {
+            platform: Platform::Any,
+            adapter_family: AdapterFamily::Wasi,
+            tier: CapabilityTier::Strict,
+        },
+        shapes_fn: fs_rw_net,
+        status: TripleStatus::Available,
+    },
+    TargetTripleEntry {
+        triple: TargetTriple {
             platform: Platform::Windows,
             adapter_family: AdapterFamily::Native,
             tier: CapabilityTier::Strict,
@@ -140,8 +157,8 @@ mod tests {
     use alloc::vec::Vec;
 
     #[test]
-    fn registry_has_six_entries() {
-        assert_eq!(REGISTRY.len(), 6);
+    fn registry_has_seven_entries() {
+        assert_eq!(REGISTRY.len(), 7);
     }
 
     #[test]
@@ -159,7 +176,7 @@ mod tests {
     #[test]
     fn list_available_excludes_reserved() {
         let avail: Vec<_> = list_available().map(|e| e.triple).collect();
-        assert_eq!(avail.len(), 5);
+        assert_eq!(avail.len(), 6);
         for e in avail {
             let entry = lookup(&e).unwrap();
             assert!(matches!(entry.status, TripleStatus::Available));
@@ -213,5 +230,18 @@ mod tests {
         assert_eq!(p.triple, t);
         assert!(matches!(p.status, TripleStatus::Available));
         assert!(p.required_shapes.contains(&CapabilityShape::FilesystemRead));
+    }
+
+    #[test]
+    fn any_wasi_strict_is_available_with_fs_rw_net_shapes() {
+        let t: TargetTriple = "any-wasi-strict".parse().unwrap();
+        let e = lookup(&t).expect("any-wasi-strict must be registered");
+        assert!(matches!(e.status, TripleStatus::Available));
+        let shapes = (e.shapes_fn)();
+        assert!(shapes.contains(&CapabilityShape::FilesystemRead));
+        assert!(shapes.contains(&CapabilityShape::FilesystemWrite));
+        assert!(shapes.contains(&CapabilityShape::NetworkHttp));
+        assert!(!shapes.contains(&CapabilityShape::ProcessExec));
+        assert!(!shapes.contains(&CapabilityShape::AgentSpawn));
     }
 }
