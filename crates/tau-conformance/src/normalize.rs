@@ -76,6 +76,20 @@ fn strip_quotes(s: &str) -> &str {
         .unwrap_or(s)
 }
 
+/// Unwrap the `Some(X)` Debug wrapper the runtime emits for the
+/// `Option<StopReason>` stop_reason field, yielding the inner variant
+/// name (or "none"). Keeps the golden event stream clean and meaningful.
+fn clean_stop_reason(raw: &str) -> String {
+    let s = raw.trim();
+    if s == "None" {
+        return "none".to_string();
+    }
+    if let Some(inner) = s.strip_prefix("Some(").and_then(|x| x.strip_suffix(')')) {
+        return inner.trim().to_string();
+    }
+    s.to_string()
+}
+
 /// Map one captured tracing event into the conformance stream, pushing or
 /// patching [`out`] in place. Non-whitelisted events are no-ops.
 ///
@@ -94,7 +108,7 @@ pub fn map_tracing(c: &CapturedEvent, _st: &mut NormState, out: &mut Vec<Conform
         }),
         "llm.request_built" => out.push(ConformanceEvent::InferenceCallStarted),
         "llm.response_received" => out.push(ConformanceEvent::InferenceCallCompleted {
-            stop_reason: strip_quotes(field(c, "stop_reason").unwrap_or_default()).to_string(),
+            stop_reason: clean_stop_reason(strip_quotes(field(c, "stop_reason").unwrap_or_default())),
             tokens_in: 0,
             tokens_out: 0,
         }),
@@ -281,6 +295,63 @@ mod tests {
                 stop_reason: "tool_use".into(),
                 tokens_in: 12,
                 tokens_out: 5
+            }
+        );
+    }
+
+    #[test]
+    fn stop_reason_unwraps_some_debug_wrapper() {
+        let mut out = Vec::new();
+        let mut st = NormState::default();
+        map_tracing(
+            &captured("llm.response_received", &[("stop_reason", "Some(ToolUse)")]),
+            &mut st,
+            &mut out,
+        );
+        assert_eq!(
+            out.last().unwrap(),
+            &ConformanceEvent::InferenceCallCompleted {
+                stop_reason: "ToolUse".into(),
+                tokens_in: 0,
+                tokens_out: 0
+            }
+        );
+    }
+
+    #[test]
+    fn stop_reason_unwraps_some_with_end_turn() {
+        let mut out = Vec::new();
+        let mut st = NormState::default();
+        map_tracing(
+            &captured("llm.response_received", &[("stop_reason", "Some(EndTurn)")]),
+            &mut st,
+            &mut out,
+        );
+        assert_eq!(
+            out.last().unwrap(),
+            &ConformanceEvent::InferenceCallCompleted {
+                stop_reason: "EndTurn".into(),
+                tokens_in: 0,
+                tokens_out: 0
+            }
+        );
+    }
+
+    #[test]
+    fn stop_reason_converts_none_to_lowercase() {
+        let mut out = Vec::new();
+        let mut st = NormState::default();
+        map_tracing(
+            &captured("llm.response_received", &[("stop_reason", "None")]),
+            &mut st,
+            &mut out,
+        );
+        assert_eq!(
+            out.last().unwrap(),
+            &ConformanceEvent::InferenceCallCompleted {
+                stop_reason: "none".into(),
+                tokens_in: 0,
+                tokens_out: 0
             }
         );
     }
