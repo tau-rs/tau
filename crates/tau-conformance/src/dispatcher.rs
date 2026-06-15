@@ -39,10 +39,8 @@ pub(crate) struct ConformanceDispatcher {
 impl ConformanceDispatcher {
     /// Construct with both native tools and a live MCP `weather` client.
     ///
-    /// Used by `DevProfile` (Task 9), which opens the cassette-backed
-    /// `weather` server before driving the scenario.
-    // used by DevProfile in Task 9
-    #[allow(dead_code)]
+    /// Used by `DevProfile`, which opens the cassette-backed `weather`
+    /// server before driving the scenario.
     pub(crate) fn new(backend: Arc<dyn DynLlmBackend>, weather: Arc<McpClient>) -> Self {
         Self {
             backend,
@@ -55,9 +53,6 @@ impl ConformanceDispatcher {
     /// Invoking the `weather` tool against this dispatcher surfaces a
     /// [`RuntimeError::Internal`] — a scenario that drives `weather`
     /// without an MCP client wired is a wiring bug and should fail loudly.
-    // used by DevProfile in Task 9 (lib-only `--all-targets` pass sees the
-    // sole in-crate caller as test-cfg'd and flags this otherwise)
-    #[allow(dead_code)]
     pub(crate) fn new_native_only(backend: Arc<dyn DynLlmBackend>) -> Self {
         Self {
             backend,
