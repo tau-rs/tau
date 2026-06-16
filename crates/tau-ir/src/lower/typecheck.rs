@@ -288,6 +288,7 @@ mod tests {
                 max_tokens: None,
             },
             produces: alloc::vec::Vec::new(),
+            output_schema: None,
         }
     }
 
@@ -558,6 +559,7 @@ mod tests {
                     max_tokens: None,
                 },
                 produces: alloc::vec![],
+                output_schema: None,
             },
         );
         wf
