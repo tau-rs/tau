@@ -434,10 +434,13 @@ mod tests {
 name = "diff-fixture"
 version = "0.1.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-
+model = "default"
 
 [agents.solo.prompt]
 system = "hi"
@@ -590,10 +593,13 @@ system = "hi"
 name = "repro-fixture"
 version = "0.1.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-
+model = "default"
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -648,10 +654,13 @@ system = "you are solo"
 name = "repro-fixture"
 version = "0.2.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-
+model = "default"
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -698,10 +707,13 @@ system = "you are solo"
 name = "sliced-fixture"
 version = "0.1.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-
+model = "default"
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -709,7 +721,7 @@ system = "you are solo"
 [agents.extra]
 display_name = "Extra"
 package = "noop@^0.1"
-
+model = "default"
 
 [agents.extra.prompt]
 system = "you are extra"
@@ -777,10 +789,13 @@ system = "you are extra"
 name = "caprepro"
 version = "0.1.0"
 
+[models]
+default = { backend = "homepkg", model = "model-v1" }
+
 [agents.r]
 display_name = "R"
 package = "homepkg@^0.1"
-
+model = "default"
 
 [agents.r.prompt]
 system = "you are r"
@@ -840,10 +855,13 @@ deny_paths = ["/data/secret/**"]
 name = "sliced-fixture"
 version = "0.1.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-
+model = "default"
 
 [agents.solo.prompt]
 system = "you are MUTATED solo"
@@ -851,7 +869,7 @@ system = "you are MUTATED solo"
 [agents.extra]
 display_name = "Extra"
 package = "noop@^0.1"
-
+model = "default"
 
 [agents.extra.prompt]
 system = "you are extra"

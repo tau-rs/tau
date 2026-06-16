@@ -20,10 +20,14 @@ fn write_fixture(root: &Path) {
 name = "e2e-fixture"
 version = "0.1.0"
 
+[models]
+fs-read-model = { backend = "fs-read", model = "model-v1" }
+critic-model  = { backend = "critic",  model = "model-v1" }
+
 [agents.researcher]
 display_name = "Researcher"
 package      = "fs-read@^0.1"
-
+model        = "fs-read-model"
 
 [agents.researcher.prompt]
 system = "you are a researcher"
@@ -31,7 +35,7 @@ system = "you are a researcher"
 [agents.writer]
 display_name = "Writer"
 package      = "critic@^0.1"
-
+model        = "critic-model"
 
 [agents.writer.prompt]
 system_file = "agents/writer.md"

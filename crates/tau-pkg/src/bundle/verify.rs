@@ -360,9 +360,13 @@ mod tests {
 name = "verify-fixture"
 version = "0.1.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
+model = "default"
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -496,9 +500,13 @@ system = "you are solo"
 name = "verify-fixture"
 version = "0.2.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
+model = "default"
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -535,9 +543,13 @@ system = "you are solo"
 name = "pkg-fixture"
 version = "0.1.0"
 
+[models]
+default = { backend = "demo", model = "model-v1" }
+
 [agents.solo]
 display_name = "Solo"
 package = "demo@^0.1"
+model = "default"
 
 [agents.solo.prompt]
 system = "hi"
@@ -634,9 +646,13 @@ installed_at = "2024-01-01T00:00:00Z"
 name = "file-prompt"
 version = "0.1.0"
 
+[models]
+default = { backend = "noop", model = "model-v1" }
+
 [agents.writer]
 display_name = "Writer"
 package = "noop@^0.1"
+model = "default"
 
 [agents.writer.prompt]
 system_file = "prompt.md"
