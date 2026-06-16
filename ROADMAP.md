@@ -541,9 +541,12 @@ decision + the β.7/β.7.5 split rationale.
 ballooned after β.3 PR-6 expanded the MCP surface — the in-wasm
 MCP-facilitator path deserves its own ADR and conformance scope.)*
 
-> Implementation status (2026-06-14): spec + plan landed; PR-1
-> (`any-wasi-strict` triple + `tau build wasm` skeleton) in progress.
-> ADR-0046 (Proposed); ADR-0047 forthcoming (Phase 5).
+> Implementation status (2026-06-16): PR-1 (`any-wasi-strict` triple +
+> `tau build wasm` skeleton) landed (#350); spec amended (SkillResolver port
+> + single-channel observable); PR sequence A/B/C–G. ADR-0046 (Proposed);
+> ADR-0049 (Accepted — single-channel typed conformance observable,
+> supersedes ADR-0048 Decision 1); in-wasm MCP-facilitator ADR shifts to
+> 0050 (forthcoming, PR-F).
 
 ### β.8 — TypeScript minimal authoring surface
 
