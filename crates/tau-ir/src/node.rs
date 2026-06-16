@@ -156,7 +156,10 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             tool_refs: alloc::vec::Vec::new(),
             context: None,
-            budget: AgentBudget { max_turns: None, max_tokens: None },
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
             produces: alloc::vec::Vec::new(),
             output_schema: Some(serde_json::json!({"type": "object"})),
         };
@@ -174,7 +177,10 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             tool_refs: alloc::vec::Vec::new(),
             context: None,
-            budget: AgentBudget { max_turns: None, max_tokens: None },
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
             produces: alloc::vec::Vec::new(),
             output_schema: None,
         };

@@ -315,7 +315,10 @@ fn build_toml(
             out.push_str(&format!("produces = [{}]\n", prods.join(", ")));
         }
         if let Some(schema) = &agent.output_schema {
-            out.push_str(&format!("output_schema = {}\n", json_to_toml_inline(schema)));
+            out.push_str(&format!(
+                "output_schema = {}\n",
+                json_to_toml_inline(schema)
+            ));
         }
         if let Some(sys) = &agent.prompt_system {
             out.push_str(&format!("[agents.{}.prompt]\n", toml_key(name)));
@@ -510,9 +513,9 @@ fn expr_to_json(expr: &Expr) -> Option<serde_json::Value> {
             }
             Some(serde_json::Value::Array(out))
         }
-        Expr::Lit(Lit::Str(s)) => {
-            Some(serde_json::Value::String(s.value.as_wtf8().to_string_lossy().into_owned()))
-        }
+        Expr::Lit(Lit::Str(s)) => Some(serde_json::Value::String(
+            s.value.as_wtf8().to_string_lossy().into_owned(),
+        )),
         Expr::Lit(Lit::Bool(b)) => Some(serde_json::Value::Bool(b.value)),
         Expr::Lit(Lit::Null(_)) => Some(serde_json::Value::Null),
         Expr::Lit(Lit::Num(n)) => {
