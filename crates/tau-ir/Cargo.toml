@@ -11,13 +11,8 @@ authors.workspace      = true
 [dependencies]
 tau-domain = { workspace = true, default-features = false, features = ["serde"] }
 tau-ports  = { workspace = true, default-features = false, features = ["serde"] }
-# tau-pkg is required by the `lower` module (β.2.2) which pipes a
-# `ProjectConfig` into an `IrModule`. The lower module uses std (via
-# tau-pkg), so it is gated under the `with-std-adapters` feature (which
-# is the default).
-tau-pkg    = { workspace = true, optional = true }
 serde      = { workspace = true, default-features = false, features = ["alloc", "derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, default-features = false, features = ["alloc"] }
 chrono     = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 thiserror  = { workspace = true, default-features = false }
 hashbrown  = { workspace = true }
@@ -28,14 +23,8 @@ sha2       = { workspace = true, default-features = false }
 
 [dev-dependencies]
 tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
-tau-pkg    = { workspace = true }
 tau-ports  = { workspace = true, features = ["serde"] }
 
 [features]
-default            = ["with-std-adapters"]
-# When on, enables Message↔tau_domain::Message bidirectional adapters
-# that require std (SystemTime ↔ i64-ms conversion through UNIX_EPOCH).
-# Also enables the `lower` module which pipes tau_pkg::ProjectConfig →
-# IrModule. Disable for pure no_std consumers.
-with-std-adapters  = ["dep:tau-pkg"]
-test-fixtures      = []
+default       = []
+test-fixtures = []

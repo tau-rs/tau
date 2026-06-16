@@ -1,8 +1,8 @@
 //! Lowering of `[trigger.*]` config into `IrModule.triggers`.
 
-use tau_ir::lower::{lower_project, Caches};
+use tau_ir_lower::{lower_project, Caches, LowerError};
 use tau_ir::trigger::TriggerKind;
-use tau_ir::{IrError, IrFormatVersion};
+use tau_ir::IrFormatVersion;
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::registry;
 
@@ -121,7 +121,7 @@ fn rejects_trigger_referencing_unknown_agent() {
     let config = ProjectConfig::parse_str(toml).unwrap();
     let err = lower_project(&config, &target(), &caches()).unwrap_err();
     assert!(
-        matches!(&err, IrError::UnknownTriggerAgent { trigger, agent }
+        matches!(&err, LowerError::UnknownTriggerAgent { trigger, agent }
             if trigger == "t" && agent.0 == "ghost"),
         "expected UnknownTriggerAgent; got {err:?}"
     );

@@ -1,7 +1,7 @@
 //! End-to-end lowering test against a minimal tau.toml.
 
-use tau_ir::lower::{lower_project, Caches};
-use tau_ir::{IrError, IrFormatVersion};
+use tau_ir_lower::{lower_project, Caches, LowerError};
+use tau_ir::IrFormatVersion;
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;
 
@@ -29,9 +29,9 @@ fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'sta
                 .map(|n| hash_of(n))
         })),
         mcp_contract: Box::leak(Box::new(
-            move |url: &str| -> Option<tau_ir::lower::ResolvedMcpContract> {
+            move |url: &str| -> Option<tau_ir_lower::ResolvedMcpContract> {
                 mcp_known.iter().find(|u| u.as_str() == url).map(|u| {
-                    tau_ir::lower::ResolvedMcpContract {
+                    tau_ir_lower::ResolvedMcpContract {
                         hash: hash_of(u),
                         expanded_tools: vec![],
                         requires_sampling: false,
@@ -67,7 +67,7 @@ fn lookup_first_available() -> TargetTriple {
 fn lookup_target_excluding_network() -> TargetTriple {
     // Synthetic triple not in the registry → registry::lookup returns None
     // → capability_fit::check returns CapabilityFitFailed { missing: [], tools: [] }.
-    // The assert `matches!(err, IrError::CapabilityFitFailed { .. })` passes.
+    // The assert `matches!(err, LowerError::CapabilityFitFailed { .. })` passes.
     "darwin-container-strict".parse().unwrap()
 }
 
@@ -157,7 +157,7 @@ fn lowering_refuses_on_capability_fit_mismatch() {
     let target = lookup_target_excluding_network();
     let caches = caches_with(vec![], vec!["https://example.com".into()]);
     let err = lower_project(&config, &target, &caches).unwrap_err();
-    assert!(matches!(err, IrError::CapabilityFitFailed { .. }));
+    assert!(matches!(err, LowerError::CapabilityFitFailed { .. }));
 }
 
 #[test]

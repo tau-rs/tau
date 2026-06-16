@@ -15,19 +15,14 @@
 //!   in the hash. See `canonical` and `hash` modules.
 
 extern crate alloc;
-#[cfg(feature = "with-std-adapters")]
-extern crate std;
 
 pub mod budget;
 pub mod canonical;
 pub mod capability;
 pub mod check;
 pub mod context;
-pub mod error;
 pub mod hash;
 pub mod ids;
-#[cfg(feature = "with-std-adapters")]
-pub mod lower;
 pub mod message;
 pub mod module;
 pub mod node;
@@ -46,7 +41,6 @@ pub use capability::{CapabilityRequirements, CapabilityTable};
 // module path (`tau_ir::check::RetryPolicy` / `tau_ir::trigger::RetryPolicy`).
 pub use check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail};
 pub use context::ContextConfig;
-pub use error::IrError;
 pub use hash::compute_hash;
 pub use ids::{AgentId, CheckId, PipelineStepId, StepId, SubflowId, ToolId};
 pub use message::{Message, MessagePayload};

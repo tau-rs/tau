@@ -20,3 +20,4 @@ thiserror  = { workspace = true, default-features = false }
 tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
 tau-pkg    = { workspace = true }
 tau-ports  = { workspace = true, features = ["serde"] }
+sha2       = { workspace = true }
