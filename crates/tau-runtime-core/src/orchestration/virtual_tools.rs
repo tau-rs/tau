@@ -606,7 +606,7 @@ pub fn validate_skill_spawn(
     args: &Value,
     parent: &AgentId,
     parent_grant: &[Capability],
-    scope: &tau_pkg::Scope,
+    resolver: &dyn tau_ports::SkillResolver,
 ) -> Result<crate::orchestration::SkillSpawnRequest, OrchestrationError> {
     let name = tool_name
         .strip_prefix("skill.")
@@ -649,7 +649,7 @@ pub fn validate_skill_spawn(
         system_prompt: a.system_prompt,
         scope_paths: a.scope_paths,
     };
-    crate::orchestration::resolve_skill_for_spawn(name, &spawn_args, parent_grant, scope)
+    crate::orchestration::resolve_skill_for_spawn(name, &spawn_args, parent_grant, resolver)
 }
 
 // ─── tests ───────────────────────────────────────────────────────────────────
