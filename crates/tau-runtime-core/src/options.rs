@@ -100,6 +100,17 @@ pub struct RunOptions {
     /// shells with no override system.
     pub capability_resolver: Option<Arc<dyn tau_ports::CapabilityResolver>>,
 
+    /// Skill resolver used to look up installed skills for
+    /// `skill.<name>.spawn` virtual-tool dispatch. Host shells supply
+    /// their impl — tau-runtime-tokio ships `TauPkgSkillResolver` over
+    /// `tau_pkg::find_installed_skill`; guest (wasm/embassy) shells ship
+    /// `tau_ports::NoSkillResolver` or leave this `None`.
+    ///
+    /// When `None`, a `skill.<name>.spawn` call fails gracefully with a
+    /// "no skill resolver available" tool error (the kernel never reads
+    /// the filesystem itself). Single-agent runs leave this `None`.
+    pub skill_resolver: Option<Arc<dyn tau_ports::SkillResolver>>,
+
     /// Set by `Runtime::spawn_root_agent` when running inside a
     /// multi-agent orchestrated run. When present, virtual tool calls
     /// (`task.*`, `run.*`, `agent.<kind>.spawn`) are intercepted before
@@ -155,6 +166,10 @@ impl core::fmt::Debug for RunOptions {
                     .map(|_| "<CapabilityResolver>"),
             )
             .field(
+                "skill_resolver",
+                &self.skill_resolver.as_ref().map(|_| "<SkillResolver>"),
+            )
+            .field(
                 "orchestration_state",
                 &self.orchestration_state.as_ref().map(|_| "<RunState>"),
             )
@@ -181,6 +196,7 @@ impl Default for RunOptions {
             clock: None,
             random: None,
             capability_resolver: None,
+            skill_resolver: None,
             orchestration_state: None,
             orchestration_runtime: None,
             scope_root: None,
@@ -235,5 +251,11 @@ mod tests {
         let opts = RunOptions::default();
         assert!(opts.clock.is_none());
         assert!(opts.random.is_none());
+    }
+
+    #[test]
+    fn run_options_skill_resolver_defaults_to_none() {
+        let opts = RunOptions::default();
+        assert!(opts.skill_resolver.is_none());
     }
 }

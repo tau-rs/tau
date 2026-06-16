@@ -1,18 +1,18 @@
 //! Third lowering stage: workflow-shape invariants.
 
-use crate::error::IrError;
-use crate::subflow::SubflowKind;
-use crate::tool_impl::ToolImpl;
+use crate::error::LowerError;
+use tau_ir::subflow::SubflowKind;
+use tau_ir::tool_impl::ToolImpl;
 
 use super::parse::Parsed;
 
 /// Run the typecheck stage on a `Parsed` value.
-pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
+pub(super) fn typecheck(parsed: &Parsed) -> Result<(), LowerError> {
     // 1. Each Agent::tool_refs entry must exist in `tools`.
     for (agent_id, agent) in parsed.workflow.agents.iter() {
         for tool_ref in agent.tool_refs.iter() {
             if !parsed.workflow.tools.contains_key(tool_ref) {
-                return Err(IrError::UnknownToolRef {
+                return Err(LowerError::UnknownToolRef {
                     agent: agent_id.clone(),
                     tool: tool_ref.clone(),
                 });
@@ -28,7 +28,7 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
                 cap_subset: _,
             } => {
                 if !parsed.workflow.agents.contains_key(target_agent) {
-                    return Err(IrError::UnknownSubflowTarget {
+                    return Err(LowerError::UnknownSubflowTarget {
                         subflow: edge.id.clone(),
                         agent: target_agent.clone(),
                     });
@@ -42,7 +42,7 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
                 // dynamically.
             }
             SubflowKind::Compose { .. } => {
-                return Err(IrError::UnsupportedComposeSubflow {
+                return Err(LowerError::UnsupportedComposeSubflow {
                     subflow: edge.id.clone(),
                 });
             }
@@ -59,7 +59,7 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
         } = &tool.impl_
         {
             if content_hash == &[0u8; 32] {
-                return Err(IrError::UnknownNativeTool {
+                return Err(LowerError::UnknownNativeTool {
                     tool: tool_id.clone(),
                     fn_name: fn_ref.name.clone(),
                 });
@@ -73,7 +73,7 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
     for (tool_id, tool) in parsed.workflow.tools.iter() {
         if let ToolImpl::Subflow { target } = &tool.impl_ {
             if !parsed.workflow.agents.contains_key(target) {
-                return Err(IrError::UnknownSubflowToolTarget {
+                return Err(LowerError::UnknownSubflowToolTarget {
                     tool: tool_id.clone(),
                     agent: target.clone(),
                 });
@@ -81,7 +81,7 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
         }
         if let ToolImpl::Step { id } = &tool.impl_ {
             if !parsed.workflow.steps.contains_key(id) {
-                return Err(IrError::UnknownStepToolTarget {
+                return Err(LowerError::UnknownStepToolTarget {
                     tool: tool_id.clone(),
                     step: id.clone(),
                 });
@@ -92,7 +92,7 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
     // 6. Each trigger's entrypoint agent must exist.
     for trigger in parsed.triggers.iter() {
         if !parsed.workflow.agents.contains_key(&trigger.agent) {
-            return Err(IrError::UnknownTriggerAgent {
+            return Err(LowerError::UnknownTriggerAgent {
                 trigger: trigger.name.clone(),
                 agent: trigger.agent.clone(),
             });
@@ -116,9 +116,9 @@ pub(super) fn typecheck(parsed: &Parsed) -> Result<(), IrError> {
 /// - the last step must be the builtin `fit_budget` (guarantees a ceiling);
 /// - no transformer name repeats;
 /// - a `Builtin`-kind step must be a known builtin name.
-fn check_context(wf: &crate::module::Workflow) -> Result<(), IrError> {
-    use crate::context::ContextNodeKind;
+fn check_context(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
     use alloc::collections::BTreeSet;
+    use tau_ir::context::ContextNodeKind;
 
     const BUILTINS: [&str; 3] = ["trim_old", "compact_tool_outputs", "fit_budget"];
 
@@ -130,7 +130,7 @@ fn check_context(wf: &crate::module::Workflow) -> Result<(), IrError> {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for step in &ctx.pipeline {
             if !seen.insert(step.transformer.as_str()) {
-                return Err(crate::error::IrError::DuplicateContextTransformer {
+                return Err(crate::error::LowerError::DuplicateContextTransformer {
                     agent: id.0.clone(),
                     transformer: step.transformer.clone(),
                 });
@@ -138,7 +138,7 @@ fn check_context(wf: &crate::module::Workflow) -> Result<(), IrError> {
             if matches!(step.kind, ContextNodeKind::Builtin)
                 && !BUILTINS.contains(&step.transformer.as_str())
             {
-                return Err(crate::error::IrError::UnknownContextTransformer {
+                return Err(crate::error::LowerError::UnknownContextTransformer {
                     agent: id.0.clone(),
                     transformer: step.transformer.clone(),
                 });
@@ -146,7 +146,7 @@ fn check_context(wf: &crate::module::Workflow) -> Result<(), IrError> {
         }
         let last = ctx.pipeline.last().expect("non-empty checked above");
         if last.transformer != "fit_budget" {
-            return Err(crate::error::IrError::ContextFitBudgetNotLast {
+            return Err(crate::error::LowerError::ContextFitBudgetNotLast {
                 agent: id.0.clone(),
                 last: last.transformer.clone(),
             });
@@ -155,10 +155,10 @@ fn check_context(wf: &crate::module::Workflow) -> Result<(), IrError> {
     Ok(())
 }
 
-fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
-    use crate::pipeline::StepRun;
-    use crate::template::{extract_refs, TemplateRef};
+fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
     use alloc::collections::BTreeSet;
+    use tau_ir::pipeline::StepRun;
+    use tau_ir::template::{extract_refs, TemplateRef};
 
     let Some(pipeline) = &wf.pipeline else {
         return Ok(());
@@ -168,7 +168,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
     for step in &pipeline.steps {
         let sid = step.id.0.as_str();
         if !seen_ids.insert(sid) {
-            return Err(IrError::DuplicatePipelineStepId { id: sid.into() });
+            return Err(LowerError::DuplicatePipelineStepId { id: sid.into() });
         }
 
         let exists = match &step.run {
@@ -180,7 +180,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
         if !exists {
             // For Check steps, emit the more precise UnknownCheckRef error.
             if let StepRun::Check(check_id) = &step.run {
-                return Err(IrError::UnknownCheckRef {
+                return Err(LowerError::UnknownCheckRef {
                     step: sid.into(),
                     check: check_id.0.clone(),
                 });
@@ -191,7 +191,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
                 StepRun::Deterministic(s) => alloc::format!("deterministic:{}", s.0),
                 StepRun::Check(c) => alloc::format!("check:{}", c.0),
             };
-            return Err(IrError::UnknownPipelineRun {
+            return Err(LowerError::UnknownPipelineRun {
                 step: sid.into(),
                 target,
             });
@@ -202,7 +202,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
         // appear strictly BEFORE the current check step in the pipeline.
         if let StepRun::Check(check_id) = &step.run {
             if let Some(check) = wf.checks.get(check_id) {
-                use crate::check::{CheckVerify, Locus};
+                use tau_ir::check::{CheckVerify, Locus};
                 let locus = match &check.verify {
                     CheckVerify::Goal { evaluates, .. } => Some(evaluates),
                     CheckVerify::Deliverable { locus, .. } => Some(locus),
@@ -219,7 +219,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
                     let is_earlier =
                         ref_step_id.0 != sid && seen_ids.contains(ref_step_id.0.as_str());
                     if !is_earlier {
-                        return Err(IrError::UnknownCheckLocus {
+                        return Err(LowerError::UnknownCheckLocus {
                             check: check_id.0.clone(),
                             output: ref_step_id.0.clone(),
                         });
@@ -228,7 +228,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
             }
         }
 
-        let refs = extract_refs(&step.input).map_err(|e| IrError::BadPipelineTemplate {
+        let refs = extract_refs(&step.input).map_err(|e| LowerError::BadPipelineTemplate {
             step: sid.into(),
             detail: alloc::format!("{e}"),
         })?;
@@ -236,7 +236,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
             if let TemplateRef::StepOutput(ref_id) = r {
                 let exists_anywhere = pipeline.steps.iter().any(|s| s.id.0 == ref_id);
                 if !exists_anywhere {
-                    return Err(IrError::UnknownOutputRef {
+                    return Err(LowerError::UnknownOutputRef {
                         step: sid.into(),
                         referenced: ref_id,
                     });
@@ -247,7 +247,7 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
                 // Guard self-reference explicitly; !seen_ids.contains catches
                 // forward references (later steps not yet inserted).
                 if ref_id == sid || !seen_ids.contains(ref_id.as_str()) {
-                    return Err(IrError::ForwardOutputRef {
+                    return Err(LowerError::ForwardOutputRef {
                         step: sid.into(),
                         referenced: ref_id,
                     });
@@ -261,16 +261,16 @@ fn check_pipeline(wf: &crate::module::Workflow) -> Result<(), IrError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::{CapabilityRequirements, CapabilityTable};
-    use crate::ids::{AgentId, StepId, ToolId};
     use crate::lower::parse::Parsed;
-    use crate::module::Workflow;
-    use crate::node::{Agent, Tool, ToolSpec};
-    use crate::tool_impl::ToolImpl;
-    use crate::AgentBudget;
     use alloc::collections::BTreeMap;
     use alloc::string::{String, ToString};
     use alloc::vec;
+    use tau_ir::capability::{CapabilityRequirements, CapabilityTable};
+    use tau_ir::ids::{AgentId, StepId, ToolId};
+    use tau_ir::module::Workflow;
+    use tau_ir::node::{Agent, Tool, ToolSpec};
+    use tau_ir::tool_impl::ToolImpl;
+    use tau_ir::AgentBudget;
 
     fn empty_caps() -> CapabilityRequirements {
         CapabilityRequirements { declared: vec![] }
@@ -318,7 +318,7 @@ mod tests {
         let parsed = crate::lower::parse::parse(&cfg).unwrap();
         let err = typecheck(&parsed).unwrap_err();
         assert!(
-            matches!(err, IrError::UnknownPipelineRun { .. }),
+            matches!(err, LowerError::UnknownPipelineRun { .. }),
             "got {err:?}"
         );
     }
@@ -354,7 +354,7 @@ mod tests {
         let parsed = crate::lower::parse::parse(&cfg).unwrap();
         let err = typecheck(&parsed).unwrap_err();
         assert!(
-            matches!(err, IrError::ForwardOutputRef { .. }),
+            matches!(err, LowerError::ForwardOutputRef { .. }),
             "got {err:?}"
         );
     }
@@ -426,7 +426,7 @@ mod tests {
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
-            matches!(err, IrError::UnknownSubflowToolTarget { ref tool, ref agent }
+            matches!(err, LowerError::UnknownSubflowToolTarget { ref tool, ref agent }
                 if tool.0 == "call_ghost" && agent.0 == "ghost"),
             "expected UnknownSubflowToolTarget; got {err:?}"
         );
@@ -436,9 +436,9 @@ mod tests {
     fn check_step_with_unknown_check_id_is_rejected() {
         // A pipeline step runs StepRun::Check("ghost") but workflow.checks
         // has no entry for "ghost" → should return UnknownCheckRef.
-        use crate::capability::CapabilityTable;
-        use crate::ids::{CheckId, PipelineStepId};
-        use crate::pipeline::{Pipeline, PipelineStep, StepRun};
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::{CheckId, PipelineStepId};
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
 
         let check_id = CheckId("ghost".to_string());
         // No entry in workflow.checks for "ghost".
@@ -462,7 +462,7 @@ mod tests {
         };
         let err = typecheck(&parsed).expect_err("should reject unknown check ref");
         assert!(
-            matches!(err, IrError::UnknownCheckRef { ref step, ref check }
+            matches!(err, LowerError::UnknownCheckRef { ref step, ref check }
                 if step == "step-a" && check == "ghost"),
             "expected UnknownCheckRef; got {err:?}"
         );
@@ -472,10 +472,10 @@ mod tests {
     fn check_locus_output_referencing_later_step_is_rejected() {
         // A check whose Locus::Output names a step that comes AFTER the check
         // step in the pipeline → should return UnknownCheckLocus.
-        use crate::capability::CapabilityTable;
-        use crate::check::{Check, CheckVerify, GoalPredicate, Locus, OnFail, RetryPolicy};
-        use crate::ids::{CheckId, PipelineStepId};
-        use crate::pipeline::{Pipeline, PipelineStep, StepRun};
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Check, CheckVerify, GoalPredicate, Locus, OnFail, RetryPolicy};
+        use tau_ir::ids::{CheckId, PipelineStepId};
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
 
         let check_id = CheckId("my-check".to_string());
         // The check evaluates Locus::Output("later") but "later" runs after
@@ -514,7 +514,7 @@ mod tests {
                         // "later" comes after the check step — invalid forward reference
                         PipelineStep {
                             id: PipelineStepId("later".to_string()),
-                            run: StepRun::Tool(crate::ids::ToolId("some-tool".to_string())),
+                            run: StepRun::Tool(tau_ir::ids::ToolId("some-tool".to_string())),
                             input: "${input}".to_string(),
                         },
                     ],
@@ -525,7 +525,7 @@ mod tests {
         };
         let err = typecheck(&parsed).expect_err("should reject forward-referencing check locus");
         assert!(
-            matches!(err, IrError::UnknownCheckLocus { ref check, ref output }
+            matches!(err, LowerError::UnknownCheckLocus { ref check, ref output }
                 if check == "my-check" && output == "later"),
             "expected UnknownCheckLocus; got {err:?}"
         );
@@ -533,9 +533,9 @@ mod tests {
 
     // ── check_context tests ──────────────────────────────────────────────────
 
-    use crate::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
+    use tau_ir::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
 
-    fn agent_with_context(steps: alloc::vec::Vec<&str>) -> crate::module::Workflow {
+    fn agent_with_context(steps: alloc::vec::Vec<&str>) -> tau_ir::module::Workflow {
         let pipeline = steps
             .into_iter()
             .map(|t| ContextStep {
@@ -545,7 +545,11 @@ mod tests {
                 config: Default::default(),
             })
             .collect();
-        let mut wf = crate::module::Workflow::default();
+        let mut wf = tau_ir::module::Workflow::default();
+        // `ContextConfig` is `#[non_exhaustive]`; build via `Default` + the
+        // public `pipeline` field rather than a struct literal.
+        let mut ctx = ContextConfig::default();
+        ctx.pipeline = pipeline;
         wf.agents.insert(
             AgentId("a".into()),
             Agent {
@@ -553,8 +557,8 @@ mod tests {
                 prompt: "p".into(),
                 model: "m".into(),
                 tool_refs: alloc::vec![],
-                context: Some(ContextConfig { pipeline }),
-                budget: crate::AgentBudget {
+                context: Some(ctx),
+                budget: tau_ir::AgentBudget {
                     max_turns: None,
                     max_tokens: None,
                 },
@@ -576,7 +580,7 @@ mod tests {
         let wf = agent_with_context(alloc::vec!["bogus", "fit_budget"]);
         assert!(matches!(
             check_context(&wf),
-            Err(crate::error::IrError::UnknownContextTransformer { .. })
+            Err(crate::error::LowerError::UnknownContextTransformer { .. })
         ));
     }
 
@@ -585,7 +589,7 @@ mod tests {
         let wf = agent_with_context(alloc::vec!["fit_budget", "trim_old"]);
         assert!(matches!(
             check_context(&wf),
-            Err(crate::error::IrError::ContextFitBudgetNotLast { .. })
+            Err(crate::error::LowerError::ContextFitBudgetNotLast { .. })
         ));
     }
 
@@ -594,7 +598,7 @@ mod tests {
         let wf = agent_with_context(alloc::vec!["trim_old", "trim_old", "fit_budget"]);
         assert!(matches!(
             check_context(&wf),
-            Err(crate::error::IrError::DuplicateContextTransformer { .. })
+            Err(crate::error::LowerError::DuplicateContextTransformer { .. })
         ));
     }
 
@@ -629,7 +633,7 @@ mod tests {
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
-            matches!(err, IrError::UnknownStepToolTarget { ref tool, ref step }
+            matches!(err, LowerError::UnknownStepToolTarget { ref tool, ref step }
                 if tool.0 == "normalize" && step.0 == "missing-step"),
             "expected UnknownStepToolTarget; got {err:?}"
         );

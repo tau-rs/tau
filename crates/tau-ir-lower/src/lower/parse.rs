@@ -10,19 +10,19 @@ use alloc::collections::BTreeMap;
 use tau_pkg::project::{PipelineRunRef, ProjectConfig};
 use tau_pkg::{PromptEntry, ToolBody};
 
-use crate::capability::{CapabilityRequirements, CapabilityTable};
-use crate::check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail, RetryPolicy};
-use crate::error::IrError;
-use crate::ids::{AgentId, CheckId, PipelineStepId, StepId, ToolId};
-use crate::module::Workflow;
-use crate::node::{Agent, Deterministic, Tool, ToolSpec};
-use crate::pipeline::{Pipeline, PipelineStep, StepRun};
-use crate::subflow::SubflowEdge;
-use crate::tool_impl::{Hash256, NativeFnRef, ToolImpl};
-use crate::trigger::{
+use crate::error::LowerError;
+use tau_ir::capability::{CapabilityRequirements, CapabilityTable};
+use tau_ir::check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail, RetryPolicy};
+use tau_ir::ids::{AgentId, CheckId, PipelineStepId, StepId, ToolId};
+use tau_ir::module::Workflow;
+use tau_ir::node::{Agent, Deterministic, Tool, ToolSpec};
+use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+use tau_ir::subflow::SubflowEdge;
+use tau_ir::tool_impl::{Hash256, NativeFnRef, ToolImpl};
+use tau_ir::trigger::{
     Backoff, BackoffStrategy, RetryPolicy as TriggerRetryPolicy, TriggerBinding, TriggerKind,
 };
-use crate::AgentBudget;
+use tau_ir::AgentBudget;
 
 /// Output of the parse stage.
 #[derive(Debug)]
@@ -34,7 +34,7 @@ pub(super) struct Parsed {
 }
 
 /// Run the parse stage on a `ProjectConfig`.
-pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
+pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
     let mut agents: BTreeMap<AgentId, Agent> = BTreeMap::new();
     let mut tools: BTreeMap<ToolId, Tool> = BTreeMap::new();
     let mut steps: BTreeMap<StepId, Deterministic> = BTreeMap::new();
@@ -74,7 +74,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             // forwarded as a parse error so existing callers aren't
             // silently broken when a new variant lands.
             _ => {
-                return Err(IrError::Parse("unsupported tool body variant".into()));
+                return Err(LowerError::Parse("unsupported tool body variant".into()));
             }
         };
         let spec = ToolSpec {
@@ -157,7 +157,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
         // silently overwritten, causing the wrong implementation to be
         // dispatched at runtime. Reject early with a clear error.
         if tools.contains_key(&tool_id) {
-            return Err(IrError::Parse(alloc::format!(
+            return Err(LowerError::Parse(alloc::format!(
                 "step name {name:?} collides with an existing tool name; \
                  rename the step or the tool"
             )));
@@ -191,7 +191,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             "manual" => TriggerKind::Manual,
             // validate_trigger already rejected anything else; defensive.
             other => {
-                return Err(IrError::Parse(alloc::format!(
+                return Err(LowerError::Parse(alloc::format!(
                     "trigger {name:?}: unsupported kind {other:?} reached lowering"
                 )));
             }
@@ -204,7 +204,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
                     "exponential" => BackoffStrategy::Exponential,
                     // validate_trigger already rejected anything else; defensive.
                     other => {
-                        return Err(IrError::Parse(alloc::format!(
+                        return Err(LowerError::Parse(alloc::format!(
                             "trigger {name:?}: unsupported backoff strategy {other:?} reached lowering"
                         )));
                     }
@@ -377,8 +377,8 @@ fn lower_checks(
 ///
 /// tau-pkg's validator already shape-checked the determinism strings and
 /// custom-node `(source, package)` pairs, so this is a pure structural copy.
-fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<crate::context::ContextConfig> {
-    use crate::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
+fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context::ContextConfig> {
+    use tau_ir::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
     if entry.context.is_empty() {
         return None;
     }
@@ -402,7 +402,12 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<crate::context:
             config: s.config.clone(),
         })
         .collect();
-    Some(ContextConfig { pipeline })
+    // `ContextConfig` is `#[non_exhaustive]`; it cannot be built with a
+    // struct literal from outside `tau-ir`. Build via `Default` + the
+    // public `pipeline` field instead (behavior-identical).
+    let mut cfg = ContextConfig::default();
+    cfg.pipeline = pipeline;
+    Some(cfg)
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].
@@ -455,7 +460,7 @@ fn lower_judge(j: &tau_pkg::project::JudgeConfig) -> JudgeRef {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool_impl::ToolImpl;
+    use tau_ir::tool_impl::ToolImpl;
     use tau_pkg::project::ProjectConfig;
 
     #[test]
@@ -562,13 +567,13 @@ deterministic = "do_foo"
             Ok(_) => panic!("parse stage should reject collision but returned Ok"),
         };
         match &err {
-            IrError::Parse(msg) => {
+            LowerError::Parse(msg) => {
                 assert!(
                     msg.contains("collide") || msg.contains("collision"),
                     "error message should mention collision; got: {msg:?}"
                 );
             }
-            other => panic!("expected IrError::Parse; got {other:?}"),
+            other => panic!("expected LowerError::Parse; got {other:?}"),
         }
     }
 

@@ -6,11 +6,11 @@ use alloc::vec::Vec;
 use tau_domain::CapabilityShape;
 use thiserror::Error;
 
-use crate::ids::{AgentId, StepId, SubflowId, ToolId};
+use tau_ir::ids::{AgentId, StepId, SubflowId, ToolId};
 
 /// IR-level error type.
 #[derive(Debug, Error)]
-pub enum IrError {
+pub enum LowerError {
     /// Workflow-shape error: an Agent references a Tool that doesn't
     /// exist in the workflow.
     #[error("agent {agent:?} references unknown tool {tool:?}")]
@@ -92,6 +92,10 @@ pub enum IrError {
     /// Generic parse failure surfacing from the upstream TOML parser.
     #[error("tau.toml parse error: {0}")]
     Parse(String),
+
+    /// MCP-specific build error (per β.3 design doc §5).
+    #[error("MCP build: {0}")]
+    McpBuild(#[from] crate::lower::McpBuildError),
 
     /// SubflowEdge::Compose is not yet implemented (v0 reserves the variant).
     #[error("subflow {subflow:?}: Compose variant is not supported in v0")]

@@ -46,6 +46,9 @@ pub async fn spawn_root_agent_with_scope(
     // Delegate to the core's inner. Passing `run_id` keeps the inner's
     // RunState in sync with the JSONL log path we just constructed.
     let scope_root_str = scope_root.to_string_lossy().into_owned();
+    let skill_resolver: std::sync::Arc<dyn tau_ports::SkillResolver> = std::sync::Arc::new(
+        crate::skill_resolver_impl::TauPkgSkillResolver::new(scope_root.clone()),
+    );
     runtime
         .spawn_root_agent_inner(
             root_agent_def,
@@ -57,6 +60,7 @@ pub async fn spawn_root_agent_with_scope(
             Some(random),
             Some(run_id),
             Some(scope_root_str),
+            Some(skill_resolver),
         )
         .await
         .map_err(RuntimeError::Core)

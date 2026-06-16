@@ -5,7 +5,7 @@
 //! caller supplies (native tool registry, MCP contract cache, skill
 //! content-hash table), runs the capability-fit check against the
 //! target triple, and produces a typed `IrModule`. Any error short-
-//! circuits with `IrError`.
+//! circuits with `LowerError`.
 //!
 //! `tau build` is the caller; `tau dev` is also a caller (it lowers
 //! once per source change to drive the interpreter against a fresh IR).
@@ -21,9 +21,9 @@ pub use mcp_build_error::McpBuildError;
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;
 
-use crate::capability::CapabilityRequirements;
-use crate::error::IrError;
-use crate::module::IrModule;
+use crate::error::LowerError;
+use tau_ir::capability::CapabilityRequirements;
+use tau_ir::module::IrModule;
 
 /// Per-server-tool slice of a resolved MCP contract.
 ///
@@ -69,7 +69,7 @@ pub struct ResolvedMcpContract {
 /// # Example
 ///
 /// ```
-/// use tau_ir::lower::{lower_project, Caches};
+/// use tau_ir_lower::{lower_project, Caches};
 /// use tau_pkg::project::ProjectConfig;
 /// use tau_ports::target::registry;
 ///
@@ -91,7 +91,7 @@ pub fn lower_project(
     config: &ProjectConfig,
     target: &TargetTriple,
     caches: &Caches,
-) -> Result<IrModule, IrError> {
+) -> Result<IrModule, LowerError> {
     let parsed = parse::parse(config)?;
     let resolved = resolve::resolve(parsed, caches)?;
     typecheck::typecheck(&resolved)?;
@@ -123,7 +123,7 @@ fn build_module(parsed: crate::lower::parse::Parsed, target: &TargetTriple) -> I
     // skip-empty serialization preserves trigger-less hashes; the appended
     // array differentiates trigger-bearing hashes on its own.
     IrModule {
-        ir_format: crate::IrFormatVersion::current(),
+        ir_format: tau_ir::IrFormatVersion::current(),
         tau_version: env!("CARGO_PKG_VERSION").into(),
         target: *target,
         workflow: parsed.workflow,

@@ -18,5 +18,6 @@ thiserror       = { workspace = true }
 serde_json      = { workspace = true }
 
 [dev-dependencies]
-tau-ir    = { workspace = true }
-tau-ports = { workspace = true }
+tau-ir       = { workspace = true }
+tau-ir-lower = { workspace = true }
+tau-ports    = { workspace = true }

@@ -9,7 +9,7 @@
 //! - [`resolve_skill_for_spawn`] — end-to-end: lookup + substitute +
 //!   scope + subset check. Returns a `SkillSpawnRequest` ready for
 //!   the existing v1.1 spawn machinery.
-//!   **Requires the `host-fs` feature** (reads SKILL.md via `std::fs`).
+//!   **Requires the `host-fs` feature** (returns a `PathBuf`). Skill lookup + SKILL.md reading are delegated to the injected `tau_ports::SkillResolver` port.
 
 use alloc::string::String;
 #[cfg(feature = "host-fs")]
@@ -17,15 +17,14 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use globset::GlobBuilder;
-#[cfg(feature = "host-fs")]
 use tau_domain::SKILL_DIR_VAR;
 use tau_domain::{Capability, FsCapability};
-#[cfg(feature = "host-fs")]
-use tau_pkg::{find_installed_skill, Scope};
 
 use crate::orchestration::error::OrchestrationError;
 #[cfg(feature = "host-fs")]
 use crate::orchestration::virtual_tools::check_capability_subset;
+#[cfg(feature = "host-fs")]
+use tau_ports::SkillResolver;
 
 /// A validated, ready-to-spawn skill invocation.
 ///
@@ -96,17 +95,12 @@ pub struct SkillSpawnArgs {
 }
 
 /// Substitute `${SKILL_DIR}` literal in capability `paths` entries
-/// with `install_path.display()`. Non-path capabilities (net.http,
+/// with `install_path`. Non-path capabilities (net.http,
 /// task_list, plan, agent.spawn, skill.spawn, custom) pass through.
-///
-/// Gated behind `host-fs` because it takes a `std::path::Path` argument.
 ///
 /// # Example
 ///
 /// ```
-/// # #[cfg(feature = "host-fs")]
-/// # {
-/// use std::path::Path;
 /// use tau_domain::{Capability, FsCapability, SKILL_DIR_VAR};
 /// use tau_runtime_core::orchestration::skill_resolve::substitute_skill_dir;
 ///
@@ -115,22 +109,16 @@ pub struct SkillSpawnArgs {
 ///     "paths": [format!("{SKILL_DIR_VAR}/refs/**")]
 /// })).expect("valid capability");
 ///
-/// let out = substitute_skill_dir(&[cap], Path::new("/skills/critic/1.0.0"));
+/// let out = substitute_skill_dir(&[cap], "/skills/critic/1.0.0");
 /// if let Capability::Filesystem(FsCapability::Read { paths, .. }) = &out[0] {
 ///     assert_eq!(paths[0], "/skills/critic/1.0.0/refs/**");
 /// }
-/// # }
 /// ```
-#[cfg(feature = "host-fs")]
-pub fn substitute_skill_dir(
-    caps: &[Capability],
-    install_path: &std::path::Path,
-) -> Vec<Capability> {
-    let install_str = install_path.display().to_string();
+pub fn substitute_skill_dir(caps: &[Capability], install_path: &str) -> Vec<Capability> {
     let subst = |paths: &[String]| -> Vec<String> {
         paths
             .iter()
-            .map(|p| p.replace(SKILL_DIR_VAR, &install_str))
+            .map(|p| p.replace(SKILL_DIR_VAR, install_path))
             .collect()
     };
     caps.iter()
@@ -292,67 +280,48 @@ pub fn apply_scope_paths(
     Ok(out)
 }
 
-/// End-to-end resolution. Looks up skill, substitutes ${SKILL_DIR},
-/// narrows by scope_paths, verifies subset law, returns request.
+/// End-to-end resolution. Looks up the skill via the injected
+/// [`SkillResolver`] port, substitutes `${SKILL_DIR}`, narrows by
+/// `scope_paths`, verifies the subset law, returns the request.
 ///
 /// `parent_grant` is the parent agent's effective capability grant —
 /// used for the v1.1 capability subset law.
 ///
-/// **Requires the `host-fs` feature**: reads SKILL.md from the
-/// filesystem via `std::fs::read_to_string`. Embassy callers (no fs)
-/// must always supply a `system_prompt` override in `args` and never
-/// reach this function, OR rely on a future no-fs variant.
+/// **Requires the `host-fs` feature**: returns a [`SkillSpawnRequest`]
+/// whose `install_path` is a `std::path::PathBuf`. Guest shells without
+/// `host-fs` cannot construct the request and never call this; they ship
+/// `tau_ports::NoSkillResolver` so a `skill.<name>.spawn` fails gracefully.
 #[cfg(feature = "host-fs")]
 pub fn resolve_skill_for_spawn(
     skill_name: &str,
     args: &SkillSpawnArgs,
     parent_grant: &[Capability],
-    scope: &Scope,
+    resolver: &dyn SkillResolver,
 ) -> Result<SkillSpawnRequest, OrchestrationError> {
-    let installed = match find_installed_skill(scope, skill_name) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return Err(OrchestrationError::SkillNotInstalled {
-                name: skill_name.to_string(),
-            });
-        }
-        Err(tau_pkg::FindSkillError::InstallPathMissing { path, .. }) => {
-            return Err(OrchestrationError::SkillInstallPathMissing {
-                name: skill_name.to_string(),
-                expected_path: path,
-            });
-        }
-        Err(e) => {
-            return Err(OrchestrationError::SkillContentInvalid {
-                name: skill_name.to_string(),
-                detail: e.to_string(),
-            });
-        }
-    };
+    use tau_ports::SkillResolveError;
 
-    // 1. system_prompt: caller override OR read SKILL.md body.
-    let system_prompt = if let Some(sp) = &args.system_prompt {
-        sp.clone()
-    } else {
-        let skill_md_path = installed.install_path.join(&installed.skill.content);
-        // std::fs::read_to_string — gated by host-fs feature.
-        let text = std::fs::read_to_string(&skill_md_path).map_err(|e| {
-            OrchestrationError::SkillContentInvalid {
+    let resolved = resolver.resolve(skill_name).map_err(|e| match e {
+        SkillResolveError::NotFound => OrchestrationError::SkillNotInstalled {
+            name: skill_name.to_string(),
+        },
+        SkillResolveError::InstallPathMissing { expected_path } => {
+            OrchestrationError::SkillInstallPathMissing {
                 name: skill_name.to_string(),
-                detail: alloc::format!("reading SKILL.md at {skill_md_path:?}: {e}"),
+                expected_path: std::path::PathBuf::from(expected_path),
             }
-        })?;
-        let parsed = tau_domain::parse_skill_md(&text).map_err(|e| {
-            OrchestrationError::SkillContentInvalid {
-                name: skill_name.to_string(),
-                detail: alloc::format!("parsing SKILL.md: {e}"),
-            }
-        })?;
-        parsed.body
-    };
+        }
+        SkillResolveError::Invalid { detail } => OrchestrationError::SkillContentInvalid {
+            name: skill_name.to_string(),
+            detail,
+        },
+    })?;
+
+    // 1. system_prompt: caller override OR the resolved SKILL.md body.
+    let system_prompt = args.system_prompt.clone().unwrap_or(resolved.system_prompt);
 
     // 2. ${SKILL_DIR} substitution in capabilities.
-    let substituted = substitute_skill_dir(&installed.capabilities, &installed.install_path);
+    let install_path = resolved.install_path;
+    let substituted = substitute_skill_dir(&resolved.capabilities, &install_path);
 
     // 3. Apply caller's scope_paths if provided.
     let scoped = if let Some(sp) = &args.scope_paths {
@@ -366,7 +335,7 @@ pub fn resolve_skill_for_spawn(
 
     Ok(SkillSpawnRequest {
         skill_name: skill_name.to_string(),
-        install_path: installed.install_path,
+        install_path: std::path::PathBuf::from(install_path),
         system_prompt,
         grant: scoped,
         message: args.message.clone(),
@@ -379,6 +348,7 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
     use tau_domain::NetCapability;
+    use tau_ports::{ResolvedSkill, SkillResolveError, SkillResolver};
 
     fn fs_read(paths: Vec<&str>) -> Capability {
         let paths_json: Vec<serde_json::Value> = paths
@@ -420,10 +390,7 @@ mod tests {
     #[test]
     fn substitute_skill_dir_replaces_in_fs_read() {
         let caps = vec![fs_read(vec!["${SKILL_DIR}/refs/**"])];
-        let out = substitute_skill_dir(
-            &caps,
-            std::path::Path::new("/scope/.tau/packages/critic/0.1.0"),
-        );
+        let out = substitute_skill_dir(&caps, "/scope/.tau/packages/critic/0.1.0");
         match &out[0] {
             Capability::Filesystem(FsCapability::Read { paths, .. }) => {
                 assert_eq!(paths[0], "/scope/.tau/packages/critic/0.1.0/refs/**");
@@ -435,7 +402,7 @@ mod tests {
     #[test]
     fn substitute_skill_dir_passes_through_non_fs() {
         let caps = vec![net_http(vec!["api.example.com"])];
-        let out = substitute_skill_dir(&caps, std::path::Path::new("/scope"));
+        let out = substitute_skill_dir(&caps, "/scope");
         assert_eq!(out.len(), 1);
         match &out[0] {
             Capability::Network(NetCapability::Http {
@@ -504,5 +471,72 @@ mod tests {
             &out[1],
             Capability::Network(NetCapability::Http { .. })
         ));
+    }
+
+    struct MockResolver {
+        result: Result<ResolvedSkill, SkillResolveError>,
+    }
+    impl SkillResolver for MockResolver {
+        fn resolve(&self, _name: &str) -> Result<ResolvedSkill, SkillResolveError> {
+            self.result.clone()
+        }
+    }
+
+    #[test]
+    fn resolve_skill_for_spawn_builds_request_from_port() {
+        let resolver = MockResolver {
+            result: Ok(ResolvedSkill {
+                install_path: "/scope/.tau/packages/critic/0.1.0".to_string(),
+                capabilities: vec![fs_read(vec!["${SKILL_DIR}/refs/**"])],
+                system_prompt: "You are a critic.".to_string(),
+            }),
+        };
+        let args = SkillSpawnArgs {
+            message: "review this".into(),
+            system_prompt: None,
+            scope_paths: None,
+        };
+        let parent = vec![fs_read(vec!["/scope/.tau/packages/critic/0.1.0/refs/**"])];
+        let req = resolve_skill_for_spawn("critic", &args, &parent, &resolver).expect("resolve ok");
+        assert_eq!(req.skill_name, "critic");
+        assert_eq!(req.system_prompt, "You are a critic.");
+        assert_eq!(
+            req.install_path,
+            std::path::PathBuf::from("/scope/.tau/packages/critic/0.1.0")
+        );
+        match &req.grant[0] {
+            Capability::Filesystem(FsCapability::Read { paths, .. }) => {
+                assert_eq!(paths[0], "/scope/.tau/packages/critic/0.1.0/refs/**");
+            }
+            other => panic!("expected fs.read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_skill_for_spawn_maps_not_found() {
+        let resolver = MockResolver {
+            result: Err(SkillResolveError::NotFound),
+        };
+        let args = SkillSpawnArgs::default();
+        let err = resolve_skill_for_spawn("ghost", &args, &[], &resolver).unwrap_err();
+        assert!(matches!(err, OrchestrationError::SkillNotInstalled { .. }));
+    }
+
+    #[test]
+    fn resolve_skill_for_spawn_caller_override_wins() {
+        let resolver = MockResolver {
+            result: Ok(ResolvedSkill {
+                install_path: "/scope/skill".to_string(),
+                capabilities: vec![],
+                system_prompt: "default body".to_string(),
+            }),
+        };
+        let args = SkillSpawnArgs {
+            message: "go".into(),
+            system_prompt: Some("override body".into()),
+            scope_paths: None,
+        };
+        let req = resolve_skill_for_spawn("s", &args, &[], &resolver).expect("ok");
+        assert_eq!(req.system_prompt, "override body");
     }
 }

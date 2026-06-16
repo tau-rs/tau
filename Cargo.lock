@@ -3827,6 +3827,7 @@ dependencies = [
  "tau-app",
  "tau-domain",
  "tau-ir",
+ "tau-ir-lower",
  "tau-mcp",
  "tau-mcp-tokio",
  "tau-observe",
@@ -3861,6 +3862,7 @@ dependencies = [
  "sha2 0.11.0",
  "tau-domain",
  "tau-ir",
+ "tau-ir-lower",
  "tau-mcp",
  "tau-mcp-tokio",
  "tau-pkg",
@@ -3905,7 +3907,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tau-domain",
- "tau-pkg",
  "tau-ports",
  "thiserror 2.0.18",
 ]
@@ -3920,11 +3921,29 @@ dependencies = [
  "sha2 0.11.0",
  "tau-domain",
  "tau-ir",
+ "tau-ir-lower",
  "tau-pkg",
  "tau-ports",
  "tau-runtime-core",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "tau-ir-lower"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tau-domain",
+ "tau-ir",
+ "tau-pkg",
+ "tau-ports",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4130,7 +4149,6 @@ dependencies = [
  "serde_json",
  "tau-domain",
  "tau-ir",
- "tau-pkg",
  "tau-ports",
  "tau-runtime-core",
  "thiserror 2.0.18",
@@ -4265,6 +4283,7 @@ dependencies = [
  "swc_ecma_ast",
  "swc_ecma_parser",
  "tau-ir",
+ "tau-ir-lower",
  "tau-pkg",
  "tau-ports",
  "thiserror 2.0.18",
