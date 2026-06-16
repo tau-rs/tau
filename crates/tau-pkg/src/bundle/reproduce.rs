@@ -437,7 +437,7 @@ version = "0.1.0"
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.solo.prompt]
 system = "hi"
@@ -593,7 +593,7 @@ version = "0.1.0"
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -651,7 +651,7 @@ version = "0.2.0"
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -701,7 +701,7 @@ version = "0.1.0"
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -709,7 +709,7 @@ system = "you are solo"
 [agents.extra]
 display_name = "Extra"
 package = "noop@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.extra.prompt]
 system = "you are extra"
@@ -780,7 +780,7 @@ version = "0.1.0"
 [agents.r]
 display_name = "R"
 package = "homepkg@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.r.prompt]
 system = "you are r"
@@ -843,7 +843,7 @@ version = "0.1.0"
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.solo.prompt]
 system = "you are MUTATED solo"
@@ -851,7 +851,7 @@ system = "you are MUTATED solo"
 [agents.extra]
 display_name = "Extra"
 package = "noop@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.extra.prompt]
 system = "you are extra"

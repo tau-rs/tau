@@ -59,8 +59,6 @@ pub struct UncheckedAgent {
     pub display_name: String,
     /// Package reference of the form `<name>@<semver-req>`.
     pub package: String,
-    /// LLM backend identifier; resolved at lookup time.
-    pub llm_backend: String,
     /// Optional `[agents.<id>.requires]` sub-table.
     #[serde(default)]
     pub requires: Option<UncheckedRequires>,
@@ -730,7 +728,6 @@ pub struct ContextStepEntry {
 ///     "reviewer".to_string(),
 ///     "Code Reviewer".to_string(),
 ///     "code-reviewer@^0.1".to_string(),
-///     "anthropic".to_string(),
 ///     RequiresEntry::default(),
 ///     BTreeMap::new(),
 ///     PromptEntry::None,
@@ -748,8 +745,6 @@ pub struct AgentEntry {
     pub display_name: String,
     /// Package reference (`<name>@<semver-req>`).
     pub package: String,
-    /// LLM backend identifier.
-    pub llm_backend: String,
     /// Validated `requires` block.
     pub requires: RequiresEntry,
     /// Free-form configuration table.
@@ -791,7 +786,6 @@ impl AgentEntry {
         id: String,
         display_name: String,
         package: String,
-        llm_backend: String,
         requires: RequiresEntry,
         config: BTreeMap<String, toml::Value>,
         prompt: PromptEntry,
@@ -801,7 +795,6 @@ impl AgentEntry {
             id,
             display_name,
             package,
-            llm_backend,
             requires,
             config,
             prompt,
@@ -1239,12 +1232,6 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
             message: "package must be non-empty".into(),
         });
     }
-    if raw.llm_backend.trim().is_empty() {
-        return Err(ProjectConfigError::AgentValidation {
-            id,
-            message: "llm_backend must be non-empty".into(),
-        });
-    }
 
     // Convert the typed unchecked overrides into runtime-shape
     // CapabilityOverride values. The intersect-vs-manifest check runs
@@ -1424,7 +1411,6 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         id,
         display_name: raw.display_name,
         package: raw.package,
-        llm_backend: raw.llm_backend,
         requires,
         config,
         prompt,
@@ -2165,7 +2151,7 @@ mod tests {
             [agents.reviewer]
             display_name = "Code Reviewer"
             package      = "code-reviewer@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.reviewer.requires.tools]]
             name = "fs-read"
@@ -2203,7 +2189,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.r.capabilities]]
             kind        = "fs.read"
@@ -2231,7 +2217,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.r.capabilities]]
             kind        = "fs.read"
@@ -2263,7 +2249,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.r.capabilities]]
             kind          = "net.http"
@@ -2293,7 +2279,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         assert!(cfg.agents.get("r").unwrap().capability_overrides.is_empty());
@@ -2308,7 +2294,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [agents.r.prompt]
             system      = "inline"
@@ -2330,7 +2316,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [agents.r.prompt]
             system = "be helpful"
@@ -2349,7 +2335,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "demo@^0.1"
-            llm_backend = "mock-llm"
+
 
             [[agents.a.context.pipeline]]
             transformer = "trim_old"
@@ -2395,7 +2381,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "demo@^0.1"
-            llm_backend = "mock-llm"
+
 
             [[agents.a.context.pipeline]]
             transformer = "my_custom"
@@ -2415,7 +2401,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "demo@^0.1"
-            llm_backend = "mock-llm"
+
 
             [[agents.a.context.pipeline]]
             transformer = "my_custom"
@@ -2436,7 +2422,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [agents.r.prompt]
             system_file = "prompts/r.md"
@@ -2458,7 +2444,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         let agent = cfg.agents.get("r").unwrap();
@@ -2474,7 +2460,7 @@ mod tests {
             [agents.r]
             display_name = ""
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
         "#;
         let result = parse(toml_str);
         let Err(ProjectConfigError::AgentValidation { id, message }) = result else {
@@ -2493,31 +2479,13 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = ""
-            llm_backend  = "anthropic"
+
         "#;
         let result = parse(toml_str);
         let Err(ProjectConfigError::AgentValidation { message, .. }) = result else {
             panic!()
         };
         assert!(message.contains("package"));
-    }
-
-    #[test]
-    fn validate_rejects_empty_llm_backend() {
-        let toml_str = r#"
-            [project]
-            name = "x"
-
-            [agents.r]
-            display_name = "R"
-            package      = "p@^0.1"
-            llm_backend  = ""
-        "#;
-        let result = parse(toml_str);
-        let Err(ProjectConfigError::AgentValidation { message, .. }) = result else {
-            panic!()
-        };
-        assert!(message.contains("llm_backend"));
     }
 
     #[test]
@@ -2529,7 +2497,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [agents.r.requires]
             tools = ["fs-read"]
@@ -2551,7 +2519,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.r.requires.tools]]
             name = "fs-read"
@@ -2574,7 +2542,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.r.requires.tools]]
             name = "fs-read"
@@ -2594,12 +2562,12 @@ mod tests {
             [agents.alpha]
             display_name = "Alpha"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [agents.beta]
             display_name = "Beta"
             package      = "q@^0.1"
-            llm_backend  = "openai"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         assert_eq!(cfg.agents.len(), 2);
@@ -2773,7 +2741,7 @@ mod tests {
             [agents.monitor]
             display_name = "Monitor"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
             model        = "claude-haiku-4-5"
             tool_refs    = ["read_temp", "set_fan"]
             max_turns    = 10
@@ -2796,7 +2764,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         let agent = cfg.agents.get("r").unwrap();
@@ -2907,7 +2875,7 @@ mod tests {
             [agents.summarizer]
             display_name = "Summarizer"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [trigger.nightly]
             kind     = "cron"
@@ -2940,7 +2908,7 @@ mod tests {
             [agents.summarizer]
             display_name = "S"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [trigger.manual]
             kind  = "manual"
@@ -2961,7 +2929,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -2981,7 +2949,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "manual"
             agent = "a"
@@ -3001,7 +2969,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "webhook"
             agent = "a"
@@ -3023,7 +2991,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3043,7 +3011,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3075,7 +3043,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3098,7 +3066,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "event"
             agent = "a"
@@ -3117,7 +3085,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3143,7 +3111,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3168,7 +3136,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3328,7 +3296,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3404,7 +3372,7 @@ name = "p"
 [agents.writer]
 display_name = "Writer"
 package      = "demo@^0.1"
-llm_backend  = "anthropic"
+
 model        = "claude-haiku-4-5"
 produces     = ["/workspace/report.md"]
 "#;
@@ -3426,7 +3394,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 [deliverables.report]
 path         = "/workspace/report.md"
@@ -3449,7 +3417,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3478,7 +3446,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3503,7 +3471,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3531,7 +3499,7 @@ must_satisfy = "x"
             ""
         };
         let polish_agent = if polish_after {
-            "[agents.polish]\ndisplay_name=\"P\"\npackage=\"d@^0.1\"\nllm_backend=\"anthropic\"\nmodel=\"m\"\n"
+            "[agents.polish]\ndisplay_name=\"P\"\npackage=\"d@^0.1\"\nmodel=\"m\"\n"
         } else {
             ""
         };
@@ -3542,12 +3510,12 @@ name = "p"
 [agents.gather]
 display_name="G"
 package="d@^0.1"
-llm_backend="anthropic"
+
 model="m"
 [agents.writer]
 display_name="W"
 package="d@^0.1"
-llm_backend="anthropic"
+
 model="m"
 produces=["/workspace/report.md"]
 tool_refs=["write_file"]
@@ -3608,7 +3576,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3646,7 +3614,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3707,7 +3675,7 @@ name = "p"
 [agents.writer]
 display_name="W"
 package="d@^0.1"
-llm_backend="anthropic"
+
 model="m"
 produces=["/workspace/report.md"]
 tool_refs=["write_file"]
@@ -3738,7 +3706,7 @@ description = "d"
 [agents.assistant]
 display_name = "A"
 package = "anthropic@^1"
-llm_backend = "anthropic"
+
 
 [[agents.assistant.credentials]]
 id = "anthropic_api_key"
@@ -3761,7 +3729,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "Bad Id"
 env = "X"
@@ -3782,7 +3750,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "ok_id"
 env = "lower_case"
@@ -3803,7 +3771,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "ok_id"
 env = "1KEY"
@@ -3824,7 +3792,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "openai_api_key"
 env = "OPENAI_API_KEY"
@@ -3849,7 +3817,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "id_one"
 env = "SAME"
@@ -3888,15 +3856,13 @@ mod proptests {
             ident_strategy(),
             safe_string_strategy(), // display_name
             ident_strategy(),       // package name
-            ident_strategy(),       // llm_backend
         )
-            .prop_map(|(id, dn, pkg, llm)| {
+            .prop_map(|(id, dn, pkg)| {
                 (
                     id,
                     UncheckedAgent {
                         display_name: dn,
                         package: format!("{pkg}@^0.1"),
-                        llm_backend: llm,
                         requires: None,
                         capabilities: Vec::new(),
                         config: None,

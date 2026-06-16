@@ -219,10 +219,18 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
             effective_to_bundle(&eff)
         };
 
+        // Derive the backend kind from the project [models] table via the
+        // agent's model alias. Falls back to empty string when the alias is
+        // absent; the real resolution happens at IR lowering.
+        let backend_kind = project_config
+            .models
+            .get(&entry.model)
+            .map(|m| m.backend.clone())
+            .unwrap_or_default();
         agents.push(BundleAgent {
             id: agent_id,
             backend: BackendRef {
-                kind: entry.llm_backend.clone(),
+                kind: backend_kind,
                 model: None,
                 extra: std::collections::BTreeMap::new(),
             },
@@ -712,7 +720,7 @@ name = "test-project"
 [agents.zeta]
 display_name = "Zeta"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+
 
 [agents.zeta.prompt]
 system = "you are zeta"
@@ -720,7 +728,7 @@ system = "you are zeta"
 [agents.alpha]
 display_name = "Alpha"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+
 
 [agents.alpha.prompt]
 system = "you are alpha"
@@ -766,7 +774,7 @@ name = "test-project"
 [agents.r]
 display_name = "R"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+
 
 [agents.r.prompt]
 system_file = "prompts/r.md"
@@ -813,7 +821,7 @@ version = "0.1.0"
 [agents.alpha]
 display_name = "Alpha"
 package = "pkg-home@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.alpha.prompt]
 system = "you are alpha"
@@ -825,7 +833,7 @@ source = "https://example.com/pkg-a.git"
 [agents.beta]
 display_name = "Beta"
 package = "pkg-home@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.beta.prompt]
 system = "you are beta"
@@ -1000,7 +1008,7 @@ version = "1.2.3"
 [agents.alpha]
 display_name = "Alpha"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+
 
 [agents.alpha.prompt]
 system = "you are alpha"
@@ -1083,7 +1091,7 @@ name = "test-project"
 [agents.r]
 display_name = "R"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+
 
 [agents.r.prompt]
 system_file = "prompts/missing.md"
@@ -1216,7 +1224,7 @@ version = "0.1.0"
 [agents.r]
 display_name = "R"
 package = "homepkg@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.r.prompt]
 system = "you are r"
@@ -1350,7 +1358,7 @@ version = "0.1.0"
 [agents.r]
 display_name = "R"
 package = "ghost@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.r.prompt]
 system = "you are r"
@@ -1412,7 +1420,7 @@ version = "0.1.0"
 [agents.summarizer]
 display_name = "S"
 package = "p@^0.1"
-llm_backend = "anthropic"
+
 
 [agents.summarizer.prompt]
 system = "hi"

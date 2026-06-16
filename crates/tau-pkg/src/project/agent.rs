@@ -4,18 +4,20 @@
 //!
 //! Per spec §3.3 and §3.4: walks the per-scope lockfile to find the
 //! highest-version installed package matching the entry's `package`
-//! reference, reads its manifest, verifies the declared `llm_backend`
-//! is installed, and materializes the `system_prompt` (inline or file).
+//! reference, reads its manifest, and materializes the `system_prompt`
+//! (inline or file). The backend is resolved from the project's `[models]`
+//! table via the agent's `model` alias.
 //! `requires.tools` resolve+install happens at the CLI call sites
 //! (cmd/run.rs, cmd/chat.rs, cmd/resolve.rs) before this function runs.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::{ManifestReadError, RegistryError, Scope};
 use tau_domain::{AgentDefinition, AgentId, PackageId, PackageManifest, PackageName, Value};
 
-use super::project::{AgentEntry, PromptEntry};
+use super::project::{AgentEntry, ModelEntry, PromptEntry};
 
 /// Errors from [`build_agent_definition`].
 ///
@@ -51,21 +53,6 @@ pub enum AgentResolutionError {
         package: String,
         /// Stringified semver requirement.
         req: String,
-    },
-
-    /// The agent's `llm_backend` reference doesn't match any installed
-    /// package in the resolved scope. v0.1 does NOT enforce that the
-    /// package's `kind` is `llm-backend` — that check lands when the
-    /// runtime grows kind-aware loading (Phase 1+).
-    #[error(
-        "agent {agent_id:?} llm backend {backend:?} not installed \
-         (run `tau install <backend-url>`)"
-    )]
-    LlmBackendNotFound {
-        /// Agent id from `[agents.<id>]`.
-        agent_id: String,
-        /// Raw `llm_backend = "..."` from the entry.
-        backend: String,
     },
 
     /// Failed to read the resolved package's `tau.toml` manifest.
@@ -135,7 +122,8 @@ pub enum AgentResolutionError {
 ///    `name` satisfying the requirement.
 /// 3. Read the resolved package's manifest from
 ///    `scope.package_dir(name, version)/tau.toml`.
-/// 4. Verify `entry.llm_backend` resolves to an installed package.
+/// 4. Derive the LLM backend name from the project `[models]` table via
+///    `entry.model` alias. Unresolvable → `"unresolved"` placeholder.
 /// 5. (Removed) `requires.tools` is no longer verified here; resolve+install
 ///    happens at the CLI call sites before `build_agent_definition` is called.
 /// 6. Read `prompt.system` / `prompt.system_file` (path relative to
@@ -150,6 +138,7 @@ pub fn build_agent_definition(
     entry: &AgentEntry,
     project_root: &Path,
     scope: &Scope,
+    models: &BTreeMap<String, ModelEntry>,
 ) -> Result<(AgentDefinition, PackageManifest), AgentResolutionError> {
     // Step 1: parse `package = "name@^0.1"` into name + semver req.
     let (raw_name, version_req) = parse_package_ref(&entry.package).map_err(|message| {
@@ -216,19 +205,24 @@ pub fn build_agent_definition(
         }
     })?;
 
-    // Step 4: verify `llm_backend` is installed.
-    let llm_name = PackageName::from_str(&entry.llm_backend).map_err(|e| {
-        AgentResolutionError::InvalidIdentifier {
-            agent_id: entry.id.clone(),
-            message: format!("llm_backend {:?}: {e}", entry.llm_backend),
-        }
+    // Step 4: derive backend name from the project [models] table via the
+    // agent's `model` alias. Real per-agent backend resolution happens at IR
+    // lowering; here we use the value only to satisfy AgentDefinition::new's
+    // PackageName parameter. Fall back to "unresolved" when the alias is
+    // absent so the legacy path compiles without panicking.
+    let backend_str = models
+        .get(&entry.model)
+        .map(|m| m.backend.clone())
+        .unwrap_or_default();
+    let llm_name = PackageName::from_str(if backend_str.is_empty() {
+        "unresolved"
+    } else {
+        &backend_str
+    })
+    .map_err(|e| AgentResolutionError::InvalidIdentifier {
+        agent_id: entry.id.clone(),
+        message: format!("backend from models[{:?}]: {e}", entry.model),
     })?;
-    if !installed.iter().any(|pkg| pkg.name == llm_name) {
-        return Err(AgentResolutionError::LlmBackendNotFound {
-            agent_id: entry.id.clone(),
-            backend: entry.llm_backend.clone(),
-        });
-    }
 
     // Step 5 (verify requires.tools) was removed in Tier 2 priority 5.
     // resolve+install for requires.tools now lives at the CLI call sites
@@ -338,7 +332,6 @@ mod tests {
             id: "reviewer".into(),
             display_name: "Code Reviewer".into(),
             package: "code-reviewer@^0.1".into(),
-            llm_backend: "anthropic".into(),
             requires: RequiresEntry::default(),
             config: BTreeMap::new(),
             prompt: PromptEntry::None,
@@ -471,7 +464,7 @@ generated_at = "{now_rfc3339}"
         let (_tmp, project_root, scope) = make_project_scope();
         let entry = entry(|_| {});
 
-        let err = build_agent_definition(&entry, &project_root, &scope).unwrap_err();
+        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         match err {
             AgentResolutionError::PackageNotFound { agent_id, package } => {
                 assert_eq!(agent_id, "reviewer");
@@ -486,7 +479,7 @@ generated_at = "{now_rfc3339}"
         let (_tmp, project_root, scope) = make_project_scope();
         let entry = entry(|e| e.package = "code-reviewer@not-a-semver".into());
 
-        let err = build_agent_definition(&entry, &project_root, &scope).unwrap_err();
+        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         assert!(
             matches!(err, AgentResolutionError::PackageParse { .. }),
             "got: {err:?}"
@@ -499,7 +492,7 @@ generated_at = "{now_rfc3339}"
         // PackageName must be lowercase ASCII kebab-case; "Bad" is rejected.
         let entry = entry(|e| e.package = "Bad@^0.1".into());
 
-        let err = build_agent_definition(&entry, &project_root, &scope).unwrap_err();
+        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         assert!(
             matches!(err, AgentResolutionError::InvalidIdentifier { .. }),
             "got: {err:?}"
@@ -527,22 +520,16 @@ generated_at = "{now_rfc3339}"
             "tool",
             "https://example.com/cr.git",
         );
-        install_fixture(
-            &scope,
-            "anthropic",
-            "0.1.0",
-            "llm-backend",
-            "https://example.com/anthropic.git",
-        );
 
         let entry = entry(|e| e.package = "code-reviewer@^0.1".into());
-        let (def, manifest) = build_agent_definition(&entry, &project_root, &scope).unwrap();
+        // No models map → backend falls back to "unresolved".
+        let (def, manifest) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
 
         assert_eq!(def.id.as_str(), "reviewer");
         assert_eq!(def.display_name, "Code Reviewer");
         assert_eq!(def.package.name.as_str(), "code-reviewer");
         assert_eq!(def.package.version.to_string(), "0.1.0");
-        assert_eq!(def.llm_backend.as_str(), "anthropic");
+        assert_eq!(def.llm_backend.as_str(), "unresolved");
         assert_eq!(manifest.name().as_str(), "code-reviewer");
         assert_eq!(manifest.version().to_string(), "0.1.0");
     }
@@ -558,45 +545,15 @@ generated_at = "{now_rfc3339}"
             "tool",
             "https://example.com/cr.git",
         );
-        install_fixture(
-            &scope,
-            "anthropic",
-            "0.1.0",
-            "llm-backend",
-            "https://example.com/anthropic.git",
-        );
 
         let entry = entry(|e| e.package = "code-reviewer@^0.1".into());
-        let err = build_agent_definition(&entry, &project_root, &scope).unwrap_err();
+        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         match err {
             AgentResolutionError::PackageVersionUnsatisfied { agent_id, req, .. } => {
                 assert_eq!(agent_id, "reviewer");
                 assert!(req.contains("0.1") || req.contains("^0.1"));
             }
             other => panic!("expected PackageVersionUnsatisfied, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn build_agent_definition_returns_llm_backend_not_found() {
-        let (_tmp, project_root, scope) = make_project_scope();
-        // Install agent package but not the llm-backend.
-        install_fixture(
-            &scope,
-            "code-reviewer",
-            "0.1.0",
-            "tool",
-            "https://example.com/cr.git",
-        );
-
-        let entry = entry(|_| {}); // llm_backend = "anthropic"
-        let err = build_agent_definition(&entry, &project_root, &scope).unwrap_err();
-        match err {
-            AgentResolutionError::LlmBackendNotFound { agent_id, backend } => {
-                assert_eq!(agent_id, "reviewer");
-                assert_eq!(backend, "anthropic");
-            }
-            other => panic!("expected LlmBackendNotFound, got: {other:?}"),
         }
     }
 
@@ -631,20 +588,13 @@ generated_at = "{now_rfc3339}"
             "tool",
             "https://example.com/cr.git",
         );
-        install_fixture(
-            &scope,
-            "anthropic",
-            "0.1.0",
-            "llm-backend",
-            "https://example.com/anthropic.git",
-        );
         // "fs-read" is intentionally NOT installed; Step 5 was deleted so this
         // must NOT cause an error.
         let tool = make_required_tool("fs-read", "https://example.com/fs-read.git", "^0.1");
 
         let entry = entry(|e| e.requires.tools = vec![tool]);
         // Should succeed: requires.tools is no longer checked at this layer.
-        let (def, _manifest) = build_agent_definition(&entry, &project_root, &scope).unwrap();
+        let (def, _manifest) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(def.id.as_str(), "reviewer");
     }
 
@@ -658,13 +608,6 @@ generated_at = "{now_rfc3339}"
             "tool",
             "https://example.com/cr.git",
         );
-        install_fixture(
-            &scope,
-            "anthropic",
-            "0.1.0",
-            "llm-backend",
-            "https://example.com/anthropic.git",
-        );
 
         // Drop a prompt file at <project_root>/prompts/reviewer.md.
         let prompt_dir = project_root.join("prompts");
@@ -675,7 +618,7 @@ generated_at = "{now_rfc3339}"
         let entry = entry(|e| {
             e.prompt = PromptEntry::File("prompts/reviewer.md".into());
         });
-        let (def, _manifest) = build_agent_definition(&entry, &project_root, &scope).unwrap();
+        let (def, _manifest) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(
             def.system_prompt.as_deref(),
             Some("You are a careful reviewer.")
@@ -692,18 +635,11 @@ generated_at = "{now_rfc3339}"
             "tool",
             "https://example.com/cr.git",
         );
-        install_fixture(
-            &scope,
-            "anthropic",
-            "0.1.0",
-            "llm-backend",
-            "https://example.com/anthropic.git",
-        );
 
         let entry = entry(|e| {
             e.prompt = PromptEntry::File("prompts/missing.md".into());
         });
-        let err = build_agent_definition(&entry, &project_root, &scope).unwrap_err();
+        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         match err {
             AgentResolutionError::PromptFileRead { agent_id, path, .. } => {
                 assert_eq!(agent_id, "reviewer");
@@ -723,16 +659,9 @@ generated_at = "{now_rfc3339}"
             "tool",
             "https://example.com/cr.git",
         );
-        install_fixture(
-            &scope,
-            "anthropic",
-            "0.1.0",
-            "llm-backend",
-            "https://example.com/anthropic.git",
-        );
 
         let entry = entry(|e| e.prompt = PromptEntry::Inline("be helpful".into()));
-        let (def, _) = build_agent_definition(&entry, &project_root, &scope).unwrap();
+        let (def, _) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(def.system_prompt.as_deref(), Some("be helpful"));
     }
 
@@ -746,13 +675,6 @@ generated_at = "{now_rfc3339}"
             "tool",
             "https://example.com/cr.git",
         );
-        install_fixture(
-            &scope,
-            "anthropic",
-            "0.1.0",
-            "llm-backend",
-            "https://example.com/anthropic.git",
-        );
 
         let entry = entry(|e| {
             let mut cfg = BTreeMap::new();
@@ -764,7 +686,7 @@ generated_at = "{now_rfc3339}"
             e.config = cfg;
         });
 
-        let (def, _) = build_agent_definition(&entry, &project_root, &scope).unwrap();
+        let (def, _) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(def.config.len(), 2);
         assert_eq!(
             def.config.get("model").and_then(Value::as_string),
