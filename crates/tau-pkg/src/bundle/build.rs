@@ -35,7 +35,7 @@ pub struct BuildOptions {
     /// the bundle schema_version is written as 2. When `None`, the
     /// bundle is schema_version 2 but with no IR payload field. The
     /// caller (tau-cli) is responsible for lowering the project IR via
-    /// `tau_ir::lower::lower_project` and constructing the `IrPayload`
+    /// `tau_ir_lower::lower_project` and constructing the `IrPayload`
     /// before calling `build`.
     pub ir_payload: Option<IrPayload>,
 }

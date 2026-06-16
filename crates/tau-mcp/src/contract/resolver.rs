@@ -23,7 +23,7 @@ use crate::McpError;
 use tau_domain::Capability;
 
 /// Per-server-tool slice of a resolved MCP contract. Mirror of
-/// `tau_ir::lower::ResolvedServerTool` — the resolver returns this type
+/// `tau_ir_lower::ResolvedServerTool` — the resolver returns this type
 /// and tau-cli converts to tau-ir's shape (trivial field-by-field map).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedServerTool {
