@@ -1,7 +1,7 @@
 //! End-to-end lowering test against a minimal tau.toml.
 
-use tau_ir_lower::{lower_project, Caches, LowerError};
 use tau_ir::IrFormatVersion;
+use tau_ir_lower::{lower_project, Caches, LowerError};
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;
 

@@ -1,8 +1,8 @@
 //! Lowering of `[trigger.*]` config into `IrModule.triggers`.
 
-use tau_ir_lower::{lower_project, Caches, LowerError};
 use tau_ir::trigger::TriggerKind;
 use tau_ir::IrFormatVersion;
+use tau_ir_lower::{lower_project, Caches, LowerError};
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::registry;
 

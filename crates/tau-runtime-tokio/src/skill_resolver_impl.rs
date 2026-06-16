@@ -57,11 +57,10 @@ impl SkillResolver for TauPkgSkillResolver {
 
         // Read + parse SKILL.md for the default system prompt.
         let skill_md_path = installed.install_path.join(&installed.skill.content);
-        let text = std::fs::read_to_string(&skill_md_path).map_err(|e| {
-            SkillResolveError::Invalid {
+        let text =
+            std::fs::read_to_string(&skill_md_path).map_err(|e| SkillResolveError::Invalid {
                 detail: format!("reading SKILL.md at {skill_md_path:?}: {e}"),
-            }
-        })?;
+            })?;
         let parsed = tau_domain::parse_skill_md(&text).map_err(|e| SkillResolveError::Invalid {
             detail: format!("parsing SKILL.md: {e}"),
         })?;

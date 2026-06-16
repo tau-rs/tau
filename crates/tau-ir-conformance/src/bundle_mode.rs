@@ -24,8 +24,8 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use tau_ir_lower::{lower_project, Caches};
 use tau_ir::IrModule;
+use tau_ir_lower::{lower_project, Caches};
 use tau_pkg::bundle::{build as build_bundle, BuildOptions, BundleManifest, IrPayload};
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::registry as target_registry;

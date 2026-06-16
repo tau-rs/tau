@@ -35,8 +35,7 @@ fn toml_and_ts_produce_byte_equal_canonical_ir_with_goals_and_deliverables() {
 
     let toml_ir =
         tau_ir_lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
-    let ts_ir =
-        tau_ir_lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
+    let ts_ir = tau_ir_lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
 
     // ── Canonical-encode and compare bytes ───────────────────────────────────
     let toml_bytes = tau_ir::canonical::to_canonical_bytes(&toml_ir);

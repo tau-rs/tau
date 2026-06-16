@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
-use tau_ir_lower::{lower_project, Caches};
 use tau_ir::{AgentId, IrModule};
+use tau_ir_lower::{lower_project, Caches};
 use tau_pkg::project::ProjectConfig;
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_ports::target::TargetTriple;
