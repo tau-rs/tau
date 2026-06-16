@@ -215,6 +215,7 @@ pub fn build_agent_definition(
         .map(|m| m.backend.clone())
         .unwrap_or_default();
     let llm_name = PackageName::from_str(if backend_str.is_empty() {
+        // TODO(Task 4): unreachable once [models] alias validation lands; bridge value only.
         "unresolved"
     } else {
         &backend_str
@@ -663,6 +664,32 @@ generated_at = "{now_rfc3339}"
         let entry = entry(|e| e.prompt = PromptEntry::Inline("be helpful".into()));
         let (def, _) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(def.system_prompt.as_deref(), Some("be helpful"));
+    }
+
+    #[test]
+    fn build_agent_definition_resolves_backend_from_models() {
+        let (_tmp, project_root, scope) = make_project_scope();
+        install_fixture(
+            &scope,
+            "code-reviewer",
+            "0.1.0",
+            "tool",
+            "https://example.com/cr.git",
+        );
+
+        // Build a models map with a single entry.
+        let mut models = BTreeMap::new();
+        models.insert(
+            "haiku".to_string(),
+            ModelEntry {
+                backend: "anthropic".into(),
+                model: "claude-haiku-4-5".into(),
+            },
+        );
+
+        let entry = entry(|e| e.model = "haiku".into());
+        let (def, _) = build_agent_definition(&entry, &project_root, &scope, &models).unwrap();
+        assert_eq!(def.llm_backend.as_str(), "anthropic");
     }
 
     #[test]
