@@ -40,6 +40,11 @@ pub struct UncheckedProjectConfig {
     /// Map of model alias → unchecked `{ backend, model }` entry.
     #[serde(default)]
     pub models: BTreeMap<String, RawModelEntry>,
+    /// Top-level package declarations (e.g. `packages = ["anthropic@^1"]`).
+    /// Backend names in `[models]` may resolve against these as well as
+    /// against agent `package` fields.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 /// `[project]` table.
@@ -701,6 +706,9 @@ pub struct ProjectConfig {
     pub deliverables: BTreeMap<String, DeliverableEntry>,
     /// Map of model alias → validated `{ backend, model }`.
     pub models: BTreeMap<String, ModelEntry>,
+    /// Top-level declared packages (raw strings like `"anthropic@^1"`).
+    /// Names parsed from these are valid `[models]` backend identifiers.
+    pub packages: Vec<String>,
 }
 
 /// Validated context-pipeline step.
@@ -1245,6 +1253,7 @@ impl UncheckedProjectConfig {
             goals,
             deliverables,
             models,
+            packages: self.packages,
         };
 
         validate_postconditions(&mut result)?;
@@ -2087,13 +2096,18 @@ fn package_name_from_ref(pkg_ref: &str) -> &str {
 /// Runs **after** `validate_postconditions` so postcondition errors take
 /// priority; model errors are additive atop a structurally-sound config.
 fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
-    // Collect the set of declared package names from all agents' `package`
-    // fields.  A package name is the prefix before the first `@`; e.g.
-    // `"anthropic@^1"` → `"anthropic"`.
+    // Collect the set of declared package names.  A package name is the
+    // prefix before the first `@`; e.g. `"anthropic@^1"` → `"anthropic"`.
+    // We union two sources:
+    //   1. Top-level `packages` entries (e.g. `packages = ["anthropic@^1"]`).
+    //   2. Each agent's `package` field.
+    // This allows a backend to be declared solely in the top-level
+    // `[packages]` table without any agent referencing it directly.
     let declared_packages: std::collections::BTreeSet<&str> = cfg
-        .agents
-        .values()
-        .map(|a| package_name_from_ref(&a.package))
+        .packages
+        .iter()
+        .map(|p| package_name_from_ref(p))
+        .chain(cfg.agents.values().map(|a| package_name_from_ref(&a.package)))
         .collect();
 
     // 1. Validate every `[models]` entry.
@@ -4058,6 +4072,30 @@ prompt = { system = "hi" }
     }
 
     #[test]
+    fn model_backend_declared_via_packages_table_is_accepted() {
+        // The backend `anthropic` is declared ONLY in the top-level
+        // `packages` array — no agent uses `package = "anthropic@…"`.
+        // This must validate OK: the [packages] table is a legitimate
+        // declaration source for model backends.
+        let toml = r#"
+packages = ["anthropic@^1"]
+[project]
+name="p"
+[models]
+haiku = { backend="anthropic", model="claude-haiku-4-5" }
+[agents.writer]
+display_name="Writer"
+package="code-reviewer@^0.1"
+model = "haiku"
+prompt = { system = "hi" }
+"#;
+        toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .expect("backend declared in [packages] should be accepted");
+    }
+
+    #[test]
     fn agent_without_model_is_refused() {
         let toml = r#"
 [project]
@@ -4170,6 +4208,7 @@ mod proptests {
                 goals: BTreeMap::new(),
                 deliverables: BTreeMap::new(),
                 models: models_map,
+                packages: Vec::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();
