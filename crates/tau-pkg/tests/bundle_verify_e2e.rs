@@ -30,7 +30,6 @@ version = "0.1.0"
 [agents.researcher]
 display_name = "Researcher"
 package      = "fs-read@^0.1"
-llm_backend  = "anthropic"
 
 [agents.researcher.prompt]
 system = "you are a researcher"
@@ -38,7 +37,6 @@ system = "you are a researcher"
 [agents.writer]
 display_name = "Writer"
 package      = "critic@^0.1"
-llm_backend  = "anthropic"
 
 [agents.writer.prompt]
 system_file = "agents/writer.md"

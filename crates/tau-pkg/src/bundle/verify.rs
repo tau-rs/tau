@@ -363,7 +363,6 @@ version = "0.1.0"
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-llm_backend = "anthropic"
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -500,7 +499,6 @@ version = "0.2.0"
 [agents.solo]
 display_name = "Solo"
 package = "noop@^0.1"
-llm_backend = "anthropic"
 
 [agents.solo.prompt]
 system = "you are solo"
@@ -540,7 +538,6 @@ version = "0.1.0"
 [agents.solo]
 display_name = "Solo"
 package = "demo@^0.1"
-llm_backend = "anthropic"
 
 [agents.solo.prompt]
 system = "hi"
@@ -640,7 +637,6 @@ version = "0.1.0"
 [agents.writer]
 display_name = "Writer"
 package = "noop@^0.1"
-llm_backend = "anthropic"
 
 [agents.writer.prompt]
 system_file = "prompt.md"
