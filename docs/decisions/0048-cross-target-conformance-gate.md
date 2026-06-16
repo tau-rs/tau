@@ -1,8 +1,15 @@
 # ADR-0048: β.6 cross-target conformance gate — dual-channel `ConformanceEvent` contract
 
-**Status:** Superseded by [ADR-0049](0049-single-channel-conformance-observable.md)
+**Status:** Accepted
 **Date:** 2026-06-14
 **Deciders:** Titouan (architect), implementing session
+
+> **Update (2026-06-16):** Decision 1 below (dual-channel sourcing) is
+> **superseded by [ADR-0049](0049-single-channel-typed-conformance-observable.md)**.
+> The four tracing-sourced events are promoted to typed `RunEvent` variants
+> and conformance now sources from `run_ir_streaming` alone, so a `no_std`
+> wasm guest can emit the full stream. The `ConformanceEvent` output contract
+> + golden file (defined here) are unchanged.
 
 ## Context
 
