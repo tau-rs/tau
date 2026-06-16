@@ -655,6 +655,16 @@ pub struct DeliverableEntry {
     pub gate: String,
 }
 
+/// Validated `[models.<alias>]` entry: a concrete backend + vendor model id.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelEntry {
+    /// Backend package name (must be a declared package).
+    pub backend: String,
+    /// Vendor model id (e.g. `"claude-haiku-4-5"`). Trusted; not validated offline.
+    pub model: String,
+}
+
 /// Validated project config. Constructed via
 /// [`UncheckedProjectConfig::validate`] only.
 #[non_exhaustive]
@@ -678,6 +688,8 @@ pub struct ProjectConfig {
     pub goals: BTreeMap<String, GoalEntry>,
     /// Map of deliverable id → validated deliverable entry.
     pub deliverables: BTreeMap<String, DeliverableEntry>,
+    /// Map of model alias → validated `{ backend, model }`.
+    pub models: BTreeMap<String, ModelEntry>,
 }
 
 /// Validated context-pipeline step.
@@ -1181,6 +1193,7 @@ impl UncheckedProjectConfig {
             pipeline,
             goals,
             deliverables,
+            models: BTreeMap::new(),
         };
 
         validate_postconditions(&mut result)?;
@@ -2090,6 +2103,13 @@ mod tests {
     fn parse(toml_str: &str) -> Result<ProjectConfig, ProjectConfigError> {
         let unchecked: UncheckedProjectConfig = toml::from_str(toml_str).unwrap();
         unchecked.validate()
+    }
+
+    #[test]
+    fn model_entry_holds_backend_and_model() {
+        let m = ModelEntry { backend: "anthropic".into(), model: "claude-haiku-4-5".into() };
+        assert_eq!(m.backend, "anthropic");
+        assert_eq!(m.model, "claude-haiku-4-5");
     }
 
     #[test]
