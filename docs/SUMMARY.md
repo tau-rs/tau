@@ -117,6 +117,8 @@
 - [ADR-0045 — Context-manager primitive (β.4)](decisions/0045-context-manager.md)
 - [ADR-0046 — Wasm AOT artifact + WIT world (β.7.5)](decisions/0046-wasm-aot-artifact.md)
 - [ADR-0047 — Credential provider chain (β.5)](decisions/0047-credential-provider-chain.md)
+- [ADR-0048 — β.6 cross-target conformance gate (dual-channel, superseded)](decisions/0048-cross-target-conformance-gate.md)
+- [ADR-0049 — Single-channel typed conformance observable (β.7.5)](decisions/0049-single-channel-conformance-observable.md)
 
 # Retrospectives
 
