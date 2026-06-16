@@ -8,7 +8,7 @@
 //! only difference is the IR-module sourcing path:
 //!
 //! - DevMode lowers `workflow.toml` in-process via
-//!   `tau_ir::lower::lower_project`.
+//!   `tau_ir_lower::lower_project`.
 //! - BundleMode lowers the same `workflow.toml` via
 //!   `tau_pkg::bundle::build` (which calls the exact same `lower_project`
 //!   internally via [`build_ir_payload`]), then decodes the bundle's
@@ -24,7 +24,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use tau_ir::lower::{lower_project, Caches};
+use tau_ir_lower::{lower_project, Caches};
 use tau_ir::IrModule;
 use tau_pkg::bundle::{build as build_bundle, BuildOptions, BundleManifest, IrPayload};
 use tau_pkg::project::ProjectConfig;
@@ -274,7 +274,7 @@ mod tests {
 
     /// A fixture whose tool declares an `agent.spawn` capability — that
     /// shape is NOT in `linux-native-strict`'s `required_shapes`
-    /// (`fs_rw_exec_net`), so `tau_ir::lower::capability_fit::check`
+    /// (`fs_rw_exec_net`), so `tau_ir_lower::capability_fit::check`
     /// refuses lowering with `IrError::CapabilityFitFailed`. BundleMode
     /// must surface this as a build-refused report instead of crashing.
     ///

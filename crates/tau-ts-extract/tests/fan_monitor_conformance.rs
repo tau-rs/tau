@@ -24,7 +24,7 @@ fn toml_and_ts_produce_byte_equal_canonical_ir() {
     // from the symbolic name so the typecheck stage (which rejects zero
     // sentinels) passes. Both TOML and TS paths call the same closure, so
     // the hash is identical for the same fn_name → byte-equal IR preserved.
-    let caches = tau_ir::lower::Caches {
+    let caches = tau_ir_lower::Caches {
         native_tool: &|fn_name| {
             // Simple deterministic hash: repeat the first byte of the name
             // (or 0x01 for empty) across all 32 bytes. Sufficient for
@@ -41,9 +41,9 @@ fn toml_and_ts_produce_byte_equal_canonical_ir() {
     };
 
     let toml_ir =
-        tau_ir::lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
+        tau_ir_lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
     let ts_ir =
-        tau_ir::lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
+        tau_ir_lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
 
     // ── Canonical-encode and compare bytes ───────────────────────────────────
     let toml_bytes = tau_ir::canonical::to_canonical_bytes(&toml_ir);

@@ -23,6 +23,7 @@ tau-workflow        = { workspace = true }
 tau-app             = { workspace = true }
 tau-observe         = { workspace = true, features = ["non_blocking"] }
 tau-ir              = { workspace = true }
+tau-ir-lower        = { workspace = true }
 tau-mcp             = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio       = { workspace = true }
 tau-ts-extract      = { path = "../tau-ts-extract" }
