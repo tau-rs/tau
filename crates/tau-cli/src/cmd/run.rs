@@ -367,12 +367,12 @@ async fn try_run_pipeline(
     // no skill resolution. A lowering failure is NOT fatal here — it just
     // means "no pipeline path", so we fall through to the legacy flow
     // (which has its own, independent validation/errors).
-    let caches = tau_ir::lower::Caches {
+    let caches = tau_ir_lower::Caches {
         native_tool: &crate::cmd::build::native_tool_hash,
         mcp_contract: &|_url| None,
         skill: &|_name| None,
     };
-    let module = match tau_ir::lower::lower_project(
+    let module = match tau_ir_lower::lower_project(
         project,
         &tau_ports::target::TargetTriple::host(),
         &caches,

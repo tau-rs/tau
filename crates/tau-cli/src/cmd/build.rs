@@ -162,7 +162,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
 ///
 /// Returns:
 /// - `Vec<McpEntryMeta>` — per-entry metadata for writing to `tau.lock`.
-/// - `BTreeMap<String, tau_ir::lower::ResolvedMcpContract>` — URL-keyed
+/// - `BTreeMap<String, tau_ir_lower::ResolvedMcpContract>` — URL-keyed
 ///   cache for `Caches::mcp_contract`.
 ///
 /// On `--offline`, reads `.tau/mcp/<entry>.contract.json` (error if missing).
@@ -172,7 +172,7 @@ async fn resolve_mcp_cache(
     offline: bool,
 ) -> anyhow::Result<(
     Vec<LockedMcpEntry>,
-    BTreeMap<String, tau_ir::lower::ResolvedMcpContract>,
+    BTreeMap<String, tau_ir_lower::ResolvedMcpContract>,
 )> {
     use tau_pkg::project::project::{ToolBody, UncheckedProjectConfig};
 
@@ -219,7 +219,7 @@ async fn resolve_mcp_cache(
         // Pinned path: read `.tau/mcp/<entry>.contract.json`.
         use tau_mcp::contract::McpContractResolver as _;
         let resolver = tau_mcp::contract::resolver::PinnedResolver::new(&pin_base);
-        let mut ir_cache: BTreeMap<String, tau_ir::lower::ResolvedMcpContract> = BTreeMap::new();
+        let mut ir_cache: BTreeMap<String, tau_ir_lower::ResolvedMcpContract> = BTreeMap::new();
         let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
         for (entry, url) in &mcp_entries {
             let resolved = resolver
@@ -261,7 +261,7 @@ async fn resolve_mcp_cache(
             }
         }
 
-        let mut ir_cache: BTreeMap<String, tau_ir::lower::ResolvedMcpContract> = BTreeMap::new();
+        let mut ir_cache: BTreeMap<String, tau_ir_lower::ResolvedMcpContract> = BTreeMap::new();
         let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
         for (entry, url) in &mcp_entries {
             if let Some(lr) = live.get(url) {
@@ -281,8 +281,8 @@ async fn resolve_mcp_cache(
 /// Convert a `tau_mcp` resolver output to tau-ir's structurally-identical type.
 fn to_ir_shape(
     r: tau_mcp::contract::resolver::ResolvedMcpContract,
-) -> tau_ir::lower::ResolvedMcpContract {
-    use tau_ir::lower::{ResolvedMcpContract as IrR, ResolvedServerTool as IrS};
+) -> tau_ir_lower::ResolvedMcpContract {
+    use tau_ir_lower::{ResolvedMcpContract as IrR, ResolvedServerTool as IrS};
     IrR {
         hash: r.hash,
         expanded_tools: r
@@ -353,7 +353,7 @@ pub(crate) struct LowerIrResult {
     /// inspects it and rejects the build (exit 2) so a typecheck failure —
     /// e.g. an invalid context pipeline — is surfaced at build time rather
     /// than silently dropped (see ADR: build-time enforcement discipline).
-    pub lower_error: Option<tau_ir::error::IrError>,
+    pub lower_error: Option<tau_ir_lower::LowerError>,
 }
 
 /// Attempt to lower the project IR, returning `Some(IrPayload)` on
@@ -376,7 +376,7 @@ pub(crate) struct LowerIrResult {
 pub(crate) fn lower_ir(
     project_root: &std::path::Path,
     target: &TargetTriple,
-    mcp_cache: &BTreeMap<String, tau_ir::lower::ResolvedMcpContract>,
+    mcp_cache: &BTreeMap<String, tau_ir_lower::ResolvedMcpContract>,
     preloaded_config: Option<&tau_pkg::project::ProjectConfig>,
 ) -> LowerIrResult {
     use tau_pkg::project::project::UncheckedProjectConfig;
@@ -429,13 +429,13 @@ pub(crate) fn lower_ir(
     // module hash stays reproducible). When a real native-tool registry
     // lands in tau-pkg, replace this closure with the registry's
     // source-content hash — see this fn's doc-comment.
-    let caches = tau_ir::lower::Caches {
+    let caches = tau_ir_lower::Caches {
         native_tool: &|name: &str| Some(sha256_name(name)),
         mcp_contract: &|url| mcp_cache.get(url).cloned(),
         skill: &|_name| None,
     };
 
-    match tau_ir::lower::lower_project(config, target, &caches) {
+    match tau_ir_lower::lower_project(config, target, &caches) {
         Ok(module) => {
             let bytes = tau_ir::to_canonical_bytes(&module);
             let hash_bytes = tau_ir::compute_hash(&module);
@@ -476,7 +476,7 @@ pub(crate) fn native_tool_hash(name: &str) -> Option<[u8; 32]> {
 /// Returns `SHA-256(name.as_bytes())`. Used by [`lower_ir`]'s `Caches::native_tool`
 /// closure until a real native-tool registry lands in `tau-pkg`. Distinct
 /// names always produce distinct hashes, and the value is non-zero so
-/// `tau_ir::lower::typecheck` won't reject it as the unknown-tool sentinel.
+/// `tau_ir_lower::lower::typecheck` won't reject it as the unknown-tool sentinel.
 fn sha256_name(name: &str) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -758,7 +758,7 @@ mod tests {
     }
 
     /// `sha256_name` is never the zero sentinel — that's the
-    /// `tau_ir::lower::typecheck` "unknown native tool" tripwire and
+    /// `tau_ir_lower::lower::typecheck` "unknown native tool" tripwire and
     /// would re-introduce the silent-IR-loss bug A.2 is fixing.
     #[test]
     fn sha256_name_is_never_zero_sentinel() {

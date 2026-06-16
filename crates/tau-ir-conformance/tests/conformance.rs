@@ -126,8 +126,8 @@ async fn fixture_02_cross_mode_conformance() {
 ///
 /// `tools.forbidden.capabilities = [{ kind = "agent.spawn" }]` is not
 /// in the host target's `required_shapes`, so
-/// `tau_ir::lower::capability_fit::check` refuses lowering with
-/// `IrError::CapabilityFitFailed`. BOTH modes must surface a
+/// `tau_ir_lower::lower::capability_fit::check` refuses lowering with
+/// `LowerError::CapabilityFitFailed`. BOTH modes must surface a
 /// `build_refused` report (D-3b refusal symmetry).
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_03_dev_mode_build_refused() {

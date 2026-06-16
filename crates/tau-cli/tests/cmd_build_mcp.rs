@@ -68,7 +68,7 @@ enum LowerFixtureOutcome {
 }
 
 fn lower_fixture(path: &std::path::Path) -> LowerFixtureOutcome {
-    use tau_ir::lower::{lower_project, Caches};
+    use tau_ir_lower::{lower_project, Caches};
     use tau_pkg::project::project::{ProjectConfig, ToolBody};
     use tau_ports::target::registry;
 
