@@ -10,7 +10,8 @@
 //! `06_multi_turn_history`, `07_mcp_weather_cassette`,
 //! `08_pipeline_sequence`, `09_deliverables_happy`,
 //! `10_deliverable_retry`, `11_deliverable_no_producer`,
-//! `12_pipeline_reverse_alpha`, and `13_context_pipeline`.
+//! `12_pipeline_reverse_alpha`, `13_context_pipeline`, and
+//! `14_agent_output_schema`.
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -22,8 +23,7 @@ use tau_runtime_core::outcome::RunOutcome;
 
 /// Fixture directory names that the IR / interpreter cannot yet build
 /// or execute. Any future directory-scanning conformance test must skip
-/// these. Empty as of the deliverables-and-goals track — all eleven
-/// fixtures are live.
+/// these. Empty — all fourteen fixtures are live.
 #[allow(dead_code)]
 pub const DEFERRED_FIXTURES: &[&str] = &[];
 
@@ -679,6 +679,48 @@ async fn fixture_13_dev_mode_completed() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_13_cross_mode_conformance() {
     let dir = fixture_dir("13_context_pipeline");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 14 — agent output_schema is additive + byte-stable (v1.3.0)
+// ---------------------------------------------------------------------------
+
+/// Fixture 14: mirrors fixture 01 (agent + one native tool, two turns) with an
+/// additional `output_schema` on the agent. The schema does not affect
+/// execution — it is carried verbatim on the IR `Agent` node. This dev-mode
+/// test proves the v1.2.0→v1.3.0 additive field lowers and runs to completion
+/// with the same single `read_temp` tool call as the schema-less fixture 01.
+/// (The canonical bundle encode/decode round-trip of the field is covered by
+/// the cross-mode test below.)
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_14_dev_mode_completed_with_output_schema() {
+    let dir = fixture_dir("14_agent_output_schema");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    let total = count_tool_calls(&report, "read_temp");
+    assert_eq!(total, 1, "expected exactly 1 read_temp call; got {total}");
+}
+
+/// Cross-mode conformance for fixture 14: the agent's `output_schema` round-trips
+/// through the bundle's canonical encoder/decoder (BundleMode asserts
+/// `canonical_hash` equality internally), and both modes produce the same
+/// side-effect multiset.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_14_cross_mode_conformance() {
+    let dir = fixture_dir("14_agent_output_schema");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

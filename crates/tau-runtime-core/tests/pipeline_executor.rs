@@ -191,6 +191,7 @@ fn agent(id: &str) -> Agent {
         context: None,
         budget: AgentBudget::default(),
         produces: Vec::new(),
+        output_schema: None,
     }
 }
 

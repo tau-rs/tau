@@ -288,6 +288,7 @@ mod tests {
                 max_tokens: None,
             },
             produces: Vec::new(),
+            output_schema: None,
         }
     }
 
@@ -562,6 +563,7 @@ mod tests {
                     max_tokens: None,
                 },
                 produces: vec![],
+                output_schema: None,
             },
         );
         wf

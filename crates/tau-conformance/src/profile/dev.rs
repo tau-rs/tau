@@ -1,21 +1,18 @@
-//! Interpreted dev profile: drive `run_ir_streaming` with a [`Captor`]
-//! tracing layer; interleave tracing + `RunEvent` at each generator yield.
-//! The executor is single-threaded (`current_thread`), so all tracing
-//! emitted between two yields belongs to that step — causal ordering for
-//! free.
-//!
-//! [`Captor`]: tau_observe::capture::Captor
+//! Interpreted dev profile: drive `run_ir_streaming` and normalize its
+//! single typed `RunEvent` stream into `ConformanceEvent`s (ADR-0049,
+//! supersedes ADR-0048's dual-channel interleave). No tracing subscriber
+//! is installed — the engine emits every gate event as a typed variant,
+//! which is exactly what a no_std wasm guest produces across the
+//! component boundary.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use futures::StreamExt as _;
 
-use tau_observe::capture::Captor;
-
 use crate::dispatcher::ConformanceDispatcher;
 use crate::event::ConformanceEvent;
-use crate::normalize::{map_runevent, map_tracing, NormState};
+use crate::normalize::{map_runevent, NormState};
 use crate::profile::{Profile, ProfileError};
 use crate::scenario::Scenario;
 use crate::sequenced_llm::SequencedLlm;
@@ -43,12 +40,6 @@ impl Profile for DevProfile {
             Arc::new(ConformanceDispatcher::new_native_only(backend))
         };
 
-        // Install Captor as the thread-local default subscriber for the
-        // whole run. The DefaultGuard holds across awaits on this
-        // single-threaded executor (hence the `?Send` trait bound).
-        let captor = Captor::new();
-        let _guard = tracing::subscriber::set_default(captor.subscriber());
-
         let stream = tau_runtime_core::interpreter::run_ir_streaming(
             scenario.module.clone(),
             &scenario.entry,
@@ -59,25 +50,13 @@ impl Profile for DevProfile {
         .map_err(|e| ProfileError(format!("run_ir_streaming: {e}")))?;
         let mut stream = Box::pin(stream);
 
+        // Single-channel: every conformance event is sourced from the typed
+        // `RunEvent` stream. No tracing capture, no interleave.
         let mut out: Vec<ConformanceEvent> = Vec::new();
         let mut st = NormState::default();
-        let mut consumed = 0usize;
-        loop {
-            let next = stream.next().await;
-            // Drain tracing captured since the previous yield: on this
-            // single-threaded executor it all causally precedes `next`.
-            let captured = captor.events();
-            for c in &captured[consumed..] {
-                map_tracing(c, &mut st, &mut out);
-            }
-            consumed = captured.len();
-            match next {
-                Some(ev) => {
-                    if let Some(ce) = map_runevent(ev, &mut st) {
-                        out.push(ce);
-                    }
-                }
-                None => break,
+        while let Some(ev) = stream.next().await {
+            if let Some(ce) = map_runevent(ev, &mut st) {
+                out.push(ce);
             }
         }
         Ok(out)

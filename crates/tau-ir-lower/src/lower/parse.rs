@@ -121,6 +121,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
                     max_tokens: entry.max_tokens,
                 },
                 produces: entry.produces.clone(),
+                output_schema: entry.output_schema.clone(),
             },
         );
     }

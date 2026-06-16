@@ -3865,14 +3865,12 @@ dependencies = [
  "tau-ir-lower",
  "tau-mcp",
  "tau-mcp-tokio",
- "tau-observe",
  "tau-pkg",
  "tau-ports",
  "tau-runtime-core",
  "tau-runtime-tokio",
  "tempfile",
  "tokio",
- "tracing",
 ]
 
 [[package]]
