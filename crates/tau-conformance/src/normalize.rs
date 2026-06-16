@@ -1,29 +1,24 @@
-//! Channel normalizer (ADR-0048).
+//! Channel normalizer (ADR-0049, supersedes ADR-0048's dual-channel).
 //!
-//! Maps the two raw runtime channels into [`ConformanceEvent`]:
+//! Maps the single [`tau_runtime_core::stream::RunEvent`] channel into
+//! [`ConformanceEvent`]. The β.6 gate observable is now produced entirely
+//! by the engine's typed event stream (`run_ir_streaming`), so a no_std
+//! wasm guest can emit it across the component boundary with no tracing
+//! subscriber.
 //!
-//! 1. **tracing** events captured by [`tau_observe::CapturedEvent`]. The
-//!    VOCABULARY event name lives in `fields["name"]` (the runtime emits
-//!    `info!(name = EV_..., field = val, ...)`), NOT in the struct's
-//!    `.name` (which the captor sets to the literal message or callsite).
-//! 2. [`tau_runtime_core::stream::RunEvent`] — the whitelisted tool-call
-//!    and run-completion variants.
+//! The whitelisted variants map as follows:
 //!
-//! ## Patch-last token folding
+//! - `RunStarted`, `ContextStepRan`, `InferenceCallStarted`,
+//!   `InferenceCallCompleted` — the β.7.5 typed gate lifecycle variants.
+//! - `ToolCallStarted`, `ToolCallCompleted`, `RunCompleted` — tool args /
+//!   results / run outcome.
 //!
-//! `llm.token_usage` is emitted AFTER `llm.response_received` (stream.rs
-//! emits response_received then, conditionally, token_usage). So tokens
-//! cannot be pre-stashed for a preceding response_received. Instead,
-//! [`map_tracing`] pushes an [`InferenceCallCompleted`] with zero tokens
-//! on `llm.response_received`, then `llm.token_usage` patches the
-//! most-recently-pushed `InferenceCallCompleted` in place.
-//!
-//! [`InferenceCallCompleted`]: ConformanceEvent::InferenceCallCompleted
+//! Non-whitelisted variants (`TextDelta`, `TurnCompleted`, `FatalError`,
+//! plus any future `#[non_exhaustive]` additions) map to `None`.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
-use tau_observe::capture::CapturedEvent;
 use tau_ports::tool::{ToolContent, ToolResult};
 use tau_runtime_core::outcome::RunOutcome;
 use tau_runtime_core::stream::RunEvent;
@@ -54,85 +49,11 @@ impl NormState {
     }
 }
 
-/// Read a vocabulary field by name (e.g. the `name` field carrying the
-/// event vocabulary string, or `step`, `stop_reason`, …).
-fn field<'a>(c: &'a CapturedEvent, k: &str) -> Option<&'a str> {
-    c.fields.get(k).map(String::as_str)
-}
-
-/// Read a numeric field, defaulting to 0 when absent or unparseable.
-/// (The captor renders all integers through `to_string`, so these parse
-/// cleanly when present.)
-fn u64f(c: &CapturedEvent, k: &str) -> u64 {
-    field(c, k).and_then(|s| s.parse().ok()).unwrap_or(0)
-}
-
-/// Strip a single pair of surrounding double-quotes, if present. The
-/// `stop_reason` field is Debug-formatted; some shapes wrap the value in
-/// quotes. We keep the cleaned value deterministic for golden capture.
-fn strip_quotes(s: &str) -> &str {
-    s.strip_prefix('"')
-        .and_then(|t| t.strip_suffix('"'))
-        .unwrap_or(s)
-}
-
-/// Unwrap the `Some(X)` Debug wrapper the runtime emits for the
-/// `Option<StopReason>` stop_reason field, yielding the inner variant
-/// name (or "none"). Keeps the golden event stream clean and meaningful.
-fn clean_stop_reason(raw: &str) -> String {
-    let s = raw.trim();
-    if s == "None" {
-        return "none".to_string();
-    }
-    if let Some(inner) = s.strip_prefix("Some(").and_then(|x| x.strip_suffix(')')) {
-        return inner.trim().to_string();
-    }
-    s.to_string()
-}
-
-/// Map one captured tracing event into the conformance stream, pushing or
-/// patching [`out`] in place. Non-whitelisted events are no-ops.
-///
-/// The vocabulary event name is read from `fields["name"]` (see module
-/// docs). Token folding uses the patch-last approach: see module docs.
-pub fn map_tracing(c: &CapturedEvent, _st: &mut NormState, out: &mut Vec<ConformanceEvent>) {
-    let Some(name) = field(c, "name") else {
-        return;
-    };
-    match name {
-        "runtime.run_started" => out.push(ConformanceEvent::RunStarted),
-        "runtime.context_step_ran" => out.push(ConformanceEvent::ContextStepRan {
-            step: field(c, "step").unwrap_or_default().to_string(),
-            tokens_in: u64f(c, "tokens_in"),
-            tokens_out: u64f(c, "tokens_out"),
-        }),
-        "llm.request_built" => out.push(ConformanceEvent::InferenceCallStarted),
-        "llm.response_received" => out.push(ConformanceEvent::InferenceCallCompleted {
-            stop_reason: clean_stop_reason(strip_quotes(
-                field(c, "stop_reason").unwrap_or_default(),
-            )),
-            tokens_in: 0,
-            tokens_out: 0,
-        }),
-        "llm.token_usage" => {
-            // Patch the most-recently-pushed InferenceCallCompleted.
-            if let Some(ConformanceEvent::InferenceCallCompleted {
-                tokens_in,
-                tokens_out,
-                ..
-            }) = out
-                .iter_mut()
-                .rev()
-                .find(|e| matches!(e, ConformanceEvent::InferenceCallCompleted { .. }))
-            {
-                *tokens_in = u64f(c, "input_tokens");
-                *tokens_out = u64f(c, "output_tokens");
-            }
-        }
-        // capability.*, message.added, dispatch.*, runtime.completed,
-        // runtime.failed, llm.stop_reason, etc. — not whitelisted.
-        _ => {}
-    }
+/// Render a `StopReason` to its Debug variant name (`"ToolUse"`,
+/// `"EndTurn"`, …) — the canonical string the frozen [`ConformanceEvent`]
+/// and the golden compare against.
+fn stop_reason_name(sr: tau_ports::StopReason) -> String {
+    format!("{sr:?}")
 }
 
 /// Map one [`RunEvent`] into the conformance stream, canonicalizing
@@ -141,6 +62,26 @@ pub fn map_tracing(c: &CapturedEvent, _st: &mut NormState, out: &mut Vec<Conform
 /// `#[non_exhaustive]` additions).
 pub fn map_runevent(ev: RunEvent, st: &mut NormState) -> Option<ConformanceEvent> {
     match ev {
+        RunEvent::RunStarted => Some(ConformanceEvent::RunStarted),
+        RunEvent::ContextStepRan {
+            step,
+            tokens_in,
+            tokens_out,
+        } => Some(ConformanceEvent::ContextStepRan {
+            step,
+            tokens_in,
+            tokens_out,
+        }),
+        RunEvent::InferenceCallStarted => Some(ConformanceEvent::InferenceCallStarted),
+        RunEvent::InferenceCallCompleted {
+            stop_reason,
+            tokens_in,
+            tokens_out,
+        } => Some(ConformanceEvent::InferenceCallCompleted {
+            stop_reason: stop_reason_name(stop_reason),
+            tokens_in,
+            tokens_out,
+        }),
         RunEvent::ToolCallStarted { id, name, args } => Some(ConformanceEvent::ToolCallStarted {
             name,
             args: value_to_json(&args),
@@ -211,22 +152,7 @@ fn run_outcome_discriminant(o: &RunOutcome) -> String {
 mod tests {
     use super::*;
     use crate::event::{ConformanceEvent, ToolOutcome};
-    use std::collections::BTreeMap;
-    use tau_observe::capture::CapturedEvent;
-
-    fn captured(name: &str, kv: &[(&str, &str)]) -> CapturedEvent {
-        let mut fields = BTreeMap::new();
-        fields.insert("name".to_string(), name.to_string());
-        for (k, v) in kv {
-            fields.insert(k.to_string(), v.to_string());
-        }
-        CapturedEvent {
-            target: "tau_runtime_core::stream".into(),
-            level: "debug".into(),
-            name: "event".into(),
-            fields,
-        }
-    }
+    use tau_ports::StopReason;
 
     fn make_tool_started(id: &str, name: &str) -> RunEvent {
         RunEvent::ToolCallStarted {
@@ -251,147 +177,81 @@ mod tests {
     }
 
     #[test]
-    fn whitelisted_tracing_events_map() {
-        let mut out = Vec::new();
+    fn run_started_maps() {
         let mut st = NormState::default();
-        map_tracing(&captured("runtime.run_started", &[]), &mut st, &mut out);
-        map_tracing(
-            &captured(
-                "runtime.context_step_ran",
-                &[
-                    ("step", "trim_old"),
-                    ("tokens_in", "40"),
-                    ("tokens_out", "30"),
-                ],
-            ),
-            &mut st,
-            &mut out,
-        );
-        assert_eq!(out[0], ConformanceEvent::RunStarted);
         assert_eq!(
-            out[1],
-            ConformanceEvent::ContextStepRan {
+            map_runevent(RunEvent::RunStarted, &mut st),
+            Some(ConformanceEvent::RunStarted)
+        );
+    }
+
+    #[test]
+    fn context_step_ran_maps() {
+        let mut st = NormState::default();
+        assert_eq!(
+            map_runevent(
+                RunEvent::ContextStepRan {
+                    step: "trim_old".into(),
+                    tokens_in: 40,
+                    tokens_out: 30,
+                },
+                &mut st
+            ),
+            Some(ConformanceEvent::ContextStepRan {
                 step: "trim_old".into(),
                 tokens_in: 40,
-                tokens_out: 30
-            }
+                tokens_out: 30,
+            })
         );
     }
 
     #[test]
-    fn token_usage_patches_last_inference_completed() {
-        let mut out = Vec::new();
+    fn inference_started_maps() {
         let mut st = NormState::default();
-        map_tracing(
-            &captured("llm.response_received", &[("stop_reason", "tool_use")]),
-            &mut st,
-            &mut out,
+        assert_eq!(
+            map_runevent(RunEvent::InferenceCallStarted, &mut st),
+            Some(ConformanceEvent::InferenceCallStarted)
         );
-        map_tracing(
-            &captured(
-                "llm.token_usage",
-                &[("input_tokens", "12"), ("output_tokens", "5")],
+    }
+
+    #[test]
+    fn inference_completed_maps_stop_reason_to_debug_name() {
+        let mut st = NormState::default();
+        assert_eq!(
+            map_runevent(
+                RunEvent::InferenceCallCompleted {
+                    stop_reason: StopReason::ToolUse,
+                    tokens_in: 12,
+                    tokens_out: 5,
+                },
+                &mut st
             ),
-            &mut st,
-            &mut out,
-        );
-        assert_eq!(
-            out.last().unwrap(),
-            &ConformanceEvent::InferenceCallCompleted {
-                stop_reason: "tool_use".into(),
-                tokens_in: 12,
-                tokens_out: 5
-            }
-        );
-    }
-
-    #[test]
-    fn stop_reason_unwraps_some_debug_wrapper() {
-        let mut out = Vec::new();
-        let mut st = NormState::default();
-        map_tracing(
-            &captured("llm.response_received", &[("stop_reason", "Some(ToolUse)")]),
-            &mut st,
-            &mut out,
-        );
-        assert_eq!(
-            out.last().unwrap(),
-            &ConformanceEvent::InferenceCallCompleted {
+            Some(ConformanceEvent::InferenceCallCompleted {
                 stop_reason: "ToolUse".into(),
-                tokens_in: 0,
-                tokens_out: 0
-            }
+                tokens_in: 12,
+                tokens_out: 5,
+            })
         );
     }
 
     #[test]
-    fn stop_reason_unwraps_some_with_end_turn() {
-        let mut out = Vec::new();
+    fn inference_completed_end_turn_maps_to_debug_name() {
         let mut st = NormState::default();
-        map_tracing(
-            &captured("llm.response_received", &[("stop_reason", "Some(EndTurn)")]),
-            &mut st,
-            &mut out,
-        );
         assert_eq!(
-            out.last().unwrap(),
-            &ConformanceEvent::InferenceCallCompleted {
+            map_runevent(
+                RunEvent::InferenceCallCompleted {
+                    stop_reason: StopReason::EndTurn,
+                    tokens_in: 0,
+                    tokens_out: 0,
+                },
+                &mut st
+            ),
+            Some(ConformanceEvent::InferenceCallCompleted {
                 stop_reason: "EndTurn".into(),
                 tokens_in: 0,
-                tokens_out: 0
-            }
+                tokens_out: 0,
+            })
         );
-    }
-
-    #[test]
-    fn stop_reason_converts_none_to_lowercase() {
-        let mut out = Vec::new();
-        let mut st = NormState::default();
-        map_tracing(
-            &captured("llm.response_received", &[("stop_reason", "None")]),
-            &mut st,
-            &mut out,
-        );
-        assert_eq!(
-            out.last().unwrap(),
-            &ConformanceEvent::InferenceCallCompleted {
-                stop_reason: "none".into(),
-                tokens_in: 0,
-                tokens_out: 0
-            }
-        );
-    }
-
-    #[test]
-    fn stop_reason_quotes_are_stripped() {
-        let mut out = Vec::new();
-        let mut st = NormState::default();
-        map_tracing(
-            &captured("llm.response_received", &[("stop_reason", "\"EndTurn\"")]),
-            &mut st,
-            &mut out,
-        );
-        assert_eq!(
-            out.last().unwrap(),
-            &ConformanceEvent::InferenceCallCompleted {
-                stop_reason: "EndTurn".into(),
-                tokens_in: 0,
-                tokens_out: 0
-            }
-        );
-    }
-
-    #[test]
-    fn non_whitelisted_tracing_events_dropped() {
-        let mut out = Vec::new();
-        let mut st = NormState::default();
-        map_tracing(&captured("capability.allow", &[]), &mut st, &mut out);
-        map_tracing(
-            &captured("message.added", &[("role", "User")]),
-            &mut st,
-            &mut out,
-        );
-        assert!(out.is_empty());
     }
 
     #[test]
@@ -461,21 +321,6 @@ mod tests {
     fn non_whitelisted_runevents_are_none() {
         let mut st = NormState::default();
         assert!(map_runevent(RunEvent::TextDelta { delta: "x".into() }, &mut st).is_none());
-    }
-
-    #[test]
-    fn token_usage_without_prior_inference_is_noop() {
-        let mut out = Vec::new();
-        let mut st = NormState::default();
-        map_tracing(
-            &captured(
-                "llm.token_usage",
-                &[("input_tokens", "9"), ("output_tokens", "3")],
-            ),
-            &mut st,
-            &mut out,
-        );
-        assert!(out.is_empty());
     }
 
     #[test]

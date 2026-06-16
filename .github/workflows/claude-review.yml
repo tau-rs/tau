@@ -86,9 +86,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@28f83620103c48a57093dcc2837eec89e036bb9f  # beta
+      - uses: anthropics/claude-code-action@4d7e1f0cd85743fdc93b1c8040ab54395da024e2  # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Pin the model explicitly. This action's pinned default
+          # (`claude-sonnet-4-20250514`) was retired and now 404s from the
+          # API ("not_found_error: model: claude-sonnet-4-20250514"),
+          # failing every `review PR` run. Pin a current model so the job
+          # survives default churn; bump when the model line moves.
+          model: claude-sonnet-4-6
           # Pass the workflow's auto-injected GITHUB_TOKEN so the action's
           # GitHub REST calls (permission check on the PR actor, comment
           # posting) authenticate against the current repo. Without this
@@ -145,12 +151,15 @@ jobs:
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "Previous tag/commit: $previous"
 
-      - uses: anthropics/claude-code-action@28f83620103c48a57093dcc2837eec89e036bb9f  # beta
+      - uses: anthropics/claude-code-action@4d7e1f0cd85743fdc93b1c8040ab54395da024e2  # beta
         env:
           CURRENT_TAG: ${{ github.event.release.tag_name }}
           PREV_REF: ${{ steps.prev.outputs.previous }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Pin the model explicitly — see the note on the PR-review job:
+          # the action's pinned default model was retired and 404s.
+          model: claude-sonnet-4-6
           # See note above on the PR-review job — same reason: survive
           # repo transfers by using the workflow-scoped GITHUB_TOKEN
           # instead of the GitHub App installation token.

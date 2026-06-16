@@ -116,8 +116,43 @@ fn random_ref(opts: &RunOptions) -> &Arc<dyn RandomSource> {
 /// assert_eq!(describe(&tool_ev), "tool-started");
 /// ```
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum RunEvent {
+    /// Run started. Emitted once, before the first turn. Typed
+    /// counterpart of the `runtime.run_started` tracing event (β.7.5:
+    /// promoted to a typed variant so a no_std wasm guest can produce the
+    /// β.6 conformance observable over a single channel — see ADR-0049).
+    RunStarted,
+
+    /// A β.4 context-pipeline transform ran. Emitted once per transform
+    /// per turn, carrying the step name and the pre/post token estimates.
+    /// Typed counterpart of the `runtime.context_step_ran` tracing event.
+    ContextStepRan {
+        /// Transform name (e.g. `"trim_old"`, `"fit_budget"`).
+        step: String,
+        /// Token estimate of the view entering this transform.
+        tokens_in: u64,
+        /// Token estimate of the view leaving this transform.
+        tokens_out: u64,
+    },
+
+    /// The per-turn LLM request was built and is about to be sent. Typed
+    /// counterpart of the `llm.request_built` tracing event.
+    InferenceCallStarted,
+
+    /// The per-turn LLM response finished streaming. Typed counterpart of
+    /// `llm.response_received` folded with `llm.token_usage`: carries the
+    /// turn's `StopReason` and token usage (zero when the provider did not
+    /// report usage).
+    InferenceCallCompleted {
+        /// Why the turn's inference stopped.
+        stop_reason: StopReason,
+        /// Input tokens reported for this turn (`0` if unreported).
+        tokens_in: u64,
+        /// Output tokens reported for this turn (`0` if unreported).
+        tokens_out: u64,
+    },
+
     /// LLM emitted a text fragment. Concatenate with previous deltas
     /// for the running assistant message text.
     TextDelta {
@@ -254,6 +289,7 @@ pub fn run_streaming_inner(
         let mut aggregated_tokens = crate::options::TokenUsage::default();
 
         info!(name = EV_RUNTIME_RUN_STARTED);
+        yield RunEvent::RunStarted;
 
         // max_turns guard: immediately report out-of-resources if 0.
         if options.max_turns == 0 {
@@ -314,6 +350,11 @@ pub fn run_streaming_inner(
                                 tokens_in = before,
                                 tokens_out = after,
                             );
+                            yield RunEvent::ContextStepRan {
+                                step: t.name().into(),
+                                tokens_in: u64::from(before),
+                                tokens_out: u64::from(after),
+                            };
                             view = next;
                         }
                         Err(e) => {
@@ -342,6 +383,7 @@ pub fn run_streaming_inner(
                 messages = request.messages.len(),
                 tools = request.tools.len(),
             );
+            yield RunEvent::InferenceCallStarted;
 
             let llm_stream_result = async { backend.stream(request).await }
                 .instrument(info_span!(parent: &turn_span, "llm.complete"))
@@ -413,6 +455,17 @@ pub fn run_streaming_inner(
                 tool_uses = pending_tool_uses.len(),
                 stop_reason = ?turn_stop_reason,
             );
+            // β.7.5: typed counterpart of `llm.response_received` folded
+            // with `llm.token_usage`. The dual-channel design pushed a
+            // zero-token InferenceCallCompleted on response_received then
+            // patched it on token_usage; reading `turn_usage` directly here
+            // yields the identical result (zero when unreported). `turn_usage`
+            // (tau_ports::TokenUsage) is `Copy`, so it stays usable below.
+            yield RunEvent::InferenceCallCompleted {
+                stop_reason: turn_stop_reason.unwrap_or(StopReason::EndTurn),
+                tokens_in: turn_usage.map_or(0, |u| u64::from(u.input_tokens)),
+                tokens_out: turn_usage.map_or(0, |u| u64::from(u.output_tokens)),
+            };
 
             // ADR-0006 §3.9: emit `llm.token_usage` when the backend
             // reports per-turn usage. Skip when `None` to avoid emitting
@@ -1720,6 +1773,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn new_gate_variants_serde_round_trip() {
+        use tau_ports::StopReason;
+        let evs = alloc::vec![
+            RunEvent::RunStarted,
+            RunEvent::ContextStepRan {
+                step: "trim_old".into(),
+                tokens_in: 4,
+                tokens_out: 4,
+            },
+            RunEvent::InferenceCallStarted,
+            RunEvent::InferenceCallCompleted {
+                stop_reason: StopReason::ToolUse,
+                tokens_in: 0,
+                tokens_out: 0,
+            },
+        ];
+        for ev in evs {
+            let json = serde_json::to_string(&ev).expect("serialize");
+            let back: RunEvent = serde_json::from_str(&json).expect("deserialize");
+            // RunEvent is not PartialEq; assert the Debug shape round-trips.
+            assert_eq!(alloc::format!("{ev:?}"), alloc::format!("{back:?}"));
+        }
+    }
+
     // ---- Task 3 tests: run_streaming_inner ----
 
     use std::sync::Arc;
@@ -1850,6 +1928,44 @@ mod tests {
         out
     }
 
+    /// Drop the β.7.5 typed gate lifecycle events (`RunStarted`,
+    /// `ContextStepRan`, `InferenceCallStarted`, `InferenceCallCompleted`)
+    /// so the pre-existing pump-invariant assertions — which target the
+    /// tool/text/turn/run events and their exact indices — keep holding
+    /// unchanged. Gate-event ordering is locked separately by the
+    /// `gate_events_*` full-sequence tests below and by the β.6
+    /// conformance golden.
+    fn strip_gate_events(events: Vec<RunEvent>) -> Vec<RunEvent> {
+        events
+            .into_iter()
+            .filter(|e| {
+                !matches!(
+                    e,
+                    RunEvent::RunStarted
+                        | RunEvent::ContextStepRan { .. }
+                        | RunEvent::InferenceCallStarted
+                        | RunEvent::InferenceCallCompleted { .. }
+                )
+            })
+            .collect()
+    }
+
+    /// Map a `RunEvent` to a short variant tag for ordering assertions.
+    fn event_kind(e: &RunEvent) -> &'static str {
+        match e {
+            RunEvent::RunStarted => "RunStarted",
+            RunEvent::ContextStepRan { .. } => "ContextStepRan",
+            RunEvent::InferenceCallStarted => "InferenceCallStarted",
+            RunEvent::InferenceCallCompleted { .. } => "InferenceCallCompleted",
+            RunEvent::TextDelta { .. } => "TextDelta",
+            RunEvent::ToolCallStarted { .. } => "ToolCallStarted",
+            RunEvent::ToolCallCompleted { .. } => "ToolCallCompleted",
+            RunEvent::TurnCompleted { .. } => "TurnCompleted",
+            RunEvent::RunCompleted { .. } => "RunCompleted",
+            RunEvent::FatalError { .. } => "FatalError",
+        }
+    }
+
     /// Build a ToolArgsValidator that accepts everything (opt-out schema).
     fn make_passthrough_validator() -> crate::tool_args::ToolArgsValidator {
         crate::tool_args::ToolArgsValidator::compile(&Value::Null)
@@ -1887,7 +2003,7 @@ mod tests {
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         assert_eq!(events.len(), 4, "got events: {events:#?}");
         let RunEvent::TextDelta { delta } = &events[0] else {
@@ -1927,7 +2043,7 @@ mod tests {
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         assert_eq!(events.len(), 2, "got events: {events:#?}");
         // events[0] = TextDelta("Hello"), events[1] = FatalError{kind="Llm"}
@@ -1973,7 +2089,7 @@ mod tests {
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         assert_eq!(events.len(), 1, "got events: {events:#?}");
         // LLM open failure → FatalError{kind="Llm"} (batch drainer converts to Err(RuntimeError::Llm)).
@@ -2049,7 +2165,7 @@ mod tests {
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Expected sequence:
         // ToolCallStarted, ToolCallCompleted, TurnCompleted (turn 1),
@@ -2188,7 +2304,7 @@ paths = ["/etc/**"]
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Expected: ToolCallStarted then RunCompleted{Failed}
         assert_eq!(events.len(), 2, "got events: {events:#?}");
@@ -2297,7 +2413,7 @@ paths = ["/etc/**"]
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Expected:
         // ToolCallStarted, ToolCallCompleted{Err(reason)}, TurnCompleted (turn 1),
@@ -2387,7 +2503,7 @@ paths = ["/etc/**"]
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Expected: ToolCallStarted then FatalError{kind="Tool"}
         // (no ToolCallCompleted — plugin crash terminates the run;
@@ -2463,7 +2579,7 @@ paths = ["/etc/**"]
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Expected order:
         // ToolCallStarted(a), ToolCallStarted(b)  [during LLM stream drain]
@@ -2568,7 +2684,7 @@ paths = ["/etc/**"]
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Expected: ToolCallStarted, ToolCallCompleted, TurnCompleted, RunCompleted{Failed{OutOfResources}}
         assert_eq!(events.len(), 4, "got events: {events:#?}");
@@ -2660,7 +2776,7 @@ paths = ["/etc/**"]
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Expected order per spec §4.3 pump invariants:
         //   ToolCallStarted(id_1)  — during chunk drain
@@ -2734,7 +2850,7 @@ paths = ["/etc/**"]
             vec![],
             vec![],
         );
-        let events = collect_events(Box::pin(stream)).await;
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // Drain loop's None arm exits with turn_stop_reason = None,
         // accumulated_text = "", pending_tool_uses = [].
@@ -2767,5 +2883,154 @@ paths = ["/etc/**"]
             "expected RunCompleted Completed, got {:?}",
             events[1]
         );
+    }
+
+    // ---- β.7.5 tests: typed gate-event emission + ordering ----
+
+    #[tokio::test]
+    async fn gate_events_full_sequence_text_only() {
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::new(vec![
+            Ok(CompletionChunk::Text {
+                delta: "Hello ".into(),
+            }),
+            Ok(CompletionChunk::Text {
+                delta: "world".into(),
+            }),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::EndTurn,
+                usage: None,
+            }),
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            test_run_options(),
+            HashMap::new(),
+            HashMap::new(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let events = collect_events(Box::pin(stream)).await;
+
+        // Single-turn, no-tool, empty context pipeline → the typed gate
+        // events bracket the run and the inference exactly:
+        let kinds: Vec<&str> = events.iter().map(event_kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "RunStarted",
+                "InferenceCallStarted",
+                "TextDelta",
+                "TextDelta",
+                "InferenceCallCompleted",
+                "TurnCompleted",
+                "RunCompleted",
+            ],
+            "got events: {events:#?}"
+        );
+
+        // InferenceCallCompleted carries the turn's StopReason and zero
+        // tokens (provider reported no usage).
+        let RunEvent::InferenceCallCompleted {
+            stop_reason,
+            tokens_in,
+            tokens_out,
+        } = &events[4]
+        else {
+            panic!("expected InferenceCallCompleted, got {:?}", events[4])
+        };
+        assert_eq!(*stop_reason, StopReason::EndTurn);
+        assert_eq!(*tokens_in, 0);
+        assert_eq!(*tokens_out, 0);
+    }
+
+    #[tokio::test]
+    async fn gate_events_full_sequence_tool_turn_carries_usage() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+
+        let spec = make_tool_spec("echo".into(), "echo tool".into(), Value::Null);
+        let mock_tool = MockTool::new("echo", spec);
+        let tool_arc: Arc<dyn DynTool> = Arc::new(mock_tool);
+        let (tools, validators, tool_specs_list) = make_tool_entry("echo", tool_arc);
+
+        // Turn 1: ToolUse + Finish(ToolUse) WITH usage; Turn 2: text + EndTurn.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use("call_1".into(), "echo".into(), Value::Null),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: Some(PortsTokenUsage::new(10, 5)),
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Done!".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: None,
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            test_run_options(),
+            tools,
+            validators,
+            vec![],
+            tool_specs_list,
+            vec![],
+            vec![],
+        );
+        let events = collect_events(Box::pin(stream)).await;
+
+        let kinds: Vec<&str> = events.iter().map(event_kind).collect();
+        // Per-turn the typed events interleave: InferenceCallStarted fires
+        // before the drain (so before ToolCallStarted), InferenceCallCompleted
+        // fires after the drain (so after ToolCallStarted, before dispatch's
+        // ToolCallCompleted).
+        assert_eq!(
+            kinds,
+            vec![
+                "RunStarted",
+                "InferenceCallStarted",
+                "ToolCallStarted",
+                "InferenceCallCompleted",
+                "ToolCallCompleted",
+                "TurnCompleted",
+                "InferenceCallStarted",
+                "TextDelta",
+                "InferenceCallCompleted",
+                "TurnCompleted",
+                "RunCompleted",
+            ],
+            "got events: {events:#?}"
+        );
+
+        // Turn 1's InferenceCallCompleted folds the reported token usage.
+        let RunEvent::InferenceCallCompleted {
+            stop_reason,
+            tokens_in,
+            tokens_out,
+        } = &events[3]
+        else {
+            panic!("expected InferenceCallCompleted, got {:?}", events[3])
+        };
+        assert_eq!(*stop_reason, StopReason::ToolUse);
+        assert_eq!(*tokens_in, 10);
+        assert_eq!(*tokens_out, 5);
     }
 }

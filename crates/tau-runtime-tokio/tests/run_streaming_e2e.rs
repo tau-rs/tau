@@ -232,11 +232,24 @@ async fn text_only_run_streams_text_deltas() {
         "expected at least 3 events (TextDelta, TurnCompleted, RunCompleted); got: {events:#?}"
     );
 
-    // First event(s) should be TextDelta.
+    // First event is the typed RunStarted gate event (β.7.5); the text
+    // deltas follow once inference begins.
     assert!(
-        matches!(&events[0], RunEvent::TextDelta { .. }),
-        "expected first event to be TextDelta, got {:?}",
+        matches!(&events[0], RunEvent::RunStarted),
+        "expected first event to be RunStarted, got {:?}",
         events[0]
+    );
+
+    // A TextDelta arrives before the turn completes.
+    let first_text = events
+        .iter()
+        .position(|e| matches!(e, RunEvent::TextDelta { .. }));
+    let first_turn_completed = events
+        .iter()
+        .position(|e| matches!(e, RunEvent::TurnCompleted { .. }));
+    assert!(
+        matches!((first_text, first_turn_completed), (Some(t), Some(tc)) if t < tc),
+        "expected a TextDelta before TurnCompleted, got {events:#?}"
     );
 
     // Concatenated text should equal the original.
