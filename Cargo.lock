@@ -4132,7 +4132,6 @@ dependencies = [
  "serde_json",
  "tau-domain",
  "tau-ir",
- "tau-pkg",
  "tau-ports",
  "tau-runtime-core",
  "thiserror 2.0.18",
