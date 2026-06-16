@@ -1963,7 +1963,6 @@ mod tests {
             RunEvent::TurnCompleted { .. } => "TurnCompleted",
             RunEvent::RunCompleted { .. } => "RunCompleted",
             RunEvent::FatalError { .. } => "FatalError",
-            _ => "other",
         }
     }
 
