@@ -496,6 +496,10 @@ impl Runtime {
         // via `path.to_string_lossy().into_owned()`. Used by the streaming
         // pump's skill-spawn intercept to resolve installed skills.
         scope_root: Option<alloc::string::String>,
+        // Skill resolver for `skill.<name>.spawn` dispatch. Host shells
+        // build a `TauPkgSkillResolver` from their scope; guest shells
+        // pass `None` (or a `NoSkillResolver`). Carried into `RunOptions`.
+        skill_resolver: Option<Arc<dyn tau_ports::SkillResolver>>,
     ) -> Result<tau_ports::RunSnapshot, RuntimeError> {
         use core::cell::RefCell;
 
@@ -557,6 +561,7 @@ impl Runtime {
             clock: Some(clock.clone()),
             random: Some(random.clone()),
             scope_root,
+            skill_resolver,
             ..Default::default()
         };
 

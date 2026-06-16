@@ -44,6 +44,9 @@ pub async fn drive(
     let subscriber = crate::orchestration::trace_mpsc::channel_with_writer(log_path);
 
     let scope_root_str = scope_root.to_string_lossy().into_owned();
+    let skill_resolver: Arc<dyn tau_ports::SkillResolver> = Arc::new(
+        crate::skill_resolver_impl::TauPkgSkillResolver::new(scope_root.clone()),
+    );
     runtime
         .spawn_root_agent_inner(
             root_agent_def,
@@ -55,6 +58,7 @@ pub async fn drive(
             Some(random),
             Some(run_id),
             Some(scope_root_str),
+            Some(skill_resolver),
         )
         .await
         .map_err(RuntimeError::Core)
