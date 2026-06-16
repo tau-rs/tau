@@ -88,38 +88,42 @@ pub lower_error: Option<tau_ir_lower::LowerError>,   // was: Option<tau_ir::erro
 
 ---
 
-## Genuine no_std for `tau-ir`
+## no_std hardening for `tau-ir`
 
-After the split, `tau-ir` has no std-gated code. To make it *genuinely* no_std (buildable on a target with no std at all, not merely on the std-target `wasm32-wasip2`):
+After the split, `tau-ir` has no std-gated code of its own. To remove its own remaining std-puller:
 
-- Change `serde_json` in `crates/tau-ir/Cargo.toml` to `{ default-features = false, features = ["alloc"] }`. (Today it pulls std by default; that is the only remaining std-puller in the pure set.)
-- Confirm the other deps are already no_std-clean: `tau-domain`/`tau-ports` (no_std + serde), `chrono` (alloc), `sha2` (default-features = false), `hashbrown`, `foldhash`, `thiserror` (default-features = false). All already are.
+- Change `serde_json` in `crates/tau-ir/Cargo.toml` to `{ default-features = false, features = ["alloc"] }`. (Today it pulls std by default.)
+- The other deps are already no_std-clean: `tau-domain`/`tau-ports` (no_std + serde), `chrono` (alloc), `sha2` (default-features = false), `hashbrown`, `foldhash`, `thiserror` (default-features = false).
 
-This makes `tau-ir` runnable on embassy/bare-metal, consistent with tau's wasm-primary / harness-everywhere direction.
+This makes `tau-ir`'s *own* code std-free and builds clean on `wasm32-wasip2`. Genuine bare-metal no_std (`wasm32-unknown-unknown`) is not yet reachable because of the `uuid`/`tau-domain` randomness gate — see *Known limitation* under Structural enforcement.
 
 ---
 
 ## Structural enforcement (CI)
 
-Two guards, because the two crates have different purity ceilings:
+Both crates are guarded at **`wasm32-wasip2`** (`--no-default-features`):
 
 | Crate | Target | Rationale |
 |---|---|---|
-| `tau-ir` | **`wasm32-unknown-unknown`** (no std at all) | strictest — proves genuine no_std; any future std leak becomes a compile error |
+| `tau-ir` | **`wasm32-wasip2`** (std target) | proves no tokio/rustix; the stricter `wasm32-unknown-unknown` (genuine bare-metal no_std) is **blocked by `uuid`** — `tau-domain` pulls `uuid`, whose `getrandom` backend won't compile on `wasm32-unknown-unknown` without an explicit randomness source. `tau-ir`'s own source is leak-free; the ceiling is the dep graph, not this crate. See *Known limitation*. |
 | `tau-runtime-core` | **`wasm32-wasip2`** (std target) | core's real ceiling — `globset` (used by `apply_scope_paths`) is hard-std, so bare-metal is impossible regardless |
 
 Both guards run `--no-default-features`. They live in the existing `runtime-core-no-std` job in `.github/workflows/ci.yml` (which already runs `cargo check -p tau-runtime-core --no-default-features`). The job adds:
 
 ```yaml
-      - name: tau-ir genuine no_std (wasm32-unknown-unknown)
+      - name: tau-ir builds for wasm32-wasip2 (no tokio/rustix)
         run: |
-          rustup target add wasm32-unknown-unknown
-          cargo build -p tau-ir --no-default-features --target wasm32-unknown-unknown
+          rustup target add wasm32-wasip2
+          cargo build -p tau-ir --no-default-features --target wasm32-wasip2
       - name: tau-runtime-core builds for wasm32-wasip2
         run: |
           rustup target add wasm32-wasip2
           cargo build -p tau-runtime-core --no-default-features --target wasm32-wasip2
 ```
+
+### Known limitation — genuine bare-metal no_std (`wasm32-unknown-unknown`)
+
+After this split `tau-ir` is source-level no_std-pure (zero `std`/`tau-pkg` references), but its dep graph still pulls `uuid` via `tau-domain`. `uuid` (v4/v7 → `getrandom`) refuses to compile on `wasm32-unknown-unknown` without an explicit randomness backend, so the strictest guard is not reachable here. Routing `uuid` minting in `tau-domain` through the existing `RandomSource` port (the way ULID already is) would unblock it — that is a separate `tau-domain` sub-project, out of scope for this split. Filed as a follow-up.
 
 ---
 
