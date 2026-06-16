@@ -1,6 +1,6 @@
 # ADR-0048: β.6 cross-target conformance gate — dual-channel `ConformanceEvent` contract
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0049](0049-single-channel-conformance-observable.md)
 **Date:** 2026-06-14
 **Deciders:** Titouan (architect), implementing session
 
