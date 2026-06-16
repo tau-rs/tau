@@ -362,6 +362,14 @@ jobs:
           set -e
           cargo check -p tau-runtime-core
           cargo check -p tau-runtime-core --no-default-features
+      - name: tau-ir builds for wasm32-wasip2 (no tokio/rustix)
+        run: |
+          rustup target add wasm32-wasip2
+          cargo build -p tau-ir --no-default-features --target wasm32-wasip2
+      - name: tau-runtime-core builds for wasm32-wasip2
+        run: |
+          rustup target add wasm32-wasip2
+          cargo build -p tau-runtime-core --no-default-features --target wasm32-wasip2
       - name: no forbidden executor imports in tau-runtime-core/src
         run: |
           # tau-runtime-core must be executor-agnostic. Top-level (column-0)
