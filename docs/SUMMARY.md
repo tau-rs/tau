@@ -119,6 +119,7 @@
 - [ADR-0047 — Credential provider chain (β.5)](decisions/0047-credential-provider-chain.md)
 - [ADR-0048 — Cross-target conformance gate (β.6)](decisions/0048-cross-target-conformance-gate.md)
 - [ADR-0049 — Single-channel typed conformance observable (β.7.5)](decisions/0049-single-channel-typed-conformance-observable.md)
+- [ADR-0050 — Agent `output_schema` additive field plumbing (IR v1.3.0)](decisions/0050-agent-output-schema.md)
 
 # Retrospectives
 

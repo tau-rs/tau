@@ -26,7 +26,7 @@ pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
     /// Current IR format version emitted by this `tau-ir` crate.
-    pub const CURRENT: &'static str = "v1.2.0";
+    pub const CURRENT: &'static str = "v1.3.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -90,9 +90,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v1_2_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v1.2.0");
-        assert_eq!(IrFormatVersion::current().0, "v1.2.0");
+    fn ir_format_version_is_v1_3_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v1.3.0");
+        assert_eq!(IrFormatVersion::current().0, "v1.3.0");
     }
 
     #[test]

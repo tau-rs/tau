@@ -153,6 +153,7 @@ fn writer_agent() -> Agent {
         context: None,
         budget: AgentBudget::default(),
         produces: Vec::new(),
+        output_schema: None,
     }
 }
 
