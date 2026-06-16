@@ -13,13 +13,8 @@ tau-ir     = { workspace = true }
 tau-domain = { workspace = true, default-features = false, features = ["serde"] }
 tau-ports  = { workspace = true, default-features = false, features = ["serde"] }
 tau-pkg    = { workspace = true }
-serde      = { workspace = true, default-features = false, features = ["alloc", "derive"] }
 serde_json = { workspace = true }
-chrono     = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 thiserror  = { workspace = true, default-features = false }
-hashbrown  = { workspace = true }
-foldhash   = { workspace = true }
-sha2       = { workspace = true, default-features = false }
 
 [dev-dependencies]
 tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
