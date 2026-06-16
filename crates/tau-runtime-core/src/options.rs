@@ -26,7 +26,7 @@ use core::cell::RefCell;
 /// assert_eq!(usage.total_tokens, None);
 /// ```
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
     /// Total input (prompt) tokens used across the run.
     pub input_tokens: u64,
