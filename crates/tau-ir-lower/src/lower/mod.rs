@@ -69,7 +69,7 @@ pub struct ResolvedMcpContract {
 /// # Example
 ///
 /// ```
-/// use tau_ir::lower::{lower_project, Caches};
+/// use tau_ir_lower::{lower_project, Caches};
 /// use tau_pkg::project::ProjectConfig;
 /// use tau_ports::target::registry;
 ///

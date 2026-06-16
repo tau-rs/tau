@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
-use tau_ir_lower::{lower_project, Caches};
 use tau_ir::IrModule;
+use tau_ir_lower::{lower_project, Caches};
 use tau_pkg::project::ProjectConfig;
 use tau_ports::error::LlmError;
 use tau_ports::llm::{
