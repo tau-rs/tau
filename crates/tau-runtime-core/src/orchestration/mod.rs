@@ -30,9 +30,9 @@ pub mod virtual_tools;
 pub use budget::BudgetWatchdog;
 pub use error::OrchestrationError;
 pub use run_state::RunState;
-pub use skill_resolve::{apply_scope_paths, SkillSpawnArgs};
 #[cfg(feature = "host-fs")]
-pub use skill_resolve::{substitute_skill_dir, SkillSpawnRequest};
+pub use skill_resolve::SkillSpawnRequest;
+pub use skill_resolve::{apply_scope_paths, substitute_skill_dir, SkillSpawnArgs};
 pub use task_list::TaskList;
 pub use trace::{NoopTraceSubscriber, TraceStream, TraceSubscriber};
 #[cfg(feature = "host-fs")]

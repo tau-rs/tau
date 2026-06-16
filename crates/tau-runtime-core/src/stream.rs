@@ -614,7 +614,7 @@ pub fn run_streaming_inner(
                         let is_agent_spawn = tool_use.name.starts_with("agent.")
                             && tool_use.name.ends_with(".spawn");
                         // `is_skill_spawn` is host-fs-only: skill resolution
-                        // reads SKILL.md from disk via tau_pkg::Scope. Shells
+                        // goes through the injected SkillResolver port. Shells
                         // without host-fs (embassy/wasm v1) can't reach the
                         // skill dispatch arm; tool_use.name patterns are
                         // dispatched as plain plugin calls there.
@@ -640,32 +640,26 @@ pub fn run_streaming_inner(
                         // failures without restructuring the rest of the arm.
                         #[cfg(feature = "host-fs")]
                         if is_skill_spawn {
-                            // Resolve the tau-pkg Scope from the caller-provided
-                            // `scope_root` (set by the host shell's wrapper
-                            // around `spawn_root_agent`). Embassy/wasm shells
-                            // that don't supply a scope_root land in the
-                            // `None` branch and fail gracefully.
-                            let scope_result = options
-                                .scope_root
-                                .as_deref()
-                                .and_then(|s| tau_pkg::Scope::resolve(std::path::Path::new(s)).ok());
-                            let scope = match scope_result {
-                                Some(s) => s,
+                            // Resolve the skill via the injected SkillResolver
+                            // port (host shells supply TauPkgSkillResolver;
+                            // guest shells supply NoSkillResolver or None).
+                            // A `None` resolver fails gracefully here.
+                            let resolver = match options.skill_resolver.as_ref() {
+                                Some(r) => r.clone(),
                                 None => {
                                     yield make_skill_spawn_error_tool_result(
                                         tool_use,
-                                        "no scope available for skill resolution",
+                                        "no skill resolver available for skill resolution",
                                     );
-                                    // Append error tool-result message so LLM
-                                    // history is coherent.
                                     let err_msg = Message::new(
                                         tool_addr.clone(),
                                         agent_addr.clone(),
                                         MessagePayload::ToolError {
                                             kind: "orchestration_virtual_tool_error"
                                                 .into(),
-                                            message: "skill spawn failed: no scope \
-                                                      available for skill resolution"
+                                            message: "skill spawn failed: no skill \
+                                                      resolver available for skill \
+                                                      resolution"
                                                 .into(),
                                             details: None,
                                         },
@@ -688,7 +682,7 @@ pub fn run_streaming_inner(
                                 &args_json,
                                 &agent_id_str,
                                 &granted_capabilities,
-                                &scope,
+                                resolver.as_ref(),
                             ) {
                                 Ok(r) => r,
                                 Err(e) => {
@@ -792,6 +786,7 @@ pub fn run_streaming_inner(
                                             clock: options.clock.clone(),
                                             random: options.random.clone(),
                                             scope_root: options.scope_root.clone(),
+                                            skill_resolver: options.skill_resolver.clone(),
                                             ..Default::default()
                                         };
 
@@ -1048,6 +1043,7 @@ pub fn run_streaming_inner(
                                                 clock: options.clock.clone(),
                                                 random: options.random.clone(),
                                                 scope_root: options.scope_root.clone(),
+                                                skill_resolver: options.skill_resolver.clone(),
                                                 ..Default::default()
                                             };
 
