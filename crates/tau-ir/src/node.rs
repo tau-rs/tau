@@ -43,6 +43,12 @@ pub struct Agent {
     /// Artifact loci this agent declares it produces (deliverable binding).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub produces: alloc::vec::Vec<alloc::string::String>,
+    /// Optional JSON schema describing the agent's structured output.
+    /// Plumbed from `[agents.<id>].output_schema`; consumed by a later
+    /// judge-compat build-time check. `skip_serializing_if` keeps
+    /// schema-less agents byte-stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
 }
 
 /// A tool node.
@@ -110,6 +116,7 @@ mod tests {
                 max_tokens: None,
             },
             produces: alloc::vec!["/x".into()],
+            output_schema: None,
         };
         let json = serde_json::to_string(&agent).expect("serialize");
         let back: Agent = serde_json::from_str(&json).expect("deserialize");
@@ -131,11 +138,56 @@ mod tests {
                 max_tokens: None,
             },
             produces: alloc::vec::Vec::new(),
+            output_schema: None,
         };
         let json = serde_json::to_string(&agent).expect("serialize");
         assert!(
             !json.contains("\"produces\""),
             "expected 'produces' key to be absent for empty vec; got: {json}"
+        );
+    }
+
+    /// An `Agent` with `output_schema` set round-trips through serde.
+    #[test]
+    fn agent_output_schema_round_trips() {
+        let agent = Agent {
+            id: AgentId("judge".into()),
+            prompt: String::new(),
+            model: "claude-haiku-4-5".into(),
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
+            produces: alloc::vec::Vec::new(),
+            output_schema: Some(serde_json::json!({"type": "object"})),
+        };
+        let json = serde_json::to_string(&agent).expect("serialize");
+        let back: Agent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(agent, back);
+    }
+
+    /// `output_schema = None` serializes WITHOUT an `"output_schema"` key.
+    #[test]
+    fn agent_empty_output_schema_omitted_from_json() {
+        let agent = Agent {
+            id: AgentId("gatherer".into()),
+            prompt: String::new(),
+            model: "claude-haiku-4-5".into(),
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
+            produces: alloc::vec::Vec::new(),
+            output_schema: None,
+        };
+        let json = serde_json::to_string(&agent).expect("serialize");
+        assert!(
+            !json.contains("\"output_schema\""),
+            "expected 'output_schema' key absent for None; got: {json}"
         );
     }
 }

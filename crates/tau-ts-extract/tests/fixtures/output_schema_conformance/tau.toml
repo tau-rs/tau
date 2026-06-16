@@ -1,0 +1,9 @@
+[project]
+name = "output-schema-fixture"
+
+[agents.judge]
+display_name = "Judge"
+package = "p@^0.1"
+llm_backend = "mock-llm"
+model = "mock-1"
+output_schema = { required = ["verdict"], type = "object" }
