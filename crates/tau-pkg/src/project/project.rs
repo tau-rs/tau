@@ -37,6 +37,9 @@ pub struct UncheckedProjectConfig {
     /// Map of deliverable id → unchecked deliverable definition.
     #[serde(default)]
     pub deliverables: BTreeMap<String, UncheckedDeliverable>,
+    /// Map of model alias → unchecked `{ backend, model }` entry.
+    #[serde(default)]
+    pub models: BTreeMap<String, RawModelEntry>,
 }
 
 /// `[project]` table.
@@ -567,6 +570,16 @@ pub struct GoalEntry {
     pub evaluates: LocusConfig,
     /// Verification predicate.
     pub predicate: GoalPredicateConfig,
+}
+
+/// Raw `[models.<alias>]` inline table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawModelEntry {
+    /// Backend package name.
+    pub backend: String,
+    /// Vendor model id.
+    pub model: String,
 }
 
 /// Raw `[deliverables.<id>]` table (pre-validation).
@@ -1183,6 +1196,17 @@ impl UncheckedProjectConfig {
             deliverables.insert(id.clone(), validate_deliverable(id, raw)?);
         }
 
+        let models: BTreeMap<String, ModelEntry> = self
+            .models
+            .into_iter()
+            .map(|(alias, raw)| {
+                (
+                    alias,
+                    ModelEntry { backend: raw.backend, model: raw.model },
+                )
+            })
+            .collect();
+
         let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -1193,7 +1217,7 @@ impl UncheckedProjectConfig {
             pipeline,
             goals,
             deliverables,
-            models: BTreeMap::new(),
+            models,
         };
 
         validate_postconditions(&mut result)?;
@@ -2110,6 +2134,19 @@ mod tests {
         let m = ModelEntry { backend: "anthropic".into(), model: "claude-haiku-4-5".into() };
         assert_eq!(m.backend, "anthropic");
         assert_eq!(m.model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn models_table_parses() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [models]
+            haiku = { backend = "anthropic", model = "claude-haiku-4-5" }
+        "#;
+        let cfg = parse(toml).unwrap();
+        assert_eq!(cfg.models["haiku"].backend, "anthropic");
+        assert_eq!(cfg.models["haiku"].model, "claude-haiku-4-5");
     }
 
     #[test]
@@ -3905,6 +3942,7 @@ mod proptests {
                 pipeline: None,
                 goals: BTreeMap::new(),
                 deliverables: BTreeMap::new(),
+                models: BTreeMap::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();
