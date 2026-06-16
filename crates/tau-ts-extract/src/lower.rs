@@ -33,6 +33,7 @@ struct IrAgent {
     prompt_system: Option<String>,
     tool_refs: Vec<String>,
     produces: Vec<String>,
+    output_schema: Option<serde_json::Value>,
 }
 
 enum IrToolBody {
@@ -313,6 +314,12 @@ fn build_toml(
             let prods: Vec<String> = agent.produces.iter().map(|p| toml_str(p)).collect();
             out.push_str(&format!("produces = [{}]\n", prods.join(", ")));
         }
+        if let Some(schema) = &agent.output_schema {
+            out.push_str(&format!(
+                "output_schema = {}\n",
+                json_to_toml_inline(schema)
+            ));
+        }
         if let Some(sys) = &agent.prompt_system {
             out.push_str(&format!("[agents.{}.prompt]\n", toml_key(name)));
             out.push_str(&format!("system = {}\n", toml_str(sys)));
@@ -470,6 +477,80 @@ fn expr_as_string(expr: &Expr) -> Option<String> {
         Some(s.value.as_wtf8().to_string_lossy().into_owned())
     } else {
         None
+    }
+}
+
+/// Convert a TS literal expression (object / array / string / number /
+/// bool / null) into a `serde_json::Value`. Returns `None` for any
+/// non-literal — schemas must be literal per the declarations-only
+/// contract (ADR-0041).
+fn expr_to_json(expr: &Expr) -> Option<serde_json::Value> {
+    match expr {
+        Expr::Object(obj) => {
+            let mut map = serde_json::Map::new();
+            for p in &obj.props {
+                if let PropOrSpread::Prop(prop) = p {
+                    if let Prop::KeyValue(KeyValueProp { key, value }) = prop.as_ref() {
+                        let k = match key {
+                            PropName::Ident(i) => i.sym.to_string(),
+                            PropName::Str(s) => s.value.as_wtf8().to_string_lossy().into_owned(),
+                            _ => return None,
+                        };
+                        map.insert(k, expr_to_json(value)?);
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+            Some(serde_json::Value::Object(map))
+        }
+        Expr::Array(arr) => {
+            let mut out = Vec::new();
+            for elem in arr.elems.iter().flatten() {
+                out.push(expr_to_json(&elem.expr)?);
+            }
+            Some(serde_json::Value::Array(out))
+        }
+        Expr::Lit(Lit::Str(s)) => Some(serde_json::Value::String(
+            s.value.as_wtf8().to_string_lossy().into_owned(),
+        )),
+        Expr::Lit(Lit::Bool(b)) => Some(serde_json::Value::Bool(b.value)),
+        Expr::Lit(Lit::Null(_)) => Some(serde_json::Value::Null),
+        Expr::Lit(Lit::Num(n)) => {
+            serde_json::Number::from_f64(n.value).map(serde_json::Value::Number)
+        }
+        _ => None,
+    }
+}
+
+/// Serialize a `serde_json::Value` as a TOML inline value. JSON `null` has
+/// no TOML representation, so it is emitted as the empty string (schemas
+/// should not contain null; defensive fallback). Object key order is the
+/// value's own (serde_json `Map` = `BTreeMap`, alphabetical) → deterministic.
+fn json_to_toml_inline(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let entries: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{} = {}", toml_key(k), json_to_toml_inline(v)))
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_toml_inline).collect();
+            format!("[{}]", items.join(", "))
+        }
+        // `json_to_toml_inline` feeds arbitrary JSON string values here.
+        // `toml_str` does not escape newlines, so a schema string value
+        // containing `\n` would emit invalid TOML. JSON-schema keyword
+        // values do not legitimately carry embedded newlines, so this is
+        // an accepted limit until schema validation gates on primitives.
+        serde_json::Value::String(s) => toml_str(s),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Null => toml_str(""),
     }
 }
 
@@ -779,6 +860,9 @@ fn extract_agent(
         _ => Vec::new(),
     };
 
+    // Extract `outputSchema: { ... }` → serde_json::Value (camelCase in TS).
+    let output_schema = props.get("outputSchema").and_then(|e| expr_to_json(e));
+
     let agent = IrAgent {
         display_name,
         package,
@@ -787,6 +871,7 @@ fn extract_agent(
         prompt_system,
         tool_refs,
         produces,
+        output_schema,
     };
 
     Ok((agent, extra_tools))

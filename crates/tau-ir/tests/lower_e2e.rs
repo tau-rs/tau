@@ -394,3 +394,31 @@ fn explicit_check_placement_is_not_double_appended() {
         "step id at position 2 must be 'check-report'"
     );
 }
+
+#[test]
+fn agent_output_schema_survives_lowering() {
+    let toml = r#"
+[project]
+name = "p"
+
+[agents.judge]
+display_name = "Judge"
+package = "p@^0.1"
+llm_backend = "mock"
+model = "mock-1"
+output_schema = { type = "object" }
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches).expect("lower");
+    let agent = module
+        .workflow
+        .agents
+        .get(&tau_ir::AgentId("judge".into()))
+        .expect("agent");
+    assert_eq!(
+        agent.output_schema,
+        Some(serde_json::json!({"type": "object"}))
+    );
+}
