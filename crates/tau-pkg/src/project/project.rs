@@ -2112,6 +2112,9 @@ fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
 
     // 1. Validate every `[models]` entry.
     for (alias, m) in &cfg.models {
+        // Defense-in-depth: RawModelEntry's required fields make serde reject a
+        // [models] entry missing `backend`/`model` at TOML parse time, so this
+        // guard only fires on direct in-Rust construction. Kept intentionally.
         if m.backend.is_empty() || m.model.is_empty() {
             return Err(ProjectConfigError::MalformedModelEntry {
                 alias: alias.clone(),
@@ -4112,6 +4115,45 @@ prompt = { system = "hi" }
         assert!(
             matches!(err, ProjectConfigError::MissingAgentModel { .. }),
             "expected MissingAgentModel, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_judge_model_alias_is_refused() {
+        let toml = r#"
+[project]
+name="p"
+
+[models]
+haiku = { backend="anthropic", model="claude-haiku-4-5" }
+
+[agents.writer]
+display_name="Writer"
+package="anthropic@^1"
+model = "haiku"
+produces = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+
+[[pipeline.steps]]
+id = "writer"
+run = "agent:writer"
+
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "A coherent summary."
+judge_model  = "unknown_model"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::UnknownModelAlias { ref referrer, .. } if referrer.contains("deliverable") && referrer.contains("judge")),
+            "expected UnknownModelAlias with deliverable/judge referrer, got: {err:?}"
         );
     }
 }
