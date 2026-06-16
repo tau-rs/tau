@@ -15,7 +15,7 @@
 
 ## Design Decisions (locked)
 
-1. **`Agent` loses its `Eq` derive.** `tau_ir::node::Agent` currently derives `Eq`, but `serde_json::Value` is not `Eq`. The sibling nodes `Tool` and `Deterministic` (which already carry `Value` fields) derive only `PartialEq`. We drop `Eq` from `Agent` to match. Verified no code requires `Agent: Eq` (no `HashSet<Agent>` / `BTreeSet<Agent>`; `BTreeMap` keys are `AgentId`, not `Agent`).
+1. **`Agent` KEEPS its `Eq` derive.** (Corrected during Task 2 review — the original plan wrongly claimed `Eq` had to be dropped.) `serde_json::Value` *does* implement `Eq` (serde_json provides `impl Eq for Value`), so `Agent` with an `Option<serde_json::Value>` field compiles unchanged with `#[derive(..., Eq, PartialEq, ...)]`. Verified by compilation. Dropping `Eq` would have been a needless public-API regression, so we leave the derive intact.
 
 2. **`Agent` is NOT `#[non_exhaustive]`** and is constructed by struct-literal in ~12 sites across the workspace. Every literal must gain `output_schema: <value>`. The full list is enumerated in Task 2, Step 5. The lowering site (`parse.rs`) gets the real value; every test/other site gets `None`.
 
@@ -692,7 +692,7 @@ Create `docs/decisions/0049-agent-output-schema.md`. Read `docs/decisions/templa
 - **Context:** Deterministic steps carry `output_schema`; agents did not. A later judge-compat build-time check needs the agent's declared output schema to cross-reference against a deliverable's judge. This ADR records only the additive field plumbing — not the cross-check itself.
 - **Decision:** Add `output_schema: Option<serde_json::Value>` to `UncheckedAgent`/`AgentEntry` (tau-pkg), to the IR `Agent` node behind `#[serde(default, skip_serializing_if = "Option::is_none")]`, and to the TS `outputSchema` extraction. Pass-through (no deep JSON-schema validation), mirroring `[steps.*].output_schema`.
 - **IR format version:** `v1.2.0` → `v1.3.0` — MINOR/additive per ADR-0006 semver discipline. A v1.2.0 reader ignores the absent-when-`None` key; a v1.3.0 reader handles both. All pre-existing fixtures' canonical bytes are unchanged (verified by the full `tau-ir-conformance` suite).
-- **Consequences:** `tau_ir::node::Agent` drops its `Eq` derive (`serde_json::Value` is not `Eq`; matches sibling `Tool`/`Deterministic` nodes). No runtime behavior change — the schema is inert until the downstream judge-compat task consumes it.
+- **Consequences:** No public-API regression — `tau_ir::node::Agent` keeps its `Eq` derive (`serde_json::Value` implements `Eq`). No runtime behavior change — the schema is inert until the downstream judge-compat task consumes it.
 
 - [ ] **Step 6: Link the ADR in `docs/SUMMARY.md`**
 
