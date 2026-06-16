@@ -630,8 +630,8 @@ pub enum OnFailConfig {
 /// Who evaluates a deliverable's content.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JudgeConfig {
-    /// tau's built-in minimalist judge, optionally on a chosen model.
-    Builtin {
+    /// The canonical (implicit) judge, optional `judge_model` alias override.
+    Default {
         /// `judge_model` override (runtime no-op in v1).
         model: Option<String>,
     },
@@ -1871,7 +1871,7 @@ fn validate_deliverable(
     // Collapse judge fields.
     let judge = match raw.judge {
         Some(agent_id) => JudgeConfig::Agent(agent_id),
-        None => JudgeConfig::Builtin {
+        None => JudgeConfig::Default {
             model: raw.judge_model,
         },
     };
@@ -2146,7 +2146,7 @@ fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
 
     // 3. Every deliverable judge_model override must resolve in `[models]`.
     for (id, d) in &cfg.deliverables {
-        if let JudgeConfig::Builtin { model: Some(alias) } = &d.judge {
+        if let JudgeConfig::Default { model: Some(alias) } = &d.judge {
             if !cfg.models.contains_key(alias) {
                 return Err(ProjectConfigError::UnknownModelAlias {
                     referrer: format!("deliverable `{id}` judge_model"),
@@ -3499,7 +3499,7 @@ retry_from   = "writer"
         assert_eq!(d.on_fail, OnFailConfig::Retry);
         assert_eq!(d.max_attempts, 3);
         assert_eq!(d.retry_from.as_deref(), Some("writer"));
-        assert_eq!(d.judge, JudgeConfig::Builtin { model: None });
+        assert_eq!(d.judge, JudgeConfig::Default { model: None });
     }
 
     #[test]
