@@ -71,10 +71,10 @@ pub enum GoalPredicate {
 /// Who evaluates a deliverable's content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum JudgeRef {
-    /// tau's built-in minimalist judge, optionally on a chosen model.
-    Builtin {
-        /// `judge_model` override (runtime no-op in v1 — see ADR).
-        model: Option<String>,
+    /// The canonical judge, on a build-time-resolved model.
+    Default {
+        /// Resolved model (alias resolved + producer-default applied at lowering).
+        model_ref: crate::model_ref::ModelRef,
     },
     /// A user `[agents.*]` used as judge.
     Agent(AgentId),

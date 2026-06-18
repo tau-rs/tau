@@ -29,6 +29,7 @@ pub mod ids;
 #[cfg(feature = "with-std-adapters")]
 pub mod lower;
 pub mod message;
+pub mod model_ref;
 pub mod module;
 pub mod node;
 pub mod pipeline;
@@ -50,6 +51,7 @@ pub use error::IrError;
 pub use hash::compute_hash;
 pub use ids::{AgentId, CheckId, PipelineStepId, StepId, SubflowId, ToolId};
 pub use message::{Message, MessagePayload};
+pub use model_ref::ModelRef;
 pub use module::{IrFormatVersion, IrModule, Workflow};
 pub use node::{Agent, Deterministic, Node, Subflow, Tool};
 pub use pipeline::{Pipeline, PipelineStep, StepRun};

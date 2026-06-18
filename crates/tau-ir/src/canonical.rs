@@ -87,14 +87,19 @@ mod pipeline_canonical_tests {
             },
         };
 
-        // One deliverable check: path locus, builtin judge with no model
-        // override.
+        // One deliverable check: path locus, canonical judge on a resolved
+        // model.
         let deliverable_check = Check {
             id: CheckId("report".into()),
             verify: CheckVerify::Deliverable {
                 locus: Locus::Path("/r.md".into()),
                 must_satisfy: "Must have sources section.".into(),
-                judge: JudgeRef::Builtin { model: None },
+                judge: JudgeRef::Default {
+                    model_ref: crate::model_ref::ModelRef {
+                        backend: "anthropic".into(),
+                        model_id: "claude-haiku-4-5".into(),
+                    },
+                },
             },
             retry: RetryPolicy {
                 on_fail: OnFail::Abort,
