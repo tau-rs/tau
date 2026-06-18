@@ -199,13 +199,18 @@ mod tests {
         // ResolvedMcpContract whose server-tool name contains a dot.
         // resolve() should return McpBuildError::ServerToolNameContainsDot.
         let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
 
 [agents.main]
 display_name = "Main"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = ["weather"]
 
 [tools.weather]
@@ -242,13 +247,18 @@ capabilities = []
         // One MCP entry with two server-tools should become two IR tools,
         // and the agent's tool_refs should be rewritten accordingly.
         let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
 
 [agents.main]
 display_name = "Main"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = ["weather"]
 
 [tools.weather]

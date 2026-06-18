@@ -30,14 +30,18 @@ fn cosmetic_permutations_produce_same_bytes() {
     let target = registry::list_available().next().expect("target").triple;
 
     let a = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "demo"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
 
         [agents.monitor]
         display_name = "monitor"
         package = "x@*"
-        llm_backend = "anthropic"
-        model = "M"
+        model = "default"
         tool_refs = ["t"]
 
         [tools.t]
@@ -46,6 +50,8 @@ fn cosmetic_permutations_produce_same_bytes() {
     "#;
     let b = r#"
         # leading comment
+        packages = ["mock-llm"]
+
         [tools.t]
         capabilities = []                # tools first
         native = "T"                      # extra spaces
@@ -53,12 +59,14 @@ fn cosmetic_permutations_produce_same_bytes() {
         [project]
         name = "demo"
 
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
+
         [agents.monitor]
         tool_refs = [ "t" ]              # whitespace
-        model = "M"
+        model = "default"
         display_name = "monitor"
         package = "x@*"
-        llm_backend = "anthropic"
     "#;
 
     let bytes_a = to_canonical_bytes(&lower(a, &target));

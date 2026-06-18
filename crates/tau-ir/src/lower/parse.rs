@@ -113,7 +113,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
             Agent {
                 id: agent_id,
                 prompt,
-                model: entry.model.clone(),
+                model_ref: resolve_model_ref(config, &entry.model)?,
                 tool_refs,
                 context: lower_context(entry),
                 budget: AgentBudget {
@@ -252,7 +252,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
     });
 
     // --- Checks (goals + deliverables) -----------------------------------
-    let checks = lower_checks(config, &mut pipeline);
+    let checks = lower_checks(config, &mut pipeline)?;
 
     Ok(Parsed {
         workflow: Workflow {
@@ -280,10 +280,27 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, IrError> {
 /// Producer binding and gate resolution were performed by tau-pkg's
 /// validator (`DeliverableEntry::producer` / `::gate`), so this is a pure
 /// structural copy — no re-derivation here.
+/// Resolve a model alias to a concrete [`ModelRef`] via `[models]`.
+///
+/// Infallible in practice — `validate_models` (tau-pkg) guarantees the alias
+/// exists before lowering runs; the error arm is defense-in-depth.
+fn resolve_model_ref(
+    config: &ProjectConfig,
+    alias: &str,
+) -> Result<crate::model_ref::ModelRef, IrError> {
+    let m = config.models.get(alias).ok_or_else(|| {
+        IrError::Parse(alloc::format!("model alias `{alias}` not in [models]"))
+    })?;
+    Ok(crate::model_ref::ModelRef {
+        backend: m.backend.clone(),
+        model_id: m.model.clone(),
+    })
+}
+
 fn lower_checks(
     config: &ProjectConfig,
     pipeline: &mut Option<Pipeline>,
-) -> BTreeMap<CheckId, Check> {
+) -> Result<BTreeMap<CheckId, Check>, IrError> {
     let mut checks: BTreeMap<CheckId, Check> = BTreeMap::new();
 
     // Build the checks map, goals first then deliverables (BTreeMap order).
@@ -321,7 +338,7 @@ fn lower_checks(
                 verify: CheckVerify::Deliverable {
                     locus: lower_locus(&d.locus),
                     must_satisfy: d.must_satisfy.clone(),
-                    judge: lower_judge(&d.judge),
+                    judge: lower_judge(config, d)?,
                 },
                 retry: RetryPolicy {
                     on_fail: lower_on_fail(&d.on_fail),
@@ -333,7 +350,7 @@ fn lower_checks(
     }
 
     if checks.is_empty() {
-        return checks;
+        return Ok(checks);
     }
 
     // Collect the check ids that are already explicitly positioned via a
@@ -367,7 +384,7 @@ fn lower_checks(
         None => *pipeline = Some(Pipeline { steps: appended }),
     }
 
-    checks
+    Ok(checks)
 }
 
 /// Lower a tau-pkg [`AgentEntry`]'s `[agents.<id>.context]` pipeline into an
@@ -440,14 +457,35 @@ fn lower_on_fail(o: &tau_pkg::project::OnFailConfig) -> OnFail {
     }
 }
 
-/// Map a tau-pkg [`JudgeConfig`] to an IR [`JudgeRef`].
-fn lower_judge(j: &tau_pkg::project::JudgeConfig) -> JudgeRef {
+/// Map a tau-pkg [`JudgeConfig`] to an IR [`JudgeRef`], resolving the model.
+///
+/// The canonical judge (`Default`) resolves its model from `[models]`: an
+/// explicit `judge_model` alias if present, otherwise it inherits the
+/// producing agent's resolved model (Q4). The producer is resolved by
+/// tau-pkg validation into `DeliverableEntry.producer`.
+fn lower_judge(
+    config: &ProjectConfig,
+    d: &tau_pkg::project::DeliverableEntry,
+) -> Result<JudgeRef, IrError> {
     use tau_pkg::project::JudgeConfig;
-    match j {
-        JudgeConfig::Builtin { model } => JudgeRef::Builtin {
-            model: model.clone(),
-        },
-        JudgeConfig::Agent(n) => JudgeRef::Agent(AgentId(n.clone())),
+    match &d.judge {
+        JudgeConfig::Default { model } => {
+            let model_ref = match model {
+                Some(alias) => resolve_model_ref(config, alias)?,
+                None => {
+                    let producer = config.agents.get(&d.producer).ok_or_else(|| {
+                        IrError::Parse(alloc::format!(
+                            "deliverable `{}` producer `{}` not found",
+                            d.id,
+                            d.producer
+                        ))
+                    })?;
+                    resolve_model_ref(config, &producer.model)?
+                }
+            };
+            Ok(JudgeRef::Default { model_ref })
+        }
+        JudgeConfig::Agent(n) => Ok(JudgeRef::Agent(AgentId(n.clone()))),
     }
 }
 
@@ -460,19 +498,24 @@ mod tests {
     #[test]
     fn parse_registers_tool_node_for_subflow_body() {
         let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
 
 [agents.parent]
 display_name = "Parent"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = ["notify"]
 
 [agents.worker]
 display_name = "Worker"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = []
 
 [tools.notify]
@@ -498,13 +541,18 @@ capabilities = []
     #[test]
     fn parse_registers_tool_node_for_each_step() {
         let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
 
 [agents.solo]
 display_name = "Solo"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = ["normalize"]
 
 [steps.normalize]
@@ -538,13 +586,18 @@ deterministic = "parse_celsius"
         // rejected; if the insert were allowed the step would silently
         // overwrite the tool, dispatching the wrong implementation.
         let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
 
 [agents.solo]
 display_name = "Solo"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = ["foo"]
 
 [tools.foo]
@@ -602,19 +655,24 @@ input = "${steps.a.output}"
         // test pins the new shape so a regression that re-introduces the
         // edge gets caught.
         let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
 
 [agents.parent]
 display_name = "Parent"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = ["notify"]
 
 [agents.worker]
 display_name = "Worker"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "default"
 tool_refs    = []
 
 [tools.notify]

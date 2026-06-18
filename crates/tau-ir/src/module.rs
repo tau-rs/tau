@@ -90,9 +90,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v1_2_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v1.2.0");
-        assert_eq!(IrFormatVersion::current().0, "v1.2.0");
+    fn ir_format_version_is_v2_0_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.0.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.0.0");
     }
 
     #[test]

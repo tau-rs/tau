@@ -21,13 +21,18 @@ fn target() -> tau_ports::target::TargetTriple {
 #[test]
 fn lowers_cron_trigger_into_module() {
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "demo"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
 
         [agents.summarizer]
         display_name = "S"
         package      = "p@^0.1"
-        llm_backend  = "anthropic"
+        model        = "default"
 
         [trigger.nightly]
         kind     = "cron"
@@ -66,12 +71,18 @@ fn lowers_cron_trigger_into_module() {
 #[test]
 fn trigger_less_module_keeps_v1_0_0() {
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "demo"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
+
         [agents.a]
         display_name = "A"
         package = "p@^0.1"
-        llm_backend = "anthropic"
+        model = "default"
     "#;
     let config = ProjectConfig::parse_str(toml).unwrap();
     let module = lower_project(&config, &target(), &caches()).unwrap();
@@ -82,12 +93,19 @@ fn trigger_less_module_keeps_v1_0_0() {
 #[test]
 fn triggers_are_sorted_by_name() {
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "demo"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
+
         [agents.a]
         display_name = "A"
         package = "p@^0.1"
-        llm_backend = "anthropic"
+        model = "default"
+
         [trigger.zeta]
         kind = "manual"
         agent = "a"
@@ -108,12 +126,19 @@ fn triggers_are_sorted_by_name() {
 #[test]
 fn rejects_trigger_referencing_unknown_agent() {
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "demo"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
+
         [agents.a]
         display_name = "A"
         package = "p@^0.1"
-        llm_backend = "anthropic"
+        model = "default"
+
         [trigger.t]
         kind = "manual"
         agent = "ghost"
