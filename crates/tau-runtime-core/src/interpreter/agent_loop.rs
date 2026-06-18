@@ -410,8 +410,8 @@ fn prepare_agent_run<D>(
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
-    // 1. Obtain the LLM backend from the dispatcher.
-    let backend = dispatcher.llm_backend();
+    // 1. Obtain the LLM backend from the dispatcher, keyed by the IR backend name.
+    let backend = dispatcher.llm_backend_for(&agent.model_ref.backend)?;
     let backend_name = String::from(backend.name());
 
     // 2. Build the RuntimeBuilder with the backend.
@@ -473,7 +473,8 @@ where
         ),
         llm_backend_pkg_name,
     )
-    .with_system_prompt(agent.prompt.clone());
+    .with_system_prompt(agent.prompt.clone())
+    .with_model(agent.model_ref.model_id.clone());
 
     let manifest = stub_manifest();
 
@@ -665,8 +666,8 @@ mod tests {
             Box::pin(async move { Ok(ToolInvocationResult { body, error }) })
         }
 
-        fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-            self.backend.clone()
+        fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+            Ok(self.backend.clone())
         }
     }
 
@@ -803,6 +804,124 @@ mod tests {
             other => panic!("expected Text content, got {other:?}"),
         }
         assert!(!res.is_error);
+    }
+
+    /// TDD assertion for Task 11: the `CompletionRequest` the LLM backend
+    /// receives must carry the IR `Agent.model_ref.model_id`, NOT the
+    /// backend package name (`model_ref.backend`).
+    ///
+    /// Wiring path: `prepare_agent_run` calls
+    /// `AgentDefinition::with_model(agent.model_ref.model_id.clone())` →
+    /// `stream.rs` builds
+    /// `CompletionRequest::new(agent_def.model.clone().into())`.
+    #[cfg(feature = "test-fixtures")]
+    #[tokio::test]
+    async fn completion_request_carries_model_id_not_backend_name() {
+        use tau_ports::fixtures::{make_completion_response, MockLlmBackend};
+        use tau_ports::llm::StopReason;
+
+        // MockLlmBackend named "my-backend"; the IR model_id is "claude-haiku-4-5".
+        // After wiring, the CompletionRequest the backend sees must have
+        // model == "claude-haiku-4-5", not "my-backend".
+        let backend = alloc::sync::Arc::new(
+            MockLlmBackend::new("my-backend").with_response(make_completion_response(
+                "done".to_string(),
+                alloc::vec![],
+                StopReason::EndTurn,
+                None,
+            )),
+        );
+
+        struct SingleBackendDispatcher {
+            backend: alloc::sync::Arc<MockLlmBackend>,
+        }
+
+        impl ToolDispatcher for SingleBackendDispatcher {
+            fn invoke<'a>(
+                &'a self,
+                _tool_id: &'a ToolId,
+                _args: &'a Value,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>,
+            > {
+                Box::pin(async move {
+                    Ok(ToolInvocationResult {
+                        body: None,
+                        error: None,
+                    })
+                })
+            }
+
+            fn llm_backend_for(
+                &self,
+                _backend: &str,
+            ) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+                Ok(self.backend.clone())
+            }
+        }
+
+        let dispatcher = alloc::sync::Arc::new(SingleBackendDispatcher {
+            backend: backend.clone(),
+        });
+
+        let module = alloc::sync::Arc::new(tau_ir::IrModule {
+            ir_format: tau_ir::IrFormatVersion::current(),
+            tau_version: env!("CARGO_PKG_VERSION").into(),
+            target: tau_ports::target::registry::list_available()
+                .next()
+                .expect("at least one target")
+                .triple,
+            workflow: tau_ir::Workflow {
+                agents: alloc::collections::BTreeMap::new(),
+                tools: alloc::collections::BTreeMap::new(),
+                steps: alloc::collections::BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: tau_ir::CapabilityTable(alloc::collections::BTreeMap::new()),
+                pipeline: None,
+                checks: alloc::collections::BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        });
+
+        let agent = tau_ir::node::Agent {
+            id: tau_ir::ids::AgentId("test-agent".into()),
+            prompt: alloc::string::String::new(),
+            model_ref: tau_ir::model_ref::ModelRef {
+                backend: "my-backend".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: tau_ir::budget::AgentBudget {
+                max_turns: Some(1),
+                max_tokens: None,
+            },
+            produces: alloc::vec::Vec::new(),
+        };
+
+        let user_msg = tau_domain::Message::new(
+            tau_domain::Address::User,
+            tau_domain::Address::Agent(tau_domain::AgentInstanceId::new()),
+            tau_domain::MessagePayload::Text {
+                content: "hello".into(),
+            },
+        );
+        run_agent(
+            module,
+            &agent,
+            dispatcher,
+            alloc::vec![user_msg],
+        )
+        .await
+        .expect("run_agent must succeed");
+
+        let invocations = backend.invocations();
+        assert_eq!(invocations.len(), 1, "expected exactly one LLM call");
+        assert_eq!(
+            invocations[0].model,
+            "claude-haiku-4-5",
+            "CompletionRequest.model must be the model_id, not the backend package name"
+        );
     }
 
     #[tokio::test]

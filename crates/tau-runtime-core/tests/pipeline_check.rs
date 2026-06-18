@@ -130,8 +130,8 @@ impl ToolDispatcher for CheckDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
     }
 
     fn deterministic_registry(&self) -> Option<Arc<dyn DeterministicRegistry>> {
@@ -148,7 +148,10 @@ fn writer_agent() -> Agent {
     Agent {
         id: AgentId("writer".into()),
         prompt: String::new(),
-        model: "echo-model".into(),
+        model_ref: tau_ir::ModelRef {
+            backend: "mock-llm".into(),
+            model_id: "echo-model".into(),
+        },
         tool_refs: Vec::new(),
         context: None,
         budget: AgentBudget::default(),
