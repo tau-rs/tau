@@ -371,6 +371,10 @@ jobs:
           set -e
           rustup target add wasm32-wasip2
           cargo build -p tau-runtime-core --target wasm32-wasip2 --no-default-features
+      - name: wasm guest component builds in release (β.7.5 PR-C)
+        # The no_std WASI 0.2 component must compile in the exact release
+        # profile (where the _rdl_* allocator-symbol LTO interaction lives).
+        run: cargo build -p tau-wasm-guest --target wasm32-wasip2 --release
       - name: no forbidden executor imports in tau-runtime-core/src
         run: |
           # tau-runtime-core must be executor-agnostic. Top-level (column-0)
