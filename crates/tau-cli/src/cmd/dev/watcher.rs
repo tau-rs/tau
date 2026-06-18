@@ -9,8 +9,9 @@
 //! `pending_reload` is set to `true`. The caller must hold the returned
 //! [`notify::RecommendedWatcher`] alive — dropping it stops the watcher.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -36,14 +37,54 @@ pub fn spawn(
 ) -> Result<RecommendedWatcher> {
     let paths = resolve_watch_paths(project_root, project_file_path, project);
 
+    // The set of files we actually care about, canonicalized so the callback's
+    // path matching survives symlinked temp dirs (e.g. macOS `/var` ->
+    // `/private/var`). This is the crux of correct filtering: some notify
+    // backends (notably FSEvents) watch the *parent directory* of a watched
+    // file and deliver events for sibling files too. Without this filter a
+    // write to e.g. `tau-lock.toml` — a sibling of the watched `tau.toml` —
+    // would spuriously set `pending_reload`. Match each event's paths against
+    // this set so only genuine changes to watched files trigger a reload.
+    let watched: HashSet<PathBuf> = paths
+        .iter()
+        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
+        .collect();
+
+    // Content fingerprint of the watched files at boot. The watcher flips
+    // `pending_reload` only when an event *actually changes* watched content
+    // — not on metadata-only events (`Modify(Metadata)`), and not on the
+    // historical `Create`/`Modify` events that FSEvents replays for the
+    // watched file when the watch first registers. Those replayed events
+    // otherwise race the boot sequence and cause spurious reloads.
+    let last_hash = Arc::new(AtomicU64::new(hash_watched(&watched)));
+
     let pending_for_callback = pending_reload.clone();
+    let watched_for_callback = watched.clone();
+    let last_hash_for_callback = last_hash.clone();
     let mut watcher = RecommendedWatcher::new(
         move |res: std::result::Result<notify::Event, notify::Error>| {
             let Ok(event) = res else { return };
-            if matches!(
+            if !matches!(
                 event.kind,
                 EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
             ) {
+                return;
+            }
+            // Only consider events touching an actually-watched file. Some
+            // backends (FSEvents) watch the parent directory and deliver
+            // sibling-file events; canonicalize first (matches FSEvents'
+            // `/private/…` paths), falling back to the raw path for removes.
+            let touches_watched = event.paths.iter().any(|p| {
+                let canon = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+                watched_for_callback.contains(&canon) || watched_for_callback.contains(p)
+            });
+            if !touches_watched {
+                return;
+            }
+            // Content-based change detection: ignore metadata-only and
+            // replayed events whose bytes match what we already have.
+            let new_hash = hash_watched(&watched_for_callback);
+            if new_hash != last_hash_for_callback.swap(new_hash, Ordering::AcqRel) {
                 pending_for_callback.store(true, Ordering::Release);
             }
         },
@@ -51,15 +92,34 @@ pub fn spawn(
     )
     .context("create notify watcher")?;
 
-    for path in paths {
+    for path in &paths {
         if path.exists() {
             watcher
-                .watch(&path, RecursiveMode::NonRecursive)
+                .watch(path, RecursiveMode::NonRecursive)
                 .with_context(|| format!("watch {}", path.display()))?;
         }
     }
 
     Ok(watcher)
+}
+
+/// Combined content fingerprint of all watched files, order-independent
+/// (paths sorted for determinism). A missing file contributes a sentinel so
+/// create/remove still register as a change. Used to suppress reloads from
+/// metadata-only and replayed filesystem events whose content is unchanged.
+fn hash_watched(watched: &HashSet<PathBuf>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut paths: Vec<&PathBuf> = watched.iter().collect();
+    paths.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for p in paths {
+        p.hash(&mut hasher);
+        match std::fs::read(p) {
+            Ok(bytes) => bytes.hash(&mut hasher),
+            Err(_) => (-1i8).hash(&mut hasher),
+        }
+    }
+    hasher.finish()
 }
 
 /// Resolve the full set of paths to watch for this project:
