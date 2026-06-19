@@ -10,7 +10,8 @@
 //! `06_multi_turn_history`, `07_mcp_weather_cassette`,
 //! `08_pipeline_sequence`, `09_deliverables_happy`,
 //! `10_deliverable_retry`, `11_deliverable_no_producer`,
-//! `12_pipeline_reverse_alpha`, and `13_context_pipeline`.
+//! `12_pipeline_reverse_alpha`, `13_context_pipeline`, and
+//! `14_models_multi` (per-agent / per-judge model resolution).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -679,6 +680,107 @@ async fn fixture_13_dev_mode_completed() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_13_cross_mode_conformance() {
     let dir = fixture_dir("13_context_pipeline");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 14 — models_multi (per-agent / per-judge model resolution)
+// ---------------------------------------------------------------------------
+
+/// Fixture 14 lowering: a `[models]` table with two aliases on one backend,
+/// two agents on different models, one deliverable whose judge inherits its
+/// producer's model and one whose explicit `judge_model` overrides it.
+///
+/// This is the load-bearing assertion for per-agent / per-judge model
+/// resolution (spec D2/D5/Q4): the resolved `ModelRef`s are baked at lowering.
+///   * `gather`  → `deep`  → `mock-deep`
+///   * `writer`  → `fast`  → `mock-fast`
+///   * deliverable `report`  judge inherits producer `writer` → `mock-fast`
+///   * deliverable `summary` judge has explicit `judge_model = "fast"` even
+///     though its producer `gather` is `deep` → `mock-fast` (override, not
+///     producer-derived).
+#[test]
+fn fixture_14_lowers_distinct_models_and_judge_resolution() {
+    use tau_ir::check::{CheckVerify, JudgeRef};
+    use tau_ir::ids::{AgentId, CheckId};
+    use tau_ir::lower::{lower_project, Caches};
+    use tau_pkg::project::ProjectConfig;
+
+    let toml = std::fs::read_to_string(fixture_dir("14_models_multi").join("workflow.toml"))
+        .expect("read workflow.toml");
+    let config = ProjectConfig::parse_str(&toml).expect("parse + validate fixture-14");
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one target triple available")
+        .triple;
+    let caches = Caches {
+        native_tool: &|name: &str| {
+            let seed = name.as_bytes().first().copied().unwrap_or(1);
+            Some([seed; 32])
+        },
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+    };
+    let module = lower_project(&config, &target, &caches).expect("lower fixture-14");
+
+    // Agents carry distinct resolved model ids.
+    let gather = module
+        .workflow
+        .agents
+        .get(&AgentId("gather".into()))
+        .expect("gather agent");
+    let writer = module
+        .workflow
+        .agents
+        .get(&AgentId("writer".into()))
+        .expect("writer agent");
+    assert_eq!(gather.model_ref.backend, "mock-llm");
+    assert_eq!(gather.model_ref.model_id, "mock-deep");
+    assert_eq!(writer.model_ref.model_id, "mock-fast");
+
+    // Helper: extract a deliverable check's Default-judge model id.
+    let judge_model_id = |check_id: &str| -> String {
+        let check = module
+            .workflow
+            .checks
+            .get(&CheckId(check_id.into()))
+            .unwrap_or_else(|| panic!("check {check_id} present"));
+        match &check.verify {
+            CheckVerify::Deliverable {
+                judge: JudgeRef::Default { model_ref },
+                ..
+            } => model_ref.model_id.clone(),
+            other => panic!("check {check_id}: expected Default judge, got {other:?}"),
+        }
+    };
+
+    // `report` inherits its producer (writer → fast).
+    assert_eq!(judge_model_id("report"), "mock-fast");
+    // `summary` uses the explicit judge_model = "fast", overriding its
+    // producer `gather` (which is `deep`).
+    assert_eq!(judge_model_id("summary"), "mock-fast");
+}
+
+/// Fixture 14 dev-mode: the multi-model pipeline + two judged deliverables
+/// run to completion (gather → writer → report-judge → summary-judge).
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_14_dev_mode_completed() {
+    let dir = fixture_dir("14_models_multi");
+    let report = DevMode.run(&dir).await;
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+}
+
+/// Fixture 14 cross-mode conformance (DevMode vs BundleMode).
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_14_cross_mode_conformance() {
+    let dir = fixture_dir("14_models_multi");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

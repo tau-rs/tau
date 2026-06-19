@@ -1,0 +1,50 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-14"
+
+# Two aliases on the SAME backend, distinct vendor model ids.
+[models.fast]
+backend = "mock-llm"
+model = "mock-fast"
+
+[models.deep]
+backend = "mock-llm"
+model = "mock-deep"
+
+# Two agents on DIFFERENT models.
+[agents.gather]
+display_name = "Gather"
+package      = "demo@^0.1"
+model        = "deep"
+max_turns    = 1
+produces     = ["steps.gather.output"]
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+model        = "fast"
+max_turns    = 1
+produces     = ["steps.writer.output"]
+
+[[pipeline.steps]]
+id    = "gather"
+run   = "agent:gather"
+input = "${input}"
+
+[[pipeline.steps]]
+id    = "writer"
+run   = "agent:writer"
+input = "${steps.gather.output}"
+
+# Deliverable whose judge INHERITS its producer (writer → fast); no judge_model.
+[deliverables.report]
+output       = "steps.writer.output"
+must_satisfy = "A coherent report of the gathered findings."
+
+# Deliverable with an EXPLICIT judge_model that OVERRIDES its producer's model
+# (producer gather is `deep`, but the judge runs on `fast`).
+[deliverables.summary]
+output       = "steps.gather.output"
+must_satisfy = "A faithful summary of what was gathered."
+judge_model  = "fast"
