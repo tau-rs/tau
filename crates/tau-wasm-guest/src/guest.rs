@@ -63,8 +63,12 @@ struct Component;
 
 impl Guest for Component {
     fn run(_prompt: String) -> Result<String, String> {
-        // Milestone 1: prove the toolchain. Real IR execution follows.
-        Ok("{}".to_string())
+        // PR-E1: force the tau-runtime-core graph into the link.
+        // Real run_ir wiring is PR-E2.
+        match tau_ir::from_canonical_bytes(b"{}") {
+            Ok(_) => Ok("{}".to_string()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 

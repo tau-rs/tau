@@ -17,3 +17,6 @@ crate-type = ["cdylib"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wit-bindgen = { workspace = true }
 dlmalloc    = { workspace = true }
+tau-ir = { workspace = true, default-features = false }
+tau-runtime-core = { workspace = true, default-features = false }
+serde_json = { workspace = true, default-features = false, features = ["alloc"] }
