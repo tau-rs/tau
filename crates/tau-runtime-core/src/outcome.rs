@@ -45,7 +45,7 @@ use crate::options::TokenUsage;
 /// # let _ = handle;
 /// ```
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RunOutcome {
     /// Agent completed and produced a final response.
     Completed {
@@ -131,6 +131,24 @@ mod tests {
         assert_eq!(token_usage.input_tokens, 10);
         assert_eq!(token_usage.output_tokens, 5);
         assert_eq!(token_usage.total_tokens, Some(15));
+    }
+
+    #[test]
+    fn run_outcome_serde_round_trips() {
+        let usage = TokenUsage {
+            input_tokens: 7,
+            output_tokens: 3,
+            total_tokens: Some(10),
+        };
+        let outcome = RunOutcome::Failed {
+            status: AgentStatus::Stopped,
+            all_messages: alloc::vec![],
+            total_turns: 2,
+            token_usage: usage,
+        };
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        let back: RunOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(outcome, back);
     }
 
     #[test]

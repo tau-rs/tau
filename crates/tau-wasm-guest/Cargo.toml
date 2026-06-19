@@ -1,0 +1,19 @@
+[package]
+name = "tau-wasm-guest"
+description = "β.7.5 wasm component guest: drives the tau IR via tau-runtime-core inside a WASI 0.2 component. no_std + alloc; built only for wasm32-wasip2 (empty on any other target)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+crate-type = ["cdylib"]
+
+# wasm-only dependency graph. On host targets this crate is intentionally
+# empty (see src/lib.rs), so the guest's no_std deps are not pulled into
+# `cargo check --workspace` / host test builds.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = { workspace = true }
+dlmalloc    = { workspace = true }

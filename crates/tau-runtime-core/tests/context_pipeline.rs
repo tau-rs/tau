@@ -233,6 +233,7 @@ fn build_module(context: Option<ContextConfig>) -> IrModule {
         context,
         budget: AgentBudget::default(),
         produces: Vec::new(),
+        output_schema: None,
     };
 
     let mut agents = BTreeMap::new();

@@ -26,8 +26,6 @@ pub mod context;
 pub mod error;
 pub mod hash;
 pub mod ids;
-#[cfg(feature = "with-std-adapters")]
-pub mod lower;
 pub mod message;
 pub mod model_ref;
 pub mod module;

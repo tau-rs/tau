@@ -115,6 +115,7 @@ fn sample_module() -> IrModule {
                 max_tokens: None,
             },
             produces: Vec::new(),
+            output_schema: None,
         },
     );
 

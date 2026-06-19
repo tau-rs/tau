@@ -1,7 +1,7 @@
 //! Build-time errors specific to MCP contract resolution + expansion
 //! (per β.3 design doc §5 build-time invariants table).
 //!
-//! All variants surface through `IrError::McpBuild(...)`; the `tau check`
+//! All variants surface through `LowerError::McpBuild(...)`; the `tau check`
 //! aggregator renders them with exit code 64 (validation).
 
 use alloc::string::String;

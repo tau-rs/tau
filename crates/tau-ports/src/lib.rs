@@ -30,6 +30,7 @@ pub mod fixtures;
 pub mod llm;
 pub mod orchestration;
 pub mod random;
+pub mod skill_resolver;
 pub mod storage;
 pub mod target;
 pub mod time;
@@ -61,6 +62,7 @@ pub use orchestration::{
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use random::DeterministicRandom;
 pub use random::RandomSource;
+pub use skill_resolver::{NoSkillResolver, ResolvedSkill, SkillResolveError, SkillResolver};
 pub use storage::{Key, Namespace, Storage};
 pub use target::{
     AdapterFamily, ParseError as TargetParseError, Platform, TargetCapabilityProfile, TargetTriple,

@@ -37,6 +37,7 @@ pub mod outcome;
 pub mod plugin_host;
 mod run;
 pub mod runtime_ext;
+pub mod skill_resolver_impl;
 pub mod stream;
 pub(crate) mod tool_args;
 

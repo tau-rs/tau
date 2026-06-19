@@ -12,8 +12,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tau_ir::lower::{lower_project, Caches};
 use tau_ir::{AgentId, IrModule};
+use tau_ir_lower::{lower_project, Caches};
 use tau_pkg::project::ProjectConfig;
 use tau_ports::llm::CompletionResponse;
 use tau_ports::target::registry as target_registry;

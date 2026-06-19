@@ -5,7 +5,7 @@
 //! `to_canonical_bytes`.
 
 use tau_ir::canonical::to_canonical_bytes;
-use tau_ir::lower::{lower_project, Caches};
+use tau_ir_lower::{lower_project, Caches};
 use tau_pkg::ProjectConfig;
 use tau_ports::target::registry;
 
@@ -14,7 +14,7 @@ fn lower(toml: &str, target: &tau_ports::target::TargetTriple) -> tau_ir::IrModu
     let caches = Caches {
         native_tool: &|_n: &str| Some([1u8; 32]),
         mcp_contract: &|_u: &str| {
-            Some(tau_ir::lower::ResolvedMcpContract {
+            Some(tau_ir_lower::ResolvedMcpContract {
                 hash: [2u8; 32],
                 expanded_tools: vec![],
                 requires_sampling: false,

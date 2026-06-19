@@ -23,7 +23,7 @@ fn toml_and_ts_produce_byte_equal_canonical_ir_with_models_table() {
 
     // ── Lower both to IR ─────────────────────────────────────────────────────
     let target = tau_ports::target::TargetTriple::PASSTHROUGH;
-    let caches = tau_ir::lower::Caches {
+    let caches = tau_ir_lower::Caches {
         native_tool: &|fn_name| {
             let seed = fn_name.as_bytes().first().copied().unwrap_or(1);
             let mut h = [0u8; 32];
@@ -37,9 +37,9 @@ fn toml_and_ts_produce_byte_equal_canonical_ir_with_models_table() {
     };
 
     let toml_ir =
-        tau_ir::lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
+        tau_ir_lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
     let ts_ir =
-        tau_ir::lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
+        tau_ir_lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
 
     // The two agents must carry distinct resolved model ids (haiku vs opus),
     // proving per-agent aliases resolve independently.

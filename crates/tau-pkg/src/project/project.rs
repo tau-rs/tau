@@ -104,6 +104,11 @@ pub struct UncheckedAgent {
     /// `[[agents.<id>.credentials]]` declarations; default empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credentials: Vec<UncheckedAgentCredential>,
+    /// JSON schema describing this agent's structured output. Pass-through
+    /// (no deep validation) — mirrors `[steps.<name>].output_schema`. Used
+    /// by the IR lowering pass and a later judge-compat build-time check.
+    #[serde(default)]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 /// `[[agents.<id>.credentials]]` entry — unchecked deserialization.
@@ -783,6 +788,10 @@ pub struct AgentEntry {
     pub context: Vec<ContextStepEntry>,
     /// Validated credential declarations (β.5).
     pub credentials: Vec<AgentCredential>,
+    /// JSON schema describing this agent's structured output (IR lowering
+    /// use). `None` = unspecified. Pass-through; any well-formed JSON value
+    /// is accepted (no deep JSON-schema validation).
+    pub output_schema: Option<serde_json::Value>,
 }
 
 impl AgentEntry {
@@ -814,6 +823,7 @@ impl AgentEntry {
             produces: Vec::new(),
             context: Vec::new(),
             credentials: Vec::new(),
+            output_schema: None,
         }
     }
 }
@@ -1466,6 +1476,7 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         produces: raw.produces,
         context,
         credentials,
+        output_schema: raw.output_schema,
     })
 }
 
@@ -3973,6 +3984,50 @@ env = "1KEY"
     }
 
     #[test]
+    fn agent_output_schema_parses_and_passes_through() {
+        let toml = r#"
+packages = ["mock"]
+
+[project]
+name = "p"
+
+[models]
+default = { backend = "mock", model = "model-v1" }
+
+[agents.judge]
+display_name = "Judge"
+package = "p@^0.1"
+model = "default"
+output_schema = { type = "object", required = ["verdict"] }
+"#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parse");
+        let agent = cfg.agents.get("judge").expect("agent present");
+        let schema = agent.output_schema.as_ref().expect("output_schema present");
+        assert_eq!(schema["type"], serde_json::json!("object"));
+        assert_eq!(schema["required"], serde_json::json!(["verdict"]));
+    }
+
+    #[test]
+    fn agent_without_output_schema_is_none() {
+        let toml = r#"
+packages = ["mock"]
+
+[project]
+name = "p"
+
+[models]
+default = { backend = "mock", model = "model-v1" }
+
+[agents.plain]
+display_name = "Plain"
+package = "p@^0.1"
+model = "default"
+"#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parse");
+        assert!(cfg.agents.get("plain").unwrap().output_schema.is_none());
+    }
+
+    #[test]
     fn agent_credentials_multiple_distinct_envs_ok() {
         let toml = r#"
 [project]
@@ -4203,6 +4258,7 @@ mod proptests {
                         max_tokens: None,
                         produces: Vec::new(),
                         credentials: Vec::new(),
+                        output_schema: None,
                     },
                 )
             })

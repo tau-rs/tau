@@ -235,6 +235,7 @@ where
                 max_turns: Some(1),
                 max_tokens: None,
             },
+            output_schema: None,
         },
     };
 

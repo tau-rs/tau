@@ -5,17 +5,17 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::capability::CapabilityRequirements;
-use crate::error::IrError;
-use crate::ids::ToolId;
+use crate::error::LowerError;
 use crate::lower::{Caches, McpBuildError, ResolvedMcpContract};
-use crate::node::Tool;
-use crate::tool_impl::ToolImpl;
+use tau_ir::capability::CapabilityRequirements;
+use tau_ir::ids::ToolId;
+use tau_ir::node::Tool;
+use tau_ir::tool_impl::ToolImpl;
 
 use super::parse::Parsed;
 
 /// Run the resolve stage on a `Parsed` value.
-pub(super) fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed, IrError> {
+pub(super) fn resolve(mut parsed: Parsed, caches: &Caches<'_>) -> Result<Parsed, LowerError> {
     // First pass: resolve native tool content_hashes (unchanged from β.2).
     // Collect MCP entries that need expansion.
     let mut mcp_entries: Vec<(ToolId, String)> = Vec::new(); // (old id, url)
@@ -64,7 +64,7 @@ fn expand_mcp_entry(
     old_id: &ToolId,
     url: &str,
     resolved: &ResolvedMcpContract,
-) -> Result<(), IrError> {
+) -> Result<(), LowerError> {
     // Capture the original tool (envelope + spec) before removing it.
     let original_tool = parsed
         .workflow
@@ -90,7 +90,7 @@ fn expand_mcp_entry(
     let mut new_entries: Vec<(ToolId, Tool)> = Vec::new();
     for st in &resolved.expanded_tools {
         if st.name.contains('.') {
-            return Err(IrError::McpBuild(
+            return Err(LowerError::McpBuild(
                 McpBuildError::ServerToolNameContainsDot {
                     entry: old_id.0.clone(),
                     name: st.name.clone(),
@@ -99,11 +99,13 @@ fn expand_mcp_entry(
         }
         let missing = caps_missing_from_envelope(&envelope, &st.caps);
         if !missing.is_empty() {
-            return Err(IrError::McpBuild(McpBuildError::EnvelopeCoversContract {
-                entry: old_id.0.clone(),
-                tool: st.name.clone(),
-                missing,
-            }));
+            return Err(LowerError::McpBuild(
+                McpBuildError::EnvelopeCoversContract {
+                    entry: old_id.0.clone(),
+                    tool: st.name.clone(),
+                    missing,
+                },
+            ));
         }
         let intersection = intersect_caps(&envelope, &st.caps);
         let new_id = ToolId(alloc::format!("{}.{}", old_id.0, st.name));
@@ -181,8 +183,8 @@ fn caps_missing_from_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{AgentId, ToolId};
     use crate::lower::{ResolvedMcpContract, ResolvedServerTool};
+    use tau_ir::ids::{AgentId, ToolId};
     use tau_pkg::project::ProjectConfig;
 
     fn rsc_minimal(name: &str) -> ResolvedServerTool {
@@ -234,7 +236,7 @@ capabilities = []
 
         let err = resolve(parsed, &caches).unwrap_err();
         match &err {
-            IrError::McpBuild(McpBuildError::ServerToolNameContainsDot { entry, name }) => {
+            LowerError::McpBuild(McpBuildError::ServerToolNameContainsDot { entry, name }) => {
                 assert_eq!(entry, "weather");
                 assert_eq!(name, "bad.name");
             }

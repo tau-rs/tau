@@ -1,7 +1,8 @@
 //! End-to-end lowering test against a minimal tau.toml.
 
-use tau_ir::lower::{lower_project, Caches};
-use tau_ir::{IrError, IrFormatVersion};
+use tau_ir::IrFormatVersion;
+use tau_ir_lower::LowerError;
+use tau_ir_lower::{lower_project, Caches};
 use tau_pkg::project::ProjectConfig;
 use tau_ports::target::TargetTriple;
 
@@ -29,9 +30,9 @@ fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'sta
                 .map(|n| hash_of(n))
         })),
         mcp_contract: Box::leak(Box::new(
-            move |url: &str| -> Option<tau_ir::lower::ResolvedMcpContract> {
+            move |url: &str| -> Option<tau_ir_lower::ResolvedMcpContract> {
                 mcp_known.iter().find(|u| u.as_str() == url).map(|u| {
-                    tau_ir::lower::ResolvedMcpContract {
+                    tau_ir_lower::ResolvedMcpContract {
                         hash: hash_of(u),
                         expanded_tools: vec![],
                         requires_sampling: false,
@@ -67,7 +68,7 @@ fn lookup_first_available() -> TargetTriple {
 fn lookup_target_excluding_network() -> TargetTriple {
     // Synthetic triple not in the registry → registry::lookup returns None
     // → capability_fit::check returns CapabilityFitFailed { missing: [], tools: [] }.
-    // The assert `matches!(err, IrError::CapabilityFitFailed { .. })` passes.
+    // The assert `matches!(err, LowerError::CapabilityFitFailed { .. })` passes.
     "darwin-container-strict".parse().unwrap()
 }
 
@@ -165,7 +166,7 @@ fn lowering_refuses_on_capability_fit_mismatch() {
     let target = lookup_target_excluding_network();
     let caches = caches_with(vec![], vec!["https://example.com".into()]);
     let err = lower_project(&config, &target, &caches).unwrap_err();
-    assert!(matches!(err, IrError::CapabilityFitFailed { .. }));
+    assert!(matches!(err, LowerError::CapabilityFitFailed { .. }));
 }
 
 #[test]
@@ -410,5 +411,38 @@ fn explicit_check_placement_is_not_double_appended() {
         pipe.steps[2].id,
         PipelineStepId("check-report".into()),
         "step id at position 2 must be 'check-report'"
+    );
+}
+
+#[test]
+fn agent_output_schema_survives_lowering() {
+    let toml = r#"
+packages = ["mock"]
+
+[project]
+name = "p"
+
+[models.mock-1]
+backend = "mock"
+model = "mock-1"
+
+[agents.judge]
+display_name = "Judge"
+package = "p@^0.1"
+model = "mock-1"
+output_schema = { type = "object" }
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches).expect("lower");
+    let agent = module
+        .workflow
+        .agents
+        .get(&tau_ir::AgentId("judge".into()))
+        .expect("agent");
+    assert_eq!(
+        agent.output_schema,
+        Some(serde_json::json!({"type": "object"}))
     );
 }

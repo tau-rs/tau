@@ -1,0 +1,21 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-14"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.fan]
+display_name  = "Fan Controller"
+package       = "fan-ctrl@^0.1"
+model         = "mock-1"
+tool_refs     = ["read_temp"]
+max_turns     = 2
+output_schema = { type = "object", required = ["temperature"] }
+
+[tools.read_temp]
+native      = "ReadTemp"
+description = "Read the current temperature."
+capabilities = []

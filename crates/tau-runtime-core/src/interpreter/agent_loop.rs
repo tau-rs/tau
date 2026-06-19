@@ -897,6 +897,7 @@ mod tests {
                 max_tokens: None,
             },
             produces: alloc::vec::Vec::new(),
+            output_schema: None,
         };
 
         let user_msg = tau_domain::Message::new(

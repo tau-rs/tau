@@ -1,4 +1,4 @@
-# ADR-0049: Per-agent / per-judge model resolution
+# ADR-0052: Per-agent / per-judge model resolution
 
 **Status:** Accepted
 **Date:** 2026-06-19

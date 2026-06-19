@@ -1,0 +1,27 @@
+package tau:run@0.1.0;
+
+/// Host-provided ports the guest cannot satisfy in-wasm. Inference crosses
+/// because credentials live host-side (β.5); time + randomness cross so the
+/// host controls determinism for conformance. Native tools, MCP-cassette,
+/// skills, and the context pipeline are all in-guest (no host import).
+interface host {
+    /// Delegated inference. `request-json` is a serialized
+    /// tau_ports::llm::CompletionRequest; returns a serialized
+    /// CompletionResponse. Cassette-backed in conformance.
+    complete: func(request-json: string) -> result<string, string>;
+
+    /// Monotonic-ish wall clock in milliseconds (deterministic in conformance).
+    now-millis: func() -> u64;
+
+    /// Next u64 from the host RandomSource (deterministic in conformance).
+    next-u64: func() -> u64;
+}
+
+world runner {
+    import host;
+
+    /// Drive the baked IR from its entry agent with `prompt`.
+    /// Returns a serialized observable (JSON) on success. The exact payload
+    /// schema is settled in a later PR; the WIT signature is stable.
+    export run: func(prompt: string) -> result<string, string>;
+}

@@ -362,6 +362,19 @@ jobs:
           set -e
           cargo check -p tau-runtime-core
           cargo check -p tau-runtime-core --no-default-features
+      - name: runtime-core builds for wasm32-wasip2 (β.7.5 structural no_std guard)
+        # Structural guard for the β.7.5 wasm guest: tau-runtime-core (and
+        # its pure tau-ir dep) must cross-compile to wasm32-wasip2. A crate
+        # boundary (tau-ir / tau-ir-lower) — not a feature flag — keeps the
+        # kernel free of tau-pkg → tokio/rustix. See ADR-0051.
+        run: |
+          set -e
+          rustup target add wasm32-wasip2
+          cargo build -p tau-runtime-core --target wasm32-wasip2 --no-default-features
+      - name: wasm guest component builds in release (β.7.5 PR-C)
+        # The no_std WASI 0.2 component must compile in the exact release
+        # profile (where the _rdl_* allocator-symbol LTO interaction lives).
+        run: cargo build -p tau-wasm-guest --target wasm32-wasip2 --release
       - name: no forbidden executor imports in tau-runtime-core/src
         run: |
           # tau-runtime-core must be executor-agnostic. Top-level (column-0)
