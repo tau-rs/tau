@@ -291,13 +291,19 @@ mod tests {
         std::fs::write(
             scratch.path().join("workflow.toml"),
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "refused"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
 
 [agents.solo]
 display_name = "Solo"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
+model        = "mock-1"
 tool_refs    = ["spawner"]
 max_turns    = 1
 

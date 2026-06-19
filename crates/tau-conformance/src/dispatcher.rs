@@ -105,8 +105,10 @@ impl ToolDispatcher for ConformanceDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        // Single-backend conformance dispatcher: every agent/judge resolves to
+        // the one mock backend regardless of the name in its model_ref.
+        Ok(self.backend.clone())
     }
 }
 

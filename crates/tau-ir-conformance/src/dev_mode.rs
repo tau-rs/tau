@@ -152,8 +152,10 @@ impl ToolDispatcher for RecordingDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        // Single-backend recording dispatcher: every agent/judge resolves to
+        // the one mock backend regardless of the name baked into its model_ref.
+        Ok(self.backend.clone())
     }
 
     fn deterministic_registry(

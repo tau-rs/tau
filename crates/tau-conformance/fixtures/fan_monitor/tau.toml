@@ -1,11 +1,16 @@
+packages = ["mock-llm"]
+
 [project]
 name = "fan-monitor"
+
+[models.haiku]
+backend = "mock-llm"
+model = "claude-haiku-4-5"
 
 [agents.fan-monitor]
 display_name = "Fan Monitor"
 package      = "fan-monitor@^0.1"
-llm_backend  = "mock-llm"
-model        = "claude-haiku-4-5"
+model        = "haiku"
 tool_refs    = ["read_temp", "weather", "set_fan"]
 max_turns    = 6
 

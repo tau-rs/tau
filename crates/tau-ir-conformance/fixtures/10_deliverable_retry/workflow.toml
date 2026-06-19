@@ -1,17 +1,21 @@
+packages = ["mock-llm"]
+
 [project]
 name = "fixture-10"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
 
 [agents.gather]
 display_name = "Gather"
 package      = "demo@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 max_turns    = 1
 
 [agents.writer]
 display_name = "Writer"
 package      = "demo@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 max_turns    = 1
 produces     = ["steps.writer.output"]
