@@ -104,19 +104,23 @@ fn list_agents_with_no_project_tau_toml_fails_with_init_hint() {
 #[test]
 fn list_agents_reads_project_tau_toml() {
     let dir = tempfile::tempdir().unwrap();
-    let toml_str = r#"
+    let toml_str = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [agents.committer]
 display_name = "Code Committer"
 package      = "code-committer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#;
     std::fs::write(dir.path().join("tau.toml"), toml_str).unwrap();
 
@@ -135,14 +139,18 @@ llm_backend  = "anthropic"
 #[test]
 fn list_agents_json_output_is_array_with_expected_fields() {
     let dir = tempfile::tempdir().unwrap();
-    let toml_str = r#"
+    let toml_str = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#;
     std::fs::write(dir.path().join("tau.toml"), toml_str).unwrap();
 
@@ -197,14 +205,18 @@ fn list_global_and_all_mutually_exclusive() {
 #[test]
 fn list_agents_without_capabilities_flag_omits_effective_caps() {
     let dir = tempfile::tempdir().unwrap();
-    let toml_str = r#"
+    let toml_str = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#;
     std::fs::write(dir.path().join("tau.toml"), toml_str).unwrap();
 
@@ -229,14 +241,18 @@ fn list_agents_with_capabilities_flag_renders_package_not_installed() {
     // The agent's package isn't installed in this temp scope, so the row
     // should render with "(package not installed)" — non-fatal, exit 0.
     let dir = tempfile::tempdir().unwrap();
-    let toml_str = r#"
+    let toml_str = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#;
     std::fs::write(dir.path().join("tau.toml"), toml_str).unwrap();
 
@@ -254,14 +270,18 @@ llm_backend  = "anthropic"
 #[test]
 fn list_agents_with_capabilities_json_emits_field() {
     let dir = tempfile::tempdir().unwrap();
-    let toml_str = r#"
+    let toml_str = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#;
     std::fs::write(dir.path().join("tau.toml"), toml_str).unwrap();
 

@@ -37,6 +37,14 @@ pub struct UncheckedProjectConfig {
     /// Map of deliverable id → unchecked deliverable definition.
     #[serde(default)]
     pub deliverables: BTreeMap<String, UncheckedDeliverable>,
+    /// Map of model alias → unchecked `{ backend, model }` entry.
+    #[serde(default)]
+    pub models: BTreeMap<String, RawModelEntry>,
+    /// Top-level package declarations (e.g. `packages = ["anthropic@^1"]`).
+    /// Backend names in `[models]` may resolve against these as well as
+    /// against agent `package` fields.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 /// `[project]` table.
@@ -56,8 +64,6 @@ pub struct UncheckedAgent {
     pub display_name: String,
     /// Package reference of the form `<name>@<semver-req>`.
     pub package: String,
-    /// LLM backend identifier; resolved at lookup time.
-    pub llm_backend: String,
     /// Optional `[agents.<id>.requires]` sub-table.
     #[serde(default)]
     pub requires: Option<UncheckedRequires>,
@@ -574,6 +580,16 @@ pub struct GoalEntry {
     pub predicate: GoalPredicateConfig,
 }
 
+/// Raw `[models.<alias>]` inline table (pre-validation).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawModelEntry {
+    /// Backend package name.
+    pub backend: String,
+    /// Vendor model id.
+    pub model: String,
+}
+
 /// Raw `[deliverables.<id>]` table (pre-validation).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -619,8 +635,8 @@ pub enum OnFailConfig {
 /// Who evaluates a deliverable's content.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JudgeConfig {
-    /// tau's built-in minimalist judge, optionally on a chosen model.
-    Builtin {
+    /// The canonical (implicit) judge, optional `judge_model` alias override.
+    Default {
         /// `judge_model` override (runtime no-op in v1).
         model: Option<String>,
     },
@@ -660,6 +676,16 @@ pub struct DeliverableEntry {
     pub gate: String,
 }
 
+/// Validated `[models.<alias>]` entry: a concrete backend + vendor model id.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelEntry {
+    /// Backend package name (must be a declared package).
+    pub backend: String,
+    /// Vendor model id (e.g. `"claude-haiku-4-5"`). Trusted; not validated offline.
+    pub model: String,
+}
+
 /// Validated project config. Constructed via
 /// [`UncheckedProjectConfig::validate`] only.
 #[non_exhaustive]
@@ -683,6 +709,11 @@ pub struct ProjectConfig {
     pub goals: BTreeMap<String, GoalEntry>,
     /// Map of deliverable id → validated deliverable entry.
     pub deliverables: BTreeMap<String, DeliverableEntry>,
+    /// Map of model alias → validated `{ backend, model }`.
+    pub models: BTreeMap<String, ModelEntry>,
+    /// Top-level declared packages (raw strings like `"anthropic@^1"`).
+    /// Names parsed from these are valid `[models]` backend identifiers.
+    pub packages: Vec<String>,
 }
 
 /// Validated context-pipeline step.
@@ -710,7 +741,6 @@ pub struct ContextStepEntry {
 ///     "reviewer".to_string(),
 ///     "Code Reviewer".to_string(),
 ///     "code-reviewer@^0.1".to_string(),
-///     "anthropic".to_string(),
 ///     RequiresEntry::default(),
 ///     BTreeMap::new(),
 ///     PromptEntry::None,
@@ -728,8 +758,6 @@ pub struct AgentEntry {
     pub display_name: String,
     /// Package reference (`<name>@<semver-req>`).
     pub package: String,
-    /// LLM backend identifier.
-    pub llm_backend: String,
     /// Validated `requires` block.
     pub requires: RequiresEntry,
     /// Free-form configuration table.
@@ -775,7 +803,6 @@ impl AgentEntry {
         id: String,
         display_name: String,
         package: String,
-        llm_backend: String,
         requires: RequiresEntry,
         config: BTreeMap<String, toml::Value>,
         prompt: PromptEntry,
@@ -785,7 +812,6 @@ impl AgentEntry {
             id,
             display_name,
             package,
-            llm_backend,
             requires,
             config,
             prompt,
@@ -1120,6 +1146,39 @@ pub enum ProjectConfigError {
         /// Human-readable reason.
         message: String,
     },
+
+    // --- Task 4 (D7 stage 1): model alias + backend validation ---
+    /// A `[models]` entry is missing `backend` or `model`.
+    #[error("model alias `{alias}` is malformed: needs both `backend` and `model`")]
+    MalformedModelEntry {
+        /// The alias that was malformed.
+        alias: String,
+    },
+
+    /// A `[models]` entry references a backend that is not a declared package.
+    #[error("model alias `{alias}` references undeclared backend `{backend}`")]
+    ModelBackendNotDeclared {
+        /// The alias whose backend was undeclared.
+        alias: String,
+        /// The backend package name that was not declared.
+        backend: String,
+    },
+
+    /// `agent.model` / `judge_model` references an alias absent from `[models]`.
+    #[error("{referrer} references unknown model alias `{alias}`")]
+    UnknownModelAlias {
+        /// Human-readable description of which field made the reference.
+        referrer: String,
+        /// The alias that was not in `[models]`.
+        alias: String,
+    },
+
+    /// An agent declares no `model`.
+    #[error("agent `{agent}` has no `model` (declare one in `[models]` and reference it)")]
+    MissingAgentModel {
+        /// The agent id that had no model.
+        agent: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -1181,6 +1240,20 @@ impl UncheckedProjectConfig {
             deliverables.insert(id.clone(), validate_deliverable(id, raw)?);
         }
 
+        let models: BTreeMap<String, ModelEntry> = self
+            .models
+            .into_iter()
+            .map(|(alias, raw)| {
+                (
+                    alias,
+                    ModelEntry {
+                        backend: raw.backend,
+                        model: raw.model,
+                    },
+                )
+            })
+            .collect();
+
         let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -1191,9 +1264,12 @@ impl UncheckedProjectConfig {
             pipeline,
             goals,
             deliverables,
+            models,
+            packages: self.packages,
         };
 
         validate_postconditions(&mut result)?;
+        validate_models(&result)?;
 
         Ok(result)
     }
@@ -1210,12 +1286,6 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         return Err(ProjectConfigError::AgentValidation {
             id,
             message: "package must be non-empty".into(),
-        });
-    }
-    if raw.llm_backend.trim().is_empty() {
-        return Err(ProjectConfigError::AgentValidation {
-            id,
-            message: "llm_backend must be non-empty".into(),
         });
     }
 
@@ -1397,7 +1467,6 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         id,
         display_name: raw.display_name,
         package: raw.package,
-        llm_backend: raw.llm_backend,
         requires,
         config,
         prompt,
@@ -1815,7 +1884,7 @@ fn validate_deliverable(
     // Collapse judge fields.
     let judge = match raw.judge {
         Some(agent_id) => JudgeConfig::Agent(agent_id),
-        None => JudgeConfig::Builtin {
+        None => JudgeConfig::Default {
             model: raw.judge_model,
         },
     };
@@ -2027,6 +2096,84 @@ fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigE
     Ok(())
 }
 
+/// Return the package name (the part before the first `@`) from a package
+/// reference string like `"anthropic@^1"`. Returns the whole string if there
+/// is no `@`.
+fn package_name_from_ref(pkg_ref: &str) -> &str {
+    pkg_ref.split('@').next().unwrap_or(pkg_ref)
+}
+
+/// Stage-1 build-time refusals for the `[models]` table and all references
+/// to model aliases (D7).
+///
+/// Runs **after** `validate_postconditions` so postcondition errors take
+/// priority; model errors are additive atop a structurally-sound config.
+fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
+    // Collect the set of declared package names.  A package name is the
+    // prefix before the first `@`; e.g. `"anthropic@^1"` → `"anthropic"`.
+    // We union two sources:
+    //   1. Top-level `packages` entries (e.g. `packages = ["anthropic@^1"]`).
+    //   2. Each agent's `package` field.
+    // This allows a backend to be declared solely in the top-level
+    // `[packages]` table without any agent referencing it directly.
+    let declared_packages: std::collections::BTreeSet<&str> = cfg
+        .packages
+        .iter()
+        .map(|p| package_name_from_ref(p))
+        .chain(
+            cfg.agents
+                .values()
+                .map(|a| package_name_from_ref(&a.package)),
+        )
+        .collect();
+
+    // 1. Validate every `[models]` entry.
+    for (alias, m) in &cfg.models {
+        // Defense-in-depth: RawModelEntry's required fields make serde reject a
+        // [models] entry missing `backend`/`model` at TOML parse time, so this
+        // guard only fires on direct in-Rust construction. Kept intentionally.
+        if m.backend.is_empty() || m.model.is_empty() {
+            return Err(ProjectConfigError::MalformedModelEntry {
+                alias: alias.clone(),
+            });
+        }
+        if !declared_packages.contains(m.backend.as_str()) {
+            return Err(ProjectConfigError::ModelBackendNotDeclared {
+                alias: alias.clone(),
+                backend: m.backend.clone(),
+            });
+        }
+    }
+
+    // 2. Every agent must have a non-empty model alias that resolves in
+    //    `[models]`.
+    for (id, agent) in &cfg.agents {
+        if agent.model.is_empty() {
+            return Err(ProjectConfigError::MissingAgentModel { agent: id.clone() });
+        }
+        if !cfg.models.contains_key(&agent.model) {
+            return Err(ProjectConfigError::UnknownModelAlias {
+                referrer: format!("agent `{id}`"),
+                alias: agent.model.clone(),
+            });
+        }
+    }
+
+    // 3. Every deliverable judge_model override must resolve in `[models]`.
+    for (id, d) in &cfg.deliverables {
+        if let JudgeConfig::Default { model: Some(alias) } = &d.judge {
+            if !cfg.models.contains_key(alias) {
+                return Err(ProjectConfigError::UnknownModelAlias {
+                    referrer: format!("deliverable `{id}` judge_model"),
+                    alias: alias.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn unchecked_to_capability_override(
     raw: &UncheckedCapabilityOverride,
 ) -> crate::capability_override::CapabilityOverride {
@@ -2104,6 +2251,33 @@ mod tests {
     }
 
     #[test]
+    fn model_entry_holds_backend_and_model() {
+        let m = ModelEntry {
+            backend: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+        };
+        assert_eq!(m.backend, "anthropic");
+        assert_eq!(m.model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn models_table_parses() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [models]
+            haiku = { backend = "anthropic", model = "claude-haiku-4-5" }
+            [agents.bot]
+            display_name = "Bot"
+            package = "anthropic@^1"
+            model = "haiku"
+        "#;
+        let cfg = parse(toml).unwrap();
+        assert_eq!(cfg.models["haiku"].backend, "anthropic");
+        assert_eq!(cfg.models["haiku"].model, "claude-haiku-4-5");
+    }
+
+    #[test]
     fn parse_minimal_project_only_succeeds() {
         let cfg = parse("[project]\nname = \"x\"\n").unwrap();
         assert_eq!(cfg.project_name, "x");
@@ -2116,10 +2290,13 @@ mod tests {
             [project]
             name = "demo"
 
+            [models]
+            default = { backend = "code-reviewer", model = "model-v1" }
+
             [agents.reviewer]
             display_name = "Code Reviewer"
             package      = "code-reviewer@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [[agents.reviewer.requires.tools]]
             name = "fs-read"
@@ -2154,10 +2331,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [[agents.r.capabilities]]
             kind        = "fs.read"
@@ -2185,7 +2365,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.r.capabilities]]
             kind        = "fs.read"
@@ -2217,7 +2397,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [[agents.r.capabilities]]
             kind          = "net.http"
@@ -2244,10 +2424,14 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         assert!(cfg.agents.get("r").unwrap().capability_overrides.is_empty());
@@ -2262,7 +2446,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [agents.r.prompt]
             system      = "inline"
@@ -2281,10 +2465,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [agents.r.prompt]
             system = "be helpful"
@@ -2300,10 +2487,13 @@ mod tests {
             [project]
             name = "p"
 
+            [models]
+            default = { backend = "demo", model = "model-v1" }
+
             [agents.a]
             display_name = "A"
             package = "demo@^0.1"
-            llm_backend = "mock-llm"
+            model   = "default"
 
             [[agents.a.context.pipeline]]
             transformer = "trim_old"
@@ -2349,7 +2539,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "demo@^0.1"
-            llm_backend = "mock-llm"
+
 
             [[agents.a.context.pipeline]]
             transformer = "my_custom"
@@ -2369,7 +2559,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "demo@^0.1"
-            llm_backend = "mock-llm"
+
 
             [[agents.a.context.pipeline]]
             transformer = "my_custom"
@@ -2387,10 +2577,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [agents.r.prompt]
             system_file = "prompts/r.md"
@@ -2409,10 +2602,14 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         let agent = cfg.agents.get("r").unwrap();
@@ -2428,7 +2625,7 @@ mod tests {
             [agents.r]
             display_name = ""
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
         "#;
         let result = parse(toml_str);
         let Err(ProjectConfigError::AgentValidation { id, message }) = result else {
@@ -2447,31 +2644,13 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = ""
-            llm_backend  = "anthropic"
+
         "#;
         let result = parse(toml_str);
         let Err(ProjectConfigError::AgentValidation { message, .. }) = result else {
             panic!()
         };
         assert!(message.contains("package"));
-    }
-
-    #[test]
-    fn validate_rejects_empty_llm_backend() {
-        let toml_str = r#"
-            [project]
-            name = "x"
-
-            [agents.r]
-            display_name = "R"
-            package      = "p@^0.1"
-            llm_backend  = ""
-        "#;
-        let result = parse(toml_str);
-        let Err(ProjectConfigError::AgentValidation { message, .. }) = result else {
-            panic!()
-        };
-        assert!(message.contains("llm_backend"));
     }
 
     #[test]
@@ -2483,7 +2662,7 @@ mod tests {
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
 
             [agents.r.requires]
             tools = ["fs-read"]
@@ -2502,10 +2681,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [[agents.r.requires.tools]]
             name = "fs-read"
@@ -2525,10 +2707,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [[agents.r.requires.tools]]
             name = "fs-read"
@@ -2545,15 +2730,20 @@ mod tests {
             [project]
             name = "demo"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+            beta-m  = { backend = "q", model = "model-v1" }
+
             [agents.alpha]
             display_name = "Alpha"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [agents.beta]
             display_name = "Beta"
             package      = "q@^0.1"
-            llm_backend  = "openai"
+            model        = "beta-m"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         assert_eq!(cfg.agents.len(), 2);
@@ -2724,10 +2914,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            claude-haiku-4-5 = { backend = "p", model = "claude-haiku-4-5" }
+
             [agents.monitor]
             display_name = "Monitor"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+
             model        = "claude-haiku-4-5"
             tool_refs    = ["read_temp", "set_fan"]
             max_turns    = 10
@@ -2747,14 +2940,18 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.r]
             display_name = "R"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
+
         "#;
         let cfg = parse(toml_str).unwrap();
         let agent = cfg.agents.get("r").unwrap();
-        assert_eq!(agent.model, "");
+        assert_eq!(agent.model, "default");
         assert!(agent.tool_refs.is_empty());
         assert!(agent.max_turns.is_none());
         assert!(agent.max_tokens.is_none());
@@ -2858,10 +3055,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.summarizer]
             display_name = "Summarizer"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [trigger.nightly]
             kind     = "cron"
@@ -2891,10 +3091,13 @@ mod tests {
             [project]
             name = "x"
 
+            [models]
+            default = { backend = "p", model = "model-v1" }
+
             [agents.summarizer]
             display_name = "S"
             package      = "p@^0.1"
-            llm_backend  = "anthropic"
+            model        = "default"
 
             [trigger.manual]
             kind  = "manual"
@@ -2915,7 +3118,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -2935,7 +3138,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "manual"
             agent = "a"
@@ -2955,7 +3158,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "webhook"
             agent = "a"
@@ -2977,7 +3180,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -2997,7 +3200,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3029,7 +3232,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3052,7 +3255,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "event"
             agent = "a"
@@ -3071,7 +3274,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3097,7 +3300,7 @@ mod tests {
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3119,10 +3322,12 @@ mod tests {
         let toml_str = r#"
             [project]
             name = "x"
+            [models]
+            default = { backend = "p", model = "model-v1" }
             [agents.a]
             display_name = "A"
             package = "p@^0.1"
-            llm_backend = "anthropic"
+            model = "default"
             [trigger.t]
             kind = "cron"
             agent = "a"
@@ -3279,11 +3484,15 @@ check     = "matches"
         let toml = r#"
 [project]
 name = "p"
+
+[models]
+default = { backend = "d", model = "model-v1" }
+
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
-model = "m"
+
+model = "default"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
 [tools.write_file]
@@ -3308,7 +3517,7 @@ retry_from   = "writer"
         assert_eq!(d.on_fail, OnFailConfig::Retry);
         assert_eq!(d.max_attempts, 3);
         assert_eq!(d.retry_from.as_deref(), Some("writer"));
-        assert_eq!(d.judge, JudgeConfig::Builtin { model: None });
+        assert_eq!(d.judge, JudgeConfig::Default { model: None });
     }
 
     #[test]
@@ -3355,11 +3564,14 @@ judge_model  = "claude-haiku-4-5"
 [project]
 name = "p"
 
+[models]
+haiku = { backend = "demo", model = "claude-haiku-4-5" }
+
 [agents.writer]
 display_name = "Writer"
 package      = "demo@^0.1"
-llm_backend  = "anthropic"
-model        = "claude-haiku-4-5"
+
+model        = "haiku"
 produces     = ["/workspace/report.md"]
 "#;
         let cfg: UncheckedProjectConfig = toml::from_str(toml).expect("parse");
@@ -3380,7 +3592,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 [deliverables.report]
 path         = "/workspace/report.md"
@@ -3403,7 +3615,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3429,11 +3641,12 @@ must_satisfy = "x"
         let toml = r#"
 [project]
 name = "p"
+[models]
+default = { backend = "d", model = "model-v1" }
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
-model = "m"
+model = "default"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
 [tools.write_file]
@@ -3454,11 +3667,12 @@ must_satisfy = "x"
         let toml = r#"
 [project]
 name = "p"
+[models]
+default = { backend = "d", model = "model-v1" }
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
-model = "m"
+model = "default"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
 [tools.write_file]
@@ -3485,7 +3699,7 @@ must_satisfy = "x"
             ""
         };
         let polish_agent = if polish_after {
-            "[agents.polish]\ndisplay_name=\"P\"\npackage=\"d@^0.1\"\nllm_backend=\"anthropic\"\nmodel=\"m\"\n"
+            "[agents.polish]\ndisplay_name=\"P\"\npackage=\"d@^0.1\"\nmodel=\"default\"\n"
         } else {
             ""
         };
@@ -3493,16 +3707,20 @@ must_satisfy = "x"
             r#"
 [project]
 name = "p"
+
+[models]
+default = {{ backend = "d", model = "model-v1" }}
+
 [agents.gather]
 display_name="G"
 package="d@^0.1"
-llm_backend="anthropic"
-model="m"
+
+model="default"
 [agents.writer]
 display_name="W"
 package="d@^0.1"
-llm_backend="anthropic"
-model="m"
+
+model="default"
 produces=["/workspace/report.md"]
 tool_refs=["write_file"]
 {polish_agent}[tools.write_file]
@@ -3562,7 +3780,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3600,7 +3818,7 @@ name = "p"
 [agents.writer]
 display_name = "W"
 package = "d@^0.1"
-llm_backend = "anthropic"
+
 model = "m"
 produces  = ["/workspace/report.md"]
 tool_refs = ["write_file"]
@@ -3661,7 +3879,7 @@ name = "p"
 [agents.writer]
 display_name="W"
 package="d@^0.1"
-llm_backend="anthropic"
+
 model="m"
 produces=["/workspace/report.md"]
 tool_refs=["write_file"]
@@ -3689,10 +3907,13 @@ judge="ghost"
 name = "p"
 description = "d"
 
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
+
 [agents.assistant]
 display_name = "A"
 package = "anthropic@^1"
-llm_backend = "anthropic"
+model = "default"
 
 [[agents.assistant.credentials]]
 id = "anthropic_api_key"
@@ -3715,7 +3936,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "Bad Id"
 env = "X"
@@ -3736,7 +3957,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "ok_id"
 env = "lower_case"
@@ -3757,7 +3978,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "ok_id"
 env = "1KEY"
@@ -3772,13 +3993,18 @@ env = "1KEY"
     #[test]
     fn agent_output_schema_parses_and_passes_through() {
         let toml = r#"
+packages = ["mock"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock", model = "model-v1" }
 
 [agents.judge]
 display_name = "Judge"
 package = "p@^0.1"
-llm_backend = "mock"
+model = "default"
 output_schema = { type = "object", required = ["verdict"] }
 "#;
         let cfg = ProjectConfig::parse_str(toml).expect("parse");
@@ -3791,13 +4017,18 @@ output_schema = { type = "object", required = ["verdict"] }
     #[test]
     fn agent_without_output_schema_is_none() {
         let toml = r#"
+packages = ["mock"]
+
 [project]
 name = "p"
+
+[models]
+default = { backend = "mock", model = "model-v1" }
 
 [agents.plain]
 display_name = "Plain"
 package = "p@^0.1"
-llm_backend = "mock"
+model = "default"
 "#;
         let cfg = ProjectConfig::parse_str(toml).expect("parse");
         assert!(cfg.agents.get("plain").unwrap().output_schema.is_none());
@@ -3809,10 +4040,15 @@ llm_backend = "mock"
 [project]
 name = "p"
 description = "d"
+
+[models]
+default = { backend = "x", model = "model-v1" }
+
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+model = "default"
+
 [[agents.a.credentials]]
 id = "openai_api_key"
 env = "OPENAI_API_KEY"
@@ -3837,7 +4073,7 @@ description = "d"
 [agents.a]
 display_name = "A"
 package = "x@^1"
-llm_backend = "x"
+
 [[agents.a.credentials]]
 id = "id_one"
 env = "SAME"
@@ -3850,6 +4086,137 @@ env = "SAME"
             cfg.validate().unwrap_err(),
             ProjectConfigError::CredentialDeclaration { .. }
         ));
+    }
+
+    // --- Task 4: validate_models build-time refusals (D7 stage 1) ---
+
+    #[test]
+    fn unknown_model_alias_is_refused() {
+        let toml = r#"
+[project]
+name="p"
+[models]
+haiku = { backend="anthropic", model="claude-haiku-4-5" }
+[agents.writer]
+display_name="Writer"
+package="anthropic@^1"
+model = "haiko"
+prompt = { system = "hi" }
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::UnknownModelAlias { .. }),
+            "expected UnknownModelAlias, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn model_backend_must_be_declared() {
+        let toml = r#"
+[project]
+name="p"
+[models]
+gpt = { backend="openai", model="gpt-5" }
+[agents.writer]
+display_name="Writer"
+package="anthropic@^1"
+model = "gpt"
+prompt = { system = "hi" }
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::ModelBackendNotDeclared { .. }),
+            "expected ModelBackendNotDeclared, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn model_backend_declared_via_packages_table_is_accepted() {
+        // The backend `anthropic` is declared ONLY in the top-level
+        // `packages` array — no agent uses `package = "anthropic@…"`.
+        // This must validate OK: the [packages] table is a legitimate
+        // declaration source for model backends.
+        let toml = r#"
+packages = ["anthropic@^1"]
+[project]
+name="p"
+[models]
+haiku = { backend="anthropic", model="claude-haiku-4-5" }
+[agents.writer]
+display_name="Writer"
+package="code-reviewer@^0.1"
+model = "haiku"
+prompt = { system = "hi" }
+"#;
+        toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .expect("backend declared in [packages] should be accepted");
+    }
+
+    #[test]
+    fn agent_without_model_is_refused() {
+        let toml = r#"
+[project]
+name="p"
+[agents.writer]
+display_name="Writer"
+package="anthropic@^1"
+prompt = { system = "hi" }
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::MissingAgentModel { .. }),
+            "expected MissingAgentModel, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_judge_model_alias_is_refused() {
+        let toml = r#"
+[project]
+name="p"
+
+[models]
+haiku = { backend="anthropic", model="claude-haiku-4-5" }
+
+[agents.writer]
+display_name="Writer"
+package="anthropic@^1"
+model = "haiku"
+produces = ["/workspace/report.md"]
+tool_refs = ["write_file"]
+
+[tools.write_file]
+native = "WriteFile"
+capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
+
+[[pipeline.steps]]
+id = "writer"
+run = "agent:writer"
+
+[deliverables.report]
+path         = "/workspace/report.md"
+must_satisfy = "A coherent summary."
+judge_model  = "unknown_model"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::UnknownModelAlias { ref referrer, .. } if referrer.contains("deliverable") && referrer.contains("judge")),
+            "expected UnknownModelAlias with deliverable/judge referrer, got: {err:?}"
+        );
     }
 }
 
@@ -3871,26 +4238,28 @@ mod proptests {
         "[A-Za-z0-9.]{1,30}"
     }
 
-    fn agent_entry_strategy() -> impl Strategy<Value = (String, UncheckedAgent)> {
+    fn agent_entry_strategy() -> impl Strategy<Value = (String, String, UncheckedAgent)> {
         (
             ident_strategy(),
             safe_string_strategy(), // display_name
             ident_strategy(),       // package name
-            ident_strategy(),       // llm_backend
         )
-            .prop_map(|(id, dn, pkg, llm)| {
+            .prop_map(|(id, dn, pkg)| {
+                // Use "default" as the model alias; the models table is built
+                // from the package name in the proptest body.
+                let alias = "default".to_string();
                 (
                     id,
+                    pkg.clone(),
                     UncheckedAgent {
                         display_name: dn,
                         package: format!("{pkg}@^0.1"),
-                        llm_backend: llm,
                         requires: None,
                         capabilities: Vec::new(),
                         config: None,
                         prompt: None,
                         context: None,
-                        model: None,
+                        model: Some(alias),
                         tool_refs: Vec::new(),
                         max_turns: None,
                         max_tokens: None,
@@ -3915,8 +4284,20 @@ mod proptests {
             // Deduplicate ids (TOML can't have duplicate keys; UncheckedProjectConfig uses BTreeMap).
             let mut agent_map: std::collections::BTreeMap<String, UncheckedAgent> =
                 std::collections::BTreeMap::new();
-            for (id, agent) in agents {
+            // Build a [models] table: for each unique package name, add an
+            // entry so the "default" alias has a valid declared backend.
+            let mut models_map: BTreeMap<String, RawModelEntry> = BTreeMap::new();
+            for (id, pkg_name, agent) in agents {
                 agent_map.insert(id, agent);
+                // Register the package name as the backend for "default".
+                // Last one wins; all agents use "default" alias so any
+                // declared package is sufficient as long as each agent's
+                // package name appears. We insert all to keep the declared
+                // set complete, but only one alias ("default") is referenced.
+                models_map.insert(
+                    "default".to_string(),
+                    RawModelEntry { backend: pkg_name, model: "model-v1".to_string() },
+                );
             }
 
             let original = UncheckedProjectConfig {
@@ -3931,6 +4312,8 @@ mod proptests {
                 pipeline: None,
                 goals: BTreeMap::new(),
                 deliverables: BTreeMap::new(),
+                models: models_map,
+                packages: Vec::new(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();

@@ -1,0 +1,4 @@
+{"turn": 0, "response": {"text": "gathered: 42", "stop_reason": "end_turn"}}
+{"turn": 1, "response": {"text": "report: gathered: 42", "stop_reason": "end_turn"}}
+{"turn": 2, "response": {"text": "{\"met\": true, \"rationale\": \"ok\"}", "stop_reason": "end_turn"}}
+{"turn": 3, "response": {"text": "{\"met\": true, \"rationale\": \"ok\"}", "stop_reason": "end_turn"}}

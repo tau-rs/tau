@@ -1,10 +1,15 @@
+packages = ["mock-llm"]
+
 [project]
 name = "fixture-13"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
 
 [agents.mono]
 display_name = "Mono"
 package      = "demo@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 max_turns    = 2
 

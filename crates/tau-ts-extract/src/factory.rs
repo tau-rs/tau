@@ -12,6 +12,7 @@ pub enum Factory {
     Pipeline,
     Goals,
     Deliverables,
+    Models,
 }
 
 /// If `expr` is a tau factory call like `agent({...})`, return the
@@ -28,6 +29,7 @@ pub fn recognize_factory_call(expr: &Expr) -> Option<(Factory, &CallExpr)> {
                     "pipeline" => Factory::Pipeline,
                     "goals" => Factory::Goals,
                     "deliverables" => Factory::Deliverables,
+                    "models" => Factory::Models,
                     _ => return None,
                 };
                 return Some((factory, call));

@@ -19,10 +19,14 @@ use assert_fs::prelude::*;
 /// macro) so the test project can live in a tmpdir.
 fn cassette_project_toml(cassette_path: &std::path::Path) -> String {
     format!(
-        r#"
+        r#"packages = ["anthropic"]
+
 [project]
 name = "dev-one-shot-test"
 version = "0.0.1"
+
+[models]
+anthropic = {{ backend = "anthropic", model = "claude-3-haiku-20240307" }}
 
 [tools.weather]
 mcp = "cassette:{cassette}"
@@ -30,8 +34,7 @@ mcp = "cassette:{cassette}"
 [agents.forecaster]
 display_name = "Forecaster"
 package      = "forecaster@^0.1"
-llm_backend  = "anthropic"
-model        = "claude-3-haiku-20240307"
+model        = "anthropic"
 prompt.system = "You are a weather forecaster."
 tool_refs    = ["weather"]
 "#,

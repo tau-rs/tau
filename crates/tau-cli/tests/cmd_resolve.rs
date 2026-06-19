@@ -94,14 +94,18 @@ fn write_project_toml(proj_dir: &std::path::Path, tools: &[(&str, &str, Option<&
         }
     }
     let toml = format!(
-        r#"
+        r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = {{ backend = "anthropic", model = "claude-haiku-4-5" }}
 
 [agents.reviewer]
 display_name = "Reviewer"
 package      = "demo@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 {tools_block}"#
     );
     std::fs::write(proj_dir.join("tau.toml"), toml).unwrap();

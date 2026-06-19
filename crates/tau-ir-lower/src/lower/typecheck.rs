@@ -280,7 +280,10 @@ mod tests {
         Agent {
             id: AgentId(id.to_string()),
             prompt: String::new(),
-            model: String::new(),
+            model_ref: tau_ir::model_ref::ModelRef {
+                backend: String::new(),
+                model_id: String::new(),
+            },
             tool_refs: refs.iter().map(|s| ToolId(s.to_string())).collect(),
             context: None,
             budget: AgentBudget {
@@ -326,19 +329,24 @@ mod tests {
     #[test]
     fn rejects_forward_output_reference() {
         let toml = r#"
+            packages = ["mock-llm"]
+
             [project]
             name = "demo"
+
+            [models]
+            default = { backend = "mock-llm", model = "mock-model" }
 
             [agents.a]
             display_name = "A"
             package      = "demo@^0.1"
-            llm_backend  = "mock-llm"
+            model        = "default"
             tool_refs    = []
 
             [agents.b]
             display_name = "B"
             package      = "demo@^0.1"
-            llm_backend  = "mock-llm"
+            model        = "default"
             tool_refs    = []
 
             [[pipeline.steps]]
@@ -362,19 +370,24 @@ mod tests {
     #[test]
     fn accepts_valid_backward_reference() {
         let toml = r#"
+            packages = ["mock-llm"]
+
             [project]
             name = "demo"
+
+            [models]
+            default = { backend = "mock-llm", model = "mock-model" }
 
             [agents.a]
             display_name = "A"
             package      = "demo@^0.1"
-            llm_backend  = "mock-llm"
+            model        = "default"
             tool_refs    = []
 
             [agents.b]
             display_name = "B"
             package      = "demo@^0.1"
-            llm_backend  = "mock-llm"
+            model        = "default"
             tool_refs    = []
 
             [[pipeline.steps]]
@@ -555,7 +568,10 @@ mod tests {
             Agent {
                 id: AgentId("a".into()),
                 prompt: "p".into(),
-                model: "m".into(),
+                model_ref: tau_ir::model_ref::ModelRef {
+                    backend: "b".into(),
+                    model_id: "m".into(),
+                },
                 tool_refs: alloc::vec![],
                 context: Some(ctx),
                 budget: tau_ir::AgentBudget {

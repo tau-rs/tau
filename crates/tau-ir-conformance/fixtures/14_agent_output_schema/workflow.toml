@@ -1,10 +1,15 @@
+packages = ["mock-llm"]
+
 [project]
 name = "fixture-14"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
 
 [agents.fan]
 display_name  = "Fan Controller"
 package       = "fan-ctrl@^0.1"
-llm_backend   = "mock-llm"
 model         = "mock-1"
 tool_refs     = ["read_temp"]
 max_turns     = 2

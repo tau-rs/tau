@@ -178,8 +178,8 @@ impl ToolDispatcher for EchoDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
     }
 }
 
@@ -205,8 +205,8 @@ impl ToolDispatcher for EchoWithContextRegistryDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
     }
 
     fn context_transformer_registry(&self) -> Option<Arc<dyn ContextTransformerRegistry>> {
@@ -225,7 +225,10 @@ fn build_module(context: Option<ContextConfig>) -> IrModule {
     let agent = Agent {
         id: AgentId("solo".into()),
         prompt: "you are a helpful assistant".into(),
-        model: "echo-model".into(),
+        model_ref: tau_ir::ModelRef {
+            backend: "echo-llm".into(),
+            model_id: "echo-model".into(),
+        },
         tool_refs: Vec::new(),
         context,
         budget: AgentBudget::default(),

@@ -146,8 +146,9 @@ pub async fn run(
         output,
     )?;
 
-    let (agent_def, manifest) = crate::config::build_agent_definition(entry, &cwd, &scope)
-        .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
+    let (agent_def, manifest) =
+        crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
+            .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
     if let Some(n) = args.max_turns {
@@ -189,7 +190,9 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded = plugin_loader::load_plugins(entry, &scope, trace_context, host_options).await?;
+    let loaded =
+        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
+            .await?;
 
     let runtime = loaded
         .builder
@@ -810,7 +813,8 @@ fn emit_dry_run_preview(
         manifest.name(),
         manifest.version()
     ))?;
-    output.dry_run(format!("llm backend:     {}", entry.llm_backend))?;
+    output.dry_run(format!("llm backend:     {}", agent_def.llm_backend))?;
+    output.dry_run(format!("model:           {}", agent_def.model))?;
     if let Some(sp) = &agent_def.system_prompt {
         let preview: String = sp.chars().take(80).collect();
         let suffix = if sp.chars().count() > 80 { "..." } else { "" };

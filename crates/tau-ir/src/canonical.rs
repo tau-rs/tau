@@ -44,7 +44,7 @@ mod pipeline_canonical_tests {
     use tau_ports::target::registry;
 
     #[test]
-    fn module_with_pipeline_round_trips_and_reports_v1_2() {
+    fn module_with_pipeline_round_trips_and_reports_v2_0() {
         let target = registry::list_available().next().unwrap().triple;
         let wf = Workflow {
             pipeline: Some(Pipeline {
@@ -63,7 +63,7 @@ mod pipeline_canonical_tests {
             workflow: wf,
             triggers: alloc::vec::Vec::new(),
         };
-        assert_eq!(m.ir_format.0, "v1.3.0");
+        assert_eq!(m.ir_format.0, "v2.0.0");
         let bytes = to_canonical_bytes(&m);
         let back = from_canonical_bytes(&bytes).expect("round-trips");
         assert_eq!(m, back);
@@ -87,14 +87,19 @@ mod pipeline_canonical_tests {
             },
         };
 
-        // One deliverable check: path locus, builtin judge with no model
-        // override.
+        // One deliverable check: path locus, canonical judge on a resolved
+        // model.
         let deliverable_check = Check {
             id: CheckId("report".into()),
             verify: CheckVerify::Deliverable {
                 locus: Locus::Path("/r.md".into()),
                 must_satisfy: "Must have sources section.".into(),
-                judge: JudgeRef::Builtin { model: None },
+                judge: JudgeRef::Default {
+                    model_ref: crate::model_ref::ModelRef {
+                        backend: "anthropic".into(),
+                        model_id: "claude-haiku-4-5".into(),
+                    },
+                },
             },
             retry: RetryPolicy {
                 on_fail: OnFail::Abort,

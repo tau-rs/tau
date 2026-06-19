@@ -28,12 +28,18 @@ use crate::scope::NameMap;
 struct IrAgent {
     display_name: String,
     package: String,
-    llm_backend: String,
-    model: Option<String>,
+    /// The agent's `model` alias — a key into the project `[models]` table.
+    model: String,
     prompt_system: Option<String>,
     tool_refs: Vec<String>,
     produces: Vec<String>,
     output_schema: Option<serde_json::Value>,
+}
+
+/// A `[models.<alias>]` entry: concrete backend package + vendor model id.
+struct IrModelEntry {
+    backend: String,
+    model: String,
 }
 
 enum IrToolBody {
@@ -130,6 +136,7 @@ pub fn build_project_config(
     let mut pipeline_steps: Vec<IrPipelineStep> = Vec::new();
     let mut goals: Vec<IrGoal> = Vec::new();
     let mut deliverables: Vec<IrDeliverable> = Vec::new();
+    let mut models: BTreeMap<String, IrModelEntry> = BTreeMap::new();
 
     // First pass — collect tools/mcp/goals/deliverables (so agent `tools: { ref }` can resolve them).
     for (name, expr) in names {
@@ -211,6 +218,17 @@ pub fn build_project_config(
                     })?;
                     deliverables = extract_deliverables(arr, source_path, sm)?;
                 }
+                Factory::Models => {
+                    let obj = arg_as_object(call, 0).ok_or_else(|| {
+                        mk_err(
+                            source_path,
+                            sm,
+                            call.span(),
+                            "`models(...)`: first argument must be an object literal",
+                        )
+                    })?;
+                    models = extract_models(obj, source_path, sm)?;
+                }
                 Factory::Agent => {} // second pass
             }
         }
@@ -243,6 +261,7 @@ pub fn build_project_config(
         &pipeline_steps,
         &goals,
         &deliverables,
+        &models,
     );
     ProjectConfig::parse_str(&toml).map_err(|e| map_config_err(e, source_path, sm))
 }
@@ -251,6 +270,7 @@ pub fn build_project_config(
 // TOML builder
 // ──────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn build_toml(
     project_name: &str,
     agents: &BTreeMap<String, IrAgent>,
@@ -258,11 +278,31 @@ fn build_toml(
     pipeline_steps: &[IrPipelineStep],
     goals: &[IrGoal],
     deliverables: &[IrDeliverable],
+    models: &BTreeMap<String, IrModelEntry>,
 ) -> String {
     let mut out = String::new();
 
+    // Declare each distinct `[models]` backend as a top-level package so
+    // `validate_models` accepts it. The TOML surface declares `packages`
+    // explicitly; the TS surface infers the set from the `[models]` table.
+    // A bare top-level key MUST precede every `[table]` header. `packages`
+    // does not enter the lowered IR, so this stays byte-equal with TOML.
+    let mut backends: Vec<&str> = models.values().map(|m| m.backend.as_str()).collect();
+    backends.sort_unstable();
+    backends.dedup();
+    if !backends.is_empty() {
+        let entries: Vec<String> = backends.iter().map(|b| toml_str(b)).collect();
+        out.push_str(&format!("packages = [{}]\n\n", entries.join(", ")));
+    }
+
     out.push_str("[project]\n");
     out.push_str(&format!("name = {}\n\n", toml_str(project_name)));
+
+    for (alias, m) in models {
+        out.push_str(&format!("[models.{}]\n", toml_key(alias)));
+        out.push_str(&format!("backend = {}\n", toml_str(&m.backend)));
+        out.push_str(&format!("model = {}\n\n", toml_str(&m.model)));
+    }
 
     for (name, tool) in tools {
         out.push_str(&format!("[tools.{}]\n", toml_key(name)));
@@ -302,10 +342,7 @@ fn build_toml(
             toml_str(&agent.display_name)
         ));
         out.push_str(&format!("package = {}\n", toml_str(&agent.package)));
-        out.push_str(&format!("llm_backend = {}\n", toml_str(&agent.llm_backend)));
-        if let Some(model) = &agent.model {
-            out.push_str(&format!("model = {}\n", toml_str(model)));
-        }
+        out.push_str(&format!("model = {}\n", toml_str(&agent.model)));
         if !agent.tool_refs.is_empty() {
             let refs: Vec<String> = agent.tool_refs.iter().map(|r| toml_str(r)).collect();
             out.push_str(&format!("tool_refs = [{}]\n", refs.join(", ")));
@@ -777,15 +814,14 @@ fn extract_agent(
             &format!("agent({name}): missing required string field `package`"),
         )
     })?;
-    let llm_backend = get_string(&props, "llm_backend").ok_or_else(|| {
+    let model = get_string(&props, "model").ok_or_else(|| {
         mk_err(
             source_path,
             sm,
             obj.span(),
-            &format!("agent({name}): missing required string field `llm_backend`"),
+            &format!("agent({name}): missing required string field `model` (a [models] alias)"),
         )
     })?;
-    let model = get_string(&props, "model");
 
     let prompt_system = if let Some(Expr::Object(prompt_obj)) = props.get("prompt").copied() {
         let pp = obj_props(prompt_obj);
@@ -842,7 +878,8 @@ fn extract_agent(
                         Factory::Agent
                         | Factory::Pipeline
                         | Factory::Goals
-                        | Factory::Deliverables => {}
+                        | Factory::Deliverables
+                        | Factory::Models => {}
                     }
                 }
             }
@@ -866,7 +903,6 @@ fn extract_agent(
     let agent = IrAgent {
         display_name,
         package,
-        llm_backend,
         model,
         prompt_system,
         tool_refs,
@@ -875,6 +911,48 @@ fn extract_agent(
     };
 
     Ok((agent, extra_tools))
+}
+
+/// Extract the `models({ alias: { backend, model } })` object literal into a
+/// map of alias → `{ backend, model }`. Mirrors the `[models]` TOML table.
+fn extract_models(
+    obj: &ObjectLit,
+    source_path: &Path,
+    sm: &Lrc<SourceMap>,
+) -> Result<BTreeMap<String, IrModelEntry>, TsExtractError> {
+    let mut out = BTreeMap::new();
+    for (alias, value) in obj_props(obj) {
+        let entry_obj = match value {
+            Expr::Object(o) => o,
+            _ => {
+                return Err(mk_err(
+                    source_path,
+                    sm,
+                    value.span(),
+                    &format!("models: alias `{alias}` must map to an object {{ backend, model }}"),
+                ));
+            }
+        };
+        let entry_props = obj_props(entry_obj);
+        let backend = get_string(&entry_props, "backend").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                entry_obj.span(),
+                &format!("models.{alias}: missing required string field `backend`"),
+            )
+        })?;
+        let model = get_string(&entry_props, "model").ok_or_else(|| {
+            mk_err(
+                source_path,
+                sm,
+                entry_obj.span(),
+                &format!("models.{alias}: missing required string field `model`"),
+            )
+        })?;
+        out.insert(alias, IrModelEntry { backend, model });
+    }
+    Ok(out)
 }
 
 /// Extract a non-negative integer from a numeric literal expression.
@@ -1089,11 +1167,13 @@ mod tests {
     #[test]
     fn parses_minimal_agent_export() {
         let src = r#"
+            export const m = models({
+                haiku: { backend: "anthropic", model: "claude-haiku-4-5" }
+            });
             export const fanMonitor = agent({
                 display_name: "Fan Monitor",
                 package: "fan-monitor@^0.1",
-                llm_backend: "anthropic",
-                model: "claude-haiku-4-5",
+                model: "haiku",
                 prompt: { system: "Watch the temperature." }
             });
         "#;
@@ -1108,6 +1188,9 @@ mod tests {
     #[test]
     fn resolves_top_level_constant_reference() {
         let src = r#"
+            export const m = models({
+                haiku: { backend: "anthropic", model: "claude-haiku-4-5" }
+            });
             const readTemp = tool({
                 native: "ReadTemp",
                 description: "Read temperature"
@@ -1115,8 +1198,7 @@ mod tests {
             export const a = agent({
                 display_name: "A",
                 package: "a@^0.1",
-                llm_backend: "anthropic",
-                model: "claude-haiku-4-5",
+                model: "haiku",
                 prompt: { system: "x" },
                 tools: { readTemp }
             });
@@ -1132,12 +1214,14 @@ mod tests {
     #[test]
     fn recognizes_mcp_factory() {
         let src = r#"
+            export const m = models({
+                haiku: { backend: "anthropic", model: "claude-haiku-4-5" }
+            });
             const weather = mcp("https://mcp.weather.com");
             export const a = agent({
                 display_name: "A",
                 package: "a@^0.1",
-                llm_backend: "anthropic",
-                model: "claude-haiku-4-5",
+                model: "haiku",
                 prompt: { system: "x" },
                 tools: { weather }
             });
@@ -1155,11 +1239,13 @@ mod tests {
     #[test]
     fn agent_with_no_tools_field_works() {
         let src = r#"
+            export const m = models({
+                haiku: { backend: "anthropic", model: "claude-haiku-4-5" }
+            });
             export const solo = agent({
                 display_name: "Solo",
                 package: "solo@^0.1",
-                llm_backend: "anthropic",
-                model: "claude-haiku-4-5",
+                model: "haiku",
                 prompt: { system: "alone" }
             });
         "#;
@@ -1179,7 +1265,6 @@ mod tests {
             export const a = agent({
                 display_name: "A",
                 package: "a@^0.1",
-                llm_backend: "anthropic",
                 model: "x",
                 prompt: { system: "x" },
                 tools: { t }
@@ -1219,7 +1304,6 @@ mod tests {
             export const a = agent({
                 display_name: "A",
                 package: "a@^0.1",
-                llm_backend: "anthropic",
                 model: "x",
                 prompt: { system: "x" }
             });

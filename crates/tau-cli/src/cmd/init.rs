@@ -8,10 +8,17 @@ use crate::output::Output;
 const SCAFFOLD_TEMPLATE: &str = r#"[project]
 name = "{name}"
 
+# Declare your model aliases here, then reference one from each agent's
+# `model` field. Each alias maps to a concrete backend package + vendor id:
+#   [models.default]
+#   backend = "anthropic"
+#   model   = "claude-haiku-4-5"
+[models]
+
 [agents.example]
 display_name = "Example Agent"
 package      = ""
-llm_backend  = ""
+model        = ""
 
 [agents.example.prompt]
 system = """
@@ -120,7 +127,7 @@ mod tests {
         use crate::config::project::UncheckedProjectConfig;
         let scaffold = SCAFFOLD_TEMPLATE.replace("{name}", "test-project");
         let unchecked: UncheckedProjectConfig = toml::from_str(&scaffold).unwrap();
-        // The agent has empty package + empty llm_backend; this fails validation.
+        // The agent has empty package + empty model alias; this fails validation.
         let result = unchecked.validate();
         assert!(
             result.is_err(),

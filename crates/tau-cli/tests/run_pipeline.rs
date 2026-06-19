@@ -111,10 +111,13 @@ bin = "echo-llm"
     let project_toml = r#"[project]
 name = "pipeline-demo"
 
+[models]
+default = { backend = "echo-llm", model = "claude-haiku-4-5" }
+
 [agents.gather]
 display_name = "Gatherer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 
 [agents.gather.config]
 canned_text = "PIPELINE-FINAL-OUTPUT"
@@ -122,7 +125,7 @@ canned_text = "PIPELINE-FINAL-OUTPUT"
 [agents.writer]
 display_name = "Writer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 
 [agents.writer.config]
 canned_text = "writer-canned"
@@ -235,10 +238,13 @@ bin = "echo-llm"
     let project_toml = r#"[project]
 name = "pipeline-goal-demo"
 
+[models]
+default = { backend = "echo-llm", model = "claude-haiku-4-5" }
+
 [agents.gather]
 display_name = "Gatherer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 
 [agents.gather.config]
 canned_text = "PIPELINE-FINAL-OUTPUT"
@@ -246,7 +252,7 @@ canned_text = "PIPELINE-FINAL-OUTPUT"
 [agents.writer]
 display_name = "Writer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 
 [agents.writer.config]
 canned_text = "PIPELINE-FINAL-OUTPUT"

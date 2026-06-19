@@ -1,10 +1,15 @@
+packages = ["mock-llm"]
+
 [project]
 name = "fixture-02"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
 
 [agents.weatherman]
 display_name = "Weather Man"
 package      = "weatherman@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 tool_refs    = ["weather"]
 max_turns    = 2

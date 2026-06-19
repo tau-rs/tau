@@ -219,10 +219,18 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
             effective_to_bundle(&eff)
         };
 
+        // Derive the backend kind from the project [models] table via the
+        // agent's model alias. Falls back to empty string when the alias is
+        // absent; the real resolution happens at IR lowering.
+        let backend_kind = project_config
+            .models
+            .get(&entry.model)
+            .map(|m| m.backend.clone())
+            .unwrap_or_default();
         agents.push(BundleAgent {
             id: agent_id,
             backend: BackendRef {
-                kind: entry.llm_backend.clone(),
+                kind: backend_kind,
                 model: None,
                 extra: std::collections::BTreeMap::new(),
             },
@@ -709,10 +717,13 @@ installed_at = "2024-01-01T00:00:00Z"
 [project]
 name = "test-project"
 
+[models]
+default = { backend = "p", model = "model-v1" }
+
 [agents.zeta]
 display_name = "Zeta"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [agents.zeta.prompt]
 system = "you are zeta"
@@ -720,7 +731,7 @@ system = "you are zeta"
 [agents.alpha]
 display_name = "Alpha"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [agents.alpha.prompt]
 system = "you are alpha"
@@ -763,10 +774,13 @@ generated_at = "2024-01-01T00:00:00Z"
 [project]
 name = "test-project"
 
+[models]
+default = { backend = "p", model = "model-v1" }
+
 [agents.r]
 display_name = "R"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [agents.r.prompt]
 system_file = "prompts/r.md"
@@ -810,10 +824,13 @@ generated_at = "2024-01-01T00:00:00Z"
 name = "multi"
 version = "0.1.0"
 
+[models]
+default = { backend = "pkg-home", model = "model-v1" }
+
 [agents.alpha]
 display_name = "Alpha"
 package = "pkg-home@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.alpha.prompt]
 system = "you are alpha"
@@ -825,7 +842,7 @@ source = "https://example.com/pkg-a.git"
 [agents.beta]
 display_name = "Beta"
 package = "pkg-home@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.beta.prompt]
 system = "you are beta"
@@ -997,10 +1014,13 @@ installed_at = "2024-01-01T00:00:00Z"
 name = "test-project"
 version = "1.2.3"
 
+[models]
+default = { backend = "p", model = "model-v1" }
+
 [agents.alpha]
 display_name = "Alpha"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [agents.alpha.prompt]
 system = "you are alpha"
@@ -1080,10 +1100,13 @@ generated_at = "2024-01-01T00:00:00Z"
 [project]
 name = "test-project"
 
+[models]
+default = { backend = "p", model = "model-v1" }
+
 [agents.r]
 display_name = "R"
 package      = "p@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [agents.r.prompt]
 system_file = "prompts/missing.md"
@@ -1213,10 +1236,13 @@ generated_at = "2024-01-01T00:00:00Z"
 name = "capproj"
 version = "0.1.0"
 
+[models]
+default = { backend = "homepkg", model = "model-v1" }
+
 [agents.r]
 display_name = "R"
 package = "homepkg@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.r.prompt]
 system = "you are r"
@@ -1347,10 +1373,13 @@ allowed_skills = ["critic"]
 name = "capproj"
 version = "0.1.0"
 
+[models]
+default = { backend = "ghost", model = "model-v1" }
+
 [agents.r]
 display_name = "R"
 package = "ghost@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.r.prompt]
 system = "you are r"
@@ -1409,10 +1438,13 @@ allow_paths = ["/data/**"]
 name = "trig"
 version = "0.1.0"
 
+[models]
+default = { backend = "p", model = "model-v1" }
+
 [agents.summarizer]
 display_name = "S"
 package = "p@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.summarizer.prompt]
 system = "hi"

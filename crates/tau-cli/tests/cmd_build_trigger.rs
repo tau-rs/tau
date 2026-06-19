@@ -24,15 +24,19 @@ fn emit_trigger_systemd_writes_units() {
 
     std::fs::write(
         root.join("tau.toml"),
-        r#"
+        r#"packages = ["anthropic"]
+
 [project]
 name = "trig"
 version = "0.1.0"
 
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
+
 [agents.summarizer]
 display_name = "S"
 package = "p@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.summarizer.prompt]
 system = "hi"
@@ -81,15 +85,19 @@ fn emit_trigger_k8s_writes_cronjob_manifest() {
 
     std::fs::write(
         root.join("tau.toml"),
-        r#"
+        r#"packages = ["anthropic"]
+
 [project]
 name = "ktrig"
 version = "0.1.0"
 
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
+
 [agents.worker]
 display_name = "W"
 package = "p@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.worker.prompt]
 system = "go"
@@ -135,15 +143,19 @@ fn emit_trigger_no_cron_triggers_exits_success_with_note() {
     // but the build still succeeds.
     std::fs::write(
         root.join("tau.toml"),
-        r#"
+        r#"packages = ["anthropic"]
+
 [project]
 name = "notrig"
 version = "0.1.0"
 
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
+
 [agents.solo]
 display_name = "Solo"
 package = "p@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.solo.prompt]
 system = "hi"

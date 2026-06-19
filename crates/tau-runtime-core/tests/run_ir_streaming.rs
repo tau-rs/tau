@@ -105,8 +105,8 @@ impl ToolDispatcher for EchoDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
     }
 }
 
@@ -115,7 +115,10 @@ fn agent(id: &str) -> Agent {
     Agent {
         id: AgentId(id.into()),
         prompt: String::new(),
-        model: "echo-model".into(),
+        model_ref: tau_ir::ModelRef {
+            backend: "echo-llm".into(),
+            model_id: "echo-model".into(),
+        },
         tool_refs: Vec::new(),
         context: None,
         budget: AgentBudget::default(),

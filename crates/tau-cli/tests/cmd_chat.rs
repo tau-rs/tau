@@ -63,14 +63,18 @@ fn chat_with_no_install_fails_when_deps_missing() {
     // URL. With --no-install, tau chat --dry-run should fail without
     // attempting to fetch.
     let dir = tempfile::tempdir().unwrap();
-    let toml_str = r#"
+    let toml_str = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Reviewer"
 package      = "demo@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [[agents.reviewer.requires.tools]]
 name = "missing-tool"

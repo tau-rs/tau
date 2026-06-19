@@ -172,8 +172,8 @@ impl ToolDispatcher for RetryDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
     }
 
     fn deterministic_registry(&self) -> Option<Arc<dyn DeterministicRegistry>> {
@@ -190,7 +190,10 @@ fn writer_agent() -> Agent {
     Agent {
         id: AgentId("writer".into()),
         prompt: String::new(),
-        model: "seq-model".into(),
+        model_ref: tau_ir::ModelRef {
+            backend: "seq-llm".into(),
+            model_id: "seq-model".into(),
+        },
         tool_refs: Vec::new(),
         context: None,
         budget: AgentBudget::default(),
@@ -213,7 +216,12 @@ fn build_module(retry: RetryPolicy) -> IrModule {
             verify: CheckVerify::Deliverable {
                 locus: Locus::Output(PipelineStepId("writer".into())),
                 must_satisfy: "must cite at least two sources".into(),
-                judge: JudgeRef::Builtin { model: None },
+                judge: JudgeRef::Default {
+                    model_ref: tau_ir::ModelRef {
+                        backend: "seq-llm".into(),
+                        model_id: "seq-model".into(),
+                    },
+                },
             },
             retry,
         },

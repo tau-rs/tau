@@ -224,10 +224,10 @@ where
                 agent: id.0.clone(),
             })?
             .clone(),
-        JudgeRef::Builtin { model } => Agent {
+        JudgeRef::Default { model_ref } => Agent {
             id: AgentId(String::from("__judge")),
             prompt: builtin_judge_prompt(must_satisfy),
-            model: model.clone().unwrap_or_default(),
+            model_ref: model_ref.clone(),
             tool_refs: alloc::vec::Vec::new(),
             context: None,
             produces: alloc::vec::Vec::new(),
@@ -346,8 +346,11 @@ mod tests {
                 })
             }
 
-            fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-                self.backend.clone()
+            fn llm_backend_for(
+                &self,
+                _backend: &str,
+            ) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+                Ok(self.backend.clone())
             }
         }
 
@@ -391,7 +394,12 @@ mod tests {
             let module = stub_module();
             let reader = InMemoryArtifactReader::new().with_file("/out.md", b"report content");
             let store = OutputStore::new();
-            let judge = JudgeRef::Builtin { model: None };
+            let judge = JudgeRef::Default {
+                model_ref: tau_ir::ModelRef {
+                    backend: "mock-llm".into(),
+                    model_id: "m".into(),
+                },
+            };
 
             let verdict = evaluate_deliverable(
                 module,
@@ -427,7 +435,12 @@ mod tests {
             let module = stub_module();
             let reader = InMemoryArtifactReader::new(); // nothing seeded
             let store = OutputStore::new();
-            let judge = JudgeRef::Builtin { model: None };
+            let judge = JudgeRef::Default {
+                model_ref: tau_ir::ModelRef {
+                    backend: "mock-llm".into(),
+                    model_id: "m".into(),
+                },
+            };
 
             let verdict = evaluate_deliverable(
                 module,

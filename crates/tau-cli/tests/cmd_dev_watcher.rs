@@ -11,13 +11,17 @@ async fn watcher_flips_pending_reload_on_tau_toml_edit() {
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "watcher-test"
+
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
 
 [agents.a]
 display_name = "A"
 package      = "agent-a@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "first"
 "#,
@@ -37,13 +41,17 @@ prompt.system = "first"
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "watcher-test"
+
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
 
 [agents.a]
 display_name = "A"
 package      = "agent-a@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "second"
 "#,
@@ -67,13 +75,17 @@ async fn watcher_ignores_tau_lock_changes() {
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "watcher-test"
+
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
 
 [agents.a]
 display_name = "A"
 package      = "agent-a@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "x"
 "#,

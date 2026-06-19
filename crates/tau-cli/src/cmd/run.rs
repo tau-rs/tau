@@ -163,8 +163,9 @@ pub async fn run(
         output,
     )?;
 
-    let (agent_def, manifest) = crate::config::build_agent_definition(entry, &cwd, &scope)
-        .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
+    let (agent_def, manifest) =
+        crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
+            .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
     if let Some(n) = args.max_turns {
@@ -209,7 +210,9 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded = plugin_loader::load_plugins(entry, &scope, trace_context, host_options).await?;
+    let loaded =
+        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
+            .await?;
 
     let runtime = loaded
         .builder
@@ -414,14 +417,16 @@ async fn try_run_pipeline(
     // path already built: one LLM backend + every tool the IR references
     // that the runtime actually loaded. Mirrors `ir_dispatcher::run_via_ir`
     // steps 5/5b (minus MCP, which pipeline v0 does not wire).
-    let llm_backend = match runtime.llm_backends().values().next().cloned() {
-        Some(b) => b,
-        None => {
-            return Some(Err(anyhow::anyhow!(
-                "runtime has no LLM backend after plugin load (pipeline run)"
-            )))
-        }
-    };
+    let llm_backends: std::collections::BTreeMap<String, _> = runtime
+        .llm_backends()
+        .iter()
+        .map(|(name, handle)| (name.clone(), handle.clone()))
+        .collect();
+    if llm_backends.is_empty() {
+        return Some(Err(anyhow::anyhow!(
+            "runtime has no LLM backend after plugin load (pipeline run)"
+        )));
+    }
     let mut tools_by_id = std::collections::BTreeMap::new();
     for ir_tool_id in module.workflow.tools.keys() {
         if let Some(handle) = runtime.tools().get(&ir_tool_id.0) {
@@ -429,7 +434,7 @@ async fn try_run_pipeline(
         }
     }
     let dispatcher = std::sync::Arc::new(crate::cmd::ir_dispatcher::ForwardingDispatcher::new(
-        llm_backend,
+        llm_backends,
         tools_by_id,
     ));
 
@@ -852,7 +857,8 @@ fn emit_dry_run(
         manifest.name(),
         manifest.version()
     ))?;
-    output.dry_run(format!("llm backend:     {}", entry.llm_backend))?;
+    output.dry_run(format!("llm backend:     {}", agent_def.llm_backend))?;
+    output.dry_run(format!("model:           {}", agent_def.model))?;
     if let Some(sp) = &agent_def.system_prompt {
         let preview: String = sp.chars().take(80).collect();
         let suffix = if sp.chars().count() > 80 { "..." } else { "" };
@@ -964,14 +970,20 @@ mod bundle_source_xcheck_tests {
             root.join("tau.toml"),
             format!(
                 r#"
+packages = ["anthropic"]
+
 [project]
 name = "{name}"
 version = "0.1.0"
 
+[models.default]
+backend = "anthropic"
+model = "claude-haiku-4-5"
+
 [agents.solo]
 display_name = "Solo"
 package = "{name}@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.solo.prompt]
 system = "hi"

@@ -116,6 +116,26 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
     Ok(())
 }
 
+/// Resolve an agent entry's LLM backend package name via the project
+/// `[models]` table (per-agent model resolution). `validate_models`
+/// (D7 stage 1) refuses a project whose agent names an unknown alias, so this
+/// is infallible for a validated config; the error arm is defense-in-depth.
+fn agent_llm_backend(
+    entry: &tau_pkg::project::project::AgentEntry,
+    models: &std::collections::BTreeMap<String, tau_pkg::project::project::ModelEntry>,
+) -> Result<String> {
+    models
+        .get(&entry.model)
+        .map(|m| m.backend.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "agent {:?} references model alias {:?} absent from [models]",
+                entry.id,
+                entry.model
+            )
+        })
+}
+
 /// Build the `Runtime` from a loaded `Project`.
 ///
 /// Iterates every agent in the project's `tau.toml`, reads the lockfile to
@@ -165,22 +185,25 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
 
     for entry in project.config.agents.values() {
         // ---- LLM backend ----
-        if seen_llm_backends.insert(entry.llm_backend.clone()) {
-            let pkg_name: tau_domain::PackageName =
-                entry.llm_backend.parse().with_context(|| {
-                    format!("invalid LLM backend package name {:?}", entry.llm_backend)
-                })?;
+        // The agent's backend package is derived from the project `[models]`
+        // table via its `model` alias (per-agent model resolution); the
+        // removed `AgentEntry.llm_backend` field no longer carries it.
+        let backend_name = agent_llm_backend(entry, &project.config.models)?;
+        if seen_llm_backends.insert(backend_name.clone()) {
+            let pkg_name: tau_domain::PackageName = backend_name
+                .parse()
+                .with_context(|| format!("invalid LLM backend package name {backend_name:?}"))?;
             let pkg = lockfile.find(&pkg_name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "LLM backend {:?} not installed in scope (run `tau install <url>`)",
-                    entry.llm_backend
+                    backend_name
                 )
             })?;
             let plugin = pkg.plugin.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "package {:?} has no [plugin] table in its tau.toml (data-only package \
                      cannot be used as an llm_backend)",
-                    entry.llm_backend
+                    backend_name
                 )
             })?;
             let trace_context = TraceContext::new(
@@ -191,12 +214,9 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
             let config = agent_config_to_json(entry);
             // Build this plugin's capability plan from its manifest, narrowed
             // by the agent's project-level capability overrides (audit S4).
-            let caps = read_plugin_caps(&project.scope, &lockfile, &entry.llm_backend);
+            let caps = read_plugin_caps(&project.scope, &lockfile, &backend_name);
             let plan = plan_for_plugin(&caps, &entry.capability_overrides).with_context(|| {
-                format!(
-                    "building sandbox plan for LLM backend {:?}",
-                    entry.llm_backend
-                )
+                format!("building sandbox plan for LLM backend {backend_name:?}")
             })?;
             let backend = plugin_host::load_llm_backend(
                 plugin,
@@ -206,7 +226,7 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
                 Some(&plan),
             )
             .await
-            .with_context(|| format!("load LLM backend {:?}", entry.llm_backend))?;
+            .with_context(|| format!("load LLM backend {backend_name:?}"))?;
             builder = builder.with_dyn_llm_backend(backend);
         }
 
@@ -322,9 +342,14 @@ fn gather_plugin_sandbox_reqs(
     let mut seen: std::collections::HashSet<String> = Default::default();
     let mut reqs = Vec::new();
     for entry in config.agents.values() {
-        if seen.insert(entry.llm_backend.clone()) {
-            if let Some(req) = read_plugin_sandbox_req(scope, lockfile, &entry.llm_backend) {
-                reqs.push(req);
+        // Backend package derived from the project `[models]` table; skip
+        // agents whose model alias does not resolve (validate_models refuses
+        // these at build time — defensive skip here).
+        if let Some(backend) = config.models.get(&entry.model).map(|m| m.backend.clone()) {
+            if seen.insert(backend.clone()) {
+                if let Some(req) = read_plugin_sandbox_req(scope, lockfile, &backend) {
+                    reqs.push(req);
+                }
             }
         }
         for tool in &entry.requires.tools {

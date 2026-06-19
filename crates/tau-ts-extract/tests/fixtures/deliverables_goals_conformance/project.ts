@@ -1,3 +1,7 @@
+export const projectModels = models({
+    haiku: { backend: "anthropic", model: "claude-haiku-4-5" },
+});
+
 const write_file = tool({
     native: "WriteFile",
     capabilities: [{ kind: "fs.write", paths: ["/workspace/**"] }],
@@ -6,15 +10,13 @@ const write_file = tool({
 export const gather = agent({
     display_name: "Gather",
     package: "research@^0.1",
-    llm_backend: "anthropic",
-    model: "claude-haiku-4-5",
+    model: "haiku",
 });
 
 export const writer = agent({
     display_name: "Writer",
     package: "research@^0.1",
-    llm_backend: "anthropic",
-    model: "claude-haiku-4-5",
+    model: "haiku",
     produces: ["/workspace/report.md"],
     tools: { write_file },
 });

@@ -121,6 +121,7 @@
 - [ADR-0049 — Single-channel typed conformance observable (β.7.5)](decisions/0049-single-channel-typed-conformance-observable.md)
 - [ADR-0050 — Agent `output_schema` additive field plumbing (IR v1.3.0)](decisions/0050-agent-output-schema.md)
 - [ADR-0051 — tau-ir crate split: a structural no_std boundary (β.7.5)](decisions/0051-tau-ir-crate-split.md)
+- [ADR-0052 — Per-agent / per-judge model resolution](decisions/0052-per-agent-model-resolution.md)
 
 # Retrospectives
 
