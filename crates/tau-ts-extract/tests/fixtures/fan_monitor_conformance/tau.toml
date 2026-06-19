@@ -1,12 +1,17 @@
+packages = ["anthropic"]
+
 [project]
 name = "fan-monitor-conformance"
 version = "0.0.1"
 
+[models.haiku]
+backend = "anthropic"
+model = "claude-haiku-4-5"
+
 [agents.fan_monitor]
 display_name = "Fan Monitor"
 package      = "fan-monitor@^0.1"
-llm_backend  = "anthropic"
-model        = "claude-haiku-4-5"
+model        = "haiku"
 tool_refs    = ["read_temp", "set_fan"]
 
 [agents.fan_monitor.prompt]
