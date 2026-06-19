@@ -116,6 +116,26 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
     Ok(())
 }
 
+/// Resolve an agent entry's LLM backend package name via the project
+/// `[models]` table (per-agent model resolution). `validate_models`
+/// (D7 stage 1) refuses a project whose agent names an unknown alias, so this
+/// is infallible for a validated config; the error arm is defense-in-depth.
+fn agent_llm_backend(
+    entry: &tau_pkg::project::project::AgentEntry,
+    models: &std::collections::BTreeMap<String, tau_pkg::project::project::ModelEntry>,
+) -> Result<String> {
+    models
+        .get(&entry.model)
+        .map(|m| m.backend.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "agent {:?} references model alias {:?} absent from [models]",
+                entry.id,
+                entry.model
+            )
+        })
+}
+
 /// Build the `Runtime` from a loaded `Project`.
 ///
 /// Iterates every agent in the project's `tau.toml`, reads the lockfile to
@@ -138,26 +158,6 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
 ///   tools always receive `{}` (per-tool config selectors not yet landed).
 /// - `working_context` / resource `limits` are not yet threaded into the
 ///   plan (both `None`), matching the CLI tool path.
-/// Resolve an agent entry's LLM backend package name via the project
-/// `[models]` table (per-agent model resolution). `validate_models`
-/// (D7 stage 1) refuses a project whose agent names an unknown alias, so this
-/// is infallible for a validated config; the error arm is defense-in-depth.
-fn agent_llm_backend(
-    entry: &tau_pkg::project::project::AgentEntry,
-    models: &std::collections::BTreeMap<String, tau_pkg::project::project::ModelEntry>,
-) -> Result<String> {
-    models
-        .get(&entry.model)
-        .map(|m| m.backend.clone())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "agent {:?} references model alias {:?} absent from [models]",
-                entry.id,
-                entry.model
-            )
-        })
-}
-
 async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> {
     use tau_pkg::LockFile;
     use tau_plugin_protocol::handshake::TraceContext;
@@ -190,10 +190,9 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
         // removed `AgentEntry.llm_backend` field no longer carries it.
         let backend_name = agent_llm_backend(entry, &project.config.models)?;
         if seen_llm_backends.insert(backend_name.clone()) {
-            let pkg_name: tau_domain::PackageName =
-                backend_name.parse().with_context(|| {
-                    format!("invalid LLM backend package name {backend_name:?}")
-                })?;
+            let pkg_name: tau_domain::PackageName = backend_name
+                .parse()
+                .with_context(|| format!("invalid LLM backend package name {backend_name:?}"))?;
             let pkg = lockfile.find(&pkg_name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "LLM backend {:?} not installed in scope (run `tau install <url>`)",

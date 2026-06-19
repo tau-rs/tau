@@ -1148,7 +1148,6 @@ pub enum ProjectConfigError {
     },
 
     // --- Task 4 (D7 stage 1): model alias + backend validation ---
-
     /// A `[models]` entry is missing `backend` or `model`.
     #[error("model alias `{alias}` is malformed: needs both `backend` and `model`")]
     MalformedModelEntry {
@@ -1247,7 +1246,10 @@ impl UncheckedProjectConfig {
             .map(|(alias, raw)| {
                 (
                     alias,
-                    ModelEntry { backend: raw.backend, model: raw.model },
+                    ModelEntry {
+                        backend: raw.backend,
+                        model: raw.model,
+                    },
                 )
             })
             .collect();
@@ -2118,7 +2120,11 @@ fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
         .packages
         .iter()
         .map(|p| package_name_from_ref(p))
-        .chain(cfg.agents.values().map(|a| package_name_from_ref(&a.package)))
+        .chain(
+            cfg.agents
+                .values()
+                .map(|a| package_name_from_ref(&a.package)),
+        )
         .collect();
 
     // 1. Validate every `[models]` entry.
@@ -2143,9 +2149,7 @@ fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
     //    `[models]`.
     for (id, agent) in &cfg.agents {
         if agent.model.is_empty() {
-            return Err(ProjectConfigError::MissingAgentModel {
-                agent: id.clone(),
-            });
+            return Err(ProjectConfigError::MissingAgentModel { agent: id.clone() });
         }
         if !cfg.models.contains_key(&agent.model) {
             return Err(ProjectConfigError::UnknownModelAlias {
@@ -2248,7 +2252,10 @@ mod tests {
 
     #[test]
     fn model_entry_holds_backend_and_model() {
-        let m = ModelEntry { backend: "anthropic".into(), model: "claude-haiku-4-5".into() };
+        let m = ModelEntry {
+            backend: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+        };
         assert_eq!(m.backend, "anthropic");
         assert_eq!(m.model, "claude-haiku-4-5");
     }

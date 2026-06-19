@@ -823,14 +823,9 @@ mod tests {
         // MockLlmBackend named "my-backend"; the IR model_id is "claude-haiku-4-5".
         // After wiring, the CompletionRequest the backend sees must have
         // model == "claude-haiku-4-5", not "my-backend".
-        let backend = alloc::sync::Arc::new(
-            MockLlmBackend::new("my-backend").with_response(make_completion_response(
-                "done".to_string(),
-                alloc::vec![],
-                StopReason::EndTurn,
-                None,
-            )),
-        );
+        let backend = alloc::sync::Arc::new(MockLlmBackend::new("my-backend").with_response(
+            make_completion_response("done".to_string(), alloc::vec![], StopReason::EndTurn, None),
+        ));
 
         struct SingleBackendDispatcher {
             backend: alloc::sync::Arc<MockLlmBackend>,
@@ -841,9 +836,8 @@ mod tests {
                 &'a self,
                 _tool_id: &'a ToolId,
                 _args: &'a Value,
-            ) -> Pin<
-                Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>,
-            > {
+            ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>
+            {
                 Box::pin(async move {
                     Ok(ToolInvocationResult {
                         body: None,
@@ -907,20 +901,14 @@ mod tests {
                 content: "hello".into(),
             },
         );
-        run_agent(
-            module,
-            &agent,
-            dispatcher,
-            alloc::vec![user_msg],
-        )
-        .await
-        .expect("run_agent must succeed");
+        run_agent(module, &agent, dispatcher, alloc::vec![user_msg])
+            .await
+            .expect("run_agent must succeed");
 
         let invocations = backend.invocations();
         assert_eq!(invocations.len(), 1, "expected exactly one LLM call");
         assert_eq!(
-            invocations[0].model,
-            "claude-haiku-4-5",
+            invocations[0].model, "claude-haiku-4-5",
             "CompletionRequest.model must be the model_id, not the backend package name"
         );
     }

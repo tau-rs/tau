@@ -466,7 +466,8 @@ generated_at = "{now_rfc3339}"
         let (_tmp, project_root, scope) = make_project_scope();
         let entry = entry(|_| {});
 
-        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
+        let err =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         match err {
             AgentResolutionError::PackageNotFound { agent_id, package } => {
                 assert_eq!(agent_id, "reviewer");
@@ -481,7 +482,8 @@ generated_at = "{now_rfc3339}"
         let (_tmp, project_root, scope) = make_project_scope();
         let entry = entry(|e| e.package = "code-reviewer@not-a-semver".into());
 
-        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
+        let err =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         assert!(
             matches!(err, AgentResolutionError::PackageParse { .. }),
             "got: {err:?}"
@@ -494,7 +496,8 @@ generated_at = "{now_rfc3339}"
         // PackageName must be lowercase ASCII kebab-case; "Bad" is rejected.
         let entry = entry(|e| e.package = "Bad@^0.1".into());
 
-        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
+        let err =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         assert!(
             matches!(err, AgentResolutionError::InvalidIdentifier { .. }),
             "got: {err:?}"
@@ -525,7 +528,8 @@ generated_at = "{now_rfc3339}"
 
         let entry = entry(|e| e.package = "code-reviewer@^0.1".into());
         // No models map → backend falls back to "unresolved".
-        let (def, manifest) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
+        let (def, manifest) =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
 
         assert_eq!(def.id.as_str(), "reviewer");
         assert_eq!(def.display_name, "Code Reviewer");
@@ -549,7 +553,8 @@ generated_at = "{now_rfc3339}"
         );
 
         let entry = entry(|e| e.package = "code-reviewer@^0.1".into());
-        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
+        let err =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         match err {
             AgentResolutionError::PackageVersionUnsatisfied { agent_id, req, .. } => {
                 assert_eq!(agent_id, "reviewer");
@@ -596,7 +601,8 @@ generated_at = "{now_rfc3339}"
 
         let entry = entry(|e| e.requires.tools = vec![tool]);
         // Should succeed: requires.tools is no longer checked at this layer.
-        let (def, _manifest) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
+        let (def, _manifest) =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(def.id.as_str(), "reviewer");
     }
 
@@ -620,7 +626,8 @@ generated_at = "{now_rfc3339}"
         let entry = entry(|e| {
             e.prompt = PromptEntry::File("prompts/reviewer.md".into());
         });
-        let (def, _manifest) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
+        let (def, _manifest) =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(
             def.system_prompt.as_deref(),
             Some("You are a careful reviewer.")
@@ -641,7 +648,8 @@ generated_at = "{now_rfc3339}"
         let entry = entry(|e| {
             e.prompt = PromptEntry::File("prompts/missing.md".into());
         });
-        let err = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
+        let err =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap_err();
         match err {
             AgentResolutionError::PromptFileRead { agent_id, path, .. } => {
                 assert_eq!(agent_id, "reviewer");
@@ -663,7 +671,8 @@ generated_at = "{now_rfc3339}"
         );
 
         let entry = entry(|e| e.prompt = PromptEntry::Inline("be helpful".into()));
-        let (def, _) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
+        let (def, _) =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(def.system_prompt.as_deref(), Some("be helpful"));
     }
 
@@ -714,7 +723,8 @@ generated_at = "{now_rfc3339}"
             e.config = cfg;
         });
 
-        let (def, _) = build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
+        let (def, _) =
+            build_agent_definition(&entry, &project_root, &scope, &BTreeMap::new()).unwrap();
         assert_eq!(def.config.len(), 2);
         assert_eq!(
             def.config.get("model").and_then(Value::as_string),

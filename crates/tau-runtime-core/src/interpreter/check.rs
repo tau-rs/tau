@@ -346,7 +346,10 @@ mod tests {
                 })
             }
 
-            fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+            fn llm_backend_for(
+                &self,
+                _backend: &str,
+            ) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
                 Ok(self.backend.clone())
             }
         }

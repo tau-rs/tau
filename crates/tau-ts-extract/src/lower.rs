@@ -929,9 +929,7 @@ fn extract_models(
                     source_path,
                     sm,
                     value.span(),
-                    &format!(
-                        "models: alias `{alias}` must map to an object {{ backend, model }}"
-                    ),
+                    &format!("models: alias `{alias}` must map to an object {{ backend, model }}"),
                 ));
             }
         };

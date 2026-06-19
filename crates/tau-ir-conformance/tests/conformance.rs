@@ -685,7 +685,6 @@ async fn fixture_13_cross_mode_conformance() {
     assert_conform(&dev, &bundle);
 }
 
-
 // ---------------------------------------------------------------------------
 // Fixture 14 — agent output_schema is additive + byte-stable (v1.3.0)
 // ---------------------------------------------------------------------------

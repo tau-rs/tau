@@ -46,10 +46,7 @@ pub trait ToolDispatcher {
     /// the IR `Agent`'s `model_ref.backend` field. Implementors should
     /// look up the named backend from their registry and return it, or
     /// surface a [`RuntimeError`] if the name is not registered.
-    fn llm_backend_for(
-        &self,
-        backend: &str,
-    ) -> Result<Arc<dyn DynLlmBackend>, RuntimeError>;
+    fn llm_backend_for(&self, backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError>;
 
     /// Optional handle to a deterministic-step registry.
     ///

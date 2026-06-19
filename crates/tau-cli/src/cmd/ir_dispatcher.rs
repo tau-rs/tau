@@ -110,9 +110,14 @@ pub(crate) async fn run_via_ir(
         force_passthrough,
         force_adapter_kind,
     );
-    let loaded =
-        plugin_loader::load_plugins(agent_entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        agent_entry,
+        &scope,
+        &project.models,
+        trace_context,
+        host_options,
+    )
+    .await?;
     let runtime = loaded
         .builder
         .build()
@@ -130,7 +135,9 @@ pub(crate) async fn run_via_ir(
         .map(|(name, handle)| (name.clone(), handle.clone()))
         .collect();
     if llm_backends.is_empty() {
-        return Err(anyhow::anyhow!("runtime has no LLM backend after plugin load"));
+        return Err(anyhow::anyhow!(
+            "runtime has no LLM backend after plugin load"
+        ));
     }
     // A representative backend for MCP sampling setup. Per-server backend
     // selection is out of scope for the per-agent-model track.
@@ -317,10 +324,7 @@ impl ForwardingDispatcher {
     /// keyed by its `name()`. Production code passes the whole name-keyed
     /// registry via [`Self::new`].
     #[cfg(test)]
-    fn single(
-        backend: Arc<dyn DynLlmBackend>,
-        tools: BTreeMap<ToolId, Arc<dyn DynTool>>,
-    ) -> Self {
+    fn single(backend: Arc<dyn DynLlmBackend>, tools: BTreeMap<ToolId, Arc<dyn DynTool>>) -> Self {
         let mut llm_backends = BTreeMap::new();
         llm_backends.insert(backend.name().to_string(), backend);
         Self {

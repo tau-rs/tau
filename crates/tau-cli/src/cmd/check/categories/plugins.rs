@@ -168,11 +168,7 @@ pub async fn run_plugins(ctx: &CheckCtx) -> CheckResult {
 ///
 /// A backend that is declared but not installed is left to the `packages`
 /// category — this probe only judges capability of what IS installed.
-fn check_models_backends(
-    ctx: &CheckCtx,
-    lockfile: &LockFile,
-    findings: &mut Vec<CheckFinding>,
-) {
+fn check_models_backends(ctx: &CheckCtx, lockfile: &LockFile, findings: &mut Vec<CheckFinding>) {
     let Some(project) = &ctx.project else { return };
     let mut seen = std::collections::BTreeSet::new();
     for (alias, model) in &project.models {

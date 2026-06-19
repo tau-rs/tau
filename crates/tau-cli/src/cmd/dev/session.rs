@@ -247,15 +247,14 @@ impl DevSession {
             false, // no --no-sandbox override
             None,  // no forced adapter kind
         );
-        let loaded =
-            plugin_loader::load_plugins(
-                &agent_entry,
-                &scope,
-                &self.project.models,
-                trace_context,
-                host_options,
-            )
-            .await?;
+        let loaded = plugin_loader::load_plugins(
+            &agent_entry,
+            &scope,
+            &self.project.models,
+            trace_context,
+            host_options,
+        )
+        .await?;
         let runtime = loaded
             .builder
             .build()
