@@ -780,14 +780,20 @@ mod tests {
         std::fs::write(
             project.join("tau.toml"),
             r#"
+packages = ["anthropic"]
+
 [project]
 name = "native_smoke"
 version = "0.1.0"
 
+[models.default]
+backend = "anthropic"
+model = "claude-haiku-4-5"
+
 [agents.solo]
 display_name = "Solo"
 package = "native_smoke@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.solo.prompt]
 system = "hi"

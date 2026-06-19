@@ -7,14 +7,18 @@ fn write_minimal_toml(tmp: &assert_fs::TempDir) {
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name    = "quit-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.a]
 display_name  = "A"
 package       = "a@^0.1"
-llm_backend   = "mock-llm"
 model         = "mock-1"
 prompt.system = "x"
 "#,

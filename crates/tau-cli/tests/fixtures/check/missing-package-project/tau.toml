@@ -4,10 +4,13 @@
 [project]
 name = "missing-pkg-fixture"
 
+[models]
+default = { backend = "echo-llm", model = "claude-haiku-4-5" }
+
 [agents.thing]
 display_name = "agent needing a missing tool"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 prompt.system = "test"
 
 [[agents.thing.requires.tools]]

@@ -224,13 +224,18 @@ pub fn setup_project_with_installed_agent(
     );
 
     let project_toml = format!(
-        r#"[project]
+        r#"packages = ["{llm_backend}"]
+
+[project]
 name = "demo"
+
+[models]
+default = {{ backend = "{llm_backend}", model = "claude-haiku-4-5" }}
 
 [agents.{agent_id}]
 display_name = "Test Agent"
 package      = "{pkg_name}@^0.1"
-llm_backend  = "{llm_backend}"
+model        = "default"
 "#
     );
     std::fs::write(root.join("tau.toml"), project_toml).unwrap();
@@ -526,10 +531,13 @@ bin = "echo-tool"
         r#"[project]
 name = "demo"
 
+[models]
+default = {{ backend = "echo-llm", model = "claude-haiku-4-5" }}
+
 [agents.{agent_id}]
 display_name = "Echo Agent"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 {tools_field}{config_field}"#
     );
     std::fs::write(root.join("tau.toml"), project_toml).unwrap();

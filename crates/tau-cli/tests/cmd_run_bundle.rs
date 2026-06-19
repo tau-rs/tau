@@ -33,15 +33,19 @@ fn write_minimal_project(root: &std::path::Path, name: &str) {
     std::fs::write(
         root.join("tau.toml"),
         format!(
-            r#"
+            r#"packages = ["anthropic"]
+
 [project]
 name = "{name}"
 version = "0.1.0"
 
+[models]
+default = {{ backend = "anthropic", model = "claude-haiku-4-5" }}
+
 [agents.solo]
 display_name = "Solo"
 package = "{name}@^0.1"
-llm_backend = "anthropic"
+model = "default"
 
 [agents.solo.prompt]
 system = "hi"

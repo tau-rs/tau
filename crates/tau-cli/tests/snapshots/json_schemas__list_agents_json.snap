@@ -7,6 +7,7 @@ expression: val
     "display_name": "Code Reviewer",
     "id": "reviewer",
     "llm_backend": "anthropic",
+    "model": "default",
     "package": "code-reviewer@^0.1"
   }
 ]

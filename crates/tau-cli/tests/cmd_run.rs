@@ -43,13 +43,18 @@ fn run_agent_id_not_found_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("tau.toml"),
-        r#"[project]
+        r#"packages = ["anthropic"]
+
+[project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#,
     )
     .unwrap();
@@ -154,14 +159,18 @@ fn run_with_no_install_emits_install_hints_and_fails() {
     // file:// URL. With --no-install, tau run should print the install hint
     // and exit non-zero WITHOUT actually attempting to fetch.
     let dir = tempfile::tempdir().unwrap();
-    let toml_str = r#"
+    let toml_str = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Reviewer"
 package      = "demo@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [[agents.reviewer.requires.tools]]
 name = "missing-tool"
@@ -246,14 +255,18 @@ capabilities = []
     std::fs::create_dir(&proj).unwrap();
     let tool_url = format!("file://{}", tool_repo.display());
     let toml_str = format!(
-        r#"
+        r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = {{ backend = "anthropic", model = "claude-haiku-4-5" }}
 
 [agents.reviewer]
 display_name = "Reviewer"
 package      = "demo@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 
 [[agents.reviewer.requires.tools]]
 name = "missing-tool"
