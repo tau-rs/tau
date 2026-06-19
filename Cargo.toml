@@ -37,6 +37,7 @@ members = [
     "crates/tau-ir-conformance",
     "crates/tau-conformance",
     "crates/tau-wasm-guest",
+    "crates/tau-wasm-host",
     "xtask",
 ]
 exclude = [
@@ -63,6 +64,8 @@ authors = ["Titouan Lebocq <75916953+LEBOCQTitouan@users.noreply.github.com>"]
 # β.7.5 wasm guest (wasm32-wasip2 only)
 wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
 dlmalloc    = { version = "0.2", features = ["global"] }
+# β.7.5 wasm host (std embedder; host targets only)
+wasmtime    = "45"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0" }
 tau-ports           = { path = "crates/tau-ports",  version = "0.0.0" }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
