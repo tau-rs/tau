@@ -150,8 +150,9 @@ pub struct Message {
 
 impl Message {
     /// Construct a new [`Message`] with a fresh [`MessageId`], a
-    /// `created_at` of [`SystemTime::now`], no `parent_id`, and empty
-    /// `headers`.
+    /// `created_at` of [`Utc::now`], no `parent_id`, and empty `headers`.
+    /// Host-only (`std`); the no_std kernel uses [`Message::new_with`] fed by
+    /// the `Clock`/`RandomSource` ports.
     ///
     /// `Message` is `#[non_exhaustive]`: external crates (notably
     /// tau-runtime, which assembles every message that flows through
@@ -175,13 +176,7 @@ impl Message {
     /// ```
     #[cfg(feature = "std")]
     pub fn new(sender: Address, recipient: Address, payload: MessagePayload) -> Self {
-        Self::new_with(
-            MessageId::new(),
-            Utc::now(),
-            sender,
-            recipient,
-            payload,
-        )
+        Self::new_with(MessageId::new(), Utc::now(), sender, recipient, payload)
     }
 
     /// no_std-safe constructor: the caller supplies the `id` and

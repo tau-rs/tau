@@ -180,11 +180,10 @@ impl Runtime {
         // `process`-feature-gated field (no_std hosts have no `SystemTime`),
         // so the constructor arity differs by feature.
         #[cfg(feature = "process")]
-        let ctx = SessionContext::new(instance_id, session_uuid, None)
-            .with_granted_capabilities(granted);
+        let ctx =
+            SessionContext::new(instance_id, session_uuid, None).with_granted_capabilities(granted);
         #[cfg(not(feature = "process"))]
-        let ctx = SessionContext::new(instance_id, session_uuid)
-            .with_granted_capabilities(granted);
+        let ctx = SessionContext::new(instance_id, session_uuid).with_granted_capabilities(granted);
 
         tool.init(ctx.clone()).await.map_err(RuntimeError::from)?;
         let result = tool.invoke(&ctx, &mut (), args).await;

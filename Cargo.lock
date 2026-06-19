@@ -4189,6 +4189,7 @@ dependencies = [
 name = "tau-sandbox-container"
 version = "0.0.0"
 dependencies = [
+ "serde",
  "serde_json",
  "tau-domain",
  "tau-ports",
@@ -4203,6 +4204,7 @@ dependencies = [
 name = "tau-sandbox-darwin"
 version = "0.0.0"
 dependencies = [
+ "serde",
  "serde_json",
  "tau-domain",
  "tau-ports",
@@ -4224,6 +4226,7 @@ dependencies = [
  "nix 0.31.3",
  "rtnetlink",
  "seccompiler",
+ "serde",
  "serde_json",
  "tau-domain",
  "tau-ports",
@@ -4248,6 +4251,7 @@ dependencies = [
 name = "tau-sandbox-windows"
 version = "0.0.0"
 dependencies = [
+ "serde",
  "serde_json",
  "tau-domain",
  "tau-ports",

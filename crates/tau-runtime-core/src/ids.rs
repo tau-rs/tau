@@ -90,10 +90,7 @@ pub fn now_utc(clock: &Arc<dyn Clock>) -> chrono::DateTime<chrono::Utc> {
 /// ports. The no_std kernel uses this instead of `MessageId::new` (which is
 /// std-only and reads the ambient clock/RNG) so message ids are reproducible
 /// under deterministic ports — the property wasm conformance relies on.
-pub fn message_id(
-    clock: &Arc<dyn Clock>,
-    random: &Arc<dyn RandomSource>,
-) -> tau_domain::MessageId {
+pub fn message_id(clock: &Arc<dyn Clock>, random: &Arc<dyn RandomSource>) -> tau_domain::MessageId {
     let mut rand_bytes = [0u8; 10];
     random.fill(&mut rand_bytes);
     tau_domain::MessageId::from_parts(clock.now().max(0) as u64, rand_bytes)

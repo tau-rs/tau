@@ -12,6 +12,7 @@ description = "Linux native sandbox adapter (landlock + seccomp + namespaces) fo
 tau-domain          = { workspace = true, features = ["serde"] }
 tau-ports           = { workspace = true, features = ["serde", "process"] }
 tau-sandbox-proxy   = { workspace = true }
+serde               = { workspace = true, features = ["std"] }
 tracing             = { workspace = true }
 # `net` feature required by net_filter::resolve (tokio::net::lookup_host) —
 # sub-project F. `rt` is needed because async fns inside the crate are

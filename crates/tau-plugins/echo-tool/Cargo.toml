@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 tau-plugin-sdk      = { workspace = true }
 tau-plugin-protocol = { workspace = true }
-tau-ports           = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-ports           = { workspace = true, features = ["serde", "test-fixtures", "process"] }
 tau-domain          = { workspace = true, features = ["serde"] }
 tokio               = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 serde               = { workspace = true }
