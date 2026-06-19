@@ -117,6 +117,7 @@
 - [ADR-0045 — Context-manager primitive (β.4)](decisions/0045-context-manager.md)
 - [ADR-0046 — Wasm AOT artifact + WIT world (β.7.5)](decisions/0046-wasm-aot-artifact.md)
 - [ADR-0047 — Credential provider chain (β.5)](decisions/0047-credential-provider-chain.md)
+- [ADR-0049 — Per-agent / per-judge model resolution](decisions/0049-per-agent-model-resolution.md)
 
 # Retrospectives
 
