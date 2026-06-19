@@ -5,6 +5,8 @@
 //! free-form `String` fields use `matches!()` to avoid brittle wording
 //! comparisons.
 
+use alloc::string::String;
+
 use thiserror::Error;
 
 /// Validation errors for [`crate::id::PackageName`].

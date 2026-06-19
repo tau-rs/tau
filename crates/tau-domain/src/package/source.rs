@@ -5,8 +5,13 @@
 //! later (see `docs/explanation/escape-hatches.md` for the broader
 //! escape-hatch policy this is consistent with).
 
-use std::fmt;
-use std::str::FromStr;
+use core::fmt;
+use core::str::FromStr;
+
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+#[cfg(feature = "package-source")]
+use alloc::string::ToString;
 
 use crate::error::PackageSourceError;
 
@@ -20,11 +25,13 @@ use crate::error::PackageSourceError;
 /// use tau_domain::PackageSource;
 /// use std::str::FromStr;
 ///
+/// # #[cfg(feature = "package-source")] {
 /// let s = PackageSource::from_str("https://github.com/example/repo.git#main").unwrap();
 /// assert_eq!(
 ///     s.to_string(),
 ///     "https://github.com/example/repo.git#main",
 /// );
+/// # }
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,14 +65,14 @@ impl<'de> serde::Deserialize<'de> for PackageSource {
         struct Visitor;
         impl<'de> serde::de::Visitor<'de> for Visitor {
             type Value = PackageSource;
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str("a PackageSource string in the form `<location>` or `<location>#<rev>`")
             }
             fn visit_str<E>(self, v: &str) -> Result<PackageSource, E>
             where
                 E: serde::de::Error,
             {
-                use std::str::FromStr;
+                use core::str::FromStr;
                 PackageSource::from_str(v).map_err(serde::de::Error::custom)
             }
             fn visit_string<E>(self, v: String) -> Result<PackageSource, E>
@@ -92,11 +99,13 @@ impl<'de> serde::Deserialize<'de> for PackageSource {
 /// use std::str::FromStr;
 ///
 /// // HTTPS URL form:
+/// # #[cfg(feature = "package-source")] {
 /// let s = PackageSource::from_str("https://github.com/example/repo.git").expect("valid url");
 /// if let PackageSource::Git { location, rev } = s {
 ///     assert!(matches!(location, GitLocation::Url(_)));
 ///     assert!(rev.is_none());
 /// }
+/// # }
 ///
 /// // scp-style form:
 /// let s2 = PackageSource::from_str("git@github.com:owner/repo.git").expect("valid scp");
@@ -108,6 +117,10 @@ impl<'de> serde::Deserialize<'de> for PackageSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitLocation {
     /// Standard URL (https / http / ssh / git / file scheme).
+    ///
+    /// Host-only: `url` is std-only (idna/icu). Gated behind the
+    /// `package-source` feature so it never reaches the no_std wasm guest.
+    #[cfg(feature = "package-source")]
     Url(url::Url),
     /// scp-style address, e.g. `git@github.com:owner/repo.git`. Not a
     /// valid URL by RFC 3986; git accepts it natively.
@@ -160,25 +173,42 @@ impl FromStr for GitLocation {
         // `github.com:owner/repo.git` as URLs with a custom scheme, so we use
         // `s.contains("://")` to discriminate true URLs from scp-style addresses
         // before deciding whether a non-allowed scheme is an error or a fall-through.
-        match url::Url::parse(s) {
-            Ok(url) => match url.scheme() {
-                "https" | "http" | "ssh" | "git" | "file" => Ok(GitLocation::Url(url)),
-                other if s.contains("://") => Err(PackageSourceError::UnsupportedScheme {
-                    scheme: other.to_owned(),
-                }),
-                _ => parse_scp(s),
-            },
-            Err(parse_err) => {
-                // Fall through to scp-style only if the URL wasn't recognized
-                // as having a scheme. If parser thinks it has a scheme but
-                // failed for another reason, surface the URL error.
-                if !s.contains("://") {
-                    parse_scp(s)
-                } else {
-                    Err(PackageSourceError::MalformedUrl {
-                        reason: parse_err.to_string(),
-                    })
+        //
+        // Host-only: `url` is std-only. With `package-source` off (the no_std
+        // wasm build), only scp-style addresses parse; `<scheme>://...` URLs
+        // surface `MalformedUrl`.
+        #[cfg(feature = "package-source")]
+        {
+            match url::Url::parse(s) {
+                Ok(url) => match url.scheme() {
+                    "https" | "http" | "ssh" | "git" | "file" => Ok(GitLocation::Url(url)),
+                    other if s.contains("://") => Err(PackageSourceError::UnsupportedScheme {
+                        scheme: other.to_owned(),
+                    }),
+                    _ => parse_scp(s),
+                },
+                Err(parse_err) => {
+                    // Fall through to scp-style only if the URL wasn't recognized
+                    // as having a scheme. If parser thinks it has a scheme but
+                    // failed for another reason, surface the URL error.
+                    if !s.contains("://") {
+                        parse_scp(s)
+                    } else {
+                        Err(PackageSourceError::MalformedUrl {
+                            reason: parse_err.to_string(),
+                        })
+                    }
                 }
+            }
+        }
+        #[cfg(not(feature = "package-source"))]
+        {
+            if s.contains("://") {
+                Err(PackageSourceError::MalformedUrl {
+                    reason: "URL parsing requires the `package-source` feature".to_owned(),
+                })
+            } else {
+                parse_scp(s)
             }
         }
     }
@@ -187,6 +217,7 @@ impl FromStr for GitLocation {
 impl fmt::Display for GitLocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "package-source")]
             GitLocation::Url(u) => write!(f, "{u}"),
             GitLocation::Scp { user, host, path } => {
                 if let Some(u) = user {

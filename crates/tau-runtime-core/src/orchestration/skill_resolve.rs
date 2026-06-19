@@ -16,10 +16,12 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+#[cfg(feature = "host-fs")]
 use globset::GlobBuilder;
 use tau_domain::SKILL_DIR_VAR;
 use tau_domain::{Capability, FsCapability};
 
+#[cfg(feature = "host-fs")]
 use crate::orchestration::error::OrchestrationError;
 #[cfg(feature = "host-fs")]
 use crate::orchestration::virtual_tools::check_capability_subset;
@@ -156,6 +158,7 @@ pub fn substitute_skill_dir(caps: &[Capability], install_path: &str) -> Vec<Capa
 }
 
 /// Test if `glob` covers `candidate` (i.e. candidate is a subset).
+#[cfg(feature = "host-fs")]
 fn glob_covers(glob: &str, candidate: &str) -> bool {
     // Strip ${SKILL_DIR} prefix if both sides have it — globset's
     // `{` char would otherwise be parsed as alternation.
@@ -195,6 +198,7 @@ fn glob_covers(glob: &str, candidate: &str) -> bool {
 /// let err = apply_scope_paths(vec![cap2], &["/home/alice/**".to_string()]);
 /// assert!(err.is_err());
 /// ```
+#[cfg(feature = "host-fs")]
 pub fn apply_scope_paths(
     caps: Vec<Capability>,
     scope_paths: &[String],

@@ -63,8 +63,8 @@ authors = ["Titouan Lebocq <75916953+LEBOCQTitouan@users.noreply.github.com>"]
 # β.7.5 wasm guest (wasm32-wasip2 only)
 wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
 dlmalloc    = { version = "0.2", features = ["global"] }
-tau-domain          = { path = "crates/tau-domain", version = "0.0.0" }
-tau-ports           = { path = "crates/tau-ports",  version = "0.0.0" }
+tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
+tau-ports           = { path = "crates/tau-ports",  version = "0.0.0", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
@@ -84,14 +84,20 @@ tau-sandbox-proxy       = { path = "crates/tau-sandbox-proxy",       version = "
 tau-workflow            = { path = "crates/tau-workflow",            version = "0.0.0" }
 tau-app                 = { path = "crates/tau-app",                 version = "0.0.0" }
 tau-observe             = { path = "crates/tau-observe",             version = "0.0.0" }
-thiserror       = "2"
-semver          = { version = "1" }
-uuid            = { version = "1", features = ["v7"] }
+# `default-features = false` on these aliases so no_std members can honour
+# their `default-features = false` declarations (cargo silently IGNORES a
+# member's `default-features = false` unless the workspace alias also sets
+# it). Universally-wanted, no_std-safe sub-features (serde `derive`, tracing
+# `attributes`, chrono `serde`/`alloc`) stay in the alias; `std`/`clock` are
+# opt-in per consumer.
+thiserror       = { version = "2", default-features = false }
+semver          = { version = "1", default-features = false }
+uuid            = { version = "1", default-features = false, features = ["v7"] }
 url             = "2"
-serde           = { version = "1", features = ["derive"] }
-serde_json      = "1"
-sha2            = "0.11"
-base64          = "0.22"
+serde           = { version = "1", default-features = false, features = ["derive"] }
+serde_json      = { version = "1", default-features = false, features = ["alloc"] }
+sha2            = { version = "0.11", default-features = false }
+base64          = { version = "0.22", default-features = false, features = ["alloc"] }
 proptest        = "1"
 assert_matches  = "1"
 rstest          = "0.26"
@@ -100,13 +106,13 @@ globset         = "0.4"
 regex           = "1"
 jsonschema      = "0.46"
 foldhash     = { version = "0.2", default-features = false }
-futures-core    = "0.3"
+futures-core    = { version = "0.3", default-features = false, features = ["alloc"] }
 hashbrown    = { version = "0.17", default-features = false, features = ["default-hasher"] }
 toml            = "1.1"
 fs4             = "0.8"
 humantime-serde = "1"
 tempfile        = "3"
-tracing         = "0.1"
+tracing         = { version = "0.1", default-features = false, features = ["attributes"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmp-serde       = "1"
 rmpv            = { version = "1", features = ["with-serde"] }
@@ -117,7 +123,7 @@ futures         = "0.3"
 insta           = { version = "1", features = ["json"] }
 dashmap         = "6"
 tokio-util      = { version = "0.7", features = ["rt"] }
-chrono          = { version = "0.4", features = ["serde"] }
+chrono          = { version = "0.4", default-features = false, features = ["serde", "alloc"] }
 tokio           = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-util", "io-std", "process", "sync", "time"] }
 reqwest             = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 wiremock        = "0.6"
@@ -129,4 +135,12 @@ landlock     = "0.4"
 libc         = "0.2"
 nix          = { version = "0.31", default-features = false, features = ["sched", "user", "process", "fs"] }
 seccompiler  = "0.5"
-ulid         = "1"
+ulid         = { version = "1", default-features = false }
+
+# Vendored no_std fork of async-stream (upstream 0.3.6 is std-only via
+# `thread_local!` + `use std::`). Required so the β.7.5 wasm guest can link
+# `tau-runtime-core::run_ir_streaming`. See vendor/async-stream/Cargo.toml for
+# the full rationale; delete this patch + the vendored crate once upstream
+# (tokio-rs/async-stream) ships no_std.
+[patch.crates-io]
+async-stream = { path = "vendor/async-stream" }

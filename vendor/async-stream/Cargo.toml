@@ -1,0 +1,35 @@
+# Vendored, no_std-enabled fork of async-stream 0.3.6 (upstream is std-only).
+#
+# Why this exists: the β.7.5 wasm guest (`tau-wasm-guest`) links
+# `tau-runtime-core`, whose `run_ir_streaming` is built on `async_stream::stream!`.
+# Upstream async-stream 0.3.6 is NOT no_std-compatible — it writes
+# `use std::{cell,future,pin,ptr,task}` (all of which are core re-exports) and,
+# more substantively, backs its yielder with a std `thread_local!`. Both link
+# `std`, which collides with the guest's own `#[panic_handler]`.
+#
+# This fork is a FAITHFUL port: `std::` → `core::`, `#![no_std]`, and a
+# target-gated STORE — the real `thread_local!` on (multi-threaded) std hosts so
+# behaviour is byte-identical there, and a single-threaded global on wasm32
+# (wasip2 is single-threaded). The proc-macro (`async-stream-impl`) is used
+# UNCHANGED from crates.io — it already emits `::core::` paths.
+#
+# Wired via `[patch.crates-io]` in the workspace root so every consumer
+# (host + guest) resolves to this copy. Delete this fork + the patch entry once
+# upstream ships no_std (tokio-rs/async-stream).
+[package]
+name = "async-stream"
+version = "0.3.6"
+edition = "2021"
+rust-version = "1.65"
+description = "no_std-enabled vendored fork of async-stream (see header comment)"
+license = "MIT"
+repository = "https://github.com/tokio-rs/async-stream"
+
+[lib]
+name = "async_stream"
+path = "src/lib.rs"
+
+[dependencies]
+async-stream-impl = "=0.3.6"
+futures-core = { version = "0.3", default-features = false }
+pin-project-lite = "0.2"

@@ -12,12 +12,15 @@
 //! (`any_message`, `any_agent_definition`-derived IDs) generate fresh
 //! v7 UUIDs each call.
 
-use std::collections::BTreeMap;
-use std::str::FromStr;
-use std::time::SystemTime;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use core::str::FromStr;
 
 use crate::agent::AgentDefinition;
-use crate::id::{AgentId, AgentInstanceId, MessageId, PackageName};
+use crate::id::{AgentId, PackageName};
+#[cfg(feature = "std")]
+use crate::id::{AgentInstanceId, MessageId};
+#[cfg(feature = "std")]
 use crate::message::{Address, Message, MessagePayload};
 use crate::package::capability::{
     AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability,
@@ -83,13 +86,18 @@ pub fn any_agent_definition() -> AgentDefinition {
 }
 
 /// A minimal `Message` with a Text payload (fresh UUIDs).
+///
+/// Host-only (`std`): mints ids via [`MessageId::new`]/[`AgentInstanceId::new`],
+/// which read the ambient clock + RNG.
+#[cfg(feature = "std")]
 pub fn any_message() -> Message {
     Message {
         id: MessageId::new(),
         sender: Address::User,
         recipient: Address::Agent(AgentInstanceId::new()),
         parent_id: None,
-        created_at: SystemTime::UNIX_EPOCH,
+        created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0)
+            .expect("0 is a valid timestamp"),
         headers: BTreeMap::new(),
         payload: MessagePayload::Text {
             content: "hello".into(),

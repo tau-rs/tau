@@ -9,7 +9,9 @@
 //! `kind = "fs.read"` form. The custom `Deserialize` impl on
 //! [`Capability`] maps it onto the variant tree.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use crate::value::Value;
 

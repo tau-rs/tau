@@ -17,13 +17,25 @@
 //! [`detect_format`]. Used by `tau-pkg::synthesize` (the bridge
 //! into the install pipeline) and by `tau-cli::cmd::skill::import`.
 
-use std::path::Path;
-use std::str::FromStr;
+#[cfg(feature = "serde")]
+use core::str::FromStr;
 
+#[cfg(feature = "std")]
+use std::path::Path;
+
+use alloc::string::String;
+#[cfg(feature = "serde")]
+use alloc::string::ToString;
+
+#[cfg(feature = "serde")]
 use crate::id::PackageName;
+#[cfg(feature = "serde")]
 use crate::package::sandbox::PluginSandboxRequirements;
+#[cfg(feature = "serde")]
 use crate::package::skill::{SkillContent, SkillManifest};
+#[cfg(feature = "serde")]
 use crate::package::{kinds, PackageKind, PackageManifest, PackageSource, UncheckedManifest};
+#[cfg(feature = "serde")]
 use crate::version::Version;
 
 /// Classification of a directory containing a skill package.
@@ -80,6 +92,7 @@ pub enum SkillFormat {
 /// // No recognized files → Invalid
 /// assert_eq!(detect_format(dir2.path()), SkillFormat::Invalid);
 /// ```
+#[cfg(feature = "std")]
 pub fn detect_format(dir: &Path) -> SkillFormat {
     if dir.join("tau.toml").is_file() {
         SkillFormat::Tau

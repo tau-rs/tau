@@ -1,7 +1,10 @@
 //! Message envelope, addressing, and payload types (G5).
 
-use std::collections::BTreeMap;
-use std::time::SystemTime;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use chrono::{DateTime, Utc};
 
 use crate::agent::AgentStatus;
 use crate::id::{AgentInstanceId, MessageId};
@@ -135,8 +138,10 @@ pub struct Message {
     pub recipient: Address,
     /// Optional pointer to the message this one replies to.
     pub parent_id: Option<MessageId>,
-    /// When the message was created.
-    pub created_at: SystemTime,
+    /// When the message was created (UTC). Supplied by the caller's
+    /// `Clock` port in the no_std kernel; the std `Message::new`
+    /// convenience stamps `Utc::now()`.
+    pub created_at: DateTime<Utc>,
     /// Free-form headers. `BTreeMap` for stable iteration order.
     pub headers: BTreeMap<String, String>,
     /// Message body.
@@ -168,13 +173,36 @@ impl Message {
     /// assert!(matches!(m.payload, MessagePayload::Text { .. }));
     /// assert!(m.parent_id.is_none());
     /// ```
+    #[cfg(feature = "std")]
     pub fn new(sender: Address, recipient: Address, payload: MessagePayload) -> Self {
+        Self::new_with(
+            MessageId::new(),
+            Utc::now(),
+            sender,
+            recipient,
+            payload,
+        )
+    }
+
+    /// no_std-safe constructor: the caller supplies the `id` and
+    /// `created_at` (minted from the `Clock`/`RandomSource` ports), with no
+    /// `parent_id` and empty `headers`. This is how the kernel assembles
+    /// every message inside the agent loop so ids/timestamps are
+    /// reproducible under conformance. See
+    /// `tau_runtime_core::ids::message_id`.
+    pub fn new_with(
+        id: MessageId,
+        created_at: DateTime<Utc>,
+        sender: Address,
+        recipient: Address,
+        payload: MessagePayload,
+    ) -> Self {
         Self {
-            id: MessageId::new(),
+            id,
             sender,
             recipient,
             parent_id: None,
-            created_at: SystemTime::now(),
+            created_at,
             headers: BTreeMap::new(),
             payload,
         }
