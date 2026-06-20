@@ -18,8 +18,8 @@ mod guest;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use guest::wit_host;
 #[cfg(target_arch = "wasm32")]
+mod dispatcher;
+#[cfg(target_arch = "wasm32")]
 mod executor;
 #[cfg(target_arch = "wasm32")]
 mod host_ports;
-#[cfg(target_arch = "wasm32")]
-mod dispatcher;

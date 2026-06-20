@@ -342,8 +342,10 @@ impl Runtime {
         // at Runtime::build time and stored in the registry; without
         // `tool-validation` (e.g. the wasm guest) no schema validation runs.
         #[cfg(feature = "tool-validation")]
-        let tool_validators: HbHashMap<alloc::string::String, crate::tool_args::ToolArgsValidator> =
-            self.tool_validators().clone().into_iter().collect();
+        let tool_validators: HbHashMap<
+            alloc::string::String,
+            crate::tool_args::ToolArgsValidator,
+        > = self.tool_validators().clone().into_iter().collect();
         #[cfg(not(feature = "tool-validation"))]
         let tool_validators: HbHashMap<alloc::string::String, ()> = HbHashMap::default();
 

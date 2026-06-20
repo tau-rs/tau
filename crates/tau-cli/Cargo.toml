@@ -64,17 +64,21 @@ regex              = { workspace = true }
 jsonschema         = { workspace = true }
 
 [dev-dependencies]
-assert_cmd = "2"
-assert_fs  = "1"
-insta      = { version = "1", features = ["yaml", "json", "redactions"] }
-predicates = "3"
-proptest   = { workspace = true }
-rstest     = { workspace = true }
-tempfile   = "3"
-url        = { workspace = true }
-walkdir    = { workspace = true }
+assert_cmd       = "2"
+assert_fs        = "1"
+insta            = { version = "1", features = ["yaml", "json", "redactions"] }
+predicates       = "3"
+proptest         = { workspace = true }
+rstest           = { workspace = true }
+serde_json       = { workspace = true }
+tempfile         = "3"
+url              = { workspace = true }
+walkdir          = { workspace = true }
 # test-fixtures feature needed by tests/common/mock_llm.rs (T9: orchestration pattern tests).
-tau-ports  = { workspace = true, features = ["test-fixtures", "serde"] }
+tau-ports        = { workspace = true, features = ["test-fixtures", "serde"] }
+# Task 4: e2e tau build wasm → wasmtime → typed RunEvent stream (β.7.5 PR-E2).
+tau-wasm-host    = { path = "../tau-wasm-host" }
+tau-runtime-core = { workspace = true }
 
 [features]
 # Production `tau` binary ships with OTLP support enabled out of the box.

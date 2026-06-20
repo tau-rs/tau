@@ -30,7 +30,11 @@ impl GuestDispatcher {
         clock: Arc<dyn Clock>,
         random: Arc<dyn RandomSource>,
     ) -> Self {
-        Self { backend, clock, random }
+        Self {
+            backend,
+            clock,
+            random,
+        }
     }
 }
 
@@ -39,14 +43,11 @@ impl ToolDispatcher for GuestDispatcher {
         &'a self,
         tool_id: &'a ToolId,
         _args: &'a Value,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
         let name = tool_id.0.clone();
         Box::pin(async move {
             Err(RuntimeError::Internal {
-                message: format!(
-                    "tool `{name}` invoked but the wasm guest wires no tools (E2)"
-                ),
+                message: format!("tool `{name}` invoked but the wasm guest wires no tools (E2)"),
             })
         })
     }

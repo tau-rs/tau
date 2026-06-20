@@ -25,11 +25,13 @@ impl LlmBackend for HostLlmBackend {
     }
 
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
-        let req_json = serde_json::to_string(&req)
-            .map_err(|e| LlmError::Internal { message: e.to_string() })?;
-        let resp_json =
-            host::complete(&req_json).map_err(|e| LlmError::Internal { message: e })?;
-        serde_json::from_str(&resp_json).map_err(|e| LlmError::Internal { message: e.to_string() })
+        let req_json = serde_json::to_string(&req).map_err(|e| LlmError::Internal {
+            message: e.to_string(),
+        })?;
+        let resp_json = host::complete(&req_json).map_err(|e| LlmError::Internal { message: e })?;
+        serde_json::from_str(&resp_json).map_err(|e| LlmError::Internal {
+            message: e.to_string(),
+        })
     }
 
     async fn stream(&self, req: CompletionRequest) -> Result<CompletionStream, LlmError> {

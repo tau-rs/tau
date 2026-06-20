@@ -122,18 +122,17 @@ impl Guest for Component {
             Arc::new(crate::host_ports::HostLlmBackend);
         let clock: Arc<dyn tau_ports::Clock> = Arc::new(crate::host_ports::HostClock);
         let random: Arc<dyn tau_ports::RandomSource> = Arc::new(crate::host_ports::HostRandom);
-        let dispatcher =
-            Arc::new(crate::dispatcher::GuestDispatcher::new(backend, clock, random));
+        let dispatcher = Arc::new(crate::dispatcher::GuestDispatcher::new(
+            backend, clock, random,
+        ));
 
         let module = Arc::new(module);
-        let stream = crate::executor::block_on(
-            tau_runtime_core::interpreter::run_ir_streaming(
-                module,
-                &entry,
-                dispatcher,
-                Vec::new(),
-            ),
-        )
+        let stream = crate::executor::block_on(tau_runtime_core::interpreter::run_ir_streaming(
+            module,
+            &entry,
+            dispatcher,
+            Vec::new(),
+        ))
         .map_err(|e| e.to_string())?;
 
         let events = crate::executor::collect_stream(stream);

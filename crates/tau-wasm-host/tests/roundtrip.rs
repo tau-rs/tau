@@ -62,7 +62,9 @@ fn build_guest_component(ir_bytes: Option<&[u8]>) -> Vec<u8> {
         _scratch = None;
     }
 
-    let output = cmd.output().expect("failed to spawn cargo to build the guest");
+    let output = cmd
+        .output()
+        .expect("failed to spawn cargo to build the guest");
 
     assert!(
         output.status.success(),
@@ -173,12 +175,18 @@ fn guest_drives_ir_and_returns_typed_stream() {
         serde_json::from_str(&out).expect("guest output is a RunEvent array");
 
     assert!(
-        matches!(events.first(), Some(tau_runtime_core::stream::RunEvent::RunStarted)),
+        matches!(
+            events.first(),
+            Some(tau_runtime_core::stream::RunEvent::RunStarted)
+        ),
         "stream must start with RunStarted; got {:?}",
         events.first()
     );
     assert!(
-        matches!(events.last(), Some(tau_runtime_core::stream::RunEvent::RunCompleted { .. })),
+        matches!(
+            events.last(),
+            Some(tau_runtime_core::stream::RunEvent::RunCompleted { .. })
+        ),
         "stream must end with RunCompleted; got {:?}",
         events.last()
     );
