@@ -122,6 +122,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
                 },
                 produces: entry.produces.clone(),
                 output_schema: entry.output_schema.clone(),
+                durable: lower_durable(entry),
             },
         );
     }
@@ -425,6 +426,25 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context
     let mut cfg = ContextConfig::default();
     cfg.pipeline = pipeline;
     Some(cfg)
+}
+
+/// Lower the validated `[agents.<id>.durable]` block into an IR
+/// [`tau_ir::durable::Durability`] (ADR-0053). `None` when the agent is
+/// not durable. tau-pkg's validator guarantees the strings are known
+/// values, so the mapping is total; the wildcard arms are
+/// defense-in-depth and resolve to the A-minimal defaults.
+fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable::Durability> {
+    use tau_ir::durable::{CheckpointGranularity, Durability, DurableStore};
+    let d = entry.durable.as_ref()?;
+    let checkpoint = match d.checkpoint.as_str() {
+        "per_turn" => CheckpointGranularity::PerTurn,
+        _ => CheckpointGranularity::PerTurn,
+    };
+    let store = match d.store.as_str() {
+        "file" => DurableStore::File,
+        _ => DurableStore::File,
+    };
+    Some(Durability::new(checkpoint, store))
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].

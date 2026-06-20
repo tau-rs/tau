@@ -292,6 +292,7 @@ mod tests {
             },
             produces: alloc::vec::Vec::new(),
             output_schema: None,
+            durable: None,
         }
     }
 
@@ -580,6 +581,7 @@ mod tests {
                 },
                 produces: alloc::vec![],
                 output_schema: None,
+                durable: None,
             },
         );
         wf

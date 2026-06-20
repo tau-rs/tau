@@ -145,6 +145,23 @@ pub struct RunOptions {
 
     /// Token estimator used by `fit_budget`. Defaults to the heuristic.
     pub token_estimator: Arc<dyn crate::context::TokenEstimator>,
+
+    /// Durable checkpoint store (ADR-0053). Set by the interpreter only for
+    /// agents that declare `durable` AND when the host dispatcher supplies a
+    /// store. When `Some` (with [`Self::run_id`] also set), the agent loop
+    /// persists a `TurnCheckpoint` after each `TurnCompleted`. `None` =
+    /// durability off (default, and for all non-durable agents).
+    pub checkpoint_store: Option<Arc<dyn tau_ports::orchestration::CheckpointStore>>,
+
+    /// Run id used to key checkpoints + as the `--resume` handle. Set by the
+    /// host shell alongside [`Self::checkpoint_store`].
+    pub run_id: Option<String>,
+
+    /// Rehydrated checkpoint for a resumed run (`tau run --resume`). When
+    /// `Some`, the loop seeds its history + turn counter from this checkpoint
+    /// and re-enters at the next turn, instead of starting fresh — so already
+    /// committed turns are not re-billed.
+    pub resume_from: Option<tau_ports::orchestration::TurnCheckpoint>,
 }
 
 impl core::fmt::Debug for RunOptions {
@@ -183,6 +200,12 @@ impl core::fmt::Debug for RunOptions {
                 &alloc::format!("<{} transformers>", self.context_pipeline.len()),
             )
             .field("token_estimator", &"<TokenEstimator>")
+            .field(
+                "checkpoint_store",
+                &self.checkpoint_store.as_ref().map(|_| "<CheckpointStore>"),
+            )
+            .field("run_id", &self.run_id)
+            .field("resume_from", &self.resume_from.as_ref().map(|c| c.turn))
             .finish()
     }
 }
@@ -202,6 +225,9 @@ impl Default for RunOptions {
             scope_root: None,
             context_pipeline: Vec::new(),
             token_estimator: Arc::new(crate::context::HeuristicEstimator),
+            checkpoint_store: None,
+            run_id: None,
+            resume_from: None,
         }
     }
 }

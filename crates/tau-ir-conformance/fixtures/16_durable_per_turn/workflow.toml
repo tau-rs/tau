@@ -1,0 +1,28 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-16"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.fan]
+display_name = "Fan Controller"
+package      = "fan-ctrl@^0.1"
+model        = "mock-1"
+tool_refs    = ["read_temp"]
+max_turns    = 2
+
+# ADR-0053: opt the agent into turn-level checkpoint/resume. The durable
+# block is additive metadata on the IR Agent; it does not change the
+# observable side-effect multiset, so this fixture must cross-mode-conform
+# identically to fixture 01 (which is byte-identical minus this block).
+[agents.fan.durable]
+checkpoint = "per_turn"
+store = "file"
+
+[tools.read_temp]
+native      = "ReadTemp"
+description = "Read the current temperature."
+capabilities = []

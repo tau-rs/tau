@@ -594,6 +594,12 @@ pub struct RunArgs {
     /// the run is refused (Phase 2 §C.3).
     #[arg(long, value_name = "PATH")]
     pub bundle: Option<std::path::PathBuf>,
+    /// Resume a durable run by its run id (ADR-0053). The entry agent must
+    /// declare `[durable]`; the run rehydrates the latest checkpoint under
+    /// `.tau/runs/<RUN_ID>/` and re-enters at the next turn, so already
+    /// committed turns are not re-billed.
+    #[arg(long, value_name = "RUN_ID")]
+    pub resume: Option<String>,
 }
 
 /// Arguments for `tau chat`.

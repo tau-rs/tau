@@ -536,6 +536,20 @@ where
             crate::context::build_context_pipeline(ctx_cfg, registry.as_deref())?;
     }
 
+    // 6c. ADR-0053: wire durable checkpoint/resume for agents that opt in.
+    //     Gated on `agent.durable` so only the declaring agent checkpoints —
+    //     a non-durable judge / subflow / pipeline-step agent sharing this
+    //     code path is left untouched. The host dispatcher supplies the
+    //     store + run id (and any resume checkpoint); a dispatcher without a
+    //     store leaves the agent running as ordinary (non-durable).
+    if agent.durable.is_some() {
+        if let Some(handles) = dispatcher.checkpointing() {
+            run_options.checkpoint_store = Some(handles.store);
+            run_options.run_id = Some(handles.run_id);
+            run_options.resume_from = handles.resume;
+        }
+    }
+
     // 7. Split initial_messages into history + initial_message.
     //    The kernel requires exactly one initial_message; if the caller
     //    provided none, synthesise a placeholder so the run loop has
@@ -892,6 +906,7 @@ mod tests {
             },
             produces: alloc::vec::Vec::new(),
             output_schema: None,
+            durable: None,
         };
 
         let user_msg = tau_domain::Message::new(

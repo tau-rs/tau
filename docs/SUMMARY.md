@@ -30,6 +30,7 @@
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
+- [Run tau under a durable orchestrator](how-to/run-tau-under-a-durable-orchestrator.md)
 - [Use a mounted secret as a credential](how-to/use-mounted-secrets.md)
 - [Write a tool plugin](how-to/write-a-tool-plugin.md)
 
@@ -122,6 +123,7 @@
 - [ADR-0050 — Agent `output_schema` additive field plumbing (IR v1.3.0)](decisions/0050-agent-output-schema.md)
 - [ADR-0051 — tau-ir crate split: a structural no_std boundary (β.7.5)](decisions/0051-tau-ir-crate-split.md)
 - [ADR-0052 — Per-agent / per-judge model resolution](decisions/0052-per-agent-model-resolution.md)
+- [ADR-0053 — Turn-level checkpoint/resume (durable execution A-minimal)](decisions/0053-turn-level-checkpoint-resume.md)
 
 # Retrospectives
 

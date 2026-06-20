@@ -248,6 +248,36 @@ pub enum RunEvent {
 /// to the next turn. Terminates with `RunCompleted{Completed}` when
 /// the LLM responds with no tool uses.
 ///
+/// Persist a turn-boundary checkpoint for a durable agent (ADR-0053).
+///
+/// No-op unless BOTH a `checkpoint_store` and a `run_id` are set on
+/// `options` (the interpreter sets them only for agents that declare
+/// `durable`). A store failure is logged and swallowed, not fatal: a
+/// missed checkpoint only means a crash would re-enter from the previous
+/// committed turn (at-least-once is preserved), so it must not abort an
+/// otherwise-healthy run.
+fn persist_checkpoint_if_durable(
+    options: &RunOptions,
+    turn: u32,
+    messages: &[Message],
+    tokens: &crate::options::TokenUsage,
+) {
+    if let (Some(store), Some(run_id)) =
+        (options.checkpoint_store.as_ref(), options.run_id.as_ref())
+    {
+        let ckpt = tau_ports::orchestration::TurnCheckpoint {
+            run_id: run_id.clone(),
+            turn,
+            history: messages.to_vec(),
+            input_tokens: tokens.input_tokens,
+            output_tokens: tokens.output_tokens,
+        };
+        if let Err(e) = store.persist(&ckpt) {
+            warn!(name = "runtime.checkpoint_failed", turn, error = %e);
+        }
+    }
+}
+
 /// Constructed inputs are pre-validated by the caller in Task 6
 /// (`Runtime::run_streaming`); here we trust them.
 #[allow(dead_code)] // wired up by Task 6
@@ -268,25 +298,40 @@ pub fn run_streaming_inner(
 ) -> impl Stream<Item = RunEvent> + 'static {
     async_stream::stream! {
         let agent_instance_id = AgentInstanceId::new();
-        let mut messages: Vec<Message> = Vec::with_capacity(history.len() + 1);
-        // ADR-0006 §3.9: emit one `message.added` per message pushed onto
-        // the run history. No explicit `parent:` here — these fire before
-        // any `runtime.turn` span opens, so they attach to the outer
-        // `runtime.agent_run` span (or the caller's current span).
-        for m in &history {
-            debug!(
-                name = EV_MESSAGE_ADDED,
-                role = ?m.sender,
-            );
-        }
-        messages.extend(history);
-        debug!(
-            name = EV_MESSAGE_ADDED,
-            role = ?initial_message.sender,
-        );
-        messages.push(initial_message);
-        let mut total_turns: u32 = 0;
-        let mut aggregated_tokens = crate::options::TokenUsage::default();
+        // ADR-0053: a resumed run rehydrates its committed history + turn
+        // counter from the latest checkpoint and re-enters at the next turn,
+        // so turns 1..=ckpt.turn are NOT re-billed (no LLM calls are made
+        // for them). A fresh run extends the supplied history and pushes the
+        // initial user message as turn 0's seed.
+        let (mut messages, mut total_turns, mut aggregated_tokens) =
+            if let Some(ckpt) = options.resume_from.clone() {
+                let tokens = crate::options::TokenUsage {
+                    input_tokens: ckpt.input_tokens,
+                    output_tokens: ckpt.output_tokens,
+                    total_tokens: None,
+                };
+                (ckpt.history, ckpt.turn, tokens)
+            } else {
+                let mut messages: Vec<Message> = Vec::with_capacity(history.len() + 1);
+                // ADR-0006 §3.9: emit one `message.added` per message pushed
+                // onto the run history. No explicit `parent:` here — these
+                // fire before any `runtime.turn` span opens, so they attach
+                // to the outer `runtime.agent_run` span (or the caller's
+                // current span).
+                for m in &history {
+                    debug!(
+                        name = EV_MESSAGE_ADDED,
+                        role = ?m.sender,
+                    );
+                }
+                messages.extend(history);
+                debug!(
+                    name = EV_MESSAGE_ADDED,
+                    role = ?initial_message.sender,
+                );
+                messages.push(initial_message);
+                (messages, 0u32, crate::options::TokenUsage::default())
+            };
 
         info!(name = EV_RUNTIME_RUN_STARTED);
         yield RunEvent::RunStarted;
@@ -545,6 +590,11 @@ pub fn run_streaming_inner(
                     usage: turn_usage,
                     turn: total_turns,
                 };
+
+                // ADR-0053: commit the final turn boundary for durable
+                // agents (the assistant's closing message is already in
+                // `messages`).
+                persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens);
 
                 let final_message = messages
                     .last()
@@ -1552,6 +1602,11 @@ pub fn run_streaming_inner(
                 usage: turn_usage,
                 turn: total_turns,
             };
+
+            // ADR-0053: commit a checkpoint at this turn boundary (after the
+            // tool results are in `messages`) for durable agents, before
+            // looping back into the next — possibly crashing — turn.
+            persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens);
 
             // Loop back for the next turn (LLM will see tool results).
         }
@@ -3028,5 +3083,171 @@ paths = ["/etc/**"]
         assert_eq!(*stop_reason, StopReason::ToolUse);
         assert_eq!(*tokens_in, 10);
         assert_eq!(*tokens_out, 5);
+    }
+
+    // ---- ADR-0053: durable checkpoint emit + resume ----
+
+    /// A durable agent commits one checkpoint per completed turn, exercising
+    /// BOTH boundary sites: the tool-loop site (turn 1, a tool_use turn) and
+    /// the end-turn site (turn 2). The latest checkpoint carries the full
+    /// accumulated history.
+    #[tokio::test]
+    async fn durable_agent_persists_a_checkpoint_per_turn() {
+        use tau_ports::fixtures::{make_tool_spec, make_tool_use, MockCheckpointStore, MockTool};
+        use tau_ports::CheckpointStore as _;
+
+        let spec = make_tool_spec("echo".into(), "echo tool".into(), Value::Null);
+        let tool_arc: Arc<dyn DynTool> = Arc::new(MockTool::new("echo", spec));
+        let (tools, validators, tool_specs_list) = make_tool_entry("echo", tool_arc);
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(make_tool_use(
+                    "call_1".into(),
+                    "echo".into(),
+                    Value::Null,
+                ))),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: Some(PortsTokenUsage::new(10, 5)),
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "done".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: Some(PortsTokenUsage::new(3, 2)),
+                }),
+            ],
+        ]));
+
+        let store = Arc::new(MockCheckpointStore::new());
+        let opts = RunOptions {
+            checkpoint_store: Some(store.clone()),
+            run_id: Some("run-xyz".into()),
+            ..test_run_options()
+        };
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            opts,
+            tools,
+            validators,
+            vec![],
+            tool_specs_list,
+            vec![],
+            vec![],
+        );
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
+        assert!(
+            matches!(events.last(), Some(RunEvent::RunCompleted { .. })),
+            "expected RunCompleted; got {events:#?}"
+        );
+
+        // One checkpoint per turn, in order (turn 1 via the tool-loop site,
+        // turn 2 via the end-turn site).
+        let run_id = String::from("run-xyz");
+        assert_eq!(store.persisted_turns(&run_id), alloc::vec![1, 2]);
+
+        // The turn-2 checkpoint carries the full accumulated history
+        // (user + assistant(tool_use) + tool_result + assistant(text)).
+        let latest = store
+            .load_latest(&run_id)
+            .expect("load ok")
+            .expect("a checkpoint exists");
+        assert_eq!(latest.turn, 2);
+        assert!(
+            latest.history.len() >= 3,
+            "history should accumulate across turns; got {}",
+            latest.history.len()
+        );
+        // Token accounting accumulated across both turns (10+3 / 5+2).
+        assert_eq!(latest.input_tokens, 13);
+        assert_eq!(latest.output_tokens, 7);
+    }
+
+    /// Resume re-enters at the next turn after the last committed checkpoint
+    /// WITHOUT re-billing completed turns. Proof: the resumed run is handed a
+    /// `ScriptedLlm` with EXACTLY ONE turn of chunks. Had resume restarted at
+    /// turn 1, the loop would need a second LLM call and exhaust the script;
+    /// completing with a single call proves turns 1–2 were not re-run.
+    #[tokio::test]
+    async fn durable_resume_re_enters_at_next_turn_without_rebilling() {
+        use tau_ports::fixtures::MockCheckpointStore;
+        use tau_ports::CheckpointStore as _;
+
+        // A checkpoint as it would stand after turn 2 crashed mid-turn-3.
+        let checkpoint = tau_ports::TurnCheckpoint {
+            run_id: "run-resumed".into(),
+            turn: 2,
+            history: alloc::vec![user_msg("original task")],
+            input_tokens: 13,
+            output_tokens: 7,
+        };
+
+        // EXACTLY ONE turn available — the resumed turn 3.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::new(vec![
+            Ok(CompletionChunk::Text {
+                delta: "final".into(),
+            }),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::EndTurn,
+                usage: Some(PortsTokenUsage::new(5, 3)),
+            }),
+        ]));
+
+        let store = Arc::new(MockCheckpointStore::new());
+        let opts = RunOptions {
+            checkpoint_store: Some(store.clone()),
+            run_id: Some("run-resumed".into()),
+            resume_from: Some(checkpoint),
+            ..test_run_options()
+        };
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("ignored-on-resume"),
+            opts,
+            HashMap::new(),
+            HashMap::new(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
+
+        // Completed via a single LLM turn → turns 1–2 were not re-billed.
+        assert!(
+            matches!(events.last(), Some(RunEvent::RunCompleted { .. })),
+            "expected RunCompleted via a single resumed turn; got {events:#?}"
+        );
+        // The completed turn is turn 3 (continued from checkpoint turn 2).
+        let last_turn = events.iter().rev().find_map(|e| match e {
+            RunEvent::TurnCompleted { turn, .. } => Some(*turn),
+            _ => None,
+        });
+        assert_eq!(
+            last_turn,
+            Some(3),
+            "resume must continue at turn 3, not restart at turn 1"
+        );
+
+        // The resumed turn committed its own checkpoint at turn 3, with token
+        // accounting continued from the checkpoint (13+5 / 7+3).
+        let run_id = String::from("run-resumed");
+        assert_eq!(store.persisted_turns(&run_id), alloc::vec![3]);
+        let latest = store.load_latest(&run_id).unwrap().unwrap();
+        assert_eq!(latest.input_tokens, 18);
+        assert_eq!(latest.output_tokens, 10);
     }
 }

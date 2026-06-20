@@ -251,6 +251,69 @@ pub struct RunSnapshot {
     pub ended_at: Option<DateTime<Utc>>,
 }
 
+// ---------------------------------------------------------------------------
+// Turn-level checkpoint/resume (ADR-0053 — durable execution A-minimal)
+// ---------------------------------------------------------------------------
+
+/// A resumable snapshot of an agent run taken at a completed turn boundary.
+///
+/// The full message history is carried so resume is "feed the history back
+/// in" — β.4's context pipeline is stateless and re-derives deterministically
+/// from the history, so no separate context-manager state is needed (ADR-0053
+/// D4). Token counts are plain `u64` (not [`crate::llm::TokenUsage`], which is
+/// `u32`-based) so the runtime's `u64` accounting round-trips without
+/// narrowing; the runtime reconstructs its own token type on resume.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct TurnCheckpoint {
+    /// Run this checkpoint belongs to (the `--resume` key).
+    pub run_id: RunId,
+    /// The turn number that just completed (1-based). Resume re-enters at
+    /// `turn + 1`.
+    pub turn: u32,
+    /// Full message history as of the end of `turn`.
+    pub history: Vec<tau_domain::Message>,
+    /// Cumulative input (prompt) tokens through `turn`.
+    pub input_tokens: u64,
+    /// Cumulative output (completion) tokens through `turn`.
+    pub output_tokens: u64,
+}
+
+/// Errors surfaced by a [`CheckpointStore`].
+///
+/// Messages are `String` (not `std::io::Error`) so the type stays
+/// no_std-clean; the host `FileCheckpointStore` maps I/O failures into
+/// [`CheckpointError::Io`].
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CheckpointError {
+    /// Reading or writing the durable store failed.
+    #[error("checkpoint store I/O failed: {0}")]
+    Io(String),
+    /// Encoding or decoding a checkpoint failed.
+    #[error("checkpoint (de)serialization failed: {0}")]
+    Serialization(String),
+}
+
+/// Port: persists and loads [`TurnCheckpoint`]s for durable agents (ADR-0053).
+///
+/// Injected into the runtime via `RunOptions`; the agent loop calls
+/// [`CheckpointStore::persist`] after each `TurnCompleted` when the agent is
+/// durable, and `tau run --resume` calls [`CheckpointStore::load_latest`]
+/// before the loop. Keeping this behind a port (rather than feature-gating
+/// file I/O inside the no_std kernel) lets the kill-and-resume test run
+/// in-core against an in-memory mock — see `crate::fixtures` under the
+/// `test-fixtures` feature.
+pub trait CheckpointStore: Send + Sync {
+    /// Durably commit a turn boundary. At-least-once: a side effect in the
+    /// turn may have already happened, so callers must be idempotent.
+    fn persist(&self, ckpt: &TurnCheckpoint) -> Result<(), CheckpointError>;
+
+    /// Load the latest (highest-`turn`) checkpoint for `run_id`, or `None`
+    /// if the run has no committed checkpoint.
+    fn load_latest(&self, run_id: &RunId) -> Result<Option<TurnCheckpoint>, CheckpointError>;
+}
+
 #[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;

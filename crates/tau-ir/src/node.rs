@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::budget::AgentBudget;
 use crate::capability::CapabilityRequirements;
 use crate::context::ContextConfig;
+use crate::durable::Durability;
 use crate::ids::{AgentId, StepId, ToolId};
 use crate::subflow::SubflowEdge;
 use crate::tool_impl::{NativeFnRef, ToolImpl};
@@ -49,6 +50,12 @@ pub struct Agent {
     /// schema-less agents byte-stable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
+    /// Optional durable-execution config (ADR-0053). `None` => not
+    /// durable (whole-bundle reentrant only). `Some` opts the agent into
+    /// turn-level checkpoint/resume. `skip_serializing_if` keeps
+    /// non-durable agents byte-stable with pre-A-minimal modules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable: Option<Durability>,
 }
 
 /// A tool node.
@@ -120,6 +127,7 @@ mod tests {
             },
             produces: alloc::vec!["/x".into()],
             output_schema: None,
+            durable: None,
         };
         let json = serde_json::to_string(&agent).expect("serialize");
         let back: Agent = serde_json::from_str(&json).expect("deserialize");
@@ -145,6 +153,7 @@ mod tests {
             },
             produces: alloc::vec::Vec::new(),
             output_schema: None,
+            durable: None,
         };
         let json = serde_json::to_string(&agent).expect("serialize");
         assert!(
@@ -171,6 +180,7 @@ mod tests {
             },
             produces: alloc::vec::Vec::new(),
             output_schema: Some(serde_json::json!({"type": "object"})),
+            durable: None,
         };
         let json = serde_json::to_string(&agent).expect("serialize");
         let back: Agent = serde_json::from_str(&json).expect("deserialize");
@@ -195,11 +205,65 @@ mod tests {
             },
             produces: alloc::vec::Vec::new(),
             output_schema: None,
+            durable: None,
         };
         let json = serde_json::to_string(&agent).expect("serialize");
         assert!(
             !json.contains("\"output_schema\""),
             "expected 'output_schema' key absent for None; got: {json}"
+        );
+    }
+
+    /// An `Agent` with `durable` set round-trips through serde (ADR-0053).
+    #[test]
+    fn agent_durable_round_trips() {
+        let agent = Agent {
+            id: AgentId("fan-monitor".into()),
+            prompt: String::new(),
+            model_ref: crate::model_ref::ModelRef {
+                backend: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
+            produces: alloc::vec::Vec::new(),
+            output_schema: None,
+            durable: Some(crate::durable::Durability::per_turn_file()),
+        };
+        let json = serde_json::to_string(&agent).expect("serialize");
+        let back: Agent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(agent, back);
+    }
+
+    /// `durable = None` serializes WITHOUT a `"durable"` key — byte-stable
+    /// with pre-A-minimal modules (mirrors `produces` / `output_schema`).
+    #[test]
+    fn agent_non_durable_omitted_from_json() {
+        let agent = Agent {
+            id: AgentId("gatherer".into()),
+            prompt: String::new(),
+            model_ref: crate::model_ref::ModelRef {
+                backend: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: AgentBudget {
+                max_turns: None,
+                max_tokens: None,
+            },
+            produces: alloc::vec::Vec::new(),
+            output_schema: None,
+            durable: None,
+        };
+        let json = serde_json::to_string(&agent).expect("serialize");
+        assert!(
+            !json.contains("\"durable\""),
+            "expected 'durable' key absent for None; got: {json}"
         );
     }
 }

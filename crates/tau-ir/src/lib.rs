@@ -23,6 +23,7 @@ pub mod canonical;
 pub mod capability;
 pub mod check;
 pub mod context;
+pub mod durable;
 pub mod error;
 pub mod hash;
 pub mod ids;
@@ -45,6 +46,7 @@ pub use capability::{CapabilityRequirements, CapabilityTable};
 // module path (`tau_ir::check::RetryPolicy` / `tau_ir::trigger::RetryPolicy`).
 pub use check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail};
 pub use context::ContextConfig;
+pub use durable::{CheckpointGranularity, Durability, DurableStore};
 pub use error::IrError;
 pub use hash::compute_hash;
 pub use ids::{AgentId, CheckId, PipelineStepId, StepId, SubflowId, ToolId};

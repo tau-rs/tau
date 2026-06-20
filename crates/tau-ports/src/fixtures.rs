@@ -822,3 +822,69 @@ mod process_tests {
         assert!(handle.is_ok());
     }
 }
+
+// ---------------------------------------------------------------------------
+// MockCheckpointStore — in-memory CheckpointStore (ADR-0053)
+// ---------------------------------------------------------------------------
+
+use crate::orchestration::{CheckpointError, CheckpointStore, RunId, TurnCheckpoint};
+
+/// In-memory [`CheckpointStore`] for tests.
+///
+/// Records every persisted [`TurnCheckpoint`] keyed by `(run_id, turn)` and
+/// returns the highest-`turn` checkpoint from `load_latest`. Lets a
+/// kill-and-resume test run entirely in-core: drive a run with this store,
+/// inspect [`MockCheckpointStore::persisted_turns`], then construct a fresh
+/// run that resumes from `load_latest` — no filesystem, no tokio host.
+#[derive(Default)]
+pub struct MockCheckpointStore {
+    by_run: Mutex<BTreeMap<RunId, BTreeMap<u32, TurnCheckpoint>>>,
+}
+
+impl MockCheckpointStore {
+    /// Construct an empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The turn numbers committed for `run_id`, ascending. Test introspection.
+    pub fn persisted_turns(&self, run_id: &RunId) -> Vec<u32> {
+        self.by_run
+            .lock()
+            .expect("checkpoint mutex")
+            .get(run_id)
+            .map(|turns| turns.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Total checkpoints recorded across all runs. Test introspection.
+    pub fn persist_count(&self) -> usize {
+        self.by_run
+            .lock()
+            .expect("checkpoint mutex")
+            .values()
+            .map(|turns| turns.len())
+            .sum()
+    }
+}
+
+impl CheckpointStore for MockCheckpointStore {
+    fn persist(&self, ckpt: &TurnCheckpoint) -> Result<(), CheckpointError> {
+        self.by_run
+            .lock()
+            .expect("checkpoint mutex")
+            .entry(ckpt.run_id.clone())
+            .or_default()
+            .insert(ckpt.turn, ckpt.clone());
+        Ok(())
+    }
+
+    fn load_latest(&self, run_id: &RunId) -> Result<Option<TurnCheckpoint>, CheckpointError> {
+        Ok(self
+            .by_run
+            .lock()
+            .expect("checkpoint mutex")
+            .get(run_id)
+            .and_then(|turns| turns.values().next_back().cloned()))
+    }
+}

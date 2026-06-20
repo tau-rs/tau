@@ -28,8 +28,10 @@ impl IrFormatVersion {
     /// Current IR format version emitted by this `tau-ir` crate.
     // Track 1 (per-agent model resolution) is a breaking change (Agent.model →
     // model_ref, JudgeRef variant rename), so its MAJOR bump supersedes Track 2's
-    // MINOR v1.3.0 (output_schema, additive). Final reconciled version: v2.0.0.
-    pub const CURRENT: &'static str = "v2.0.0";
+    // MINOR v1.3.0 (output_schema, additive). Reconciled to v2.0.0.
+    // MINOR v2.1.0: Agent.durable additive optional field (ADR-0053,
+    // durable execution A-minimal). Byte-stable when absent.
+    pub const CURRENT: &'static str = "v2.1.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -93,9 +95,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_0_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.0.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.0.0");
+    fn ir_format_version_is_v2_1_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.1.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.1.0");
     }
 
     #[test]

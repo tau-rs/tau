@@ -25,6 +25,12 @@ short, focused, and named after the goal — not the feature.
   Anthropic SKILL.md format; `--strict`, `--force`, and the roundtrip
   guarantee for capability-less skills.
 
+## Execution & durability
+
+- [Run tau under a durable orchestrator](run-tau-under-a-durable-orchestrator.md)
+  — hand a tau bundle to Temporal, Inngest, or Cloudflare Workflows as a
+  safe-to-retry reentrant unit; the whole-bundle granularity caveat.
+
 ## Contributing
 
 - [Write a tool plugin](write-a-tool-plugin.md) — eight-step walk

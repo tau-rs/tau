@@ -34,6 +34,10 @@ struct IrAgent {
     tool_refs: Vec<String>,
     produces: Vec<String>,
     output_schema: Option<serde_json::Value>,
+    /// `durable: { checkpoint, store }` (ADR-0053), captured as a JSON
+    /// object and re-emitted as the `[agents.<id>.durable]` TOML sub-table
+    /// so the TS path lowers to the same IR as TOML authoring.
+    durable: Option<serde_json::Value>,
 }
 
 /// A `[models.<alias>]` entry: concrete backend package + vendor model id.
@@ -356,6 +360,18 @@ fn build_toml(
                 "output_schema = {}\n",
                 json_to_toml_inline(schema)
             ));
+        }
+        if let Some(durable) = &agent.durable {
+            // Re-emit as a sub-table so it lowers identically to TOML
+            // authoring. Only the A-minimal keys are recognized; tau-pkg
+            // validation rejects any other value.
+            out.push_str(&format!("[agents.{}.durable]\n", toml_key(name)));
+            if let Some(checkpoint) = durable.get("checkpoint").and_then(|v| v.as_str()) {
+                out.push_str(&format!("checkpoint = {}\n", toml_str(checkpoint)));
+            }
+            if let Some(store) = durable.get("store").and_then(|v| v.as_str()) {
+                out.push_str(&format!("store = {}\n", toml_str(store)));
+            }
         }
         if let Some(sys) = &agent.prompt_system {
             out.push_str(&format!("[agents.{}.prompt]\n", toml_key(name)));
@@ -900,6 +916,9 @@ fn extract_agent(
     // Extract `outputSchema: { ... }` → serde_json::Value (camelCase in TS).
     let output_schema = props.get("outputSchema").and_then(|e| expr_to_json(e));
 
+    // Extract `durable: { checkpoint, store }` → serde_json::Value (ADR-0053).
+    let durable = props.get("durable").and_then(|e| expr_to_json(e));
+
     let agent = IrAgent {
         display_name,
         package,
@@ -908,6 +927,7 @@ fn extract_agent(
         tool_refs,
         produces,
         output_schema,
+        durable,
     };
 
     Ok((agent, extra_tools))
