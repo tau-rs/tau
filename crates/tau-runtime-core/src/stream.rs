@@ -1742,6 +1742,10 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use tau_ports::fixtures::{make_token_usage, make_tool_result};
+    // Tests that build tool-validator maps use ToolArgsValidator directly.
+    // The type is only present when `tool-validation` is enabled (the default).
+    #[cfg(feature = "tool-validation")]
+    use crate::tool_args::ToolArgsValidator;
 
     #[test]
     fn run_event_text_delta_clone_preserves_delta() {
