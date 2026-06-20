@@ -485,7 +485,7 @@ fn sha256_name(name: &str) -> [u8; 32] {
 }
 
 /// Encode a byte slice as lowercase hex.
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
