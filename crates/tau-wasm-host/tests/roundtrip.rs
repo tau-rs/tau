@@ -141,10 +141,47 @@ fn guest_with_no_baked_ir_errors() {
 
 #[test]
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
-fn guest_decodes_baked_ir_format() {
+fn guest_decodes_baked_ir_and_starts_run() {
+    // The guest now drives `run_ir_streaming`. Feed one end-turn response so the
+    // agent loop completes rather than hanging waiting for an LLM call.
     let component = build_guest_component(Some(&trivial_ir_bytes()));
-    let out = run_component(&component, "hi", vec![]).expect("runs");
-    assert!(out.contains("v2.0.0"), "guest should echo the IR format, got: {out}");
+    let out =
+        run_component(&component, "hi", vec![end_turn_response()]).expect("runs with cassette");
+    // The guest returns a JSON array of RunEvents; the presence of "RunStarted"
+    // proves the IR was decoded and the interpreter was entered.
+    assert!(
+        out.contains("RunStarted"),
+        "guest should return a RunEvent stream; got: {out}"
+    );
+}
+
+/// A minimal valid CompletionResponse that ends the turn immediately
+/// (no tool calls) — the cassette for a 1-agent reply-and-stop scenario.
+fn end_turn_response() -> String {
+    r#"{"text":"done","tool_uses":[],"stop_reason":"EndTurn","usage":null}"#.to_string()
+}
+
+#[test]
+#[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
+fn guest_drives_ir_and_returns_typed_stream() {
+    let component = build_guest_component(Some(&trivial_ir_bytes()));
+    let out = tau_wasm_host::run_component(&component, "hi", vec![end_turn_response()])
+        .expect("guest runs the baked IR");
+
+    // The guest returns a JSON array of RunEvents.
+    let events: Vec<tau_runtime_core::stream::RunEvent> =
+        serde_json::from_str(&out).expect("guest output is a RunEvent array");
+
+    assert!(
+        matches!(events.first(), Some(tau_runtime_core::stream::RunEvent::RunStarted)),
+        "stream must start with RunStarted; got {:?}",
+        events.first()
+    );
+    assert!(
+        matches!(events.last(), Some(tau_runtime_core::stream::RunEvent::RunCompleted { .. })),
+        "stream must end with RunCompleted; got {:?}",
+        events.last()
+    );
 }
 
 #[test]
@@ -152,8 +189,9 @@ fn guest_decodes_baked_ir_format() {
 fn host_guest_roundtrip_is_deterministic() {
     let ir = trivial_ir_bytes();
     let wasm = build_guest_component(Some(&ir));
-    let first = run_component(&wasm, "hello", vec![]).expect("first run");
-    let second = run_component(&wasm, "hello", vec![]).expect("second run");
+    // Provide one cassette response so both runs complete without hanging.
+    let first = run_component(&wasm, "hello", vec![end_turn_response()]).expect("first run");
+    let second = run_component(&wasm, "hello", vec![end_turn_response()]).expect("second run");
     assert_eq!(
         first, second,
         "same inputs must yield byte-identical output"

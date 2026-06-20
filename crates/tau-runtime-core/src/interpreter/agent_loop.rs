@@ -354,12 +354,20 @@ fn make_tool_spec(name: &str, description: &str, input_schema: &serde_json::Valu
 /// serde JSON deserialization — the same escape hatch used for other
 /// non-exhaustive domain types.
 fn stub_manifest() -> PackageManifest {
+    // `UncheckedManifest` is `#[non_exhaustive]` (no external struct-literal
+    // construction allowed), so we go through its serde `Deserialize` impl.
+    //
+    // Root cause of the original wasm panic: `PackageSource::from_str` for
+    // `https://…` URLs requires the `package-source` feature (which enables
+    // `url::Url`). Without it, `source` deserialization returns `MalformedUrl`
+    // and `.expect(…)` panics. Fix: use an scp-style address
+    // (`example.com:example/ir.git`) — always parseable, no feature gate.
     let json = serde_json::json!({
         "name": "ir-agent",
         "version": "0.0.0",
         "description": "Synthesised manifest for IR interpreter agent",
         "authors": [],
-        "source": "https://example.com/ir.git",
+        "source": "example.com:example/ir.git",
         "kind": "tool",
         "dependencies": [],
         "capabilities": [],
@@ -541,7 +549,14 @@ where
     //    provided none, synthesise a placeholder so the run loop has
     //    something to send to the LLM.
     let (history, initial_message) = split_history(initial_messages).unwrap_or_else(|| {
-        let placeholder = Message::new(
+        // Use the no_std-safe constructor so this path compiles without the
+        // `std` feature (required for the wasm guest that calls run_ir_streaming
+        // with `initial_messages = Vec::new()`).
+        let clock = run_options.clock.as_ref().expect("clock checked above");
+        let random = run_options.random.as_ref().expect("random checked above");
+        let placeholder = Message::new_with(
+            crate::ids::message_id(clock, random),
+            crate::ids::now_utc(clock),
             Address::User,
             Address::System,
             MessagePayload::Text {

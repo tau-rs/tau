@@ -12,3 +12,14 @@
 mod baked;
 #[cfg(target_arch = "wasm32")]
 mod guest;
+/// Re-export the WIT-generated host imports so sibling modules can reference
+/// them at `crate::wit_host::complete` etc. without needing to know the
+/// exact wit-bindgen generated path inside `guest.rs`.
+#[cfg(target_arch = "wasm32")]
+pub(crate) use guest::wit_host;
+#[cfg(target_arch = "wasm32")]
+mod executor;
+#[cfg(target_arch = "wasm32")]
+mod host_ports;
+#[cfg(target_arch = "wasm32")]
+mod dispatcher;

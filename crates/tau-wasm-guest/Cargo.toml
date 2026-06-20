@@ -24,5 +24,7 @@ tau-ir = { workspace = true, default-features = false }
 # capability-override→globset, host-fs), which drag in std. The guest is the
 # only no_std consumer, so it opts out locally rather than inverting the
 # alias default for the 5 host crates that legitimately want those features.
-tau-runtime-core = { path = "../tau-runtime-core", default-features = false }
+tau-ports = { workspace = true, default-features = false, features = ["serde"] }
+tau-runtime-core = { path = "../tau-runtime-core", default-features = false, features = ["wasm-interpreter"] }
+futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 serde_json = { workspace = true }
