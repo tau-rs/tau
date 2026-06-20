@@ -116,6 +116,7 @@ fn sample_module() -> IrModule {
             },
             produces: Vec::new(),
             output_schema: None,
+            durable: None,
         },
     );
 

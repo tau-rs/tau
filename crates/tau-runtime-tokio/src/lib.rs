@@ -23,6 +23,7 @@ pub mod builder;
 pub(crate) mod capability;
 pub mod capability_override;
 pub mod capability_resolver_impl;
+pub mod checkpoint;
 pub mod clock;
 pub mod credentials;
 pub mod drive;
@@ -43,6 +44,7 @@ pub(crate) mod tool_args;
 
 pub use builder::{Runtime, RuntimeBuilder, TauRuntimeBuilder};
 pub use capability_override::{CapabilityOverride, EffectiveCapability, OverrideExpandError};
+pub use checkpoint::FileCheckpointStore;
 pub use clock::TokioClock;
 pub use drive::drive;
 pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError};

@@ -1,0 +1,17 @@
+packages = ["mock-llm"]
+
+[project]
+name = "durable-fixture"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.fan]
+display_name = "Fan"
+package = "p@^0.1"
+model = "mock-1"
+
+[agents.fan.durable]
+checkpoint = "per_turn"
+store = "file"
