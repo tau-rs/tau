@@ -247,8 +247,14 @@ impl DevSession {
             false, // no --no-sandbox override
             None,  // no forced adapter kind
         );
-        let loaded =
-            plugin_loader::load_plugins(&agent_entry, &scope, trace_context, host_options).await?;
+        let loaded = plugin_loader::load_plugins(
+            &agent_entry,
+            &scope,
+            &self.project.models,
+            trace_context,
+            host_options,
+        )
+        .await?;
         let runtime = loaded
             .builder
             .build()
@@ -294,7 +300,12 @@ impl DevSession {
         //    and single-agent paths. It is rebuilt every turn (and reads
         //    `self.ir` fresh), so `:reload` — which swaps `self.ir` — is
         //    automatically reflected on the next turn.
-        let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backend, tools_by_id));
+        let llm_backends: BTreeMap<String, Arc<dyn DynLlmBackend>> = runtime
+            .llm_backends()
+            .iter()
+            .map(|(name, handle)| (name.clone(), handle.clone()))
+            .collect();
+        let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backends, tools_by_id));
         let initial = Message::new(
             Address::User,
             Address::Agent(AgentInstanceId::new()),
@@ -382,13 +393,19 @@ mod tests {
         tmp.child("tau.toml")
             .write_str(
                 r#"
+packages = ["anthropic"]
+
 [project]
 name = "dev-test"
+
+[models.default]
+backend = "anthropic"
+model = "claude-haiku-4-5"
 
 [agents.fan-monitor]
 display_name = "Fan Monitor"
 package      = "fan-monitor@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 prompt.system = "Test agent"
 "#,
             )
@@ -425,19 +442,25 @@ prompt.system = "Test agent"
         tmp.child("tau.toml")
             .write_str(
                 r#"
+packages = ["anthropic"]
+
 [project]
 name = "dev-test"
+
+[models.default]
+backend = "anthropic"
+model = "claude-haiku-4-5"
 
 [agents.first]
 display_name = "First Agent"
 package      = "first@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 prompt.system = "First"
 
 [agents.second]
 display_name = "Second Agent"
 package      = "second@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 prompt.system = "Second"
 "#,
             )

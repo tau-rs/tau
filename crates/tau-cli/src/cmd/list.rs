@@ -47,6 +47,9 @@ struct AgentRow {
     id: String,
     display_name: String,
     package: String,
+    /// The agent's `model` alias (the `[models]` key it references).
+    model: String,
+    /// Backend package the agent's `model` alias resolves to via `[models]`.
     llm_backend: String,
     /// Effective capability set after applying the project override.
     /// `None` when --capabilities flag is not set, OR the package is
@@ -199,6 +202,7 @@ fn list_agents(args: &ListArgs, output: &mut Output) -> anyhow::Result<()> {
                 scope
                     .as_ref()
                     .expect("scope was resolved when --capabilities was set"),
+                &config.models,
             ) {
                 Ok((_def, manifest)) => {
                     let effective = tau_runtime_tokio::capability_override::compute_effective(
@@ -223,7 +227,12 @@ fn list_agents(args: &ListArgs, output: &mut Output) -> anyhow::Result<()> {
             id: agent.id.clone(),
             display_name: agent.display_name.clone(),
             package: agent.package.clone(),
-            llm_backend: agent.llm_backend.clone(),
+            model: agent.model.clone(),
+            llm_backend: config
+                .models
+                .get(&agent.model)
+                .map(|m| m.backend.clone())
+                .unwrap_or_default(),
             effective_capabilities,
         });
     }

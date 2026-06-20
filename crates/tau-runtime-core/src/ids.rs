@@ -59,7 +59,12 @@ pub fn ulid(clock: &Arc<dyn Clock>, random: &Arc<dyn RandomSource>) -> String {
     let mut b = [0u8; 16];
     b[..10].copy_from_slice(&rand_bytes);
     let rand_part = u128::from_le_bytes(b);
-    ::ulid::Ulid::from_parts(ts, rand_part).to_string()
+    // `to_str` (no_std-safe) rather than `Display`/`to_string` (ulid gates
+    // its `Display` impl behind its `std` feature, which this no_std kernel
+    // does not enable). A canonical ULID is always 26 base32 chars.
+    let mut buf = [0u8; 26];
+    let s = ::ulid::Ulid::from_parts(ts, rand_part).array_to_str(&mut buf);
+    String::from(&*s)
 }
 
 /// Wall-clock now as `chrono::DateTime<Utc>` from the supplied `Clock`.
@@ -79,4 +84,25 @@ pub fn ulid(clock: &Arc<dyn Clock>, random: &Arc<dyn RandomSource>) -> String {
 pub fn now_utc(clock: &Arc<dyn Clock>) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(clock.now())
         .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from_timestamp_millis(0).unwrap())
+}
+
+/// Mint a [`tau_domain::MessageId`] (UUID v7) from the `Clock` + `RandomSource`
+/// ports. The no_std kernel uses this instead of `MessageId::new` (which is
+/// std-only and reads the ambient clock/RNG) so message ids are reproducible
+/// under deterministic ports — the property wasm conformance relies on.
+pub fn message_id(clock: &Arc<dyn Clock>, random: &Arc<dyn RandomSource>) -> tau_domain::MessageId {
+    let mut rand_bytes = [0u8; 10];
+    random.fill(&mut rand_bytes);
+    tau_domain::MessageId::from_parts(clock.now().max(0) as u64, rand_bytes)
+}
+
+/// Mint a [`tau_domain::AgentInstanceId`] (UUID v7) from the `Clock` +
+/// `RandomSource` ports — the no_std counterpart of `AgentInstanceId::new`.
+pub fn agent_instance_id(
+    clock: &Arc<dyn Clock>,
+    random: &Arc<dyn RandomSource>,
+) -> tau_domain::AgentInstanceId {
+    let mut rand_bytes = [0u8; 10];
+    random.fill(&mut rand_bytes);
+    tau_domain::AgentInstanceId::from_parts(clock.now().max(0) as u64, rand_bytes)
 }

@@ -27,7 +27,8 @@ default = []
 
 [dev-dependencies]
 tau-plugin-protocol = { workspace = true, features = ["test-support"] }
-tau-ports           = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-ports           = { workspace = true, features = ["serde", "test-fixtures", "process"] }
+tau-domain          = { workspace = true, features = ["serde", "std"] }
 proptest            = { workspace = true }
 tokio               = { workspace = true, features = ["macros", "rt-multi-thread"] }
-uuid                = { workspace = true }
+uuid                = { workspace = true, features = ["v7", "std"] }

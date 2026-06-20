@@ -54,6 +54,12 @@ pub async fn run_plugins(ctx: &CheckCtx) -> CheckResult {
     let mut findings = Vec::new();
     let mut plugins_seen = 0usize;
 
+    // D7 stage 2: every `[models].backend` package must expose LLM completion
+    // (its installed plugin must declare `provides = "llm_backend"`). This is
+    // offline — it reads the lockfile-recorded plugin manifest, no spawn — so
+    // it runs in both `--fast` and full modes.
+    check_models_backends(ctx, &lockfile, &mut findings);
+
     // NOTE: `plugin: Option<LockedPlugin>` is on `LockedPackage` (not on
     // `LockedVersion`). Each package has at most one plugin binary; the
     // `active_version` field carries the canonical version string.
@@ -152,6 +158,64 @@ pub async fn run_plugins(ctx: &CheckCtx) -> CheckResult {
         status,
         findings,
         duration: std::time::Duration::ZERO,
+    }
+}
+
+/// D7 stage 2: probe each distinct `[models].backend` package and emit a
+/// `BackendNotLlmCapable` finding when an *installed* backend package does not
+/// expose LLM completion (its plugin does not declare `provides = "llm_backend"`,
+/// or it is a data-only package with no plugin at all).
+///
+/// A backend that is declared but not installed is left to the `packages`
+/// category — this probe only judges capability of what IS installed.
+fn check_models_backends(ctx: &CheckCtx, lockfile: &LockFile, findings: &mut Vec<CheckFinding>) {
+    let Some(project) = &ctx.project else { return };
+    let mut seen = std::collections::BTreeSet::new();
+    for (alias, model) in &project.models {
+        if !seen.insert(model.backend.clone()) {
+            continue;
+        }
+        let Some(pkg) = lockfile
+            .packages
+            .iter()
+            .find(|p| p.name.to_string() == model.backend)
+        else {
+            // Not installed — `packages`/`config` categories own that diagnosis.
+            continue;
+        };
+        let provides = pkg.plugin.as_ref().map(|p| p.manifest.provides);
+        if provides == Some(tau_domain::PortKind::LlmBackend) {
+            continue;
+        }
+        let actual = match provides {
+            Some(kind) => format!("provides `{kind}`"),
+            None => "is a data-only package (no plugin)".to_string(),
+        };
+        findings.push(CheckFinding {
+            category: CheckCategory::Plugins,
+            severity: Severity::Error,
+            rule_id: "tau.models.backend_not_llm_capable",
+            summary: format!(
+                "model backend `{}` (alias `{alias}`) does not expose LLM completion: it {actual}",
+                model.backend
+            ),
+            detail: Some(
+                "Every [models] backend must resolve to a plugin that declares \
+                 `provides = \"llm_backend\"`."
+                    .into(),
+            ),
+            location: None,
+            remediation: Some(format!(
+                "point alias `{alias}` at an llm_backend package, or install one for `{}`",
+                model.backend
+            )),
+            structured: json!({
+                "kind": "BackendNotLlmCapable",
+                "alias": alias,
+                "backend": model.backend,
+                "provides": provides.map(|k| k.to_string()),
+            }),
+        });
     }
 }
 

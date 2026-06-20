@@ -38,12 +38,15 @@ pub trait ToolDispatcher {
         args: &'a Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>;
 
-    /// Return the LLM backend this dispatcher is wired to.
+    /// Resolve the backend an agent/judge needs, by backend package name.
     ///
     /// The interpreter calls this once per agent-node execution to build
-    /// a `RuntimeBuilder` for the inner agent loop. Implementors own the
-    /// backend handle (typically an `Arc`-clone of the caller's backend).
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend>;
+    /// a `RuntimeBuilder` for the inner agent loop. `backend` is the
+    /// package name of the LLM backend (e.g. `"anthropic"`), taken from
+    /// the IR `Agent`'s `model_ref.backend` field. Implementors should
+    /// look up the named backend from their registry and return it, or
+    /// surface a [`RuntimeError`] if the name is not registered.
+    fn llm_backend_for(&self, backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError>;
 
     /// Optional handle to a deterministic-step registry.
     ///

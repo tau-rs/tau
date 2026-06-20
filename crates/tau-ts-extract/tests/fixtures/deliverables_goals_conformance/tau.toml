@@ -1,5 +1,11 @@
+packages = ["anthropic"]
+
 [project]
 name = "deliverables-goals-conformance"
+
+[models.haiku]
+backend = "anthropic"
+model = "claude-haiku-4-5"
 
 [tools.write_file]
 native = "WriteFile"
@@ -8,14 +14,12 @@ capabilities = [{ kind = "fs.write", paths = ["/workspace/**"] }]
 [agents.gather]
 display_name = "Gather"
 package = "research@^0.1"
-llm_backend = "anthropic"
-model = "claude-haiku-4-5"
+model = "haiku"
 
 [agents.writer]
 display_name = "Writer"
 package = "research@^0.1"
-llm_backend = "anthropic"
-model = "claude-haiku-4-5"
+model = "haiku"
 produces = ["/workspace/report.md"]
 tool_refs = ["write_file"]
 

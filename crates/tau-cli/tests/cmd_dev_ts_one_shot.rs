@@ -15,11 +15,13 @@ fn dev_one_shot_with_ts_project_exits_gracefully() {
     tmp.child("project.ts")
         .write_str(
             r#"
+export const m = models({
+    haiku: { backend: "anthropic", model: "claude-haiku-4-5" }
+});
 export const a = agent({
     display_name: "A",
     package: "a@^0.1",
-    llm_backend: "anthropic",
-    model: "claude-haiku-4-5",
+    model: "haiku",
     prompt: { system: "x" }
 });
 "#,

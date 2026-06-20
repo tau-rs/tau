@@ -24,15 +24,18 @@ use predicates::prelude::*;
 /// A `tau.toml` whose agent declares a context pipeline where `fit_budget`
 /// is the FIRST step rather than the last. `check_context` must reject it
 /// with `ContextFitBudgetNotLast`.
-const TAU_TOML_FIT_BUDGET_NOT_LAST: &str = r#"
+const TAU_TOML_FIT_BUDGET_NOT_LAST: &str = r#"packages = ["mock-llm"]
+
 [project]
 name = "ctx-bad"
 version = "0.1.0"
 
+[models]
+m = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.a]
 display_name = "A"
 package = "demo@^0.1"
-llm_backend = "mock-llm"
 model = "m"
 
 [[agents.a.context.pipeline]]

@@ -139,13 +139,18 @@ fn run_unknown_agent_is_two() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("tau.toml"),
-        r#"[project]
+        r#"packages = ["anthropic"]
+
+[project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#,
     )
     .unwrap();

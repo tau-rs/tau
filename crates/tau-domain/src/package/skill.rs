@@ -20,6 +20,9 @@
 //!
 //! See `docs/decisions/0025-skills-foundation.md` for the ADR.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::package::manifest::PackageDep;
 
 /// Public string constant for the `${SKILL_DIR}` interpolation
@@ -76,6 +79,7 @@ pub struct SkillManifest {
 
 #[cfg(feature = "serde")]
 fn default_skill_content() -> String {
+    use alloc::string::ToString;
     "SKILL.md".to_string()
 }
 
@@ -196,8 +200,10 @@ pub enum SkillContentError {
 /// ```
 ///
 /// The body is everything after the closing `---` line.
-#[cfg(feature = "serde")]
+#[cfg(feature = "skill-md")]
 pub fn parse_skill_md(input: &str) -> Result<SkillContent, SkillContentError> {
+    use alloc::string::ToString;
+
     // Helper: strip an optional trailing `\r` from a line slice.
     fn trim_cr(s: &str) -> &str {
         s.strip_suffix('\r').unwrap_or(s)
@@ -256,7 +262,7 @@ pub fn parse_skill_md(input: &str) -> Result<SkillContent, SkillContentError> {
     Ok(SkillContent { frontmatter, body })
 }
 
-#[cfg(all(test, feature = "serde"))]
+#[cfg(all(test, feature = "skill-md"))]
 mod parse_tests {
     use super::*;
 

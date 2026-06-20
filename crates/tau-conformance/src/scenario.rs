@@ -120,13 +120,18 @@ mod tests {
 
     fn write_min_fixture(dir: &std::path::Path) {
         let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "mini"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
 
 [agents.solo]
 display_name = "Solo"
 package      = "solo@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 tool_refs    = ["read_temp"]
 max_turns    = 2

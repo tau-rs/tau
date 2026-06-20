@@ -110,8 +110,14 @@ pub(crate) async fn run_via_ir(
         force_passthrough,
         force_adapter_kind,
     );
-    let loaded =
-        plugin_loader::load_plugins(agent_entry, &scope, trace_context, host_options).await?;
+    let loaded = plugin_loader::load_plugins(
+        agent_entry,
+        &scope,
+        &project.models,
+        trace_context,
+        host_options,
+    )
+    .await?;
     let runtime = loaded
         .builder
         .build()
@@ -120,12 +126,26 @@ pub(crate) async fn run_via_ir(
     // 5. Pull Arc<dyn DynLlmBackend> + Arc<dyn DynTool> handles for the
     //    forwarding dispatcher. ToolId.0 == tool.spec.name == DynTool::name()
     //    by lowering construction; see crates/tau-ir/src/lower/parse.rs.
-    let llm_backend = runtime
+    // Hold the WHOLE name-keyed registry so the forwarding dispatcher can
+    // select a backend per agent/judge by the name baked into its resolved
+    // `model_ref` (per-agent model resolution) — not just one ambient backend.
+    let llm_backends: BTreeMap<String, Arc<dyn DynLlmBackend>> = runtime
         .llm_backends()
+        .iter()
+        .map(|(name, handle)| (name.clone(), handle.clone()))
+        .collect();
+    if llm_backends.is_empty() {
+        return Err(anyhow::anyhow!(
+            "runtime has no LLM backend after plugin load"
+        ));
+    }
+    // A representative backend for MCP sampling setup. Per-server backend
+    // selection is out of scope for the per-agent-model track.
+    let mcp_backend = llm_backends
         .values()
         .next()
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("runtime has no LLM backend after plugin load"))?;
+        .expect("llm_backends is non-empty (checked above)");
 
     let mut tools_by_id: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
     for ir_tool_id in module.workflow.tools.keys() {
@@ -149,7 +169,7 @@ pub(crate) async fn run_via_ir(
                 scope.lockfile_path().display()
             )
         })?;
-    let mcp_setup = setup_mcp_runtime(&project, &lockfile, llm_backend.clone())
+    let mcp_setup = setup_mcp_runtime(&project, &lockfile, mcp_backend.clone())
         .await
         .map_err(|e| anyhow::anyhow!("MCP setup: {e}"))?;
     for (id, tool) in mcp_setup.tools {
@@ -187,7 +207,7 @@ pub(crate) async fn run_via_ir(
         ));
     }
 
-    let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backend, tools_by_id));
+    let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backends, tools_by_id));
 
     // 6. Build the initial prompt text from --prompt / stdin.
     let prompt_text = match &args.prompt {
@@ -282,16 +302,35 @@ pub(crate) async fn run_via_ir(
 /// runtime is a build/install skew (the verify gate should catch it,
 /// but defense-in-depth is cheap).
 pub(crate) struct ForwardingDispatcher {
-    backend: Arc<dyn DynLlmBackend>,
+    /// Every loaded LLM backend, keyed by `DynLlmBackend::name()`. The
+    /// interpreter selects one per agent/judge via `llm_backend_for`, using
+    /// the backend name baked into the agent's resolved `model_ref` at lowering.
+    llm_backends: BTreeMap<String, Arc<dyn DynLlmBackend>>,
     tools: BTreeMap<ToolId, Arc<dyn DynTool>>,
 }
 
 impl ForwardingDispatcher {
     pub(crate) fn new(
-        backend: Arc<dyn DynLlmBackend>,
+        llm_backends: BTreeMap<String, Arc<dyn DynLlmBackend>>,
         tools: BTreeMap<ToolId, Arc<dyn DynTool>>,
     ) -> Self {
-        Self { backend, tools }
+        Self {
+            llm_backends,
+            tools,
+        }
+    }
+
+    /// Test-only convenience: build a dispatcher from a single backend,
+    /// keyed by its `name()`. Production code passes the whole name-keyed
+    /// registry via [`Self::new`].
+    #[cfg(test)]
+    fn single(backend: Arc<dyn DynLlmBackend>, tools: BTreeMap<ToolId, Arc<dyn DynTool>>) -> Self {
+        let mut llm_backends = BTreeMap::new();
+        llm_backends.insert(backend.name().to_string(), backend);
+        Self {
+            llm_backends,
+            tools,
+        }
     }
 }
 
@@ -448,8 +487,13 @@ impl ToolDispatcher for ForwardingDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        self.llm_backends
+            .get(backend)
+            .cloned()
+            .ok_or_else(|| RuntimeError::Internal {
+                message: format!("no loaded LLM backend named `{backend}`"),
+            })
     }
 
     /// Supply the tokio host's wall-clock to the inner agent loop.
@@ -925,7 +969,7 @@ mod tests {
 
         let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
         tools.insert(ToolId("echo".into()), dyn_tool);
-        let disp = ForwardingDispatcher::new(backend, tools);
+        let disp = ForwardingDispatcher::single(backend, tools);
 
         let args = serde_json::json!({"hello": "world"});
         let res = disp
@@ -1049,7 +1093,7 @@ mod tests {
         let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
         let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
         tools.insert(ToolId("plain".into()), Arc::new(PlainTextTool));
-        let disp = ForwardingDispatcher::new(backend, tools);
+        let disp = ForwardingDispatcher::single(backend, tools);
 
         let res = disp
             .invoke(&ToolId("plain".into()), &serde_json::Value::Null)
@@ -1077,7 +1121,7 @@ mod tests {
         let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
         let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
         tools.insert(ToolId("json-text".into()), Arc::new(JsonTextTool));
-        let disp = ForwardingDispatcher::new(backend, tools);
+        let disp = ForwardingDispatcher::single(backend, tools);
 
         let res = disp
             .invoke(&ToolId("json-text".into()), &serde_json::Value::Null)
@@ -1119,7 +1163,7 @@ mod tests {
         let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
         let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
         tools.insert(ToolId("plain".into()), Arc::new(PlainTextTool));
-        let disp = ForwardingDispatcher::new(backend, tools);
+        let disp = ForwardingDispatcher::single(backend, tools);
         let res = disp
             .invoke(
                 &ToolId("plain".into()),
@@ -1133,7 +1177,7 @@ mod tests {
     #[tokio::test]
     async fn forwarding_dispatcher_unknown_tool_yields_internal_error() {
         let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
-        let disp = ForwardingDispatcher::new(backend, BTreeMap::new());
+        let disp = ForwardingDispatcher::single(backend, BTreeMap::new());
 
         let err = match disp
             .invoke(&ToolId("missing".into()), &serde_json::Value::Null)
@@ -1150,12 +1194,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forwarding_dispatcher_llm_backend_returns_owned_handle() {
+    async fn forwarding_dispatcher_llm_backend_for_selects_by_name() {
         let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("the-backend"));
-        let disp = ForwardingDispatcher::new(backend, BTreeMap::new());
+        let disp = ForwardingDispatcher::single(backend, BTreeMap::new());
 
-        let handle = disp.llm_backend();
+        let handle = disp
+            .llm_backend_for("the-backend")
+            .expect("backend present by name");
         assert_eq!(handle.name(), "the-backend");
+
+        // An unknown backend name surfaces a typed RuntimeError rather than
+        // silently falling back to an ambient backend.
+        let err = match disp.llm_backend_for("nope") {
+            Ok(_) => panic!("unknown backend must error"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, RuntimeError::Internal { .. }), "{err:?}");
     }
 
     /// A tool that returns `is_error: true` so we can confirm the
@@ -1205,7 +1259,7 @@ mod tests {
         let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
         let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
         tools.insert(ToolId("boom".into()), Arc::new(ErroringTool));
-        let disp = ForwardingDispatcher::new(backend, tools);
+        let disp = ForwardingDispatcher::single(backend, tools);
 
         let res = disp
             .invoke(&ToolId("boom".into()), &serde_json::Value::Null)

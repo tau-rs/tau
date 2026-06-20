@@ -11,14 +11,18 @@ async fn auto_reload_applies_pending_change() {
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "watch-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.first]
 display_name = "First"
 package      = "first@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "v1"
 "#,
@@ -38,21 +42,24 @@ prompt.system = "v1"
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "watch-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.first]
 display_name = "First"
 package      = "first@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "v2"
 
 [agents.second]
 display_name = "Second"
 package      = "second@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "v2"
 "#,
@@ -70,14 +77,18 @@ async fn auto_reload_is_noop_when_nothing_pending() {
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "watch-noop-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.a]
 display_name = "A"
 package      = "a@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "x"
 "#,

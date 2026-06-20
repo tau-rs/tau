@@ -25,13 +25,18 @@ mod common;
 fn write_tau_toml(dir: &std::path::Path) {
     std::fs::write(
         dir.join("tau.toml"),
-        r#"[project]
+        r#"packages = ["anthropic"]
+
+[project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Reviewer"
 package      = "demo@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#,
     )
     .unwrap();

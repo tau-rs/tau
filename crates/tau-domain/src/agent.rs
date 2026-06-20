@@ -3,10 +3,12 @@
 //! tau-domain holds the *vocabulary* (identity, definition, status enum).
 //! State-machine *transitions* live in tau-runtime — see G2 / spec §3.4.
 
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+
 use crate::id::{AgentId, PackageName};
 use crate::package::PackageId;
 use crate::value::Value;
-use std::collections::BTreeMap;
 
 /// Agent lifecycle status. Carries diagnostic data only on `Failed`;
 /// transition rules live in tau-runtime.
@@ -164,6 +166,9 @@ pub struct AgentDefinition {
     /// Reference to an installed LLM-backend plugin package.
     /// Required at v0.1 (see ADR-0002 escape clause).
     pub llm_backend: PackageName,
+    /// Resolved vendor model id used to build the LLM request.
+    /// Defaults to empty string; set via [`AgentDefinition::with_model`].
+    pub model: String,
     /// Optional system prompt.
     pub system_prompt: Option<String>,
     /// Free-form per-agent config (validated by plugins, not by tau-domain).
@@ -184,9 +189,16 @@ impl AgentDefinition {
             display_name,
             package,
             llm_backend,
+            model: String::new(),
             system_prompt: None,
             config: BTreeMap::new(),
         }
+    }
+
+    /// Set the resolved vendor model id used to build the LLM request.
+    pub fn with_model(mut self, model: String) -> Self {
+        self.model = model;
+        self
     }
 
     /// Set `system_prompt`.
@@ -270,5 +282,20 @@ mod definition_tests {
         .with_system_prompt("hi".into());
 
         assert_eq!(def.system_prompt.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn agent_definition_carries_model() {
+        let def = AgentDefinition::new(
+            AgentId::from_str("a").unwrap(),
+            "A".into(),
+            PackageId {
+                name: PackageName::from_str("p").unwrap(),
+                version: Version::parse("0.0.1").unwrap(),
+            },
+            PackageName::from_str("b").unwrap(),
+        )
+        .with_model("claude-haiku-4-5".into());
+        assert_eq!(def.model, "claude-haiku-4-5");
     }
 }

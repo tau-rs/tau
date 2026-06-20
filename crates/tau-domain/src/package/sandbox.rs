@@ -2,6 +2,8 @@
 //! table. Optional; absent means the plugin asserts no tier or shape
 //! floor and is satisfied by any adapter.
 
+use alloc::vec::Vec;
+
 use crate::package::capability::CapabilityShape;
 
 /// Plugin-side sandbox requirements.

@@ -9,14 +9,18 @@ async fn reload_picks_up_new_agent_after_edit() {
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "reload-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.first]
 display_name = "First"
 package      = "first@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "first"
 "#,
@@ -33,21 +37,24 @@ prompt.system = "first"
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "reload-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.first]
 display_name = "First"
 package      = "first@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "first-EDITED"
 
 [agents.second]
 display_name = "Second"
 package      = "second@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "second"
 "#,

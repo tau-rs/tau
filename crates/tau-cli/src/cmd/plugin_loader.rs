@@ -133,11 +133,27 @@ pub(crate) async fn flush_recorders() {
 pub(crate) async fn load_plugins(
     entry: &AgentEntry,
     scope: &Scope,
+    models: &std::collections::BTreeMap<String, tau_pkg::project::project::ModelEntry>,
     trace_context: TraceContext,
     mut host_options: PluginHostOptions,
 ) -> anyhow::Result<LoadedPlugins> {
     let lockfile = LockFile::load(&scope.lockfile_path())
         .with_context(|| format!("loading lockfile {}", scope.lockfile_path().display()))?;
+
+    // Resolve the agent's LLM backend package name from the project `[models]`
+    // table via its `model` alias (per-agent model resolution); the removed
+    // `AgentEntry.llm_backend` field no longer carries it. `validate_models`
+    // refuses an unknown alias at build time — the error arm is defensive.
+    let llm_backend_name = models
+        .get(&entry.model)
+        .map(|m| m.backend.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "agent {:?} references model alias {:?} absent from [models]",
+                entry.id,
+                entry.model
+            )
+        })?;
 
     // ---- Resolve sandbox adapter ----
     // Read the scope's [sandbox] + [credentials] config; fall back to
@@ -189,7 +205,7 @@ pub(crate) async fn load_plugins(
     let mut plugin_sandbox_reqs: Vec<tau_domain::PluginSandboxRequirements> = Vec::new();
 
     // LLM backend plugin requirements
-    if let Some(req) = read_plugin_sandbox_req(scope, &lockfile, &entry.llm_backend) {
+    if let Some(req) = read_plugin_sandbox_req(scope, &lockfile, &llm_backend_name) {
         plugin_sandbox_reqs.push(req);
     }
 
@@ -236,26 +252,21 @@ pub(crate) async fn load_plugins(
     // ---- LLM backend ----
     let llm_plugin = resolve_plugin(
         &lockfile,
-        &entry.llm_backend,
+        &llm_backend_name,
         PortKind::LlmBackend,
         "llm_backend",
     )?;
 
     // Build the sandbox plan for the LLM backend plugin, using the
     // agent's capability_overrides (project-level narrowing).
-    let llm_caps = read_plugin_caps_by_name(scope, &lockfile, &entry.llm_backend);
+    let llm_caps = read_plugin_caps_by_name(scope, &lockfile, &llm_backend_name);
     let llm_plan = build_plan(
         &llm_caps,
         &entry.capability_overrides,
         None, // working_context — deferred
         None, // limits — deferred
     )
-    .with_context(|| {
-        format!(
-            "building sandbox plan for LLM backend {:?}",
-            entry.llm_backend
-        )
-    })?;
+    .with_context(|| format!("building sandbox plan for LLM backend {llm_backend_name:?}"))?;
 
     // The agent's per-package config table (a free-form
     // `[agents.<id>.config]` block in the project tau.toml) is passed
@@ -272,7 +283,7 @@ pub(crate) async fn load_plugins(
         Some(&llm_plan),
     )
     .await
-    .with_context(|| format!("loading LLM backend plugin {:?}", entry.llm_backend))?;
+    .with_context(|| format!("loading LLM backend plugin {llm_backend_name:?}"))?;
 
     let mut builder = tau_runtime_tokio::Runtime::builder().with_dyn_llm_backend(llm_backend);
 
@@ -441,7 +452,6 @@ mod tests {
             "reviewer".into(),
             "Code Reviewer".into(),
             "code-reviewer@^0.1".into(),
-            "anthropic".into(),
             RequiresEntry::default(),
             config,
             PromptEntry::None,

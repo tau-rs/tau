@@ -10,14 +10,18 @@ async fn reload_preserves_history_length() {
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "history-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.a]
 display_name = "A"
 package      = "a@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "v1"
 "#,
@@ -45,14 +49,18 @@ prompt.system = "v1"
     tmp.child("tau.toml")
         .write_str(
             r#"
+packages = ["mock-llm"]
+
 [project]
 name = "history-test"
 version = "0.0.1"
 
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
 [agents.a]
 display_name = "A"
 package      = "a@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 prompt.system = "v2"
 "#,

@@ -81,14 +81,18 @@ fn lowering_passes_minimal_workflow() {
     // Uses `[agents.<id>]` (plural) per the existing tau.toml convention;
     // the spec example's `[agent.X]` (singular) is non-normative.
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "temp-monitor"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
 
         [agents.monitor]
         display_name = "Monitor"
         package      = "monitor@^0.1"
-        llm_backend  = "anthropic"
-        model        = "claude-haiku-4-5"
+        model        = "default"
         tool_refs    = ["read_temp", "set_fan"]
 
         [tools.read_temp]
@@ -137,14 +141,18 @@ fn lowering_passes_minimal_workflow() {
 fn lowering_refuses_on_capability_fit_mismatch() {
     // Workflow declares network; build for a target without NetworkHttp shape.
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "net-workflow"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
 
         [agents.x]
         display_name = "X"
         package      = "x@^0.1"
-        llm_backend  = "anthropic"
-        model        = "x"
+        model        = "default"
         tool_refs    = ["weather"]
 
         [tools.weather]
@@ -170,20 +178,23 @@ fn lowers_goals_and_deliverables_into_checks() {
     // report and holds a covering fs.write capability; one goal
     // (regex match) and one deliverable (path locus, retry from writer).
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "research"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
 
         [agents.gather]
         display_name = "Gather"
         package      = "research@^0.1"
-        llm_backend  = "anthropic"
-        model        = "claude-haiku-4-5"
+        model        = "default"
 
         [agents.writer]
         display_name = "Writer"
         package      = "research@^0.1"
-        llm_backend  = "anthropic"
-        model        = "claude-haiku-4-5"
+        model        = "default"
         produces     = ["/workspace/report.md"]
         tool_refs    = ["write_file"]
 
@@ -251,14 +262,18 @@ fn lowers_goals_and_deliverables_into_checks() {
 #[test]
 fn lowers_context_pipeline_onto_agent() {
     let toml = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "ctx-lower"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
 
 [agents.a]
 display_name = "A"
 package      = "demo@^0.1"
-llm_backend  = "mock-llm"
-model        = "m"
+model        = "default"
 
 [[agents.a.context.pipeline]]
 transformer = "trim_old"
@@ -295,20 +310,23 @@ fn explicit_check_placement_is_not_double_appended() {
     // The deliverable check must appear EXACTLY ONCE at the explicitly
     // declared position, not also auto-appended at the end.
     let toml = r#"
+        packages = ["mock-llm"]
+
         [project]
         name = "explicit-check"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
 
         [agents.gather]
         display_name = "Gather"
         package      = "research@^0.1"
-        llm_backend  = "anthropic"
-        model        = "claude-haiku-4-5"
+        model        = "default"
 
         [agents.writer]
         display_name = "Writer"
         package      = "research@^0.1"
-        llm_backend  = "anthropic"
-        model        = "claude-haiku-4-5"
+        model        = "default"
         produces     = ["/workspace/report.md"]
         tool_refs    = ["write_file"]
 
@@ -399,13 +417,18 @@ fn explicit_check_placement_is_not_double_appended() {
 #[test]
 fn agent_output_schema_survives_lowering() {
     let toml = r#"
+packages = ["mock"]
+
 [project]
 name = "p"
+
+[models.mock-1]
+backend = "mock"
+model = "mock-1"
 
 [agents.judge]
 display_name = "Judge"
 package = "p@^0.1"
-llm_backend = "mock"
 model = "mock-1"
 output_schema = { type = "object" }
 "#;

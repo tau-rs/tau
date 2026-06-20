@@ -71,14 +71,18 @@ fn json_schema_list_packages_empty() {
 #[test]
 fn json_schema_list_agents() {
     let dir = tempfile::tempdir().unwrap();
-    let toml = r#"
+    let toml = r#"packages = ["anthropic"]
+
 [project]
 name = "demo"
+
+[models]
+default = { backend = "anthropic", model = "claude-haiku-4-5" }
 
 [agents.reviewer]
 display_name = "Code Reviewer"
 package      = "code-reviewer@^0.1"
-llm_backend  = "anthropic"
+model        = "default"
 "#;
     std::fs::write(dir.path().join("tau.toml"), toml).unwrap();
 

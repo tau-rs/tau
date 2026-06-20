@@ -325,7 +325,7 @@ pub fn run_streaming_inner(
             );
             debug!(parent: &turn_span, name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
 
-            let mut request = CompletionRequest::new(agent_def.llm_backend.as_str().into());
+            let mut request = CompletionRequest::new(agent_def.model.clone());
             request.system = agent_def.system_prompt.clone();
             // β.4: derive a budgeted per-turn VIEW; stored `messages`
             // (full conversation) is never mutated.

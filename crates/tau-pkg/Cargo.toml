@@ -9,10 +9,10 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-tau-domain            = { workspace = true, features = ["serde"] }
+tau-domain            = { workspace = true, features = ["serde", "skill-md", "package-source"] }
 tau-plugin-protocol   = { workspace = true }
 tau-ports             = { workspace = true, features = ["serde"] }
-thiserror             = { workspace = true }
+thiserror             = { workspace = true, features = ["std"] }
 toml                  = { workspace = true }
 serde                 = { workspace = true }
 # Source-agnostic whole-tree SHA-256 for `tau verify` (ADR-0012 / priority 7).
@@ -39,7 +39,7 @@ default = []
 proptest   = { workspace = true }
 # `tau_ports::fixtures::scratch_dir` for labeled tempdir creation
 # (T7 of the test-suite-upgrades plan). Test-fixtures feature only.
-tau-ports  = { workspace = true, features = ["test-fixtures", "serde"] }
+tau-ports  = { workspace = true, features = ["test-fixtures", "serde", "process"] }
 # Capturing subscriber for the install-diagnostics tracing tests
 # (asserts target/level/fields + RUST_LOG-style EnvFilter honoring).
 tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }

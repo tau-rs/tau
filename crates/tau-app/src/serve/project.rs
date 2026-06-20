@@ -97,7 +97,12 @@ impl Project {
                     agent_id: agent_id.to_string(),
                     root: self.root.display().to_string(),
                 })?;
-        Ok(build_agent_definition(entry, &self.root, &self.scope)?)
+        Ok(build_agent_definition(
+            entry,
+            &self.root,
+            &self.scope,
+            &self.config.models,
+        )?)
     }
 
     /// List all agent ids defined in the project's `tau.toml`.

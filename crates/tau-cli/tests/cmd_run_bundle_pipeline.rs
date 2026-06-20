@@ -126,10 +126,13 @@ bin = "echo-llm"
 name = "pipeline-bundle-demo"
 version = "0.1.0"
 
+[models]
+default = { backend = "echo-llm", model = "claude-haiku-4-5" }
+
 [agents.gather]
 display_name = "Gatherer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 
 [agents.gather.prompt]
 system = "gather"
@@ -140,7 +143,7 @@ canned_text = "PIPELINE-FINAL-OUTPUT"
 [agents.writer]
 display_name = "Writer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 
 [agents.writer.prompt]
 system = "write"

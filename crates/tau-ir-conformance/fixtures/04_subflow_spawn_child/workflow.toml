@@ -1,10 +1,15 @@
+packages = ["mock-llm"]
+
 [project]
 name = "fixture-04"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
 
 [agents.parent]
 display_name = "Parent"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 tool_refs    = ["notify"]
 max_turns    = 3
@@ -12,7 +17,6 @@ max_turns    = 3
 [agents.worker]
 display_name = "Worker"
 package      = "p@^0.1"
-llm_backend  = "mock-llm"
 model        = "mock-1"
 tool_refs    = ["page"]
 max_turns    = 3

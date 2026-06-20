@@ -113,10 +113,13 @@ bin = "echo-llm"
     let project_toml = r#"[project]
 name = "dev-pipeline-demo"
 
+[models]
+default = { backend = "echo-llm", model = "claude-haiku-4-5" }
+
 [agents.gather]
 display_name = "Gatherer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 max_turns    = 1
 
 [agents.gather.config]
@@ -125,7 +128,7 @@ script = ["STEP-ONE", "STEP-TWO-FINAL"]
 [agents.writer]
 display_name = "Writer"
 package      = "echo-llm@^0.1"
-llm_backend  = "echo-llm"
+model        = "default"
 max_turns    = 1
 
 [pipeline]

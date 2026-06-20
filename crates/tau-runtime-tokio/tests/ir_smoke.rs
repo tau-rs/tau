@@ -50,8 +50,10 @@ impl ToolDispatcher for StubDispatcher {
         })
     }
 
-    fn llm_backend(&self) -> Arc<dyn DynLlmBackend> {
-        self.backend.clone()
+    fn llm_backend_for(&self, backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        // Single-backend stub: the agent's resolved model_ref names "stub-llm".
+        debug_assert!(backend == "stub-llm" || backend.is_empty());
+        Ok(self.backend.clone())
     }
 }
 
@@ -102,7 +104,10 @@ fn sample_module() -> IrModule {
         Agent {
             id: AgentId("monitor".into()),
             prompt: "You are a monitor agent.".into(),
-            model: "claude-haiku-4-5".into(),
+            model_ref: tau_ir::ModelRef {
+                backend: "stub-llm".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
             tool_refs: vec![ToolId("read_temp".into())],
             context: None,
             budget: AgentBudget {

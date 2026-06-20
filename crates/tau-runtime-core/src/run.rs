@@ -105,9 +105,7 @@ impl Runtime {
         package_manifest: &PackageManifest,
         tool_name: &str,
         args: tau_domain::Value,
-        // _clock: reserved for Task 3.6 — will be used for trace-event
-        // timestamps once orchestration RunState moves to core.
-        _clock: Option<Arc<dyn tau_ports::Clock>>,
+        clock: Option<Arc<dyn tau_ports::Clock>>,
         random: Option<Arc<dyn tau_ports::RandomSource>>,
     ) -> Result<tau_ports::ToolResult, RuntimeError> {
         use tau_ports::SessionContext;
@@ -140,25 +138,52 @@ impl Runtime {
         // the test-fixture DeterministicRandom if available, otherwise
         // produce a nil UUID. Production callers must supply a real
         // RandomSource via their shell's `drive` entry point.
-        let session_uuid = match random {
-            Some(ref r) => crate::ids::uuid_v4(r),
+        // Resolve the entropy source once, then mint both the session UUID
+        // and the agent-instance id from the `Clock`/`RandomSource` ports so
+        // ids are reproducible under deterministic ports (the no_std kernel
+        // never reaches `AgentInstanceId::new`, which is std-only). When the
+        // caller passes `None`, fall back to the test-fixture
+        // DeterministicRandom if available, otherwise a nil/zero id.
+        let instance_millis = clock.as_ref().map(|c| c.now().max(0) as u64).unwrap_or(0);
+        let (session_uuid, instance_id) = match random {
+            Some(ref r) => {
+                let mut rb = [0u8; 10];
+                r.fill(&mut rb);
+                (
+                    crate::ids::uuid_v4(r),
+                    AgentInstanceId::from_parts(instance_millis, rb),
+                )
+            }
             None => {
                 #[cfg(any(test, feature = "test-fixtures"))]
                 {
                     let r: Arc<dyn tau_ports::RandomSource> =
                         Arc::new(tau_ports::DeterministicRandom::seeded(0));
-                    crate::ids::uuid_v4(&r)
+                    let mut rb = [0u8; 10];
+                    r.fill(&mut rb);
+                    (
+                        crate::ids::uuid_v4(&r),
+                        AgentInstanceId::from_parts(instance_millis, rb),
+                    )
                 }
                 #[cfg(not(any(test, feature = "test-fixtures")))]
                 {
-                    uuid::Uuid::nil()
+                    (
+                        uuid::Uuid::nil(),
+                        AgentInstanceId::from_parts(instance_millis, [0u8; 10]),
+                    )
                 }
             }
         };
 
-        // Build a minimal SessionContext (no deadline, no deny entries).
-        let ctx = SessionContext::new(AgentInstanceId::new(), session_uuid, None)
-            .with_granted_capabilities(granted);
+        // Build a minimal SessionContext (no deny entries). `deadline` is a
+        // `process`-feature-gated field (no_std hosts have no `SystemTime`),
+        // so the constructor arity differs by feature.
+        #[cfg(feature = "process")]
+        let ctx =
+            SessionContext::new(instance_id, session_uuid, None).with_granted_capabilities(granted);
+        #[cfg(not(feature = "process"))]
+        let ctx = SessionContext::new(instance_id, session_uuid).with_granted_capabilities(granted);
 
         tool.init(ctx.clone()).await.map_err(RuntimeError::from)?;
         let result = tool.invoke(&ctx, &mut (), args).await;

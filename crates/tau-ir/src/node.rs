@@ -32,8 +32,8 @@ pub struct Agent {
     pub id: AgentId,
     /// System prompt.
     pub prompt: String,
-    /// Model identifier (e.g. `"claude-haiku-4-5"`).
-    pub model: String,
+    /// Resolved model selection (backend + vendor id), baked at lowering.
+    pub model_ref: crate::model_ref::ModelRef,
     /// Tools this agent is allowed to call.
     pub tool_refs: Vec<ToolId>,
     /// Optional β.4 context-management config.
@@ -108,7 +108,10 @@ mod tests {
         let agent = Agent {
             id: AgentId("writer".into()),
             prompt: "You write reports.".into(),
-            model: "claude-haiku-4-5".into(),
+            model_ref: crate::model_ref::ModelRef {
+                backend: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
             tool_refs: alloc::vec::Vec::new(),
             context: None,
             budget: AgentBudget {
@@ -130,7 +133,10 @@ mod tests {
         let agent = Agent {
             id: AgentId("gatherer".into()),
             prompt: alloc::string::String::new(),
-            model: "claude-haiku-4-5".into(),
+            model_ref: crate::model_ref::ModelRef {
+                backend: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
             tool_refs: alloc::vec::Vec::new(),
             context: None,
             budget: AgentBudget {
@@ -153,7 +159,10 @@ mod tests {
         let agent = Agent {
             id: AgentId("judge".into()),
             prompt: String::new(),
-            model: "claude-haiku-4-5".into(),
+            model_ref: crate::model_ref::ModelRef {
+                backend: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
             tool_refs: alloc::vec::Vec::new(),
             context: None,
             budget: AgentBudget {
@@ -174,7 +183,10 @@ mod tests {
         let agent = Agent {
             id: AgentId("gatherer".into()),
             prompt: String::new(),
-            model: "claude-haiku-4-5".into(),
+            model_ref: crate::model_ref::ModelRef {
+                backend: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
             tool_refs: alloc::vec::Vec::new(),
             context: None,
             budget: AgentBudget {

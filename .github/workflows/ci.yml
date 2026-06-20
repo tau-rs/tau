@@ -371,9 +371,16 @@ jobs:
           set -e
           rustup target add wasm32-wasip2
           cargo build -p tau-runtime-core --target wasm32-wasip2 --no-default-features
-      - name: wasm guest component builds in release (β.7.5 PR-C)
-        # The no_std WASI 0.2 component must compile in the exact release
-        # profile (where the _rdl_* allocator-symbol LTO interaction lives).
+      - name: wasm guest links tau-runtime-core std-free (β.7.5 PR-E1 link gate)
+        # AUTHORITATIVE std-free LINK gate. Unlike the `cargo build
+        # -p tau-runtime-core --target wasm32-wasip2` step above (which only
+        # *compiles* the kernel on a target that *has* std), this links the
+        # full kernel into the no_std cdylib + encodes the WASI 0.2 component.
+        # A `duplicate lang item 'panic_impl'` here means a dependency regained
+        # `std` (e.g. a workspace alias lost `default-features = false`, or a
+        # crate stopped honouring no_std); `failed to resolve import env::*`
+        # means a missing mem-intrinsic. Both are hard regressions of the
+        # β.7.5 no_std foundation — do not paper over with --allow-undefined.
         run: cargo build -p tau-wasm-guest --target wasm32-wasip2 --release
       - name: no forbidden executor imports in tau-runtime-core/src
         run: |

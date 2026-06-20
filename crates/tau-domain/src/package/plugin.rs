@@ -6,8 +6,11 @@
 //! as canonical strings via `Display`/`FromStr` (not as adjacent-tagged
 //! objects), so a TOML `provides = "llm_backend"` round-trips cleanly.
 
-use std::fmt;
-use std::str::FromStr;
+use core::fmt;
+use core::str::FromStr;
+
+use alloc::borrow::ToOwned;
+use alloc::string::String;
 
 use crate::error::{PluginKindError, PortKindError};
 
@@ -190,6 +193,7 @@ impl PluginManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
     use assert_matches::assert_matches;
 
     #[test]
