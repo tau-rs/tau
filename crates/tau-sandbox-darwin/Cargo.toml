@@ -12,6 +12,7 @@ description = "macOS (sandbox-exec) sandbox adapter for tau"
 tau-domain          = { workspace = true, features = ["serde"] }
 tau-ports           = { workspace = true, features = ["serde", "process"] }
 tau-sandbox-proxy   = { workspace = true }
+serde               = { workspace = true, features = ["std"] }
 tracing             = { workspace = true }
 tokio               = { workspace = true }
 thiserror           = { workspace = true }

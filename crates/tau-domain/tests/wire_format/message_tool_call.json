@@ -7,10 +7,7 @@
     "Tool": "fs.read"
   },
   "parent_id": null,
-  "created_at": {
-    "secs_since_epoch": 0,
-    "nanos_since_epoch": 0
-  },
+  "created_at": "1970-01-01T00:00:00Z",
   "headers": {},
   "payload": {
     "ToolCall": {

@@ -30,5 +30,7 @@ tokio        = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 futures      = "0.3"
 proptest     = { workspace = true }
 serde_json   = "1"
-tau-domain   = { workspace = true, features = ["serde", "test-fixtures"] }
+# `std` so tests can use std-only `AgentInstanceId::new` / `Uuid::now_v7`.
+tau-domain   = { workspace = true, features = ["serde", "test-fixtures", "std"] }
+uuid         = { workspace = true, features = ["std"] }
 tempfile     = { workspace = true }

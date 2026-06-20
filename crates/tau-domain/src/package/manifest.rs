@@ -4,6 +4,10 @@
 //! owns only the data type, the typestate around validation, and serde
 //! derives (under the `serde` feature).
 
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::id::PackageName;
 use crate::package::capability::Capability;
 use crate::package::plugin::PluginManifest;
@@ -138,7 +142,7 @@ impl<'de> serde::Deserialize<'de> for PackageKind {
         struct Visitor;
         impl<'de> serde::de::Visitor<'de> for Visitor {
             type Value = PackageKind;
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str("a package kind string (e.g. \"tool\", \"llm-backend\")")
             }
             fn visit_str<E>(self, v: &str) -> Result<PackageKind, E>

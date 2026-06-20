@@ -14,7 +14,9 @@
 //! round-trips. Strings starting with `"@bytes:"` are reserved and rejected
 //! at serialize time.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// A JSON-shaped value: nullable, scalar, or recursive.
 ///
@@ -145,12 +147,15 @@ mod value_serde {
     //! See module-level docs on the reserved `@bytes:` prefix.
 
     use super::Value;
+    use alloc::borrow::ToOwned;
+    use alloc::collections::BTreeMap;
+    use alloc::string::String;
+    use alloc::vec::Vec;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use core::fmt;
     use serde::de::{self, MapAccess, SeqAccess, Visitor};
     use serde::ser::{SerializeMap, SerializeSeq, Serializer};
     use serde::{Deserialize, Deserializer, Serialize};
-    use std::collections::BTreeMap;
-    use std::fmt;
 
     /// Reserved prefix marking a base64-encoded `Value::Bytes` payload on
     /// the wire.
@@ -307,6 +312,7 @@ mod value_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn accessors_match_variants() {

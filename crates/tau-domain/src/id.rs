@@ -3,8 +3,11 @@
 //! `PackageName` and `AgentId` are validating ASCII kebab-case identifiers.
 //! `AgentInstanceId` and `MessageId` are UUID v7-based opaque identifiers.
 
-use std::fmt;
-use std::str::FromStr;
+use core::fmt;
+use core::str::FromStr;
+
+use alloc::borrow::ToOwned;
+use alloc::string::String;
 
 use crate::error::{AgentIdError, PackageNameError};
 
@@ -69,6 +72,7 @@ impl FromStr for PackageName {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn accepts_valid_names() {
@@ -249,9 +253,21 @@ mod agent_id_tests {
 pub struct AgentInstanceId(uuid::Uuid);
 
 impl AgentInstanceId {
-    /// Generate a fresh UUID v7.
+    /// Generate a fresh UUID v7 from the ambient system clock + RNG.
+    ///
+    /// Host-only (`std`). The no_std kernel mints instance ids
+    /// deterministically via [`AgentInstanceId::from_parts`], fed by the
+    /// `Clock`/`RandomSource` ports.
+    #[cfg(feature = "std")]
     pub fn new() -> Self {
         Self(uuid::Uuid::now_v7())
+    }
+
+    /// Mint a UUID v7 from an explicit Unix-millisecond timestamp and 10
+    /// random bytes — the no_std-safe constructor the kernel feeds from
+    /// its `Clock`/`RandomSource` ports.
+    pub fn from_parts(unix_millis: u64, random: [u8; 10]) -> Self {
+        Self(uuid::Builder::from_unix_timestamp_millis(unix_millis, &random).into_uuid())
     }
 
     /// Wrap an existing `Uuid`.
@@ -278,6 +294,7 @@ impl AgentInstanceId {
     }
 }
 
+#[cfg(feature = "std")]
 impl Default for AgentInstanceId {
     fn default() -> Self {
         Self::new()
@@ -314,9 +331,23 @@ impl FromStr for AgentInstanceId {
 pub struct MessageId(uuid::Uuid);
 
 impl MessageId {
-    /// Generate a fresh UUID v7.
+    /// Generate a fresh UUID v7 from the ambient system clock + RNG.
+    ///
+    /// Host-only (`std`): reads `SystemTime` + `getrandom`. The no_std
+    /// kernel mints ids deterministically via [`MessageId::from_parts`],
+    /// fed by the `Clock`/`RandomSource` ports — see
+    /// `tau_runtime_core::ids::message_id`.
+    #[cfg(feature = "std")]
     pub fn new() -> Self {
         Self(uuid::Uuid::now_v7())
+    }
+
+    /// Mint a UUID v7 from an explicit Unix-millisecond timestamp and 10
+    /// random bytes — no ambient clock or RNG. This is the no_std-safe
+    /// constructor the kernel routes through its `Clock`/`RandomSource`
+    /// ports so ids are reproducible under conformance.
+    pub fn from_parts(unix_millis: u64, random: [u8; 10]) -> Self {
+        Self(uuid::Builder::from_unix_timestamp_millis(unix_millis, &random).into_uuid())
     }
 
     /// Wrap an existing `Uuid`.
@@ -343,6 +374,7 @@ impl MessageId {
     }
 }
 
+#[cfg(feature = "std")]
 impl Default for MessageId {
     fn default() -> Self {
         Self::new()
@@ -417,6 +449,7 @@ mod uuid_id_serde {
 #[cfg(test)]
 mod uuid_id_tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn agent_instance_round_trips() {

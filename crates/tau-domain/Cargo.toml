@@ -12,14 +12,33 @@ authors.workspace      = true
 thiserror = { workspace = true }
 semver    = { workspace = true }
 uuid      = { workspace = true }
-url       = { workspace = true }
+chrono     = { workspace = true }
+url       = { workspace = true, optional = true }
 serde      = { workspace = true, optional = true }
 base64     = { workspace = true, optional = true }
 serde_yaml = { version = "0.9", optional = true }
 
 [features]
-default       = []
-serde         = ["dep:serde", "dep:base64", "dep:serde_yaml", "uuid/serde", "semver/serde", "url/serde"]
+# Host build (and `cargo test -p tau-domain`) gets the full surface. The
+# no_std wasm guest pulls tau-domain via runtime-core with
+# `default-features = false` (honoured because the workspace `tau-domain`
+# alias sets `default-features = false`), so it gets only `serde`.
+default       = ["std", "package-source", "skill-md"]
+# Pulls in `std`. Implied by every host-only feature below; the no_std wasm
+# guest enables none of these.
+std            = ["chrono/std", "chrono/clock", "uuid/std"]
+# Core serde derives on the runtime vocabulary. no_std-safe: pulls `base64`
+# (alloc-only, for `Value::Bytes` wire encoding) but NOT `url`/`serde_yaml`.
+# `url?/serde` is a weak ref: it enables url's serde impls ONLY when the
+# `package-source` feature has already pulled `url` — so plain `serde` on a
+# no_std build never drags in `url`/`icu`/std.
+serde         = ["dep:serde", "serde/alloc", "dep:base64", "uuid/serde", "semver/serde", "url?/serde"]
+# Host-only: git `PackageSource`/`GitLocation::Url` parsing. `url` is std-only
+# (idna/icu). Kept out of `default` so it never reaches the wasm guest (which
+# pulls tau-domain only through runtime-core's `serde` feature).
+package-source = ["dep:url", "std"]
+# Host-only: SKILL.md YAML frontmatter parsing. `serde_yaml` is std-only.
+skill-md       = ["dep:serde_yaml", "serde", "std"]
 test-fixtures = []
 
 [dev-dependencies]

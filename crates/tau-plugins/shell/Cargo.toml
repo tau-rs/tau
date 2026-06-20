@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 tau-domain          = { workspace = true, features = ["serde"] }
-tau-ports           = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-ports           = { workspace = true, features = ["serde", "test-fixtures", "process"] }
 tau-plugin-protocol = { workspace = true }
 tau-plugin-sdk      = { workspace = true }
 serde               = { workspace = true }
@@ -29,12 +29,12 @@ tracing             = { workspace = true }
 
 [dev-dependencies]
 tempfile            = { workspace = true }
-tau-domain          = { workspace = true, features = ["serde"] }
-tau-ports           = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-domain          = { workspace = true, features = ["serde", "std"] }
+tau-ports           = { workspace = true, features = ["serde", "test-fixtures", "process"] }
 tau-plugin-protocol = { workspace = true, features = ["test-support"] }
 tau-plugin-sdk      = { workspace = true }
 rmp-serde           = { workspace = true }
-uuid                = { workspace = true }
+uuid                = { workspace = true, features = ["v7", "std"] }
 serde               = { workspace = true }
 serde_json          = "1"
 assert_matches      = { workspace = true }

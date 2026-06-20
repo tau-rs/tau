@@ -59,12 +59,38 @@ unsafe extern "C" fn cabi_realloc(
     ptr
 }
 
+/// `memcmp` for the no_std wasip2 component.
+///
+/// `wasm32-wasip2` expects libc to supply the `mem*` intrinsics, but a no_std
+/// cdylib links no libc — leaving `memcmp` as an unresolved `env` import that
+/// the component encoder rejects (`failed to resolve import env::memcmp`).
+/// `compiler_builtins` provides `memcpy`/`memset`/`memmove` on this target but
+/// not `memcmp`, so the guest fills just this one. Byte-wise (no slice ops, to
+/// avoid lowering back into an intrinsic call).
+#[no_mangle]
+unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+    let mut i = 0;
+    while i < n {
+        let x = *a.add(i);
+        let y = *b.add(i);
+        if x != y {
+            return x as i32 - y as i32;
+        }
+        i += 1;
+    }
+    0
+}
+
 struct Component;
 
 impl Guest for Component {
     fn run(_prompt: String) -> Result<String, String> {
-        // Milestone 1: prove the toolchain. Real IR execution follows.
-        Ok("{}".to_string())
+        // PR-E1: force the tau-runtime-core graph into the link.
+        // Real run_ir wiring is PR-E2.
+        match tau_ir::from_canonical_bytes(b"{}") {
+            Ok(_) => Ok("{}".to_string()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 

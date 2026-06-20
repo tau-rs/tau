@@ -3,10 +3,12 @@
 //! tau-domain holds the *vocabulary* (identity, definition, status enum).
 //! State-machine *transitions* live in tau-runtime — see G2 / spec §3.4.
 
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+
 use crate::id::{AgentId, PackageName};
 use crate::package::PackageId;
 use crate::value::Value;
-use std::collections::BTreeMap;
 
 /// Agent lifecycle status. Carries diagnostic data only on `Failed`;
 /// transition rules live in tau-runtime.

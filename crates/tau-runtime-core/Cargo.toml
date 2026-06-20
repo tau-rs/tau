@@ -27,8 +27,10 @@ futures-core = { workspace = true, default-features = false, features = ["alloc"
 tracing      = { workspace = true, default-features = false, features = ["attributes"] }
 # Required by `stream::run_streaming_inner` (the async_stream::stream! macro).
 async-stream = { workspace = true }
-# Glob matching for skill_resolve::apply_scope_paths (skill capability narrowing).
-globset      = { workspace = true }
+# Glob matching for skill_resolve::apply_scope_paths (skill capability
+# narrowing). std-only (aho-corasick/regex) → optional, gated behind
+# `host-fs` (the feature its only caller `resolve_skill_for_spawn` needs).
+globset      = { workspace = true, optional = true }
 # Optional: used by the `tool-validation` feature (jsonschema-based tool
 # args pre-compilation). Both are std-only so they gate behind the feature.
 jsonschema   = { workspace = true, optional = true }
@@ -37,14 +39,19 @@ jsonschema   = { workspace = true, optional = true }
 # `process` makes ProcessCapabilityGate wire-up available; pulled in via
 # tau-ports' `process` feature. Host shells (tau-runtime-tokio) keep this on.
 process            = ["tau-ports/process"]
-# `capability-override` enables the glob-narrowing module (globset is std-only).
+# `capability-override` enables override-aware capability resolution wiring.
 capability-override = []
 # `tool-validation` enables ADR-0010 jsonschema-based tool args validation
 # (jsonschema is std-only).
-tool-validation    = ["dep:jsonschema"]
+# `tool-validation` gates the host `stream` module (legacy `Runtime`
+# streaming), which uses the std-only `Message::new`/`AgentInstanceId::new`
+# convenience ctors. It is already a std feature (jsonschema is std-only), so
+# it also enables `tau-domain/std`. The guest drives the interpreter's
+# `run_ir_streaming` instead and enables neither.
+tool-validation    = ["dep:jsonschema", "tau-domain/std"]
 # `host-fs` enables code paths that consume std::path::PathBuf scope-roots
 # and read skill markdown via std::fs. Embassy ships without this feature.
-host-fs            = []
+host-fs            = ["dep:globset"]
 
 default = ["process", "capability-override", "tool-validation", "host-fs"]
 # Activates DeterministicRandom fallback in invoke_tool for test paths.
@@ -55,9 +62,11 @@ test-fixtures = ["tau-ports/test-fixtures"]
 toml           = { workspace = true }
 proptest       = { workspace = true }
 assert_matches = { workspace = true }
-tau-domain     = { workspace = true, features = ["test-fixtures"] }
+# `std` so tests can use the std-only `Message::new`/`AgentInstanceId::new`
+# convenience ctors; `package-source`/`skill-md` for skill-resolve tests.
+tau-domain     = { workspace = true, features = ["test-fixtures", "std", "package-source", "skill-md"] }
 # test-fixtures enables MockLlmBackend, MockTool, MockStorage for builder tests.
-tau-ports      = { workspace = true, features = ["test-fixtures"] }
+tau-ports      = { workspace = true, features = ["test-fixtures", "process"] }
 serde_json     = { workspace = true }
 # futures-executor: Task 3.8 executor-agnostic smoke test.
 futures-executor = "0.3"
