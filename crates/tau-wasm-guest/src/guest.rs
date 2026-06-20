@@ -85,12 +85,14 @@ struct Component;
 
 impl Guest for Component {
     fn run(_prompt: String) -> Result<String, String> {
-        // PR-E1: force the tau-runtime-core graph into the link.
-        // Real run_ir wiring is PR-E2.
-        match tau_ir::from_canonical_bytes(b"{}") {
-            Ok(_) => Ok("{}".to_string()),
-            Err(e) => Err(e.to_string()),
+        let bytes = crate::baked::BAKED_IR;
+        if bytes.is_empty() {
+            return Err("tau-wasm-guest: no baked IR".to_string());
         }
+        let module = tau_ir::from_canonical_bytes(bytes).map_err(|e| e.to_string())?;
+        // Task 2 milestone: prove the baked bytes decode. Driving the IR
+        // through run_ir_streaming lands in Task 3.
+        Ok(module.ir_format.0)
     }
 }
 

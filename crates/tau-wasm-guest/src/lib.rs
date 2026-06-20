@@ -9,4 +9,6 @@
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
 #[cfg(target_arch = "wasm32")]
+mod baked;
+#[cfg(target_arch = "wasm32")]
 mod guest;
