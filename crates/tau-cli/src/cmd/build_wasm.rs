@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context as _, Result};
+use tau_ir_lower::LowerError;
 
 use crate::cli::BuildWasmArgs;
 use crate::cmd::build::{hex_lower, native_tool_hash};
@@ -48,8 +49,20 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
         skill: &|_name| None,
     };
 
-    let module = tau_ir_lower::lower_project(&loaded.project, &target, &caches)
-        .map_err(|e| anyhow::anyhow!("lowering for {WASM_TARGET} failed: {e}"))?;
+    let module =
+        tau_ir_lower::lower_project(&loaded.project, &target, &caches).map_err(|e| match e {
+            LowerError::CapabilityFitFailed {
+                ref missing,
+                ref tools,
+            } => anyhow::anyhow!(
+                "capability-fit refused for {WASM_TARGET}: \
+                 the following capability shape(s) are not supported by wasm guests: {missing:?}. \
+                 Offending tools: {tools:?}. \
+                 Remove or replace tools that require ProcessExec or AgentSpawn \
+                 before building for wasm.",
+            ),
+            other => anyhow::anyhow!("lowering for {WASM_TARGET} failed: {other}"),
+        })?;
     let bytes = tau_ir::to_canonical_bytes(&module);
     Ok((module, bytes))
 }

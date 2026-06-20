@@ -70,7 +70,6 @@ insta            = { version = "1", features = ["yaml", "json", "redactions"] }
 predicates       = "3"
 proptest         = { workspace = true }
 rstest           = { workspace = true }
-serde_json       = { workspace = true }
 tempfile         = "3"
 url              = { workspace = true }
 walkdir          = { workspace = true }
@@ -78,7 +77,6 @@ walkdir          = { workspace = true }
 tau-ports        = { workspace = true, features = ["test-fixtures", "serde"] }
 # Task 4: e2e tau build wasm → wasmtime → typed RunEvent stream (β.7.5 PR-E2).
 tau-wasm-host    = { path = "../tau-wasm-host" }
-tau-runtime-core = { workspace = true }
 
 [features]
 # Production `tau` binary ships with OTLP support enabled out of the box.

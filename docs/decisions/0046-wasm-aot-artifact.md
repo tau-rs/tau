@@ -196,16 +196,16 @@ the wasm host runner (`tau-wasm-host`) lands in β.7.5 Phase 3.
 - The observable is `ConformanceReport`, not a literal `RunEvent` stream.
   Any consumer that expects a stream (β.6 conformance gate) is a **named gap**:
   promoting to a literal stream is deferred to β.6.
-
-> **Status (PR-E2, 2026-06-20):** the guest now drives `run_ir_streaming`
-> over the baked IR and returns the serialized typed `RunEvent` stream; the
-> `dev == wasm` conformance arm (`WasmMode`) is flipped live in PR-G.
 - Real (non-cassette) MCP transport from inside wasm is **reserved but
   unimplemented** in β.7.5. Projects that require live MCP connections cannot
   `tau build wasm` until the γ.1 `tau:mcp` host import lands.
 - `tau check --target any-wasi-strict` emits a non-fatal Warning ("no local
   adapter; static cross-check only") until the wasm host runner lands.
   This is intentional and correct.
+
+> **Status (PR-E2, 2026-06-20):** the guest now drives `run_ir_streaming`
+> over the baked IR and returns the serialized typed `RunEvent` stream; the
+> `dev == wasm` conformance arm (`WasmMode`) is flipped live in PR-G.
 
 ## Alternatives considered
 

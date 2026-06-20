@@ -16,10 +16,8 @@ anyhow     = { workspace = true }
 thiserror  = { workspace = true }
 
 [dev-dependencies]
-serde_json       = { workspace = true }
 tau-ir           = { workspace = true }
 tau-ir-lower     = { workspace = true }
 tau-pkg          = { workspace = true }
-tau-ports        = { workspace = true }
 tau-runtime-core = { workspace = true }
 tempfile         = { workspace = true }
