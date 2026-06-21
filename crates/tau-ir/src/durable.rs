@@ -9,11 +9,10 @@
 //! `CheckpointStore`, and `tau run --resume <run_id>` re-enters at the
 //! next turn.
 //!
-//! Both enums are `#[non_exhaustive]`: A-minimal ships exactly
-//! `PerTurn` + `File`. `CheckpointGranularity::PerToolCall`,
-//! `DurableStore::Kv`, and the A-full `EventSourced` granularity are
-//! additive `MINOR` `ir_format` bumps for later (the same discipline that
-//! added `output_schema` as v1.3.0).
+//! Both enums are `#[non_exhaustive]`: A-minimal ships `PerTurn` + `File`
+//! + `PerToolCall`. `DurableStore::Kv` and the A-full `EventSourced`
+//! granularity are additive `MINOR` `ir_format` bumps for later (the
+//! same discipline that added `output_schema` as v1.3.0).
 
 use serde::{Deserialize, Serialize};
 
@@ -47,14 +46,21 @@ impl Durability {
 
 /// Checkpoint granularity.
 ///
-/// A-minimal ships only `PerTurn` (commit after each completed turn,
-/// at-least-once for the crashed turn). Finer granularities are additive.
+/// A-minimal ships `PerTurn` (commit after each completed turn,
+/// at-least-once for the crashed turn) and `PerToolCall` (narrower
+/// at-least-once window within a turn). Finer granularities are additive.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CheckpointGranularity {
     /// Commit a checkpoint after each completed turn.
     #[serde(rename = "per_turn")]
     PerTurn,
+    /// Commit a checkpoint after each completed tool call within a turn.
+    /// Narrows (does not close) the at-least-once window — exactly-once
+    /// stays A-full's job. Resume re-dispatches only the tools that had
+    /// not completed before the crash (ADR-0053 follow-up).
+    #[serde(rename = "per_tool_call")]
+    PerToolCall,
 }
 
 /// Where durable state is written.
@@ -88,5 +94,17 @@ mod tests {
         let json = serde_json::to_string(&d).expect("serialize");
         assert!(json.contains("per_turn"), "got: {json}");
         assert!(json.contains("file"), "got: {json}");
+    }
+
+    #[test]
+    fn per_tool_call_round_trips_snake_case() {
+        let d = Durability::new(
+            CheckpointGranularity::PerToolCall,
+            DurableStore::File,
+        );
+        let json = serde_json::to_string(&d).expect("serialize");
+        assert!(json.contains("per_tool_call"), "got: {json}");
+        let back: Durability = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(d, back);
     }
 }
