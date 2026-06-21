@@ -438,6 +438,7 @@ fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable
     let d = entry.durable.as_ref()?;
     let checkpoint = match d.checkpoint.as_str() {
         "per_turn" => CheckpointGranularity::PerTurn,
+        "per_tool_call" => CheckpointGranularity::PerToolCall,
         _ => CheckpointGranularity::PerTurn,
     };
     let store = match d.store.as_str() {
@@ -713,5 +714,42 @@ capabilities = []
             "expected no SubflowEdge entries; got {:?}",
             parsed.workflow.edges
         );
+    }
+
+    #[test]
+    fn lower_durable_maps_per_tool_call() {
+        let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "p@^0.1"
+model        = "default"
+tool_refs    = []
+
+[agents.a.durable]
+checkpoint = "per_tool_call"
+store      = "file"
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let parsed = parse(&config).expect("parse stage");
+        let agent = parsed
+            .workflow
+            .agents
+            .get(&tau_ir::AgentId("a".into()))
+            .expect("agent a present");
+        let durable = agent.durable.as_ref().expect("durable present");
+        assert_eq!(
+            durable.checkpoint,
+            tau_ir::durable::CheckpointGranularity::PerToolCall,
+            "per_tool_call should lower to PerToolCall, not PerTurn"
+        );
+        assert_eq!(durable.store, tau_ir::durable::DurableStore::File);
     }
 }
