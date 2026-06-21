@@ -11,8 +11,9 @@
 //! `08_pipeline_sequence`, `09_deliverables_happy`,
 //! `10_deliverable_retry`, `11_deliverable_no_producer`,
 //! `12_pipeline_reverse_alpha`, `13_context_pipeline`,
-//! `14_agent_output_schema`, and `15_models_multi` (per-agent / per-judge
-//! model resolution).
+//! `14_agent_output_schema`, `15_models_multi` (per-agent / per-judge
+//! model resolution), `16_durable_per_turn`, and
+//! `17_durable_per_tool_call` (per-tool-call checkpoint granularity).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -865,6 +866,41 @@ async fn fixture_16_dev_mode_completed_with_durable() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_16_cross_mode_conformance() {
     let dir = fixture_dir("16_durable_per_turn");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 17 — durable per_tool_call (ADR-0053) is additive + byte-stable
+// ---------------------------------------------------------------------------
+
+/// Fixture 17: one turn issuing two native tool calls (read_temp +
+/// read_humidity) with a `per_tool_call` durable block. The durable config
+/// is carried verbatim on the IR `Agent`; it does not affect execution (the
+/// conformance harness drives the interpreter with no `CheckpointStore`, so
+/// no checkpoint is written). This dev-mode test proves the `per_tool_call`
+/// granularity variant lowers and runs to completion with both tool calls
+/// recorded — the observable side-effect multiset is identical to a
+/// durable-less twin.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_17_dev_mode_completed_with_per_tool_call() {
+    let dir = fixture_dir("17_durable_per_tool_call");
+    let report = DevMode.run(&dir).await;
+    assert!(report.build_refused.is_none(), "got build_refused: {:?}", report.build_refused);
+    assert!(matches!(report.run_outcome, Some(RunOutcome::Completed { .. })), "got: {:?}", report.run_outcome);
+    assert_eq!(count_tool_calls(&report, "read_temp"), 1);
+    assert_eq!(count_tool_calls(&report, "read_humidity"), 1);
+}
+
+/// Cross-mode conformance for fixture 17: the agent's `durable` block with
+/// `per_tool_call` granularity round-trips through the bundle's canonical
+/// encoder/decoder (BundleMode asserts `canonical_hash` equality internally),
+/// and both modes produce the same side-effect multiset — durable is
+/// observationally inert.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_17_cross_mode_conformance() {
+    let dir = fixture_dir("17_durable_per_tool_call");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

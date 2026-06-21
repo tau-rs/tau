@@ -6,6 +6,12 @@
 //! previous turn's file intact — the resume point, which is exactly the
 //! at-least-once boundary A-minimal promises. `load_latest` returns the
 //! highest-`n` file.
+//!
+//! Under `PerToolCall`, multiple checkpoints are written within one turn —
+//! they share `turn-<n>.json` (last-write-wins; the atomic `.tmp`-rename
+//! makes overwrite safe), and the turn-boundary write finalizes it with an
+//! empty `pending_tool_uses`. `load_latest` still returns the highest-`n`
+//! file, whose `pending_tool_uses` directs mid-turn resume.
 
 use std::path::PathBuf;
 
