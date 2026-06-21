@@ -3498,11 +3498,9 @@ paths = ["/etc/**"]
             ],
             input_tokens: 10,
             output_tokens: 5,
-            pending_tool_uses: alloc::vec![make_tool_use(
-                "b".into(),
-                "tool-b".into(),
-                Value::Null,
-            )],
+            pending_tool_uses: alloc::vec![
+                make_tool_use("b".into(), "tool-b".into(), Value::Null,)
+            ],
         };
 
         // EXACTLY ONE turn available — the post-completion turn 2.
@@ -3542,24 +3540,16 @@ paths = ["/etc/**"]
         let events = strip_gate_events(collect_events(Box::pin(stream)).await);
 
         // tool-b dispatched exactly once; tool-a never re-invoked.
-        assert_eq!(
-            b.invocations().len(),
-            1,
-            "tool-b must run once on resume"
-        );
-        assert_eq!(
-            a.invocations().len(),
-            0,
-            "tool-a must NOT be re-invoked"
-        );
+        assert_eq!(b.invocations().len(), 1, "tool-b must run once on resume");
+        assert_eq!(a.invocations().len(), 0, "tool-a must NOT be re-invoked");
 
         // ToolCallStarted(tool-b) precedes ToolCallCompleted(tool-b) (invariant).
-        let started = events.iter().position(|e| {
-            matches!(e, RunEvent::ToolCallStarted { name, .. } if name == "tool-b")
-        });
-        let completed = events.iter().position(|e| {
-            matches!(e, RunEvent::ToolCallCompleted { name, .. } if name == "tool-b")
-        });
+        let started = events
+            .iter()
+            .position(|e| matches!(e, RunEvent::ToolCallStarted { name, .. } if name == "tool-b"));
+        let completed = events.iter().position(
+            |e| matches!(e, RunEvent::ToolCallCompleted { name, .. } if name == "tool-b"),
+        );
         assert!(
             started.is_some() && completed.is_some() && started < completed,
             "ToolCallStarted(tool-b) must precede ToolCallCompleted(tool-b); events: {events:#?}"

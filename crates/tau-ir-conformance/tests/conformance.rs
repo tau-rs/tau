@@ -887,8 +887,16 @@ async fn fixture_16_cross_mode_conformance() {
 async fn fixture_17_dev_mode_completed_with_per_tool_call() {
     let dir = fixture_dir("17_durable_per_tool_call");
     let report = DevMode.run(&dir).await;
-    assert!(report.build_refused.is_none(), "got build_refused: {:?}", report.build_refused);
-    assert!(matches!(report.run_outcome, Some(RunOutcome::Completed { .. })), "got: {:?}", report.run_outcome);
+    assert!(
+        report.build_refused.is_none(),
+        "got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "got: {:?}",
+        report.run_outcome
+    );
     assert_eq!(count_tool_calls(&report, "read_temp"), 1);
     assert_eq!(count_tool_calls(&report, "read_humidity"), 1);
 }

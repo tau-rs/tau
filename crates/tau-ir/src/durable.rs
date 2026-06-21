@@ -98,10 +98,7 @@ mod tests {
 
     #[test]
     fn per_tool_call_round_trips_snake_case() {
-        let d = Durability::new(
-            CheckpointGranularity::PerToolCall,
-            DurableStore::File,
-        );
+        let d = Durability::new(CheckpointGranularity::PerToolCall, DurableStore::File);
         let json = serde_json::to_string(&d).expect("serialize");
         assert!(json.contains("per_tool_call"), "got: {json}");
         let back: Durability = serde_json::from_str(&json).expect("deserialize");

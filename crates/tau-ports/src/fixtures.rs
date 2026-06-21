@@ -889,10 +889,7 @@ impl CheckpointStore for MockCheckpointStore {
             .entry(ckpt.run_id.clone())
             .or_default()
             .insert(ckpt.turn, ckpt.clone());
-        self.log
-            .lock()
-            .expect("log mutex")
-            .push(ckpt.clone());
+        self.log.lock().expect("log mutex").push(ckpt.clone());
         Ok(())
     }
 
