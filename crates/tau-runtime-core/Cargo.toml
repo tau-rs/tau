@@ -41,14 +41,17 @@ jsonschema   = { workspace = true, optional = true }
 process            = ["tau-ports/process"]
 # `capability-override` enables override-aware capability resolution wiring.
 capability-override = []
+# `wasm-interpreter` exposes `interpreter` and `stream` without std (no
+# jsonschema, no `AgentInstanceId::new`/`Message::new`). Used by the no_std
+# wasm guest to drive `run_ir_streaming` and serialize `RunEvent`. All
+# `Message::new`/`AgentInstanceId::new` calls in these modules are replaced by
+# no_std-safe `ids::message_id`/`ids::agent_instance_id` helpers.
+wasm-interpreter   = []
 # `tool-validation` enables ADR-0010 jsonschema-based tool args validation
-# (jsonschema is std-only).
-# `tool-validation` gates the host `stream` module (legacy `Runtime`
-# streaming), which uses the std-only `Message::new`/`AgentInstanceId::new`
-# convenience ctors. It is already a std feature (jsonschema is std-only), so
-# it also enables `tau-domain/std`. The guest drives the interpreter's
-# `run_ir_streaming` instead and enables neither.
-tool-validation    = ["dep:jsonschema", "tau-domain/std"]
+# (jsonschema is std-only). Implies `wasm-interpreter` (stream + interpreter
+# are a superset already; gating them behind tool-validation is now just an
+# additive alias so nothing breaks for existing callers).
+tool-validation    = ["wasm-interpreter", "dep:jsonschema", "tau-domain/std"]
 # `host-fs` enables code paths that consume std::path::PathBuf scope-roots
 # and read skill markdown via std::fs. Embassy ships without this feature.
 host-fs            = ["dep:globset"]

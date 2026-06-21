@@ -1,0 +1,23 @@
+packages = ["anthropic"]
+
+[project]
+name = "needs-exec-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.main]
+display_name = "Main"
+package = "needs-exec-wasm@^0.1"
+model = "claude"
+tool_refs = ["runner"]
+
+[agents.main.prompt]
+system = "Uses a process-exec tool."
+
+[tools.runner]
+native = "Runner"
+description = "Runs a process."
+capabilities = [{ kind = "process.spawn" }]

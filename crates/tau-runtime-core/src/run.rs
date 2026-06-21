@@ -220,7 +220,7 @@ impl Runtime {
 // futures are non-`Send` by design — see `builder::BoxFuture`).
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "tool-validation")]
+#[cfg(feature = "wasm-interpreter")]
 impl Runtime {
     /// Stream an agent run from a single initial message.
     ///
@@ -338,8 +338,16 @@ impl Runtime {
             .collect();
 
         // Step 8: Snapshot tool_validators registry.
-        let tool_validators: HbHashMap<alloc::string::String, crate::tool_args::ToolArgsValidator> =
-            self.tool_validators().clone().into_iter().collect();
+        // When `tool-validation` is enabled the validators are pre-compiled
+        // at Runtime::build time and stored in the registry; without
+        // `tool-validation` (e.g. the wasm guest) no schema validation runs.
+        #[cfg(feature = "tool-validation")]
+        let tool_validators: HbHashMap<
+            alloc::string::String,
+            crate::tool_args::ToolArgsValidator,
+        > = self.tool_validators().clone().into_iter().collect();
+        #[cfg(not(feature = "tool-validation"))]
+        let tool_validators: HbHashMap<alloc::string::String, ()> = HbHashMap::default();
 
         // Step 9: Construct and return the stream.
         let stream = crate::stream::run_streaming_inner(

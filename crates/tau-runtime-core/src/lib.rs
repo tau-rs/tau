@@ -21,9 +21,9 @@ pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind
 
 pub mod builder;
 pub mod ids;
-#[cfg(feature = "tool-validation")]
+#[cfg(feature = "wasm-interpreter")]
 pub mod interpreter;
-#[cfg(feature = "tool-validation")]
+#[cfg(feature = "wasm-interpreter")]
 pub use interpreter::run_ir;
 pub mod run;
 pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime, RuntimeBuilder};
@@ -34,7 +34,7 @@ pub mod dispatch;
 pub mod options;
 pub mod orchestration;
 pub mod outcome;
-#[cfg(feature = "tool-validation")]
+#[cfg(feature = "wasm-interpreter")]
 pub mod stream;
 #[doc(hidden)]
 pub mod vocabulary;

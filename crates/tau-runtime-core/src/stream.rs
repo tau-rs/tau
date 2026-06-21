@@ -23,9 +23,11 @@ use hashbrown::HashMap;
 
 use futures_core::Stream;
 use tau_domain::{
-    Address, AgentDefinition, AgentInstanceId, Capability, Message, MessagePayload,
-    PackageManifest, Value,
+    Address, AgentDefinition, Capability, Message, MessagePayload, PackageManifest, Value,
 };
+// AgentInstanceId::new() (std-only) is only needed in the host-fs branch.
+#[cfg(feature = "host-fs")]
+use tau_domain::AgentInstanceId;
 use tau_ports::{
     Clock, CompletionChunk, CompletionRequest, DenyEntry, LlmError, RandomSource, SessionContext,
     StopReason, TokenUsage, ToolError, ToolResult, ToolSpec,
@@ -35,7 +37,15 @@ use tracing::{debug, info, info_span, warn, Instrument as _};
 use crate::builder::{DynLlmBackend, DynTool};
 use crate::options::RunOptions;
 use crate::outcome::RunOutcome;
-use crate::tool_args::ToolArgsValidator;
+/// Type of the per-tool schema validator passed to `run_streaming_inner`.
+///
+/// When `tool-validation` is enabled this is the real `ToolArgsValidator`
+/// (pre-compiled jsonschema).  Without `tool-validation` (e.g. the wasm
+/// guest) schema validation is a no-op and the validator is `()`.
+#[cfg(feature = "tool-validation")]
+type ValidatorMap = HashMap<String, crate::tool_args::ToolArgsValidator>;
+#[cfg(not(feature = "tool-validation"))]
+type ValidatorMap = HashMap<String, ()>;
 use crate::vocabulary::{
     EV_CONTEXT_STEP_RAN, EV_DISPATCH_TOOL_RESOLVED, EV_LLM_REQUEST_BUILT, EV_LLM_RESPONSE_RECEIVED,
     EV_LLM_STOP_REASON, EV_LLM_TOKEN_USAGE, EV_LLM_TOOL_USE_EMITTED, EV_MESSAGE_ADDED,
@@ -292,14 +302,16 @@ pub fn run_streaming_inner(
     initial_message: Message,
     options: RunOptions,
     tools: HashMap<String, Arc<dyn DynTool>>,
-    tool_validators: HashMap<String, ToolArgsValidator>,
+    tool_validators: ValidatorMap,
     granted_capabilities: Vec<Capability>,
     tool_specs: Vec<ToolSpec>,
     deny_entries: Vec<DenyEntry>,
     granted_for_session: Vec<Capability>,
 ) -> impl Stream<Item = RunEvent> + 'static {
     async_stream::stream! {
-        let agent_instance_id = AgentInstanceId::new();
+        // Use the no_std-safe constructor (clock/random from RunOptions) so
+        // this path compiles under the `wasm-interpreter` feature without `std`.
+        let agent_instance_id = crate::ids::agent_instance_id(clock_ref(&options), random_ref(&options));
         // ADR-0053: a resumed run rehydrates its committed history + turn
         // counter from the latest checkpoint and re-enters at the next turn,
         // so turns 1..=ckpt.turn are NOT re-billed (no LLM calls are made
@@ -506,7 +518,7 @@ pub fn run_streaming_inner(
                 // emitted from inside the provider's stream impl attributes to
                 // this turn.
                 loop {
-                    let next = std::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx))
+                    let next = core::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx))
                         .instrument(turn_span.clone())
                         .await;
                     match next {
@@ -606,7 +618,9 @@ pub fn run_streaming_inner(
                 // Append assistant text to history if present.
                 if !accumulated_text.is_empty() {
                     let agent_addr = Address::Agent(agent_instance_id);
-                    let assistant_msg = Message::new(
+                    let assistant_msg = Message::new_with(
+                        crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                        crate::ids::now_utc(clock_ref(&options)),
                         agent_addr,
                         Address::User,
                         MessagePayload::Text {
@@ -722,7 +736,7 @@ pub fn run_streaming_inner(
                         let required_cap = crate::orchestration::required_capability(
                             &tool_use.name,
                         );
-                        let required_slice = std::slice::from_ref(&required_cap);
+                        let required_slice = core::slice::from_ref(&required_cap);
                         let missing = dispatch_span.in_scope(|| {
                             crate::capability::check_capabilities_for_tool(
                                 &tool_use.name,
@@ -753,7 +767,9 @@ pub fn run_streaming_inner(
                         // Append the tool-call message (parallels normal path).
                         let agent_addr = Address::Agent(agent_instance_id);
                         let tool_addr = Address::Tool(tool_use.name.clone());
-                        let tool_call_msg = Message::new(
+                        let tool_call_msg = Message::new_with(
+                            crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                            crate::ids::now_utc(clock_ref(&options)),
                             agent_addr.clone(),
                             tool_addr.clone(),
                             MessagePayload::ToolCall {
@@ -905,7 +921,7 @@ pub fn run_streaming_inner(
                                             safe_skill,
                                         );
                                         let child_id =
-                                            std::str::FromStr::from_str(&child_id_str)
+                                            core::str::FromStr::from_str(&child_id_str)
                                                 .unwrap_or_else(|_| {
                                                     agent_def.id.clone()
                                                 });
@@ -1148,7 +1164,7 @@ pub fn run_streaming_inner(
                                                 agent_def.id.as_str(),
                                                 suffix_short
                                             );
-                                            let child_id = std::str::FromStr::from_str(
+                                            let child_id = core::str::FromStr::from_str(
                                                 &child_id_str,
                                             )
                                             .unwrap_or_else(|_| {
@@ -1205,9 +1221,11 @@ pub fn run_streaming_inner(
                                             };
 
                                             // Initial user message for the child.
-                                            let child_msg = Message::new(
+                                            let child_msg = Message::new_with(
+                                                crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                                                crate::ids::now_utc(clock_ref(&options)),
                                                 Address::User,
-                                                Address::Agent(AgentInstanceId::new()),
+                                                Address::Agent(crate::ids::agent_instance_id(clock_ref(&options), random_ref(&options))),
                                                 MessagePayload::Text {
                                                     content: req.message,
                                                 },
@@ -1359,7 +1377,9 @@ pub fn run_streaming_inner(
                                 body: crate::run::content_to_value(&tool_result.content),
                             }
                         };
-                        let orch_result_msg = Message::new(
+                        let orch_result_msg = Message::new_with(
+                            crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                            crate::ids::now_utc(clock_ref(&options)),
                             tool_addr,
                             agent_addr,
                             result_payload,
@@ -1447,7 +1467,9 @@ pub fn run_streaming_inner(
                 // ----- Append the tool-call message -------------------------
                 let agent_addr = Address::Agent(agent_instance_id);
                 let tool_addr = Address::Tool(tool_use.name.clone());
-                let tool_call_msg = Message::new(
+                let tool_call_msg = Message::new_with(
+                    crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                    crate::ids::now_utc(clock_ref(&options)),
                     agent_addr.clone(),
                     tool_addr.clone(),
                     MessagePayload::ToolCall {
@@ -1462,7 +1484,15 @@ pub fn run_streaming_inner(
                 messages.push(tool_call_msg);
 
                 // ----- Open a session ---------------------------------------
+                // SessionContext::new signature differs by `process` feature:
+                // with `process`: (agent_id, session_id, deadline: Option<SystemTime>)
+                // without `process` (wasm guest): (agent_id, session_id)
+                #[cfg(feature = "process")]
                 let ctx = SessionContext::new(agent_instance_id, crate::ids::uuid_v4(random_ref(&options)), None)
+                    .with_granted_capabilities(granted_for_session.clone())
+                    .with_deny_entries(deny_entries.clone());
+                #[cfg(not(feature = "process"))]
+                let ctx = SessionContext::new(agent_instance_id, crate::ids::uuid_v4(random_ref(&options)))
                     .with_granted_capabilities(granted_for_session.clone())
                     .with_deny_entries(deny_entries.clone());
                 // ADR-0006 §3.9: `tool.session_open` span wraps the
@@ -1490,71 +1520,83 @@ pub fn run_streaming_inner(
                 }
                 drop(session_open_span);
 
-                // ----- Schema validation ------------------------------------
-                let validator = tool_validators.get(tool_use.name.as_str()).expect(
-                    "tool_validators is in 1:1 correspondence with tools \
-                     (Task 4 invariant). If this fires, the registration \
-                     pipeline is broken.",
-                );
-                match crate::tool_args::validate_tool_args(
-                    &tool_use.input,
-                    &tool_use.name,
-                    validator,
-                ) {
-                    Err(ToolError::BadArgs { reason }) => {
-                        // Validation failure is recoverable: write a
-                        // ToolError message into the conversation so the
-                        // LLM gets to self-correct, then yield
-                        // ToolCallCompleted with Err and continue.
-                        let close_span = info_span!(
-                            parent: &dispatch_span,
-                            SPAN_TOOL_SESSION_CLOSE,
-                            tool_name = %tool_use.name,
-                            session_id = %ctx.session_id,
-                        );
-                        let _ = tool.teardown(()).instrument(close_span).await; // best-effort
-                        warn!(
-                            parent: &turn_span,
-                            name = "tool.args_validation_failed",
-                            tool_name = %tool_use.name,
-                        );
-                        let validation_err_msg = Message::new(
-                            tool_addr.clone(),
-                            agent_addr.clone(),
-                            MessagePayload::ToolError {
-                                kind: "tool_args_validation".into(),
-                                message: reason.clone(),
-                                details: None,
-                            },
-                        );
-                        debug!(
-                            parent: &turn_span,
-                            name = EV_MESSAGE_ADDED,
-                            role = ?validation_err_msg.sender,
-                        );
-                        messages.push(validation_err_msg);
-                        yield RunEvent::ToolCallCompleted {
-                            id: tool_use.id.clone(),
-                            name: tool_use.name.clone(),
-                            result: Err(reason),
-                        };
-                        continue; // next tool_use
+                // ----- Schema validation (tool-validation feature only) ------
+                // When `tool-validation` is enabled, pre-compiled jsonschema
+                // validators reject bad args before dispatch. Without it
+                // (e.g. the wasm guest), validation is skipped — the
+                // `tool_validators` map is `HashMap<String, ()>` and the
+                // `crate::tool_args` module is absent.
+                #[cfg(feature = "tool-validation")]
+                {
+                    let validator = tool_validators.get(tool_use.name.as_str()).expect(
+                        "tool_validators is in 1:1 correspondence with tools \
+                         (Task 4 invariant). If this fires, the registration \
+                         pipeline is broken.",
+                    );
+                    match crate::tool_args::validate_tool_args(
+                        &tool_use.input,
+                        &tool_use.name,
+                        validator,
+                    ) {
+                        Err(ToolError::BadArgs { reason }) => {
+                            // Validation failure is recoverable: write a
+                            // ToolError message into the conversation so the
+                            // LLM gets to self-correct, then yield
+                            // ToolCallCompleted with Err and continue.
+                            let close_span = info_span!(
+                                parent: &dispatch_span,
+                                SPAN_TOOL_SESSION_CLOSE,
+                                tool_name = %tool_use.name,
+                                session_id = %ctx.session_id,
+                            );
+                            let _ = tool.teardown(()).instrument(close_span).await; // best-effort
+                            warn!(
+                                parent: &turn_span,
+                                name = "tool.args_validation_failed",
+                                tool_name = %tool_use.name,
+                            );
+                            let validation_err_msg = Message::new_with(
+                                crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                                crate::ids::now_utc(clock_ref(&options)),
+                                tool_addr.clone(),
+                                agent_addr.clone(),
+                                MessagePayload::ToolError {
+                                    kind: "tool_args_validation".into(),
+                                    message: reason.clone(),
+                                    details: None,
+                                },
+                            );
+                            debug!(
+                                parent: &turn_span,
+                                name = EV_MESSAGE_ADDED,
+                                role = ?validation_err_msg.sender,
+                            );
+                            messages.push(validation_err_msg);
+                            yield RunEvent::ToolCallCompleted {
+                                id: tool_use.id.clone(),
+                                name: tool_use.name.clone(),
+                                result: Err(reason),
+                            };
+                            continue; // next tool_use
+                        }
+                        Err(other) => {
+                            // Defensive: validate_tool_args only emits BadArgs
+                            // in v0.1 — reach here only if the contract changes.
+                            let close_span = info_span!(
+                                parent: &dispatch_span,
+                                SPAN_TOOL_SESSION_CLOSE,
+                                tool_name = %tool_use.name,
+                                session_id = %ctx.session_id,
+                            );
+                            let _ = tool.teardown(()).instrument(close_span).await;
+                            yield make_tool_fatal_error(other);
+                            return;
+                        }
+                        Ok(_) => {} // proceed to invoke
                     }
-                    Err(other) => {
-                        // Defensive: validate_tool_args only emits BadArgs
-                        // in v0.1 — reach here only if the contract changes.
-                        let close_span = info_span!(
-                            parent: &dispatch_span,
-                            SPAN_TOOL_SESSION_CLOSE,
-                            tool_name = %tool_use.name,
-                            session_id = %ctx.session_id,
-                        );
-                        let _ = tool.teardown(()).instrument(close_span).await;
-                        yield make_tool_fatal_error(other);
-                        return;
-                    }
-                    Ok(_) => {} // proceed to invoke
                 }
+                #[cfg(not(feature = "tool-validation"))]
+                let _ = &tool_validators; // suppress unused-variable warning
 
                 // ----- Invoke -----------------------------------------------
                 // ADR-0006 §3.9: `tool.invoke` span wraps the `invoke`
@@ -1631,7 +1673,9 @@ pub fn run_streaming_inner(
                         body: crate::run::content_to_value(&tool_result.content),
                     }
                 };
-                let tool_result_msg = Message::new(
+                let tool_result_msg = Message::new_with(
+                    crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                    crate::ids::now_utc(clock_ref(&options)),
                     tool_addr,
                     agent_addr,
                     result_payload,
@@ -1726,6 +1770,7 @@ fn emit_policy_denied_failure(turn_span: &tracing::Span, turn_index: u32, tool_n
 /// `skill.<name>.spawn` virtual tool call. Used in the `is_skill_spawn` branch
 /// of `run_streaming_inner` for early-exit error paths (scope resolution
 /// failure, validation failure).
+#[cfg_attr(not(feature = "host-fs"), allow(dead_code))]
 fn make_skill_spawn_error_tool_result(tool_use: &tau_ports::ToolUse, msg: &str) -> RunEvent {
     RunEvent::ToolCallCompleted {
         id: tool_use.id.clone(),
@@ -1827,6 +1872,10 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use tau_ports::fixtures::{make_token_usage, make_tool_result};
+    // Tests that build tool-validator maps use ToolArgsValidator directly.
+    // The type is only present when `tool-validation` is enabled (the default).
+    #[cfg(feature = "tool-validation")]
+    use crate::tool_args::ToolArgsValidator;
 
     #[test]
     fn run_event_text_delta_clone_preserves_delta() {

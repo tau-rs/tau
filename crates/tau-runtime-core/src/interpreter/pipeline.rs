@@ -340,9 +340,16 @@ fn rendered_to_args(rendered: &str) -> Value {
 /// Exposed as `pub(crate)` so `check.rs` can reuse it without a separate
 /// definition (single source of truth).
 pub(crate) fn user_message(content: &str) -> Message {
-    Message::new(
+    // Use no_std-safe constructors (std-gated `Message::new` and
+    // `AgentInstanceId::new` aren't available in the wasm-interpreter
+    // build). The kernel replaces the agent instance id when it builds
+    // the inner agent loop, so the placeholder zeros are ephemeral.
+    use tau_domain::MessageId;
+    Message::new_with(
+        MessageId::from_parts(0, [0u8; 10]),
+        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(0).unwrap(),
         Address::User,
-        Address::Agent(AgentInstanceId::new()),
+        Address::Agent(AgentInstanceId::from_parts(0, [0u8; 10])),
         MessagePayload::Text {
             content: content.to_string(),
         },

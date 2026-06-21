@@ -203,6 +203,10 @@ the wasm host runner (`tau-wasm-host`) lands in β.7.5 Phase 3.
   adapter; static cross-check only") until the wasm host runner lands.
   This is intentional and correct.
 
+> **Status (PR-E2, 2026-06-20):** the guest now drives `run_ir_streaming`
+> over the baked IR and returns the serialized typed `RunEvent` stream; the
+> `dev == wasm` conformance arm (`WasmMode`) is flipped live in PR-G.
+
 ## Alternatives considered
 
 - **Approach A — thin guest, tools in host imports:** rejected because it

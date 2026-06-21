@@ -14,6 +14,15 @@ wit_bindgen::generate!({
     path: "../../wit",
 });
 
+/// Re-export the WIT-generated host imports so sibling modules (host_ports.rs)
+/// can access them without knowing the exact generated module path.
+/// The path `tau::run::host` is what wit_bindgen generates for `import host`
+/// in the `tau:run` package's `runner` world (identical to the wasmtime host
+/// side which uses `tau::run::host`).
+pub(crate) mod wit_host {
+    pub(crate) use super::tau::run::host::*;
+}
+
 /// dlmalloc is a portable no_std allocator; the guest has no std heap.
 #[global_allocator]
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
@@ -85,12 +94,49 @@ struct Component;
 
 impl Guest for Component {
     fn run(_prompt: String) -> Result<String, String> {
-        // PR-E1: force the tau-runtime-core graph into the link.
-        // Real run_ir wiring is PR-E2.
-        match tau_ir::from_canonical_bytes(b"{}") {
-            Ok(_) => Ok("{}".to_string()),
-            Err(e) => Err(e.to_string()),
+        use alloc::sync::Arc;
+        use alloc::vec::Vec;
+
+        let bytes = crate::baked::BAKED_IR;
+        if bytes.is_empty() {
+            return Err("tau-wasm-guest: no baked IR".to_string());
         }
+        let module = tau_ir::from_canonical_bytes(bytes).map_err(|e| e.to_string())?;
+
+        // E2 scope: exactly one agent; it is the entry.
+        if module.workflow.agents.len() != 1 {
+            return Err(alloc::format!(
+                "tau-wasm-guest: E2 supports exactly one agent, found {}",
+                module.workflow.agents.len()
+            ));
+        }
+        let entry = module
+            .workflow
+            .agents
+            .keys()
+            .next()
+            .expect("len checked == 1")
+            .clone();
+
+        let backend: Arc<dyn tau_runtime_core::builder::DynLlmBackend> =
+            Arc::new(crate::host_ports::HostLlmBackend);
+        let clock: Arc<dyn tau_ports::Clock> = Arc::new(crate::host_ports::HostClock);
+        let random: Arc<dyn tau_ports::RandomSource> = Arc::new(crate::host_ports::HostRandom);
+        let dispatcher = Arc::new(crate::dispatcher::GuestDispatcher::new(
+            backend, clock, random,
+        ));
+
+        let module = Arc::new(module);
+        let stream = crate::executor::block_on(tau_runtime_core::interpreter::run_ir_streaming(
+            module,
+            &entry,
+            dispatcher,
+            Vec::new(),
+        ))
+        .map_err(|e| e.to_string())?;
+
+        let events = crate::executor::collect_stream(stream);
+        serde_json::to_string(&events).map_err(|e| e.to_string())
     }
 }
 

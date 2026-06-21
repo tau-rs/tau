@@ -1,0 +1,17 @@
+packages = ["anthropic"]
+
+[project]
+name = "trivial-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.main]
+display_name = "Main"
+package = "trivial-wasm@^0.1"
+model = "claude"
+
+[agents.main.prompt]
+system = "You are a trivial test agent. Reply and stop."

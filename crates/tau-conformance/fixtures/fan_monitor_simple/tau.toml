@@ -1,0 +1,25 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fan-monitor-simple"
+
+[models.haiku]
+backend = "mock-llm"
+model = "claude-haiku-4-5"
+
+[agents.fan-monitor]
+display_name = "Fan Monitor"
+package      = "fan-monitor@^0.1"
+model        = "haiku"
+tool_refs    = ["read_temp", "set_fan"]
+max_turns    = 6
+
+[tools.read_temp]
+native      = "ReadTemp"
+description = "Read the current temperature."
+capabilities = []
+
+[tools.set_fan]
+native      = "SetFan"
+description = "Set the fan on or off."
+capabilities = []
