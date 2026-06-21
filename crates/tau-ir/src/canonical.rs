@@ -44,7 +44,7 @@ mod pipeline_canonical_tests {
     use tau_ports::target::registry;
 
     #[test]
-    fn module_with_pipeline_round_trips_and_reports_v2_0() {
+    fn module_with_pipeline_round_trips_and_reports_v2_1() {
         let target = registry::list_available().next().unwrap().triple;
         let wf = Workflow {
             pipeline: Some(Pipeline {
@@ -63,7 +63,7 @@ mod pipeline_canonical_tests {
             workflow: wf,
             triggers: alloc::vec::Vec::new(),
         };
-        assert_eq!(m.ir_format.0, "v2.0.0");
+        assert_eq!(m.ir_format.0, "v2.1.0");
         let bytes = to_canonical_bytes(&m);
         let back = from_canonical_bytes(&bytes).expect("round-trips");
         assert_eq!(m, back);

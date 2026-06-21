@@ -29,7 +29,9 @@ use tau_ports::tool::{SessionContext, ToolContent};
 use tau_runtime_core::builder::{DynLlmBackend, DynTool};
 use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::run_ir;
-use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
+use tau_runtime_core::interpreter::tool_dispatch::{
+    DurableHandles, ToolDispatcher, ToolInvocationResult,
+};
 
 use crate::cli::RunArgs;
 use crate::cmd::plugin_loader;
@@ -207,7 +209,53 @@ pub(crate) async fn run_via_ir(
         ));
     }
 
-    let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backends, tools_by_id));
+    // 5d. ADR-0053: wire durable checkpoint/resume when the entry agent
+    //     declares `[durable]`. The store is rooted at the project scope so
+    //     checkpoints land under `<scope>/.tau/runs/<run_id>/`. On
+    //     `--resume <id>` we load the latest committed checkpoint; on a fresh
+    //     durable run we mint a run id and tell the operator how to resume.
+    let mut dispatcher = ForwardingDispatcher::new(llm_backends, tools_by_id);
+    if entry_agent.durable.is_some() {
+        let store: Arc<dyn tau_ports::CheckpointStore> = Arc::new(
+            tau_runtime_tokio::FileCheckpointStore::new(scope.path().to_path_buf()),
+        );
+        let (durable_run_id, resume) = match &args.resume {
+            Some(rid) => {
+                let resume = store
+                    .load_latest(rid)
+                    .map_err(|e| anyhow::anyhow!("loading checkpoint for --resume {rid:?}: {e}"))?;
+                match &resume {
+                    Some(c) => {
+                        output.status(format!(
+                            "resuming durable run {rid:?} from turn {} (turns 1..={} not re-billed)",
+                            c.turn, c.turn
+                        ))?;
+                    }
+                    None => {
+                        output.warn(format!(
+                            "no checkpoint found for --resume {rid:?}; starting a fresh run under that id"
+                        ))?;
+                    }
+                }
+                (rid.clone(), resume)
+            }
+            None => {
+                let rid = format!(
+                    "run-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                );
+                output.status(format!(
+                    "durable run id: {rid} (resume after a crash with `tau run --resume {rid}`)"
+                ))?;
+                (rid, None)
+            }
+        };
+        dispatcher = dispatcher.with_durable(store, durable_run_id, resume);
+    }
+    let dispatcher = Arc::new(dispatcher);
 
     // 6. Build the initial prompt text from --prompt / stdin.
     let prompt_text = match &args.prompt {
@@ -307,6 +355,11 @@ pub(crate) struct ForwardingDispatcher {
     /// the backend name baked into the agent's resolved `model_ref` at lowering.
     llm_backends: BTreeMap<String, Arc<dyn DynLlmBackend>>,
     tools: BTreeMap<ToolId, Arc<dyn DynTool>>,
+    /// ADR-0053 durable handles. `None` for non-durable runs. Set via
+    /// [`Self::with_durable`] when the entry agent declares `durable`.
+    durable_store: Option<Arc<dyn tau_ports::CheckpointStore>>,
+    durable_run_id: Option<String>,
+    durable_resume: Option<tau_ports::TurnCheckpoint>,
 }
 
 impl ForwardingDispatcher {
@@ -317,7 +370,25 @@ impl ForwardingDispatcher {
         Self {
             llm_backends,
             tools,
+            durable_store: None,
+            durable_run_id: None,
+            durable_resume: None,
         }
+    }
+
+    /// Attach durable checkpoint/resume handles (ADR-0053). The
+    /// interpreter reads these via [`ToolDispatcher::checkpointing`] only
+    /// for agents that declare `durable`.
+    pub(crate) fn with_durable(
+        mut self,
+        store: Arc<dyn tau_ports::CheckpointStore>,
+        run_id: String,
+        resume: Option<tau_ports::TurnCheckpoint>,
+    ) -> Self {
+        self.durable_store = Some(store);
+        self.durable_run_id = Some(run_id);
+        self.durable_resume = resume;
+        self
     }
 
     /// Test-only convenience: build a dispatcher from a single backend,
@@ -330,6 +401,9 @@ impl ForwardingDispatcher {
         Self {
             llm_backends,
             tools,
+            durable_store: None,
+            durable_run_id: None,
+            durable_resume: None,
         }
     }
 }
@@ -534,6 +608,17 @@ impl ToolDispatcher for ForwardingDispatcher {
         &self,
     ) -> Option<Arc<dyn tau_runtime_core::interpreter::artifact::ArtifactReader>> {
         Some(crate::cmd::builtin_registry::make_artifact_reader())
+    }
+
+    /// Supply durable checkpoint/resume handles (ADR-0053) when configured
+    /// via [`Self::with_durable`]. Returns `None` for non-durable runs, in
+    /// which case even a `durable` agent runs as ordinary (no store wired).
+    fn checkpointing(&self) -> Option<DurableHandles> {
+        Some(DurableHandles {
+            store: self.durable_store.clone()?,
+            run_id: self.durable_run_id.clone()?,
+            resume: self.durable_resume.clone(),
+        })
     }
 }
 

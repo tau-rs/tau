@@ -81,6 +81,9 @@ pub struct UncheckedAgent {
     /// Optional `[agents.<id>.context]` sub-table (β.4).
     #[serde(default)]
     pub context: Option<UncheckedContext>,
+    /// Optional `[agents.<id>.durable]` sub-table (ADR-0053).
+    #[serde(default)]
+    pub durable: Option<UncheckedDurable>,
     // --- IR lowering fields (β.2.2) ---
     /// LLM model identifier (e.g. `"claude-haiku-4-5"`). Used by the IR
     /// lowering pass; ignored by the existing agent-resolution path.
@@ -201,6 +204,18 @@ pub struct UncheckedContextStep {
     /// For custom nodes: declared determinism (`pure` default).
     #[serde(default)]
     pub determinism: Option<String>,
+}
+
+/// `[agents.<id>.durable]` sub-table (ADR-0053). Opts an agent into
+/// turn-level checkpoint/resume. `deny_unknown_fields` so a typo'd key
+/// fails the build rather than being silently dropped.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedDurable {
+    /// Checkpoint granularity. A-minimal accepts only `"per_turn"`.
+    pub checkpoint: String,
+    /// Durable store. A-minimal accepts only `"file"`.
+    pub store: String,
 }
 
 /// Single `[[agents.<id>.capabilities]]` array-of-tables entry.
@@ -729,6 +744,17 @@ pub struct ContextStepEntry {
     pub config: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
+/// Validated `[agents.<id>.durable]` block (ADR-0053). Present only when
+/// the agent opts into durable execution. Strings are validated to known
+/// values at parse time; lowering maps them to `tau_ir` enums.
+#[derive(Debug, Clone)]
+pub struct DurableEntry {
+    /// Validated checkpoint granularity (`"per_turn"`).
+    pub checkpoint: String,
+    /// Validated durable store (`"file"`).
+    pub store: String,
+}
+
 /// Validated entry for a single agent.
 ///
 /// # Example
@@ -792,6 +818,9 @@ pub struct AgentEntry {
     /// use). `None` = unspecified. Pass-through; any well-formed JSON value
     /// is accepted (no deep JSON-schema validation).
     pub output_schema: Option<serde_json::Value>,
+    /// Validated `[agents.<id>.durable]` block (ADR-0053). `None` = not
+    /// durable (whole-bundle reentrant only).
+    pub durable: Option<DurableEntry>,
 }
 
 impl AgentEntry {
@@ -824,6 +853,7 @@ impl AgentEntry {
             context: Vec::new(),
             credentials: Vec::new(),
             output_schema: None,
+            durable: None,
         }
     }
 }
@@ -1432,6 +1462,39 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         }
     };
 
+    // ADR-0053: validate the optional durable-execution block. A-minimal
+    // accepts exactly `checkpoint = "per_turn"` + `store = "file"`; any
+    // other value is a build error (build-time enforcement — the
+    // `#[non_exhaustive]` IR enums grow additively for finer granularities
+    // / stores later).
+    let durable: Option<DurableEntry> = match raw.durable {
+        None => None,
+        Some(d) => {
+            if d.checkpoint != "per_turn" {
+                return Err(ProjectConfigError::AgentValidation {
+                    id: id.clone(),
+                    message: format!(
+                        "durable.checkpoint {:?} unsupported (A-minimal accepts only \"per_turn\")",
+                        d.checkpoint
+                    ),
+                });
+            }
+            if d.store != "file" {
+                return Err(ProjectConfigError::AgentValidation {
+                    id: id.clone(),
+                    message: format!(
+                        "durable.store {:?} unsupported (A-minimal accepts only \"file\")",
+                        d.store
+                    ),
+                });
+            }
+            Some(DurableEntry {
+                checkpoint: d.checkpoint,
+                store: d.store,
+            })
+        }
+    };
+
     // β.5: validate credential declarations.
     let mut credentials = Vec::with_capacity(raw.credentials.len());
     let mut seen_envs = std::collections::BTreeSet::new();
@@ -1479,6 +1542,7 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
         context,
         credentials,
         output_schema: raw.output_schema,
+        durable,
     })
 }
 
@@ -4259,6 +4323,7 @@ mod proptests {
                         config: None,
                         prompt: None,
                         context: None,
+                        durable: None,
                         model: Some(alias),
                         tool_refs: Vec::new(),
                         max_turns: None,

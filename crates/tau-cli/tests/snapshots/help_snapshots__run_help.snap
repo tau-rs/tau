@@ -38,6 +38,9 @@ Options:
       --bundle <PATH>
           Run from a pre-built bundle, verifying the cwd matches it first. The bundle must target this host triple and the project must be installed at the exact tree hashes recorded in the bundle, or the run is refused (Phase 2 §C.3)
 
+      --resume <RUN_ID>
+          Resume a durable run by its run id (ADR-0053). The entry agent must declare `[durable]`; the run rehydrates the latest checkpoint under `.tau/runs/<RUN_ID>/` and re-enters at the next turn, so already committed turns are not re-billed
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

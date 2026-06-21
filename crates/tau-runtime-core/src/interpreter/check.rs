@@ -236,6 +236,9 @@ where
                 max_tokens: None,
             },
             output_schema: None,
+            // The synthesized judge runs as a one-shot sub-agent; it is
+            // never itself durable (ADR-0053).
+            durable: None,
         },
     };
 

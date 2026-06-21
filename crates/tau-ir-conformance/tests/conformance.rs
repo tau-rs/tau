@@ -827,3 +827,103 @@ async fn fixture_15_cross_mode_conformance() {
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
 }
+
+// ---------------------------------------------------------------------------
+// Fixture 16 — durable agent (ADR-0053) is additive + byte-stable
+// ---------------------------------------------------------------------------
+
+/// Fixture 16: mirrors fixture 01 (agent + one native tool, two turns) with
+/// an additional `[agents.fan.durable]` block. The durable config is carried
+/// verbatim on the IR `Agent`; it does not affect execution (the conformance
+/// harness drives the interpreter with no `CheckpointStore`, so no checkpoint
+/// is written). This dev-mode test proves the v2.0.0→v2.1.0 additive field
+/// lowers and runs to completion with the same single `read_temp` tool call
+/// as the durable-less fixture 01.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_16_dev_mode_completed_with_durable() {
+    let dir = fixture_dir("16_durable_per_turn");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    let total = count_tool_calls(&report, "read_temp");
+    assert_eq!(total, 1, "expected exactly 1 read_temp call; got {total}");
+}
+
+/// Cross-mode conformance for fixture 16: the agent's `durable` block
+/// round-trips through the bundle's canonical encoder/decoder (BundleMode
+/// asserts `canonical_hash` equality internally), and both modes produce the
+/// same side-effect multiset — durable is observationally inert.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_16_cross_mode_conformance() {
+    let dir = fixture_dir("16_durable_per_turn");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Bundle reentrancy — the runtime half of the "safe-to-retry reentrant
+// artifact" contract (durable-execution Phase B)
+// ---------------------------------------------------------------------------
+
+/// Reentrancy reference test: a built tau bundle is a pure function of
+/// `(bundle, input)` — invoking it twice with the same input yields an
+/// identical observable outcome.
+///
+/// This is the runtime half of the contract documented in
+/// `docs/how-to/run-tau-under-a-durable-orchestrator.md`: a host
+/// orchestrator (Temporal / Inngest / Cloudflare Workflows) owns
+/// *durability* (when / whether to re-run), and tau guarantees the bundle
+/// is a *reentrant* unit that is safe to retry. "Safe to retry" means a
+/// second invocation with the same input produces the same observable
+/// side effects as the first — exactly what a retry policy assumes.
+///
+/// The *build* half of the contract — that a bundle's content address
+/// (`bundle.sha256`) is a pure function of its source — is proven
+/// separately by `tau_pkg::bundle::reproduce` (e.g.
+/// `reproducible_when_tree_unchanged`) and `verify_self_hash`. Together
+/// the two halves establish "pure function of `(bundle_hash, input)`".
+///
+/// Fixture 06 (`06_multi_turn_history`) is used because a multi-turn agent
+/// loop is the closest fixture to the long-running unit the durability
+/// story cares about: three consecutive tool-use turns then an end_turn.
+/// Comparison goes through [`assert_conform`] — outcome compared by kind,
+/// side effects compared as `(tool_name, args)` and message multisets —
+/// because the raw `RunOutcome` embeds per-run message UUIDs and
+/// timestamps that are nondeterministic *by design* and are not part of
+/// the observable outcome a retry must reproduce.
+#[tokio::test(flavor = "current_thread")]
+async fn bundle_invocation_is_reentrant_multi_turn() {
+    let dir = fixture_dir("06_multi_turn_history");
+
+    // Two independent invocations of the same bundle with the same input.
+    let first = BundleMode.run(&dir).await;
+    let second = BundleMode.run(&dir).await;
+
+    // Both invocations must actually execute (not build-refuse) and reach
+    // a completed outcome — otherwise "identical outcome" could be
+    // trivially satisfied by two identical failures.
+    assert!(
+        first.build_refused.is_none(),
+        "first invocation unexpectedly build-refused: {:?}",
+        first.build_refused
+    );
+    assert!(
+        matches!(first.run_outcome, Some(RunOutcome::Completed { .. })),
+        "first invocation must complete, got: {:?}",
+        first.run_outcome
+    );
+
+    // The load-bearing assertion: a retry of the same bundle with the same
+    // input is observationally identical to the original invocation.
+    assert_conform(&first, &second);
+}

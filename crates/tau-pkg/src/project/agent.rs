@@ -345,6 +345,7 @@ mod tests {
             context: Vec::new(),
             credentials: Vec::new(),
             output_schema: None,
+            durable: None,
         };
         mutate(&mut e);
         e

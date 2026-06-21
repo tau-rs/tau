@@ -20,6 +20,23 @@ use tau_ir::ToolId;
 use crate::builder::DynLlmBackend;
 use crate::error::RuntimeError;
 
+/// Durable-execution handles supplied by the host (ADR-0053).
+///
+/// Returned from [`ToolDispatcher::checkpointing`]. When present AND the
+/// agent declares `durable`, [`super::agent_loop`]'s `prepare_agent_run`
+/// wires `store` + `run_id` (and any `resume` checkpoint) into the agent
+/// loop's `RunOptions`. Bundling the three into one struct keeps the trait
+/// to a single additive method.
+pub struct DurableHandles {
+    /// Where turn checkpoints are written/read.
+    pub store: Arc<dyn tau_ports::CheckpointStore>,
+    /// Run id used to key checkpoints and as the `--resume` handle.
+    pub run_id: String,
+    /// When resuming, the latest checkpoint to rehydrate from; `None` for a
+    /// fresh durable run.
+    pub resume: Option<tau_ports::TurnCheckpoint>,
+}
+
 /// Result of one tool invocation.
 pub struct ToolInvocationResult {
     /// Successful body (None if the tool errored — see `error`).
@@ -112,6 +129,18 @@ pub trait ToolDispatcher {
     fn context_transformer_registry(
         &self,
     ) -> Option<Arc<dyn crate::context::ContextTransformerRegistry>> {
+        None
+    }
+
+    /// Optional durable-execution handles (ADR-0053).
+    ///
+    /// Returning `Some` enables turn-level checkpointing for agents that
+    /// declare `durable` (the gating is in `prepare_agent_run`). The tokio
+    /// host returns a `FileCheckpointStore` + the run id (and, on
+    /// `tau run --resume`, the loaded checkpoint); dispatchers without a
+    /// durable store return `None` (the default) and durable agents then run
+    /// as ordinary non-durable agents.
+    fn checkpointing(&self) -> Option<DurableHandles> {
         None
     }
 }

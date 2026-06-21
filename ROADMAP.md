@@ -793,7 +793,10 @@ sharpens, but does not relax, any of them.
 - **NG5.** Tau is not a general-purpose workflow engine. *(Clarification:
   tau executes workflow IR with capability-safe portability as its
   defining property; it does not compete with general orchestrators
-  like Temporal/n8n on their breadth.)*
+  like Temporal/n8n on their breadth. Durability — when and whether to
+  re-run — is delegated to the host orchestrator; tau guarantees the
+  compiled bundle is a safe-to-retry reentrant unit. See
+  [Run tau under a durable orchestrator](docs/how-to/run-tau-under-a-durable-orchestrator.md).)*
 - **NG6.** Tau does not provide persistent agent memory in core.
   *(Context-manager v2 retrieval is backed by a contracted vector-store
   MCP — never built-in.)*
