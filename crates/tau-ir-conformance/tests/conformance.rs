@@ -836,7 +836,7 @@ async fn fixture_15_cross_mode_conformance() {
 /// an additional `[agents.fan.durable]` block. The durable config is carried
 /// verbatim on the IR `Agent`; it does not affect execution (the conformance
 /// harness drives the interpreter with no `CheckpointStore`, so no checkpoint
-/// is written). This dev-mode test proves the v2.0.0→v2.1.0 additive field
+/// is written). This dev-mode test proves the v2.1.0→v2.2.0 additive field
 /// lowers and runs to completion with the same single `read_temp` tool call
 /// as the durable-less fixture 01.
 #[tokio::test(flavor = "current_thread")]
