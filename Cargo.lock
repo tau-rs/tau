@@ -4306,6 +4306,7 @@ dependencies = [
  "tau-ir-lower",
  "tau-mcp",
  "tau-mcp-tokio",
+ "tau-native-tools",
  "tau-pkg",
  "tau-ports",
  "tau-runtime-core",
@@ -4422,6 +4423,13 @@ dependencies = [
  "tracing",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "tau-native-tools"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -4743,6 +4751,7 @@ dependencies = [
  "futures-core",
  "serde_json",
  "tau-ir",
+ "tau-native-tools",
  "tau-ports",
  "tau-runtime-core",
  "wit-bindgen 0.58.0",
