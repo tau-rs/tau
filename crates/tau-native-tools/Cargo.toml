@@ -1,0 +1,12 @@
+[package]
+name = "tau-native-tools"
+description = "β.7.5 shared deterministic native tools (read_temp/set_fan), no_std; one source of tool bodies for both the dev conformance profile and the wasm guest."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+serde_json = { workspace = true, default-features = false, features = ["alloc"] }
