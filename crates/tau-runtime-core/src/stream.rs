@@ -412,9 +412,12 @@ pub fn run_streaming_inner(
             if mid_turn_resume {
                 pending_tool_uses = core::mem::take(&mut resume_pending);
                 // Re-emit ToolCallStarted so the "Started precedes Completed"
-                // invariant holds on the resumed stream. The assistant
-                // tool-call messages are already in `messages` from the
-                // pre-crash run, so they are NOT re-pushed here.
+                // invariant holds on the resumed stream. This seed block
+                // pushes no message itself: the dispatch loop below pushes
+                // each re-dispatched tool's ToolCall exactly once, which is
+                // correct because these pending tools were never recorded in
+                // the pre-crash history (the mid-turn checkpoint was taken
+                // after the prior tool's result, before these tools started).
                 for tu in &pending_tool_uses {
                     yield RunEvent::ToolCallStarted {
                         id: tu.id.clone(),
