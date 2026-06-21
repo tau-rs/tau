@@ -277,6 +277,18 @@ pub struct TurnCheckpoint {
     pub input_tokens: u64,
     /// Cumulative output (completion) tokens through `turn`.
     pub output_tokens: u64,
+    /// Tools the model requested in `turn` that had **not** completed when
+    /// this snapshot was taken (`PerToolCall` mid-turn checkpoints only).
+    /// Empty for a `PerTurn` / turn-boundary checkpoint — serde-skipped so
+    /// those snapshots stay byte-identical to the A-minimal wire form.
+    /// On resume the runtime re-dispatches exactly these before the next
+    /// LLM call; carried explicitly because they are not derivable from
+    /// `history` (see ADR-0053 follow-up).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub pending_tool_uses: Vec<crate::llm::ToolUse>,
 }
 
 /// Errors surfaced by a [`CheckpointStore`].
@@ -318,6 +330,23 @@ pub trait CheckpointStore: Send + Sync {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn per_turn_checkpoint_omits_pending_field() {
+        let c = TurnCheckpoint {
+            run_id: "r".into(),
+            turn: 1,
+            history: alloc::vec![],
+            input_tokens: 0,
+            output_tokens: 0,
+            pending_tool_uses: alloc::vec![],
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(
+            !json.contains("pending_tool_uses"),
+            "empty pending must be skipped for byte-stability; got {json}"
+        );
+    }
 
     #[test]
     fn task_status_roundtrips_snake_case() {

@@ -162,6 +162,10 @@ pub struct RunOptions {
     /// and re-enters at the next turn, instead of starting fresh — so already
     /// committed turns are not re-billed.
     pub resume_from: Option<tau_ports::orchestration::TurnCheckpoint>,
+
+    /// The declaring agent's checkpoint granularity, when durable. Gates the
+    /// mid-turn (per-tool) checkpoint + resume path (ADR-0053 follow-up).
+    pub durable_granularity: Option<tau_ir::durable::CheckpointGranularity>,
 }
 
 impl core::fmt::Debug for RunOptions {
@@ -206,6 +210,7 @@ impl core::fmt::Debug for RunOptions {
             )
             .field("run_id", &self.run_id)
             .field("resume_from", &self.resume_from.as_ref().map(|c| c.turn))
+            .field("durable_granularity", &self.durable_granularity)
             .finish()
     }
 }
@@ -228,6 +233,7 @@ impl Default for RunOptions {
             checkpoint_store: None,
             run_id: None,
             resume_from: None,
+            durable_granularity: None,
         }
     }
 }

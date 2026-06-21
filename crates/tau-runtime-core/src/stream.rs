@@ -271,6 +271,7 @@ fn persist_checkpoint_if_durable(
             history: messages.to_vec(),
             input_tokens: tokens.input_tokens,
             output_tokens: tokens.output_tokens,
+            pending_tool_uses: alloc::vec![],
         };
         if let Err(e) = store.persist(&ckpt) {
             warn!(name = "runtime.checkpoint_failed", turn, error = %e);
@@ -3189,6 +3190,7 @@ paths = ["/etc/**"]
             history: alloc::vec![user_msg("original task")],
             input_tokens: 13,
             output_tokens: 7,
+            pending_tool_uses: vec![],
         };
 
         // EXACTLY ONE turn available — the resumed turn 3.

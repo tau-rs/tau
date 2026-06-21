@@ -107,6 +107,7 @@ mod tests {
             )],
             input_tokens: turn as u64 * 10,
             output_tokens: turn as u64 * 5,
+            pending_tool_uses: vec![],
         }
     }
 

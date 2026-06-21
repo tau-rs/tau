@@ -302,7 +302,7 @@ pub enum CompletionChunk {
 
 /// One tool-use request emitted by the model.
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ToolUse {
     /// Provider-supplied identifier; round-tripped to
