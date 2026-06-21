@@ -151,13 +151,19 @@ impl Runner {
                                 agent: agent.clone(),
                             })?;
                     let initial_message = build_user_message(resolved_input.clone());
+                    // Host-shell contract (`stream.rs::clock_ref`): inject the
+                    // production clock + randomness or `run_streaming_inner`
+                    // panics on the first port use.
+                    let mut run_opts = tau_runtime_tokio::RunOptions::default();
+                    run_opts.clock = Some(std::sync::Arc::new(tau_runtime_tokio::TokioClock));
+                    run_opts.random = Some(std::sync::Arc::new(tau_runtime_tokio::OsRandom));
                     let result = self
                         .runtime
                         .run(
                             agent_def.clone(),
                             manifest.clone(),
                             initial_message,
-                            tau_runtime_tokio::RunOptions::default(),
+                            run_opts,
                         )
                         .await;
                     (resolved_input, agent_outcome_to_string(result))

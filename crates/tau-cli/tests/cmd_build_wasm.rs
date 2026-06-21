@@ -17,7 +17,7 @@ fn fixture(name: &str) -> PathBuf {
 #[test]
 fn trivial_project_lowers_to_wasm_ir() {
     let (module, bytes) = lower_to_wasm_ir(&fixture("trivial")).expect("trivial lowers");
-    assert_eq!(module.ir_format.0, "v2.0.0");
+    assert_eq!(module.ir_format.0, tau_ir::IrFormatVersion::CURRENT);
     assert!(!bytes.is_empty(), "canonical IR bytes must be non-empty");
     // Re-decoding the bytes yields an equal module (round-trip sanity).
     let decoded = tau_ir::from_canonical_bytes(&bytes).expect("bytes decode");

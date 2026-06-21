@@ -168,6 +168,12 @@ pub async fn run(
             .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
+    // Host-shell contract (`stream.rs::clock_ref`): the single-agent run path
+    // (`run_streaming_path`) drives the core streaming path directly, so it must
+    // inject the production clock + randomness or `run_streaming_inner` panics on
+    // the first port use. The IR/bundle paths inject these via the dispatcher.
+    options.clock = Some(std::sync::Arc::new(tau_runtime_tokio::TokioClock));
+    options.random = Some(std::sync::Arc::new(tau_runtime_tokio::OsRandom));
     if let Some(n) = args.max_turns {
         options.max_turns = n;
     }
