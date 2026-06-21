@@ -1,0 +1,5 @@
+{
+  "run_outcome_kind": "Completed",
+  "tool_calls": { "read_temp:{}": 1, "read_humidity:{}": 1 },
+  "message_added_count": 6
+}

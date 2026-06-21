@@ -836,9 +836,14 @@ use crate::orchestration::{CheckpointError, CheckpointStore, RunId, TurnCheckpoi
 /// kill-and-resume test run entirely in-core: drive a run with this store,
 /// inspect [`MockCheckpointStore::persisted_turns`], then construct a fresh
 /// run that resumes from `load_latest` — no filesystem, no tokio host.
+///
+/// `log` is an append-only record of every `persist` call in order, including
+/// mid-turn intermediate writes. Use [`MockCheckpointStore::all_persists`] to
+/// assert that a per-tool checkpoint carried the expected `pending_tool_uses`.
 #[derive(Default)]
 pub struct MockCheckpointStore {
     by_run: Mutex<BTreeMap<RunId, BTreeMap<u32, TurnCheckpoint>>>,
+    log: Mutex<Vec<TurnCheckpoint>>,
 }
 
 impl MockCheckpointStore {
@@ -866,6 +871,14 @@ impl MockCheckpointStore {
             .map(|turns| turns.len())
             .sum()
     }
+
+    /// Every `persist` call in chronological order, including mid-turn
+    /// intermediate writes that are later overwritten in `by_run`. Use this
+    /// to assert that a per-tool-call checkpoint carried the expected
+    /// `pending_tool_uses` before the turn-boundary write cleared them.
+    pub fn all_persists(&self) -> Vec<TurnCheckpoint> {
+        self.log.lock().expect("log mutex").clone()
+    }
 }
 
 impl CheckpointStore for MockCheckpointStore {
@@ -876,6 +889,7 @@ impl CheckpointStore for MockCheckpointStore {
             .entry(ckpt.run_id.clone())
             .or_default()
             .insert(ckpt.turn, ckpt.clone());
+        self.log.lock().expect("log mutex").push(ckpt.clone());
         Ok(())
     }
 

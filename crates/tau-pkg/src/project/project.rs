@@ -212,7 +212,7 @@ pub struct UncheckedContextStep {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncheckedDurable {
-    /// Checkpoint granularity. A-minimal accepts only `"per_turn"`.
+    /// Checkpoint granularity. A-minimal accepts `"per_turn"` or `"per_tool_call"`.
     pub checkpoint: String,
     /// Durable store. A-minimal accepts only `"file"`.
     pub store: String,
@@ -749,7 +749,7 @@ pub struct ContextStepEntry {
 /// values at parse time; lowering maps them to `tau_ir` enums.
 #[derive(Debug, Clone)]
 pub struct DurableEntry {
-    /// Validated checkpoint granularity (`"per_turn"`).
+    /// Validated checkpoint granularity (`"per_turn"` or `"per_tool_call"`).
     pub checkpoint: String,
     /// Validated durable store (`"file"`).
     pub store: String,
@@ -1463,18 +1463,18 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
     };
 
     // ADR-0053: validate the optional durable-execution block. A-minimal
-    // accepts exactly `checkpoint = "per_turn"` + `store = "file"`; any
+    // accepts `checkpoint = "per_turn"` or `checkpoint = "per_tool_call"` with `store = "file"`; any
     // other value is a build error (build-time enforcement — the
     // `#[non_exhaustive]` IR enums grow additively for finer granularities
     // / stores later).
     let durable: Option<DurableEntry> = match raw.durable {
         None => None,
         Some(d) => {
-            if d.checkpoint != "per_turn" {
+            if d.checkpoint != "per_turn" && d.checkpoint != "per_tool_call" {
                 return Err(ProjectConfigError::AgentValidation {
                     id: id.clone(),
                     message: format!(
-                        "durable.checkpoint {:?} unsupported (A-minimal accepts only \"per_turn\")",
+                        "durable.checkpoint {:?} unsupported (accepts \"per_turn\" or \"per_tool_call\")",
                         d.checkpoint
                     ),
                 });
@@ -4281,6 +4281,28 @@ judge_model  = "unknown_model"
             matches!(err, ProjectConfigError::UnknownModelAlias { ref referrer, .. } if referrer.contains("deliverable") && referrer.contains("judge")),
             "expected UnknownModelAlias with deliverable/judge referrer, got: {err:?}"
         );
+    }
+
+    #[test]
+    fn durable_accepts_per_tool_call() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [models.m]
+            backend = "x"
+            model = "m"
+            [agents.a]
+            display_name = "A"
+            package = "x@^0.1"
+            model = "m"
+            [agents.a.durable]
+            checkpoint = "per_tool_call"
+            store = "file"
+        "#;
+        let cfg = parse(toml).expect("valid per_tool_call durable");
+        let agent = cfg.agents.get("a").unwrap();
+        let durable = agent.durable.as_ref().expect("durable present");
+        assert_eq!(durable.checkpoint, "per_tool_call");
     }
 }
 

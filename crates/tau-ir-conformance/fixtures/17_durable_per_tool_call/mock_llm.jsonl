@@ -1,0 +1,2 @@
+{"turn": 0, "response": {"tool_uses": [{"id": "1", "name": "read_temp", "input": {}}, {"id": "2", "name": "read_humidity", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 1, "response": {"text": "ok", "stop_reason": "end_turn"}}

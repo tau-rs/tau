@@ -1,0 +1,32 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-17"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.fan]
+display_name = "Fan Controller"
+package      = "fan-ctrl@^0.1"
+model        = "mock-1"
+tool_refs    = ["read_temp", "read_humidity"]
+max_turns    = 2
+
+# ADR-0053 follow-up: per-tool-call durable. Additive IR metadata; with no
+# CheckpointStore in the conformance harness it does not change the observable
+# side-effect multiset, so this fixture cross-mode-conforms like fixture 16.
+[agents.fan.durable]
+checkpoint = "per_tool_call"
+store = "file"
+
+[tools.read_temp]
+native      = "ReadTemp"
+description = "Read the current temperature."
+capabilities = []
+
+[tools.read_humidity]
+native      = "ReadHumidity"
+description = "Read the current humidity."
+capabilities = []

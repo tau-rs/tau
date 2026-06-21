@@ -271,6 +271,7 @@ fn persist_checkpoint_if_durable(
     turn: u32,
     messages: &[Message],
     tokens: &crate::options::TokenUsage,
+    pending_tool_uses: Vec<tau_ports::llm::ToolUse>,
 ) {
     if let (Some(store), Some(run_id)) =
         (options.checkpoint_store.as_ref(), options.run_id.as_ref())
@@ -281,6 +282,7 @@ fn persist_checkpoint_if_durable(
             history: messages.to_vec(),
             input_tokens: tokens.input_tokens,
             output_tokens: tokens.output_tokens,
+            pending_tool_uses,
         };
         if let Err(e) = store.persist(&ckpt) {
             warn!(name = "runtime.checkpoint_failed", turn, error = %e);
@@ -315,6 +317,16 @@ pub fn run_streaming_inner(
         // so turns 1..=ckpt.turn are NOT re-billed (no LLM calls are made
         // for them). A fresh run extends the supplied history and pushes the
         // initial user message as turn 0's seed.
+        // Carry any mid-turn pending tools (PerToolCall resume).
+        // Non-empty only when the checkpoint was written after a per-tool-call
+        // commit mid-turn; the first iteration consumes these via `mem::take`
+        // and skips the LLM drain so the normal dispatch loop re-runs them.
+        let mut resume_pending: Vec<tau_ports::llm::ToolUse> = options
+            .resume_from
+            .as_ref()
+            .map(|c| c.pending_tool_uses.clone())
+            .unwrap_or_default();
+
         let (mut messages, mut total_turns, mut aggregated_tokens) =
             if let Some(ckpt) = options.resume_from.clone() {
                 let tokens = crate::options::TokenUsage {
@@ -322,7 +334,17 @@ pub fn run_streaming_inner(
                     output_tokens: ckpt.output_tokens,
                     total_tokens: None,
                 };
-                (ckpt.history, ckpt.turn, tokens)
+                // Mid-turn resume: re-run the SAME turn (finish its pending
+                // tools) before the loop advances. Seed one below `turn` so
+                // the first `total_turns += 1` restores `turn`, and the
+                // `TurnCompleted` event carries the correct (un-doubled) number.
+                // Turn-boundary resume (empty pending) seeds `ckpt.turn` as before.
+                let seed_turn = if ckpt.pending_tool_uses.is_empty() {
+                    ckpt.turn
+                } else {
+                    ckpt.turn.saturating_sub(1)
+                };
+                (ckpt.history, seed_turn, tokens)
             } else {
                 let mut messages: Vec<Message> = Vec::with_capacity(history.len() + 1);
                 // ADR-0006 §3.9: emit one `message.added` per message pushed
@@ -382,215 +404,247 @@ pub fn run_streaming_inner(
             );
             debug!(parent: &turn_span, name = EV_RUNTIME_TURN_STARTED, turn = total_turns);
 
-            let mut request = CompletionRequest::new(agent_def.model.clone());
-            request.system = agent_def.system_prompt.clone();
-            // β.4: derive a budgeted per-turn VIEW; stored `messages`
-            // (full conversation) is never mutated.
-            let provider_messages = if options.context_pipeline.is_empty() {
-                crate::run::agent_messages_to_provider_messages(&messages)
-            } else {
-                let cx = crate::context::TransformCx::pure(
-                    options.token_estimator.as_ref(),
-                    agent_def.system_prompt.as_deref(),
-                );
-                let mut view = messages.clone();
-                let mut pipeline_failed: Option<alloc::string::String> = None;
-                for t in &options.context_pipeline {
-                    let before: u32 = view.iter().map(|m| cx.estimate_tokens(m)).sum();
-                    match t.transform(&cx, view).await {
-                        Ok(next) => {
-                            let after: u32 = next.iter().map(|m| cx.estimate_tokens(m)).sum();
-                            debug!(
-                                parent: &turn_span,
-                                name = EV_CONTEXT_STEP_RAN,
-                                step = t.name(),
-                                tokens_in = before,
-                                tokens_out = after,
-                            );
-                            yield RunEvent::ContextStepRan {
-                                step: t.name().into(),
-                                tokens_in: u64::from(before),
-                                tokens_out: u64::from(after),
-                            };
-                            view = next;
-                        }
-                        Err(e) => {
-                            pipeline_failed = Some(alloc::format!("{e}"));
-                            view = alloc::vec::Vec::new();
-                            break;
-                        }
-                    }
-                }
-                if let Some(detail) = pipeline_failed {
-                    // Terminal kernel error: mirror the make_*_fatal_error
-                    // family (e.g. make_llm_fatal_error at the LLM-open seam
-                    // just below). FatalError is the batch drainer's signal
-                    // to reconstruct Err(RuntimeError::ContextPipeline).
-                    warn!(parent: &turn_span, name = EV_RUNTIME_FAILED, detail = %detail);
-                    yield make_context_pipeline_fatal_error(detail);
-                    return;
-                }
-                crate::run::agent_messages_to_provider_messages(&view)
-            };
-            request.messages = provider_messages;
-            request.tools = tool_specs.clone();
-            debug!(
-                parent: &turn_span,
-                name = EV_LLM_REQUEST_BUILT,
-                messages = request.messages.len(),
-                tools = request.tools.len(),
-            );
-            yield RunEvent::InferenceCallStarted;
-
-            let llm_stream_result = async { backend.stream(request).await }
-                .instrument(info_span!(parent: &turn_span, "llm.complete"))
-                .await;
-            let mut llm_stream = match llm_stream_result {
-                Ok(s) => s,
-                Err(llm_err) => {
-                    warn!(parent: &turn_span, name = "runtime.streaming_llm_open_failed");
-                    yield make_llm_fatal_error(llm_err);
-                    return;
-                }
-            };
-
+            // Hoist the four turn-body accumulators above the LLM-drain
+            // prologue so both the mid-turn-resume path and the normal
+            // LLM-drain path can write into them. The `if mid_turn_resume`
+            // block below seeds `pending_tool_uses` directly; the `else`
+            // block (the existing prologue) populates all four via the LLM
+            // stream. Either way the dispatch loop that follows sees the
+            // correct values.
             let mut accumulated_text = String::new();
             let mut turn_stop_reason: Option<StopReason> = None;
             let mut turn_usage: Option<TokenUsage> = None;
             let mut pending_tool_uses: Vec<tau_ports::ToolUse> = Vec::new();
 
-            // Drain the LLM stream for this turn.
-            // CompletionStream is Pin<Box<dyn Stream + Send>>; .as_mut() gives Pin<&mut S>.
-            // Each chunk-poll is instrumented with `turn_span` so any tracing
-            // emitted from inside the provider's stream impl attributes to
-            // this turn.
-            loop {
-                let next = core::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx))
-                    .instrument(turn_span.clone())
+            // PerToolCall mid-turn resume: the first turn after a mid-turn
+            // checkpoint finishes the carried tools WITHOUT an LLM call.
+            // `core::mem::take` empties `resume_pending` so subsequent
+            // turns always fall through to the normal LLM-drain `else` path.
+            let mid_turn_resume = !resume_pending.is_empty();
+            if mid_turn_resume {
+                pending_tool_uses = core::mem::take(&mut resume_pending);
+                // Re-emit ToolCallStarted so the "Started precedes Completed"
+                // invariant holds on the resumed stream. This seed block
+                // pushes no message itself: the dispatch loop below pushes
+                // each re-dispatched tool's ToolCall exactly once, which is
+                // correct because these pending tools were never recorded in
+                // the pre-crash history (the mid-turn checkpoint was taken
+                // after the prior tool's result, before these tools started).
+                for tu in &pending_tool_uses {
+                    yield RunEvent::ToolCallStarted {
+                        id: tu.id.clone(),
+                        name: tu.name.clone(),
+                        args: tu.input.clone(),
+                    };
+                }
+            } else {
+                // Normal path: build the request, run the context pipeline,
+                // drain the LLM stream, emit gate events, push assistant text.
+                let mut request = CompletionRequest::new(agent_def.model.clone());
+                request.system = agent_def.system_prompt.clone();
+                // β.4: derive a budgeted per-turn VIEW; stored `messages`
+                // (full conversation) is never mutated.
+                let provider_messages = if options.context_pipeline.is_empty() {
+                    crate::run::agent_messages_to_provider_messages(&messages)
+                } else {
+                    let cx = crate::context::TransformCx::pure(
+                        options.token_estimator.as_ref(),
+                        agent_def.system_prompt.as_deref(),
+                    );
+                    let mut view = messages.clone();
+                    let mut pipeline_failed: Option<alloc::string::String> = None;
+                    for t in &options.context_pipeline {
+                        let before: u32 = view.iter().map(|m| cx.estimate_tokens(m)).sum();
+                        match t.transform(&cx, view).await {
+                            Ok(next) => {
+                                let after: u32 = next.iter().map(|m| cx.estimate_tokens(m)).sum();
+                                debug!(
+                                    parent: &turn_span,
+                                    name = EV_CONTEXT_STEP_RAN,
+                                    step = t.name(),
+                                    tokens_in = before,
+                                    tokens_out = after,
+                                );
+                                yield RunEvent::ContextStepRan {
+                                    step: t.name().into(),
+                                    tokens_in: u64::from(before),
+                                    tokens_out: u64::from(after),
+                                };
+                                view = next;
+                            }
+                            Err(e) => {
+                                pipeline_failed = Some(alloc::format!("{e}"));
+                                view = alloc::vec::Vec::new();
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(detail) = pipeline_failed {
+                        // Terminal kernel error: mirror the make_*_fatal_error
+                        // family (e.g. make_llm_fatal_error at the LLM-open seam
+                        // just below). FatalError is the batch drainer's signal
+                        // to reconstruct Err(RuntimeError::ContextPipeline).
+                        warn!(parent: &turn_span, name = EV_RUNTIME_FAILED, detail = %detail);
+                        yield make_context_pipeline_fatal_error(detail);
+                        return;
+                    }
+                    crate::run::agent_messages_to_provider_messages(&view)
+                };
+                request.messages = provider_messages;
+                request.tools = tool_specs.clone();
+                debug!(
+                    parent: &turn_span,
+                    name = EV_LLM_REQUEST_BUILT,
+                    messages = request.messages.len(),
+                    tools = request.tools.len(),
+                );
+                yield RunEvent::InferenceCallStarted;
+
+                let llm_stream_result = async { backend.stream(request).await }
+                    .instrument(info_span!(parent: &turn_span, "llm.complete"))
                     .await;
-                match next {
-                    None => break,
-                    Some(Ok(CompletionChunk::Text { delta })) => {
-                        accumulated_text.push_str(&delta);
-                        yield RunEvent::TextDelta { delta };
-                    }
-                    Some(Ok(CompletionChunk::ToolUse(tool_use))) => {
-                        // Per spec Q3-A: yield ToolCallStarted immediately on
-                        // receipt — display intent BEFORE dispatch.
-                        debug!(
-                            parent: &turn_span,
-                            name = "runtime.streaming_tool_use_received",
-                            id = %tool_use.id,
-                            tool_name = %tool_use.name,
-                        );
-                        yield RunEvent::ToolCallStarted {
-                            id: tool_use.id.clone(),
-                            name: tool_use.name.clone(),
-                            args: tool_use.input.clone(),
-                        };
-                        pending_tool_uses.push(tool_use);
-                    }
-                    Some(Ok(CompletionChunk::Finish { stop_reason, usage })) => {
-                        turn_stop_reason = Some(stop_reason);
-                        turn_usage = usage;
-                        break;
-                    }
-                    Some(Err(llm_err)) => {
-                        warn!(parent: &turn_span, name = "runtime.streaming_llm_chunk_err");
+                let mut llm_stream = match llm_stream_result {
+                    Ok(s) => s,
+                    Err(llm_err) => {
+                        warn!(parent: &turn_span, name = "runtime.streaming_llm_open_failed");
                         yield make_llm_fatal_error(llm_err);
                         return;
                     }
-                    // CompletionChunk is #[non_exhaustive]; ignore unknown variants.
-                    Some(Ok(_)) => {}
+                };
+
+                // Drain the LLM stream for this turn.
+                // CompletionStream is Pin<Box<dyn Stream + Send>>; .as_mut() gives Pin<&mut S>.
+                // Each chunk-poll is instrumented with `turn_span` so any tracing
+                // emitted from inside the provider's stream impl attributes to
+                // this turn.
+                loop {
+                    let next = core::future::poll_fn(|cx| llm_stream.as_mut().poll_next(cx))
+                        .instrument(turn_span.clone())
+                        .await;
+                    match next {
+                        None => break,
+                        Some(Ok(CompletionChunk::Text { delta })) => {
+                            accumulated_text.push_str(&delta);
+                            yield RunEvent::TextDelta { delta };
+                        }
+                        Some(Ok(CompletionChunk::ToolUse(tool_use))) => {
+                            // Per spec Q3-A: yield ToolCallStarted immediately on
+                            // receipt — display intent BEFORE dispatch.
+                            debug!(
+                                parent: &turn_span,
+                                name = "runtime.streaming_tool_use_received",
+                                id = %tool_use.id,
+                                tool_name = %tool_use.name,
+                            );
+                            yield RunEvent::ToolCallStarted {
+                                id: tool_use.id.clone(),
+                                name: tool_use.name.clone(),
+                                args: tool_use.input.clone(),
+                            };
+                            pending_tool_uses.push(tool_use);
+                        }
+                        Some(Ok(CompletionChunk::Finish { stop_reason, usage })) => {
+                            turn_stop_reason = Some(stop_reason);
+                            turn_usage = usage;
+                            break;
+                        }
+                        Some(Err(llm_err)) => {
+                            warn!(parent: &turn_span, name = "runtime.streaming_llm_chunk_err");
+                            yield make_llm_fatal_error(llm_err);
+                            return;
+                        }
+                        // CompletionChunk is #[non_exhaustive]; ignore unknown variants.
+                        Some(Ok(_)) => {}
+                    }
                 }
-            }
 
-            debug!(
-                parent: &turn_span,
-                name = EV_LLM_RESPONSE_RECEIVED,
-                text_len = accumulated_text.len(),
-                tool_uses = pending_tool_uses.len(),
-                stop_reason = ?turn_stop_reason,
-            );
-            // β.7.5: typed counterpart of `llm.response_received` folded
-            // with `llm.token_usage`. The dual-channel design pushed a
-            // zero-token InferenceCallCompleted on response_received then
-            // patched it on token_usage; reading `turn_usage` directly here
-            // yields the identical result (zero when unreported). `turn_usage`
-            // (tau_ports::TokenUsage) is `Copy`, so it stays usable below.
-            yield RunEvent::InferenceCallCompleted {
-                stop_reason: turn_stop_reason.unwrap_or(StopReason::EndTurn),
-                tokens_in: turn_usage.map_or(0, |u| u64::from(u.input_tokens)),
-                tokens_out: turn_usage.map_or(0, |u| u64::from(u.output_tokens)),
-            };
-
-            // ADR-0006 §3.9: emit `llm.token_usage` when the backend
-            // reports per-turn usage. Skip when `None` to avoid emitting
-            // misleading zeros.
-            if let Some(usage) = turn_usage {
-                let input = u64::from(usage.input_tokens);
-                let output = u64::from(usage.output_tokens);
-                info!(
-                    parent: &turn_span,
-                    name = EV_LLM_TOKEN_USAGE,
-                    input_tokens = input,
-                    output_tokens = output,
-                    total_tokens = input.saturating_add(output),
-                );
-            }
-
-            // ADR-0006 §3.9: emit `llm.stop_reason` when the backend
-            // reports one (StopReason has Debug, not Display).
-            if let Some(reason) = turn_stop_reason {
                 debug!(
                     parent: &turn_span,
-                    name = EV_LLM_STOP_REASON,
-                    stop_reason = ?reason,
+                    name = EV_LLM_RESPONSE_RECEIVED,
+                    text_len = accumulated_text.len(),
+                    tool_uses = pending_tool_uses.len(),
+                    stop_reason = ?turn_stop_reason,
                 );
-            }
+                // β.7.5: typed counterpart of `llm.response_received` folded
+                // with `llm.token_usage`. The dual-channel design pushed a
+                // zero-token InferenceCallCompleted on response_received then
+                // patched it on token_usage; reading `turn_usage` directly here
+                // yields the identical result (zero when unreported). `turn_usage`
+                // (tau_ports::TokenUsage) is `Copy`, so it stays usable below.
+                yield RunEvent::InferenceCallCompleted {
+                    stop_reason: turn_stop_reason.unwrap_or(StopReason::EndTurn),
+                    tokens_in: turn_usage.map_or(0, |u| u64::from(u.input_tokens)),
+                    tokens_out: turn_usage.map_or(0, |u| u64::from(u.output_tokens)),
+                };
 
-            // ADR-0006 §3.9: emit one `llm.tool_use_emitted` per ToolUse
-            // block returned by the LLM. Fires before dispatch so the
-            // event records the model's intent regardless of whether
-            // dispatch later succeeds.
-            for tu in &pending_tool_uses {
-                debug!(
-                    parent: &turn_span,
-                    name = EV_LLM_TOOL_USE_EMITTED,
-                    tool_name = %tu.name,
-                    tool_use_id = %tu.id,
-                );
-            }
+                // ADR-0006 §3.9: emit `llm.token_usage` when the backend
+                // reports per-turn usage. Skip when `None` to avoid emitting
+                // misleading zeros.
+                if let Some(usage) = turn_usage {
+                    let input = u64::from(usage.input_tokens);
+                    let output = u64::from(usage.output_tokens);
+                    info!(
+                        parent: &turn_span,
+                        name = EV_LLM_TOKEN_USAGE,
+                        input_tokens = input,
+                        output_tokens = output,
+                        total_tokens = input.saturating_add(output),
+                    );
+                }
 
-            // Append assistant text to history if present.
-            if !accumulated_text.is_empty() {
-                let agent_addr = Address::Agent(agent_instance_id);
-                let assistant_msg = Message::new_with(
-                    crate::ids::message_id(clock_ref(&options), random_ref(&options)),
-                    crate::ids::now_utc(clock_ref(&options)),
-                    agent_addr,
-                    Address::User,
-                    MessagePayload::Text {
-                        content: accumulated_text.clone(),
-                    },
-                );
-                debug!(
-                    parent: &turn_span,
-                    name = EV_MESSAGE_ADDED,
-                    role = ?assistant_msg.sender,
-                );
-                messages.push(assistant_msg);
-            }
+                // ADR-0006 §3.9: emit `llm.stop_reason` when the backend
+                // reports one (StopReason has Debug, not Display).
+                if let Some(reason) = turn_stop_reason {
+                    debug!(
+                        parent: &turn_span,
+                        name = EV_LLM_STOP_REASON,
+                        stop_reason = ?reason,
+                    );
+                }
 
-            // Accumulate token usage.
-            if let Some(usage) = turn_usage {
-                aggregated_tokens.input_tokens = aggregated_tokens
-                    .input_tokens
-                    .saturating_add(u64::from(usage.input_tokens));
-                aggregated_tokens.output_tokens = aggregated_tokens
-                    .output_tokens
-                    .saturating_add(u64::from(usage.output_tokens));
-            }
+                // ADR-0006 §3.9: emit one `llm.tool_use_emitted` per ToolUse
+                // block returned by the LLM. Fires before dispatch so the
+                // event records the model's intent regardless of whether
+                // dispatch later succeeds.
+                for tu in &pending_tool_uses {
+                    debug!(
+                        parent: &turn_span,
+                        name = EV_LLM_TOOL_USE_EMITTED,
+                        tool_name = %tu.name,
+                        tool_use_id = %tu.id,
+                    );
+                }
+
+                // Append assistant text to history if present.
+                if !accumulated_text.is_empty() {
+                    let agent_addr = Address::Agent(agent_instance_id);
+                    let assistant_msg = Message::new_with(
+                        crate::ids::message_id(clock_ref(&options), random_ref(&options)),
+                        crate::ids::now_utc(clock_ref(&options)),
+                        agent_addr,
+                        Address::User,
+                        MessagePayload::Text {
+                            content: accumulated_text.clone(),
+                        },
+                    );
+                    debug!(
+                        parent: &turn_span,
+                        name = EV_MESSAGE_ADDED,
+                        role = ?assistant_msg.sender,
+                    );
+                    messages.push(assistant_msg);
+                }
+
+                // Accumulate token usage.
+                if let Some(usage) = turn_usage {
+                    aggregated_tokens.input_tokens = aggregated_tokens
+                        .input_tokens
+                        .saturating_add(u64::from(usage.input_tokens));
+                    aggregated_tokens.output_tokens = aggregated_tokens
+                        .output_tokens
+                        .saturating_add(u64::from(usage.output_tokens));
+                }
+            } // end else (normal LLM-drain prologue)
 
             // No tool uses → end of run.
             if pending_tool_uses.is_empty() {
@@ -607,8 +661,8 @@ pub fn run_streaming_inner(
 
                 // ADR-0053: commit the final turn boundary for durable
                 // agents (the assistant's closing message is already in
-                // `messages`).
-                persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens);
+                // `messages`). A fully-completed turn has no pending tools.
+                persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens, Vec::new());
 
                 let final_message = messages
                     .last()
@@ -632,7 +686,7 @@ pub fn run_streaming_inner(
             }
 
             // ----- Per-tool dispatch ----------------------------------------
-            for tool_use in &pending_tool_uses {
+            for (tool_idx, tool_use) in pending_tool_uses.iter().enumerate() {
                 // ADR-0006 §3.9: each tool dispatch is wrapped in a
                 // `dispatch.tool` span as a child of the turn span.
                 // Same straddles-await discipline as `turn_span`: do not
@@ -1638,6 +1692,25 @@ pub fn run_streaming_inner(
                     name: tool_use.name.clone(),
                     result: Ok(tool_result),
                 };
+
+                // ADR-0053 follow-up: PerToolCall commits a mid-turn
+                // checkpoint after each tool. The remaining (not-yet-run)
+                // tools are carried explicitly — they are NOT in `messages`.
+                // Overwrites turn-<n>.json (atomic-rename safe); the
+                // turn-boundary write later finalizes it with empty pending.
+                if options.durable_granularity
+                    == Some(tau_ir::durable::CheckpointGranularity::PerToolCall)
+                {
+                    let remaining: Vec<tau_ports::llm::ToolUse> =
+                        pending_tool_uses[tool_idx + 1..].to_vec();
+                    persist_checkpoint_if_durable(
+                        &options,
+                        total_turns,
+                        &messages,
+                        &aggregated_tokens,
+                        remaining,
+                    );
+                }
             }
             // End of per-tool dispatch for this turn.
 
@@ -1650,7 +1723,8 @@ pub fn run_streaming_inner(
             // ADR-0053: commit a checkpoint at this turn boundary (after the
             // tool results are in `messages`) for durable agents, before
             // looping back into the next — possibly crashing — turn.
-            persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens);
+            // A fully-completed turn has no pending tools.
+            persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens, Vec::new());
 
             // Loop back for the next turn (LLM will see tool results).
         }
@@ -3238,6 +3312,7 @@ paths = ["/etc/**"]
             history: alloc::vec![user_msg("original task")],
             input_tokens: 13,
             output_tokens: 7,
+            pending_tool_uses: vec![],
         };
 
         // EXACTLY ONE turn available — the resumed turn 3.
@@ -3298,5 +3373,256 @@ paths = ["/etc/**"]
         let latest = store.load_latest(&run_id).unwrap().unwrap();
         assert_eq!(latest.input_tokens, 18);
         assert_eq!(latest.output_tokens, 10);
+    }
+
+    /// A durable PerToolCall agent writes a mid-turn checkpoint after each
+    /// tool call, carrying the remaining (not-yet-run) tools. After all tools
+    /// are dispatched and the turn-boundary write finalizes the checkpoint, the
+    /// final stored snapshot must have empty `pending_tool_uses`.
+    ///
+    /// MockCheckpointStore keys by (run_id, turn) and overwrites on each
+    /// `persist`, so we cannot inspect the intermediate snapshot directly. The
+    /// authoritative DoD for the carried-pending behavior is Task 7's resume
+    /// test. Here we assert: run completes + final checkpoint is clean.
+    #[tokio::test]
+    async fn per_tool_call_checkpoints_carry_remaining_tools() {
+        use tau_ports::fixtures::{make_tool_spec, make_tool_use, MockCheckpointStore, MockTool};
+        use tau_ports::CheckpointStore as _;
+
+        // One turn: two tool uses (a, b), then an end-turn turn.
+        let spec_a = make_tool_spec("tool-a".into(), "a".into(), Value::Null);
+        let spec_b = make_tool_spec("tool-b".into(), "b".into(), Value::Null);
+        let a: Arc<dyn DynTool> = Arc::new(MockTool::new("tool-a", spec_a));
+        let b: Arc<dyn DynTool> = Arc::new(MockTool::new("tool-b", spec_b));
+        let (mut tools, mut validators, mut specs) = make_tool_entry("tool-a", a);
+        let (tb, vb, sb) = make_tool_entry("tool-b", b);
+        tools.extend(tb);
+        validators.extend(vb);
+        specs.extend(sb);
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(make_tool_use(
+                    "a".into(),
+                    "tool-a".into(),
+                    Value::Null,
+                ))),
+                Ok(CompletionChunk::ToolUse(make_tool_use(
+                    "b".into(),
+                    "tool-b".into(),
+                    Value::Null,
+                ))),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: Some(PortsTokenUsage::new(10, 5)),
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "done".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: Some(PortsTokenUsage::new(3, 2)),
+                }),
+            ],
+        ]));
+
+        let store = Arc::new(MockCheckpointStore::new());
+        let opts = RunOptions {
+            checkpoint_store: Some(store.clone()),
+            run_id: Some("run-ptc".into()),
+            durable_granularity: Some(tau_ir::durable::CheckpointGranularity::PerToolCall),
+            ..test_run_options()
+        };
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            opts,
+            tools,
+            validators,
+            vec![],
+            specs,
+            vec![],
+            vec![],
+        );
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
+        assert!(
+            matches!(events.last(), Some(RunEvent::RunCompleted { .. })),
+            "got {events:#?}"
+        );
+
+        // After tool-a's mid-turn checkpoint, turn-1 carried [tool-b].
+        // The turn-1 boundary write then finalized it with empty pending,
+        // so load_latest (turn 2) carries no pending.
+        let run_id = String::from("run-ptc");
+        let latest = store.load_latest(&run_id).unwrap().unwrap();
+        assert!(
+            latest.pending_tool_uses.is_empty(),
+            "final checkpoint must be clean; got {:?}",
+            latest.pending_tool_uses
+        );
+        // Both turn 1 and turn 2 have committed checkpoints.
+        assert_eq!(
+            store.persisted_turns(&run_id),
+            alloc::vec![1, 2],
+            "expected turns [1, 2] to be persisted"
+        );
+
+        // Core per-tool-call invariant: the per-tool checkpoint written after
+        // tool-a completed must carry tool-b in pending_tool_uses.  This
+        // assertion fails if the per-tool checkpoint site is removed/disabled.
+        let persists = store.all_persists();
+        let mid = persists
+            .iter()
+            .find(|c| c.turn == 1 && !c.pending_tool_uses.is_empty())
+            .expect(
+                "expected a mid-turn per-tool checkpoint for turn 1 with non-empty \
+                 pending_tool_uses — the PerToolCall checkpoint site may be missing",
+            );
+        assert_eq!(
+            mid.pending_tool_uses.len(),
+            1,
+            "after tool-a, exactly tool-b should remain; got {:?}",
+            mid.pending_tool_uses
+        );
+        assert_eq!(
+            mid.pending_tool_uses[0].name, "tool-b",
+            "the remaining pending tool must be tool-b"
+        );
+    }
+
+    // ---- Task 7 helpers ----
+
+    /// Build an Agent→Tool ToolCall message (as the stream.rs dispatch arm does
+    /// for a normal tool-call turn). Used to seed checkpoint history.
+    fn agent_tool_call_msg(tool_name: &str, args: Value) -> Message {
+        Message::new(
+            Address::Agent(AgentInstanceId::new()),
+            Address::Tool(tool_name.to_string()),
+            MessagePayload::ToolCall { args },
+        )
+    }
+
+    /// Build a Tool→Agent ToolResult message (as the stream.rs dispatch arm does
+    /// after a successful tool invocation). Used to seed checkpoint history.
+    fn tool_result_msg(tool_name: &str, body: Value) -> Message {
+        Message::new(
+            Address::Tool(tool_name.to_string()),
+            Address::Agent(AgentInstanceId::new()),
+            MessagePayload::ToolResult { body },
+        )
+    }
+
+    /// DoD: a turn issued two tools; the process crashed after tool-a's
+    /// mid-turn checkpoint. Resume re-dispatches ONLY tool-b (tool-a is not
+    /// re-invoked) and completes — with a single subsequent LLM call.
+    #[tokio::test]
+    async fn per_tool_call_resume_redispatches_only_pending_tool() {
+        use tau_ports::fixtures::{make_tool_spec, make_tool_use, MockCheckpointStore, MockTool};
+
+        // tool-a already completed (must NOT run again); tool-b is pending.
+        let spec_a = make_tool_spec("tool-a".into(), "a".into(), Value::Null);
+        let spec_b = make_tool_spec("tool-b".into(), "b".into(), Value::Null);
+        let a = Arc::new(MockTool::new("tool-a", spec_a));
+        let b = Arc::new(MockTool::new("tool-b", spec_b));
+        let a_dyn: Arc<dyn DynTool> = a.clone();
+        let b_dyn: Arc<dyn DynTool> = b.clone();
+        let (mut tools, mut validators, mut specs) = make_tool_entry("tool-a", a_dyn);
+        let (tb, vb, sb) = make_tool_entry("tool-b", b_dyn);
+        tools.extend(tb);
+        validators.extend(vb);
+        specs.extend(sb);
+
+        // Mid-turn checkpoint: turn 1 in progress, tool-a done, tool-b pending.
+        let checkpoint = tau_ports::TurnCheckpoint {
+            run_id: "run-mid".into(),
+            turn: 1,
+            history: alloc::vec![
+                user_msg("do both"),
+                // tool-a's ToolCall + ToolResult already in history:
+                agent_tool_call_msg("tool-a", Value::Null),
+                tool_result_msg("tool-a", Value::Null),
+            ],
+            input_tokens: 10,
+            output_tokens: 5,
+            pending_tool_uses: alloc::vec![
+                make_tool_use("b".into(), "tool-b".into(), Value::Null,)
+            ],
+        };
+
+        // EXACTLY ONE turn available — the post-completion turn 2.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::new(vec![
+            Ok(CompletionChunk::Text {
+                delta: "final".into(),
+            }),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::EndTurn,
+                usage: Some(PortsTokenUsage::new(4, 2)),
+            }),
+        ]));
+
+        let store = Arc::new(MockCheckpointStore::new());
+        let opts = RunOptions {
+            checkpoint_store: Some(store.clone()),
+            run_id: Some("run-mid".into()),
+            resume_from: Some(checkpoint),
+            durable_granularity: Some(tau_ir::durable::CheckpointGranularity::PerToolCall),
+            ..test_run_options()
+        };
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("ignored-on-resume"),
+            opts,
+            tools,
+            validators,
+            vec![],
+            specs,
+            vec![],
+            vec![],
+        );
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
+
+        // tool-b dispatched exactly once; tool-a never re-invoked.
+        assert_eq!(b.invocations().len(), 1, "tool-b must run once on resume");
+        assert_eq!(a.invocations().len(), 0, "tool-a must NOT be re-invoked");
+
+        // ToolCallStarted(tool-b) precedes ToolCallCompleted(tool-b) (invariant).
+        let started = events
+            .iter()
+            .position(|e| matches!(e, RunEvent::ToolCallStarted { name, .. } if name == "tool-b"));
+        let completed = events.iter().position(
+            |e| matches!(e, RunEvent::ToolCallCompleted { name, .. } if name == "tool-b"),
+        );
+        assert!(
+            started.is_some() && completed.is_some() && started < completed,
+            "ToolCallStarted(tool-b) must precede ToolCallCompleted(tool-b); events: {events:#?}"
+        );
+
+        // The partial turn finished as turn 1 (no double-count), then turn 2 ran.
+        let turns: Vec<u32> = events
+            .iter()
+            .filter_map(|e| match e {
+                RunEvent::TurnCompleted { turn, .. } => Some(*turn),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            turns,
+            vec![1, 2],
+            "finish turn 1 mid-turn, then turn 2; got {turns:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(RunEvent::RunCompleted { .. })),
+            "stream must end with RunCompleted; got {events:#?}"
+        );
     }
 }
