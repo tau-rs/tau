@@ -292,7 +292,6 @@ fn persist_checkpoint_if_durable(
 /// (`Runtime::run_streaming`); here we trust them.
 #[allow(dead_code)] // wired up by Task 6
 #[allow(clippy::too_many_arguments)] // 12 params intentional: see Task 4 design doc
-#[allow(unused_variables)] // deny_entries / granted_for_session are used only by #[cfg(not(feature = "process"))]
 pub fn run_streaming_inner(
     backend: Arc<dyn DynLlmBackend>,
     agent_def: AgentDefinition,
@@ -1435,7 +1434,9 @@ pub fn run_streaming_inner(
                 // with `process`: (agent_id, session_id, deadline: Option<SystemTime>)
                 // without `process` (wasm guest): (agent_id, session_id)
                 #[cfg(feature = "process")]
-                let ctx = SessionContext::new(agent_instance_id, crate::ids::uuid_v4(random_ref(&options)), None);
+                let ctx = SessionContext::new(agent_instance_id, crate::ids::uuid_v4(random_ref(&options)), None)
+                    .with_granted_capabilities(granted_for_session.clone())
+                    .with_deny_entries(deny_entries.clone());
                 #[cfg(not(feature = "process"))]
                 let ctx = SessionContext::new(agent_instance_id, crate::ids::uuid_v4(random_ref(&options)))
                     .with_granted_capabilities(granted_for_session.clone())
