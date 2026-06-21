@@ -261,6 +261,7 @@ fn persist_checkpoint_if_durable(
     turn: u32,
     messages: &[Message],
     tokens: &crate::options::TokenUsage,
+    pending_tool_uses: Vec<tau_ports::llm::ToolUse>,
 ) {
     if let (Some(store), Some(run_id)) =
         (options.checkpoint_store.as_ref(), options.run_id.as_ref())
@@ -271,7 +272,7 @@ fn persist_checkpoint_if_durable(
             history: messages.to_vec(),
             input_tokens: tokens.input_tokens,
             output_tokens: tokens.output_tokens,
-            pending_tool_uses: alloc::vec![],
+            pending_tool_uses,
         };
         if let Err(e) = store.persist(&ckpt) {
             warn!(name = "runtime.checkpoint_failed", turn, error = %e);
@@ -594,8 +595,8 @@ pub fn run_streaming_inner(
 
                 // ADR-0053: commit the final turn boundary for durable
                 // agents (the assistant's closing message is already in
-                // `messages`).
-                persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens);
+                // `messages`). A fully-completed turn has no pending tools.
+                persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens, Vec::new());
 
                 let final_message = messages
                     .last()
@@ -619,7 +620,7 @@ pub fn run_streaming_inner(
             }
 
             // ----- Per-tool dispatch ----------------------------------------
-            for tool_use in &pending_tool_uses {
+            for (tool_idx, tool_use) in pending_tool_uses.iter().enumerate() {
                 // ADR-0006 §3.9: each tool dispatch is wrapped in a
                 // `dispatch.tool` span as a child of the turn span.
                 // Same straddles-await discipline as `turn_span`: do not
@@ -1595,6 +1596,25 @@ pub fn run_streaming_inner(
                     name: tool_use.name.clone(),
                     result: Ok(tool_result),
                 };
+
+                // ADR-0053 follow-up: PerToolCall commits a mid-turn
+                // checkpoint after each tool. The remaining (not-yet-run)
+                // tools are carried explicitly — they are NOT in `messages`.
+                // Overwrites turn-<n>.json (atomic-rename safe); the
+                // turn-boundary write later finalizes it with empty pending.
+                if options.durable_granularity
+                    == Some(tau_ir::durable::CheckpointGranularity::PerToolCall)
+                {
+                    let remaining: Vec<tau_ports::llm::ToolUse> =
+                        pending_tool_uses[tool_idx + 1..].to_vec();
+                    persist_checkpoint_if_durable(
+                        &options,
+                        total_turns,
+                        &messages,
+                        &aggregated_tokens,
+                        remaining,
+                    );
+                }
             }
             // End of per-tool dispatch for this turn.
 
@@ -1607,7 +1627,8 @@ pub fn run_streaming_inner(
             // ADR-0053: commit a checkpoint at this turn boundary (after the
             // tool results are in `messages`) for durable agents, before
             // looping back into the next — possibly crashing — turn.
-            persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens);
+            // A fully-completed turn has no pending tools.
+            persist_checkpoint_if_durable(&options, total_turns, &messages, &aggregated_tokens, Vec::new());
 
             // Loop back for the next turn (LLM will see tool results).
         }
@@ -3251,5 +3272,104 @@ paths = ["/etc/**"]
         let latest = store.load_latest(&run_id).unwrap().unwrap();
         assert_eq!(latest.input_tokens, 18);
         assert_eq!(latest.output_tokens, 10);
+    }
+
+    /// A durable PerToolCall agent writes a mid-turn checkpoint after each
+    /// tool call, carrying the remaining (not-yet-run) tools. After all tools
+    /// are dispatched and the turn-boundary write finalizes the checkpoint, the
+    /// final stored snapshot must have empty `pending_tool_uses`.
+    ///
+    /// MockCheckpointStore keys by (run_id, turn) and overwrites on each
+    /// `persist`, so we cannot inspect the intermediate snapshot directly. The
+    /// authoritative DoD for the carried-pending behavior is Task 7's resume
+    /// test. Here we assert: run completes + final checkpoint is clean.
+    #[tokio::test]
+    async fn per_tool_call_checkpoints_carry_remaining_tools() {
+        use tau_ports::fixtures::{make_tool_spec, make_tool_use, MockCheckpointStore, MockTool};
+        use tau_ports::CheckpointStore as _;
+
+        // One turn: two tool uses (a, b), then an end-turn turn.
+        let spec_a = make_tool_spec("tool-a".into(), "a".into(), Value::Null);
+        let spec_b = make_tool_spec("tool-b".into(), "b".into(), Value::Null);
+        let a: Arc<dyn DynTool> = Arc::new(MockTool::new("tool-a", spec_a));
+        let b: Arc<dyn DynTool> = Arc::new(MockTool::new("tool-b", spec_b));
+        let (mut tools, mut validators, mut specs) = make_tool_entry("tool-a", a);
+        let (tb, vb, sb) = make_tool_entry("tool-b", b);
+        tools.extend(tb);
+        validators.extend(vb);
+        specs.extend(sb);
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(make_tool_use(
+                    "a".into(),
+                    "tool-a".into(),
+                    Value::Null,
+                ))),
+                Ok(CompletionChunk::ToolUse(make_tool_use(
+                    "b".into(),
+                    "tool-b".into(),
+                    Value::Null,
+                ))),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: Some(PortsTokenUsage::new(10, 5)),
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "done".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: Some(PortsTokenUsage::new(3, 2)),
+                }),
+            ],
+        ]));
+
+        let store = Arc::new(MockCheckpointStore::new());
+        let opts = RunOptions {
+            checkpoint_store: Some(store.clone()),
+            run_id: Some("run-ptc".into()),
+            durable_granularity: Some(tau_ir::durable::CheckpointGranularity::PerToolCall),
+            ..test_run_options()
+        };
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            opts,
+            tools,
+            validators,
+            vec![],
+            specs,
+            vec![],
+            vec![],
+        );
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
+        assert!(
+            matches!(events.last(), Some(RunEvent::RunCompleted { .. })),
+            "got {events:#?}"
+        );
+
+        // After tool-a's mid-turn checkpoint, turn-1 carried [tool-b].
+        // The turn-1 boundary write then finalized it with empty pending,
+        // so load_latest (turn 2) carries no pending.
+        let run_id = String::from("run-ptc");
+        let latest = store.load_latest(&run_id).unwrap().unwrap();
+        assert!(
+            latest.pending_tool_uses.is_empty(),
+            "final checkpoint must be clean; got {:?}",
+            latest.pending_tool_uses
+        );
+        // Both turn 1 and turn 2 have committed checkpoints.
+        assert_eq!(
+            store.persisted_turns(&run_id),
+            alloc::vec![1, 2],
+            "expected turns [1, 2] to be persisted"
+        );
     }
 }
