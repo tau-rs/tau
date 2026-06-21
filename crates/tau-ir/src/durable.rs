@@ -9,8 +9,8 @@
 //! `CheckpointStore`, and `tau run --resume <run_id>` re-enters at the
 //! next turn.
 //!
-//! Both enums are `#[non_exhaustive]`: A-minimal ships `PerTurn` + `File`
-//! + `PerToolCall`. `DurableStore::Kv` and the A-full `EventSourced`
+//! Both enums are `#[non_exhaustive]`: A-minimal ships `PerTurn`, `File`,
+//! and `PerToolCall`. `DurableStore::Kv` and the A-full `EventSourced`
 //! granularity are additive `MINOR` `ir_format` bumps for later (the
 //! same discipline that added `output_schema` as v1.3.0).
 
