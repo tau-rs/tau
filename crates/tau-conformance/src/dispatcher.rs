@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use core::future::Future;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use tau_ir::ToolId;
 use tau_mcp::protocol::tools::{ContentBlock, ToolsCallResponse};
@@ -75,15 +75,15 @@ impl ToolDispatcher for ConformanceDispatcher {
         let weather = self.weather.clone();
 
         Box::pin(async move {
+            // Native tools come from the shared no_std crate so dev and the
+            // wasm guest return byte-identical bodies (PR-F).
+            if let Some(body) = tau_native_tools::invoke(&name, &args_owned) {
+                return Ok(ToolInvocationResult {
+                    body: Some(body),
+                    error: None,
+                });
+            }
             match name.as_str() {
-                "read_temp" => Ok(ToolInvocationResult {
-                    body: Some(json!(32)),
-                    error: None,
-                }),
-                "set_fan" => Ok(ToolInvocationResult {
-                    body: Some(json!({"ok": true})),
-                    error: None,
-                }),
                 "weather" => {
                     let client = weather.ok_or_else(|| RuntimeError::Internal {
                         message: "weather invoked but no MCP client wired".to_string(),

@@ -10,6 +10,7 @@ members = [
     "crates/tau-pkg",
     "crates/tau-mcp",
     "crates/tau-mcp-tokio",
+    "crates/tau-native-tools",
     "crates/tau-runtime-core",
     "crates/tau-observe",
     "crates/tau-runtime-tokio",
@@ -72,6 +73,7 @@ tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
 tau-mcp-tokio       = { path = "crates/tau-mcp-tokio", version = "0.0.0", default-features = false }
+tau-native-tools    = { path = "crates/tau-native-tools", version = "0.0.0", default-features = false }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
 tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0" }
 tau-runtime-tokio   = { path = "crates/tau-runtime-tokio", version = "0.0.0" }

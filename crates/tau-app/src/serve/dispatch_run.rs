@@ -98,7 +98,12 @@ pub async fn execute(disp: Dispatcher, req: Request, streaming: bool) {
         MessagePayload::Text { content: prompt },
     );
 
-    let opts = RunOptions::default();
+    // Host-shell contract (`stream.rs::clock_ref`): serve drives the core
+    // streaming path directly, so it must inject the production clock +
+    // randomness or `run_streaming_inner` panics on the first port use.
+    let mut opts = RunOptions::default();
+    opts.clock = Some(std::sync::Arc::new(tau_runtime_tokio::TokioClock));
+    opts.random = Some(std::sync::Arc::new(tau_runtime_tokio::OsRandom));
     let cancel = disp.cancel_reg.register(req.id.clone());
 
     let result: Result<(), tau_runtime_tokio::RuntimeError> = if streaming {

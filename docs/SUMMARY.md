@@ -124,6 +124,7 @@
 - [ADR-0051 — tau-ir crate split: a structural no_std boundary (β.7.5)](decisions/0051-tau-ir-crate-split.md)
 - [ADR-0052 — Per-agent / per-judge model resolution](decisions/0052-per-agent-model-resolution.md)
 - [ADR-0053 — Turn-level checkpoint/resume (durable execution A-minimal)](decisions/0053-turn-level-checkpoint-resume.md)
+- [ADR-0054 — In-wasm MCP facilitator (β.7.5)](decisions/0054-in-wasm-mcp-facilitator.md)
 
 # Retrospectives
 
