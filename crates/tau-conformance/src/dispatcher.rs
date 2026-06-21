@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use core::future::Future;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use tau_ir::ToolId;
 use tau_mcp::protocol::tools::{ContentBlock, ToolsCallResponse};
