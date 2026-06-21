@@ -3371,5 +3371,27 @@ paths = ["/etc/**"]
             alloc::vec![1, 2],
             "expected turns [1, 2] to be persisted"
         );
+
+        // Core per-tool-call invariant: the per-tool checkpoint written after
+        // tool-a completed must carry tool-b in pending_tool_uses.  This
+        // assertion fails if the per-tool checkpoint site is removed/disabled.
+        let persists = store.all_persists();
+        let mid = persists
+            .iter()
+            .find(|c| c.turn == 1 && !c.pending_tool_uses.is_empty())
+            .expect(
+                "expected a mid-turn per-tool checkpoint for turn 1 with non-empty \
+                 pending_tool_uses — the PerToolCall checkpoint site may be missing",
+            );
+        assert_eq!(
+            mid.pending_tool_uses.len(),
+            1,
+            "after tool-a, exactly tool-b should remain; got {:?}",
+            mid.pending_tool_uses
+        );
+        assert_eq!(
+            mid.pending_tool_uses[0].name, "tool-b",
+            "the remaining pending tool must be tool-b"
+        );
     }
 }
