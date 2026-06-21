@@ -42,13 +42,20 @@ impl ToolDispatcher for GuestDispatcher {
     fn invoke<'a>(
         &'a self,
         tool_id: &'a ToolId,
-        _args: &'a Value,
+        args: &'a Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
         let name = tool_id.0.clone();
+        let args_owned = args.clone();
         Box::pin(async move {
-            Err(RuntimeError::Internal {
-                message: format!("tool `{name}` invoked but the wasm guest wires no tools (E2)"),
-            })
+            match tau_native_tools::invoke(&name, &args_owned) {
+                Some(body) => Ok(ToolInvocationResult {
+                    body: Some(body),
+                    error: None,
+                }),
+                None => Err(RuntimeError::Internal {
+                    message: format!("tau-wasm-guest: unknown native tool `{name}`"),
+                }),
+            }
         })
     }
 
