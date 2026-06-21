@@ -39,7 +39,10 @@ mod tests {
 
     #[test]
     fn set_fan_returns_ok_true_ignoring_args() {
-        assert_eq!(invoke("set_fan", &json!({ "on": true })), Some(json!({ "ok": true })));
+        assert_eq!(
+            invoke("set_fan", &json!({ "on": true })),
+            Some(json!({ "ok": true }))
+        );
         assert_eq!(invoke("set_fan", &json!({})), Some(json!({ "ok": true })));
     }
 
