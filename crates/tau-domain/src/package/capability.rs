@@ -562,6 +562,137 @@ mod capability_de {
     }
 }
 
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Capability {
+    fn schema_name() -> alloc::borrow::Cow<'static, str> {
+        "Capability".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "title": "capability",
+            "oneOf": [
+                // fs.read
+                {
+                    "type": "object",
+                    "required": ["kind", "paths"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind":  { "const": "fs.read" },
+                        "paths": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                // fs.write  (max_bytes is optional — in properties but not required)
+                {
+                    "type": "object",
+                    "required": ["kind", "paths"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind":      { "const": "fs.write" },
+                        "paths":     { "type": "array", "items": { "type": "string" } },
+                        "max_bytes": { "type": "integer", "minimum": 0 }
+                    }
+                },
+                // fs.exec
+                {
+                    "type": "object",
+                    "required": ["kind", "paths"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind":  { "const": "fs.exec" },
+                        "paths": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                // net.http
+                {
+                    "type": "object",
+                    "required": ["kind", "hosts", "methods"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind":    { "const": "net.http" },
+                        "hosts":   { "type": "array", "items": { "type": "string" } },
+                        "methods": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                // process.spawn
+                {
+                    "type": "object",
+                    "required": ["kind", "commands"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind":     { "const": "process.spawn" },
+                        "commands": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                // agent.spawn
+                {
+                    "type": "object",
+                    "required": ["kind", "allowed_kinds"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind":          { "const": "agent.spawn" },
+                        "allowed_kinds": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                // skill.spawn
+                {
+                    "type": "object",
+                    "required": ["kind", "allowed_skills"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind":           { "const": "skill.spawn" },
+                        "allowed_skills": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                // task_list  (mode is one of "read"/"write"/"manage")
+                {
+                    "type": "object",
+                    "required": ["kind", "mode"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": { "const": "task_list" },
+                        "mode": { "type": "string", "enum": ["read", "write", "manage"] }
+                    }
+                },
+                // plan  (mode is one of "read"/"write")
+                {
+                    "type": "object",
+                    "required": ["kind", "mode"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": { "const": "plan" },
+                        "mode": { "type": "string", "enum": ["read", "write"] }
+                    }
+                },
+                // Custom — arbitrary kind string that is NOT one of the 9 fixed kinds,
+                // plus arbitrary additional params (no additionalProperties:false).
+                {
+                    "type": "object",
+                    "required": ["kind"],
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "not": {
+                                "enum": [
+                                    "fs.read",
+                                    "fs.write",
+                                    "fs.exec",
+                                    "net.http",
+                                    "process.spawn",
+                                    "agent.spawn",
+                                    "skill.spawn",
+                                    "task_list",
+                                    "plan"
+                                ]
+                            }
+                        }
+                    }
+                }
+            ]
+        })
+    }
+}
+
 #[cfg(test)]
 mod shape_tests {
     use super::*;
@@ -788,5 +919,81 @@ mod tests {
             allowed_skills: vec!["x".into()],
         });
         assert_eq!(cap.required_shape(), CapabilityShape::SkillSpawn);
+    }
+}
+
+#[cfg(all(test, feature = "schema"))]
+mod schema_tests {
+    use super::*;
+
+    /// All 9 fixed kinds that must appear as `const` in the `oneOf`.
+    const FIXED_KINDS: &[&str] = &[
+        "fs.read",
+        "fs.write",
+        "fs.exec",
+        "net.http",
+        "process.spawn",
+        "agent.spawn",
+        "skill.spawn",
+        "task_list",
+        "plan",
+    ];
+
+    #[test]
+    fn capability_schema_has_ten_oneof_branches() {
+        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let one_of = v["oneOf"].as_array().expect("oneOf must be present");
+        assert_eq!(
+            one_of.len(),
+            10,
+            "expected 10 oneOf branches (9 fixed + Custom), got {}",
+            one_of.len()
+        );
+    }
+
+    #[test]
+    fn capability_schema_all_fixed_kinds_present_as_const() {
+        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let one_of = v["oneOf"].as_array().expect("oneOf must be present");
+        for kind in FIXED_KINDS {
+            let found = one_of
+                .iter()
+                .any(|b| b["properties"]["kind"]["const"].as_str() == Some(kind));
+            assert!(found, "kind '{}' not found as a const in oneOf", kind);
+        }
+    }
+
+    #[test]
+    fn capability_schema_custom_branch_has_not_enum_exclusion() {
+        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let one_of = v["oneOf"].as_array().expect("oneOf must be present");
+        // The Custom branch has no `const` on `kind`; instead it has a `not`/`enum` exclusion.
+        let custom_branch = one_of
+            .iter()
+            .find(|b| b["properties"]["kind"]["const"].is_null())
+            .expect("Custom branch (no const on kind) not found");
+        let not_enum = &custom_branch["properties"]["kind"]["not"]["enum"];
+        let exclusions = not_enum
+            .as_array()
+            .expect("not/enum exclusion list missing");
+        // All 9 fixed kinds must be excluded
+        for kind in FIXED_KINDS {
+            assert!(
+                exclusions.iter().any(|e| e.as_str() == Some(kind)),
+                "fixed kind '{}' missing from Custom branch not/enum exclusion",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn capability_schema_is_oneof_tagged_by_kind() {
+        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let variants = v["oneOf"].as_array().expect("oneOf present");
+        // Every fixed branch pins a const "kind" — verified via the const assertion above.
+        // At least one branch has kind==fs.read
+        assert!(variants
+            .iter()
+            .any(|b| b["properties"]["kind"]["const"] == "fs.read"));
     }
 }
