@@ -308,11 +308,6 @@ jobs:
         # The #[ignore]'d wasm-profile test is skipped by nextest until
         # β.7.5 ships `tau build wasm`. See ADR-0048.
         run: cargo nextest run --profile ci -p tau-conformance
-      - name: IR JSON schema — drift + conformance (EPIC 2.2)
-        run: |
-          set -e
-          cargo test -p tau-ir --features schema --test schema_drift
-          cargo test -p tau-ir-lower --test ir_schema_conformance
 
   test-credential-chain:
     name: test-credential-chain / linux
@@ -497,6 +492,21 @@ jobs:
         run: cargo build -p tau-plugin-compat
       - name: Build tau-plugin-compat (integration-tests feature)
         run: cargo build -p tau-plugin-compat --features integration-tests --tests
+
+  schema-conformance:
+    name: IR schema (drift + conformance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Drift check + conformance kit validation
+        run: cargo test -p tau-ir --features schema --test schema_export --test schema_conformance
 
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's

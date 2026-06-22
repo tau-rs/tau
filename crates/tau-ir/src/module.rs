@@ -1,11 +1,5 @@
 //! Top-level IR container.
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -64,7 +58,6 @@ pub struct IrModule {
     /// Semver-shaped (e.g. `"0.X.Y"`).
     pub tau_version: String,
     /// Target triple this module was lowered for.
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub target: TargetTriple,
     /// The workflow itself.
     pub workflow: Workflow,
@@ -102,6 +95,19 @@ pub struct Workflow {
         skip_serializing_if = "alloc::collections::BTreeMap::is_empty"
     )]
     pub checks: alloc::collections::BTreeMap<crate::ids::CheckId, crate::check::Check>,
+}
+
+#[cfg(all(test, feature = "schema"))]
+mod schema_tests {
+    use super::*;
+    #[test]
+    fn ir_module_schema_builds_and_is_object() {
+        let v = serde_json::to_value(&schemars::schema_for!(IrModule)).unwrap();
+        assert_eq!(v["type"], "object");
+        // ir_format is a required top-level property
+        let req = v["required"].as_array().expect("required present");
+        assert!(req.iter().any(|x| x == "ir_format"));
+    }
 }
 
 #[cfg(test)]

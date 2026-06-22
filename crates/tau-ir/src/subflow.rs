@@ -1,11 +1,5 @@
 //! Subflow edges connecting agents and (eventually) sub-workflows.
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::boxed::Box;
 use serde::{Deserialize, Serialize};
 

@@ -6,12 +6,6 @@
 //! [`ToolImpl::Native::content_hash`] and [`ToolImpl::Mcp::contract_hash`]
 //! at build time so every IR module is fully hashable per D-6.
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::string::String;
 use serde::{Deserialize, Serialize};
 

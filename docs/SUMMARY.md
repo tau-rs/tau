@@ -44,9 +44,9 @@
 - [Sandbox platform support](reference/sandbox-platform-support.md)
 - [Serve mode protocol](reference/serve-mode-protocol.md)
 - [Skill manifest schema](reference/skill-manifest-schema.md)
+- [IR JSON Schema](reference/ir-json-schema.md)
 - [tau mcp](reference/tau-mcp.md)
 - [Target triple reference](reference/target-triples.md)
-- [IR JSON schema](reference/ir-schema.md)
 
 # Explanation
 

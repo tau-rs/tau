@@ -3,13 +3,10 @@
 //! - `cargo xtask build-base-image` — builds `tau-plugin-base:dev`.
 //! - `cargo xtask build-plugin-images [--name <bin>]` — builds the base if
 //!   missing, then builds each plugin's image (or just the named one).
-//! - `cargo xtask gen-ir-schema` — regenerates `schema/ir/tau-ir.schema.json`
-//!   and `schema/ir/samples/*.json` from the tau-ir serde types (EPIC 2.2).
 //!
 //! Auto-detects the container runtime (podman first, docker fallback) by
 //! probing `<runtime> --version` with a 2-second timeout. Mirrors the
-//! convention from `tau-sandbox-container::probe`. Only queried for
-//! container-related subcommands.
+//! convention from `tau-sandbox-container::probe`.
 //!
 //! Honors `BUILDX_CACHE_FROM` / `BUILDX_CACHE_TO` env vars: when set, each
 //! `<runtime> build` invocation gets `--cache-from=<value>` /
@@ -39,9 +36,6 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Regenerate schema/ir/tau-ir.schema.json + schema/ir/samples/*.json
-    /// from the tau-ir serde types (EPIC 2.2).
-    GenIrSchema,
 }
 
 /// All plugins shipped in-tree that get a Dockerfile in Phase 1.
@@ -55,53 +49,25 @@ const PLUGINS: &[&str] = &[
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let runtime = detect_runtime()?;
+    eprintln!("xtask: using container runtime `{runtime}`");
 
     match cli.command {
-        Cmd::GenIrSchema => gen_ir_schema(),
-        cmd => {
-            let runtime = detect_runtime()?;
-            eprintln!("xtask: using container runtime `{runtime}`");
-            match cmd {
-                Cmd::BuildBaseImage => build_base(&runtime),
-                Cmd::BuildPluginImages { name } => match name {
-                    Some(n) => {
-                        ensure_base(&runtime)?;
-                        build_plugin(&runtime, &n)
-                    }
-                    None => {
-                        ensure_base(&runtime)?;
-                        for p in PLUGINS {
-                            build_plugin(&runtime, p)?;
-                        }
-                        Ok(())
-                    }
-                },
-                Cmd::GenIrSchema => unreachable!("handled above"),
+        Cmd::BuildBaseImage => build_base(&runtime),
+        Cmd::BuildPluginImages { name } => match name {
+            Some(n) => {
+                ensure_base(&runtime)?;
+                build_plugin(&runtime, &n)
             }
-        }
+            None => {
+                ensure_base(&runtime)?;
+                for p in PLUGINS {
+                    build_plugin(&runtime, p)?;
+                }
+                Ok(())
+            }
+        },
     }
-}
-
-fn gen_ir_schema() -> Result<()> {
-    eprintln!("xtask: regenerating schema/ir/ via schema_drift (bless mode) ...");
-    let status = Command::new(env!("CARGO"))
-        .args([
-            "test",
-            "-p",
-            "tau-ir",
-            "--features",
-            "schema",
-            "--test",
-            "schema_drift",
-        ])
-        .env("TAU_BLESS", "1")
-        .env("CARGO_INCREMENTAL", "0")
-        .status()
-        .context("running schema_drift in bless mode")?;
-    if !status.success() {
-        bail!("gen-ir-schema failed");
-    }
-    Ok(())
 }
 
 /// Probe `podman` first, then `docker`. Mirrors PR #40's

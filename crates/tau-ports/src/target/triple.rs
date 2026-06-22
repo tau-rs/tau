@@ -137,6 +137,20 @@ impl<'de> serde::Deserialize<'de> for TargetTriple {
     }
 }
 
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for TargetTriple {
+    fn schema_name() -> alloc::borrow::Cow<'static, str> {
+        "TargetTriple".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "title": "target triple",
+            "description": "tau target triple, e.g. \"x86_64-unknown-linux-native-strict\""
+        })
+    }
+}
+
 fn tier_as_str(t: CapabilityTier) -> &'static str {
     match t {
         CapabilityTier::None => "none",
@@ -151,6 +165,17 @@ fn tier_from_str(s: &str) -> Result<CapabilityTier, ParseError> {
         "light" => Ok(CapabilityTier::Light),
         "strict" => Ok(CapabilityTier::Strict),
         other => Err(ParseError::UnknownTier(other.to_string())),
+    }
+}
+
+#[cfg(all(test, feature = "schema"))]
+mod schema_tests {
+    use super::*;
+    #[test]
+    fn target_triple_schema_is_string() {
+        let schema = schemars::schema_for!(TargetTriple);
+        let v = serde_json::to_value(&schema).unwrap();
+        assert_eq!(v["type"], "string");
     }
 }
 

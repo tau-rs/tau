@@ -14,12 +14,6 @@
 //! granularity are additive `MINOR` `ir_format` bumps for later (the
 //! same discipline that added `output_schema` as v1.3.0).
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use serde::{Deserialize, Serialize};
 
 /// Durable-execution config attached to an [`crate::node::Agent`].

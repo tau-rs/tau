@@ -22,7 +22,6 @@ foldhash   = { workspace = true }
 sha2       = { workspace = true, default-features = false }
 
 [dev-dependencies]
-tau-domain  = { workspace = true, features = ["serde", "test-fixtures"] }
-tau-pkg     = { workspace = true }
-tau-ports   = { workspace = true, features = ["serde"] }
-jsonschema  = { workspace = true }
+tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-pkg    = { workspace = true }
+tau-ports  = { workspace = true, features = ["serde"] }

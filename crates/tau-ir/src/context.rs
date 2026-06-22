@@ -5,12 +5,6 @@
 //! the slot so adding β.4's struct later is a `MINOR` `ir_format`
 //! bump (additive optional field), not a `MAJOR` one.
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -48,10 +42,6 @@ pub struct ContextStep {
     pub kind: ContextNodeKind,
     /// Per-node config (e.g. `keep_last_turns`, `max_bytes`, `max_tokens`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "alloc::collections::BTreeMap<alloc::string::String, serde_json::Value>")
-    )]
     pub config: BTreeMap<String, Value>,
 }
 

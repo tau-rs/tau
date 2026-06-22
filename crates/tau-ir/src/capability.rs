@@ -6,12 +6,6 @@
 //! triple's `supported_shapes` at build time and refuses the build on any
 //! miss.
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -33,10 +27,6 @@ pub struct CapabilityRequirements {
     /// permuted capability arrays produce different canonical bytes. If
     /// order-independent hashing becomes required, sort in the lowering
     /// parse stage — `Capability` needs `Ord` first.)
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "alloc::vec::Vec<serde_json::Value>")
-    )]
     pub declared: Vec<Capability>,
 }
 

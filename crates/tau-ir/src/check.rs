@@ -1,12 +1,6 @@
 //! Postcondition checks: `goal` (deterministic predicate) and
 //! `deliverable` (produced artifact + LLM-judged content).
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::string::String;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -73,7 +67,6 @@ pub enum GoalPredicate {
     /// At least N items.
     MinCount(u64),
     /// Validates against the JSON schema.
-    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
     SchemaValid(Value),
     /// Registered native fn.
     NativeFn(NativeFnRef),

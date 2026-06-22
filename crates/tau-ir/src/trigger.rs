@@ -14,12 +14,6 @@
 //! enforce). The enums are `#[non_exhaustive]` so adding those kinds later is
 //! a minor change.
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;

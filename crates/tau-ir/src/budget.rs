@@ -4,12 +4,6 @@
 //! this; exceeding any field surfaces as a `RuntimeError`. Fields are
 //! optional so an agent can opt out (typical for development).
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use serde::{Deserialize, Serialize};
 
 /// Bounds on an agent's execution.

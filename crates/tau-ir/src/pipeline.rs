@@ -2,12 +2,6 @@
 //! top-to-bottom, threading each step's output to later steps via
 //! `${steps.<id>.output}` templating.
 
-// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
-// from the std prelude — import it when the feature is active.
-#[cfg(feature = "schema")]
-#[allow(unused_imports)]
-use std::prelude::rust_2021::*;
-
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
