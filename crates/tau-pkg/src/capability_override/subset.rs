@@ -178,6 +178,8 @@ fn mode_subset(
     }
 }
 
+/// Callers MUST pass a same-kind-filtered parent slice (guaranteed by `same_kind` in
+/// `capability_set_subset`); this gathers Read/Write/Exec paths indiscriminately.
 fn gather_paths(parents: &[&Capability]) -> Vec<String> {
     parents
         .iter()
@@ -249,7 +251,7 @@ fn most_permissive_max_bytes(parents: &[&Capability]) -> Option<u64> {
         if let Capability::Filesystem(FsCapability::Write { max_bytes, .. }) = p {
             match max_bytes {
                 None => return None,
-                Some(m) => acc = Some(acc.unwrap_or(0).max(*m)),
+                Some(m) => acc = acc.map(|a| a.max(*m)),
             }
         }
     }
@@ -328,7 +330,9 @@ mod tests {
         let parent = vec![cap(
             r#"{"kind":"fs.write","paths":["/p/**"],"max_bytes":5000}"#,
         )];
-        assert!(capability_set_subset(&child, &parent).is_err());
+        let v = capability_set_subset(&child, &parent).unwrap_err();
+        assert_eq!(v.kind, "fs.write");
+        assert_eq!(v.offender, "max_bytes=unlimited");
     }
 
     #[test]
@@ -416,6 +420,7 @@ mod tests {
         let parent = vec![cap(r#"{"kind":"fs.read","paths":["/**"]}"#)];
         let v = capability_set_subset(&child, &parent).unwrap_err();
         assert_eq!(v.kind, "net.http");
+        assert_eq!(v.offender, "net.http");
         assert!(v.reason.contains("not in ceiling"), "got {}", v.reason);
     }
 
@@ -448,6 +453,66 @@ mod tests {
         assert_eq!(
             max_bytes_le(9000, Some(5000)).unwrap_err(),
             "max_bytes=9000"
+        );
+    }
+
+    // N2 — multi-parent union: fs.write ceiling = max(5000, 8000) = 8000
+
+    #[test]
+    fn multi_parent_fs_write_union_ceiling_admits_child_within_max() {
+        let child = vec![cap(
+            r#"{"kind":"fs.write","paths":["/p/**"],"max_bytes":7000}"#,
+        )];
+        let parent = vec![
+            cap(r#"{"kind":"fs.write","paths":["/p/**"],"max_bytes":5000}"#),
+            cap(r#"{"kind":"fs.write","paths":["/p/**"],"max_bytes":8000}"#),
+        ];
+        assert!(capability_set_subset(&child, &parent).is_ok());
+    }
+
+    // N2 — multi-parent union: net.http host admitted by second parent
+
+    #[test]
+    fn multi_parent_net_http_union_admits_host_from_second_parent() {
+        let child = vec![cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":[]}"#)];
+        let parent = vec![
+            cap(r#"{"kind":"net.http","hosts":["a.com"],"methods":[]}"#),
+            cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":[]}"#),
+        ];
+        assert!(capability_set_subset(&child, &parent).is_ok());
+    }
+
+    // N1 — unknown mode on child yields "unknown mode" reason.
+    // Constructed directly (serde folds unknown modes into Custom, bypassing
+    // the mode_subset path; we want to exercise mode_rank returning None).
+
+    #[test]
+    fn task_list_child_unknown_mode_yields_unknown_mode_reason() {
+        let child = vec![Capability::TaskList {
+            mode: "bogus".to_string(),
+        }];
+        let parent = vec![cap(r#"{"kind":"task_list","mode":"manage"}"#)];
+        let v = capability_set_subset(&child, &parent).unwrap_err();
+        assert!(
+            v.reason.contains("unknown mode"),
+            "got reason: {}",
+            v.reason
+        );
+    }
+
+    // N1 — unknown mode on parent yields "ceiling mode unknown" reason.
+
+    #[test]
+    fn task_list_parent_unknown_mode_yields_ceiling_mode_unknown_reason() {
+        let child = vec![cap(r#"{"kind":"task_list","mode":"read"}"#)];
+        let parent = vec![Capability::TaskList {
+            mode: "bogus".to_string(),
+        }];
+        let v = capability_set_subset(&child, &parent).unwrap_err();
+        assert!(
+            v.reason.contains("ceiling mode unknown"),
+            "got reason: {}",
+            v.reason
         );
     }
 }
