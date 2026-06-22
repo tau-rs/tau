@@ -223,7 +223,18 @@ fn compile_node(schema: &Value, pointer: &str) -> Result<Schema, CompileErr> {
     node.maximum = obj.get("maximum").and_then(Value::as_f64);
     node.exclusive_minimum = obj.get("exclusiveMinimum").and_then(Value::as_f64);
     node.exclusive_maximum = obj.get("exclusiveMaximum").and_then(Value::as_f64);
-    node.multiple_of = obj.get("multipleOf").and_then(Value::as_f64);
+    if let Some(mo) = obj.get("multipleOf") {
+        match mo.as_f64() {
+            Some(m) if m > 0.0 => node.multiple_of = Some(m),
+            _ => {
+                return Err(CompileErr {
+                    keyword: "multipleOf".into(),
+                    pointer: pointer.to_string(),
+                    detail: "multipleOf must be a positive number".into(),
+                })
+            }
+        }
+    }
     node.min_length = obj.get("minLength").and_then(Value::as_u64);
     node.max_length = obj.get("maxLength").and_then(Value::as_u64);
     node.min_items = obj.get("minItems").and_then(Value::as_u64);
@@ -371,7 +382,9 @@ fn check_node(node: &Schema, value: &Value, pointer: &str, out: &mut Vec<Violati
             }
         }
         if let Some(m) = node.multiple_of {
-            if m != 0.0 && (n / m).fract().abs() > 1e-9 {
+            let ratio = n / m;
+            let rounded = ratio.round();
+            if (ratio - rounded).abs() > 1e-9 * ratio.abs().max(1.0) {
                 out.push(Violation {
                     pointer: pointer.to_string(),
                     message: format!("{n} not a multiple of {m}"),
@@ -447,10 +460,8 @@ fn check_node(node: &Schema, value: &Value, pointer: &str, out: &mut Vec<Violati
                 check_node(sub, child, &child_ptr, out);
             }
         }
-    }
-    // additionalProperties: false → reject keys not in `properties`.
-    if node.additional_properties == Some(false) {
-        if let Value::Object(map) = value {
+        // additionalProperties: false → reject keys not in `properties`.
+        if node.additional_properties == Some(false) {
             for k in map.keys() {
                 if !node.properties.contains_key(k) {
                     out.push(Violation {
@@ -556,6 +567,65 @@ mod tests {
         let s = compile(&v(serde_json::json!({ "type": "number", "multipleOf": 2 }))).unwrap();
         assert!(s.check(&v(serde_json::json!(4))).is_empty());
         assert!(!s.check(&v(serde_json::json!(5))).is_empty());
+    }
+
+    #[test]
+    fn additional_properties_false() {
+        let s = compile(&v(serde_json::json!({
+            "type": "object",
+            "properties": { "x": { "type": "number" } },
+            "additionalProperties": false
+        })))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!({ "x": 1 }))).is_empty());
+        assert!(!s
+            .check(&v(serde_json::json!({ "x": 1, "y": 2 })))
+            .is_empty());
+    }
+
+    #[test]
+    fn additional_properties_schema_form_fails_closed() {
+        assert!(compile(&v(
+            serde_json::json!({ "additionalProperties": { "type": "string" } })
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn exclusive_bounds_and_items() {
+        let s = compile(&v(
+            serde_json::json!({ "type": "integer", "exclusiveMinimum": 0, "exclusiveMaximum": 10 }),
+        ))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!(5))).is_empty());
+        assert!(!s.check(&v(serde_json::json!(0))).is_empty());
+        assert!(!s.check(&v(serde_json::json!(10))).is_empty());
+
+        let s = compile(&v(
+            serde_json::json!({ "type": "array", "items": { "type": "integer" } }),
+        ))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!([1, 2, 3]))).is_empty());
+        assert!(!s.check(&v(serde_json::json!([1, "bad"]))).is_empty());
+    }
+
+    #[test]
+    fn fractional_multiple_of_is_correct() {
+        let s = compile(&v(
+            serde_json::json!({ "type": "number", "multipleOf": 0.1 }),
+        ))
+        .unwrap();
+        assert!(
+            s.check(&v(serde_json::json!(7))).is_empty(),
+            "7 is a multiple of 0.1"
+        );
+        assert!(!s.check(&v(serde_json::json!(7.05))).is_empty());
+    }
+
+    #[test]
+    fn non_positive_multiple_of_fails_closed() {
+        assert!(compile(&v(serde_json::json!({ "multipleOf": 0 }))).is_err());
+        assert!(compile(&v(serde_json::json!({ "multipleOf": -2 }))).is_err());
     }
 
     #[test]
