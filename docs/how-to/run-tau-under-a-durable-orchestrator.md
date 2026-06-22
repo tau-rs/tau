@@ -10,10 +10,11 @@ tau does not provide that itself. tau is a workflow *compiler and
 runtime*, not a general-purpose durable-execution engine (see
 [non-goal NG5](../../ROADMAP.md)). Instead, tau makes its compiled
 artifact a clean unit to hand to an orchestrator that *does* own
-durability — Temporal, Inngest, DBOS, Restate, or Cloudflare Workflows.
+durability — Temporal, Inngest, Dapr Workflows, DBOS, Restate, or
+Cloudflare Workflows.
 
 This guide states the contract that makes that safe, then shows the
-integration shape for three common orchestrators.
+integration shape for four common orchestrators.
 
 ## The contract: a tau bundle is a safe-to-retry reentrant unit
 
@@ -34,6 +35,12 @@ Because the bundle is content-addressed, the orchestrator can use
 `bundle_hash` as a stable cache/idempotency key. Because invocation is
 reentrant, the orchestrator's retry policy is safe: a retried step
 recomputes the same answer rather than diverging.
+
+You can run the reentrancy proof yourself:
+`cargo test -p tau-ir-conformance bundle_invocation_is_reentrant_multi_turn`
+invokes the same bundle twice and asserts an identical observable
+outcome (same result + same side-effect multiset) — the executable
+guarantee your orchestrator's retry policy relies on.
 
 ```mermaid
 flowchart LR
@@ -125,7 +132,39 @@ export class FanMonitor extends WorkflowEntrypoint<Env, Plan> {
 }
 ```
 
-In all three, the orchestrator persists the result of each completed
+### Dapr Workflows (Python)
+
+```python
+from datetime import timedelta
+from dapr.ext.workflow import (
+    WorkflowRuntime, DaprWorkflowContext, WorkflowActivityContext, RetryPolicy,
+)
+
+wfr = WorkflowRuntime()
+
+@wfr.activity(name="run_tau_bundle")
+def run_tau_bundle(ctx: WorkflowActivityContext, step_input: dict) -> dict:
+    # tau run --bundle is the reentrant unit; Dapr owns the retry.
+    return invoke_subprocess(["tau", "run", "--bundle", "fan-monitor.tau",
+                              "--input", json.dumps(step_input)])
+
+@wfr.workflow(name="fan_monitor")
+def fan_monitor(ctx: DaprWorkflowContext, plan: list[dict]):
+    retry = RetryPolicy(
+        first_retry_interval=timedelta(seconds=10),
+        max_number_of_attempts=5,
+        backoff_coefficient=2,
+    )
+    for step in plan:                       # Dapr persists each activity result
+        yield ctx.call_activity(run_tau_bundle, input=step, retry_policy=retry)
+```
+
+If `run_tau_bundle` crashes, Dapr retries the activity under `retry`;
+because the bundle is reentrant, every attempt produces the same
+observable outcome. Activities that already completed are rehydrated
+from Dapr's workflow state store on replay, not re-run.
+
+In all four, the orchestrator persists the result of each completed
 `tau run --bundle` call and only retries the failing one. tau supplies
 the reentrancy that makes those retries correct.
 
