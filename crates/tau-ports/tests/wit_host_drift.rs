@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use tau_ports::llm::{CompletionRequest, LlmBackend};
 use tau_ports::random::RandomSource;
 use tau_ports::time::Clock;
+use wit_parser::{Type, TypeDefKind};
 
 /// Compile-time containment: these fns only compile while the three backing
 /// port methods exist with a compatible shape. (Never called.)
@@ -37,7 +38,7 @@ fn _ports_back_the_wit_host_world() {
         // The sign difference is documented above.
         c.now()
     }
-    fn _next_u64_exists(r: &dyn RandomSource) {
+    fn _fill_exists(r: &dyn RandomSource) {
         // WIT `next-u64: func() -> u64` is backed by `RandomSource::fill`,
         // the entropy source from which u64 values are drawn in the guest.
         let mut buf = [0u8; 8];
@@ -86,6 +87,42 @@ fn host_interface_is_the_frozen_three_function_surface() {
     );
     assert_eq!(by("now-millis").params.len(), 0);
     assert_eq!(by("next-u64").params.len(), 0);
+
+    // Return-shape assertions: dropping the error arm of `complete` or changing
+    // `now-millis`/`next-u64` to a non-u64 primitive would still pass the arity
+    // check above but is caught here.
+    //
+    // `complete` must return `result<string, string>` — its return type is a
+    // Type::Id whose TypeDef kind is TypeDefKind::Result(_).
+    let complete_ret = by("complete")
+        .result
+        .expect("complete must have a return type");
+    match complete_ret {
+        Type::Id(tid) => {
+            let kind = &resolve.types[tid].kind;
+            assert!(
+                matches!(kind, TypeDefKind::Result(_)),
+                "complete must return result<_, _> (has the error arm); got {:?}",
+                kind
+            );
+        }
+        other => panic!(
+            "complete return type must be Type::Id (result<_,_>), got {:?}",
+            other
+        ),
+    }
+
+    // `now-millis` and `next-u64` must return a bare u64 (NOT a result).
+    assert_eq!(
+        by("now-millis").result,
+        Some(Type::U64),
+        "now-millis must return u64 (plain primitive, not a result)"
+    );
+    assert_eq!(
+        by("next-u64").result,
+        Some(Type::U64),
+        "next-u64 must return u64 (plain primitive, not a result)"
+    );
 }
 
 #[test]
