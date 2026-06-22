@@ -20,7 +20,7 @@ foldhash   = { workspace = true }
 # SHA-256 for the canonical-bytes hash (β.2.3). sha2 supports no_std via
 # `default-features = false`.
 sha2       = { workspace = true, default-features = false }
-schemars   = { workspace = true, optional = true }
+schemars   = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
 tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
