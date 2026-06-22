@@ -4614,6 +4614,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "wit-parser 0.251.0",
  "zeroize",
 ]
 

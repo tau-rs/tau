@@ -507,6 +507,8 @@ jobs:
           with-mold: true
       - name: Drift check + conformance kit validation
         run: cargo test -p tau-ir --features schema --test schema_export --test schema_conformance
+      - name: WIT host world drift (EPIC 2.3)
+        run: cargo test -p tau-ports --test wit_host_drift
 
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's

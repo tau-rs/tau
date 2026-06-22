@@ -42,3 +42,7 @@ serde_json   = "1"
 tau-domain   = { workspace = true, features = ["serde", "test-fixtures", "std"] }
 uuid         = { workspace = true, features = ["std"] }
 tempfile     = { workspace = true }
+# Parse the committed WIT host world to assert its frozen 3-function surface
+# (EPIC 2.3). std/test-only. Pin to the version already in Cargo.lock
+# (transitive via wit-bindgen 0.58) so no second copy is pulled.
+wit-parser   = "0.251"
