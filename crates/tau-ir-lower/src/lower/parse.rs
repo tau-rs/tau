@@ -451,6 +451,7 @@ pub fn durable_entry_to_ir(
                 "per_tool_call" => CheckpointGranularity::PerToolCall,
                 _ => CheckpointGranularity::PerTurn,
             };
+            // TODO: map store when DurableStore::Kv lands (A-full)
             let store = DurableStore::File;
             Durability::Explicit { checkpoint, store }
         }

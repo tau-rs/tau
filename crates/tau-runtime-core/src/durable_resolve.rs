@@ -81,9 +81,12 @@ impl ResolvedDurability {
 ///
 /// A-minimal policy: every triple in the target registry provides the `File`
 /// store (host filesystem or host-mediated wasi preopen), so all registered
-/// targets honor `survive-restarts` → `PerTurn + File`. Any triple absent from
-/// the registry has no shipping store and is `Unsupported`. The policy
-/// diverges the moment a `Kv` store or a no-persistence target lands.
+/// targets honor `survive-restarts` → `PerTurn + File`. This includes
+/// `Reserved` entries (e.g. `windows-native-strict`): `tau_ports::target::lookup`
+/// finds them and they count as present/Honored even though no shipping adapter
+/// exists yet. Any triple *absent* from the registry (not found by `lookup`)
+/// has no shipping store and is `Unsupported`. The policy diverges the moment
+/// a `Kv` store or a no-persistence target lands.
 pub fn resolve_durability(d: &Durability, target: &TargetTriple) -> ResolvedDurability {
     let provides_file = target_provides_file(target);
     match d {
@@ -173,6 +176,7 @@ mod tests {
         let d = Durability::Intent(DurabilityIntent::SurviveRestarts);
         let r = resolve_durability(&d, &off);
         assert!(matches!(r.support, Support::Unsupported { .. }));
+        assert_eq!(r.from_intent, Some(DurabilityIntent::SurviveRestarts));
         assert!(r.clone().require_supported(&off).is_err());
     }
 }

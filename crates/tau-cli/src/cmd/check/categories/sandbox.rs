@@ -47,14 +47,17 @@ pub async fn run_sandbox(ctx: &CheckCtx) -> CheckResult {
         .filter(|p| p.plugin.is_some())
         .collect();
 
-    if plugin_pkgs.is_empty() {
-        return skipped("no plugin packages in lockfile");
-    }
-
     let mut findings: Vec<CheckFinding> = Vec::new();
 
     // --target branch: validate against the target's documented profile
     // instead of the locally resolved adapter.
+    //
+    // NOTE: the `plugin_pkgs.is_empty()` skip is intentionally NOT placed
+    // before this block.  Durability is an agent concern, independent of
+    // plugins.  A project with durable agents and no plugin packages must
+    // still receive durability findings (and the hard-fail path) when
+    // `--target` is set.  The per-plugin loop below no-ops naturally when
+    // `plugin_pkgs` is empty.
     if let Some(target) = &ctx.target {
         let Some(entry) = tau_ports::target::lookup(target) else {
             // Should not happen — dispatch already validated the triple.
@@ -208,6 +211,13 @@ pub async fn run_sandbox(ctx: &CheckCtx) -> CheckResult {
             findings,
             duration: std::time::Duration::ZERO,
         };
+    }
+
+    // No-target path: skip entirely when there are no plugin packages to
+    // validate. (The --target path above already returned, so we only reach
+    // here when ctx.target is None.)
+    if plugin_pkgs.is_empty() {
+        return skipped("no plugin packages in lockfile");
     }
 
     // Resolve adapter unless we're in --fast mode.
@@ -436,6 +446,92 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tau_pkg::project::project::{AgentEntry, DurableEntry, PromptEntry, RequiresEntry};
+
+    // ---------------------------------------------------------------------------
+    // Regression test for the `plugin_pkgs.is_empty()` early-return gap.
+    //
+    // Before the fix, `run_sandbox` would return `Skipped("no plugin packages in
+    // lockfile")` even when `--target` was supplied and the project had a durable
+    // agent, so durability findings were never emitted and the hard-fail path
+    // (`DurabilityUnsupported`) was silently bypassed.
+    // ---------------------------------------------------------------------------
+
+    /// Build a minimal CheckCtx pointing at a temp-dir project that has:
+    ///   - a tau.toml with one durable agent (survive-restarts intent)
+    ///   - a lockfile with NO plugin packages
+    ///   - a target triple that honors durability
+    fn make_ctx_durable_no_plugins(
+        project_root: &std::path::Path,
+        target: tau_ports::target::TargetTriple,
+    ) -> CheckCtx {
+        // Create .tau/ so Scope::resolve finds a project scope.
+        std::fs::create_dir_all(project_root.join(".tau")).unwrap();
+
+        let scope = tau_pkg::Scope::resolve(project_root).unwrap();
+
+        // Write an empty lockfile (no plugin packages).
+        let lf = tau_pkg::lockfile::LockFile::default();
+        lf.save(&scope.lockfile_path()).unwrap();
+
+        // Build a ProjectConfig with one durable agent inline.
+        // NOTE: `packages = ["mock-llm"]` declares the backend so the
+        // validator accepts `backend = "mock-llm"` in [models].
+        let toml_src = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "test-durable"
+
+[models]
+default = { backend = "mock-llm", model = "mock" }
+
+[agents.bot]
+display_name = "Bot"
+package      = "p@^0.1"
+model        = "default"
+tool_refs    = []
+durable      = "survive-restarts"
+"#;
+        let project = tau_pkg::project::ProjectConfig::parse_str(toml_src).ok();
+
+        CheckCtx {
+            project_root: project_root.to_path_buf(),
+            scope,
+            project,
+            fast: false,
+            target: Some(target),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_sandbox_with_target_emits_durability_finding_even_with_no_plugin_packages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target: tau_ports::target::TargetTriple = "any-wasi-strict".parse().unwrap();
+        let ctx = make_ctx_durable_no_plugins(tmp.path(), target);
+
+        let result = run_sandbox(&ctx).await;
+
+        // Must NOT be Skipped — durability is an agent concern, not a plugin concern.
+        assert!(
+            !matches!(result.status, CheckStatus::Skipped { .. }),
+            "expected non-Skipped result but got {:?}",
+            result.status
+        );
+
+        // Must contain at least one durability finding for the durable agent.
+        let durability_findings: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "tau.durability.resolved")
+            .collect();
+        assert!(
+            !durability_findings.is_empty(),
+            "expected tau.durability.resolved finding; got findings: {:#?}",
+            result.findings
+        );
+        // The finding is a Note (Honored on a registered target).
+        assert_eq!(durability_findings[0].severity, Severity::Note);
+    }
 
     fn agent_with_durable(id: &str, durable: DurableEntry) -> AgentEntry {
         let mut entry = AgentEntry::new(

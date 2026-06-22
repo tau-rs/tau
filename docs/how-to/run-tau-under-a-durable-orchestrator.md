@@ -185,7 +185,7 @@ specific store), use the explicit sub-table form instead:
 
 ```toml
 [agents.fan.durable]
-checkpoint = "per_turn"
+checkpoint = "per_tool_call"
 store = "file"
 ```
 
