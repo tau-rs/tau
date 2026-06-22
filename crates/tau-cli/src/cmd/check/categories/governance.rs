@@ -15,6 +15,9 @@ use crate::cmd::check::result::{
     CheckCategory, CheckFinding, CheckResult, CheckStatus, FindingLocation, Severity,
 };
 use crate::cmd::check::runner::CheckCtx;
+use tau_domain::Capability;
+use tau_pkg::capability_override::{capability_set_subset, CeilingViolation};
+use tau_pkg::project::allow::AllowConfig;
 use tau_pkg::project::ProjectConfig;
 
 pub fn run_governance(ctx: &CheckCtx) -> CheckResult {
@@ -42,7 +45,7 @@ pub fn run_governance(ctx: &CheckCtx) -> CheckResult {
 }
 
 pub(crate) fn governance_findings(project: &ProjectConfig, tau_toml: &Path) -> Vec<CheckFinding> {
-    let Some(_allow) = &project.allow else {
+    let Some(allow) = &project.allow else {
         return vec![CheckFinding {
             category: CheckCategory::Governance,
             severity: Severity::Warning,
@@ -56,8 +59,73 @@ pub(crate) fn governance_findings(project: &ProjectConfig, tau_toml: &Path) -> V
             structured: json!({ "check": "no_constitution" }),
         }];
     };
-    // Over-reach + closed-world checks added in Tasks 3 and 4.
-    Vec::new()
+    let mut out = Vec::new();
+    over_reach(project, allow, tau_toml, &mut out);
+    out
+}
+
+fn over_reach(
+    project: &ProjectConfig,
+    allow: &AllowConfig,
+    tau_toml: &Path,
+    out: &mut Vec<CheckFinding>,
+) {
+    for (name, tool) in &project.tools {
+        if let Err(v) = capability_set_subset(&tool.capabilities, &allow.ceiling) {
+            out.push(over_reach_finding(&format!("tool '{name}'"), &v, tau_toml));
+        }
+    }
+    for (name, entry) in &allow.tools {
+        if let Err(v) = capability_set_subset(&entry.ceiling, &allow.ceiling) {
+            out.push(over_reach_finding(
+                &format!("[allow.tools.{name}] ceiling"),
+                &v,
+                tau_toml,
+            ));
+        }
+    }
+    for agent in project.agents.values() {
+        for ov in &agent.capability_overrides {
+            let Some(list) = &ov.allow else { continue };
+            let Some(synth) = synth_cap(&ov.kind, list) else {
+                continue;
+            };
+            if let Err(v) = capability_set_subset(&[synth], &allow.ceiling) {
+                out.push(over_reach_finding(
+                    &format!("agent '{}': override", agent.id),
+                    &v,
+                    tau_toml,
+                ));
+            }
+        }
+    }
+}
+
+fn over_reach_finding(subject: &str, v: &CeilingViolation, tau_toml: &Path) -> CheckFinding {
+    CheckFinding {
+        category: CheckCategory::Governance,
+        severity: Severity::Error,
+        rule_id: "tau.governance.over_reach",
+        summary: format!(
+            "{subject}: capability {} \"{}\" exceeds [allow] ceiling ({})",
+            v.kind, v.offender, v.reason
+        ),
+        detail: None,
+        location: Some(loc(tau_toml)),
+        remediation: Some("narrow the capability or widen the [allow] ceiling".to_string()),
+        structured: json!({ "check": "over_reach", "subject": subject, "kind": v.kind, "offender": v.offender }),
+    }
+}
+
+fn synth_cap(kind: &str, allow: &[String]) -> Option<Capability> {
+    let field = match kind {
+        "fs.read" | "fs.write" | "fs.exec" => "paths",
+        "net.http" => "hosts",
+        "process.spawn" => "commands",
+        _ => return None,
+    };
+    let v = json!({ "kind": kind, field: allow });
+    serde_json::from_value::<Capability>(v).ok()
 }
 
 fn loc(tau_toml: &Path) -> FindingLocation {
@@ -111,5 +179,89 @@ name = "demo"
         );
         let f = governance_findings(&cfg, Path::new("tau.toml"));
         assert!(f.is_empty(), "got {}", summaries(&f));
+    }
+
+    #[test]
+    fn tool_caps_exceeding_root_flagged() {
+        let cfg = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.tools.fetch]
+native = "Fetch"
+
+[tools.fetch]
+native = "Fetch"
+capabilities = [{ kind = "fs.read", paths = ["/etc/**"] }]
+"#,
+        );
+        let f = governance_findings(&cfg, Path::new("tau.toml"));
+        assert!(
+            f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
+                && x.summary.contains("/etc/**")
+                && x.summary.contains("fetch")),
+            "got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn allow_tools_ceiling_exceeding_root_flagged() {
+        let cfg = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["api.x.com"] }
+
+[allow.tools.fetch]
+native = "Fetch"
+"net.http" = { hosts = ["evil.com"] }
+"#,
+        );
+        let f = governance_findings(&cfg, Path::new("tau.toml"));
+        assert!(
+            f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
+                && x.summary.contains("evil.com")),
+            "got: {}", summaries(&f)
+        );
+    }
+
+    #[test]
+    fn agent_override_exceeding_root_flagged() {
+        let cfg = proj(
+            r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+capabilities = [{ kind = "fs.read", allow_paths = ["/etc/**"] }]
+"#,
+        );
+        let f = governance_findings(&cfg, Path::new("tau.toml"));
+        assert!(
+            f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
+                && x.summary.contains("/etc/**")
+                && x.summary.contains("solo")),
+            "got: {}",
+            summaries(&f)
+        );
     }
 }
