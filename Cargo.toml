@@ -110,6 +110,7 @@ walkdir         = "2"
 globset         = "0.4"
 regex           = "1"
 jsonschema      = "0.46"
+schemars        = { version = "1", default-features = false }
 foldhash     = { version = "0.2", default-features = false }
 futures-core    = { version = "0.3", default-features = false, features = ["alloc"] }
 hashbrown    = { version = "0.17", default-features = false, features = ["default-hasher"] }

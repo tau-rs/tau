@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 /// Absent (`None` on the agent) is byte-stable with pre-A-minimal modules.
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Durability {
     /// High-level intent. The host resolves it to a concrete granularity +
@@ -56,6 +57,7 @@ impl Durability {
 /// `#[non_exhaustive]`: more intents are additive `MINOR` `ir_format` bumps.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum DurabilityIntent {
     /// "This run must survive a process restart." Resolves per target to the
     /// coarsest checkpoint + store the target can durably provide.
@@ -70,6 +72,7 @@ pub enum DurabilityIntent {
 /// at-least-once window within a turn). Finer granularities are additive.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CheckpointGranularity {
     /// Commit a checkpoint after each completed turn.
     #[serde(rename = "per_turn")]
@@ -89,6 +92,7 @@ pub enum CheckpointGranularity {
 /// additive follow-up belonging to A-full.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum DurableStore {
     /// Per-turn snapshot files under `.tau/runs/<run_id>/`.
     #[serde(rename = "file")]

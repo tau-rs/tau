@@ -15,6 +15,7 @@ use crate::tool_impl::{NativeFnRef, ToolImpl};
 
 /// One of the four IR node variants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Node {
     /// LLM agent loop with tool dispatch.
     Agent(Agent),
@@ -28,6 +29,7 @@ pub enum Node {
 
 /// An LLM agent loop with tools and optional context block.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Agent {
     /// Identifier within the workflow.
     pub id: AgentId,
@@ -60,6 +62,7 @@ pub struct Agent {
 
 /// A tool node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Tool {
     /// Identifier within the workflow.
     pub id: ToolId,
@@ -78,6 +81,7 @@ pub struct Tool {
 /// Mirror of `tau_ports::ToolSpec` adapted for IR storage. Provides the
 /// LLM-facing schema; not used for capability decisions.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolSpec {
     /// LLM-visible name.
     pub name: String,
@@ -89,6 +93,7 @@ pub struct ToolSpec {
 
 /// A pure-function step.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Deterministic {
     /// Identifier within the workflow.
     pub id: StepId,

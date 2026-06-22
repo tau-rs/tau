@@ -20,10 +20,12 @@ foldhash   = { workspace = true }
 # SHA-256 for the canonical-bytes hash (β.2.3). sha2 supports no_std via
 # `default-features = false`.
 sha2       = { workspace = true, default-features = false }
+schemars   = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
-tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
-tau-ports  = { workspace = true, features = ["serde"] }
+tau-domain  = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-ports   = { workspace = true, features = ["serde"] }
+jsonschema  = { workspace = true }
 
 [features]
 # Pure no_std by default — `tau-runtime-core` and the wasm guest link this.
@@ -32,4 +34,5 @@ default            = []
 # When on, enables Message↔tau_domain::Message bidirectional adapters
 # that require std (SystemTime ↔ i64-ms conversion through UNIX_EPOCH).
 with-std-adapters  = []
+schema             = ["dep:schemars", "tau-domain/schema", "tau-ports/schema"]
 test-fixtures      = []

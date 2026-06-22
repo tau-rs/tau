@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// A concrete, build-time-resolved model selection.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelRef {
     /// Backend package name — the key the runtime resolves a backend by.
     pub backend: String,
