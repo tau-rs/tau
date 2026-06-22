@@ -160,6 +160,7 @@ which keyword and where).
 | group | keywords |
 |---|---|
 | structural | `type`, `properties`, `required`, `items`, `enum`, `const`, `additionalProperties` (boolean form only) |
+| combinators | `oneOf`, `anyOf`, `allOf`, `not` |
 | numeric | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` |
 | string | `minLength`, `maxLength` |
 | array | `minItems`, `maxItems`, `uniqueItems` |
@@ -167,18 +168,31 @@ which keyword and where).
 `type` accepts the JSON Schema primitive names (`object`, `array`, `string`,
 `number`, `integer`, `boolean`, `null`) and an array-of-types union.
 
+The combinators are included because the audit (§4) found a real production
+schema (`fs-write`) using `oneOf`, and combinators are no_std-trivial to
+evaluate (run each subschema, count passes: `oneOf` = exactly one, `anyOf` =
+at least one, `allOf` = all, `not` = zero) — they need no regex engine, which
+is what makes `pattern`/`format` the only genuinely hard exclusions.
+
+**Ignored annotation keywords (NOT errors):** `title`, `description`,
+`default`, `$comment`, `examples`, `$schema`, `$id`. These are
+non-validating; `compile()` skips them silently. (Necessary: `fs-write`'s
+schema carries `title`/`description`/`default` on its sub-schemas, so
+treating unknown keys as `UnsupportedKeyword` would wrongly reject it. Only
+keys in the §3.2 list are hard errors; annotations are ignored.)
+
 ### 3.2 Explicitly unsupported in v1 (fail-closed)
 
-`pattern`, `format`, `$ref`, `$defs`/`definitions`, `allOf`, `anyOf`,
-`oneOf`, `not`, `if`/`then`/`else`, `additionalProperties` (schema form),
-`patternProperties`, `dependencies`. Each produces
-`SchemaCompileError::UnsupportedKeyword` at compile/build time.
+`pattern`, `format`, `$ref`, `$defs`/`definitions`, `if`/`then`/`else`,
+`additionalProperties` (schema form), `patternProperties`, `dependencies`.
+Each produces `SchemaCompileError::UnsupportedKeyword` at compile/build time.
 
 **Rationale for fail-closed:** an unsupported keyword must be a loud build
 error, never silently skipped validation. `pattern`/`format` are excluded
-because they require a regex engine and there is no clean no_std one; the
-others are excluded as YAGNI for tool-argument schemas (they can graduate to
-a v2 subset if a real schema needs them).
+because they require a regex engine and there is no clean no_std one (and the
+audit confirmed no real tool schema uses them). The rest are YAGNI for
+tool-argument schemas (no real schema uses them) and can graduate to a v2
+subset if one ever does.
 
 ### 3.3 Violation reporting
 
@@ -190,25 +204,41 @@ invented.
 
 ---
 
-## 4. The `pattern` risk (resolved before code)
+## 4. Schema-subset audit (DONE — Story 0.1/0.2 gate, resolved)
 
-The v1 subset excludes `pattern`. If any tool `input_schema` shipped in the
-repo uses `pattern` (or `format`, etc.), it would fail to build under the new
-validator. **Story 0.2's first task is a repo-wide audit** of every tool
-`input_schema` — the 5 production plugins (anthropic, ollama, openai,
-fs-read, shell), all test fixtures, the 3 reference skill packages, and the
-conformance scenarios — to confirm the v1 subset covers them.
+A repo-wide audit of every tool `input_schema` (production plugins, test
+fixtures, reference skill packages, conformance scenarios) was run before
+committing to the subset. Method: grep all `*.rs`/`*.json`/`*.toml` under
+`crates/` for the risky JSON-Schema keywords
+(`pattern`/`format`/`allOf`/`anyOf`/`oneOf`/`not`/`$ref`/`patternProperties`/`if`/`then`/`else`/`dependencies`)
+and characterise each hit as a real schema keyword vs a false positive.
 
-Decision rule once the audit lands:
+**Findings:**
 
-- **subset covers everything** → proceed as designed (expected outcome).
-- **a real schema uses `pattern`/`format`** → STOP and choose, with the
-  audit in hand: (a) narrow the offending schema, (b) add a minimal
-  fixed-purpose no_std matcher for the specific patterns used, or (c) a
-  documented host-only parity exception. No regex engine is pre-committed.
+- **One real combinator use:** `crates/tau-plugins/fs-write/src/plugin.rs`
+  (`fn schema()`) uses top-level `oneOf` to discriminate a "write" branch
+  from an "edit" branch (each with `const` mode discriminant, nested
+  `properties`/`required`, and `additionalProperties: false`). This is a
+  well-motivated discriminated union, not a casual usage.
+- **No real use of regex keywords.** Every `pattern` hit is a runtime *arg*
+  to the builtin `matches` deterministic function
+  (`builtin_registry.rs` tests, `interpreter/check.rs` —
+  `json!({ "pattern": x })`), where regex matching is the function's job; none
+  is a JSON-Schema `pattern` keyword in a tool `input_schema`. No `format` or
+  `$ref` in any tool schema. `"dependencies"` hits
+  (`install.rs`, `agent_loop.rs`) are unrelated data fields, not the schema
+  keyword.
 
-This audit is the gating task; nothing else in 0.2 starts until it confirms
-the subset (or the deviation is decided).
+**Resolution:** include the combinators in the v1 subset (§3.1) — this covers
+`fs-write` with no production-schema edits — and keep only the regex-dependent
+keywords (and the YAGNI rest) excluded (§3.2). The §3.1-with-combinators
+subset covers every tool schema in the repo today. The `pattern`/regex risk is
+therefore **not realised**; no regex engine is needed for v1.
+
+If a future tool schema introduces `pattern`/`format`, the fail-closed build
+error names the keyword and the team chooses then: narrow the schema, add a
+fixed-purpose no_std matcher, or a documented host-only parity exception. No
+regex engine is pre-committed.
 
 ---
 
@@ -231,22 +261,21 @@ TDD throughout (the repo's standard).
 
 ## 6. PR sequencing
 
-1. **PR-0a — schema-subset audit (Story 0.2 gate).** Read-only inventory of
-   every tool `input_schema` in the repo vs the v1 subset; result recorded
-   (committed appendix to this spec or a short `docs/` note). Resolves the
-   §4 `pattern` risk. No production code.
-2. **PR-0b — the no_std validator (Stories 0.2 + 0.3).** `CompiledSchema` +
-   `compile` + `validate`; swap `tool_args.rs` internals; differential test;
-   delete `jsonschema`; feature refactor (`tool-validation = ["wasm-
-   interpreter"]`, drop `tau-domain/std`, drop the std arm in `lib.rs`); wire
-   `tau check` to surface `SchemaCompileError`. The bulk of the work.
-3. **PR-0c — run-loop no_std CI lane (Stories 0.5 + close-out).** A lane that
+The schema-subset audit (PR-0a in the original plan) is **done** and recorded
+in §4, so implementation is two PRs:
+
+1. **PR-0b — the no_std validator (Stories 0.1 + 0.2 + 0.3 + 0.4).**
+   `CompiledSchema` + `compile` (incl. combinators + ignored annotations per
+   §3.1) + `validate`; swap `tool_args.rs` internals; differential test
+   against `jsonschema`; delete `jsonschema`; feature refactor
+   (`tool-validation = ["wasm-interpreter"]`, drop `tau-domain/std`, drop the
+   std arm in `lib.rs`); wire `tau check` to surface `SchemaCompileError`.
+   The bulk of the work. Body closes #378 (0.1), #379 (0.2), #380 (0.3),
+   #381 (0.4) — the last already satisfied (§1).
+2. **PR-0c — run-loop no_std CI lane (Story 0.5 + close-out).** A lane that
    *runs* `run_ir_streaming` no_std (not just checks/links) with
    `tool-validation` on, asserting tool-arg-rejection parity with the host
-   path. Closes the epic; updates ROADMAP EPIC 0 status.
-
-Story 0.1 (inventory) and 0.4 (serde_json) are already satisfied (see §1) and
-are closed by reference in PR-0b's body.
+   path. Closes #382 and the epic; updates ROADMAP EPIC 0 status.
 
 ### Epic DoD
 
