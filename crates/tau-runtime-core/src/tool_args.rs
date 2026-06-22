@@ -16,8 +16,7 @@
 //! See `docs/superpowers/specs/2026-04-30-tool-args-schema-design.md`
 //! and ADR-0010.
 //!
-//! Gated behind `feature = "tool-validation"` (previously jsonschema was std-only;
-//! now backed by the no_std `crate::schema::CompiledSchema`).
+//! Gated behind `feature = "tool-validation"`; the validator is no_std (EPIC 0).
 
 use alloc::format;
 use alloc::string::String;
@@ -332,114 +331,5 @@ mod tests {
         let a = args(serde_json::json!({ "x": "hello" }));
         let got = validate_tool_args(&a, "test-tool", &v).expect("happy path");
         assert_eq!(got, &a);
-    }
-
-    /// Differential: the new validator must agree with jsonschema on accept/reject
-    /// for every (schema, args) pair. Deleted with jsonschema in Task 7.
-    #[test]
-    fn differential_against_jsonschema() {
-        let cases = [
-            (
-                serde_json::json!({"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}),
-                serde_json::json!({"x":"ok"}),
-            ),
-            (
-                serde_json::json!({"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}),
-                serde_json::json!({}),
-            ),
-            (
-                serde_json::json!({"type":"integer","minimum":1,"maximum":10}),
-                serde_json::json!(5),
-            ),
-            (
-                serde_json::json!({"type":"integer","minimum":1,"maximum":10}),
-                serde_json::json!(99),
-            ),
-            (
-                serde_json::json!({"enum":["a","b"]}),
-                serde_json::json!("c"),
-            ),
-            (
-                serde_json::json!({"oneOf":[{"type":"string"},{"type":"integer"}]}),
-                serde_json::json!("s"),
-            ),
-            (
-                serde_json::json!({"type":"array","items":{"type":"integer"},"minItems":1}),
-                serde_json::json!([1, 2]),
-            ),
-            (
-                serde_json::json!({"type":"array","items":{"type":"integer"}}),
-                serde_json::json!(["bad"]),
-            ),
-            // additionalProperties (most divergence-prone)
-            (
-                serde_json::json!({"type":"object","properties":{"x":{"type":"number"}},"additionalProperties":false}),
-                serde_json::json!({"x":1,"y":2}),
-            ), // reject
-            (
-                serde_json::json!({"type":"object","properties":{"x":{"type":"number"}},"additionalProperties":false}),
-                serde_json::json!({"x":1}),
-            ), // accept
-            // oneOf multi-match → reject (matrix only had single-match)
-            (
-                serde_json::json!({"oneOf":[{"type":"integer"},{"minimum":5}]}),
-                serde_json::json!(7),
-            ),
-            // const
-            (
-                serde_json::json!({"const":"write"}),
-                serde_json::json!("edit"),
-            ), // reject
-            (
-                serde_json::json!({"const":"write"}),
-                serde_json::json!("write"),
-            ), // accept
-            // not
-            (
-                serde_json::json!({"not":{"type":"string"}}),
-                serde_json::json!("x"),
-            ), // reject
-            (
-                serde_json::json!({"not":{"type":"string"}}),
-                serde_json::json!(3),
-            ), // accept
-            // anyOf
-            (
-                serde_json::json!({"anyOf":[{"type":"string"},{"type":"integer"}]}),
-                serde_json::json!(true),
-            ), // reject
-            // allOf
-            (
-                serde_json::json!({"allOf":[{"type":"integer"},{"minimum":0}]}),
-                serde_json::json!(-1),
-            ), // reject
-            // multipleOf fractional (most divergence-prone numeric path)
-            (
-                serde_json::json!({"type":"number","multipleOf":0.1}),
-                serde_json::json!(7.05),
-            ), // reject
-            (
-                serde_json::json!({"type":"number","multipleOf":0.1}),
-                serde_json::json!(7),
-            ), // accept
-            // integer accepts integral float
-            (
-                serde_json::json!({"type":"integer"}),
-                serde_json::json!(2.0),
-            ), // accept
-        ];
-        for (schema_json, args_json) in cases {
-            let js = jsonschema::options()
-                .with_draft(jsonschema::Draft::Draft7)
-                .build(&schema_json)
-                .expect("jsonschema compiles");
-            let js_ok = js.is_valid(&args_json);
-            let ours = crate::schema::compile(&schema_json).expect("ours compiles");
-            let our_ok = ours.check(&args_json).is_empty();
-            assert_eq!(
-                js_ok, our_ok,
-                "divergence on schema={schema_json} args={args_json}"
-            );
-        }
     }
 }

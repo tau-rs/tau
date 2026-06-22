@@ -39,9 +39,9 @@ use crate::options::RunOptions;
 use crate::outcome::RunOutcome;
 /// Type of the per-tool schema validator passed to `run_streaming_inner`.
 ///
-/// When `tool-validation` is enabled this is the real `ToolArgsValidator`
-/// (pre-compiled jsonschema).  Without `tool-validation` (e.g. the wasm
-/// guest) schema validation is a no-op and the validator is `()`.
+/// When `tool-validation` is enabled this is the real pre-compiled no_std
+/// `ToolArgsValidator`.  Without `tool-validation` (e.g. the wasm guest)
+/// schema validation is a no-op and the validator is `()`.
 #[cfg(feature = "tool-validation")]
 type ValidatorMap = HashMap<String, crate::tool_args::ToolArgsValidator>;
 #[cfg(not(feature = "tool-validation"))]
