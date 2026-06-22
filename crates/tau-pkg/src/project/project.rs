@@ -961,6 +961,13 @@ pub enum ProjectConfigError {
         message: String,
     },
 
+    /// `[allow]` constitution failed internal well-formedness validation.
+    #[error("[allow]: {message}")]
+    AllowValidation {
+        /// Human-readable message describing the violation.
+        message: String,
+    },
+
     /// Project override on `kind` expanded the package's grant. Carries
     /// the agent id, the failing kind, and a human-readable reason.
     #[error("agent {id:?}: capability override on {kind:?} expands the package's grant: {reason}")]

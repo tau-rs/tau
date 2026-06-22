@@ -9,8 +9,10 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use tau_domain::Capability;
 
-use super::project::RawModelEntry;
+use super::project::{ModelEntry, ProjectConfigError, RawModelEntry};
 
 /// Unchecked `[allow]` table. `models` / `mcp` / `tools` bind to named
 /// fields; every other key is a raw-cap kind captured by `caps` via
@@ -62,9 +64,166 @@ pub struct UncheckedToolAllow {
     pub caps: BTreeMap<String, toml::Value>,
 }
 
+/// Validated `[allow]` constitution. Produced by [`validate_allow`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AllowConfig {
+    /// Root raw-cap ceiling, as canonical `Capability` values.
+    pub ceiling: Vec<Capability>,
+    /// `[allow.models]` — the sole home for alias → `{ backend, model }`.
+    pub models: BTreeMap<String, ModelEntry>,
+    /// `[allow.mcp.<name>]` — registered MCP servers + host ceiling.
+    pub mcp: BTreeMap<String, McpAllowEntry>,
+    /// `[allow.tools.<name>]` — registered tools + per-tool cap ceiling.
+    pub tools: BTreeMap<String, ToolAllowEntry>,
+}
+
+/// Validated `[allow.mcp.<name>]` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpAllowEntry {
+    /// MCP server URL.
+    pub url: String,
+    /// Host ceiling (explicit, or derived from `url`).
+    pub hosts: Vec<String>,
+}
+
+/// Validated `[allow.tools.<name>]` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolAllowEntry {
+    /// Native or MCP binding.
+    pub binding: ToolBinding,
+    /// Per-tool cap ceiling (may be empty).
+    pub ceiling: Vec<Capability>,
+}
+
+/// A registered tool's binding.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolBinding {
+    /// Native tool symbol.
+    Native(String),
+    /// MCP tool (registered MCP name).
+    Mcp(String),
+}
+
+/// Raw-cap kinds permitted as `[allow]` keys (and `[allow.tools.*]` ceiling
+/// keys). `agent.spawn` flows through the lattice's spawn link, not a raw
+/// ceiling entry; `custom`/anything else is not a narrowable ceiling kind.
+const ALLOWED_CAP_KINDS: &[&str] =
+    &["fs.read", "fs.write", "fs.exec", "net.http", "process.spawn"];
+
+fn err(message: impl Into<String>) -> ProjectConfigError {
+    ProjectConfigError::AllowValidation {
+        message: message.into(),
+    }
+}
+
+/// Bridge one kind-as-key raw cap (`"fs.read" => { paths = [...] }`) into a
+/// canonical `Capability`, re-emitting it as `{ kind, ... }` for the domain
+/// deserializer. Rejects non-whitelisted kinds and non-table values.
+fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConfigError> {
+    if !ALLOWED_CAP_KINDS.contains(&kind) {
+        return Err(err(format!(
+            "raw-cap kind {kind:?} is not permitted in [allow] \
+             (allowed: fs.read, fs.write, fs.exec, net.http, process.spawn)"
+        )));
+    }
+    // toml::Value → serde_json::Value, then inject `kind`.
+    let json: JsonValue = serde_json::to_value(value)
+        .map_err(|e| err(format!("raw-cap {kind:?}: not serializable: {e}")))?;
+    let JsonValue::Object(mut obj) = json else {
+        return Err(err(format!("raw-cap {kind:?}: value must be a table")));
+    };
+    obj.insert("kind".to_string(), JsonValue::String(kind.to_string()));
+    serde_json::from_value::<Capability>(JsonValue::Object(obj))
+        .map_err(|e| err(format!("raw-cap {kind:?}: malformed: {e}")))
+}
+
+/// Bridge a kind-as-key cap map into a sorted `Vec<Capability>`.
+fn bridge_caps(caps: &BTreeMap<String, toml::Value>) -> Result<Vec<Capability>, ProjectConfigError> {
+    // BTreeMap iteration is sorted by key, giving deterministic ceiling order.
+    caps.iter().map(|(k, v)| bridge_cap(k, v)).collect()
+}
+
+/// Validate an `[allow]` constitution into an [`AllowConfig`].
+///
+/// Story 1.2: raw-cap ceiling bridge + (Task 3) registry well-formedness.
+/// No subset / closed-world / cross-reference checks (stories 1.3–1.6).
+pub fn validate_allow(raw: UncheckedAllow) -> Result<AllowConfig, ProjectConfigError> {
+    let ceiling = bridge_caps(&raw.caps)?;
+    Ok(AllowConfig {
+        ceiling,
+        models: BTreeMap::new(), // filled in Task 3
+        mcp: BTreeMap::new(),    // filled in Task 3
+        tools: BTreeMap::new(),  // filled in Task 3
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
+
+    fn allow_from(toml: &str) -> UncheckedAllow {
+        toml::from_str(toml).expect("parse [allow]")
+    }
+
+    #[test]
+    fn raw_caps_bridge_into_capability_vec() {
+        let raw = allow_from(
+            r#"
+"fs.read" = { paths = ["/proj/**"] }
+"net.http" = { hosts = ["api.weather.com"] }
+"process.spawn" = { commands = ["git"] }
+"#,
+        );
+        let cfg = validate_allow(raw).expect("validate");
+        // Ceiling is sorted by the BTreeMap key order: fs.read, net.http, process.spawn.
+        assert!(cfg.ceiling.iter().any(|c| matches!(
+            c,
+            Capability::Filesystem(FsCapability::Read { paths, .. }) if paths == &["/proj/**".to_string()]
+        )));
+        assert!(cfg.ceiling.iter().any(|c| matches!(
+            c,
+            Capability::Network(NetCapability::Http { hosts, .. }) if hosts == &["api.weather.com".to_string()]
+        )));
+        assert!(cfg.ceiling.iter().any(|c| matches!(
+            c,
+            Capability::Process(ProcessCapability::Spawn { commands, .. }) if commands == &["git".to_string()]
+        )));
+    }
+
+    #[test]
+    fn agent_spawn_key_rejected() {
+        let raw = allow_from(r#""agent.spawn" = { allowed_kinds = ["worker"] }"#);
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("agent.spawn"), "got: {err}");
+    }
+
+    #[test]
+    fn custom_key_rejected() {
+        let raw = allow_from(r#""task_list" = { mode = "read" }"#);
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("task_list"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_key_rejected() {
+        let raw = allow_from(r#""fs.teleport" = { paths = ["/"] }"#);
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("fs.teleport"), "got: {err}");
+    }
+
+    #[test]
+    fn malformed_cap_shape_rejected() {
+        // net.http with `paths` instead of `hosts` — wrong field for the kind.
+        // The bridge tolerates extra fields, so we assert the *value* is wrong
+        // by checking hosts is empty (paths is ignored). A stricter shape check
+        // belongs to 1.4; here we only require the bridge to succeed-or-name.
+        // Use a genuinely un-bridgeable value instead: a non-table.
+        let raw = allow_from(r#""fs.read" = "not-a-table""#);
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("fs.read"), "got: {err}");
+    }
 
     #[test]
     fn full_allow_deserializes_into_named_and_flatten_fields() {
