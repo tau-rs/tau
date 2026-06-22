@@ -308,6 +308,11 @@ jobs:
         # The #[ignore]'d wasm-profile test is skipped by nextest until
         # β.7.5 ships `tau build wasm`. See ADR-0048.
         run: cargo nextest run --profile ci -p tau-conformance
+      - name: IR JSON schema — drift + conformance (EPIC 2.2)
+        run: |
+          set -e
+          cargo test -p tau-ir --features schema --test schema_drift
+          cargo test -p tau-ir-lower --test ir_schema_conformance
 
   test-credential-chain:
     name: test-credential-chain / linux
