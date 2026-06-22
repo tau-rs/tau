@@ -9,6 +9,7 @@
 //! `[workspace]` precedent that justifies the shared filename.
 
 pub mod agent;
+pub mod allow;
 #[allow(clippy::module_inception)]
 pub mod project;
 

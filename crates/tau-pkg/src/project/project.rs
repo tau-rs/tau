@@ -45,6 +45,10 @@ pub struct UncheckedProjectConfig {
     /// against agent `package` fields.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Optional root `[allow]` constitution (ADR-0057). `None` = no
+    /// constitution declared (opt-in governance).
+    #[serde(default)]
+    pub allow: Option<crate::project::allow::UncheckedAllow>,
 }
 
 /// `[project]` table.
@@ -596,7 +600,7 @@ pub struct GoalEntry {
 }
 
 /// Raw `[models.<alias>]` inline table (pre-validation).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawModelEntry {
     /// Backend package name.
@@ -4401,6 +4405,7 @@ mod proptests {
                 deliverables: BTreeMap::new(),
                 models: models_map,
                 packages: Vec::new(),
+                allow: None,
             };
 
             let toml_str = toml::to_string(&original).unwrap();
