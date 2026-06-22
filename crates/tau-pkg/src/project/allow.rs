@@ -166,6 +166,8 @@ fn derive_host(url: &str) -> Option<String> {
 pub fn validate_allow(raw: UncheckedAllow) -> Result<AllowConfig, ProjectConfigError> {
     let ceiling = bridge_caps(&raw.caps)?;
 
+    // NOTE: [allow.models] backends are NOT validated against declared `packages`
+    // here — that closed-world/backend check is deferred to Story 1.4.
     let models: BTreeMap<String, ModelEntry> = raw
         .models
         .into_iter()
@@ -279,12 +281,10 @@ mod tests {
     }
 
     #[test]
-    fn malformed_cap_shape_rejected() {
-        // net.http with `paths` instead of `hosts` — wrong field for the kind.
-        // The bridge tolerates extra fields, so we assert the *value* is wrong
-        // by checking hosts is empty (paths is ignored). A stricter shape check
-        // belongs to 1.4; here we only require the bridge to succeed-or-name.
-        // Use a genuinely un-bridgeable value instead: a non-table.
+    fn non_table_cap_value_rejected() {
+        // Asserts that a non-table cap value (e.g. `"fs.read" = "not-a-table"`) is
+        // rejected by the bridge. Strict field-shape validation (e.g. `net.http`
+        // given `paths` instead of `hosts`) is deferred to Story 1.4.
         let raw = allow_from(r#""fs.read" = "not-a-table""#);
         let err = validate_allow(raw).unwrap_err();
         assert!(format!("{err}").contains("fs.read"), "got: {err}");
