@@ -881,8 +881,8 @@ pub struct TargetShowArgs {
 pub struct CheckArgs {
     /// Optional category — runs only the named check (one of:
     /// config, lockfile, packages, sandbox, plugins, skills,
-    /// mcp-contracts). When omitted, runs all 7 categories.
-    #[arg(value_name = "CATEGORY", value_parser = ["config", "lockfile", "packages", "sandbox", "plugins", "skills", "mcp-contracts"])]
+    /// mcp-contracts, governance). When omitted, runs all 8 categories.
+    #[arg(value_name = "CATEGORY", value_parser = ["config", "lockfile", "packages", "sandbox", "plugins", "skills", "mcp-contracts", "governance"])]
     pub category: Option<String>,
 
     /// Reduce per-check I/O where a fast variant exists.
