@@ -977,7 +977,10 @@ mod tests {
             panic!("expected BuildError::ToolSchemaInvalid, got: {err:?}");
         };
         assert_eq!(tool_name, "broken");
-        assert!(detail.contains("compile"), "detail: {detail}");
+        assert!(
+            detail.contains("type") || detail.contains("unsupported"),
+            "detail: {detail}"
+        );
     }
 
     #[cfg(feature = "tool-validation")]

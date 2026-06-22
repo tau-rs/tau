@@ -16,14 +16,14 @@
 //! See `docs/superpowers/specs/2026-04-30-tool-args-schema-design.md`
 //! and ADR-0010.
 //!
-//! Gated behind `feature = "tool-validation"` (jsonschema is std-only).
+//! Gated behind `feature = "tool-validation"` (previously jsonschema was std-only;
+//! now backed by the no_std `crate::schema::CompiledSchema`).
 
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use jsonschema::{Draft, ValidationOptions, Validator};
 use tau_domain::Value;
 use tau_ports::ToolError;
 
@@ -35,7 +35,7 @@ use tau_ports::ToolError;
 ///
 /// # Cloneability
 ///
-/// `ToolArgsValidator` is `Clone`: the compiled `jsonschema::Validator`
+/// `ToolArgsValidator` is `Clone`: the compiled `CompiledSchema`
 /// is wrapped in `Arc` so cloning is a reference-count bump rather than
 /// a schema recompile. This is required by `Runtime::run_streaming_with_history`,
 /// which snapshots the `tool_validators` registry into an owned HashMap
@@ -43,13 +43,13 @@ use tau_ports::ToolError;
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ToolArgsValidator {
-    /// Compiled jsonschema instance. `None` = tool opted out (empty
+    /// Compiled no_std schema instance. `None` = tool opted out (empty
     /// schema or `Value::Null`); validation is a no-op.
     ///
     /// Wrapped in `Arc` so that `ToolArgsValidator` can be `Clone`
     /// without recompiling the schema — clone is an Arc reference-count
     /// bump.
-    compiled: Option<Arc<Validator>>,
+    compiled: Option<Arc<crate::schema::CompiledSchema>>,
     /// The original input_schema as declared, kept for inclusion in
     /// BadArgs error messages (the MANDATORY rule).
     declared_schema_json: String,
@@ -82,12 +82,17 @@ impl ToolArgsValidator {
             });
         }
 
-        let compiled = draft7_options()
-            .build(&schema_json)
-            .map_err(|err| SchemaCompileError {
-                kind: format!("schema compile failed: {err}"),
-                schema_excerpt: declared_schema_json.chars().take(200).collect(),
-            })?;
+        let compiled = crate::schema::compile(&schema_json).map_err(|err| SchemaCompileError {
+            kind: if err.keyword.is_empty() {
+                format!("schema invalid at {}: {}", err.pointer, err.detail)
+            } else {
+                format!(
+                    "unsupported keyword '{}' at {}: {}",
+                    err.keyword, err.pointer, err.detail
+                )
+            },
+            schema_excerpt: declared_schema_json.chars().take(200).collect(),
+        })?;
         Ok(Self {
             compiled: Some(Arc::new(compiled)),
             declared_schema_json,
@@ -108,8 +113,9 @@ impl ToolArgsValidator {
         let args_json = serde_json::to_value(args)
             .map_err(|e| format!("internal: args serialization failed: {e}"))?;
         let issues: Vec<String> = compiled
-            .iter_errors(&args_json)
-            .map(|e| format!("  {}: {}", e.instance_path(), e))
+            .check(&args_json)
+            .into_iter()
+            .map(|vio| format!("  {}: {}", vio.pointer, vio.message))
             .collect();
         if !issues.is_empty() {
             let args_repr =
@@ -125,11 +131,6 @@ impl ToolArgsValidator {
         }
         Ok(())
     }
-}
-
-/// Construct a `ValidationOptions` builder configured for JSON Schema Draft 7.
-fn draft7_options() -> ValidationOptions<'static> {
-    jsonschema::options().with_draft(Draft::Draft7)
 }
 
 /// Error returned when a tool's `input_schema` fails to compile as a
@@ -212,8 +213,8 @@ mod tests {
         let s = schema(serde_json::json!({ "type": "objectt" }));
         let err = ToolArgsValidator::compile(&s).expect_err("malformed");
         assert!(
-            err.kind.contains("compile"),
-            "expected compile-failure kind; got: {}",
+            err.kind.contains("type") || err.kind.contains("unsupported"),
+            "expected type/unsupported failure kind; got: {}",
             err.kind
         );
         assert!(
@@ -331,5 +332,58 @@ mod tests {
         let a = args(serde_json::json!({ "x": "hello" }));
         let got = validate_tool_args(&a, "test-tool", &v).expect("happy path");
         assert_eq!(got, &a);
+    }
+
+    /// Differential: the new validator must agree with jsonschema on accept/reject
+    /// for every (schema, args) pair. Deleted with jsonschema in Task 7.
+    #[test]
+    fn differential_against_jsonschema() {
+        let cases = [
+            (
+                serde_json::json!({"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}),
+                serde_json::json!({"x":"ok"}),
+            ),
+            (
+                serde_json::json!({"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}),
+                serde_json::json!({}),
+            ),
+            (
+                serde_json::json!({"type":"integer","minimum":1,"maximum":10}),
+                serde_json::json!(5),
+            ),
+            (
+                serde_json::json!({"type":"integer","minimum":1,"maximum":10}),
+                serde_json::json!(99),
+            ),
+            (
+                serde_json::json!({"enum":["a","b"]}),
+                serde_json::json!("c"),
+            ),
+            (
+                serde_json::json!({"oneOf":[{"type":"string"},{"type":"integer"}]}),
+                serde_json::json!("s"),
+            ),
+            (
+                serde_json::json!({"type":"array","items":{"type":"integer"},"minItems":1}),
+                serde_json::json!([1, 2]),
+            ),
+            (
+                serde_json::json!({"type":"array","items":{"type":"integer"}}),
+                serde_json::json!(["bad"]),
+            ),
+        ];
+        for (schema_json, args_json) in cases {
+            let js = jsonschema::options()
+                .with_draft(jsonschema::Draft::Draft7)
+                .build(&schema_json)
+                .expect("jsonschema compiles");
+            let js_ok = js.is_valid(&args_json);
+            let ours = crate::schema::compile(&schema_json).expect("ours compiles");
+            let our_ok = ours.check(&args_json).is_empty();
+            assert_eq!(
+                js_ok, our_ok,
+                "divergence on schema={schema_json} args={args_json}"
+            );
+        }
     }
 }

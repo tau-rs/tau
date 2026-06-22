@@ -61,6 +61,8 @@ default = ["process", "capability-override", "tool-validation", "host-fs"]
 test-fixtures = ["tau-ports/test-fixtures"]
 
 [dev-dependencies]
+# TEMPORARY (EPIC 0 PR-0b): differential test only; removed in Task 7.
+jsonschema     = { workspace = true }
 # toml + proptest: used by capability.rs unit/property tests (Task 3.3).
 toml           = { workspace = true }
 proptest       = { workspace = true }
