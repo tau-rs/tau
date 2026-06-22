@@ -1,4 +1,4 @@
-//! Adapters mapping the three `tau:run/host` WIT imports onto the core ports
+//! Adapters mapping the three `tau:host/host` WIT imports onto the core ports
 //! the interpreter consumes: LLM inference, clock, and randomness. All three
 //! cross the wasm boundary because credentials (β.5) and determinism live
 //! host-side.
@@ -12,8 +12,8 @@ use tau_ports::{Clock, LlmBackend, LlmError, RandomSource};
 
 // The WIT-generated host imports are re-exported by `guest.rs` as
 // `crate::wit_host` (see the `wit_host` module there). Using a re-export
-// avoids coupling to the exact generated path (`crate::guest::tau::run::host`
-// for wit-bindgen guest, vs `tau::run::host` on the wasmtime host side).
+// avoids coupling to the exact generated path (`crate::guest::tau::host::host`
+// for wit-bindgen guest, vs `tau::host::host` on the wasmtime host side).
 use crate::wit_host as host;
 
 /// `LlmBackend` backed by the host `complete` import (cassette in conformance).
