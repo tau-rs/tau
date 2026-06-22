@@ -50,7 +50,13 @@ wasm-interpreter   = []
 tool-validation    = ["wasm-interpreter"]
 # `host-fs` enables code paths that consume std::path::PathBuf scope-roots
 # and read skill markdown via std::fs. Embassy ships without this feature.
-host-fs            = ["dep:globset"]
+# It is a host-only (std) path: its skill-resolution code uses the std-only
+# `tau-domain` ctors (`Message::new`/`AgentInstanceId::new`, needing wall-clock
+# + `uuid::now_v7`), so pull `tau-domain/std` here. The no_std guest build
+# enables neither `host-fs` nor any std, so it stays std-free. (Before EPIC 0
+# this std came incidentally via `tool-validation -> tau-domain/std`, removed
+# in PR-0b.)
+host-fs            = ["dep:globset", "tau-domain/std"]
 
 default = ["process", "capability-override", "tool-validation", "host-fs"]
 # Activates DeterministicRandom fallback in invoke_tool for test paths.
