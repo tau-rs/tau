@@ -107,8 +107,13 @@ pub enum ToolBinding {
 /// Raw-cap kinds permitted as `[allow]` keys (and `[allow.tools.*]` ceiling
 /// keys). `agent.spawn` flows through the lattice's spawn link, not a raw
 /// ceiling entry; `custom`/anything else is not a narrowable ceiling kind.
-const ALLOWED_CAP_KINDS: &[&str] =
-    &["fs.read", "fs.write", "fs.exec", "net.http", "process.spawn"];
+const ALLOWED_CAP_KINDS: &[&str] = &[
+    "fs.read",
+    "fs.write",
+    "fs.exec",
+    "net.http",
+    "process.spawn",
+];
 
 fn err(message: impl Into<String>) -> ProjectConfigError {
     ProjectConfigError::AllowValidation {
@@ -138,7 +143,9 @@ fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConf
 }
 
 /// Bridge a kind-as-key cap map into a sorted `Vec<Capability>`.
-fn bridge_caps(caps: &BTreeMap<String, toml::Value>) -> Result<Vec<Capability>, ProjectConfigError> {
+fn bridge_caps(
+    caps: &BTreeMap<String, toml::Value>,
+) -> Result<Vec<Capability>, ProjectConfigError> {
     // BTreeMap iteration is sorted by key, giving deterministic ceiling order.
     caps.iter().map(|(k, v)| bridge_cap(k, v)).collect()
 }
@@ -339,7 +346,10 @@ url = "https://api.weather.com/mcp"
 "#,
         );
         let cfg = validate_allow(raw).expect("validate");
-        assert_eq!(cfg.mcp["weather"].hosts, vec!["api.weather.com".to_string()]);
+        assert_eq!(
+            cfg.mcp["weather"].hosts,
+            vec!["api.weather.com".to_string()]
+        );
     }
 
     #[test]
@@ -392,7 +402,10 @@ native = "ReadTemp"
 "#,
         );
         let cfg = validate_allow(raw).expect("validate");
-        assert_eq!(cfg.tools["read_temp"].binding, ToolBinding::Native("ReadTemp".to_string()));
+        assert_eq!(
+            cfg.tools["read_temp"].binding,
+            ToolBinding::Native("ReadTemp".to_string())
+        );
         assert_eq!(cfg.tools["read_temp"].ceiling.len(), 1);
     }
 
@@ -405,7 +418,10 @@ mcp = "weather"
 "#,
         );
         let cfg = validate_allow(raw).expect("validate");
-        assert_eq!(cfg.tools["weather"].binding, ToolBinding::Mcp("weather".to_string()));
+        assert_eq!(
+            cfg.tools["weather"].binding,
+            ToolBinding::Mcp("weather".to_string())
+        );
         assert!(cfg.tools["weather"].ceiling.is_empty());
     }
 

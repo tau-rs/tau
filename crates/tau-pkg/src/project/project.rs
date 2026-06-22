@@ -4350,7 +4350,10 @@ fast = { backend = "anthropic", model = "claude-haiku-4-5" }
             .validate()
             .expect("validate");
         assert!(cfg.allow.is_none(), "no [allow] = opt-out");
-        assert_eq!(cfg.models["fast"].backend, "anthropic", "legacy [models] still works");
+        assert_eq!(
+            cfg.models["fast"].backend, "anthropic",
+            "legacy [models] still works"
+        );
     }
 
     #[test]
