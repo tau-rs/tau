@@ -41,3 +41,4 @@ require ADRs and are recorded in commit messages and PR discussion (PG3).
 | [0007](0007-tau-cli.md) | tau-cli + tau-runtime amendments (capability filter, run_with_history) | Accepted |
 | [0008](0008-plugin-loading.md) | Plugin loading mechanism — IPC over MessagePack-RPC + tau-pkg, tau-runtime, tau-domain amendments | Accepted |
 | [0033](0033-tau-serve-mode.md) | Tau serve mode v1 — JSON-RPC 2.0 over NDJSON-framed stdio | Accepted |
+| [0056](0056-contract-versioning-stability-surface.md) | The two contracts are the semver stability surface | Accepted |
