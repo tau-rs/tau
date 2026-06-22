@@ -1,4 +1,4 @@
-package tau:host@0.1.0;
+package tau:run@0.1.0;
 
 /// Host-provided ports the guest cannot satisfy in-wasm. Inference crosses
 /// because credentials live host-side (β.5); time + randomness cross so the

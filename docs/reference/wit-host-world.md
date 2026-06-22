@@ -1,49 +1,25 @@
-# WIT host world
+# WIT host world (embedding contract)
 
-tau publishes the **embedding contract** — the WIT host world — as a
-frozen WIT package that any host embedding `tau-wasm-guest` must implement
-(ADR-0055/ADR-0056). It is the second of tau's two public contracts; the
-first is the [IR JSON Schema](ir-json-schema.md).
+tau's **embedding contract** (ADR-0056) is the WIT host world in
+[`wit/tau-run.wit`](https://github.com/tau-rs/tau/blob/main/wit/tau-run.wit) —
+`package tau:run@0.1.0`. Language-neutral embedders consume it via wit-bindgen / jco.
 
-- **Package:** `tau:host@0.1.0`
-- **World:** `runner`
-- **Interface:** `host`
-- **Source:** [`wit/tau-host.wit`](https://github.com/tau-rs/tau/blob/main/wit/tau-host.wit)
-- **Drift test:** `crates/tau-ports/tests/wit_host_drift.rs`
+The host world has a **frozen minimal 3-function surface** — the ports the guest
+cannot satisfy in-wasm, projected across the boundary:
 
-## Host functions
-
-| WIT host fn | Signature | Backing port |
+| WIT host function | signature | tau-ports trait |
 |---|---|---|
-| `complete` | `func(request-json: string) -> result<string, string>` | `tau_ports::llm::LlmBackend::complete` |
-| `now-millis` | `func() -> u64` | `tau_ports::time::Clock::now` (i64 ms, bridged) |
-| `next-u64` | `func() -> u64` | `tau_ports::random::RandomSource::fill` (the trait primitive) |
+| `complete` | `func(request-json: string) -> result<string, string>` | `llm::LlmBackend` (JSON-serialized request/response) |
+| `now-millis` | `func() -> u64` | `time::Clock` |
+| `next-u64` | `func() -> u64` | `random::RandomSource` |
 
-**Principle: host imports = inference + nondeterminism only.** Native tools,
-the MCP-cassette replayer, skills, and the context pipeline are all compiled
-into the guest; only the three crossing-points above require a host-side
-implementation.
+The surface is frozen and drift-tested (`tau-wasm-host/tests/wit_host_drift.rs`):
+adding, removing, renaming, or re-shaping a host function fails the test
+deliberately. Signature drift between these functions and their ports also breaks
+compilation via `tau-wasm-guest/src/host_ports.rs`.
 
-## WIT ⊊ ports
-
-The WIT surface is a strict subset of the port traits. Every host function
-maps to a concrete port method, but the ports expose more than the WIT world
-requires — the guest requests only what it cannot satisfy in-wasm. The drift
-test (`wit_host_drift.rs`) enforces this containment at compile time: if a
-port method required by the WIT world is removed or renamed, the test fails to
-compile.
-
-## Signedness note
-
-`now-millis` returns `u64`; the backing `Clock::now` returns `i64` (signed
-milliseconds since the Unix epoch). The host bridge casts `i64 → u64` at the
-boundary. Both sides document this as "milliseconds since Unix epoch"; the
-sign difference is a WIT-vs-Rust surface mismatch absorbed by the bridge, not
-a semantic difference.
-
-## Stability
-
-The package identifier `tau:host@0.1.0` is semver-versioned. ADR-0056 governs
-stability: any additive change bumps the minor version; any breaking change
-bumps the major version and requires a migration path. The frozen WIT file is
-the authoritative artifact; prose documentation is informative only.
+The `runner` world also **exports** `run`; that payload is not yet frozen and the
+package stays `0.x` until it settles (then it graduates to `1.0.0` under ADR-0056's
+embedding-contract semver). The package is named `tau:run` (it carries both the
+host imports and the `run` export); ADR-0056's `tau:host` was illustrative of the
+versioning mechanism.

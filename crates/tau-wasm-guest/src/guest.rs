@@ -16,11 +16,11 @@ wit_bindgen::generate!({
 
 /// Re-export the WIT-generated host imports so sibling modules (host_ports.rs)
 /// can access them without knowing the exact generated module path.
-/// The path `tau::host::host` is what wit_bindgen generates for `import host`
-/// in the `tau:host` package's `runner` world (identical to the wasmtime host
-/// side which uses `tau::host::host`).
+/// The path `tau::run::host` is what wit_bindgen generates for `import host`
+/// in the `tau:run` package's `runner` world (identical to the wasmtime host
+/// side which uses `tau::run::host`).
 pub(crate) mod wit_host {
-    pub(crate) use super::tau::host::host::*;
+    pub(crate) use super::tau::run::host::*;
 }
 
 /// dlmalloc is a portable no_std allocator; the guest has no std heap.

@@ -71,8 +71,6 @@ generation (supports `no_std`). `cargo-component` is experimental and std-leanin
 
 ### Decision 4 — The `tau:run` WIT world
 
-**Amended by EPIC 2.3 (2026-06-22):** the package was renamed `tau:run` → `tau:host`; see ADR-0056 and `docs/reference/wit-host-world.md`.
-
 A single world `tau:run/runner`:
 
 ```wit

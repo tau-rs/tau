@@ -2,7 +2,7 @@
 //! WASI 0.2 component.
 //!
 //! The guest (built for `wasm32-wasip2`, see the `tau-wasm-guest` crate)
-//! exports `run(prompt) -> result<string, string>` from the `tau:host/runner`
+//! exports `run(prompt) -> result<string, string>` from the `tau:run/runner`
 //! world and imports three host ports it cannot satisfy in-wasm:
 //!
 //! - `complete(request-json) -> result<string, string>` — delegated
@@ -28,11 +28,11 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
 wasmtime::component::bindgen!({
-    path: "../../wit/tau-host.wit",
+    path: "../../wit/tau-run.wit",
     world: "runner",
 });
 
-use tau::host::host;
+use tau::run::host;
 
 /// Deterministic step (ms) added to the clock on every `now-millis` call.
 const CLOCK_STEP_MILLIS: u64 = 1;
@@ -62,7 +62,7 @@ pub enum WasmHostError {
     InvalidResponse(#[source] serde_json::Error),
 }
 
-/// Store data backing the three `tau:host/host` imports with deterministic
+/// Store data backing the three `tau:run/host` imports with deterministic
 /// behaviour. One instance per [`run_component`] call.
 struct HostState {
     /// Queue of canned `CompletionResponse` JSON strings, popped front-first
@@ -119,7 +119,7 @@ fn determinism_config() -> wasmtime::Result<Config> {
     Ok(config)
 }
 
-/// Load `wasm_bytes` as a component, satisfy the three `tau:host/host` imports
+/// Load `wasm_bytes` as a component, satisfy the three `tau:run/host` imports
 /// with deterministic stubs, instantiate it under a determinism `Config`,
 /// and drive the exported `run(prompt)`.
 ///
