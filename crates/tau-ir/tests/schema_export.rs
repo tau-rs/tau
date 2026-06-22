@@ -7,8 +7,7 @@ use tau_ir::module::{IrFormatVersion, IrModule};
 
 fn schema_path() -> PathBuf {
     // CARGO_MANIFEST_DIR = crates/tau-ir ; the repo root is two levels up.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../schemas/ir/tau-ir.v2.2.0.schema.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas/ir/tau-ir.v2.2.0.schema.json")
 }
 
 /// Single source of the schema bytes — used by both the writer and the drift check.
@@ -23,10 +22,7 @@ fn generate_ir_schema() -> serde_json::Value {
         "https://lebocqtitouan.github.io/tau/schemas/ir/v2.2.0/tau-ir.schema.json".into(),
     );
     obj.insert("title".into(), "tau IR module (ir_format v2.2.0)".into());
-    obj.insert(
-        "x-tau-ir-format".into(),
-        IrFormatVersion::CURRENT.into(),
-    );
+    obj.insert("x-tau-ir-format".into(), IrFormatVersion::CURRENT.into());
     v
 }
 
@@ -47,8 +43,7 @@ fn schema_matches_checked_in_file() {
     let on_disk = std::fs::read_to_string(schema_path())
         .expect("schemas/ir/tau-ir.v2.2.0.schema.json missing — run with UPDATE_SCHEMA=1");
     assert_eq!(
-        generated,
-        on_disk,
+        generated, on_disk,
         "published IR schema drifted from the serde types; regenerate with UPDATE_SCHEMA=1"
     );
 }
