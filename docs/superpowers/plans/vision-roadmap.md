@@ -48,16 +48,26 @@ against in-flight parallel work). EPIC 6 is mostly independent.
   to a Reserved niche. *Accept:* ROADMAP reflects the component-first frame.
 **Epic DoD:** identity ADR merged; philosophy + ROADMAP match the vision.
 
-## EPIC 0 — Core no_std readiness (de-std the run loop)  [BLOCKS 3,4,5,7]
-**Goal:** `run`/`stream`/`interpreter` compile *and run* no_std (today gated behind
-`tool-validation` → pulls std via `jsonschema` + `tau-domain/std`).
-- **0.1** Inventory every std pull in the run path. *Accept:* documented list.
-- **0.2** Move tool-arg JSON-schema validation to build-time (`tau check`) or a no_std
-  validator, so the run loop drops `jsonschema`. *Accept:* run loop builds without it.
-- **0.3** Remove `tau-domain/std` from the run path; feature-gate remaining std uses.
-- **0.4** `serde_json` alloc-only in the core.
-- **0.5** CI lane: `check (tau-runtime-core no-default-features WITH run loop / linux)`.
-**Epic DoD:** the agent loop compiles + runs no_std; new CI lane green.
+## EPIC 0 — Core no_std readiness (de-std the run loop)  [BLOCKS 3,4,5,7]  ✅ SHIPPED 2026-06-22
+**Goal:** `run`/`stream`/`interpreter` compile *and run* no_std (was gated behind
+`tool-validation` → pulled std via `jsonschema` + `tau-domain/std`).
+Spec: `docs/superpowers/specs/2026-06-22-epic-0-destd-run-loop-design.md`.
+Shipped via **PR-0b (#424, merged)** + **PR-0c**.
+- **0.1** ✅ Inventory every std pull in the run path (recorded in the spec §1/§4).
+- **0.2** ✅ Replaced std-only `jsonschema` with a no_std JSON-Schema-subset validator
+  (`tau-runtime-core::schema`, fail-closed on out-of-subset keywords; behaviour proven
+  equivalent to jsonschema via a 20-pair differential before removal). PR-0b.
+- **0.3** ✅ `tau-domain/std` dropped from `tool-validation`; remaining host std attached to
+  the host-only `host-fs` feature (so the no_std guest build stays std-free). PR-0b.
+- **0.4** ✅ `serde_json` was already alloc-only in the core (verified).
+- **0.5** ✅ CI lane added: `runtime-core no-std build` job now also *runs* the loop under
+  `--no-default-features --features wasm-interpreter,tool-validation` (proves validation
+  executes no_std, not just compiles). PR-0c.
+**Epic DoD:** ✅ the agent loop compiles + runs no_std; `tool-validation` pulls no std;
+new CI step green. (Regression note: dropping the std pulls unmasked two latent feature-graph
+holes — `tau-ports` `process` not pulling `serde?/std`, and `host-fs` not pulling
+`tau-domain/std` — both fixed in PR-0b; the pre-existing isolated `cargo check -p
+tau-runtime-core` CI guard catches this class.)
 
 ## EPIC 2 — Lock the two contracts as public ABIs (+ codegen source)  [constitutional · BLOCKS 3,5]
 **Goal:** IR/authoring schema (incl. root `[allow]`) + WIT host world are minimal, versioned
