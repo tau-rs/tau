@@ -6,11 +6,6 @@
 //! args against it. Both are no_std. See
 //! `docs/superpowers/specs/2026-06-22-epic-0-destd-run-loop-design.md`.
 
-// Scaffold: schema fields and helpers for later tasks (T2/T3/T6) are
-// intentionally unused here; the module is private until T6 wires it
-// into `tool_args`. Suppress the resulting dead-code lint at module scope.
-#![allow(dead_code)]
-
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -84,13 +79,6 @@ pub struct CompileErr {
 }
 
 impl CompiledSchema {
-    /// Opt-out validator: accepts every value.
-    pub fn accepts_all() -> Self {
-        Self {
-            root: Schema::default(),
-        }
-    }
-
     /// Validate `value`, collecting all violations (empty = valid).
     pub fn check(&self, value: &Value) -> Vec<Violation> {
         let mut out = Vec::new();
@@ -769,6 +757,21 @@ mod tests {
             let err = compile(&schema).expect_err(kw);
             assert_eq!(err.keyword, kw, "error should name the offending keyword");
         }
+    }
+
+    #[test]
+    fn one_of_rejects_when_two_branches_match() {
+        // 5 satisfies BOTH {minimum:0} and {maximum:10} → matches 2 → oneOf rejects.
+        let s = compile(&v(
+            serde_json::json!({ "oneOf": [ { "minimum": 0 }, { "maximum": 10 } ] }),
+        ))
+        .unwrap();
+        assert!(
+            !s.check(&v(serde_json::json!(5))).is_empty(),
+            "value matching two oneOf branches must be rejected"
+        );
+        // 15 satisfies only {minimum:0} → matches exactly 1 → accepts.
+        assert!(s.check(&v(serde_json::json!(15))).is_empty());
     }
 
     #[test]
