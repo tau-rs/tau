@@ -1,0 +1,70 @@
+{
+  "ir_format": "v2.3.0",
+  "target": "passthrough",
+  "tau_version": "0.0.0",
+  "workflow": {
+    "agents": {
+      "processor": {
+        "budget": {
+          "max_tokens": null,
+          "max_turns": 5
+        },
+        "context": null,
+        "id": "processor",
+        "model_ref": {
+          "backend": "anthropic",
+          "model_id": "claude-haiku-4-5"
+        },
+        "prompt": "You are a text processor agent.",
+        "tool_refs": [
+          "normalize-text"
+        ]
+      }
+    },
+    "capability_table": {},
+    "edges": [],
+    "pipeline": null,
+    "steps": {
+      "normalize": {
+        "fn_ref": {
+          "name": "NormalizeText"
+        },
+        "id": "normalize",
+        "input_schema": {
+          "type": "string"
+        },
+        "output_schema": {
+          "type": "string"
+        }
+      }
+    },
+    "tools": {
+      "normalize-text": {
+        "capabilities": {
+          "declared": []
+        },
+        "id": "normalize-text",
+        "impl_": {
+          "Step": {
+            "id": "normalize"
+          }
+        },
+        "spec": {
+          "description": "Normalize text via a deterministic step.",
+          "input_schema": {
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          },
+          "name": "normalize_text"
+        }
+      }
+    }
+  }
+}

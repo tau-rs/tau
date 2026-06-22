@@ -1,0 +1,95 @@
+{
+  "ir_format": "v2.3.0",
+  "target": "passthrough",
+  "tau_version": "0.0.0",
+  "workflow": {
+    "agents": {
+      "researcher": {
+        "budget": {
+          "max_tokens": null,
+          "max_turns": 5
+        },
+        "context": null,
+        "id": "researcher",
+        "model_ref": {
+          "backend": "anthropic",
+          "model_id": "claude-haiku-4-5"
+        },
+        "prompt": "You are a research agent.",
+        "tool_refs": [
+          "weather-current"
+        ]
+      }
+    },
+    "capability_table": {},
+    "edges": [],
+    "pipeline": null,
+    "steps": {},
+    "tools": {
+      "weather-current": {
+        "capabilities": {
+          "declared": []
+        },
+        "id": "weather-current",
+        "impl_": {
+          "Mcp": {
+            "capability_subset": {
+              "declared": []
+            },
+            "contract_hash": [
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "server_tool_name": "get_current",
+            "url": "https://mcp.weather.example.com"
+          }
+        },
+        "spec": {
+          "description": "Get current weather conditions.",
+          "input_schema": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          },
+          "name": "weather_current"
+        }
+      }
+    }
+  }
+}

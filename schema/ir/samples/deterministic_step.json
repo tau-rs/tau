@@ -1,0 +1,36 @@
+{
+  "ir_format": "v2.3.0",
+  "target": "passthrough",
+  "tau_version": "0.0.0",
+  "workflow": {
+    "agents": {},
+    "capability_table": {},
+    "edges": [],
+    "pipeline": {
+      "steps": [
+        {
+          "id": "step-normalize",
+          "input": "${input}",
+          "run": {
+            "Deterministic": "normalize"
+          }
+        }
+      ]
+    },
+    "steps": {
+      "normalize": {
+        "fn_ref": {
+          "name": "NormalizeText"
+        },
+        "id": "normalize",
+        "input_schema": {
+          "type": "string"
+        },
+        "output_schema": {
+          "type": "string"
+        }
+      }
+    },
+    "tools": {}
+  }
+}

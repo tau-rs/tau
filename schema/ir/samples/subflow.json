@@ -1,0 +1,63 @@
+{
+  "ir_format": "v2.3.0",
+  "target": "passthrough",
+  "tau_version": "0.0.0",
+  "workflow": {
+    "agents": {
+      "executor": {
+        "budget": {
+          "max_tokens": null,
+          "max_turns": 5
+        },
+        "context": null,
+        "id": "executor",
+        "model_ref": {
+          "backend": "anthropic",
+          "model_id": "claude-haiku-4-5"
+        },
+        "prompt": "You execute tasks.",
+        "tool_refs": []
+      },
+      "orchestrator": {
+        "budget": {
+          "max_tokens": null,
+          "max_turns": 3
+        },
+        "context": null,
+        "id": "orchestrator",
+        "model_ref": {
+          "backend": "anthropic",
+          "model_id": "claude-haiku-4-5"
+        },
+        "prompt": "You orchestrate sub-agents.",
+        "tool_refs": [
+          "run-executor"
+        ]
+      }
+    },
+    "capability_table": {},
+    "edges": [],
+    "pipeline": null,
+    "steps": {},
+    "tools": {
+      "run-executor": {
+        "capabilities": {
+          "declared": []
+        },
+        "id": "run-executor",
+        "impl_": {
+          "Subflow": {
+            "target": "executor"
+          }
+        },
+        "spec": {
+          "description": "Spawn the executor sub-agent.",
+          "input_schema": {
+            "type": "object"
+          },
+          "name": "run_executor"
+        }
+      }
+    }
+  }
+}
