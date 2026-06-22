@@ -326,7 +326,9 @@ fn type_matches(ty: JsonType, value: &Value) -> bool {
         (JsonType::Integer, Value::Number(n)) => {
             n.as_i64().is_some()
                 || n.as_u64().is_some()
-                || n.as_f64().map(|f| FloatCore::fract(f) == 0.0).unwrap_or(false)
+                || n.as_f64()
+                    .map(|f| FloatCore::fract(f) == 0.0)
+                    .unwrap_or(false)
         }
         _ => false,
     }
