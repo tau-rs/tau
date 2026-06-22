@@ -4,6 +4,16 @@ This document tracks current direction, prior shipped work, and the
 forward phasing under the canonical philosophy
 [`docs/explanation/tau-philosophy.md`](docs/explanation/tau-philosophy.md).
 
+**What tau ships is a component, not an application.** The product is
+`tau-runtime-core` (the engine) plus two versioned public contracts — the
+authoring/IR schema (including the root `[allow]` governance section) and the
+generated WIT host world — per
+[ADR-0055](docs/decisions/0055-tau-identity-two-contracts.md). The `tau` CLI
+is the **reference host** that exercises those contracts, held to the highest
+quality bar but architecturally one host among peers (edge / browser /
+embedded are its equals). The phases below are framed engine-first on that
+basis.
+
 For per-issue tracking, see
 [GitHub Issues](https://github.com/LEBOCQTitouan/tau/issues).
 For the historical record of every Phase 0/1 sub-project, see
@@ -635,16 +645,22 @@ green. The registry's stability discipline (ADR-0034) applies throughout.
 | γ.5b | **`bare-metal-xtensa-passthrough`** + siblings | γ.5a (`tau-runtime-embassy`); β.1 core | reserved-slot existence | static-tool builder; firmware-image artifact rule (a new `tau build` artifact shape); `reqwless` + `embedded-tls` `LlmBackend` impl |
 | γ.6 | Context-manager v2: **`retrieve_relevant`** | β.4 pipeline | v1 transformers unchanged | new transformer backed by a contracted vector-store MCP (e.g. pgvector / qdrant) |
 
-**γ.5 is two sub-projects, not one.** The embassy shell (γ.5a) is the
-expensive part — async runtime swap, `no_std` dependency tree audit,
-plumbing for `reqwless`/`embedded-tls`. It must land before any actual
-firmware target (γ.5b) can produce a real artifact. Sized realistically:
-γ.5a ~6–8 weeks (one implementer with embassy/HAL familiarity);
-γ.5b ~3–4 weeks per CPU triple after γ.5a.
+**Embedded = tau-as-component is the goal; tau-as-firmware is a gated
+niche.** The product on a microcontroller is tau shipped as a **component**
+inside someone's product firmware — a wasm guest (γ.4) or a `no_std`
+library — delegating inference to a gateway like every other target.
+**wasm-on-MCU is the on-chip spine** (γ.4 today on WAMR Preview-1; the
+`wasi-p2-component` target graduates when the runtime ecosystem ships the
+Component Model on MCU — tracked via Framing C″).
 
-The `wasi-p2-component` target on MCU (the "wasm component on
-microcontroller") is **deferred** to a future phase until the runtime
-ecosystem catches up. Tracked via Framing C″.
+**γ.5 (tau-as-firmware — embassy + WAMR *owning the whole chip*) is demoted
+to a Reserved NICHE**, gated on BOTH: (1) a named gateway-less buyer who
+genuinely cannot delegate inference, and (2) WAMR shipping the Component
+Model on MCU. Absent both, γ.5 is not scheduled. When it is unblocked it is
+still two sub-projects: the embassy shell (γ.5a) is the expensive part —
+async runtime swap, `no_std` dependency-tree audit, `reqwless`/`embedded-tls`
+plumbing — and must land before any firmware target (γ.5b) produces a real
+artifact (γ.5a ~6–8 weeks; γ.5b ~3–4 weeks per CPU triple).
 
 Phase 2 §F (remote target backends) folds into Phase γ as additional
 `Sandbox` + `LlmBackend` adapters as user demand surfaces (Vercel
@@ -793,9 +809,14 @@ sharpens, but does not relax, any of them.
 - **NG5.** Tau is not a general-purpose workflow engine. *(Clarification:
   tau executes workflow IR with capability-safe portability as its
   defining property; it does not compete with general orchestrators
-  like Temporal/n8n on their breadth. Durability — when and whether to
-  re-run — is delegated to the host orchestrator; tau guarantees the
-  compiled bundle is a safe-to-retry reentrant unit. See
+  like Temporal/n8n on their breadth. Durability is **delegated-canonical**:
+  when and whether to re-run is the host orchestrator's job, and tau
+  guarantees the compiled bundle is a safe-to-retry reentrant unit.
+  **Opt-in, host-sized durability tiers** layer on top of that reentrancy —
+  A-minimal turn-level checkpoint/resume shipped 2026-06-10 (PR #373;
+  [ADR-0053](docs/decisions/0053-turn-level-checkpoint-resume.md)), with a
+  gated A-full tier above it — none of which changes the delegated-canonical
+  model. See
   [Run tau under a durable orchestrator](docs/how-to/run-tau-under-a-durable-orchestrator.md).)*
 - **NG6.** Tau does not provide persistent agent memory in core.
   *(Context-manager v2 retrieval is backed by a contracted vector-store

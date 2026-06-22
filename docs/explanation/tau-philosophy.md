@@ -95,22 +95,36 @@ delegated* — that covers server, edge, browser, and embedded without forking.
 
 ### 3. tau is *capability-safe by construction*; portability is the dividend
 
-Every tool — native or contracted — declares its capabilities. The
-**capability gate** is the single, uniform enforcement point: at the OS
-boundary (landlock / seccomp / sandbox-exec / AppContainer) for native tools,
-and at the contract boundary for MCP servers. `tau check` refuses to build a
-workflow that requires enforcement a target can't provide. A workflow that
-demands `strict` cannot ship as `passthrough` without explicit declaration.
+Every tool — native or contracted — declares its capabilities **once**, in
+the root `tau.toml` constitution. Capabilities are uniform in *declaration*,
+not in *mechanism*: `tau build` **lowers the same declaration per target** to
+whatever that target enforces with:
+
+- **wasm (the primary target):** generated **WIT imports** + host config. A
+  capability the workflow never declared produces no import; an un-imported
+  host function is **unreachable by construction** — there is nothing to
+  sandbox at runtime because the capability was never wired in. Enforcement is
+  structural, not a runtime check.
+- **host / native:** an OS sandbox — landlock / seccomp (Linux),
+  sandbox-exec (macOS), AppContainer (Windows) — gates the declared
+  capabilities at the process boundary.
+- **bare-metal firmware:** **passthrough** — advisory only, and **honestly
+  labeled** as such. The declaration is recorded and surfaced, but the chip
+  provides no enforcement boundary; tau does not pretend otherwise.
+
+`tau check` refuses to build a workflow that requires enforcement a target
+can't provide. A workflow that demands `strict` cannot ship as `passthrough`
+without an explicit declaration.
 
 This is the gap that MCP itself leaves open: MCP's "capabilities" are
 protocol-feature negotiation; its authorization is OAuth-scoped remote access.
 **Neither sandboxes a tool's filesystem, network, or exec at runtime.** tau
-fills exactly that gap, and does so uniformly across native and contracted
-tools.
+fills exactly that gap, lowering one declaration to each target's native
+mechanism.
 
-Portability falls out of capability-correctness: if every tool's capability
-shape is honored by the target, the artifact runs there. The target triple is
-the contract.
+Portability falls out of capability-correctness: if every tool's declared
+capability shape can be lowered onto the target, the artifact runs there. The
+target triple is the contract.
 
 ---
 
@@ -369,25 +383,21 @@ genuinely unoccupied.
 
 ## The wedge
 
-The only unoccupied position in the landscape is:
+The 2026 field has filled in around tau — Cloudflare a portable MCP host
+(vendor-locked), wasmCloud wasm sandboxing (a mesh you operate), LangGraph a
+durable agent graph (Python, no artifact), BAML a prompt compiler
+(host-language glue), Temporal durable execution (your infra), esp-claw an
+on-MCU agent (no sandbox). Each owns one slice. Nobody ships tau's
+combination:
 
-> **A portable, capability-enforced agent + workflow artifact that nobody
-> else produces.**
+> declare what agents are *allowed* in a root constitution, author workflows
+> beautifully in any language (generated, typed), and compile to one
+> hardware-agnostic, capability-bounded component proven identical across
+> local / edge / browser / embedded — with build-time enforcement and no
+> runtime surprises.
 
-Three differentiators, ranked by defensibility:
-
-1. **Per-tool capability enforcement** — fills the gap MCP explicitly leaves
-   to the host. Concrete, demonstrable, immediately useful.
-2. **A portable agent harness (MCP host / facilitator) on wasm and edge** —
-   greenfield. Wasm MCP *servers* exist; portable hosts essentially don't.
-3. **Compiling the harness all the way to embedded / firmware** — novel,
-   highest-upside, riskiest. Acknowledged research bet.
-
-Everything else (harness/inference split, delegated inference, BFF
-credentials, server/edge/browser portability) is table stakes already
-delivered by Vercel AI SDK, Cloudflare Agents, the OpenAI/Claude Agent SDKs,
-or the Dapr stack. tau **integrates** those patterns; it does not claim
-novelty on them.
+The moat is the **combination + conformance + vendor-independence +
+root-governed capability safety** — not novelty of any one piece.
 
 ---
 
