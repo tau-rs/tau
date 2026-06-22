@@ -24,7 +24,7 @@ Commands:
   skill      Inspect installed skill packages (list, show)
   target     Inspect the deployment-target registry (list, show)
   serve      Start serve mode: accept JSON-RPC requests over stdio
-  check      Run pre-flight validation against the project (config, lockfile, packages, sandbox, plugins, skills, mcp-contracts). Aggregates existing validators into one CI/IDE-friendly verb
+  check      Run pre-flight validation against the project (config, lockfile, packages, sandbox, plugins, skills, mcp-contracts, governance). Aggregates existing validators into one CI/IDE-friendly verb
   build      Build a deployment bundle from this project (Phase 2 §C.2), or compile a workflow to WebAssembly (`tau build wasm <project>`)
   mcp        Manage Model Context Protocol (MCP) server contracts
   dev        Hot-reload REPL driving the post-β.3 IR runtime

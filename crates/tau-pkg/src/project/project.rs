@@ -2247,6 +2247,13 @@ fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
         )
         .collect();
 
+    // Models live in [models] OR, when [allow] is present, in [allow.models]
+    // (the sole home per ADR-0057). Resolve references against the union.
+    let allow_models = cfg.allow.as_ref().map(|a| &a.models);
+    let known = |alias: &str| -> bool {
+        cfg.models.contains_key(alias) || allow_models.is_some_and(|am| am.contains_key(alias))
+    };
+
     // 1. Validate every `[models]` entry.
     for (alias, m) in &cfg.models {
         // Defense-in-depth: RawModelEntry's required fields make serde reject a
@@ -2265,13 +2272,29 @@ fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
         }
     }
 
+    if let Some(am) = allow_models {
+        for (alias, m) in am {
+            if m.backend.is_empty() || m.model.is_empty() {
+                return Err(ProjectConfigError::MalformedModelEntry {
+                    alias: alias.clone(),
+                });
+            }
+            if !declared_packages.contains(m.backend.as_str()) {
+                return Err(ProjectConfigError::ModelBackendNotDeclared {
+                    alias: alias.clone(),
+                    backend: m.backend.clone(),
+                });
+            }
+        }
+    }
+
     // 2. Every agent must have a non-empty model alias that resolves in
-    //    `[models]`.
+    //    `[models]` or `[allow.models]`.
     for (id, agent) in &cfg.agents {
         if agent.model.is_empty() {
             return Err(ProjectConfigError::MissingAgentModel { agent: id.clone() });
         }
-        if !cfg.models.contains_key(&agent.model) {
+        if !known(&agent.model) {
             return Err(ProjectConfigError::UnknownModelAlias {
                 referrer: format!("agent `{id}`"),
                 alias: agent.model.clone(),
@@ -2279,10 +2302,11 @@ fn validate_models(cfg: &ProjectConfig) -> Result<(), ProjectConfigError> {
         }
     }
 
-    // 3. Every deliverable judge_model override must resolve in `[models]`.
+    // 3. Every deliverable judge_model override must resolve in `[models]` or
+    //    `[allow.models]`.
     for (id, d) in &cfg.deliverables {
         if let JudgeConfig::Default { model: Some(alias) } = &d.judge {
-            if !cfg.models.contains_key(alias) {
+            if !known(alias) {
                 return Err(ProjectConfigError::UnknownModelAlias {
                     referrer: format!("deliverable `{id}` judge_model"),
                     alias: alias.clone(),
@@ -4460,6 +4484,8 @@ fast = { backend = "anthropic", model = "claude-haiku-4-5" }
     #[test]
     fn allow_present_populates_allow_config() {
         let toml = r#"
+packages = ["anthropic@^1"]
+
 [project]
 name = "demo"
 
@@ -4498,6 +4524,80 @@ fast = { backend = "anthropic", model = "claude-haiku-4-5" }
             format!("{err}").contains("[allow.models]"),
             "expected sole-home conflict, got: {err}"
         );
+    }
+
+    #[test]
+    fn agent_model_resolves_via_allow_models() {
+        let toml = r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .expect("agent model under [allow.models] must validate");
+        assert!(cfg.allow.is_some());
+    }
+
+    #[test]
+    fn agent_model_absent_from_allow_models_is_refused() {
+        let toml = r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "nope"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(format!("{err}").contains("nope"), "got: {err}");
+    }
+
+    #[test]
+    fn allow_models_backend_must_be_declared_package() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "undeclared"
+model = "m-1"
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(format!("{err}").contains("undeclared"), "got: {err}");
     }
 }
 
