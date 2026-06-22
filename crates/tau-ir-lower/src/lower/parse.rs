@@ -434,18 +434,26 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context
 /// values, so the mapping is total; the wildcard arms are
 /// defense-in-depth and resolve to the A-minimal defaults.
 fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable::Durability> {
-    use tau_ir::durable::{CheckpointGranularity, Durability, DurableStore};
-    let d = entry.durable.as_ref()?;
-    let checkpoint = match d.checkpoint.as_str() {
-        "per_turn" => CheckpointGranularity::PerTurn,
-        "per_tool_call" => CheckpointGranularity::PerToolCall,
-        _ => CheckpointGranularity::PerTurn,
-    };
-    let store = match d.store.as_str() {
-        "file" => DurableStore::File,
-        _ => DurableStore::File,
-    };
-    Some(Durability::new(checkpoint, store))
+    use tau_ir::durable::{CheckpointGranularity, Durability, DurabilityIntent, DurableStore};
+    use tau_pkg::project::project::DurableEntry;
+    match entry.durable.as_ref()? {
+        DurableEntry::Intent(s) => {
+            // tau-pkg validated the string; the mapping is total.
+            debug_assert_eq!(s, "survive-restarts");
+            Some(Durability::Intent(DurabilityIntent::SurviveRestarts))
+        }
+        DurableEntry::Explicit { checkpoint, store } => {
+            // tau-pkg validated both strings; wildcard arms are defence-in-depth.
+            let checkpoint = match checkpoint.as_str() {
+                "per_tool_call" => CheckpointGranularity::PerToolCall,
+                _ => CheckpointGranularity::PerTurn,
+            };
+            let store = match store.as_str() {
+                _ => DurableStore::File,
+            };
+            Some(Durability::Explicit { checkpoint, store })
+        }
+    }
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].
@@ -738,18 +746,41 @@ checkpoint = "per_tool_call"
 store      = "file"
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
-        let agent = parsed
-            .workflow
-            .agents
-            .get(&tau_ir::AgentId("a".into()))
-            .expect("agent a present");
-        let durable = agent.durable.as_ref().expect("durable present");
+        let agent_entry = config.agents.get("a").expect("agent a");
+        let durable = super::lower_durable(agent_entry).expect("durable present");
         assert_eq!(
-            durable.checkpoint,
-            tau_ir::durable::CheckpointGranularity::PerToolCall,
-            "per_tool_call should lower to PerToolCall, not PerTurn"
+            durable,
+            tau_ir::durable::Durability::Explicit {
+                checkpoint: tau_ir::durable::CheckpointGranularity::PerToolCall,
+                store: tau_ir::durable::DurableStore::File,
+            }
         );
-        assert_eq!(durable.store, tau_ir::durable::DurableStore::File);
+    }
+
+    #[test]
+    fn lower_durable_maps_intent() {
+        let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "p@^0.1"
+model        = "default"
+tool_refs    = []
+durable      = "survive-restarts"
+"#;
+        let project = tau_pkg::project::project::ProjectConfig::parse_str(toml).expect("parse");
+        let agent_entry = project.agents.get("a").expect("agent a");
+        let durable = super::lower_durable(agent_entry).expect("durable present");
+        assert_eq!(
+            durable,
+            tau_ir::durable::Durability::Intent(tau_ir::durable::DurabilityIntent::SurviveRestarts)
+        );
     }
 }
