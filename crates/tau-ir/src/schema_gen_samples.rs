@@ -169,6 +169,72 @@ pub(crate) fn deterministic_step() -> IrModule {
     base_module(workflow)
 }
 
+/// Sample: one agent + one step tool (`ToolImpl::Step`) delegating to a
+/// deterministic step node.
+pub(crate) fn tool_impl_step() -> IrModule {
+    let agent_id = AgentId("processor".into());
+    let tool_id = ToolId("normalize-text".into());
+    let step_id = StepId("normalize".into());
+
+    let agent = Agent {
+        id: agent_id.clone(),
+        prompt: "You are a text processor agent.".into(),
+        model_ref: ModelRef {
+            backend: "anthropic".into(),
+            model_id: "claude-haiku-4-5".into(),
+        },
+        tool_refs: alloc::vec![tool_id.clone()],
+        context: None,
+        budget: AgentBudget {
+            max_turns: Some(5),
+            max_tokens: None,
+        },
+        produces: alloc::vec![],
+        output_schema: None,
+        durable: None,
+    };
+
+    let step_tool = Tool {
+        id: tool_id.clone(),
+        impl_: ToolImpl::Step {
+            id: step_id.clone(),
+        },
+        capabilities: CapabilityRequirements {
+            declared: alloc::vec![],
+        },
+        spec: ToolSpec {
+            name: "normalize_text".into(),
+            description: "Normalize text via a deterministic step.".into(),
+            input_schema: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
+        },
+    };
+
+    let step = crate::node::Deterministic {
+        id: step_id.clone(),
+        fn_ref: NativeFnRef {
+            name: "NormalizeText".into(),
+        },
+        input_schema: serde_json::json!({"type": "string"}),
+        output_schema: serde_json::json!({"type": "string"}),
+    };
+
+    let mut agents = BTreeMap::new();
+    agents.insert(agent_id, agent);
+    let mut tools = BTreeMap::new();
+    tools.insert(tool_id, step_tool);
+    let mut steps = BTreeMap::new();
+    steps.insert(step_id, step);
+
+    let workflow = Workflow {
+        agents,
+        tools,
+        steps,
+        ..Workflow::default()
+    };
+
+    base_module(workflow)
+}
+
 /// Sample: one agent + one subflow tool (`ToolImpl::Subflow`) spawning a
 /// child agent.
 pub(crate) fn subflow() -> IrModule {

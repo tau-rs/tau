@@ -50,7 +50,7 @@ pub struct ContextStep {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")
+        schemars(with = "alloc::collections::BTreeMap<alloc::string::String, serde_json::Value>")
     )]
     pub config: BTreeMap<String, Value>,
 }

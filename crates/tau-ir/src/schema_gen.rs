@@ -18,7 +18,7 @@ pub fn ir_json_schema() -> serde_json::Value {
         IrFormatVersion::CURRENT
     ));
     meta.id = Some(alloc::format!(
-        "https://tau-rs.github.io/tau/schema/ir/tau-ir.schema.json#{}",
+        "https://tau-rs.github.io/tau/schema/ir/{}/tau-ir.schema.json",
         IrFormatVersion::CURRENT
     ));
     serde_json::to_value(&root).expect("schema serializes")
@@ -42,6 +42,10 @@ pub fn sample_modules() -> Vec<(&'static str, IrModule)> {
             crate::schema_gen_samples::deterministic_step(),
         ),
         ("subflow", crate::schema_gen_samples::subflow()),
+        (
+            "tool_impl_step",
+            crate::schema_gen_samples::tool_impl_step(),
+        ),
     ])
 }
 
