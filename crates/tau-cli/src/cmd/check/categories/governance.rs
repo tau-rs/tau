@@ -18,7 +18,7 @@ use crate::cmd::check::runner::CheckCtx;
 use tau_domain::Capability;
 use tau_pkg::capability_override::{capability_set_subset, CeilingViolation};
 use tau_pkg::project::allow::AllowConfig;
-use tau_pkg::project::ProjectConfig;
+use tau_pkg::project::{ProjectConfig, ToolBinding};
 
 pub fn run_governance(ctx: &CheckCtx) -> CheckResult {
     let project = match &ctx.project {
@@ -61,6 +61,7 @@ pub(crate) fn governance_findings(project: &ProjectConfig, tau_toml: &Path) -> V
     };
     let mut out = Vec::new();
     over_reach(project, allow, tau_toml, &mut out);
+    closed_world(project, allow, tau_toml, &mut out);
     out
 }
 
@@ -114,6 +115,74 @@ fn over_reach_finding(subject: &str, v: &CeilingViolation, tau_toml: &Path) -> C
         location: Some(loc(tau_toml)),
         remediation: Some("narrow the capability or widen the [allow] ceiling".to_string()),
         structured: json!({ "check": "over_reach", "subject": subject, "kind": v.kind, "offender": v.offender }),
+    }
+}
+
+fn closed_world(
+    project: &ProjectConfig,
+    allow: &AllowConfig,
+    tau_toml: &Path,
+    out: &mut Vec<CheckFinding>,
+) {
+    // Agent tool refs registered. (Model refs are validated upstream by validate_models.)
+    for agent in project.agents.values() {
+        for t in &agent.tool_refs {
+            if !allow.tools.contains_key(t) {
+                out.push(unregistered(
+                    "unregistered_tool",
+                    "tau.governance.unregistered_tool",
+                    &format!(
+                        "agent '{}' references unregistered tool '{t}' — add [allow.tools.{t}]",
+                        agent.id
+                    ),
+                    tau_toml,
+                ));
+            }
+        }
+    }
+    // Defined tools registered.
+    for name in project.tools.keys() {
+        if !allow.tools.contains_key(name) {
+            out.push(unregistered(
+                "unregistered_tool_def",
+                "tau.governance.unregistered_tool_def",
+                &format!("tool '{name}' is defined but not registered in [allow.tools]"),
+                tau_toml,
+            ));
+        }
+    }
+    // Tool→MCP bindings registered.
+    for (name, entry) in &allow.tools {
+        if let ToolBinding::Mcp(mcp_name) = &entry.binding {
+            if !allow.mcp.contains_key(mcp_name) {
+                out.push(unregistered(
+                    "unregistered_mcp",
+                    "tau.governance.unregistered_mcp",
+                    &format!(
+                        "[allow.tools.{name}] binds MCP '{mcp_name}' which is not registered in [allow.mcp]"
+                    ),
+                    tau_toml,
+                ));
+            }
+        }
+    }
+}
+
+fn unregistered(
+    check: &str,
+    rule_id: &'static str,
+    summary: &str,
+    tau_toml: &Path,
+) -> CheckFinding {
+    CheckFinding {
+        category: CheckCategory::Governance,
+        severity: Severity::Error,
+        rule_id,
+        summary: summary.to_string(),
+        detail: None,
+        location: Some(loc(tau_toml)),
+        remediation: Some("register the resource in the corresponding [allow.*] table".to_string()),
+        structured: json!({ "check": check }),
     }
 }
 
@@ -229,6 +298,117 @@ native = "Fetch"
             f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
                 && x.summary.contains("evil.com")),
             "got: {}", summaries(&f)
+        );
+    }
+
+    #[test]
+    fn unregistered_tool_ref_and_defined_tool_flagged() {
+        let cfg = proj(
+            r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[tools.fetch]
+native = "Fetch"
+capabilities = []
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+tool_refs = ["fetch"]
+"#,
+        );
+        let f = governance_findings(&cfg, Path::new("tau.toml"));
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.unregistered_tool"
+                    && x.summary.contains("fetch")),
+            "tool ref: {}",
+            summaries(&f)
+        );
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.unregistered_tool_def"
+                    && x.summary.contains("fetch")),
+            "tool def: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn tool_binds_unregistered_mcp_flagged() {
+        let cfg = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["api.x.com"] }
+
+[allow.tools.weather]
+mcp = "weather"
+"#,
+        );
+        let f = governance_findings(&cfg, Path::new("tau.toml"));
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.unregistered_mcp"
+                    && x.summary.contains("weather")),
+            "got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn fully_registered_within_ceiling_is_clean() {
+        let cfg = proj(
+            r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[allow.mcp.weather]
+url = "https://api.weather.com/mcp"
+
+[allow.tools.read_temp]
+native = "ReadTemp"
+"fs.read" = { paths = ["/proj/sensors/**"] }
+
+[tools.read_temp]
+native = "ReadTemp"
+capabilities = [{ kind = "fs.read", paths = ["/proj/sensors/**"] }]
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+tool_refs = ["read_temp"]
+"#,
+        );
+        let f = governance_findings(&cfg, Path::new("tau.toml"));
+        let errs: Vec<_> = f.iter().filter(|x| x.severity == Severity::Error).collect();
+        assert!(
+            errs.is_empty(),
+            "expected no errors, got: {}",
+            summaries(&f)
         );
     }
 
