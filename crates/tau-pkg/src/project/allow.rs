@@ -143,17 +143,82 @@ fn bridge_caps(caps: &BTreeMap<String, toml::Value>) -> Result<Vec<Capability>, 
     caps.iter().map(|(k, v)| bridge_cap(k, v)).collect()
 }
 
+/// Derive the host from a URL without pulling in a URL crate: strip the
+/// scheme (`scheme://`), then take everything up to the first `/`, `:`, `?`,
+/// or `#`. Returns `None` for an empty/scheme-less/host-less string.
+fn derive_host(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest)?;
+    let host: String = after_scheme
+        .chars()
+        .take_while(|c| !matches!(c, '/' | ':' | '?' | '#'))
+        .collect();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
 /// Validate an `[allow]` constitution into an [`AllowConfig`].
 ///
 /// Story 1.2: raw-cap ceiling bridge + (Task 3) registry well-formedness.
 /// No subset / closed-world / cross-reference checks (stories 1.3–1.6).
 pub fn validate_allow(raw: UncheckedAllow) -> Result<AllowConfig, ProjectConfigError> {
     let ceiling = bridge_caps(&raw.caps)?;
+
+    let models: BTreeMap<String, ModelEntry> = raw
+        .models
+        .into_iter()
+        .map(|(alias, m)| {
+            (
+                alias,
+                ModelEntry {
+                    backend: m.backend,
+                    model: m.model,
+                },
+            )
+        })
+        .collect();
+
+    let mut mcp = BTreeMap::new();
+    for (name, m) in raw.mcp {
+        if m.url.trim().is_empty() {
+            return Err(err(format!("[allow.mcp.{name}]: url must be non-empty")));
+        }
+        let hosts = if m.hosts.is_empty() {
+            let host = derive_host(&m.url).ok_or_else(|| {
+                err(format!(
+                    "[allow.mcp.{name}]: cannot derive host from url {:?}",
+                    m.url
+                ))
+            })?;
+            vec![host]
+        } else {
+            m.hosts
+        };
+        mcp.insert(name, McpAllowEntry { url: m.url, hosts });
+    }
+
+    let mut tools = BTreeMap::new();
+    for (name, t) in raw.tools {
+        let binding = match (t.native, t.mcp) {
+            (Some(n), None) => ToolBinding::Native(n),
+            (None, Some(m)) => ToolBinding::Mcp(m),
+            _ => {
+                return Err(err(format!(
+                    "[allow.tools.{name}]: exactly one of `native` or `mcp` required"
+                )));
+            }
+        };
+        let ceiling = bridge_caps(&t.caps)?;
+        tools.insert(name, ToolAllowEntry { binding, ceiling });
+    }
+
     Ok(AllowConfig {
         ceiling,
-        models: BTreeMap::new(), // filled in Task 3
-        mcp: BTreeMap::new(),    // filled in Task 3
-        tools: BTreeMap::new(),  // filled in Task 3
+        models,
+        mcp,
+        tools,
     })
 }
 
@@ -250,6 +315,136 @@ native = "ReadTemp"
         assert_eq!(allow.tools["read_temp"].native.as_deref(), Some("ReadTemp"));
         // The tool's per-tool ceiling cap lands in its own flatten map.
         assert!(allow.tools["read_temp"].caps.contains_key("fs.read"));
+    }
+
+    #[test]
+    fn models_convert_to_model_entry() {
+        let raw = allow_from(
+            r#"
+[models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+"#,
+        );
+        let cfg = validate_allow(raw).expect("validate");
+        assert_eq!(cfg.models["fast"].backend, "anthropic");
+        assert_eq!(cfg.models["fast"].model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn mcp_url_derives_host_when_absent() {
+        let raw = allow_from(
+            r#"
+[mcp.weather]
+url = "https://api.weather.com/mcp"
+"#,
+        );
+        let cfg = validate_allow(raw).expect("validate");
+        assert_eq!(cfg.mcp["weather"].hosts, vec!["api.weather.com".to_string()]);
+    }
+
+    #[test]
+    fn mcp_explicit_hosts_preserved() {
+        let raw = allow_from(
+            r#"
+[mcp.weather]
+url = "https://api.weather.com/mcp"
+hosts = ["a.example.com", "b.example.com"]
+"#,
+        );
+        let cfg = validate_allow(raw).expect("validate");
+        assert_eq!(
+            cfg.mcp["weather"].hosts,
+            vec!["a.example.com".to_string(), "b.example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn mcp_empty_url_rejected() {
+        let raw = allow_from(
+            r#"
+[mcp.weather]
+url = ""
+"#,
+        );
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("weather"), "got: {err}");
+    }
+
+    #[test]
+    fn mcp_unparseable_url_rejected() {
+        let raw = allow_from(
+            r#"
+[mcp.weather]
+url = "not a url"
+"#,
+        );
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("weather"), "got: {err}");
+    }
+
+    #[test]
+    fn tool_native_binding_with_ceiling() {
+        let raw = allow_from(
+            r#"
+[tools.read_temp]
+native = "ReadTemp"
+"fs.read" = { paths = ["/proj/sensors/**"] }
+"#,
+        );
+        let cfg = validate_allow(raw).expect("validate");
+        assert_eq!(cfg.tools["read_temp"].binding, ToolBinding::Native("ReadTemp".to_string()));
+        assert_eq!(cfg.tools["read_temp"].ceiling.len(), 1);
+    }
+
+    #[test]
+    fn tool_mcp_binding() {
+        let raw = allow_from(
+            r#"
+[tools.weather]
+mcp = "weather"
+"#,
+        );
+        let cfg = validate_allow(raw).expect("validate");
+        assert_eq!(cfg.tools["weather"].binding, ToolBinding::Mcp("weather".to_string()));
+        assert!(cfg.tools["weather"].ceiling.is_empty());
+    }
+
+    #[test]
+    fn tool_both_bindings_rejected() {
+        let raw = allow_from(
+            r#"
+[tools.x]
+native = "A"
+mcp = "b"
+"#,
+        );
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("exactly one"), "got: {err}");
+    }
+
+    #[test]
+    fn tool_no_binding_rejected() {
+        let raw = allow_from(
+            r#"
+[tools.x]
+"fs.read" = { paths = ["/x/**"] }
+"#,
+        );
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("exactly one"), "got: {err}");
+    }
+
+    #[test]
+    fn tool_ceiling_bad_kind_rejected() {
+        let raw = allow_from(
+            r#"
+[tools.x]
+native = "A"
+"agent.spawn" = { allowed_kinds = ["w"] }
+"#,
+        );
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("agent.spawn"), "got: {err}");
     }
 
     #[test]
