@@ -1521,8 +1521,8 @@ pub fn run_streaming_inner(
                 drop(session_open_span);
 
                 // ----- Schema validation (tool-validation feature only) ------
-                // When `tool-validation` is enabled, pre-compiled jsonschema
-                // validators reject bad args before dispatch. Without it
+                // When `tool-validation` is enabled, pre-compiled no_std
+                // `ToolArgsValidator` instances reject bad args before dispatch. Without it
                 // (e.g. the wasm guest), validation is skipped — the
                 // `tool_validators` map is `HashMap<String, ()>` and the
                 // `crate::tool_args` module is absent.

@@ -985,6 +985,29 @@ mod tests {
 
     #[cfg(feature = "tool-validation")]
     #[test]
+    fn unsupported_schema_keyword_fails_build_with_named_keyword() {
+        // `pattern` is not supported in v1 of ToolArgsValidator; the error
+        // detail must name the offending keyword so `tau check` can surface it.
+        let tool = TestSchemaTool {
+            name: "patterned",
+            schema_value: schema_value(serde_json::json!({ "type": "string", "pattern": "x" })),
+        };
+        let err = Runtime::builder()
+            .with_dyn_tool(Arc::new(tool))
+            .with_llm_backend(mock_llm())
+            .build()
+            .expect_err("pattern is an unsupported keyword");
+        let BuildError::ToolSchemaInvalid { detail, .. } = err else {
+            panic!("expected BuildError::ToolSchemaInvalid, got: {err:?}");
+        };
+        assert!(
+            detail.contains("pattern"),
+            "detail should name the unsupported keyword; got: {detail}"
+        );
+    }
+
+    #[cfg(feature = "tool-validation")]
+    #[test]
     fn build_handles_empty_schema_as_opt_out() {
         let tool = TestSchemaTool {
             name: "any-args",
