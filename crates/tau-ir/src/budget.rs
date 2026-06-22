@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bounds on an agent's execution.
 #[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentBudget {
     /// Maximum number of turns the agent loop may take. `None` defers
