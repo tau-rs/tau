@@ -9,10 +9,10 @@
 //! than re-constructing variants.
 
 pub(crate) mod glob_subset;
+pub mod subset;
+pub use subset::{capability_set_subset, CeilingViolation};
 
 use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
-
-use self::glob_subset::is_glob_subset_set;
 
 /// Override entry parsed from project tau.toml. Constructed by tau-cli at
 /// parse time and passed through to the runtime via `RunOptions.project_override`.
@@ -259,32 +259,27 @@ fn validate_allow_subset(cap: &Capability, allow: &[String]) -> Result<(), Strin
             return Err("allow narrowing not supported for this capability kind".into());
         }
     };
-    // Filesystem fields are globs → glob-subset analysis. Hosts and commands
-    // are exact-match strings → set inclusion.
     if matches!(cap, Capability::Filesystem(_)) {
-        is_glob_subset_set(allow, parents).map_err(|offender| {
+        subset::paths_subset(allow, parents).map_err(|offender| {
             format!("allow entry {offender:?} is not a subset of any package grant")
         })
     } else {
-        for entry in allow {
-            if !parents.iter().any(|p| p == entry) {
-                return Err(format!("allow entry {entry:?} is not in package grant"));
-            }
-        }
-        Ok(())
+        subset::string_set_subset(allow, parents)
+            .map_err(|offender| format!("allow entry {offender:?} is not in package grant"))
     }
 }
 
 #[allow(dead_code)] // wired up by compute_effective, itself wired up by Task 5
 fn validate_max_bytes(cap: &Capability, requested: u64) -> Result<(), String> {
     match cap {
-        Capability::Filesystem(FsCapability::Write { max_bytes, .. }) => match max_bytes {
-            None => Ok(()), // package = unlimited; any value is a tightening
-            Some(pkg_max) if requested <= *pkg_max => Ok(()),
-            Some(pkg_max) => Err(format!(
-                "max_bytes={requested} exceeds package grant {pkg_max}"
-            )),
-        },
+        Capability::Filesystem(FsCapability::Write { max_bytes, .. }) => {
+            subset::max_bytes_le(requested, *max_bytes).map_err(|_| {
+                format!(
+                    "max_bytes={requested} exceeds package grant {}",
+                    max_bytes.expect("max_bytes_le only errs when the ceiling is Some")
+                )
+            })
+        }
         _ => Err("max_bytes only meaningful for fs.write".into()),
     }
 }
