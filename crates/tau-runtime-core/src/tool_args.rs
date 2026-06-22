@@ -139,7 +139,7 @@ impl ToolArgsValidator {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SchemaCompileError {
-    /// jsonschema's diagnostic.
+    /// Human-readable compile diagnostic from the no_std schema validator.
     pub kind: String,
     /// First 200 chars of the schema for context.
     pub schema_excerpt: String,
@@ -371,6 +371,62 @@ mod tests {
                 serde_json::json!({"type":"array","items":{"type":"integer"}}),
                 serde_json::json!(["bad"]),
             ),
+            // additionalProperties (most divergence-prone)
+            (
+                serde_json::json!({"type":"object","properties":{"x":{"type":"number"}},"additionalProperties":false}),
+                serde_json::json!({"x":1,"y":2}),
+            ), // reject
+            (
+                serde_json::json!({"type":"object","properties":{"x":{"type":"number"}},"additionalProperties":false}),
+                serde_json::json!({"x":1}),
+            ), // accept
+            // oneOf multi-match → reject (matrix only had single-match)
+            (
+                serde_json::json!({"oneOf":[{"type":"integer"},{"minimum":5}]}),
+                serde_json::json!(7),
+            ),
+            // const
+            (
+                serde_json::json!({"const":"write"}),
+                serde_json::json!("edit"),
+            ), // reject
+            (
+                serde_json::json!({"const":"write"}),
+                serde_json::json!("write"),
+            ), // accept
+            // not
+            (
+                serde_json::json!({"not":{"type":"string"}}),
+                serde_json::json!("x"),
+            ), // reject
+            (
+                serde_json::json!({"not":{"type":"string"}}),
+                serde_json::json!(3),
+            ), // accept
+            // anyOf
+            (
+                serde_json::json!({"anyOf":[{"type":"string"},{"type":"integer"}]}),
+                serde_json::json!(true),
+            ), // reject
+            // allOf
+            (
+                serde_json::json!({"allOf":[{"type":"integer"},{"minimum":0}]}),
+                serde_json::json!(-1),
+            ), // reject
+            // multipleOf fractional (most divergence-prone numeric path)
+            (
+                serde_json::json!({"type":"number","multipleOf":0.1}),
+                serde_json::json!(7.05),
+            ), // reject
+            (
+                serde_json::json!({"type":"number","multipleOf":0.1}),
+                serde_json::json!(7),
+            ), // accept
+            // integer accepts integral float
+            (
+                serde_json::json!({"type":"integer"}),
+                serde_json::json!(2.0),
+            ), // accept
         ];
         for (schema_json, args_json) in cases {
             let js = jsonschema::options()
