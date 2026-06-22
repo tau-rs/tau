@@ -751,4 +751,33 @@ mod tests {
         assert!(!s.check(&v(serde_json::json!([]))).is_empty());
         assert!(!s.check(&v(serde_json::json!([1, 1]))).is_empty());
     }
+
+    #[test]
+    fn unsupported_keywords_fail_closed() {
+        for kw in [
+            "pattern",
+            "format",
+            "$ref",
+            "patternProperties",
+            "if",
+            "dependencies",
+        ] {
+            let mut m = serde_json::Map::new();
+            m.insert("type".to_string(), serde_json::json!("string"));
+            m.insert(kw.to_string(), serde_json::json!({}));
+            let schema = Value::Object(m);
+            let err = compile(&schema).expect_err(kw);
+            assert_eq!(err.keyword, kw, "error should name the offending keyword");
+        }
+    }
+
+    #[test]
+    fn annotations_are_ignored_not_errors() {
+        let s = compile(&v(serde_json::json!({
+            "type": "string",
+            "title": "Name", "description": "the name", "default": "x", "examples": ["a"]
+        })))
+        .expect("annotations must not error");
+        assert!(s.check(&v(serde_json::json!("hi"))).is_empty());
+    }
 }
