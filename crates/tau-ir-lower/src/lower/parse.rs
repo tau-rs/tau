@@ -445,7 +445,10 @@ pub fn durable_entry_to_ir(
             debug_assert_eq!(s, "survive-restarts");
             Durability::Intent(DurabilityIntent::SurviveRestarts)
         }
-        DurableEntry::Explicit { checkpoint, store: _ } => {
+        DurableEntry::Explicit {
+            checkpoint,
+            store: _,
+        } => {
             // tau-pkg validated both strings; wildcard arms are defence-in-depth.
             let checkpoint = match checkpoint.as_str() {
                 "per_tool_call" => CheckpointGranularity::PerToolCall,

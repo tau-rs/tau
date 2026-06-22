@@ -138,7 +138,10 @@ mod tests {
         let r = resolve_durability(&d, t);
         assert_eq!(r.checkpoint, CheckpointGranularity::PerTurn);
         assert_eq!(r.store, DurableStore::File);
-        assert!(matches!(r.support, Support::Honored), "target {t} should honor");
+        assert!(
+            matches!(r.support, Support::Honored),
+            "target {t} should honor"
+        );
         assert_eq!(r.from_intent, Some(DurabilityIntent::SurviveRestarts));
     }
 

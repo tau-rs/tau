@@ -1515,7 +1515,10 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
                     ),
                 });
             }
-            Some(DurableEntry::Explicit { checkpoint: d.checkpoint, store: d.store })
+            Some(DurableEntry::Explicit {
+                checkpoint: d.checkpoint,
+                store: d.store,
+            })
         }
     };
 

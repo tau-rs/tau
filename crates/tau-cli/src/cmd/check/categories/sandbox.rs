@@ -441,6 +441,31 @@ fn durability_findings(
     out
 }
 
+fn build_plan_finding(
+    plugin_id: &str,
+    message: String,
+    tau_toml_path: &std::path::Path,
+) -> CheckFinding {
+    CheckFinding {
+        category: CheckCategory::Sandbox,
+        severity: Severity::Error,
+        rule_id: "tau.sandbox.plan_invalid",
+        summary: format!("build_plan failed for `{plugin_id}`: {message}"),
+        detail: None,
+        location: Some(FindingLocation {
+            path: tau_toml_path.to_path_buf(),
+            line: None,
+            column: None,
+        }),
+        remediation: None,
+        structured: json!({
+            "plugin_id": plugin_id,
+            "kind": "BuildPlanFailed",
+            "error": message,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,30 +638,5 @@ durable      = "survive-restarts"
         let target: tau_ports::target::TargetTriple = "passthrough".parse().unwrap();
         let findings = durability_findings(&agents, &target);
         assert!(findings.is_empty());
-    }
-}
-
-fn build_plan_finding(
-    plugin_id: &str,
-    message: String,
-    tau_toml_path: &std::path::Path,
-) -> CheckFinding {
-    CheckFinding {
-        category: CheckCategory::Sandbox,
-        severity: Severity::Error,
-        rule_id: "tau.sandbox.plan_invalid",
-        summary: format!("build_plan failed for `{plugin_id}`: {message}"),
-        detail: None,
-        location: Some(FindingLocation {
-            path: tau_toml_path.to_path_buf(),
-            line: None,
-            column: None,
-        }),
-        remediation: None,
-        structured: json!({
-            "plugin_id": plugin_id,
-            "kind": "BuildPlanFailed",
-            "error": message,
-        }),
     }
 }

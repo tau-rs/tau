@@ -215,7 +215,7 @@ pub(crate) async fn run_via_ir(
     //     `--resume <id>` we load the latest committed checkpoint; on a fresh
     //     durable run we mint a run id and tell the operator how to resume.
     let mut dispatcher = ForwardingDispatcher::new(llm_backends, tools_by_id);
-    if entry_agent.durable.is_some() {
+    if let Some(durability) = entry_agent.durable.as_ref() {
         let store: Arc<dyn tau_ports::CheckpointStore> = Arc::new(
             tau_runtime_tokio::FileCheckpointStore::new(scope.path().to_path_buf()),
         );
@@ -257,12 +257,9 @@ pub(crate) async fn run_via_ir(
         // refuse to start a run we cannot make durable — symmetric with
         // `tau check --target` failing at build time.
         let host_target = tau_ports::target::TargetTriple::host();
-        let resolved = tau_runtime_core::resolve_durability(
-            entry_agent.durable.as_ref().expect("durable present in this branch"),
-            &host_target,
-        )
-        .require_supported(&host_target)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let resolved = tau_runtime_core::resolve_durability(durability, &host_target)
+            .require_supported(&host_target)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         dispatcher = dispatcher.with_durable(store, durable_run_id, resume, resolved.checkpoint);
     }
     let dispatcher = Arc::new(dispatcher);

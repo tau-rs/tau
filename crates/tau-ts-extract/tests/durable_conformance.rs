@@ -69,8 +69,8 @@ fn toml_and_ts_produce_byte_equal_canonical_ir_with_agent_durable() {
 
 #[test]
 fn toml_and_ts_produce_byte_equal_canonical_ir_with_durable_intent() {
-    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/durable_intent_conformance");
+    let fixture_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/durable_intent_conformance");
 
     // ── TOML path ────────────────────────────────────────────────────────────
     let toml_str = std::fs::read_to_string(fixture_dir.join("tau.toml")).expect("read tau.toml");
