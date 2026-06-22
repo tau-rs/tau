@@ -2,6 +2,12 @@
 //! top-to-bottom, threading each step's output to later steps via
 //! `${steps.<id>.output}` templating.
 
+// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
+// from the std prelude — import it when the feature is active.
+#[cfg(feature = "schema")]
+#[allow(unused_imports)]
+use std::prelude::rust_2021::*;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -10,6 +16,7 @@ use crate::ids::{AgentId, PipelineStepId, StepId, ToolId};
 
 /// An ordered, engine-sequenced pipeline of steps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Pipeline {
     /// Steps, executed top-to-bottom in this order.
     pub steps: Vec<PipelineStep>,
@@ -17,6 +24,7 @@ pub struct Pipeline {
 
 /// One step in a [`Pipeline`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PipelineStep {
     /// Handle for this step; its output is addressable as
     /// `steps.<id>.output` by later steps.
@@ -29,6 +37,7 @@ pub struct PipelineStep {
 
 /// What a [`PipelineStep`] executes — a reference to an existing node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum StepRun {
     /// Run an agent node by id.
     Agent(AgentId),

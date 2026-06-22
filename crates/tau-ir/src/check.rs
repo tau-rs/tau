@@ -1,6 +1,12 @@
 //! Postcondition checks: `goal` (deterministic predicate) and
 //! `deliverable` (produced artifact + LLM-judged content).
 
+// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
+// from the std prelude — import it when the feature is active.
+#[cfg(feature = "schema")]
+#[allow(unused_imports)]
+use std::prelude::rust_2021::*;
+
 use alloc::string::String;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,6 +16,7 @@ use crate::tool_impl::NativeFnRef;
 
 /// A postcondition evaluated at a point in the pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Check {
     /// Identifier within the workflow.
     pub id: CheckId,
@@ -21,6 +28,7 @@ pub struct Check {
 
 /// The two postcondition kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CheckVerify {
     /// Deterministic predicate over a read locus.
     Goal {
@@ -42,6 +50,7 @@ pub enum CheckVerify {
 
 /// A read/produce locus.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Locus {
     /// Filesystem path.
     Path(String),
@@ -51,6 +60,7 @@ pub enum Locus {
 
 /// Deterministic goal predicate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum GoalPredicate {
     /// Locus resolves.
     Exists,
@@ -63,6 +73,7 @@ pub enum GoalPredicate {
     /// At least N items.
     MinCount(u64),
     /// Validates against the JSON schema.
+    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
     SchemaValid(Value),
     /// Registered native fn.
     NativeFn(NativeFnRef),
@@ -70,6 +81,7 @@ pub enum GoalPredicate {
 
 /// Who evaluates a deliverable's content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum JudgeRef {
     /// The canonical judge, on a build-time-resolved model.
     Default {
@@ -82,6 +94,7 @@ pub enum JudgeRef {
 
 /// Failure handling for a check.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RetryPolicy {
     /// Abort vs rewind-and-retry.
     pub on_fail: OnFail,
@@ -93,6 +106,7 @@ pub struct RetryPolicy {
 
 /// `on_fail` discriminant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OnFail {
     /// Exit non-zero with the rationale.
     Abort,

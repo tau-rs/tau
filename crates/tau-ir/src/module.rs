@@ -1,5 +1,11 @@
 //! Top-level IR container.
 
+// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
+// from the std prelude — import it when the feature is active.
+#[cfg(feature = "schema")]
+#[allow(unused_imports)]
+use std::prelude::rust_2021::*;
+
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -22,6 +28,7 @@ use crate::trigger::TriggerBinding;
 ///   `#[non_exhaustive]` enum).
 /// - PATCH for spec-only edits with no IR-shape effect.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
@@ -49,6 +56,7 @@ impl IrFormatVersion {
 /// v0). `tau verify --bundle` re-builds and asserts byte-equality of
 /// the canonical form (D-6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IrModule {
     /// IR language version (D-6 — separate from `tau_version`).
     pub ir_format: IrFormatVersion,
@@ -56,6 +64,7 @@ pub struct IrModule {
     /// Semver-shaped (e.g. `"0.X.Y"`).
     pub tau_version: String,
     /// Target triple this module was lowered for.
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub target: TargetTriple,
     /// The workflow itself.
     pub workflow: Workflow,
@@ -70,6 +79,7 @@ pub struct IrModule {
 
 /// The set of nodes + edges that make up one workflow.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Workflow {
     /// Agent nodes by id.
     pub agents: BTreeMap<AgentId, Agent>,

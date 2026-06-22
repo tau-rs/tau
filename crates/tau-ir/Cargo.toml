@@ -20,6 +20,9 @@ foldhash   = { workspace = true }
 # SHA-256 for the canonical-bytes hash (β.2.3). sha2 supports no_std via
 # `default-features = false`.
 sha2       = { workspace = true, default-features = false }
+# Optional: JSON-Schema generation from the IR serde types (EPIC 2.2). std;
+# off by default so the no_std default build + wasm guest are untouched.
+schemars   = { version = "0.8", optional = true }
 
 [dev-dependencies]
 tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
@@ -33,3 +36,6 @@ default            = []
 # that require std (SystemTime ↔ i64-ms conversion through UNIX_EPOCH).
 with-std-adapters  = []
 test-fixtures      = []
+# JSON-Schema generation from the IR serde types (EPIC 2.2). Pulls in std
+# via schemars; off by default so the no_std build stays clean.
+schema             = ["dep:schemars"]

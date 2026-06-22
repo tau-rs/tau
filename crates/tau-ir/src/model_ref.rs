@@ -1,11 +1,18 @@
 //! Resolved model reference: the concrete `{ backend, model_id }` an alias
 //! lowered to. The IR never carries the source-level alias (D2).
 
+// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
+// from the std prelude — import it when the feature is active.
+#[cfg(feature = "schema")]
+#[allow(unused_imports)]
+use std::prelude::rust_2021::*;
+
 use alloc::string::String;
 use serde::{Deserialize, Serialize};
 
 /// A concrete, build-time-resolved model selection.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModelRef {
     /// Backend package name — the key the runtime resolves a backend by.
     pub backend: String,

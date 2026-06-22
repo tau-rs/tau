@@ -1,5 +1,11 @@
 //! Subflow edges connecting agents and (eventually) sub-workflows.
 
+// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
+// from the std prelude — import it when the feature is active.
+#[cfg(feature = "schema")]
+#[allow(unused_imports)]
+use std::prelude::rust_2021::*;
+
 use alloc::boxed::Box;
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +14,7 @@ use crate::ids::{AgentId, SubflowId};
 
 /// The kind of subflow connection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SubflowKind {
     /// Spawn a sibling agent within the same module with a narrowed
     /// capability set. Per the subset-of-parent rule, `cap_subset`
@@ -31,6 +38,7 @@ pub enum SubflowKind {
 
 /// A subflow edge in a workflow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SubflowEdge {
     /// Identifier of this subflow within the workflow.
     pub id: SubflowId,

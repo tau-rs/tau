@@ -17,6 +17,12 @@
 extern crate alloc;
 #[cfg(feature = "with-std-adapters")]
 extern crate std;
+// schemars derive macros (0.8) emit bare `vec![]` and `Box` which need std
+// prelude macros. When `schema` is on, import std with #[macro_use] to bring
+// `vec!` into scope (safe: std re-exports alloc, no conflict).
+#[cfg(all(feature = "schema", not(feature = "with-std-adapters")))]
+#[macro_use]
+extern crate std;
 
 pub mod budget;
 pub mod canonical;
@@ -36,6 +42,11 @@ pub mod subflow;
 pub mod template;
 pub mod tool_impl;
 pub mod trigger;
+
+#[cfg(feature = "schema")]
+pub mod schema_gen;
+#[cfg(feature = "schema")]
+mod schema_gen_samples;
 
 // Re-exports of the canonical public API surface.
 pub use budget::AgentBudget;

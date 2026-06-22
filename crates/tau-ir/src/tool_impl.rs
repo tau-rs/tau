@@ -6,6 +6,12 @@
 //! [`ToolImpl::Native::content_hash`] and [`ToolImpl::Mcp::contract_hash`]
 //! at build time so every IR module is fully hashable per D-6.
 
+// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
+// from the std prelude — import it when the feature is active.
+#[cfg(feature = "schema")]
+#[allow(unused_imports)]
+use std::prelude::rust_2021::*;
+
 use alloc::string::String;
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +29,7 @@ pub type Hash256 = [u8; 32];
 /// directly. v0's interpreter dispatches by name through a
 /// `NativeFnRegistry` injected at runtime.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NativeFnRef {
     /// Symbolic name of the Rust `Tool` impl.
     pub name: String,
@@ -30,6 +37,7 @@ pub struct NativeFnRef {
 
 /// How a [`crate::Tool`] node's behavior is provided at runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolImpl {
     /// Statically linked native tool.
     Native {

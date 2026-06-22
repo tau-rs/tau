@@ -1,5 +1,11 @@
 //! IR node variants. Typed full per D-1: Agent + Tool + Deterministic + Subflow.
 
+// schemars 0.8 derive generates code using bare `Box`/`String`/`vec!`
+// from the std prelude — import it when the feature is active.
+#[cfg(feature = "schema")]
+#[allow(unused_imports)]
+use std::prelude::rust_2021::*;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -15,6 +21,7 @@ use crate::tool_impl::{NativeFnRef, ToolImpl};
 
 /// One of the four IR node variants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Node {
     /// LLM agent loop with tool dispatch.
     Agent(Agent),
@@ -28,6 +35,7 @@ pub enum Node {
 
 /// An LLM agent loop with tools and optional context block.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Agent {
     /// Identifier within the workflow.
     pub id: AgentId,
@@ -49,6 +57,7 @@ pub struct Agent {
     /// judge-compat build-time check. `skip_serializing_if` keeps
     /// schema-less agents byte-stable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<serde_json::Value>"))]
     pub output_schema: Option<Value>,
     /// Optional durable-execution config (ADR-0053). `None` => not
     /// durable (whole-bundle reentrant only). `Some` opts the agent into
@@ -60,6 +69,7 @@ pub struct Agent {
 
 /// A tool node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Tool {
     /// Identifier within the workflow.
     pub id: ToolId,
@@ -78,25 +88,30 @@ pub struct Tool {
 /// Mirror of `tau_ports::ToolSpec` adapted for IR storage. Provides the
 /// LLM-facing schema; not used for capability decisions.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolSpec {
     /// LLM-visible name.
     pub name: String,
     /// LLM-visible description.
     pub description: String,
     /// JSON schema for the tool's input.
+    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
     pub input_schema: Value,
 }
 
 /// A pure-function step.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Deterministic {
     /// Identifier within the workflow.
     pub id: StepId,
     /// Reference to the statically linked Rust function.
     pub fn_ref: NativeFnRef,
     /// JSON schema for the input.
+    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
     pub input_schema: Value,
     /// JSON schema for the output.
+    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
     pub output_schema: Value,
 }
 
