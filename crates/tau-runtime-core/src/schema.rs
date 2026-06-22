@@ -213,6 +213,38 @@ fn compile_node(schema: &Value, pointer: &str) -> Result<Schema, CompileErr> {
         None => {}
     }
 
+    if let Some(Value::Array(items)) = obj.get("enum") {
+        node.enum_values = Some(items.clone());
+    }
+    if let Some(c) = obj.get("const") {
+        node.const_value = Some(c.clone());
+    }
+    node.minimum = obj.get("minimum").and_then(Value::as_f64);
+    node.maximum = obj.get("maximum").and_then(Value::as_f64);
+    node.exclusive_minimum = obj.get("exclusiveMinimum").and_then(Value::as_f64);
+    node.exclusive_maximum = obj.get("exclusiveMaximum").and_then(Value::as_f64);
+    node.multiple_of = obj.get("multipleOf").and_then(Value::as_f64);
+    node.min_length = obj.get("minLength").and_then(Value::as_u64);
+    node.max_length = obj.get("maxLength").and_then(Value::as_u64);
+    node.min_items = obj.get("minItems").and_then(Value::as_u64);
+    node.max_items = obj.get("maxItems").and_then(Value::as_u64);
+    node.unique_items = obj.get("uniqueItems").and_then(Value::as_bool);
+    if let Some(items) = obj.get("items") {
+        node.items = Some(Box::new(compile_node(items, &format!("{pointer}/items"))?));
+    }
+    if let Some(ap) = obj.get("additionalProperties") {
+        match ap {
+            Value::Bool(b) => node.additional_properties = Some(*b),
+            _ => {
+                return Err(CompileErr {
+                    keyword: "additionalProperties".to_string(),
+                    pointer: pointer.to_string(),
+                    detail: "schema-form additionalProperties is unsupported in v1".to_string(),
+                })
+            }
+        }
+    }
+
     Ok(node)
 }
 
@@ -288,6 +320,118 @@ fn check_node(node: &Schema, value: &Value, pointer: &str, out: &mut Vec<Violati
             });
         }
     }
+    if let Some(allowed) = &node.enum_values {
+        if !allowed.iter().any(|a| a == value) {
+            out.push(Violation {
+                pointer: pointer.to_string(),
+                message: format!("value not in enum {allowed:?}"),
+            });
+        }
+    }
+    if let Some(c) = &node.const_value {
+        if c != value {
+            out.push(Violation {
+                pointer: pointer.to_string(),
+                message: format!("value must equal const {c}"),
+            });
+        }
+    }
+    if let Value::Number(_) = value {
+        let n = value.as_f64().unwrap_or(f64::NAN);
+        if let Some(m) = node.minimum {
+            if n < m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("{n} < minimum {m}"),
+                });
+            }
+        }
+        if let Some(m) = node.maximum {
+            if n > m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("{n} > maximum {m}"),
+                });
+            }
+        }
+        if let Some(m) = node.exclusive_minimum {
+            if n <= m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("{n} <= exclusiveMinimum {m}"),
+                });
+            }
+        }
+        if let Some(m) = node.exclusive_maximum {
+            if n >= m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("{n} >= exclusiveMaximum {m}"),
+                });
+            }
+        }
+        if let Some(m) = node.multiple_of {
+            if m != 0.0 && (n / m).fract().abs() > 1e-9 {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("{n} not a multiple of {m}"),
+                });
+            }
+        }
+    }
+    if let Value::String(s) = value {
+        let len = s.chars().count() as u64;
+        if let Some(m) = node.min_length {
+            if len < m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("string shorter than minLength {m}"),
+                });
+            }
+        }
+        if let Some(m) = node.max_length {
+            if len > m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("string longer than maxLength {m}"),
+                });
+            }
+        }
+    }
+    if let Value::Array(arr) = value {
+        if let Some(m) = node.min_items {
+            if (arr.len() as u64) < m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("fewer than minItems {m}"),
+                });
+            }
+        }
+        if let Some(m) = node.max_items {
+            if (arr.len() as u64) > m {
+                out.push(Violation {
+                    pointer: pointer.to_string(),
+                    message: format!("more than maxItems {m}"),
+                });
+            }
+        }
+        if node.unique_items == Some(true) {
+            for i in 0..arr.len() {
+                if arr[i + 1..].iter().any(|other| other == &arr[i]) {
+                    out.push(Violation {
+                        pointer: pointer.to_string(),
+                        message: "array items not unique".to_string(),
+                    });
+                    break;
+                }
+            }
+        }
+        if let Some(item_schema) = &node.items {
+            for (i, item) in arr.iter().enumerate() {
+                check_node(item_schema, item, &format!("{pointer}/{i}"), out);
+            }
+        }
+    }
     if let Value::Object(map) = value {
         for req in &node.required {
             if !map.contains_key(req) {
@@ -301,6 +445,19 @@ fn check_node(node: &Schema, value: &Value, pointer: &str, out: &mut Vec<Violati
             if let Some(child) = map.get(k) {
                 let child_ptr = format!("{pointer}/{k}");
                 check_node(sub, child, &child_ptr, out);
+            }
+        }
+    }
+    // additionalProperties: false → reject keys not in `properties`.
+    if node.additional_properties == Some(false) {
+        if let Value::Object(map) = value {
+            for k in map.keys() {
+                if !node.properties.contains_key(k) {
+                    out.push(Violation {
+                        pointer: pointer.to_string(),
+                        message: format!("unexpected additional property '{k}'"),
+                    });
+                }
             }
         }
     }
@@ -373,5 +530,50 @@ mod tests {
             serde_json::json!({ "type": "object", "properties": "oops" })
         ))
         .is_err());
+    }
+
+    #[test]
+    fn enum_and_const() {
+        let s = compile(&v(serde_json::json!({ "enum": ["a", "b"] }))).unwrap();
+        assert!(s.check(&v(serde_json::json!("a"))).is_empty());
+        assert!(!s.check(&v(serde_json::json!("c"))).is_empty());
+
+        let s = compile(&v(serde_json::json!({ "const": "write" }))).unwrap();
+        assert!(s.check(&v(serde_json::json!("write"))).is_empty());
+        assert!(!s.check(&v(serde_json::json!("edit"))).is_empty());
+    }
+
+    #[test]
+    fn numeric_bounds() {
+        let s = compile(&v(serde_json::json!({
+            "type": "integer", "minimum": 1, "maximum": 10
+        })))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!(5))).is_empty());
+        assert!(!s.check(&v(serde_json::json!(0))).is_empty());
+        assert!(!s.check(&v(serde_json::json!(11))).is_empty());
+
+        let s = compile(&v(serde_json::json!({ "type": "number", "multipleOf": 2 }))).unwrap();
+        assert!(s.check(&v(serde_json::json!(4))).is_empty());
+        assert!(!s.check(&v(serde_json::json!(5))).is_empty());
+    }
+
+    #[test]
+    fn string_and_array_bounds() {
+        let s = compile(&v(serde_json::json!({
+            "type": "string", "minLength": 2, "maxLength": 4
+        })))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!("abc"))).is_empty());
+        assert!(!s.check(&v(serde_json::json!("a"))).is_empty());
+        assert!(!s.check(&v(serde_json::json!("abcde"))).is_empty());
+
+        let s = compile(&v(serde_json::json!({
+            "type": "array", "minItems": 1, "uniqueItems": true
+        })))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!([1, 2]))).is_empty());
+        assert!(!s.check(&v(serde_json::json!([]))).is_empty());
+        assert!(!s.check(&v(serde_json::json!([1, 1]))).is_empty());
     }
 }
