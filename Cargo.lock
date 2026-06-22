@@ -4808,6 +4808,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "wasmtime",
+ "wit-parser 0.251.0",
 ]
 
 [[package]]
