@@ -105,6 +105,16 @@ Four sub-decisions:
 - **Honest limit.** At-least-once, not exactly-once. Documented as the
   idempotency contract; teams needing exactly-once wait for A-full.
 
+## Follow-on: EPIC 6.1 — intent-form durable knob
+
+EPIC 6.1 (shipped) adds a high-level **intent** spelling for the `durable`
+field: `durable = "survive-restarts"` (TOML) / `durable: "survive-restarts"`
+(TS). The intent lowers to `Durability::Intent(DurabilityIntent::SurviveRestarts)`
+in the IR; the host resolves it to a concrete granularity + store per target
+at run/build time, and `tau check --target <triple>` prints the resolved pair.
+See `docs/how-to/run-tau-under-a-durable-orchestrator.md` §Opt-in per-agent
+checkpointing for authoring details.
+
 ## Alternatives considered
 
 - **Feature-gated I/O inside core** (`#[cfg(feature = "host-fs")]` write

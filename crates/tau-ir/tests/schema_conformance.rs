@@ -12,7 +12,7 @@ fn load(p: &str) -> serde_json::Value {
 }
 
 fn compiled() -> jsonschema::Validator {
-    jsonschema::validator_for(&load("tau-ir.v2.2.0.schema.json")).expect("schema compiles")
+    jsonschema::validator_for(&load("tau-ir.v2.3.0.schema.json")).expect("schema compiles")
 }
 
 #[test]

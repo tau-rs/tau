@@ -4630,7 +4630,7 @@ dependencies = [
  "futures-util",
  "globset",
  "hashbrown 0.17.1",
- "jsonschema",
+ "num-traits",
  "proptest",
  "serde",
  "serde_json",

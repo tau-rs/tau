@@ -34,7 +34,8 @@ The `schema strategy` column records how the `JsonSchema` impl will be provided:
 | DeterminismClass | tau-ir | derive | cfg_attr derive |
 | ContextNodeKind | tau-ir | derive | cfg_attr derive |
 | AgentBudget | tau-ir | derive | cfg_attr derive |
-| Durability | tau-ir | derive | cfg_attr derive |
+| Durability | tau-ir | derive (enum Intent/Explicit, EPIC 6.1) | cfg_attr derive |
+| DurabilityIntent | tau-ir | derive | cfg_attr derive |
 | CheckpointGranularity | tau-ir | derive | cfg_attr derive |
 | DurableStore | tau-ir | derive | cfg_attr derive |
 | Tool | tau-ir | derive | cfg_attr derive |

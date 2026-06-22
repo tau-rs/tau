@@ -22,7 +22,13 @@ tracing = { workspace = true, default-features = false, features = ["attributes"
 
 [features]
 default       = ["process"]
-process       = []
+# `process` brings std-typed fields (e.g. `WorkingContext.working_dir:
+# Option<PathBuf>`) into serde-derived structs. When serde is also enabled,
+# those derives need serde's `std` impls — pull them weakly so `process`
+# alone (no serde) and `serde` alone (no process, the no_std path) are both
+# unaffected. Without this, an isolated `-p tau-ports`/`-p tau-runtime-core`
+# default build fails unless some other crate happens to pull `serde/std`.
+process       = ["serde?/std"]
 serde         = ["dep:serde", "tau-domain/serde", "uuid/serde"]
 schema        = ["dep:schemars"]
 test-fixtures = ["dep:tempfile"]

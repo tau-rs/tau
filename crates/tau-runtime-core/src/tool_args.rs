@@ -16,14 +16,13 @@
 //! See `docs/superpowers/specs/2026-04-30-tool-args-schema-design.md`
 //! and ADR-0010.
 //!
-//! Gated behind `feature = "tool-validation"` (jsonschema is std-only).
+//! Gated behind `feature = "tool-validation"`; the validator is no_std (EPIC 0).
 
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use jsonschema::{Draft, ValidationOptions, Validator};
 use tau_domain::Value;
 use tau_ports::ToolError;
 
@@ -35,7 +34,7 @@ use tau_ports::ToolError;
 ///
 /// # Cloneability
 ///
-/// `ToolArgsValidator` is `Clone`: the compiled `jsonschema::Validator`
+/// `ToolArgsValidator` is `Clone`: the compiled `CompiledSchema`
 /// is wrapped in `Arc` so cloning is a reference-count bump rather than
 /// a schema recompile. This is required by `Runtime::run_streaming_with_history`,
 /// which snapshots the `tool_validators` registry into an owned HashMap
@@ -43,13 +42,13 @@ use tau_ports::ToolError;
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ToolArgsValidator {
-    /// Compiled jsonschema instance. `None` = tool opted out (empty
+    /// Compiled no_std schema instance. `None` = tool opted out (empty
     /// schema or `Value::Null`); validation is a no-op.
     ///
     /// Wrapped in `Arc` so that `ToolArgsValidator` can be `Clone`
     /// without recompiling the schema — clone is an Arc reference-count
     /// bump.
-    compiled: Option<Arc<Validator>>,
+    compiled: Option<Arc<crate::schema::CompiledSchema>>,
     /// The original input_schema as declared, kept for inclusion in
     /// BadArgs error messages (the MANDATORY rule).
     declared_schema_json: String,
@@ -82,12 +81,17 @@ impl ToolArgsValidator {
             });
         }
 
-        let compiled = draft7_options()
-            .build(&schema_json)
-            .map_err(|err| SchemaCompileError {
-                kind: format!("schema compile failed: {err}"),
-                schema_excerpt: declared_schema_json.chars().take(200).collect(),
-            })?;
+        let compiled = crate::schema::compile(&schema_json).map_err(|err| SchemaCompileError {
+            kind: if err.keyword.is_empty() {
+                format!("schema invalid at {}: {}", err.pointer, err.detail)
+            } else {
+                format!(
+                    "unsupported keyword '{}' at {}: {}",
+                    err.keyword, err.pointer, err.detail
+                )
+            },
+            schema_excerpt: declared_schema_json.chars().take(200).collect(),
+        })?;
         Ok(Self {
             compiled: Some(Arc::new(compiled)),
             declared_schema_json,
@@ -108,8 +112,9 @@ impl ToolArgsValidator {
         let args_json = serde_json::to_value(args)
             .map_err(|e| format!("internal: args serialization failed: {e}"))?;
         let issues: Vec<String> = compiled
-            .iter_errors(&args_json)
-            .map(|e| format!("  {}: {}", e.instance_path(), e))
+            .check(&args_json)
+            .into_iter()
+            .map(|vio| format!("  {}: {}", vio.pointer, vio.message))
             .collect();
         if !issues.is_empty() {
             let args_repr =
@@ -127,18 +132,13 @@ impl ToolArgsValidator {
     }
 }
 
-/// Construct a `ValidationOptions` builder configured for JSON Schema Draft 7.
-fn draft7_options() -> ValidationOptions<'static> {
-    jsonschema::options().with_draft(Draft::Draft7)
-}
-
 /// Error returned when a tool's `input_schema` fails to compile as a
 /// valid Draft 7 schema. Surfaced by `RuntimeBuilder::build()` as
 /// `BuildError::ToolSchemaInvalid`.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SchemaCompileError {
-    /// jsonschema's diagnostic.
+    /// Human-readable compile diagnostic from the no_std schema validator.
     pub kind: String,
     /// First 200 chars of the schema for context.
     pub schema_excerpt: String,
@@ -212,8 +212,8 @@ mod tests {
         let s = schema(serde_json::json!({ "type": "objectt" }));
         let err = ToolArgsValidator::compile(&s).expect_err("malformed");
         assert!(
-            err.kind.contains("compile"),
-            "expected compile-failure kind; got: {}",
+            err.kind.contains("type") || err.kind.contains("unsupported"),
+            "expected type/unsupported failure kind; got: {}",
             err.kind
         );
         assert!(

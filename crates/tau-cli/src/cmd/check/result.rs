@@ -65,6 +65,9 @@ pub enum Severity {
     NeedsSetup,
     /// Informational; does not affect exit code.
     Warning,
+    /// Purely informational transparency (e.g. resolved durability).
+    /// Does not affect exit code. Renders as SARIF `note`.
+    Note,
 }
 
 /// Source location for a finding, used by `--sarif` and `--json`.
@@ -142,6 +145,7 @@ pub fn compute_exit(results: &[CheckResult]) -> i32 {
                 Severity::Error => has_error = true,
                 Severity::NeedsSetup => has_setup = true,
                 Severity::Warning => {}
+                Severity::Note => {}
             }
         }
     }

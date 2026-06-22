@@ -34,7 +34,9 @@ impl IrFormatVersion {
     // MINOR v2.2.0: CheckpointGranularity::PerToolCall variant +
     // TurnCheckpoint.pending_tool_uses additive optional field (ADR-0053
     // follow-up). Byte-stable when durable absent / PerTurn.
-    pub const CURRENT: &'static str = "v2.2.0";
+    // MINOR v2.3.0: Durability gains the `Intent(survive-restarts)` variant
+    // (EPIC 6.1) alongside the explicit form. Optional field, additive shape.
+    pub const CURRENT: &'static str = "v2.3.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -113,9 +115,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_2_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.2.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.2.0");
+    fn ir_format_version_is_v2_3_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.3.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.3.0");
     }
 
     #[test]

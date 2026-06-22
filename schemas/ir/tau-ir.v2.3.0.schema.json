@@ -603,22 +603,59 @@
       "type": "object"
     },
     "Durability": {
-      "description": "Durable-execution config attached to an [`crate::node::Agent`].\n\nCarried verbatim in the IR; the runtime reads it to decide whether to\nemit a checkpoint after each `TurnCompleted`. Absent (`None` on the\nagent) is byte-stable with pre-A-minimal modules.",
-      "properties": {
-        "checkpoint": {
-          "$ref": "#/$defs/CheckpointGranularity",
-          "description": "How often a checkpoint is committed."
+      "description": "Durable-execution config attached to an [`crate::node::Agent`].\n\nEither a high-level **intent** (the host picks granularity + store per\ntarget — EPIC 6.1) or the **explicit** A-minimal form (ADR-0053).\nAbsent (`None` on the agent) is byte-stable with pre-A-minimal modules.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "High-level intent. The host resolves it to a concrete granularity +\nstore for the run/build target (see `tau_runtime_core::durable_resolve`).",
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/DurabilityIntent"
+            }
+          },
+          "required": [
+            "intent"
+          ],
+          "type": "object"
         },
-        "store": {
-          "$ref": "#/$defs/DurableStore",
-          "description": "Where checkpoints are written."
+        {
+          "additionalProperties": false,
+          "description": "Explicit escape hatch: the author names the mechanism directly.",
+          "properties": {
+            "explicit": {
+              "properties": {
+                "checkpoint": {
+                  "$ref": "#/$defs/CheckpointGranularity",
+                  "description": "How often a checkpoint is committed."
+                },
+                "store": {
+                  "$ref": "#/$defs/DurableStore",
+                  "description": "Where checkpoints are written."
+                }
+              },
+              "required": [
+                "checkpoint",
+                "store"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "explicit"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "checkpoint",
-        "store"
-      ],
-      "type": "object"
+      ]
+    },
+    "DurabilityIntent": {
+      "description": "High-level durability intent. The host sizes it per target.\n\n`#[non_exhaustive]`: more intents are additive `MINOR` `ir_format` bumps.",
+      "oneOf": [
+        {
+          "const": "survive-restarts",
+          "description": "\"This run must survive a process restart.\" Resolves per target to the\ncoarsest checkpoint + store the target can durably provide.",
+          "type": "string"
+        }
+      ]
     },
     "DurableStore": {
       "description": "Where durable state is written.\n\nA-minimal ships only `File` (`./.tau/runs/<run_id>/turn-<n>.json`).\n`Kv` (an MCP-contracted journal — never a built-in DB, per NG6) is an\nadditive follow-up belonging to A-full.",
@@ -1378,7 +1415,7 @@
       "type": "object"
     }
   },
-  "$id": "https://lebocqtitouan.github.io/tau/schemas/ir/v2.2.0/tau-ir.schema.json",
+  "$id": "https://lebocqtitouan.github.io/tau/schemas/ir/v2.3.0/tau-ir.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "The container for one workflow's IR.\n\n`tau build` emits one `IrModule` per workflow (one per project for\nv0). `tau verify --bundle` re-builds and asserts byte-equality of\nthe canonical form (D-6).",
   "properties": {
@@ -1412,7 +1449,7 @@
     "target",
     "workflow"
   ],
-  "title": "tau IR module (ir_format v2.2.0)",
+  "title": "tau IR module (ir_format v2.3.0)",
   "type": "object",
-  "x-tau-ir-format": "v2.2.0"
+  "x-tau-ir-format": "v2.3.0"
 }

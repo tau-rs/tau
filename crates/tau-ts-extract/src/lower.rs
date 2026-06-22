@@ -362,15 +362,22 @@ fn build_toml(
             ));
         }
         if let Some(durable) = &agent.durable {
-            // Re-emit as a sub-table so it lowers identically to TOML
-            // authoring. Only the A-minimal keys are recognized; tau-pkg
-            // validation rejects any other value.
-            out.push_str(&format!("[agents.{}.durable]\n", toml_key(name)));
-            if let Some(checkpoint) = durable.get("checkpoint").and_then(|v| v.as_str()) {
-                out.push_str(&format!("checkpoint = {}\n", toml_str(checkpoint)));
-            }
-            if let Some(store) = durable.get("store").and_then(|v| v.as_str()) {
-                out.push_str(&format!("store = {}\n", toml_str(store)));
+            match durable {
+                // Intent scalar: `durable = "survive-restarts"` — a top-level
+                // agent key (must precede any sub-table for valid TOML).
+                serde_json::Value::String(intent) => {
+                    out.push_str(&format!("durable = {}\n", toml_str(intent)));
+                }
+                // Explicit object: re-emit the sub-table (unchanged).
+                _ => {
+                    out.push_str(&format!("[agents.{}.durable]\n", toml_key(name)));
+                    if let Some(checkpoint) = durable.get("checkpoint").and_then(|v| v.as_str()) {
+                        out.push_str(&format!("checkpoint = {}\n", toml_str(checkpoint)));
+                    }
+                    if let Some(store) = durable.get("store").and_then(|v| v.as_str()) {
+                        out.push_str(&format!("store = {}\n", toml_str(store)));
+                    }
+                }
             }
         }
         if let Some(sys) = &agent.prompt_system {
@@ -1347,6 +1354,36 @@ mod tests {
                 assert!(pos.col > 0, "expected non-zero col, got {}", pos.col);
             }
             other => panic!("expected ParseError, got: {other:?}"),
+        }
+    }
+
+    /// `durable: "survive-restarts"` (intent string) must lower to
+    /// `DurableEntry::Intent("survive-restarts")`, NOT a sub-table.
+    /// Tests the TOML emission path indirectly: if the emitter incorrectly
+    /// writes `[agents.a.durable]` (a sub-table with no keys) serde will
+    /// reject it as a missing-field error before we can get a `ProjectConfig`.
+    #[test]
+    fn durable_intent_string_emits_top_level_key() {
+        let src = r#"
+            export const m = models({
+                haiku: { backend: "anthropic", model: "claude-haiku-4-5" }
+            });
+            export const a = agent({
+                display_name: "A",
+                package: "a@^0.1",
+                model: "haiku",
+                prompt: { system: "x" },
+                durable: "survive-restarts"
+            });
+        "#;
+        let config = crate::extract_project(src, std::path::Path::new("/tmp/p.ts"))
+            .expect("parse must succeed");
+        let agent = config.agents.get("a").expect("agent a present");
+        match agent.durable.as_ref().expect("durable present") {
+            tau_pkg::project::project::DurableEntry::Intent(s) => {
+                assert_eq!(s, "survive-restarts", "intent string must round-trip");
+            }
+            other => panic!("expected DurableEntry::Intent, got {other:?}"),
         }
     }
 }

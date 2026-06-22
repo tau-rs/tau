@@ -18,8 +18,7 @@
           "max_tokens": 100000
         },
         "durable": {
-          "checkpoint": "per_turn",
-          "store": "file"
+          "intent": "survive-restarts"
         }
       },
       "precise-agent": {
@@ -36,8 +35,10 @@
           "max_tokens": null
         },
         "durable": {
-          "checkpoint": "per_tool_call",
-          "store": "file"
+          "explicit": {
+            "checkpoint": "per_tool_call",
+            "store": "file"
+          }
         }
       }
     },

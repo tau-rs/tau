@@ -35,6 +35,10 @@ pub struct DurableHandles {
     /// When resuming, the latest checkpoint to rehydrate from; `None` for a
     /// fresh durable run.
     pub resume: Option<tau_ports::TurnCheckpoint>,
+    /// Host-resolved checkpoint granularity (EPIC 6.1). The host resolves the
+    /// agent's `Durability` for its target and passes the concrete value here,
+    /// so the core never resolves intent itself.
+    pub checkpoint: tau_ir::durable::CheckpointGranularity,
 }
 
 /// Result of one tool invocation.

@@ -59,6 +59,7 @@ pub fn render(results: &[CheckResult], use_color: bool, exit_code: i32) -> Strin
                 Severity::Error => fixable += 1,
                 Severity::NeedsSetup => needs_setup += 1,
                 Severity::Warning => {}
+                Severity::Note => {}
             }
             let _ = writeln!(out, "        {}", f.summary);
             if let Some(d) = &f.detail {
