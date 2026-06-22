@@ -733,6 +733,9 @@ pub struct ProjectConfig {
     /// Top-level declared packages (raw strings like `"anthropic@^1"`).
     /// Names parsed from these are valid `[models]` backend identifiers.
     pub packages: Vec<String>,
+    /// Validated root `[allow]` constitution (ADR-0057). `None` = no
+    /// constitution declared (opt-in governance).
+    pub allow: Option<crate::project::allow::AllowConfig>,
 }
 
 /// Validated context-pipeline step.
@@ -1295,6 +1298,20 @@ impl UncheckedProjectConfig {
             })
             .collect();
 
+        // [allow.models] is the sole home for the alias map when a
+        // constitution is declared (ADR-0057 §3). Reject top-level
+        // [models] coexisting with [allow].
+        if self.allow.is_some() && !models.is_empty() {
+            return Err(ProjectConfigError::AllowValidation {
+                message: "[models] must be declared under [allow.models] when [allow] is present"
+                    .to_string(),
+            });
+        }
+        let allow = match self.allow {
+            Some(raw) => Some(crate::project::allow::validate_allow(raw)?),
+            None => None,
+        };
+
         let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -1307,6 +1324,7 @@ impl UncheckedProjectConfig {
             deliverables,
             models,
             packages: self.packages,
+            allow,
         };
 
         validate_postconditions(&mut result)?;
@@ -4314,6 +4332,68 @@ judge_model  = "unknown_model"
         let agent = cfg.agents.get("a").unwrap();
         let durable = agent.durable.as_ref().expect("durable present");
         assert_eq!(durable.checkpoint, "per_tool_call");
+    }
+
+    #[test]
+    fn absent_allow_yields_none_and_legacy_models_work() {
+        let toml = r#"
+packages = ["anthropic@^1"]
+
+[project]
+name = "demo"
+
+[models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .expect("validate");
+        assert!(cfg.allow.is_none(), "no [allow] = opt-out");
+        assert_eq!(cfg.models["fast"].backend, "anthropic", "legacy [models] still works");
+    }
+
+    #[test]
+    fn allow_present_populates_allow_config() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .expect("validate");
+        let allow = cfg.allow.expect("allow present");
+        assert_eq!(allow.ceiling.len(), 1);
+        assert_eq!(allow.models["fast"].model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn allow_and_top_level_models_conflict() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("[allow.models]"),
+            "expected sole-home conflict, got: {err}"
+        );
     }
 }
 
