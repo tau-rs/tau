@@ -45,6 +45,7 @@
 - [Serve mode protocol](reference/serve-mode-protocol.md)
 - [Skill manifest schema](reference/skill-manifest-schema.md)
 - [IR JSON Schema](reference/ir-json-schema.md)
+- [WIT host world](reference/wit-host-world.md)
 - [tau mcp](reference/tau-mcp.md)
 - [Target triple reference](reference/target-triples.md)
 
