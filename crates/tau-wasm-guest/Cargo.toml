@@ -20,12 +20,19 @@ dlmalloc    = { workspace = true }
 tau-ir = { workspace = true, default-features = false }
 # Direct path dep (not the `workspace = true` alias): the alias omits
 # `default-features`, so cargo would IGNORE this `default-features = false`
-# and pull runtime-core's host-only defaults (tool-validation→jsonschema,
-# capability-override→globset, host-fs), which drag in std. The guest is the
-# only no_std consumer, so it opts out locally rather than inverting the
-# alias default for the 5 host crates that legitimately want those features.
+# and pull runtime-core's host-only defaults (capability-override→globset,
+# host-fs→tau-domain/std), which drag in std. The guest is the only no_std
+# consumer, so it opts out locally rather than inverting the alias default
+# for the 5 host crates that legitimately want those features.
+#
+# `tool-validation` IS enabled: post-EPIC-0 it is no_std (the no_std schema
+# validator replaced jsonschema), so the guest validates tool args exactly
+# like the host — `RuntimeBuilder::build()` compiles validators from the
+# baked IR's tool input_schemas. This keeps host/guest conformance parity
+# (a guest that skipped validation would diverge from the host's BadArgs
+# self-correction trace).
 tau-ports = { workspace = true, default-features = false, features = ["serde"] }
-tau-runtime-core = { path = "../tau-runtime-core", default-features = false, features = ["wasm-interpreter"] }
+tau-runtime-core = { path = "../tau-runtime-core", default-features = false, features = ["wasm-interpreter", "tool-validation"] }
 tau-native-tools = { path = "../tau-native-tools", default-features = false }
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 serde_json = { workspace = true }
