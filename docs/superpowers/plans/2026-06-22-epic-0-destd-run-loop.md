@@ -57,9 +57,15 @@ Spec: [`docs/superpowers/specs/2026-06-22-epic-0-destd-run-loop-design.md`](../s
 
 - [ ] **Step 1: Add the module declaration to `lib.rs`**
 
-In `crates/tau-runtime-core/src/lib.rs`, after `pub mod builder;` (line ~22) add:
+`schema` is consumed ONLY by `tool_args`, which is itself gated
+`#[cfg(feature = "tool-validation")] pub mod tool_args;` (lib.rs:42–43). Mirror
+that gate exactly — gating avoids a dead-code warning (the crate is
+`#![deny(...)]` and CI runs clippy `-D warnings`) on the `wasm-interpreter`-only
+build where `tool_args` is absent. Add immediately after the `tool_args` line
+(lib.rs ~43):
 
 ```rust
+#[cfg(feature = "tool-validation")]
 mod schema;
 ```
 
@@ -700,14 +706,19 @@ fn annotations_are_ignored_not_errors() {
 - [ ] **Step 1: Confirm zero `std` in the new module**
 
 Run: `grep -nE '(^|[^a-zA-Z_])std::|use std' crates/tau-runtime-core/src/schema.rs`
-Expected: no output (no matches).
+Expected: no output (no matches). The module uses only `alloc::` / `core::` /
+`serde_json`, so it is `no_std`-clean by construction.
 
-- [ ] **Step 2: Confirm the crate still checks no_std with the module present**
+- [ ] **Step 2: Confirm the crate still compiles with the module present (default features)**
 
-Run: `timeout 180 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/main cargo check -p tau-runtime-core --no-default-features --features wasm-interpreter`
-Expected: clean. (The module is compiled because Task 6 will reference it under `tool-validation`, but `mod schema;` is unconditional, so this proves it builds no_std.)
+Run: `timeout 180 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/agent-impl cargo check -p tau-runtime-core`
+Expected: clean (default features include `tool-validation`, so `schema` compiles and is exercised by the Task 1–4 tests).
 
-NOTE: if Step 2 errors that `schema` is unused under `wasm-interpreter`, add `#![allow(dead_code)]`-free handling by leaving `mod schema;` unconditional — dead-code warnings are acceptable until Task 6 wires it; do NOT gate the module behind `tool-validation` (it must compile on the no_std path).
+NOTE: the definitive *no_std-with-validation* build proof is deferred to **Task 7 Step 4**
+(`--no-default-features --features wasm-interpreter,tool-validation`), because until Task 7
+removes `jsonschema`, the `tool-validation` feature still pulls std. At this task `schema`
+is gated behind `tool-validation` (mirroring `tool_args`), so the `wasm-interpreter`-only
+build simply omits it — no dead-code warning, nothing to prove yet.
 
 ### Task 6: Swap `ToolArgsValidator` internals + differential test
 
