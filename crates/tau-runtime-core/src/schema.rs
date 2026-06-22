@@ -171,19 +171,46 @@ fn compile_node(schema: &Value, pointer: &str) -> Result<Schema, CompileErr> {
     if let Some(t) = obj.get("type") {
         node.types = Some(parse_types(t, pointer)?);
     }
-    if let Some(Value::Object(props)) = obj.get("properties") {
-        for (k, sub) in props {
-            let child_ptr = format!("{pointer}/properties/{k}");
-            node.properties
-                .insert(k.clone(), compile_node(sub, &child_ptr)?);
-        }
-    }
-    if let Some(Value::Array(req)) = obj.get("required") {
-        for item in req {
-            if let Value::String(s) = item {
-                node.required.push(s.clone());
+    match obj.get("properties") {
+        Some(Value::Object(props)) => {
+            for (k, sub) in props {
+                let child_ptr = format!("{pointer}/properties/{k}");
+                node.properties
+                    .insert(k.clone(), compile_node(sub, &child_ptr)?);
             }
         }
+        Some(_) => {
+            return Err(CompileErr {
+                keyword: "properties".to_string(),
+                pointer: pointer.to_string(),
+                detail: "properties must be an object".to_string(),
+            })
+        }
+        None => {}
+    }
+    match obj.get("required") {
+        Some(Value::Array(req)) => {
+            for item in req {
+                match item {
+                    Value::String(s) => node.required.push(s.clone()),
+                    _ => {
+                        return Err(CompileErr {
+                            keyword: "required".to_string(),
+                            pointer: pointer.to_string(),
+                            detail: "required entries must be strings".to_string(),
+                        })
+                    }
+                }
+            }
+        }
+        Some(_) => {
+            return Err(CompileErr {
+                keyword: "required".to_string(),
+                pointer: pointer.to_string(),
+                detail: "required must be an array".to_string(),
+            })
+        }
+        None => {}
     }
 
     Ok(node)
@@ -213,8 +240,15 @@ fn parse_types(t: &Value, pointer: &str) -> Result<Vec<JsonType>, CompileErr> {
         Value::Array(arr) => {
             let mut out = Vec::new();
             for item in arr {
-                if let Value::String(s) = item {
-                    out.push(one(s, pointer)?);
+                match item {
+                    Value::String(s) => out.push(one(s, pointer)?),
+                    _ => {
+                        return Err(CompileErr {
+                            keyword: "type".to_string(),
+                            pointer: pointer.to_string(),
+                            detail: "type array must contain only strings".to_string(),
+                        })
+                    }
                 }
             }
             Ok(out)
@@ -317,5 +351,27 @@ mod tests {
         assert!(s
             .check(&v(serde_json::json!({ "anything": [1,2,3] })))
             .is_empty());
+    }
+
+    #[test]
+    fn malformed_type_array_fails_closed() {
+        assert!(compile(&v(serde_json::json!({ "type": [42, "string"] }))).is_err());
+    }
+
+    #[test]
+    fn malformed_required_entry_fails_closed() {
+        assert!(compile(&v(
+            serde_json::json!({ "type": "object", "required": [1, "x"] })
+        ))
+        .is_err());
+        assert!(compile(&v(serde_json::json!({ "type": "object", "required": "x" }))).is_err());
+    }
+
+    #[test]
+    fn non_object_properties_fails_closed() {
+        assert!(compile(&v(
+            serde_json::json!({ "type": "object", "properties": "oops" })
+        ))
+        .is_err());
     }
 }
