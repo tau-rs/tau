@@ -56,6 +56,7 @@
 - [tau as language (historical)](explanation/tau-as-language.md)
 - [Architecture overview](explanation/architecture-overview.md)
 - [Capabilities and consent](explanation/capabilities-and-consent.md)
+- [Contract compatibility & versioning](explanation/contract-compatibility.md)
 - [Crate map](explanation/crate-map.md)
 - [Escape hatches](explanation/escape-hatches.md)
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md)
