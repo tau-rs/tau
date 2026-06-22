@@ -12,6 +12,11 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+// `f64::round`/`fract`/`abs`/`max` are std-only inherent methods — absent in
+// no_std on real targets (e.g. wasm32-wasip2). FloatCore provides them for
+// no_std; call via UFCS (`FloatCore::round(x)`) so the import is also "used"
+// on host targets where the inherent methods would otherwise shadow it.
+use num_traits::float::FloatCore;
 use serde_json::Value;
 
 /// A compiled tool input_schema: an alloc-backed rule tree. no_std.
@@ -321,7 +326,9 @@ fn type_matches(ty: JsonType, value: &Value) -> bool {
         (JsonType::Integer, Value::Number(n)) => {
             n.as_i64().is_some()
                 || n.as_u64().is_some()
-                || n.as_f64().map(|f| f.fract() == 0.0).unwrap_or(false)
+                || n.as_f64()
+                    .map(|f| FloatCore::fract(f) == 0.0)
+                    .unwrap_or(false)
         }
         _ => false,
     }
@@ -394,8 +401,8 @@ fn check_node(node: &Schema, value: &Value, pointer: &str, out: &mut Vec<Violati
         }
         if let Some(m) = node.multiple_of {
             let ratio = n / m;
-            let rounded = ratio.round();
-            if (ratio - rounded).abs() > 1e-9 * ratio.abs().max(1.0) {
+            let rounded = FloatCore::round(ratio);
+            if FloatCore::abs(ratio - rounded) > 1e-9 * FloatCore::max(FloatCore::abs(ratio), 1.0) {
                 out.push(Violation {
                     pointer: pointer.to_string(),
                     message: format!("{n} not a multiple of {m}"),
