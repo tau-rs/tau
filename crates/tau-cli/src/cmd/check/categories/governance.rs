@@ -135,6 +135,7 @@ fn closed_world(
                         "agent '{}' references unregistered tool '{t}' — add [allow.tools.{t}]",
                         agent.id
                     ),
+                    t,
                     tau_toml,
                 ));
             }
@@ -147,6 +148,7 @@ fn closed_world(
                 "unregistered_tool_def",
                 "tau.governance.unregistered_tool_def",
                 &format!("tool '{name}' is defined but not registered in [allow.tools]"),
+                name,
                 tau_toml,
             ));
         }
@@ -161,6 +163,7 @@ fn closed_world(
                     &format!(
                         "[allow.tools.{name}] binds MCP '{mcp_name}' which is not registered in [allow.mcp]"
                     ),
+                    mcp_name,
                     tau_toml,
                 ));
             }
@@ -172,6 +175,7 @@ fn unregistered(
     check: &str,
     rule_id: &'static str,
     summary: &str,
+    subject: &str,
     tau_toml: &Path,
 ) -> CheckFinding {
     CheckFinding {
@@ -182,7 +186,7 @@ fn unregistered(
         detail: None,
         location: Some(loc(tau_toml)),
         remediation: Some("register the resource in the corresponding [allow.*] table".to_string()),
-        structured: json!({ "check": check }),
+        structured: json!({ "check": check, "subject": subject }),
     }
 }
 
@@ -194,7 +198,10 @@ fn synth_cap(kind: &str, allow: &[String]) -> Option<Capability> {
         _ => return None,
     };
     let v = json!({ "kind": kind, field: allow });
-    serde_json::from_value::<Capability>(v).ok()
+    Some(
+        serde_json::from_value::<Capability>(v)
+            .expect("synth_cap builds a valid Capability for known kinds"),
+    )
 }
 
 fn loc(tau_toml: &Path) -> FindingLocation {
