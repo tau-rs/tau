@@ -10,6 +10,7 @@
 
 pub(crate) mod glob_subset;
 pub mod subset;
+pub use subset::{capability_set_subset, CeilingViolation};
 
 use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
 
