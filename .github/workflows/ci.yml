@@ -398,6 +398,17 @@ jobs:
           fi
       - name: executor-agnostic smoke test
         run: cargo nextest run -p tau-runtime-core --test executor_agnostic_smoke
+      - name: run-loop no_std (with tool-validation) — EPIC 0 T9
+        # Prove that tool-arg validation RUNS (not just compiles) under the
+        # no_std feature set.  The test drives run_ir_streaming with a tool
+        # whose input_schema rejects the LLM's first args and asserts
+        # ToolCallCompleted { result: Err(_) } appears — proving the
+        # #[cfg(feature = "tool-validation")] block in stream.rs fires.
+        run: >-
+          cargo nextest run -p tau-runtime-core
+          --no-default-features
+          --features wasm-interpreter,tool-validation,test-fixtures
+          --test no_std_validation
 
   build-fixtures-linux:
     # Skip on tests-only PRs — downstream integration jobs that consume
