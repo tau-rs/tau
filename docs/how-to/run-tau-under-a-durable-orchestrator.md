@@ -151,6 +151,60 @@ orchestrator still owns *when* to retry, and tau's per-turn checkpoint
 narrows *how much* re-runs on each retry. Until that ships, keep
 per-invocation work bounded and side effects idempotent.
 
+## Opt-in per-agent checkpointing (EPIC 6.1 — intent form)
+
+For long-running agents that must survive a process restart *within* a
+single bundle invocation, tau provides an opt-in intent knob. Instead of
+declaring a full explicit checkpoint config, you give the agent a
+high-level **intent** and tau picks the right granularity and store for
+the run/build target:
+
+**TOML:**
+
+```toml
+[agents.fan]
+durable = "survive-restarts"
+```
+
+**TypeScript:**
+
+```ts
+export const fan = agent({
+  durable: "survive-restarts",
+});
+```
+
+The intent `"survive-restarts"` resolves per target. On targets that
+support persistence (e.g. `linux-native-strict`) the runtime resolves it
+to the coarsest granularity the target can durably provide; on targets
+that do not support checkpointing the build is refused with a clear
+diagnostic.
+
+If you need fine-grained control (e.g. `per_tool_call` checkpoints to a
+specific store), use the explicit sub-table form instead:
+
+```toml
+[agents.fan.durable]
+checkpoint = "per_tool_call"
+store = "file"
+```
+
+### Viewing the resolved durability
+
+`tau check --target <triple>` prints the resolved durability for each
+agent in the project, including which intent maps to which
+granularity/store pair for the requested target. Run it before `tau
+build` to verify the intent resolves as expected:
+
+```
+$ tau check --target linux-native-strict
+...
+[note] agent fan: durable survive-restarts → per_turn/file
+```
+
+If the target does not support durable execution, `tau check` emits an
+`error`-level finding instead, and the build will be refused.
+
 ## See also
 
 - The bundle format ([ADR-0035](../decisions/0035-bundle-format.md)) and

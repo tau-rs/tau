@@ -215,7 +215,7 @@ pub(crate) async fn run_via_ir(
     //     `--resume <id>` we load the latest committed checkpoint; on a fresh
     //     durable run we mint a run id and tell the operator how to resume.
     let mut dispatcher = ForwardingDispatcher::new(llm_backends, tools_by_id);
-    if entry_agent.durable.is_some() {
+    if let Some(durability) = entry_agent.durable.as_ref() {
         let store: Arc<dyn tau_ports::CheckpointStore> = Arc::new(
             tau_runtime_tokio::FileCheckpointStore::new(scope.path().to_path_buf()),
         );
@@ -253,7 +253,14 @@ pub(crate) async fn run_via_ir(
                 (rid, None)
             }
         };
-        dispatcher = dispatcher.with_durable(store, durable_run_id, resume);
+        // EPIC 6.1: resolve the agent's durability for THIS host's target and
+        // refuse to start a run we cannot make durable — symmetric with
+        // `tau check --target` failing at build time.
+        let host_target = tau_ports::target::TargetTriple::host();
+        let resolved = tau_runtime_core::resolve_durability(durability, &host_target)
+            .require_supported(&host_target)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        dispatcher = dispatcher.with_durable(store, durable_run_id, resume, resolved.checkpoint);
     }
     let dispatcher = Arc::new(dispatcher);
 
@@ -360,6 +367,8 @@ pub(crate) struct ForwardingDispatcher {
     durable_store: Option<Arc<dyn tau_ports::CheckpointStore>>,
     durable_run_id: Option<String>,
     durable_resume: Option<tau_ports::TurnCheckpoint>,
+    /// Host-resolved checkpoint granularity (EPIC 6.1). `None` for non-durable runs.
+    durable_granularity: Option<tau_ir::durable::CheckpointGranularity>,
 }
 
 impl ForwardingDispatcher {
@@ -373,6 +382,7 @@ impl ForwardingDispatcher {
             durable_store: None,
             durable_run_id: None,
             durable_resume: None,
+            durable_granularity: None,
         }
     }
 
@@ -384,10 +394,12 @@ impl ForwardingDispatcher {
         store: Arc<dyn tau_ports::CheckpointStore>,
         run_id: String,
         resume: Option<tau_ports::TurnCheckpoint>,
+        granularity: tau_ir::durable::CheckpointGranularity,
     ) -> Self {
         self.durable_store = Some(store);
         self.durable_run_id = Some(run_id);
         self.durable_resume = resume;
+        self.durable_granularity = Some(granularity);
         self
     }
 
@@ -404,6 +416,7 @@ impl ForwardingDispatcher {
             durable_store: None,
             durable_run_id: None,
             durable_resume: None,
+            durable_granularity: None,
         }
     }
 }
@@ -618,6 +631,7 @@ impl ToolDispatcher for ForwardingDispatcher {
             store: self.durable_store.clone()?,
             run_id: self.durable_run_id.clone()?,
             resume: self.durable_resume.clone(),
+            checkpoint: self.durable_granularity?,
         })
     }
 }

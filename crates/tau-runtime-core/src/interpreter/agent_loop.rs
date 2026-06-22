@@ -555,7 +555,7 @@ where
             run_options.checkpoint_store = Some(handles.store);
             run_options.run_id = Some(handles.run_id);
             run_options.resume_from = handles.resume;
-            run_options.durable_granularity = agent.durable.as_ref().map(|d| d.checkpoint);
+            run_options.durable_granularity = Some(handles.checkpoint);
         }
     }
 

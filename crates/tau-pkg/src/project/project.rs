@@ -206,12 +206,24 @@ pub struct UncheckedContextStep {
     pub determinism: Option<String>,
 }
 
-/// `[agents.<id>.durable]` sub-table (ADR-0053). Opts an agent into
-/// turn-level checkpoint/resume. `deny_unknown_fields` so a typo'd key
-/// fails the build rather than being silently dropped.
+/// `[agents.<id>.durable]` — either a bare intent string
+/// (`durable = "survive-restarts"`) or the explicit `{ checkpoint, store }`
+/// table (ADR-0053). Untagged: serde tries `Explicit` (a table) first, then
+/// `Intent` (a string).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum UncheckedDurable {
+    /// `[agents.<id>.durable] { checkpoint, store }`.
+    Explicit(UncheckedDurableExplicit),
+    /// `durable = "survive-restarts"`.
+    Intent(String),
+}
+
+/// Explicit durable table. `deny_unknown_fields` so a typo'd key fails the
+/// build rather than being silently dropped.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct UncheckedDurable {
+pub struct UncheckedDurableExplicit {
     /// Checkpoint granularity. A-minimal accepts `"per_turn"` or `"per_tool_call"`.
     pub checkpoint: String,
     /// Durable store. A-minimal accepts only `"file"`.
@@ -744,15 +756,19 @@ pub struct ContextStepEntry {
     pub config: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-/// Validated `[agents.<id>.durable]` block (ADR-0053). Present only when
-/// the agent opts into durable execution. Strings are validated to known
-/// values at parse time; lowering maps them to `tau_ir` enums.
+/// Validated `[agents.<id>.durable]` (ADR-0053 + EPIC 6.1). Present only
+/// when the agent opts into durable execution.
 #[derive(Debug, Clone)]
-pub struct DurableEntry {
-    /// Validated checkpoint granularity (`"per_turn"` or `"per_tool_call"`).
-    pub checkpoint: String,
-    /// Validated durable store (`"file"`).
-    pub store: String,
+pub enum DurableEntry {
+    /// Validated intent string (currently only `"survive-restarts"`).
+    Intent(String),
+    /// Validated explicit form. `checkpoint ∈ {per_turn, per_tool_call}`, `store == "file"`.
+    Explicit {
+        /// Validated checkpoint granularity.
+        checkpoint: String,
+        /// Validated durable store.
+        store: String,
+    },
 }
 
 /// Validated entry for a single agent.
@@ -1469,7 +1485,18 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
     // / stores later).
     let durable: Option<DurableEntry> = match raw.durable {
         None => None,
-        Some(d) => {
+        Some(UncheckedDurable::Intent(s)) => {
+            if s != "survive-restarts" {
+                return Err(ProjectConfigError::AgentValidation {
+                    id: id.clone(),
+                    message: format!(
+                        "durable {s:?} unsupported (accepts \"survive-restarts\" or an explicit {{ checkpoint, store }} table)"
+                    ),
+                });
+            }
+            Some(DurableEntry::Intent(s))
+        }
+        Some(UncheckedDurable::Explicit(d)) => {
             if d.checkpoint != "per_turn" && d.checkpoint != "per_tool_call" {
                 return Err(ProjectConfigError::AgentValidation {
                     id: id.clone(),
@@ -1488,7 +1515,7 @@ fn validate_agent(id: String, raw: UncheckedAgent) -> Result<AgentEntry, Project
                     ),
                 });
             }
-            Some(DurableEntry {
+            Some(DurableEntry::Explicit {
                 checkpoint: d.checkpoint,
                 store: d.store,
             })
@@ -4301,8 +4328,82 @@ judge_model  = "unknown_model"
         "#;
         let cfg = parse(toml).expect("valid per_tool_call durable");
         let agent = cfg.agents.get("a").unwrap();
-        let durable = agent.durable.as_ref().expect("durable present");
-        assert_eq!(durable.checkpoint, "per_tool_call");
+        match agent.durable.as_ref().expect("durable present") {
+            DurableEntry::Explicit { checkpoint, .. } => {
+                assert_eq!(checkpoint, "per_tool_call");
+            }
+            other => panic!("expected Explicit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn durable_accepts_intent_string() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [models.m]
+            backend = "p"
+            model = "m"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            model = "m"
+            durable = "survive-restarts"
+        "#;
+        let cfg = parse(toml).expect("valid intent durable");
+        let agent = cfg.agents.get("a").expect("agent a");
+        match agent.durable.as_ref().expect("durable present") {
+            DurableEntry::Intent(s) => assert_eq!(s, "survive-restarts"),
+            other => panic!("expected Intent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn durable_rejects_unknown_intent_string() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [models.m]
+            backend = "p"
+            model = "m"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            model = "m"
+            durable = "make-it-immortal"
+        "#;
+        let err = parse(toml).expect_err("unknown intent must fail");
+        assert!(
+            format!("{err}").contains("survive-restarts"),
+            "error should name the accepted intent, got: {err}"
+        );
+    }
+
+    #[test]
+    fn durable_explicit_table_still_parses() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [models.m]
+            backend = "p"
+            model = "m"
+            [agents.a]
+            display_name = "A"
+            package = "p@^0.1"
+            model = "m"
+            [agents.a.durable]
+            checkpoint = "per_turn"
+            store = "file"
+        "#;
+        let cfg = parse(toml).expect("valid explicit durable");
+        let agent = cfg.agents.get("a").expect("agent a");
+        match agent.durable.as_ref().expect("durable present") {
+            DurableEntry::Explicit { checkpoint, store } => {
+                assert_eq!(checkpoint, "per_turn");
+                assert_eq!(store, "file");
+            }
+            other => panic!("expected Explicit, got {other:?}"),
+        }
     }
 }
 
