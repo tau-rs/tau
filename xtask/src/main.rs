@@ -86,8 +86,7 @@ fn gen_ir_schema() -> Result<()> {
     eprintln!("xtask: regenerating schema/ir/ via schema_drift (bless mode) ...");
     let status = Command::new(env!("CARGO"))
         .args([
-            "nextest",
-            "run",
+            "test",
             "-p",
             "tau-ir",
             "--features",
