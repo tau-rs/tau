@@ -40,6 +40,8 @@ pub mod stream;
 pub mod vocabulary;
 
 #[cfg(feature = "tool-validation")]
+mod schema;
+#[cfg(feature = "tool-validation")]
 pub mod tool_args;
 
 pub use options::{RunOptions, TokenUsage};
