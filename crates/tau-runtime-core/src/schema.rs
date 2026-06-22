@@ -256,6 +256,23 @@ fn compile_node(schema: &Value, pointer: &str) -> Result<Schema, CompileErr> {
         }
     }
 
+    for (key, slot) in [("oneOf", 0u8), ("anyOf", 1), ("allOf", 2)] {
+        if let Some(Value::Array(arr)) = obj.get(key) {
+            let mut subs = Vec::new();
+            for (i, sub) in arr.iter().enumerate() {
+                subs.push(compile_node(sub, &format!("{pointer}/{key}/{i}"))?);
+            }
+            match slot {
+                0 => node.one_of = Some(subs),
+                1 => node.any_of = Some(subs),
+                _ => node.all_of = Some(subs),
+            }
+        }
+    }
+    if let Some(sub) = obj.get("not") {
+        node.not = Some(Box::new(compile_node(sub, &format!("{pointer}/not"))?));
+    }
+
     Ok(node)
 }
 
@@ -320,6 +337,12 @@ fn type_matches(ty: JsonType, value: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+fn passes(node: &Schema, value: &Value) -> bool {
+    let mut scratch = Vec::new();
+    check_node(node, value, "", &mut scratch);
+    scratch.is_empty()
 }
 
 fn check_node(node: &Schema, value: &Value, pointer: &str, out: &mut Vec<Violation>) {
@@ -443,6 +466,41 @@ fn check_node(node: &Schema, value: &Value, pointer: &str, out: &mut Vec<Violati
             for (i, item) in arr.iter().enumerate() {
                 check_node(item_schema, item, &format!("{pointer}/{i}"), out);
             }
+        }
+    }
+    if let Some(subs) = &node.one_of {
+        let n = subs.iter().filter(|s| passes(s, value)).count();
+        if n != 1 {
+            out.push(Violation {
+                pointer: pointer.to_string(),
+                message: format!("value must match exactly one oneOf branch, matched {n}"),
+            });
+        }
+    }
+    if let Some(subs) = &node.any_of {
+        if !subs.iter().any(|s| passes(s, value)) {
+            out.push(Violation {
+                pointer: pointer.to_string(),
+                message: "value matched no anyOf branch".to_string(),
+            });
+        }
+    }
+    if let Some(subs) = &node.all_of {
+        for (i, s) in subs.iter().enumerate() {
+            if !passes(s, value) {
+                out.push(Violation {
+                    pointer: format!("{pointer}/allOf/{i}"),
+                    message: "value failed an allOf branch".to_string(),
+                });
+            }
+        }
+    }
+    if let Some(sub) = &node.not {
+        if passes(sub, value) {
+            out.push(Violation {
+                pointer: pointer.to_string(),
+                message: "value matched a `not` schema".to_string(),
+            });
         }
     }
     if let Value::Object(map) = value {
@@ -626,6 +684,53 @@ mod tests {
     fn non_positive_multiple_of_fails_closed() {
         assert!(compile(&v(serde_json::json!({ "multipleOf": 0 }))).is_err());
         assert!(compile(&v(serde_json::json!({ "multipleOf": -2 }))).is_err());
+    }
+
+    #[test]
+    fn one_of_discriminated_union_like_fs_write() {
+        let s = compile(&v(serde_json::json!({
+            "type": "object",
+            "oneOf": [
+                { "properties": { "mode": { "const": "write" }, "path": { "type": "string" } },
+                  "required": ["mode", "path"], "additionalProperties": false },
+                { "properties": { "mode": { "const": "edit" }, "old": { "type": "string" } },
+                  "required": ["mode", "old"], "additionalProperties": false }
+            ]
+        })))
+        .unwrap();
+        assert!(s
+            .check(&v(serde_json::json!({ "mode": "write", "path": "/a" })))
+            .is_empty());
+        assert!(s
+            .check(&v(serde_json::json!({ "mode": "edit", "old": "x" })))
+            .is_empty());
+        // matches neither branch (missing required) → violation
+        assert!(!s
+            .check(&v(serde_json::json!({ "mode": "write" })))
+            .is_empty());
+        // matches both would also fail oneOf, but const mode makes that impossible here
+    }
+
+    #[test]
+    fn any_of_all_of_not() {
+        let s = compile(&v(
+            serde_json::json!({ "anyOf": [ { "type": "string" }, { "type": "integer" } ] }),
+        ))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!("x"))).is_empty());
+        assert!(s.check(&v(serde_json::json!(3))).is_empty());
+        assert!(!s.check(&v(serde_json::json!(true))).is_empty());
+
+        let s = compile(&v(
+            serde_json::json!({ "allOf": [ { "type": "integer" }, { "minimum": 0 } ] }),
+        ))
+        .unwrap();
+        assert!(s.check(&v(serde_json::json!(5))).is_empty());
+        assert!(!s.check(&v(serde_json::json!(-1))).is_empty());
+
+        let s = compile(&v(serde_json::json!({ "not": { "type": "string" } }))).unwrap();
+        assert!(s.check(&v(serde_json::json!(3))).is_empty());
+        assert!(!s.check(&v(serde_json::json!("x"))).is_empty());
     }
 
     #[test]
