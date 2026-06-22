@@ -16,7 +16,7 @@
 //!   `import host;` that refers to a named interface in the same package is
 //!   stored as `WorldKey::Interface(id)`, NOT `WorldKey::Name("host")`.
 //!   `Resolve::name_world_key` resolves either variant to a human-readable
-//!   name (e.g. `"tau:run/host@0.1.0"`), so we use that rather than
+//!   name (e.g. `"tau:host/host@0.1.0"`), so we use that rather than
 //!   `format!("{k:?}")` to reliably detect "host" and "run".
 
 use std::collections::BTreeSet;
@@ -34,28 +34,28 @@ const HOST_PORT_REGISTRY: &[(&str, &str)] = &[
 
 fn wit_path() -> PathBuf {
     // CARGO_MANIFEST_DIR = crates/tau-wasm-host ; repo root is two levels up.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../wit/tau-run.wit")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../wit/tau-host.wit")
 }
 
 fn load() -> Resolve {
     let mut resolve = Resolve::new();
-    // tau-run.wit is self-contained (no package deps), so push_file suffices.
+    // tau-host.wit is self-contained (no package deps), so push_file suffices.
     resolve
         .push_file(wit_path())
-        .expect("parse wit/tau-run.wit");
+        .expect("parse wit/tau-host.wit");
     resolve
 }
 
 #[test]
-fn package_is_tau_run_0_1_0() {
+fn package_is_tau_host_0_1_0() {
     let resolve = load();
     let pkg = resolve.packages.iter().next().expect("one package").1;
     assert_eq!(pkg.name.namespace, "tau");
-    assert_eq!(pkg.name.name, "run");
+    assert_eq!(pkg.name.name, "host");
     assert_eq!(
         pkg.name.version.as_ref().map(|v| v.to_string()),
         Some("0.1.0".to_string()),
-        "embedding-contract version (ADR-0056) must stay tau:run@0.1.0"
+        "embedding-contract version (ADR-0056) must stay tau:host@0.1.0"
     );
 }
 
@@ -73,7 +73,7 @@ fn host_interface_is_frozen_to_the_three_functions() {
     let want: BTreeSet<&str> = HOST_PORT_REGISTRY.iter().map(|(f, _)| *f).collect();
     assert_eq!(
         got, want,
-        "host surface drifted; update wit/tau-run.wit AND host_ports.rs AND this \
+        "host surface drifted; update wit/tau-host.wit AND host_ports.rs AND this \
          test + the registry deliberately (ADR-0056 freeze)"
     );
 }
