@@ -38,6 +38,7 @@ pub fn render(
                 Severity::Error => by_error += 1,
                 Severity::NeedsSetup => by_setup += 1,
                 Severity::Warning => {}
+                Severity::Note => {}
             }
         }
         push_line(&mut out, &check_finished_event(r));
@@ -80,6 +81,7 @@ fn finding_to_json(f: &crate::cmd::check::result::CheckFinding) -> Value {
             Severity::Error => "error",
             Severity::NeedsSetup => "needs-setup",
             Severity::Warning => "warning",
+            Severity::Note => "note",
         },
         "rule_id": f.rule_id,
         "summary": f.summary,

@@ -77,6 +77,11 @@ pub async fn run_sandbox(ctx: &CheckCtx) -> CheckResult {
         };
         let profile = entry.profile();
 
+        // EPIC 6.1: print the host-resolved durability per durable agent.
+        if let Some(project) = &ctx.project {
+            findings.extend(durability_findings(&project.agents, target));
+        }
+
         // Reserved → advisory Warning, but still validate against documented matrix.
         if let tau_ports::target::TripleStatus::Reserved { reason } = entry.status {
             findings.push(CheckFinding {
@@ -350,6 +355,169 @@ fn tier_le(a: tau_pkg::scope::SandboxRequiredTier, b: tau_ports::CapabilityTier)
         _ => 0,
     };
     req_rank <= to_rank(b)
+}
+
+/// Build the per-agent durability resolution findings for `tau check --target`.
+/// Honored → an informational `Note`; Unsupported → an `Error`.
+fn durability_findings(
+    agents: &std::collections::BTreeMap<String, tau_pkg::project::AgentEntry>,
+    target: &tau_ports::target::TargetTriple,
+) -> Vec<CheckFinding> {
+    use tau_runtime_core::Support;
+    let mut out = Vec::new();
+    for (id, agent) in agents {
+        let Some(entry) = agent.durable.as_ref() else {
+            continue;
+        };
+        let durability = tau_ir_lower::durable_entry_to_ir(entry);
+        let resolved = tau_runtime_core::resolve_durability(&durability, target);
+        let form = if resolved.from_intent.is_some() {
+            "intent"
+        } else {
+            "explicit"
+        };
+        let ckpt = match resolved.checkpoint {
+            tau_ir::durable::CheckpointGranularity::PerTurn => "per_turn",
+            tau_ir::durable::CheckpointGranularity::PerToolCall => "per_tool_call",
+            _ => "per_turn",
+        };
+        let store = match resolved.store {
+            tau_ir::durable::DurableStore::File => "file",
+            _ => "file",
+        };
+        let detail = match resolved.from_intent {
+            Some(_) => format!("survive-restarts → {ckpt} checkpoints, {store} store"),
+            None => format!("explicit {ckpt} + {store}"),
+        };
+        #[allow(unreachable_patterns)]
+        match resolved.support {
+            Support::Honored => out.push(CheckFinding {
+                category: CheckCategory::Sandbox,
+                severity: Severity::Note,
+                rule_id: "tau.durability.resolved",
+                summary: format!("{id}: {detail}  [resolved for {target}]"),
+                detail: None,
+                location: None,
+                remediation: None,
+                structured: json!({
+                    "kind": "DurabilityResolved",
+                    "agent": id,
+                    "form": form,
+                    "checkpoint": ckpt,
+                    "store": store,
+                    "support": "honored",
+                    "target": target.to_string(),
+                }),
+            }),
+            Support::Unsupported { reason } => out.push(CheckFinding {
+                category: CheckCategory::Sandbox,
+                severity: Severity::Error,
+                rule_id: "tau.durability.unsupported",
+                summary: format!("{id}: target `{target}` cannot honor durability: {reason}"),
+                detail: None,
+                location: None,
+                remediation: None,
+                structured: json!({
+                    "kind": "DurabilityUnsupported",
+                    "agent": id,
+                    "support": "unsupported",
+                    "reason": reason,
+                    "target": target.to_string(),
+                }),
+            }),
+            _ => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use tau_pkg::project::project::{AgentEntry, DurableEntry, PromptEntry, RequiresEntry};
+
+    fn agent_with_durable(id: &str, durable: DurableEntry) -> AgentEntry {
+        let mut entry = AgentEntry::new(
+            id.to_string(),
+            id.to_string(),
+            "p@^0.1".to_string(),
+            RequiresEntry::default(),
+            BTreeMap::new(),
+            PromptEntry::None,
+            vec![],
+        );
+        entry.durable = Some(durable);
+        entry.model = "default".to_string();
+        entry
+    }
+
+    #[test]
+    fn durability_findings_intent_yields_note_with_survive_restarts() {
+        let mut agents: BTreeMap<String, AgentEntry> = BTreeMap::new();
+        agents.insert(
+            "bot".to_string(),
+            agent_with_durable("bot", DurableEntry::Intent("survive-restarts".to_string())),
+        );
+        let target: tau_ports::target::TargetTriple = "any-wasi-strict".parse().unwrap();
+        let findings = durability_findings(&agents, &target);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Note);
+        assert_eq!(findings[0].rule_id, "tau.durability.resolved");
+        assert!(
+            findings[0].summary.contains("survive-restarts"),
+            "summary: {}",
+            findings[0].summary
+        );
+        assert!(
+            findings[0].summary.contains("per_turn"),
+            "summary: {}",
+            findings[0].summary
+        );
+    }
+
+    #[test]
+    fn durability_findings_explicit_yields_note() {
+        let mut agents: BTreeMap<String, AgentEntry> = BTreeMap::new();
+        agents.insert(
+            "bot2".to_string(),
+            agent_with_durable(
+                "bot2",
+                DurableEntry::Explicit {
+                    checkpoint: "per_tool_call".to_string(),
+                    store: "file".to_string(),
+                },
+            ),
+        );
+        let target: tau_ports::target::TargetTriple = "passthrough".parse().unwrap();
+        let findings = durability_findings(&agents, &target);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Note);
+        assert_eq!(findings[0].rule_id, "tau.durability.resolved");
+        assert!(
+            findings[0].summary.contains("per_tool_call"),
+            "summary: {}",
+            findings[0].summary
+        );
+    }
+
+    #[test]
+    fn durability_findings_no_durable_yields_no_findings() {
+        let mut agents: BTreeMap<String, AgentEntry> = BTreeMap::new();
+        let entry = AgentEntry::new(
+            "nodurable".to_string(),
+            "no durable".to_string(),
+            "p@^0.1".to_string(),
+            RequiresEntry::default(),
+            BTreeMap::new(),
+            PromptEntry::None,
+            vec![],
+        );
+        agents.insert("nodurable".to_string(), entry);
+        let target: tau_ports::target::TargetTriple = "passthrough".parse().unwrap();
+        let findings = durability_findings(&agents, &target);
+        assert!(findings.is_empty());
+    }
 }
 
 fn build_plan_finding(

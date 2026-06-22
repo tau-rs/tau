@@ -428,32 +428,40 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context
     Some(cfg)
 }
 
-/// Lower the validated `[agents.<id>.durable]` block into an IR
-/// [`tau_ir::durable::Durability`] (ADR-0053). `None` when the agent is
-/// not durable. tau-pkg's validator guarantees the strings are known
-/// values, so the mapping is total; the wildcard arms are
-/// defense-in-depth and resolve to the A-minimal defaults.
-fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable::Durability> {
+/// Convert a validated tau-pkg [`DurableEntry`] into the IR
+/// [`tau_ir::durable::Durability`] (ADR-0053).
+///
+/// tau-pkg's validator guarantees the strings are known values, so the
+/// mapping is total; the wildcard arms are defense-in-depth and resolve
+/// to the A-minimal defaults.
+pub fn durable_entry_to_ir(
+    entry: &tau_pkg::project::project::DurableEntry,
+) -> tau_ir::durable::Durability {
     use tau_ir::durable::{CheckpointGranularity, Durability, DurabilityIntent, DurableStore};
     use tau_pkg::project::project::DurableEntry;
-    match entry.durable.as_ref()? {
+    match entry {
         DurableEntry::Intent(s) => {
             // tau-pkg validated the string; the mapping is total.
             debug_assert_eq!(s, "survive-restarts");
-            Some(Durability::Intent(DurabilityIntent::SurviveRestarts))
+            Durability::Intent(DurabilityIntent::SurviveRestarts)
         }
-        DurableEntry::Explicit { checkpoint, store } => {
+        DurableEntry::Explicit { checkpoint, store: _ } => {
             // tau-pkg validated both strings; wildcard arms are defence-in-depth.
             let checkpoint = match checkpoint.as_str() {
                 "per_tool_call" => CheckpointGranularity::PerToolCall,
                 _ => CheckpointGranularity::PerTurn,
             };
-            let store = match store.as_str() {
-                _ => DurableStore::File,
-            };
-            Some(Durability::Explicit { checkpoint, store })
+            let store = DurableStore::File;
+            Durability::Explicit { checkpoint, store }
         }
     }
+}
+
+/// Lower the validated `[agents.<id>.durable]` block into an IR
+/// [`tau_ir::durable::Durability`] (ADR-0053). `None` when the agent is
+/// not durable.
+fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable::Durability> {
+    entry.durable.as_ref().map(durable_entry_to_ir)
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].
