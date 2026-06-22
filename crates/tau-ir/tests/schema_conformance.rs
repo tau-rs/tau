@@ -32,3 +32,17 @@ fn invalid_samples_are_rejected() {
         assert!(!v.is_valid(&inst), "invalid/{name}.json should be rejected");
     }
 }
+
+#[test]
+fn valid_samples_deserialize_through_tau_ir() {
+    for name in ["minimal", "agents-tools", "triggers", "durable"] {
+        let raw =
+            std::fs::read_to_string(dir().join(format!("conformance/valid/{name}.json"))).unwrap();
+        let parsed: Result<tau_ir::module::IrModule, _> = serde_json::from_str(&raw);
+        assert!(
+            parsed.is_ok(),
+            "valid/{name}.json must deserialize into IrModule: {:?}",
+            parsed.err()
+        );
+    }
+}

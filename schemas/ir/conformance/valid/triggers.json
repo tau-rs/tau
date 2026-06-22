@@ -1,7 +1,7 @@
 {
   "ir_format": "v2.2.0",
   "tau_version": "0.0.0",
-  "target": "x86_64-unknown-linux-native-strict",
+  "target": "linux-native-strict",
   "workflow": {
     "agents": {
       "summarizer": {

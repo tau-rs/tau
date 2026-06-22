@@ -19,9 +19,16 @@ fn generate_ir_schema() -> serde_json::Value {
     let obj = v.as_object_mut().unwrap();
     obj.insert(
         "$id".into(),
-        "https://lebocqtitouan.github.io/tau/schemas/ir/v2.2.0/tau-ir.schema.json".into(),
+        format!(
+            "https://lebocqtitouan.github.io/tau/schemas/ir/{}/tau-ir.schema.json",
+            IrFormatVersion::CURRENT
+        )
+        .into(),
     );
-    obj.insert("title".into(), "tau IR module (ir_format v2.2.0)".into());
+    obj.insert(
+        "title".into(),
+        format!("tau IR module (ir_format {})", IrFormatVersion::CURRENT).into(),
+    );
     obj.insert("x-tau-ir-format".into(), IrFormatVersion::CURRENT.into());
     v
 }
