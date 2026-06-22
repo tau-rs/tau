@@ -4412,6 +4412,7 @@ dependencies = [
  "chrono",
  "foldhash",
  "hashbrown 0.17.1",
+ "jsonschema",
  "serde",
  "serde_json",
  "sha2 0.11.0",
