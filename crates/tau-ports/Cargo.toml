@@ -14,6 +14,7 @@ thiserror    = { workspace = true }
 futures-core = { workspace = true }
 uuid         = { workspace = true }
 serde        = { workspace = true, optional = true }
+schemars     = { workspace = true, optional = true }
 chrono = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 zeroize = { workspace = true }
 tempfile     = { workspace = true, optional = true }
@@ -23,6 +24,7 @@ tracing = { workspace = true, default-features = false, features = ["attributes"
 default       = ["process"]
 process       = []
 serde         = ["dep:serde", "tau-domain/serde", "uuid/serde"]
+schema        = ["dep:schemars"]
 test-fixtures = ["dep:tempfile"]
 
 [dev-dependencies]
