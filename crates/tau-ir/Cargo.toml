@@ -23,8 +23,9 @@ sha2       = { workspace = true, default-features = false }
 schemars   = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
-tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
-tau-ports  = { workspace = true, features = ["serde"] }
+tau-domain  = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-ports   = { workspace = true, features = ["serde"] }
+jsonschema  = { workspace = true }
 
 [features]
 # Pure no_std by default — `tau-runtime-core` and the wasm guest link this.

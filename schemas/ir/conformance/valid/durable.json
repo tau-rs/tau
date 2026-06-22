@@ -1,0 +1,49 @@
+{
+  "ir_format": "v2.2.0",
+  "tau_version": "0.0.0",
+  "target": "x86_64-unknown-linux-native-strict",
+  "workflow": {
+    "agents": {
+      "fan-monitor": {
+        "id": "fan-monitor",
+        "prompt": "Monitor the fan data stream and checkpoint your progress.",
+        "model_ref": {
+          "backend": "anthropic",
+          "model_id": "claude-haiku-4-5"
+        },
+        "tool_refs": [],
+        "context": null,
+        "budget": {
+          "max_turns": null,
+          "max_tokens": 100000
+        },
+        "durable": {
+          "checkpoint": "per_turn",
+          "store": "file"
+        }
+      },
+      "precise-agent": {
+        "id": "precise-agent",
+        "prompt": "Execute tool calls with per-tool-call checkpointing.",
+        "model_ref": {
+          "backend": "anthropic",
+          "model_id": "claude-haiku-4-5"
+        },
+        "tool_refs": [],
+        "context": null,
+        "budget": {
+          "max_turns": 10,
+          "max_tokens": null
+        },
+        "durable": {
+          "checkpoint": "per_tool_call",
+          "store": "file"
+        }
+      }
+    },
+    "tools": {},
+    "steps": {},
+    "edges": [],
+    "capability_table": {}
+  }
+}

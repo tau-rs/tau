@@ -4380,6 +4380,7 @@ dependencies = [
  "chrono",
  "foldhash",
  "hashbrown 0.17.1",
+ "jsonschema",
  "schemars",
  "serde",
  "serde_json",

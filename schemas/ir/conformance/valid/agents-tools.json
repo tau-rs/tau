@@ -1,0 +1,291 @@
+{
+  "ir_format": "v2.2.0",
+  "tau_version": "0.0.0",
+  "target": "x86_64-unknown-linux-native-strict",
+  "workflow": {
+    "agents": {
+      "main": {
+        "id": "main",
+        "prompt": "You are a helpful assistant.",
+        "model_ref": {
+          "backend": "anthropic",
+          "model_id": "claude-sonnet-4-5"
+        },
+        "tool_refs": [
+          "read_file",
+          "write_file",
+          "exec_binary",
+          "fetch_url",
+          "run_cmd",
+          "spawn_agent",
+          "spawn_skill",
+          "list_tasks",
+          "read_plan",
+          "custom_tool"
+        ],
+        "context": null,
+        "budget": {
+          "max_turns": 20,
+          "max_tokens": null
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "result": { "type": "string" }
+          }
+        }
+      }
+    },
+    "tools": {
+      "read_file": {
+        "id": "read_file",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "ReadFile" },
+            "content_hash": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "fs.read", "paths": ["/tmp/**", "/var/log/**"] }
+          ]
+        },
+        "spec": {
+          "name": "read_file",
+          "description": "Read a file from the filesystem.",
+          "input_schema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+        }
+      },
+      "write_file": {
+        "id": "write_file",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "WriteFile" },
+            "content_hash": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "fs.write", "paths": ["/tmp/**"], "max_bytes": 1048576 }
+          ]
+        },
+        "spec": {
+          "name": "write_file",
+          "description": "Write content to a file.",
+          "input_schema": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] }
+        }
+      },
+      "exec_binary": {
+        "id": "exec_binary",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "ExecBinary" },
+            "content_hash": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "fs.exec", "paths": ["/usr/bin/**"] }
+          ]
+        },
+        "spec": {
+          "name": "exec_binary",
+          "description": "Execute a binary.",
+          "input_schema": { "type": "object", "properties": { "cmd": { "type": "string" } }, "required": ["cmd"] }
+        }
+      },
+      "fetch_url": {
+        "id": "fetch_url",
+        "impl_": {
+          "Mcp": {
+            "url": "https://mcp.example.com",
+            "contract_hash": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1, 2],
+            "capability_subset": {
+              "declared": [
+                { "kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET", "POST"] }
+              ]
+            },
+            "server_tool_name": "fetch"
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET", "POST"] }
+          ]
+        },
+        "spec": {
+          "name": "fetch_url",
+          "description": "Fetch a URL.",
+          "input_schema": { "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"] }
+        }
+      },
+      "run_cmd": {
+        "id": "run_cmd",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "RunCmd" },
+            "content_hash": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1, 2, 3]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "process.spawn", "commands": ["git", "cargo"] }
+          ]
+        },
+        "spec": {
+          "name": "run_cmd",
+          "description": "Run a shell command.",
+          "input_schema": { "type": "object", "properties": { "args": { "type": "array", "items": { "type": "string" } } }, "required": ["args"] }
+        }
+      },
+      "spawn_agent": {
+        "id": "spawn_agent",
+        "impl_": {
+          "Subflow": {
+            "target": "main"
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "agent.spawn", "allowed_kinds": ["worker", "critic"] }
+          ]
+        },
+        "spec": {
+          "name": "spawn_agent",
+          "description": "Spawn a sub-agent.",
+          "input_schema": { "type": "object", "properties": {} }
+        }
+      },
+      "spawn_skill": {
+        "id": "spawn_skill",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "SkillSpawn" },
+            "content_hash": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1, 2, 3, 4]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "skill.spawn", "allowed_skills": ["critic", "fact-checker"] }
+          ]
+        },
+        "spec": {
+          "name": "spawn_skill",
+          "description": "Spawn an installed skill.",
+          "input_schema": { "type": "object", "properties": { "skill_name": { "type": "string" } }, "required": ["skill_name"] }
+        }
+      },
+      "list_tasks": {
+        "id": "list_tasks",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "TaskList" },
+            "content_hash": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1, 2, 3, 4, 5]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "task_list", "mode": "read" }
+          ]
+        },
+        "spec": {
+          "name": "list_tasks",
+          "description": "List the current run's tasks.",
+          "input_schema": { "type": "object", "properties": {} }
+        }
+      },
+      "read_plan": {
+        "id": "read_plan",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "ReadPlan" },
+            "content_hash": [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1, 2, 3, 4, 5, 6]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "plan", "mode": "write" }
+          ]
+        },
+        "spec": {
+          "name": "read_plan",
+          "description": "Read or write the run's plan scratchpad.",
+          "input_schema": { "type": "object", "properties": {} }
+        }
+      },
+      "custom_tool": {
+        "id": "custom_tool",
+        "impl_": {
+          "Native": {
+            "fn_ref": { "name": "CustomTool" },
+            "content_hash": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 1, 2, 3, 4, 5, 6, 7]
+          }
+        },
+        "capabilities": {
+          "declared": [
+            { "kind": "mcp.tool.use" }
+          ]
+        },
+        "spec": {
+          "name": "custom_tool",
+          "description": "A custom capability tool.",
+          "input_schema": { "type": "object", "properties": {} }
+        }
+      }
+    },
+    "steps": {},
+    "edges": [],
+    "capability_table": {
+      "read_file": {
+        "declared": [
+          { "kind": "fs.read", "paths": ["/tmp/**", "/var/log/**"] }
+        ]
+      },
+      "write_file": {
+        "declared": [
+          { "kind": "fs.write", "paths": ["/tmp/**"], "max_bytes": 1048576 }
+        ]
+      },
+      "exec_binary": {
+        "declared": [
+          { "kind": "fs.exec", "paths": ["/usr/bin/**"] }
+        ]
+      },
+      "fetch_url": {
+        "declared": [
+          { "kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET", "POST"] }
+        ]
+      },
+      "run_cmd": {
+        "declared": [
+          { "kind": "process.spawn", "commands": ["git", "cargo"] }
+        ]
+      },
+      "spawn_agent": {
+        "declared": [
+          { "kind": "agent.spawn", "allowed_kinds": ["worker", "critic"] }
+        ]
+      },
+      "spawn_skill": {
+        "declared": [
+          { "kind": "skill.spawn", "allowed_skills": ["critic", "fact-checker"] }
+        ]
+      },
+      "list_tasks": {
+        "declared": [
+          { "kind": "task_list", "mode": "read" }
+        ]
+      },
+      "read_plan": {
+        "declared": [
+          { "kind": "plan", "mode": "write" }
+        ]
+      },
+      "custom_tool": {
+        "declared": [
+          { "kind": "mcp.tool.use" }
+        ]
+      }
+    }
+  }
+}
