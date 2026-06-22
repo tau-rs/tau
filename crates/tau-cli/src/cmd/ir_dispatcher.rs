@@ -253,16 +253,17 @@ pub(crate) async fn run_via_ir(
                 (rid, None)
             }
         };
-        // Resolve the agent's Durability intent to a concrete granularity for
-        // the host target (EPIC 6.1). Defaults to PerTurn on resolution failure
-        // (future-proof: unknown intent variants from newer IR versions).
+        // EPIC 6.1: resolve the agent's durability for THIS host's target and
+        // refuse to start a run we cannot make durable — symmetric with
+        // `tau check --target` failing at build time.
         let host_target = tau_ports::target::TargetTriple::host();
-        let granularity = if let Some(d) = &entry_agent.durable {
-            tau_runtime_core::resolve_durability(d, &host_target).checkpoint
-        } else {
-            tau_ir::durable::CheckpointGranularity::PerTurn
-        };
-        dispatcher = dispatcher.with_durable(store, durable_run_id, resume, granularity);
+        let resolved = tau_runtime_core::resolve_durability(
+            entry_agent.durable.as_ref().expect("durable present in this branch"),
+            &host_target,
+        )
+        .require_supported(&host_target)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        dispatcher = dispatcher.with_durable(store, durable_run_id, resume, resolved.checkpoint);
     }
     let dispatcher = Arc::new(dispatcher);
 
