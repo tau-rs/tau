@@ -31,10 +31,6 @@ async-stream = { workspace = true }
 # narrowing). std-only (aho-corasick/regex) → optional, gated behind
 # `host-fs` (the feature its only caller `resolve_skill_for_spawn` needs).
 globset      = { workspace = true, optional = true }
-# Optional: used by the `tool-validation` feature (jsonschema-based tool
-# args pre-compilation). Both are std-only so they gate behind the feature.
-jsonschema   = { workspace = true, optional = true }
-
 [features]
 # `process` makes ProcessCapabilityGate wire-up available; pulled in via
 # tau-ports' `process` feature. Host shells (tau-runtime-tokio) keep this on.
@@ -42,19 +38,25 @@ process            = ["tau-ports/process"]
 # `capability-override` enables override-aware capability resolution wiring.
 capability-override = []
 # `wasm-interpreter` exposes `interpreter` and `stream` without std (no
-# jsonschema, no `AgentInstanceId::new`/`Message::new`). Used by the no_std
-# wasm guest to drive `run_ir_streaming` and serialize `RunEvent`. All
+# `AgentInstanceId::new`/`Message::new`). Used by the no_std wasm guest to
+# drive `run_ir_streaming` and serialize `RunEvent`. All
 # `Message::new`/`AgentInstanceId::new` calls in these modules are replaced by
 # no_std-safe `ids::message_id`/`ids::agent_instance_id` helpers.
 wasm-interpreter   = []
-# `tool-validation` enables ADR-0010 jsonschema-based tool args validation
-# (jsonschema is std-only). Implies `wasm-interpreter` (stream + interpreter
-# are a superset already; gating them behind tool-validation is now just an
-# additive alias so nothing breaks for existing callers).
-tool-validation    = ["wasm-interpreter", "dep:jsonschema", "tau-domain/std"]
+# `tool-validation` enables ADR-0010 no_std tool args validation (EPIC 0).
+# Implies `wasm-interpreter` (stream + interpreter are a superset already;
+# gating them behind tool-validation is now just an additive alias so nothing
+# breaks for existing callers).
+tool-validation    = ["wasm-interpreter"]
 # `host-fs` enables code paths that consume std::path::PathBuf scope-roots
 # and read skill markdown via std::fs. Embassy ships without this feature.
-host-fs            = ["dep:globset"]
+# It is a host-only (std) path: its skill-resolution code uses the std-only
+# `tau-domain` ctors (`Message::new`/`AgentInstanceId::new`, needing wall-clock
+# + `uuid::now_v7`), so pull `tau-domain/std` here. The no_std guest build
+# enables neither `host-fs` nor any std, so it stays std-free. (Before EPIC 0
+# this std came incidentally via `tool-validation -> tau-domain/std`, removed
+# in PR-0b.)
+host-fs            = ["dep:globset", "tau-domain/std"]
 
 default = ["process", "capability-override", "tool-validation", "host-fs"]
 # Activates DeterministicRandom fallback in invoke_tool for test paths.

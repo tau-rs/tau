@@ -13,7 +13,7 @@
 
 extern crate alloc;
 
-#[cfg(any(test, feature = "host-fs", feature = "tool-validation"))]
+#[cfg(any(test, feature = "host-fs"))]
 extern crate std;
 
 pub mod error;
@@ -39,6 +39,8 @@ pub mod stream;
 #[doc(hidden)]
 pub mod vocabulary;
 
+#[cfg(feature = "tool-validation")]
+mod schema;
 #[cfg(feature = "tool-validation")]
 pub mod tool_args;
 
