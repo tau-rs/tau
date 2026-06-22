@@ -20,6 +20,7 @@ use crate::ids::ToolId;
 /// across the boundary. Future evolution (capability narrowing in the IR
 /// pre-hash, etc.) lands here.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CapabilityRequirements {
     /// Declared capabilities; order is taken from the source TOML verbatim
     /// (capability list order is taken from the source TOML verbatim; two
@@ -35,4 +36,5 @@ pub struct CapabilityRequirements {
 /// by the capability-fit check (D-3b) and embedded in the bundle's
 /// `tau.caps` custom section (D-3).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CapabilityTable(pub BTreeMap<ToolId, CapabilityRequirements>);

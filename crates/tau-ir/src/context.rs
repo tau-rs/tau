@@ -19,6 +19,7 @@ use serde_json::Value;
 /// placeholder.
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ContextConfig {
     /// Ordered transformers, applied top-to-bottom each turn. The last
     /// step must be the builtin `fit_budget` (typecheck-enforced).
@@ -28,6 +29,7 @@ pub struct ContextConfig {
 
 /// One node in a context pipeline.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ContextStep {
     /// Transformer name. For builtins: `trim_old`, `compact_tool_outputs`,
     /// `fit_budget`. For custom nodes: the user-chosen step name.
@@ -47,6 +49,7 @@ pub struct ContextStep {
 /// (`tau_runtime_core::context::ContextTransformer::determinism`).
 /// Defined here so both crates use one definition (no drift).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum DeterminismClass {
     /// Pure function of (messages, config); v1's three transformers.
     Pure,
@@ -58,6 +61,7 @@ pub enum DeterminismClass {
 
 /// Delivery vehicle for a context node.
 #[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ContextNodeKind {
     /// A tau-provided builtin transformer.
     #[default]

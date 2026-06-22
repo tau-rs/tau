@@ -22,6 +22,7 @@ use crate::trigger::TriggerBinding;
 ///   `#[non_exhaustive]` enum).
 /// - PATCH for spec-only edits with no IR-shape effect.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
@@ -49,6 +50,7 @@ impl IrFormatVersion {
 /// v0). `tau verify --bundle` re-builds and asserts byte-equality of
 /// the canonical form (D-6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IrModule {
     /// IR language version (D-6 — separate from `tau_version`).
     pub ir_format: IrFormatVersion,
@@ -70,6 +72,7 @@ pub struct IrModule {
 
 /// The set of nodes + edges that make up one workflow.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Workflow {
     /// Agent nodes by id.
     pub agents: BTreeMap<AgentId, Agent>,
@@ -92,6 +95,19 @@ pub struct Workflow {
         skip_serializing_if = "alloc::collections::BTreeMap::is_empty"
     )]
     pub checks: alloc::collections::BTreeMap<crate::ids::CheckId, crate::check::Check>,
+}
+
+#[cfg(all(test, feature = "schema"))]
+mod schema_tests {
+    use super::*;
+    #[test]
+    fn ir_module_schema_builds_and_is_object() {
+        let v = serde_json::to_value(&schemars::schema_for!(IrModule)).unwrap();
+        assert_eq!(v["type"], "object");
+        // ir_format is a required top-level property
+        let req = v["required"].as_array().expect("required present");
+        assert!(req.iter().any(|x| x == "ir_format"));
+    }
 }
 
 #[cfg(test)]
