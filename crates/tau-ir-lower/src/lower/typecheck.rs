@@ -288,9 +288,16 @@ fn validate_step_run(
                 });
             }
         }
-        StepRun::Check(_) => {
-            // Check presence is handled by the caller before this function is
-            // called (UnknownCheckRef). Nothing more to do here.
+        StepRun::Check(check_id) => {
+            // For nested Check refs (inside Branch/Parallel/Loop bodies) the
+            // outer check_pipeline guard never fires — validate here so that
+            // a ghost check ref inside a control-flow block is caught.
+            if !wf.checks.contains_key(check_id) {
+                return Err(LowerError::UnknownCheckRef {
+                    step: outer_step_id.into(),
+                    check: check_id.0.clone(),
+                });
+            }
         }
         StepRun::Branch {
             on,
@@ -762,6 +769,53 @@ mod tests {
             matches!(err, LowerError::UnknownPipelineRun { ref target, .. }
                 if target.contains("ghost")),
             "expected UnknownPipelineRun mentioning ghost; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn branch_nested_unknown_check_fails_typecheck() {
+        // A Branch's `then` contains StepRun::Check("ghost-check") but
+        // "ghost-check" is NOT in workflow.checks → typecheck must reject
+        // with UnknownCheckRef.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        use tau_ir::ids::{CheckId, PipelineStepId};
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("cf-step".to_string()),
+                        run: StepRun::Branch {
+                            on: Condition {
+                                evaluates: Locus::Path("/some/path".to_string()),
+                                predicate: GoalPredicate::Exists,
+                            },
+                            then: alloc::vec![PipelineStep {
+                                id: PipelineStepId("nested-check".to_string()),
+                                run: StepRun::Check(CheckId("ghost-check".to_string())),
+                                input: "${input}".to_string(),
+                            }],
+                            otherwise: alloc::vec![],
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(), // "ghost-check" absent
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject nested unknown check ref");
+        assert!(
+            matches!(err, LowerError::UnknownCheckRef { ref check, .. }
+                if check == "ghost-check"),
+            "expected UnknownCheckRef mentioning ghost-check; got {err:?}"
         );
     }
 
