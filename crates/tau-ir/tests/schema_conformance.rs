@@ -12,13 +12,19 @@ fn load(p: &str) -> serde_json::Value {
 }
 
 fn compiled() -> jsonschema::Validator {
-    jsonschema::validator_for(&load("tau-ir.v2.3.0.schema.json")).expect("schema compiles")
+    jsonschema::validator_for(&load("tau-ir.v2.4.0.schema.json")).expect("schema compiles")
 }
 
 #[test]
 fn valid_samples_validate() {
     let v = compiled();
-    for name in ["minimal", "agents-tools", "triggers", "durable"] {
+    for name in [
+        "minimal",
+        "agents-tools",
+        "triggers",
+        "durable",
+        "control_flow_branch",
+    ] {
         let inst = load(&format!("conformance/valid/{name}.json"));
         assert!(v.is_valid(&inst), "valid/{name}.json should validate");
     }
@@ -35,7 +41,13 @@ fn invalid_samples_are_rejected() {
 
 #[test]
 fn valid_samples_deserialize_through_tau_ir() {
-    for name in ["minimal", "agents-tools", "triggers", "durable"] {
+    for name in [
+        "minimal",
+        "agents-tools",
+        "triggers",
+        "durable",
+        "control_flow_branch",
+    ] {
         let raw =
             std::fs::read_to_string(dir().join(format!("conformance/valid/{name}.json"))).unwrap();
         let parsed: Result<tau_ir::module::IrModule, _> = serde_json::from_str(&raw);

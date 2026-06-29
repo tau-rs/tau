@@ -44,7 +44,7 @@ pub use capability::{CapabilityRequirements, CapabilityTable};
 // NB: `check::RetryPolicy` is intentionally NOT re-exported at the crate root
 // to avoid clashing with `trigger::RetryPolicy`. Both are reached via their
 // module path (`tau_ir::check::RetryPolicy` / `tau_ir::trigger::RetryPolicy`).
-pub use check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail};
+pub use check::{Check, CheckVerify, Condition, GoalPredicate, JudgeRef, Locus, OnFail};
 pub use context::ContextConfig;
 pub use durable::{CheckpointGranularity, Durability, DurableStore};
 pub use error::IrError;
