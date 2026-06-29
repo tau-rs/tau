@@ -176,6 +176,12 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
             StepRun::Tool(t) => wf.tools.contains_key(t),
             StepRun::Deterministic(s) => wf.steps.contains_key(s),
             StepRun::Check(c) => wf.checks.contains_key(c),
+            // EPIC 4.1 control-flow blocks: typecheck of nested steps is
+            // implemented in T2; for now they are always valid at this level.
+            StepRun::Branch { .. }
+            | StepRun::Parallel { .. }
+            | StepRun::Loop { .. }
+            | StepRun::Suspend { .. } => true,
         };
         if !exists {
             // For Check steps, emit the more precise UnknownCheckRef error.
@@ -190,6 +196,11 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
                 StepRun::Tool(t) => alloc::format!("tool:{}", t.0),
                 StepRun::Deterministic(s) => alloc::format!("deterministic:{}", s.0),
                 StepRun::Check(c) => alloc::format!("check:{}", c.0),
+                // EPIC 4.1: unreachable when exists==true (see above arm).
+                StepRun::Branch { .. }
+                | StepRun::Parallel { .. }
+                | StepRun::Loop { .. }
+                | StepRun::Suspend { .. } => unreachable!("control-flow always exists"),
             };
             return Err(LowerError::UnknownPipelineRun {
                 step: sid.into(),

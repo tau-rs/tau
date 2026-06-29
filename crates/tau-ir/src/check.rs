@@ -20,6 +20,18 @@ pub struct Check {
     pub retry: RetryPolicy,
 }
 
+/// A deterministic predicate over a read locus — the condition for a
+/// `Branch`/`Loop` (EPIC 4.1) and structurally identical to the goal arm of a
+/// `Check` (`CheckVerify::Goal`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Condition {
+    /// The locus the predicate reads.
+    pub evaluates: Locus,
+    /// The predicate applied to the locus.
+    pub predicate: GoalPredicate,
+}
+
 /// The two postcondition kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
