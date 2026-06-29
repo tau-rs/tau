@@ -171,42 +171,19 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
             return Err(LowerError::DuplicatePipelineStepId { id: sid.into() });
         }
 
-        let exists = match &step.run {
-            StepRun::Agent(a) => wf.agents.contains_key(a),
-            StepRun::Tool(t) => wf.tools.contains_key(t),
-            StepRun::Deterministic(s) => wf.steps.contains_key(s),
-            StepRun::Check(c) => wf.checks.contains_key(c),
-            // EPIC 4.1 control-flow blocks: typecheck of nested steps is
-            // implemented in T2; for now they are always valid at this level.
-            StepRun::Branch { .. }
-            | StepRun::Parallel { .. }
-            | StepRun::Loop { .. }
-            | StepRun::Suspend { .. } => true,
-        };
-        if !exists {
-            // For Check steps, emit the more precise UnknownCheckRef error.
-            if let StepRun::Check(check_id) = &step.run {
+        // For Check steps, emit the more precise UnknownCheckRef error when
+        // the check id is absent from workflow.checks.
+        if let StepRun::Check(check_id) = &step.run {
+            if !wf.checks.contains_key(check_id) {
                 return Err(LowerError::UnknownCheckRef {
                     step: sid.into(),
                     check: check_id.0.clone(),
                 });
             }
-            let target = match &step.run {
-                StepRun::Agent(a) => alloc::format!("agent:{}", a.0),
-                StepRun::Tool(t) => alloc::format!("tool:{}", t.0),
-                StepRun::Deterministic(s) => alloc::format!("deterministic:{}", s.0),
-                StepRun::Check(c) => alloc::format!("check:{}", c.0),
-                // EPIC 4.1: unreachable when exists==true (see above arm).
-                StepRun::Branch { .. }
-                | StepRun::Parallel { .. }
-                | StepRun::Loop { .. }
-                | StepRun::Suspend { .. } => unreachable!("control-flow always exists"),
-            };
-            return Err(LowerError::UnknownPipelineRun {
-                step: sid.into(),
-                target,
-            });
         }
+
+        // Validate this step's run target and recurse into any nested steps.
+        validate_step_run(&step.run, wf, sid, &seen_ids)?;
 
         // For Check steps, validate the check's locus integrity:
         // if the check has a Locus::Output referencing a step, that step must
@@ -264,6 +241,115 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
                     });
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Validate a [`StepRun`]`s referenced nodes and recurse into nested steps.
+///
+/// `outer_step_id` is the id of the top-level pipeline step that owns this
+/// run (used in error messages). `seen_ids` is the set of step ids that are
+/// in scope at the point this run executes (used for `Locus::Output` checks
+/// inside conditions). For nested steps inside control-flow blocks the scope
+/// is the same outer seen-id set — nested steps do not yet create new ids in
+/// the outer pipeline scope.
+fn validate_step_run(
+    run: &tau_ir::pipeline::StepRun,
+    wf: &tau_ir::module::Workflow,
+    outer_step_id: &str,
+    seen_ids: &alloc::collections::BTreeSet<&str>,
+) -> Result<(), LowerError> {
+    use tau_ir::check::Locus;
+    use tau_ir::pipeline::StepRun;
+
+    match run {
+        StepRun::Agent(a) => {
+            if !wf.agents.contains_key(a) {
+                return Err(LowerError::UnknownPipelineRun {
+                    step: outer_step_id.into(),
+                    target: alloc::format!("agent:{}", a.0),
+                });
+            }
+        }
+        StepRun::Tool(t) => {
+            if !wf.tools.contains_key(t) {
+                return Err(LowerError::UnknownPipelineRun {
+                    step: outer_step_id.into(),
+                    target: alloc::format!("tool:{}", t.0),
+                });
+            }
+        }
+        StepRun::Deterministic(s) => {
+            if !wf.steps.contains_key(s) {
+                return Err(LowerError::UnknownPipelineRun {
+                    step: outer_step_id.into(),
+                    target: alloc::format!("deterministic:{}", s.0),
+                });
+            }
+        }
+        StepRun::Check(_) => {
+            // Check presence is handled by the caller before this function is
+            // called (UnknownCheckRef). Nothing more to do here.
+        }
+        StepRun::Branch {
+            on,
+            then,
+            otherwise,
+        } => {
+            // Validate the condition's locus if it references a step output.
+            if let Locus::Output(ref_step_id) = &on.evaluates {
+                let is_in_scope =
+                    ref_step_id.0 != outer_step_id && seen_ids.contains(ref_step_id.0.as_str());
+                if !is_in_scope {
+                    return Err(LowerError::ConditionUnknownOutput {
+                        step: outer_step_id.into(),
+                        output: ref_step_id.0.clone(),
+                    });
+                }
+            }
+            // Recurse into both branches.
+            for nested in then.iter().chain(otherwise.iter()) {
+                validate_step_run(&nested.run, wf, outer_step_id, seen_ids)?;
+            }
+        }
+        StepRun::Parallel { branches } => {
+            // Recurse into every branch's steps.
+            for branch in branches {
+                for nested in branch {
+                    validate_step_run(&nested.run, wf, outer_step_id, seen_ids)?;
+                }
+            }
+        }
+        StepRun::Loop {
+            body,
+            until,
+            max_iters,
+        } => {
+            // Enforce the mandatory iteration bound.
+            if *max_iters == 0 {
+                return Err(LowerError::LoopMaxItersZero {
+                    step: outer_step_id.into(),
+                });
+            }
+            // Validate the exit condition's locus.
+            if let Locus::Output(ref_step_id) = &until.evaluates {
+                let is_in_scope =
+                    ref_step_id.0 != outer_step_id && seen_ids.contains(ref_step_id.0.as_str());
+                if !is_in_scope {
+                    return Err(LowerError::ConditionUnknownOutput {
+                        step: outer_step_id.into(),
+                        output: ref_step_id.0.clone(),
+                    });
+                }
+            }
+            // Recurse into the body.
+            for nested in body {
+                validate_step_run(&nested.run, wf, outer_step_id, seen_ids)?;
+            }
+        }
+        StepRun::Suspend { .. } => {
+            // No refs to validate.
         }
     }
     Ok(())
@@ -629,6 +715,152 @@ mod tests {
             check_context(&wf),
             Err(crate::error::LowerError::DuplicateContextTransformer { .. })
         ));
+    }
+
+    // ── EPIC 4.1 control-flow typecheck tests ────────────────────────────────
+
+    #[test]
+    fn branch_nested_step_with_unknown_agent_fails_typecheck() {
+        // A pipeline step is a Branch whose `then` contains StepRun::Agent("ghost")
+        // not in workflow.agents → typecheck must reject (nested refs validated).
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(), // no agents at all
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("cf-step".to_string()),
+                        run: StepRun::Branch {
+                            on: Condition {
+                                evaluates: Locus::Path("/some/path".to_string()),
+                                predicate: GoalPredicate::Exists,
+                            },
+                            then: alloc::vec![PipelineStep {
+                                id: PipelineStepId("nested-then".to_string()),
+                                run: StepRun::Agent(tau_ir::ids::AgentId("ghost".to_string())),
+                                input: "${input}".to_string(),
+                            }],
+                            otherwise: alloc::vec![],
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject unknown nested agent");
+        assert!(
+            matches!(err, LowerError::UnknownPipelineRun { ref target, .. }
+                if target.contains("ghost")),
+            "expected UnknownPipelineRun mentioning ghost; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn loop_max_iters_zero_fails_typecheck() {
+        // StepRun::Loop { max_iters: 0, .. } → typecheck must reject.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("loop-step".to_string()),
+                        run: StepRun::Loop {
+                            body: alloc::vec![],
+                            until: Condition {
+                                evaluates: Locus::Path("/done".to_string()),
+                                predicate: GoalPredicate::Exists,
+                            },
+                            max_iters: 0, // invalid
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject max_iters == 0");
+        assert!(
+            matches!(err, LowerError::LoopMaxItersZero { ref step }
+                if step == "loop-step"),
+            "expected LoopMaxItersZero; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn branch_with_valid_nested_steps_typechecks() {
+        // Branch whose then/otherwise reference existing agents → OK.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("writer".to_string()),
+            agent_with_tool_refs("writer", &[]),
+        );
+        agents.insert(
+            AgentId("reviewer".to_string()),
+            agent_with_tool_refs("reviewer", &[]),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("branch-step".to_string()),
+                        run: StepRun::Branch {
+                            on: Condition {
+                                evaluates: Locus::Path("/flag".to_string()),
+                                predicate: GoalPredicate::Exists,
+                            },
+                            then: alloc::vec![PipelineStep {
+                                id: PipelineStepId("then-step".to_string()),
+                                run: StepRun::Agent(AgentId("writer".to_string())),
+                                input: "${input}".to_string(),
+                            }],
+                            otherwise: alloc::vec![PipelineStep {
+                                id: PipelineStepId("else-step".to_string()),
+                                run: StepRun::Agent(AgentId("reviewer".to_string())),
+                                input: "${input}".to_string(),
+                            }],
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        assert!(
+            typecheck(&parsed).is_ok(),
+            "valid branch with existing agents should typecheck"
+        );
     }
 
     #[test]

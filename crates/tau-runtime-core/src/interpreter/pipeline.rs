@@ -313,18 +313,22 @@ where
             // EPIC 4.1 control-flow blocks: execution is implemented in T2
             // (the interpreter phase). Reaching these arms before T2 is a bug
             // in the caller — panic loudly rather than silently skip.
-            StepRun::Branch { .. } => return Err(RuntimeError::Internal {
-                message: alloc::format!(
+            StepRun::Branch { .. } => {
+                return Err(RuntimeError::Internal {
+                    message: alloc::format!(
                     "pipeline step {} is a Branch block — interpreter support lands in EPIC 4.2",
                     step.id.0
                 ),
-            }),
-            StepRun::Parallel { .. } => return Err(RuntimeError::Internal {
-                message: alloc::format!(
+                })
+            }
+            StepRun::Parallel { .. } => {
+                return Err(RuntimeError::Internal {
+                    message: alloc::format!(
                     "pipeline step {} is a Parallel block — interpreter support lands in EPIC 4.2",
                     step.id.0
                 ),
-            }),
+                })
+            }
             StepRun::Loop { .. } => {
                 return Err(RuntimeError::Internal {
                     message: alloc::format!(
@@ -333,12 +337,14 @@ where
                     ),
                 })
             }
-            StepRun::Suspend { .. } => return Err(RuntimeError::Internal {
-                message: alloc::format!(
+            StepRun::Suspend { .. } => {
+                return Err(RuntimeError::Internal {
+                    message: alloc::format!(
                     "pipeline step {} is a Suspend block — interpreter support lands in EPIC 4.2",
                     step.id.0
                 ),
-            }),
+                })
+            }
         };
 
         store.insert(step.id.0.clone(), output);
