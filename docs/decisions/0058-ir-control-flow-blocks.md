@@ -31,7 +31,7 @@ the single execution point:
 ```
 StepRun::Branch  { on: Condition, then: Vec<PipelineStep>, otherwise: Vec<PipelineStep> }
 StepRun::Parallel { branches: Vec<Vec<PipelineStep>> }
-StepRun::Loop    { body: Vec<PipelineStep>, until: Condition, max_iters: u32 }
+StepRun::Loop    { body: Vec<PipelineStep>, until: Condition, max_iters: u64 }
 StepRun::Suspend { resume_signal: String }
 ```
 
@@ -46,7 +46,7 @@ language — one type-checker, one schema definition.
 
 `Loop` reuses the `OnFail::Retry` rewind machinery (the interpreter already knows how to
 re-enter a step sequence from a saved snapshot) and carries a mandatory `max_iters: u32`
-bound. Unbounded loops are rejected at typecheck; `max_iters = 0` is a typecheck error.
+bound. Unbounded loops are rejected at typecheck; `max_iters = 0` is a typecheck error (`u64`).
 
 `Suspend` reuses the ADR-0053 `per_tool_call` checkpoint mechanism. The HITL round-trip
 is: checkpoint the run state, emit the `Suspend` event, wait for an external
@@ -89,6 +89,11 @@ is included in the conformance kit.
 - Nested control-flow refs and bounds (`max_iters > 0`, branch/parallel non-empty) are
   enforced at typecheck (tau build time), not at runtime — consistent with the
   Rust-like build-time enforcement principle.
+- Nested-scope resolution — a `Loop`'s `until` referencing its own body's output,
+  uniqueness of nested `PipelineStepId`s, and nested `${steps.<id>.output}` template
+  visibility — is **deferred to EPIC 4.2** (which adds execution); 4.1's typecheck
+  validates nested node references but does not yet model nested scope, so a condition
+  that reads a *nested* step's output is currently rejected.
 
 ## Alternatives considered
 

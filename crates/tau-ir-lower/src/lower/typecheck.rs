@@ -254,6 +254,12 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
 /// inside conditions). For nested steps inside control-flow blocks the scope
 /// is the same outer seen-id set — nested steps do not yet create new ids in
 /// the outer pipeline scope.
+///
+/// NOTE (EPIC 4.2 deferred): full nested-scope resolution — a `Loop`'s `until`
+/// referencing its own body's output, uniqueness of nested `PipelineStepId`s,
+/// and `${steps.<id>.output}` visibility within nested blocks — is deferred to
+/// EPIC 4.2. Currently, a condition that reads a *nested* step's output will be
+/// rejected because the nested id is not in `seen_ids`.
 fn validate_step_run(
     run: &tau_ir::pipeline::StepRun,
     wf: &tau_ir::module::Workflow,
