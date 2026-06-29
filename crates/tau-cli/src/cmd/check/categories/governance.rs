@@ -62,6 +62,7 @@ pub(crate) fn governance_findings(project: &ProjectConfig, tau_toml: &Path) -> V
     let mut out = Vec::new();
     over_reach(project, allow, tau_toml, &mut out);
     closed_world(project, allow, tau_toml, &mut out);
+    lattice(project, allow, tau_toml, &mut out);
     out
 }
 
@@ -187,6 +188,36 @@ fn unregistered(
         location: Some(loc(tau_toml)),
         remediation: Some("register the resource in the corresponding [allow.*] table".to_string()),
         structured: json!({ "check": check, "subject": subject }),
+    }
+}
+
+fn lattice(
+    project: &ProjectConfig,
+    allow: &AllowConfig,
+    tau_toml: &Path,
+    out: &mut Vec<CheckFinding>,
+) {
+    // L0: each defined tool's caps ⊆ its registered [allow.tools] ceiling.
+    for (name, def) in &project.tools {
+        if let Some(reg) = allow.tools.get(name) {
+            if let Err(v) = capability_set_subset(&def.capabilities, &reg.ceiling) {
+                out.push(CheckFinding {
+                    category: CheckCategory::Governance,
+                    severity: Severity::Error,
+                    rule_id: "tau.governance.tool_exceeds_ceiling",
+                    summary: format!(
+                        "tool '{name}': capability {} \"{}\" exceeds its [allow.tools.{name}] ceiling ({})",
+                        v.kind, v.offender, v.reason
+                    ),
+                    detail: None,
+                    location: Some(loc(tau_toml)),
+                    remediation: Some(
+                        "narrow the tool or widen its [allow.tools] ceiling".to_string(),
+                    ),
+                    structured: json!({ "check": "tool_exceeds_ceiling", "tool": name, "kind": v.kind, "offender": v.offender }),
+                });
+            }
+        }
     }
 }
 
@@ -415,6 +446,36 @@ tool_refs = ["read_temp"]
         assert!(
             errs.is_empty(),
             "expected no errors, got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn tool_caps_exceeding_its_registered_ceiling_flagged() {
+        let cfg = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.tools.grep_tool]
+native = "Grep"
+"fs.read" = { paths = ["/proj/src/**"] }
+
+[tools.grep_tool]
+native = "Grep"
+capabilities = [{ kind = "fs.read", paths = ["/proj/**"] }]
+"#,
+        );
+        let f = governance_findings(&cfg, Path::new("tau.toml"));
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.tool_exceeds_ceiling"
+                    && x.summary.contains("grep_tool")
+                    && x.summary.contains("/proj/**")),
+            "got: {}",
             summaries(&f)
         );
     }
