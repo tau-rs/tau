@@ -523,6 +523,28 @@ jobs:
       - name: WIT host world drift + freeze test
         run: cargo test -p tau-wasm-host --test wit_host_drift
 
+  ports-semver:
+    name: tau-ports ABI (cargo-semver-checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          fetch-depth: 0  # need origin/main as the semver baseline
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Install nightly (rustdoc JSON for cargo-semver-checks)
+        run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-semver-checks
+        with:
+          tool: cargo-semver-checks
+      - name: tau-ports ABI must not break without a version bump
+        run: cargo semver-checks --baseline-rev origin/main --package tau-ports
+
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's
   # paths-ignore skips it entirely). See that file for the
