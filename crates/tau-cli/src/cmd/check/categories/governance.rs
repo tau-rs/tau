@@ -239,7 +239,7 @@ fn lattice(
                         agent.id, agent.package
                     ),
                     detail: None,
-                    location: Some(loc(&std::path::PathBuf::from("tau.toml"))),
+                    location: Some(loc(&tau_toml)),
                     remediation: Some("tau resolve".to_string()),
                     structured: json!({ "check": "agent_caps_unresolved", "agent": agent.id }),
                 });
@@ -251,7 +251,7 @@ fn lattice(
                     rule_id: "tau.governance.override_expands_package",
                     summary: format!("agent '{}': {}", agent.id, e),
                     detail: None,
-                    location: Some(loc(&std::path::PathBuf::from("tau.toml"))),
+                    location: Some(loc(&tau_toml)),
                     remediation: Some("narrow the agent's [capabilities] override".to_string()),
                     structured: json!({ "check": "override_expands_package", "agent": agent.id }),
                 });
@@ -269,6 +269,7 @@ fn lattice(
                             "agent '{}' package capability {} \"{}\" exceeds [allow] ceiling ({})",
                             agent.id, v.kind, v.offender, v.reason
                         ),
+                        &tau_toml,
                     ));
                 }
                 // L2: each referenced IR tool ⊆ agent effective caps.
@@ -282,6 +283,7 @@ fn lattice(
                                     "agent '{}': tool '{t}' capability {} \"{}\" exceeds the agent's effective grant ({})",
                                     agent.id, v.kind, v.offender, v.reason
                                 ),
+                                &tau_toml,
                             ));
                         }
                     }
@@ -307,14 +309,19 @@ fn lattice(
     }
 }
 
-fn lattice_error(check: &str, rule_id: &'static str, summary: &str) -> CheckFinding {
+fn lattice_error(
+    check: &str,
+    rule_id: &'static str,
+    summary: &str,
+    tau_toml: &Path,
+) -> CheckFinding {
     CheckFinding {
         category: CheckCategory::Governance,
         severity: Severity::Error,
         rule_id,
         summary: summary.to_string(),
         detail: None,
-        location: Some(loc(&std::path::PathBuf::from("tau.toml"))),
+        location: Some(loc(tau_toml)),
         remediation: Some("narrow the capability or widen the ceiling".to_string()),
         structured: json!({ "check": check }),
     }

@@ -73,6 +73,85 @@ model = "fast"
 }
 
 #[test]
+fn within_lattice_installed_is_clean_exit_0() {
+    check_common::ensure_tau_home();
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    setup(
+        root,
+        r#"[{ kind = "fs.read", paths = ["/proj/**"] }]"#,
+        r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+"#,
+    );
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["check", "governance"])
+        .current_dir(root)
+        .assert()
+        .code(0);
+}
+
+#[test]
+fn tool_exceeding_agent_effective_fails_exit_2() {
+    check_common::ensure_tau_home();
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    setup(
+        root,
+        r#"[{ kind = "fs.read", paths = ["/proj/src/**"] }]"#, // agent effective = /proj/src/**
+        r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[allow.tools.broad]
+native = "Broad"
+"fs.read" = { paths = ["/proj/**"] }
+
+[tools.broad]
+native = "Broad"
+capabilities = [{ kind = "fs.read", paths = ["/proj/**"] }]
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+tool_refs = ["broad"]
+"#,
+    );
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["check", "governance"])
+        .current_dir(root)
+        .assert()
+        .code(2);
+}
+
+#[test]
 fn uninstalled_package_is_needs_setup_exit_3() {
     check_common::ensure_tau_home();
     let tmp = TempDir::new().unwrap();

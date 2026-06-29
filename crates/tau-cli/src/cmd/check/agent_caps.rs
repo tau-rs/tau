@@ -11,7 +11,6 @@ use tau_pkg::project::AgentEntry;
 use tau_pkg::{read_manifest, LockFile};
 
 /// Outcome of resolving an agent's package capabilities.
-#[allow(dead_code)] // wired up by Task 3 (governance.rs)
 pub(crate) enum AgentCaps {
     /// Package installed; `manifest` = declared caps, `effective` = manifest ∩ override.
     Resolved {
@@ -26,6 +25,9 @@ pub(crate) enum AgentCaps {
 
 /// Materialize an EffectiveCapability into a concrete Capability by applying
 /// the override deltas to `source` via the serde bridge.
+///
+/// `deny` is only applied to list-bearing kinds (fs/net/process); for other
+/// kinds it is a no-op (bounded; no defined semantics today).
 fn materialize(e: &EffectiveCapability) -> Capability {
     if e.allow_override.is_none() && e.deny.is_empty() && e.max_bytes_override.is_none() {
         return e.source.clone();
@@ -64,7 +66,6 @@ fn materialize(e: &EffectiveCapability) -> Capability {
 }
 
 /// Resolve the agent's package capabilities (manifest + effective).
-#[allow(dead_code)] // wired up by Task 3 (governance.rs)
 pub(crate) fn resolve_agent_caps(agent: &AgentEntry, ctx: &CheckCtx) -> AgentCaps {
     let pkg_name = agent.package.split('@').next().unwrap_or(&agent.package);
 
