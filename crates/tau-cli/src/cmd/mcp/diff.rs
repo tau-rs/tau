@@ -13,7 +13,7 @@ pub async fn run(args: McpDiffArgs, _output: &mut Output) -> Result<()> {
     let project_root = std::env::current_dir().context("get cwd")?;
     let pin_path = project_root
         .join(".tau/mcp")
-        .join(format!("{}.contract.json", &args.name));
+        .join(format!("{}.contract.json", args.name));
     let bytes = std::fs::read(&pin_path)
         .with_context(|| format!("no pin file at {}", pin_path.display()))?;
     let pinned: PinnedContract =
@@ -41,8 +41,8 @@ pub async fn run(args: McpDiffArgs, _output: &mut Output) -> Result<()> {
         println!("no drift: `{}` matches live server", args.name);
     } else {
         println!("DRIFT detected for `{}`:", args.name);
-        println!("  pin hash:  {}", &pinned.contract_hash_hex);
-        println!("  live hash: {}", &live.contract_hash_hex);
+        println!("  pin hash:  {}", pinned.contract_hash_hex);
+        println!("  live hash: {}", live.contract_hash_hex);
         println!(
             "  pin tools / live tools: {} / {}",
             pinned.contract.tools.len(),
