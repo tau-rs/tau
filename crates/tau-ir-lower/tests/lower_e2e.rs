@@ -403,7 +403,7 @@ fn explicit_check_placement_is_not_double_appended() {
     assert!(
         matches!(&pipe.steps[3].run, StepRun::Agent(AgentId(id)) if id == "gather"),
         "step after the explicit check must be gather2 (agent:gather); got {:?}",
-        &pipe.steps[3].run
+        pipe.steps[3].run
     );
 
     // The PipelineStepId at position 2 is the one declared in TOML ("check-report").

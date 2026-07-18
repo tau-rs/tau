@@ -15,7 +15,7 @@ pub async fn run(args: McpPinArgs, _output: &mut Output) -> Result<()> {
     let project_root = std::env::current_dir().context("get cwd")?;
     let pin_path = project_root
         .join(".tau/mcp")
-        .join(format!("{}.contract.json", &args.name));
+        .join(format!("{}.contract.json", args.name));
 
     let (pinned, _prev) = probe_and_pin(&args.name, args.from, &project_root).await?;
 
