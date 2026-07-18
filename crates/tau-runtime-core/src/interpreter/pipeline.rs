@@ -39,9 +39,12 @@ use crate::vocabulary::{
 /// step, and records the step's output keyed by its pipeline-step id so
 /// later steps can reference it via `${steps.<id>.output}`.
 ///
-/// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`], and
-/// [`StepRun::Check`] steps are all supported. A `Check` step evaluates a
-/// postcondition (goal or deliverable) against the accumulated outputs.
+/// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`],
+/// [`StepRun::Check`], and [`StepRun::Branch`] steps are all supported. A
+/// `Check` step evaluates a postcondition (goal or deliverable) against the
+/// accumulated outputs. A `Branch` evaluates its condition and recurses into
+/// the chosen arm (`then`/`otherwise`) against the same shared store; it
+/// stores no output of its own.
 ///
 /// # Failure handling: abort, or rewind-to-gate retry
 ///
@@ -157,7 +160,7 @@ where
                     let verdict = evaluate_goal(
                         evaluates,
                         predicate,
-                        &store,
+                        store,
                         reader.as_ref().map(|a| a.as_ref()),
                         reg.as_ref(),
                     )?;
@@ -174,7 +177,7 @@ where
                         locus,
                         must_satisfy,
                         judge,
-                        &store,
+                        store,
                         reader.as_ref().map(|a| a.as_ref()),
                         dispatcher.clone(),
                     ))
@@ -240,6 +243,34 @@ where
 
             feedback = Some(verdict.rationale);
             i = gate_idx;
+            continue;
+        }
+
+        // `Branch` blocks have their own early dispatch, mirroring `Check`
+        // above: they store no output of their own (the chosen arm's steps
+        // record their own outputs into the shared `store` as they run).
+        if let StepRun::Branch {
+            on,
+            then,
+            otherwise,
+        } = &step.run
+        {
+            let reg =
+                dispatcher
+                    .deterministic_registry()
+                    .ok_or_else(|| RuntimeError::Internal {
+                        message: format!("branch {} needs a deterministic registry", step.id.0),
+                    })?;
+            let reader = dispatcher.artifact_reader();
+            let verdict = crate::interpreter::check::eval_condition(
+                on,
+                store,
+                reader.as_ref().map(|a| a.as_ref()),
+                reg.as_ref(),
+            )?;
+            let arm = if verdict.met { then } else { otherwise };
+            Box::pin(run_steps(module, arm, input, store, dispatcher, None)).await?;
+            i += 1;
             continue;
         }
 
@@ -339,20 +370,14 @@ where
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
-            // `Check` steps are dispatched at the top of the loop and never
-            // reach this `match` (they store no output).
+            // `Check` and `Branch` steps are dispatched at the top of the
+            // loop and never reach this `match` (they store no output of
+            // their own).
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
-            // EPIC 4.1 control-flow blocks: execution is implemented in T2
-            // (the interpreter phase). Reaching these arms before T2 is a bug
-            // in the caller — panic loudly rather than silently skip.
-            StepRun::Branch { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                    "pipeline step {} is a Branch block — interpreter support lands in EPIC 4.2",
-                    step.id.0
-                ),
-                })
-            }
+            StepRun::Branch { .. } => unreachable!("branch steps are handled before this match"),
+            // EPIC 4.1 control-flow blocks: execution lands in EPIC 4.2.
+            // Reaching these arms before then is a bug in the caller — panic
+            // loudly rather than silently skip.
             StepRun::Parallel { .. } => {
                 return Err(RuntimeError::Internal {
                     message: alloc::format!(
