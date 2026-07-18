@@ -15,7 +15,7 @@ use crate::cmd::check::result::{
     CheckCategory, CheckFinding, CheckResult, CheckStatus, FindingLocation, Severity,
 };
 use crate::cmd::check::runner::CheckCtx;
-use tau_domain::Capability;
+use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
 use tau_pkg::capability_override::{capability_set_subset, CeilingViolation};
 use tau_pkg::project::allow::AllowConfig;
 use tau_pkg::project::{ProjectConfig, ToolBinding};
@@ -67,6 +67,7 @@ pub(crate) fn governance_findings(
     over_reach(project, allow, tau_toml, &mut out);
     closed_world(project, allow, tau_toml, &mut out);
     lattice(project, allow, ctx, &mut out);
+    coarse_lint(allow, tau_toml, &mut out);
     out
 }
 
@@ -341,6 +342,85 @@ fn synth_cap(kind: &str, allow: &[String]) -> Option<Capability> {
     )
 }
 
+/// Absolute-wildcard entries in a ceiling capability, as (kind, entry) pairs.
+/// Empty when the capability declares no admits-everything entry. Only fs / net
+/// / process kinds have a coarse form in scope.
+fn coarse_hits(cap: &Capability) -> Vec<(&'static str, String)> {
+    fn coarse_path(p: &str) -> bool {
+        matches!(p, "/**" | "**" | "/*")
+    }
+    match cap {
+        Capability::Filesystem(FsCapability::Read { paths, .. }) => paths
+            .iter()
+            .filter(|p| coarse_path(p))
+            .map(|p| ("fs.read", p.clone()))
+            .collect(),
+        Capability::Filesystem(FsCapability::Write { paths, .. }) => paths
+            .iter()
+            .filter(|p| coarse_path(p))
+            .map(|p| ("fs.write", p.clone()))
+            .collect(),
+        Capability::Filesystem(FsCapability::Exec { paths, .. }) => paths
+            .iter()
+            .filter(|p| coarse_path(p))
+            .map(|p| ("fs.exec", p.clone()))
+            .collect(),
+        Capability::Network(NetCapability::Http { hosts, .. }) => hosts
+            .iter()
+            .filter(|h| h.as_str() == "*")
+            .map(|h| ("net.http", h.clone()))
+            .collect(),
+        Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands
+            .iter()
+            .filter(|c| c.as_str() == "*")
+            .map(|c| ("process.spawn", c.clone()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Lint the constitution surfaces (root [allow] + [allow.tools.*] ceilings) for
+/// coarse (admits-everything) entries. Emits one Warning per hit; never fails.
+fn coarse_lint(allow: &AllowConfig, tau_toml: &Path, out: &mut Vec<CheckFinding>) {
+    for cap in &allow.ceiling {
+        for (kind, entry) in coarse_hits(cap) {
+            out.push(coarse_finding("[allow]", kind, &entry, tau_toml));
+        }
+    }
+    for (name, tool) in &allow.tools {
+        for cap in &tool.ceiling {
+            for (kind, entry) in coarse_hits(cap) {
+                out.push(coarse_finding(
+                    &format!("[allow.tools.{name}]"),
+                    kind,
+                    &entry,
+                    tau_toml,
+                ));
+            }
+        }
+    }
+}
+
+fn coarse_finding(surface: &str, kind: &str, entry: &str, tau_toml: &Path) -> CheckFinding {
+    let noun = match kind {
+        "net.http" => "host",
+        "process.spawn" => "command",
+        _ => "path",
+    };
+    CheckFinding {
+        category: CheckCategory::Governance,
+        severity: Severity::Warning,
+        rule_id: "tau.governance.coarse_ceiling",
+        summary: format!(
+            "{surface} {kind} {noun} \"{entry}\" is a coarse ceiling — list the specific {noun}s you need to tighten the constitution"
+        ),
+        detail: None,
+        location: Some(loc(tau_toml)),
+        remediation: Some(format!("replace the wildcard with the specific {noun}s")),
+        structured: json!({ "check": "coarse_ceiling", "surface": surface, "kind": kind, "entry": entry }),
+    }
+}
+
 fn loc(tau_toml: &Path) -> FindingLocation {
     FindingLocation {
         path: tau_toml.to_path_buf(),
@@ -608,6 +688,114 @@ capabilities = [{ kind = "fs.read", paths = ["/proj/**"] }]
                     && x.summary.contains("grep_tool")
                     && x.summary.contains("/proj/**")),
             "got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn coarse_wildcard_host_flagged() {
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["*"] }
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.coarse_ceiling"
+                    && x.severity == Severity::Warning
+                    && x.summary.contains("net.http")
+                    && x.summary.contains('*')),
+            "got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn coarse_whole_tree_paths_flagged() {
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"fs.read"  = { paths = ["/**"] }
+"fs.write" = { paths = ["**"] }
+"fs.exec"  = { paths = ["/*"] }
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        let coarse: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule_id == "tau.governance.coarse_ceiling")
+            .collect();
+        assert_eq!(
+            coarse.len(),
+            3,
+            "one per coarse path, got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn coarse_command_and_allow_tools_ceiling_flagged() {
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"process.spawn" = { commands = ["*"] }
+
+[allow.tools.fetch]
+native = "Fetch"
+"net.http" = { hosts = ["api.x.com", "*"] }
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.coarse_ceiling"
+                    && x.summary.contains("process.spawn")),
+            "cmd: {}",
+            summaries(&f)
+        );
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.coarse_ceiling"
+                    && x.summary.contains("[allow.tools.fetch]")
+                    && x.summary.contains("net.http")),
+            "allow.tools: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn scoped_ceilings_are_not_coarse() {
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"fs.read"       = { paths = ["/proj/**"] }
+"net.http"      = { hosts = ["api.x.com"] }
+"process.spawn" = { commands = ["git"] }
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            !f.iter()
+                .any(|x| x.rule_id == "tau.governance.coarse_ceiling"),
+            "scoped ceilings must not warn, got: {}",
             summaries(&f)
         );
     }
