@@ -549,3 +549,89 @@ async fn loop_threads_until_feedback_into_next_iteration() {
         "expected iteration 2's prompt to contain the rejection prefix, got: {seen:?}"
     );
 }
+
+// -----------------------------------------------------------------------
+// `StepRun::Parallel` — bounded cooperative fork-join (EPIC 4.2, Task 5).
+//
+// Module shape:
+//   fanout = Parallel:
+//              branch[0]: left  = Agent(echo) input "left-out"
+//              branch[1]: right = Agent(echo) input "right-out"
+//   after  = Agent(echo) input "${steps.left.output}|${steps.right.output}"
+//
+// Proves both branches' outputs land in the shared store (index-ordered
+// merge) AND that a downstream step can read both.
+// -----------------------------------------------------------------------
+
+/// Build a `[parallel:fanout, agent:after]` module. `fanout` forks two
+/// branches (`left`, `right`), each a single `Agent(echo)` step; `after`
+/// reads both branches' outputs.
+fn parallel_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("left".into()), agent("left"));
+    agents.insert(AgentId("right".into()), agent("right"));
+    agents.insert(AgentId("after".into()), agent("after"));
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("fanout".into()),
+                run: StepRun::Parallel {
+                    branches: vec![
+                        vec![PipelineStep {
+                            id: PipelineStepId("left".into()),
+                            run: StepRun::Agent(AgentId("left".into())),
+                            input: "left-out".into(),
+                        }],
+                        vec![PipelineStep {
+                            id: PipelineStepId("right".into()),
+                            run: StepRun::Agent(AgentId("right".into())),
+                            input: "right-out".into(),
+                        }],
+                    ],
+                },
+                input: String::new(),
+            },
+            PipelineStep {
+                id: PipelineStepId("after".into()),
+                run: StepRun::Agent(AgentId("after".into())),
+                input: "${steps.left.output}|${steps.right.output}".into(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn parallel_runs_all_branches_and_merges_index_ordered() {
+    let module = parallel_module();
+    let store = run_pipeline(Arc::new(module), "x".to_string(), dispatcher())
+        .await
+        .expect("runs");
+    assert_eq!(store.get("left").unwrap(), &serde_json::json!("left-out"));
+    assert_eq!(store.get("right").unwrap(), &serde_json::json!("right-out"));
+    assert_eq!(
+        store.get("after").unwrap(),
+        &serde_json::json!("left-out|right-out")
+    );
+}

@@ -30,6 +30,10 @@ use crate::vocabulary::{
     SPAN_PIPELINE_CHECK, SPAN_PIPELINE_STEP,
 };
 
+/// Max `Parallel` branches in flight at once (nginx `worker_connections`
+/// analogue). Bounded cooperative fork-join — see ADR-0059.
+const PARALLEL_CAP: usize = 8;
+
 /// Drive an `IrModule`'s pipeline to completion, returning all step
 /// outputs.
 ///
@@ -40,16 +44,21 @@ use crate::vocabulary::{
 /// later steps can reference it via `${steps.<id>.output}`.
 ///
 /// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`],
-/// [`StepRun::Check`], [`StepRun::Branch`], and [`StepRun::Loop`] steps are
-/// all supported. A `Check` step evaluates a postcondition (goal or
-/// deliverable) against the accumulated outputs. A `Branch` evaluates its
-/// condition and recurses into the chosen arm (`then`/`otherwise`) against
-/// the same shared store; it stores no output of its own. A `Loop` runs its
-/// `body` up to `max_iters` times, checking `until` after each pass and
-/// threading a failed verdict's rationale into the next pass as feedback;
-/// exhausting `max_iters` without `until` holding is a hard error
-/// ([`RuntimeError::LoopExhausted`]). Like `Branch`, a `Loop` stores no
-/// output of its own.
+/// [`StepRun::Check`], [`StepRun::Branch`], [`StepRun::Loop`], and
+/// [`StepRun::Parallel`] steps are all supported. A `Check` step evaluates a
+/// postcondition (goal or deliverable) against the accumulated outputs. A
+/// `Branch` evaluates its condition and recurses into the chosen arm
+/// (`then`/`otherwise`) against the same shared store; it stores no output
+/// of its own. A `Loop` runs its `body` up to `max_iters` times, checking
+/// `until` after each pass and threading a failed verdict's rationale into
+/// the next pass as feedback; exhausting `max_iters` without `until` holding
+/// is a hard error ([`RuntimeError::LoopExhausted`]). Like `Branch`, a
+/// `Loop` stores no output of its own. A `Parallel` forks each branch over
+/// an isolated read-only snapshot of the store (branches cannot see each
+/// other's outputs), drives them with bounded concurrency
+/// (`PARALLEL_CAP` in flight at once), and merges each branch's produced
+/// outputs back into the shared store in index order once all branches
+/// complete; like `Branch` and `Loop`, it stores no output of its own.
 ///
 /// # Failure handling: abort, or rewind-to-gate retry
 ///
@@ -337,6 +346,45 @@ where
             continue;
         }
 
+        // `Parallel` blocks have their own early dispatch, mirroring `Branch`
+        // and `Loop` above: they store no output of their own. Each branch
+        // forks a read-only snapshot of `store` (branches are read-isolated
+        // from each other — a branch cannot see a sibling's outputs, only
+        // the pre-fork state), runs to completion, and returns its produced
+        // store. Branches are driven with bounded concurrency
+        // (`PARALLEL_CAP` in flight at once, nginx `worker_connections`
+        // style) and their outputs are merged back into the shared store in
+        // index order once all branches complete, so the merge is
+        // deterministic regardless of which branch's future resolves first.
+        if let StepRun::Parallel { branches } = &step.run {
+            use futures_util::stream::{self, StreamExt};
+            let futs = branches.iter().enumerate().map(|(idx, branch)| {
+                let module = module.clone();
+                let dispatcher = dispatcher.clone();
+                let input = input.to_string();
+                let mut snap = store.clone();
+                async move {
+                    run_steps(&module, branch, &input, &mut snap, &dispatcher, None).await?;
+                    Ok::<(usize, OutputStore), RuntimeError>((idx, snap))
+                }
+            });
+            let mut results: alloc::vec::Vec<(usize, OutputStore)> =
+                stream::iter(futs)
+                    .buffered(PARALLEL_CAP)
+                    .collect::<alloc::vec::Vec<_>>()
+                    .await
+                    .into_iter()
+                    .collect::<Result<_, _>>()?;
+            // `buffered` preserves input order, but sort by index defensively
+            // so the merge is deterministic regardless of driver scheduling.
+            results.sort_by_key(|(idx, _)| *idx);
+            for (_, produced) in results {
+                store.merge(produced);
+            }
+            i += 1;
+            continue;
+        }
+
         // NOTE: we do NOT call `.entered()` here — `EnteredSpan` mutates a
         // thread-local span stack, and tokio's multi-thread scheduler can
         // move this task to a different worker thread at any `.await`,
@@ -433,23 +481,18 @@ where
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
-            // `Check`, `Branch`, and `Loop` steps are dispatched at the top
-            // of the loop and never reach this `match` (they store no
-            // output of their own).
+            // `Check`, `Branch`, `Loop`, and `Parallel` steps are dispatched
+            // at the top of the loop and never reach this `match` (they
+            // store no output of their own).
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
             StepRun::Branch { .. } => unreachable!("branch steps are handled before this match"),
             StepRun::Loop { .. } => unreachable!("loop steps are handled before this match"),
-            // EPIC 4.1 control-flow blocks not yet wired: execution lands
-            // later in EPIC 4.2. Reaching these arms before then is a bug in
-            // the caller — panic loudly rather than silently skip.
             StepRun::Parallel { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                    "pipeline step {} is a Parallel block — interpreter support lands in EPIC 4.2",
-                    step.id.0
-                ),
-                })
+                unreachable!("parallel steps are handled before this match")
             }
+            // EPIC 4.1 control-flow block not yet wired: execution lands
+            // later in EPIC 4.2. Reaching this arm before then is a bug in
+            // the caller — panic loudly rather than silently skip.
             StepRun::Suspend { .. } => {
                 return Err(RuntimeError::Internal {
                     message: alloc::format!(
