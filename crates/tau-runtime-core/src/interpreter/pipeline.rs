@@ -40,11 +40,16 @@ use crate::vocabulary::{
 /// later steps can reference it via `${steps.<id>.output}`.
 ///
 /// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`],
-/// [`StepRun::Check`], and [`StepRun::Branch`] steps are all supported. A
-/// `Check` step evaluates a postcondition (goal or deliverable) against the
-/// accumulated outputs. A `Branch` evaluates its condition and recurses into
-/// the chosen arm (`then`/`otherwise`) against the same shared store; it
-/// stores no output of its own.
+/// [`StepRun::Check`], [`StepRun::Branch`], and [`StepRun::Loop`] steps are
+/// all supported. A `Check` step evaluates a postcondition (goal or
+/// deliverable) against the accumulated outputs. A `Branch` evaluates its
+/// condition and recurses into the chosen arm (`then`/`otherwise`) against
+/// the same shared store; it stores no output of its own. A `Loop` runs its
+/// `body` up to `max_iters` times, checking `until` after each pass and
+/// threading a failed verdict's rationale into the next pass as feedback;
+/// exhausting `max_iters` without `until` holding is a hard error
+/// ([`RuntimeError::LoopExhausted`]). Like `Branch`, a `Loop` stores no
+/// output of its own.
 ///
 /// # Failure handling: abort, or rewind-to-gate retry
 ///
@@ -274,6 +279,64 @@ where
             continue;
         }
 
+        // `Loop` blocks have their own early dispatch, mirroring `Check` and
+        // `Branch` above: they store no output of their own (the body's
+        // steps record their own outputs into the shared `store` as they
+        // run, each pass overwriting the prior pass's). Runs `body` up to
+        // `max_iters` times, checking `until` after each pass; converges as
+        // soon as `until` holds, otherwise threads the failed verdict's
+        // rationale into the next pass as feedback (same
+        // "Previous attempt rejected: <rationale>" idiom `Check`'s
+        // rewind-to-gate retry uses). Exhausting `max_iters` without `until`
+        // holding is a hard error (ADR-0058 / ADR-0059) — a bounded loop
+        // that cannot reach its goal is a failure, not a silent success.
+        if let StepRun::Loop {
+            body,
+            until,
+            max_iters,
+        } = &step.run
+        {
+            let mut loop_feedback: Option<String> = None;
+            let mut converged = false;
+            for _iter in 0..*max_iters {
+                Box::pin(run_steps(
+                    module,
+                    body,
+                    input,
+                    store,
+                    dispatcher,
+                    loop_feedback.take(),
+                ))
+                .await?;
+                let reg =
+                    dispatcher
+                        .deterministic_registry()
+                        .ok_or_else(|| RuntimeError::Internal {
+                            message: format!("loop {} needs a deterministic registry", step.id.0),
+                        })?;
+                let reader = dispatcher.artifact_reader();
+                let verdict = crate::interpreter::check::eval_condition(
+                    until,
+                    store,
+                    reader.as_ref().map(|a| a.as_ref()),
+                    reg.as_ref(),
+                )?;
+                if verdict.met {
+                    converged = true;
+                    break;
+                }
+                loop_feedback = Some(verdict.rationale);
+            }
+            if !converged {
+                return Err(RuntimeError::LoopExhausted {
+                    step: step.id.0.clone(),
+                    max_iters: *max_iters,
+                });
+            }
+            i += 1;
+            continue;
+        }
+
         // NOTE: we do NOT call `.entered()` here — `EnteredSpan` mutates a
         // thread-local span stack, and tokio's multi-thread scheduler can
         // move this task to a different worker thread at any `.await`,
@@ -370,28 +433,21 @@ where
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
-            // `Check` and `Branch` steps are dispatched at the top of the
-            // loop and never reach this `match` (they store no output of
-            // their own).
+            // `Check`, `Branch`, and `Loop` steps are dispatched at the top
+            // of the loop and never reach this `match` (they store no
+            // output of their own).
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
             StepRun::Branch { .. } => unreachable!("branch steps are handled before this match"),
-            // EPIC 4.1 control-flow blocks: execution lands in EPIC 4.2.
-            // Reaching these arms before then is a bug in the caller — panic
-            // loudly rather than silently skip.
+            StepRun::Loop { .. } => unreachable!("loop steps are handled before this match"),
+            // EPIC 4.1 control-flow blocks not yet wired: execution lands
+            // later in EPIC 4.2. Reaching these arms before then is a bug in
+            // the caller — panic loudly rather than silently skip.
             StepRun::Parallel { .. } => {
                 return Err(RuntimeError::Internal {
                     message: alloc::format!(
                     "pipeline step {} is a Parallel block — interpreter support lands in EPIC 4.2",
                     step.id.0
                 ),
-                })
-            }
-            StepRun::Loop { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                        "pipeline step {} is a Loop block — interpreter support lands in EPIC 4.2",
-                        step.id.0
-                    ),
                 })
             }
             StepRun::Suspend { .. } => {

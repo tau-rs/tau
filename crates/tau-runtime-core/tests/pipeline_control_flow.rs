@@ -30,7 +30,7 @@ use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
@@ -50,7 +50,7 @@ use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::deterministic::DeterministicRegistry;
 use tau_runtime_core::interpreter::pipeline::run_pipeline;
 use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
-use tau_runtime_core::vocabulary::FN_BUILTIN_EQUALS;
+use tau_runtime_core::vocabulary::{FN_BUILTIN_EQUALS, FN_BUILTIN_MATCHES};
 
 /// LLM backend that echoes the last user-message text back as its final
 /// assistant text (mirrors `pipeline_executor.rs`'s `EchoBackend`).
@@ -274,4 +274,278 @@ async fn branch_takes_otherwise_when_condition_fails() {
         .expect("runs");
     assert_eq!(store.get("miss").unwrap(), &serde_json::json!("else-ran"));
     assert!(store.get("hit").is_none());
+}
+
+// -----------------------------------------------------------------------
+// `StepRun::Loop` — bounded walk, hard exhaustion, feedback threading
+// (EPIC 4.2, Task 4).
+//
+// Module shape:
+//   refine = Loop max_iters:
+//              body:  [ improve = Agent(counting) input "${input}" ]
+//              until: Output(improve) Matches "APPROVED"
+//
+// `CountingBackend` returns `"APPROVED"` only on its `approves_on`-th
+// invocation (else `"nope <n>"`), so the loop converges on that iteration.
+// It also records every user-turn text it sees per invocation number, so
+// the feedback-threading test can assert the 2nd invocation's prompt
+// carried the 1st iteration's rejection rationale.
+// -----------------------------------------------------------------------
+
+/// LLM backend that approves (`"APPROVED"`) on exactly its `approves_on`-th
+/// call and echoes `"nope <n>"` otherwise. Records the joined user-turn
+/// texts of every invocation, keyed by 1-based call number, so tests can
+/// inspect what a given iteration's agent actually saw.
+struct CountingBackend {
+    count: Mutex<usize>,
+    approves_on: usize,
+    turns: Mutex<BTreeMap<usize, Vec<String>>>,
+}
+
+impl CountingBackend {
+    fn new(approves_on: usize) -> Self {
+        Self {
+            count: Mutex::new(0),
+            approves_on,
+            turns: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// The joined text of each user turn the backend saw on its `call`-th
+    /// (1-based) invocation, or empty if that invocation never happened.
+    fn turns_for(&self, call: usize) -> Vec<String> {
+        self.turns
+            .lock()
+            .unwrap()
+            .get(&call)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn respond(&self, req: &CompletionRequest) -> CompletionResponse {
+        let n = {
+            let mut count = self.count.lock().unwrap();
+            *count += 1;
+            *count
+        };
+
+        let user_turns: Vec<String> = req
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                LlmProviderMessage::User { content } => Some(
+                    content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text(t) => Some(t.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+                _ => None,
+            })
+            .collect();
+        self.turns.lock().unwrap().insert(n, user_turns);
+
+        let text = if n == self.approves_on {
+            "APPROVED".to_string()
+        } else {
+            format!("nope {n}")
+        };
+
+        serde_json::from_value(serde_json::json!({
+            "text": text,
+            "tool_uses": [],
+            "stop_reason": "EndTurn",
+            "usage": null,
+        }))
+        .expect("canned CompletionResponse deserializes")
+    }
+}
+
+impl LlmBackend for CountingBackend {
+    fn name(&self) -> &str {
+        "counting-llm"
+    }
+
+    async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        Ok(self.respond(&req))
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+    ) -> Result<tau_ports::CompletionStream, LlmError> {
+        Ok(tau_ports::batch_to_stream(self.respond(&req)))
+    }
+}
+
+/// Registry answering `FN_BUILTIN_MATCHES` from the `{present, content,
+/// pattern}` args object — `met = present && content == Some(pattern)`.
+/// A literal-equality match suffices for these tests' fixed strings
+/// (`"APPROVED"`); a real `Matches` predicate would regex-match, but the
+/// interpreter only cares that the registry answers the fn, not how.
+struct MatchesRegistry;
+
+impl DeterministicRegistry for MatchesRegistry {
+    fn invoke(&self, fn_name: &str, args: &Value) -> Result<Value, RuntimeError> {
+        if fn_name == FN_BUILTIN_MATCHES {
+            let present = args["present"].as_bool().unwrap_or(false);
+            let content = args["content"].as_str();
+            let pattern = args["pattern"].as_str();
+            Ok(json!(present && content.is_some() && content == pattern))
+        } else {
+            Err(RuntimeError::Internal {
+                message: format!("MatchesRegistry: unknown fn {fn_name}"),
+            })
+        }
+    }
+}
+
+/// Dispatcher wiring a `CountingBackend` and a `MatchesRegistry` into the
+/// interpreter. Exposes `backend` so feedback-threading tests can inspect
+/// recorded turns after the run completes.
+struct LoopDispatcher {
+    backend: Arc<CountingBackend>,
+    registry: Arc<MatchesRegistry>,
+}
+
+impl ToolDispatcher for LoopDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a tau_ir::ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "LoopDispatcher::invoke should never be called (no tools)".into(),
+            })
+        })
+    }
+
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
+    }
+
+    fn deterministic_registry(&self) -> Option<Arc<dyn DeterministicRegistry>> {
+        Some(self.registry.clone())
+    }
+}
+
+fn counting_dispatcher(approves_on: usize) -> Arc<LoopDispatcher> {
+    Arc::new(LoopDispatcher {
+        backend: Arc::new(CountingBackend::new(approves_on)),
+        registry: Arc::new(MatchesRegistry),
+    })
+}
+
+/// Build a `[loop:refine]` module: `refine` loops `improve = Agent(improve)
+/// input "${input}"` up to `max_iters` times, exiting when `Output(improve)
+/// Matches "APPROVED"` holds.
+fn loop_module(max_iters: u64, approves_on: usize) -> IrModule {
+    let _ = approves_on; // encoded in the dispatcher's backend, not the module
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("improve".into()), agent("improve"));
+
+    let pipeline = Pipeline {
+        steps: vec![PipelineStep {
+            id: PipelineStepId("refine".into()),
+            run: StepRun::Loop {
+                body: vec![PipelineStep {
+                    id: PipelineStepId("improve".into()),
+                    run: StepRun::Agent(AgentId("improve".into())),
+                    input: "${input}".into(),
+                }],
+                until: Condition {
+                    evaluates: Locus::Output(PipelineStepId("improve".into())),
+                    predicate: GoalPredicate::Matches("APPROVED".into()),
+                },
+                max_iters,
+            },
+            input: String::new(),
+        }],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn loop_converges_and_stores_last_body_output() {
+    // body: improve = Agent(counting) input "${input}"; approves on call #2
+    // until: Output(improve) Matches "APPROVED"; max_iters 3
+    let module = loop_module(3, 2);
+    let store = run_pipeline(
+        Arc::new(module),
+        "draft".to_string(),
+        counting_dispatcher(2),
+    )
+    .await
+    .expect("converges");
+    assert_eq!(
+        store.get("improve").unwrap(),
+        &serde_json::json!("APPROVED")
+    );
+}
+
+#[tokio::test]
+async fn loop_exhausts_hard_errors() {
+    // approves_on = 99 (never within max_iters 3)
+    let module = loop_module(3, 99);
+    let err = run_pipeline(
+        Arc::new(module),
+        "draft".to_string(),
+        counting_dispatcher(99),
+    )
+    .await
+    .expect_err("must exhaust");
+    match err {
+        RuntimeError::LoopExhausted { step, max_iters } => {
+            assert_eq!(step, "refine");
+            assert_eq!(max_iters, 3);
+        }
+        other => panic!("expected LoopExhausted, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn loop_threads_until_feedback_into_next_iteration() {
+    let module = loop_module(3, 2);
+    let dispatcher = counting_dispatcher(2);
+    let store = run_pipeline(Arc::new(module), "draft".to_string(), dispatcher.clone())
+        .await
+        .expect("converges");
+    assert_eq!(
+        store.get("improve").unwrap(),
+        &serde_json::json!("APPROVED")
+    );
+
+    // The 2nd invocation's prompt must carry the 1st iteration's rejection
+    // rationale as a prior turn (the `until` verdict's rationale, injected
+    // via `initial_feedback`).
+    let seen = dispatcher.backend.turns_for(2);
+    assert!(
+        seen.iter()
+            .any(|m| m.contains("Previous attempt rejected:")),
+        "expected iteration 2's prompt to contain the rejection prefix, got: {seen:?}"
+    );
 }
