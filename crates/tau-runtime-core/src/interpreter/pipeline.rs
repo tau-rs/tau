@@ -346,6 +346,17 @@ where
             continue;
         }
 
+        // `Suspend` blocks have their own early dispatch, mirroring `Branch`,
+        // `Loop`, and `Parallel` above. HITL checkpoint/resume lands in EPIC
+        // 4.3; 4.2 aborts loudly with a named error rather than silently
+        // skip the block or fall through to a generic `Internal` error.
+        if let StepRun::Suspend { resume_signal } = &step.run {
+            return Err(RuntimeError::SuspendNotImplemented {
+                step: step.id.0.clone(),
+                resume_signal: resume_signal.clone(),
+            });
+        }
+
         // `Parallel` blocks have their own early dispatch, mirroring `Branch`
         // and `Loop` above: they store no output of their own. Each branch
         // forks a read-only snapshot of `store` (branches are read-isolated
@@ -481,25 +492,18 @@ where
                 let args = rendered_to_args(&rendered);
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
-            // `Check`, `Branch`, `Loop`, and `Parallel` steps are dispatched
-            // at the top of the loop and never reach this `match` (they
-            // store no output of their own).
+            // `Check` steps are dispatched at the top of the loop and never
+            // reach this `match` (they store no output of their own).
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
-            StepRun::Branch { .. } => unreachable!("branch steps are handled before this match"),
-            StepRun::Loop { .. } => unreachable!("loop steps are handled before this match"),
-            StepRun::Parallel { .. } => {
-                unreachable!("parallel steps are handled before this match")
-            }
-            // EPIC 4.1 control-flow block not yet wired: execution lands
-            // later in EPIC 4.2. Reaching this arm before then is a bug in
-            // the caller — panic loudly rather than silently skip.
-            StepRun::Suspend { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                    "pipeline step {} is a Suspend block — interpreter support lands in EPIC 4.2",
-                    step.id.0
-                ),
-                })
+            // `Branch`, `Parallel`, `Loop`, and `Suspend` are all
+            // early-dispatched above (each either stores no output of its
+            // own, or — for `Suspend` — aborts before reaching here), so
+            // none of these ever reach this `match`.
+            StepRun::Branch { .. }
+            | StepRun::Parallel { .. }
+            | StepRun::Loop { .. }
+            | StepRun::Suspend { .. } => {
+                unreachable!("control-flow blocks are early-dispatched")
             }
         };
 

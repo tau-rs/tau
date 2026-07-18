@@ -635,3 +635,146 @@ async fn parallel_runs_all_branches_and_merges_index_ordered() {
         &serde_json::json!("left-out|right-out")
     );
 }
+
+// -----------------------------------------------------------------------
+// `StepRun::Suspend` — loud abort (EPIC 4.2, Task 6). HITL checkpoint/resume
+// lands in EPIC 4.3; 4.2 aborts loudly with a named error rather than
+// silently skip.
+//
+// Also: Option-A end-to-end regression guard. A downstream top-level step
+// must be able to read a nested `Branch` arm's step output by its BARE id
+// (`${steps.inner.output}`) — the flat-global namespace is the whole point
+// of Option A (see ADR-0058/0059 and Tasks 3-5).
+// -----------------------------------------------------------------------
+
+/// Build a `[suspend:pause]` module: a single `Suspend` step, id "pause",
+/// `resume_signal` "go".
+fn suspend_module() -> IrModule {
+    let pipeline = Pipeline {
+        steps: vec![PipelineStep {
+            id: PipelineStepId("pause".into()),
+            run: StepRun::Suspend {
+                resume_signal: "go".into(),
+            },
+            input: String::new(),
+        }],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents: BTreeMap::new(),
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn suspend_returns_named_error() {
+    let module = suspend_module();
+    let err = run_pipeline(Arc::new(module), "x".to_string(), dispatcher())
+        .await
+        .expect_err("suspend aborts");
+    match err {
+        RuntimeError::SuspendNotImplemented {
+            step,
+            resume_signal,
+        } => {
+            assert_eq!(step, "pause");
+            assert_eq!(resume_signal, "go");
+        }
+        other => panic!("expected SuspendNotImplemented, got {other:?}"),
+    }
+}
+
+/// Build a `[agent:seed, branch:gate(inner), agent:tail]` module:
+///   seed = Agent(echo) input "${input}"                    -> "GO"
+///   gate = Branch on Output(seed) Equals "GO":
+///            then: [ inner = Agent(echo) input "inner-out" ]
+///            otherwise: []
+///   tail = Agent(echo) input "${steps.inner.output}"
+///
+/// `tail` is a top-level pipeline step, not nested inside the branch, yet
+/// it reads `inner`'s output by its bare id — proving the flat-global
+/// namespace (Option A) resolves nested-block step outputs for downstream
+/// top-level steps.
+fn branch_then_read_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("seed".into()), agent("seed"));
+    agents.insert(AgentId("inner".into()), agent("inner"));
+    agents.insert(AgentId("tail".into()), agent("tail"));
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("seed".into()),
+                run: StepRun::Agent(AgentId("seed".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("gate".into()),
+                run: StepRun::Branch {
+                    on: Condition {
+                        evaluates: Locus::Output(PipelineStepId("seed".into())),
+                        predicate: GoalPredicate::Equals("GO".into()),
+                    },
+                    then: vec![PipelineStep {
+                        id: PipelineStepId("inner".into()),
+                        run: StepRun::Agent(AgentId("inner".into())),
+                        input: "inner-out".into(),
+                    }],
+                    otherwise: vec![],
+                },
+                input: String::new(),
+            },
+            PipelineStep {
+                id: PipelineStepId("tail".into()),
+                run: StepRun::Agent(AgentId("tail".into())),
+                input: "${steps.inner.output}".into(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn downstream_reads_block_output_by_bare_id() {
+    let module = branch_then_read_module();
+    let store = run_pipeline(Arc::new(module), "GO".to_string(), dispatcher())
+        .await
+        .expect("runs");
+    assert_eq!(store.get("tail").unwrap(), &serde_json::json!("inner-out"));
+}
