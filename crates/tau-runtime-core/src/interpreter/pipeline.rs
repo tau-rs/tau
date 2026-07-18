@@ -73,17 +73,49 @@ where
         })?;
 
     let mut store = OutputStore::new();
+    run_steps(
+        &module,
+        &pipeline.steps,
+        &input,
+        &mut store,
+        &dispatcher,
+        None,
+    )
+    .await?;
+    Ok(store)
+}
 
+/// Execute a slice of pipeline steps against a shared [`OutputStore`].
+///
+/// Extracted from [`run_pipeline`] so nested blocks (Branch/Parallel/Loop)
+/// can drive their own step slices with the same gate-rewind, feedback, and
+/// check-dispatch semantics. `initial_feedback` seeds the per-slice feedback
+/// carried into the first gate agent step (used when a nested slice re-runs
+/// with a prior rejection rationale); top-level callers pass `None`.
+///
+/// See [`run_pipeline`]'s docs for the abort / rewind-to-gate retry model —
+/// the loop body lives here.
+#[allow(clippy::too_many_arguments)]
+async fn run_steps<D>(
+    module: &Arc<IrModule>,
+    steps: &[tau_ir::pipeline::PipelineStep],
+    input: &str,
+    store: &mut OutputStore,
+    dispatcher: &Arc<D>,
+    initial_feedback: Option<String>,
+) -> Result<(), RuntimeError>
+where
+    D: ToolDispatcher + Send + Sync + 'static,
+{
     // Per-check attempt counter (1-based on first eval), keyed by check id.
     let mut attempts: BTreeMap<String, u32> = BTreeMap::new();
     // Rationale of the most recent failed check that triggered a rewind. It
     // is injected as a prior turn at the gate's agent step and stays set
     // until the originating check resolves (pass clears it, fail updates it).
-    let mut feedback: Option<String> = None;
+    let mut feedback: Option<String> = initial_feedback;
     // gate-id -> pipeline-step index, so a failed retryable check can rewind
     // `i` to its gate without re-scanning the pipeline each time.
-    let gate_index: BTreeMap<&str, usize> = pipeline
-        .steps
+    let gate_index: BTreeMap<&str, usize> = steps
         .iter()
         .enumerate()
         .map(|(idx, step)| (step.id.0.as_str(), idx))
@@ -92,8 +124,8 @@ where
     // Index loop (not `for`) so a failed retryable check can rewind `i` to a
     // gate step. On the happy path `i` only ever advances by one.
     let mut i = 0;
-    while i < pipeline.steps.len() {
-        let step = &pipeline.steps[i];
+    while i < steps.len() {
+        let step = &steps[i];
 
         // Check steps have their own span/event vocabulary and store no
         // output, so dispatch them before the Agent/Tool/Deterministic path.
@@ -222,7 +254,7 @@ where
         let step_span = info_span!(SPAN_PIPELINE_STEP, id = step.id.0.as_str());
         tracing::info!(parent: &step_span, name = EV_PIPELINE_STEP_STARTED, id = step.id.0.as_str());
 
-        let rendered = tau_ir::template::resolve(&step.input, &input, &store.template_map())
+        let rendered = tau_ir::template::resolve(&step.input, input, &store.template_map())
             .map_err(|e| RuntimeError::Internal {
                 message: format!("pipeline step {}: {e}", step.id.0),
             })?;
@@ -353,7 +385,7 @@ where
         i += 1;
     }
 
-    Ok(store)
+    Ok(())
 }
 
 /// Turn a rendered template string into the `Value` a tool/deterministic
