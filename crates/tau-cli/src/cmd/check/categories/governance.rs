@@ -347,7 +347,7 @@ fn synth_cap(kind: &str, allow: &[String]) -> Option<Capability> {
 /// / process kinds have a coarse form in scope.
 fn coarse_hits(cap: &Capability) -> Vec<(&'static str, String)> {
     fn coarse_path(p: &str) -> bool {
-        matches!(p, "/**" | "**" | "/*")
+        matches!(p, "*" | "/*" | "**" | "/**" | "**/*" | "/**/*")
     }
     match cap {
         Capability::Filesystem(FsCapability::Read { paths, .. }) => paths
@@ -367,12 +367,12 @@ fn coarse_hits(cap: &Capability) -> Vec<(&'static str, String)> {
             .collect(),
         Capability::Network(NetCapability::Http { hosts, .. }) => hosts
             .iter()
-            .filter(|h| h.as_str() == "*")
+            .filter(|h| matches!(h.as_str(), "*" | "**"))
             .map(|h| ("net.http", h.clone()))
             .collect(),
         Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands
             .iter()
-            .filter(|c| c.as_str() == "*")
+            .filter(|c| matches!(c.as_str(), "*" | "**"))
             .map(|c| ("process.spawn", c.clone()))
             .collect(),
         _ => Vec::new(),
@@ -796,6 +796,54 @@ name = "demo"
             !f.iter()
                 .any(|x| x.rule_id == "tau.governance.coarse_ceiling"),
             "scoped ceilings must not warn, got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn coarse_bare_star_and_deep_glob_paths_flagged() {
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"fs.read"  = { paths = ["*"] }
+"fs.write" = { paths = ["**/*"] }
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        let coarse: Vec<_> = f
+            .iter()
+            .filter(|x| x.rule_id == "tau.governance.coarse_ceiling")
+            .collect();
+        assert_eq!(
+            coarse.len(),
+            2,
+            "bare * and **/* are coarse, got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn coarse_double_star_host_flagged() {
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["**"] }
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.coarse_ceiling"
+                    && x.summary.contains("net.http")),
+            "** host is coarse, got: {}",
             summaries(&f)
         );
     }
