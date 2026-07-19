@@ -13,7 +13,7 @@ tau-ir            = { workspace = true }
 tau-ir-lower      = { workspace = true }
 tau-ports         = { workspace = true, features = ["serde", "test-fixtures"] }
 tau-pkg           = { workspace = true }
-tau-runtime-core  = { workspace = true, features = ["test-fixtures"] }
+tau-runtime-core  = { workspace = true, features = ["std", "test-fixtures"] }
 tau-runtime-tokio = { workspace = true }
 tau-mcp           = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio     = { workspace = true }
@@ -31,3 +31,6 @@ tempfile          = { workspace = true }
 
 [features]
 default = []
+
+[lints]
+workspace = true

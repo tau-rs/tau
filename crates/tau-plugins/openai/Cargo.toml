@@ -41,3 +41,6 @@ serde_yaml              = "0.9"
 assert_matches          = { workspace = true }
 tau-plugin-test-support = { workspace = true }
 tau-plugin-conformance  = { workspace = true }
+
+[lints]
+workspace = true

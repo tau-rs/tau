@@ -18,6 +18,7 @@ extern crate alloc;
 #[cfg(feature = "with-std-adapters")]
 extern crate std;
 
+pub mod asset;
 pub mod budget;
 pub mod canonical;
 pub mod capability;
@@ -32,12 +33,14 @@ pub mod model_ref;
 pub mod module;
 pub mod node;
 pub mod pipeline;
+pub mod prompt;
 pub mod subflow;
 pub mod template;
 pub mod tool_impl;
 pub mod trigger;
 
 // Re-exports of the canonical public API surface.
+pub use asset::{AssetBlob, AssetKind};
 pub use budget::AgentBudget;
 pub use canonical::{from_canonical_bytes, to_canonical_bytes};
 pub use capability::{CapabilityRequirements, CapabilityTable};

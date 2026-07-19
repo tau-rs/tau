@@ -83,7 +83,7 @@ fn run_completed_is_zero() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "ping"])
+        .args(["run", "--allow-ungoverned", "echo", "ping"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()
@@ -106,7 +106,7 @@ fn run_plugin_crash_is_two() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "anything"])
+        .args(["run", "--allow-ungoverned", "echo", "anything"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()
@@ -126,7 +126,7 @@ fn run_missing_project_is_two() {
 
     AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "reviewer", "hi"])
+        .args(["run", "--allow-ungoverned", "reviewer", "hi"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .assert()
@@ -157,7 +157,7 @@ model        = "default"
 
     AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "ghost", "hi"])
+        .args(["run", "--allow-ungoverned", "ghost", "hi"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .assert()

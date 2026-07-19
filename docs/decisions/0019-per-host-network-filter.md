@@ -211,8 +211,8 @@ The architectural conflict (child PID unavailable during `wrap_spawn` / `pre_exe
 
 ## References
 
-- Spec: [`docs/superpowers/specs/2026-05-06-sandbox-net-filter-design.md`](../superpowers/specs/2026-05-06-sandbox-net-filter-design.md)
-- Plan: [`docs/superpowers/plans/2026-05-06-sandbox-net-filter.md`](../superpowers/plans/2026-05-06-sandbox-net-filter.md)
+- Spec: [`docs/superpowers/specs/2026-05-06-net-filter-integration-design.md`](../superpowers/specs/2026-05-06-net-filter-integration-design.md)
+- Plan: [`docs/superpowers/plans/2026-05-06-net-filter-integration.md`](../superpowers/plans/2026-05-06-net-filter-integration.md)
 - INTEGRATION.md: `crates/tau-sandbox-native/src/net_filter/INTEGRATION.md` — deleted with the `net_filter` module per ADR-0020.
 - PR #35 (merged 2026-05-06 at commit d4438ae): per-host network filter machinery
 - Phase 0 verification PR #34 (closed): GHA uid_map write failure discovery

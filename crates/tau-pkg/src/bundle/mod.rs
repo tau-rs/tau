@@ -20,14 +20,15 @@ pub mod reproduce_error;
 pub mod verify;
 pub mod verify_error;
 
-pub use build::{build, BuildOptions, BundleArtifact};
+pub use build::{build, read_prompt_file, BuildOptions, BundleArtifact};
 pub use build_error::BuildError;
 pub use canonical::to_canonical_toml;
 pub use error::{BundleIntegrityError, BundleIoError, BundleParseError};
 pub use hash::{compute_self_hash, verify_self_hash};
 pub use manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
-    BundlePackage, BundleRetry, BundleTrigger, IrPayload, ProjectInfo,
+    BundlePackage, BundleRetry, BundleTrigger, GovernanceRecord, GovernanceVerdict, IrPayload,
+    ProjectInfo,
 };
 pub use reproduce::{
     verify_reproducible, ManifestDiff, ManifestSide, ReproOptions, ReproReport, Side,

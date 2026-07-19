@@ -61,6 +61,24 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/LEBOCQTitouan/tau"
 authors = ["Titouan Lebocq <75916953+LEBOCQTitouan@users.noreply.github.com>"]
 
+# Centralised lint policy. Every member opts in with `[lints]\nworkspace = true`.
+# CI runs `cargo clippy --workspace --all-targets -- -D warnings`, so a lint at
+# `"warn"` here is effectively DENIED in CI — this table only contains lints the
+# workspace already satisfies. Noisier lints (clippy::pedantic, missing_docs) are
+# tracked as backlog and raised in follow-up PRs once their fallout is cleared.
+[workspace.lints.rust]
+# unsafe is deny-by-default across the workspace; the few crates that genuinely
+# need it opt out locally with `#![allow(unsafe_code)]` (tau-sandbox-native,
+# tau-wasm-guest) or a scoped `#[allow(unsafe_code)]` (tau-app's PR_SET_PDEATHSIG
+# call site). Crates that already declare `#![forbid(unsafe_code)]` keep that
+# stricter local level.
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+# Already enforced by CI's `-D warnings`; declaring it here makes the policy
+# explicit and centrally toggleable.
+all = "warn"
+
 [workspace.dependencies]
 # β.7.5 wasm guest (wasm32-wasip2 only)
 wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
@@ -70,13 +88,16 @@ dlmalloc    = { version = "0.2", features = ["global"] }
 wasmtime    = "45"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
 tau-ports           = { path = "crates/tau-ports",  version = "0.1.0", default-features = false }
-tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
+tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
 tau-mcp-tokio       = { path = "crates/tau-mcp-tokio", version = "0.0.0", default-features = false }
 tau-native-tools    = { path = "crates/tau-native-tools", version = "0.0.0", default-features = false }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
-tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0" }
+# `default-features = false` so the no_std wasm guest can link this alias
+# directly (it opts into only `wasm-interpreter`/`tool-validation`). Host/std
+# consumers re-enable the full surface with `features = ["std"]`.
+tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0", default-features = false }
 tau-runtime-tokio   = { path = "crates/tau-runtime-tokio", version = "0.0.0" }
 tau-plugin-protocol = { path = "crates/tau-plugin-protocol", version = "0.0.0" }
 tau-plugin-sdk      = { path = "crates/tau-plugin-sdk", version = "0.0.0" }
@@ -114,6 +135,7 @@ jsonschema      = "0.46"
 schemars        = { version = "1", default-features = false }
 foldhash     = { version = "0.2", default-features = false }
 futures-core    = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util    = { version = "0.3", default-features = false }
 hashbrown    = { version = "0.17", default-features = false, features = ["default-hasher"] }
 toml            = "1.1"
 fs4             = "0.8"

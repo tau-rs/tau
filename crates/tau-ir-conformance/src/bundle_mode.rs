@@ -113,6 +113,9 @@ impl ExecutionMode for BundleMode {
                 output_path: None,
                 agent_filter: None,
                 ir_payload,
+                governance: None,
+                // Conformance fixtures use inline prompts only.
+                assets: Vec::new(),
             };
             let artifact = match build_bundle(opts) {
                 Ok(a) => a,
@@ -244,8 +247,12 @@ fn build_ir_payload(
         native_tool: &|name: &str| Some(crate::sha256_name(name)),
         mcp_contract: &|_| None,
         skill: &|_| None,
+        // Conformance fixtures use inline prompts only (never invoked).
+        prompt_file: &|_| Ok(Vec::new()),
     };
-    let module = lower_project(&config, target, &caches).map_err(|e| format!("{e}"))?;
+    let module = lower_project(&config, target, &caches)
+        .map_err(|e| format!("{e}"))?
+        .module;
     let bytes = tau_ir::to_canonical_bytes(&module);
     let hash_bytes = tau_ir::compute_hash(&module);
     Ok(IrPayload {

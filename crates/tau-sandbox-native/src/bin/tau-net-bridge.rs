@@ -10,6 +10,10 @@
 //!   5. When the plugin exits, the bridge exits with the same status
 
 #![cfg_attr(not(target_os = "linux"), allow(unused))]
+// This bin is a separate crate root, so tau-sandbox-native's lib-level
+// `#![allow(unsafe_code)]` does not reach it; opt out of the workspace
+// `unsafe_code = "warn"` lint here too (the Linux path uses libc/fork/rtnetlink).
+#![allow(unsafe_code)]
 
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {

@@ -149,6 +149,18 @@ pub fn evaluate_goal(
     Ok(normalize_verdict(raw, predicate))
 }
 
+/// Evaluate a [`Condition`](tau_ir::check::Condition) (a `Branch.on` /
+/// `Loop.until`) — a thin wrapper over [`evaluate_goal`] so branch, loop,
+/// and check-goal conditions share one evaluation path.
+pub fn eval_condition(
+    cond: &tau_ir::check::Condition,
+    store: &OutputStore,
+    reader: Option<&dyn ArtifactReader>,
+    registry: &dyn DeterministicRegistry,
+) -> Result<CheckVerdict, RuntimeError> {
+    evaluate_goal(&cond.evaluates, &cond.predicate, store, reader, registry)
+}
+
 /// Build the canonical built-in judge prompt embedding `must_satisfy`.
 ///
 /// Instructs the model to reply ONLY with JSON `{"met": bool, "rationale": string}`.
@@ -226,7 +238,7 @@ where
             .clone(),
         JudgeRef::Default { model_ref } => Agent {
             id: AgentId(String::from("__judge")),
-            prompt: builtin_judge_prompt(must_satisfy),
+            prompt: tau_ir::prompt::PromptSource::inline(builtin_judge_prompt(must_satisfy)),
             model_ref: model_ref.clone(),
             tool_refs: alloc::vec::Vec::new(),
             context: None,
@@ -307,6 +319,20 @@ mod tests {
         )
         .unwrap();
         assert!(!verdict.met);
+    }
+
+    #[test]
+    fn eval_condition_delegates_to_goal() {
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        let reg = TestRegistry;
+        let store = OutputStore::new();
+        let reader = InMemoryArtifactReader::new().with_file("/r.md", b"hi");
+        let cond = Condition {
+            evaluates: Locus::Path("/r.md".into()),
+            predicate: GoalPredicate::NonEmpty,
+        };
+        let v = eval_condition(&cond, &store, Some(&reader as &dyn ArtifactReader), &reg).unwrap();
+        assert!(v.met);
     }
 
     // -----------------------------------------------------------------------

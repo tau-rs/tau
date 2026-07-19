@@ -26,7 +26,7 @@
 - **Create** `crates/tau-pkg/src/link.rs` — the entire feature: types (`LinkRecord`, `LinkedPlugin`, `LinkedSkill`, `LinkOutcome`, `LinkError`), the `link()` entrypoint, three private resolvers (`resolve_one_plugin`, `resolve_models`, `resolve_skills`), and the inline test module.
 - **Modify** `crates/tau-pkg/Cargo.toml` — add `tau-ir = { workspace = true }`.
 - **Modify** `crates/tau-pkg/src/lib.rs` — add `pub mod link;` (alphabetical, between `install_sandbox` and `lockfile`) and a `pub use link::{link, LinkError, LinkRecord, LinkOutcome, LinkedPlugin, LinkedSkill};` block.
-- **Create** `docs/decisions/0060-build-links-verified-linkrecord.md` + **Modify** `docs/SUMMARY.md`.
+- **Create** `docs/decisions/0061-build-links-verified-linkrecord.md` + **Modify** `docs/SUMMARY.md`.
 
 ---
 
@@ -827,21 +827,21 @@ git commit -m "feat(link): link() entrypoint — assemble record + collect all e
 
 ---
 
-### Task 6: ADR-0060 + SUMMARY.md
+### Task 6: ADR-0061 + SUMMARY.md
 
 **Files:**
-- Create: `docs/decisions/0060-build-links-verified-linkrecord.md`
+- Create: `docs/decisions/0061-build-links-verified-linkrecord.md`
 - Modify: `docs/SUMMARY.md` (add the ADR line under the decisions section)
 
 **Interfaces:** none (docs).
 
-- [ ] **Step 1: Write ADR-0060**
+- [ ] **Step 1: Write ADR-0061**
 
 Use `docs/decisions/template.md` structure. Title: "tau build links; bundles carry a verified LinkRecord; run trusts after verify." Status: Proposed. Content: the static-linker vs loader split (Q6), why sandbox + tool-binding stay runtime (Q5/Q6), the `LinkRecord` shape, the 4-PR rollout. Reference the spec at `docs/superpowers/specs/2026-07-19-link-phase-linkrecord-design.md`. Keep messages/paths consistent with the code from Tasks 1–5.
 
 - [ ] **Step 2: Add to SUMMARY.md**
 
-Add the line `- [0060 — Build links; verified LinkRecord](decisions/0060-build-links-verified-linkrecord.md)` in the decisions list, after the 0058 entry.
+Add the line `- [0061 — Build links; verified LinkRecord](decisions/0061-build-links-verified-linkrecord.md)` in the decisions list, after the 0058 entry.
 
 - [ ] **Step 3: Build the book to verify no broken links**
 
@@ -851,8 +851,8 @@ Expected: only `[INFO]` lines; no linkcheck errors.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/decisions/0060-build-links-verified-linkrecord.md docs/SUMMARY.md
-git commit -m "docs(link): ADR-0060 — build links; verified LinkRecord; run trusts after verify"
+git add docs/decisions/0061-build-links-verified-linkrecord.md docs/SUMMARY.md
+git commit -m "docs(link): ADR-0061 — build links; verified LinkRecord; run trusts after verify"
 ```
 
 ---
@@ -865,7 +865,7 @@ git commit -m "docs(link): ADR-0060 — build links; verified LinkRecord; run tr
 - §1 model bindings (alias→ModelRef, no re-resolution) → Task 3. ✓
 - §2 skills: parse-once, sha + parsed_ok, parsed map for resolver seed → Task 4 (+ `LinkOutcome.parsed_skills`). ✓
 - §1 collect-all-errors + deterministic ordering → Task 5. ✓
-- Deliverables: ADR-0060 + SUMMARY → Task 6. ✓
+- Deliverables: ADR-0061 + SUMMARY → Task 6. ✓
 - Out of scope (correct for PR 1): callers (PR 2), run --bundle trust (PR 3), credential flip (PR 4), the runtime record-seeded `SkillResolver` adapter (PR 2 — Task 4 only produces the parsed map).
 
 **Placeholder scan:** Two tests (Task 3, Task 5 fixtures) intentionally defer the `ProjectConfig`/full fixture construction to "grep the existing project-validation test idiom" because `ProjectConfig` is `#[non_exhaustive]` and its test-construction path is crate-local — the implementer must reuse the existing idiom rather than invent one. This is a real instruction, not a TODO; the assertions are fully concrete. Flag for the executor: resolve these two fixtures first.

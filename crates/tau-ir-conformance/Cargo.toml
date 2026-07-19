@@ -13,7 +13,7 @@ tau-ir            = { workspace = true }
 tau-ir-lower      = { workspace = true }
 tau-ports         = { workspace = true, features = ["serde", "test-fixtures"] }
 tau-pkg           = { workspace = true }
-tau-runtime-core  = { workspace = true, features = ["test-fixtures"] }
+tau-runtime-core  = { workspace = true, features = ["std", "test-fixtures"] }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
 tokio             = { workspace = true }
@@ -24,8 +24,11 @@ tempfile          = { workspace = true }
 [dev-dependencies]
 tokio             = { workspace = true, features = ["macros", "rt"] }
 serde_json        = { workspace = true }
-tau-runtime-core  = { workspace = true }
+tau-runtime-core  = { workspace = true, features = ["std"] }
 tempfile          = { workspace = true }
 
 [features]
 default = []
+
+[lints]
+workspace = true

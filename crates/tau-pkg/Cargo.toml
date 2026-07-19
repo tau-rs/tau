@@ -44,3 +44,6 @@ tau-ports  = { workspace = true, features = ["test-fixtures", "serde", "process"
 # Capturing subscriber for the install-diagnostics tracing tests
 # (asserts target/level/fields + RUST_LOG-style EnvFilter honoring).
 tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }
+
+[lints]
+workspace = true

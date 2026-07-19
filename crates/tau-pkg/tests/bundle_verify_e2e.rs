@@ -117,6 +117,8 @@ fn e2e_build_then_verify_succeeds() {
         output_path: None,
         agent_filter: None,
         ir_payload: None,
+        governance: None,
+        assets: Vec::new(),
     })
     .unwrap();
 
@@ -144,6 +146,8 @@ fn e2e_verify_catches_post_build_package_mutation() {
         output_path: None,
         agent_filter: None,
         ir_payload: None,
+        governance: None,
+        assets: Vec::new(),
     })
     .unwrap();
 

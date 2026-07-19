@@ -31,6 +31,23 @@ pub enum BundleParseError {
         /// The bundle's declared schema_version.
         schema_version: u32,
     },
+    /// A bundle carries a `[governance]` record but its `schema_version` is
+    /// below 4. Governance requires schema_version 4 (an old tau must reject
+    /// a governance-bearing bundle rather than silently ignore the verdict).
+    #[error("bundle declares a [governance] record but schema_version is {schema_version} (governance requires schema_version >= 4)")]
+    GovernanceSchemaVersionMismatch {
+        /// The bundle's declared schema_version.
+        schema_version: u32,
+    },
+    /// A bundle carries an `[[assets]]` store but its `schema_version` is
+    /// below 5. The asset store (D6-B) requires schema_version 5 (an old tau
+    /// must reject the bundle rather than silently drop the prompt bytes the
+    /// IR references).
+    #[error("bundle declares an [[assets]] store but schema_version is {schema_version} (assets require schema_version >= 5)")]
+    AssetSchemaVersionMismatch {
+        /// The bundle's declared schema_version.
+        schema_version: u32,
+    },
 }
 
 /// Errors raised when reading + parsing a bundle from disk.

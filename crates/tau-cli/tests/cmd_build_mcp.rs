@@ -114,6 +114,7 @@ fn lower_fixture(path: &std::path::Path) -> LowerFixtureOutcome {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
 
     match lower_project(&config, &target, &caches) {
@@ -273,7 +274,7 @@ capabilities = [{ kind = "net.http", hosts = ["api.weather.com"], methods = [] }
 
     let output = assert_cmd::Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--offline"])
+        .args(["build", "--allow-ungoverned", "--offline"])
         .current_dir(&project_root)
         .env("TAU_HOME", &tau_home)
         .assert()

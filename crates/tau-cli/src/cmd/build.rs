@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 
-use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact, IrPayload};
+use tau_pkg::bundle::{
+    build, BuildError, BuildOptions, BundleArtifact, GovernanceRecord, IrPayload,
+};
 use tau_pkg::lockfile::{LockedMcpEntry, LockedMcpExpandedTool};
 use tau_ports::target::TargetTriple;
 
@@ -66,6 +68,13 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         }
     };
 
+    // Governed-by-default gate (ADR-0057 / D2). Evaluate the `[allow]`
+    // constitution BEFORE any network I/O (MCP resolution): an absent ceiling
+    // is a hard error (GOV000) unless `--allow-ungoverned`, and a declared-
+    // but-violated ceiling refuses the build. The verdict is stamped into the
+    // bundle so `tau run --bundle` can enforce governed-by-default on its end.
+    let governance = evaluate_build_governance(&project_path, &target, args, output).await;
+
     // Map the repeatable `--agent` flag to the builder's filter. Empty
     // → None (build all). Parse each id to AgentId; a malformed id is a
     // config-level input error (exit 2).
@@ -108,6 +117,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         payload: ir_payload,
         triggers: trigger_bindings,
         lower_error,
+        assets: ir_assets,
     } = lower_ir(&project_root, &target, &mcp_cache_ir, ts_project.as_ref());
 
     // A typecheck/lowering error (e.g. an invalid context pipeline where
@@ -124,6 +134,8 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         output_path: args.output.clone(),
         agent_filter,
         ir_payload,
+        governance,
+        assets: ir_assets_to_bundle(ir_assets),
     };
 
     let _ = output.status("Building bundle…");
@@ -154,6 +166,56 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         Err(e) => {
             let _ = output.error(format!("{e}"));
             std::process::exit(exit_code_for(&e) as i32);
+        }
+    }
+}
+
+/// Run the governed-by-default gate (ADR-0057 / D2) for `tau build`.
+///
+/// Loads the project through the same `CheckCtx` the `tau check governance`
+/// category uses, evaluates the `[allow]` constitution against the build
+/// flags, and either returns the [`GovernanceRecord`] to stamp into the
+/// bundle or terminates the process:
+///
+/// - `NoConstitution` → prints `GOV000` and exits 2.
+/// - `Violations`     → prints the refused-build diagnostic and exits 2.
+/// - malformed project → returns `None`; the bundle builder surfaces the
+///   precise parse/validation error (also exit 2) rather than a vague GOV000.
+async fn evaluate_build_governance(
+    project_path: &std::path::Path,
+    target: &TargetTriple,
+    args: &BuildArgs,
+    output: &mut Output,
+) -> Option<GovernanceRecord> {
+    use crate::cmd::check::{
+        evaluate_governance, render_no_constitution, render_violations, CheckCtx, GovernanceFlags,
+        GovernanceOutcome,
+    };
+
+    let flags = GovernanceFlags {
+        allow_ungoverned: args.allow_ungoverned,
+        no_governance: args.no_governance,
+    };
+    let ctx = match CheckCtx::load(project_path.to_path_buf(), false, Some(*target)).await {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = output.error(format!("cannot evaluate governance: {e}"));
+            std::process::exit(2);
+        }
+    };
+    let Some(project) = &ctx.project else {
+        // Unparseable project — defer to the bundle builder's precise error.
+        return None;
+    };
+    match evaluate_governance(project, &ctx, flags) {
+        GovernanceOutcome::Proceed(verdict) => Some(GovernanceRecord { verdict }),
+        GovernanceOutcome::NoConstitution => {
+            let _ = output.diagnostic(render_no_constitution());
+            std::process::exit(2);
+        }
+        GovernanceOutcome::Violations(findings) => {
+            let _ = output.diagnostic(render_violations(&findings));
+            std::process::exit(2);
         }
     }
 }
@@ -354,6 +416,12 @@ pub(crate) struct LowerIrResult {
     /// e.g. an invalid context pipeline — is surfaced at build time rather
     /// than silently dropped (see ADR: build-time enforcement discipline).
     pub lower_error: Option<tau_ir_lower::LowerError>,
+    /// Content-addressed assets (currently `system_file` prompts) the module
+    /// references, keyed by hash (`"sha256:" + 64 hex`). Empty when lowering
+    /// failed or the project uses only inline prompts. `tau build` persists
+    /// these into the bundle's asset store; verify/dev use them to resolve
+    /// prompt references at run time (D6-B).
+    pub assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
 }
 
 /// Attempt to lower the project IR, returning `Some(IrPayload)` on
@@ -394,6 +462,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -405,6 +474,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -416,6 +486,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -433,21 +504,30 @@ pub(crate) fn lower_ir(
         native_tool: &|name: &str| Some(sha256_name(name)),
         mcp_contract: &|url| mcp_cache.get(url).cloned(),
         skill: &|_name| None,
+        // D6-B: read `system_file` prompts at build time (missing/unreadable
+        // => LowerError::PromptFileUnreadable => build fails). Routed through
+        // tau-pkg's `read_prompt_file` so the IR asset hash is computed over
+        // the same bytes as the bundle's `system_prompt_sha256`.
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
 
     match tau_ir_lower::lower_project(config, target, &caches) {
-        Ok(module) => {
-            let bytes = tau_ir::to_canonical_bytes(&module);
-            let hash_bytes = tau_ir::compute_hash(&module);
+        Ok(out) => {
+            let bytes = tau_ir::to_canonical_bytes(&out.module);
+            let hash_bytes = tau_ir::compute_hash(&out.module);
             let payload = Some(IrPayload {
-                ir_format: module.ir_format.0.clone(),
+                ir_format: out.module.ir_format.0.clone(),
                 canonical_ir_hash: hex_lower(&hash_bytes),
                 canonical_ir_bytes_hex: hex_lower(&bytes),
             });
             LowerIrResult {
                 payload,
-                triggers: module.triggers,
+                triggers: out.module.triggers,
                 lower_error: None,
+                assets: out.assets,
             }
         }
         Err(e) => {
@@ -456,9 +536,27 @@ pub(crate) fn lower_ir(
                 payload: None,
                 triggers: Vec::new(),
                 lower_error: Some(e),
+                assets: BTreeMap::new(),
             }
         }
     }
+}
+
+/// Convert the asset blobs `tau_ir_lower` collected into the bundle's
+/// `[[assets]]` shape (bytes hex-encoded), sorted by hash for determinism.
+/// Shared by `tau build` and `tau verify --bundle` so both derive an
+/// identical asset store from the same source (D6-B).
+pub(crate) fn ir_assets_to_bundle(
+    ir_assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
+) -> Vec<tau_pkg::bundle::manifest::BundleAsset> {
+    ir_assets
+        .into_iter()
+        .map(|(hash, blob)| tau_pkg::bundle::manifest::BundleAsset {
+            hash,
+            kind: blob.kind.as_str().to_string(),
+            bytes_hex: hex_lower(&blob.bytes),
+        })
+        .collect()
 }
 
 /// `Caches::native_tool`-shaped stand-in: `Some(SHA-256(name))`.
@@ -639,6 +737,8 @@ mod tests {
             agents: vec![],
             offline: false,
             emit_trigger: None,
+            allow_ungoverned: false,
+            no_governance: false,
         }
     }
 

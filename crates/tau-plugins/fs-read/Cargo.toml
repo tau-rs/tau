@@ -39,3 +39,6 @@ rmp-serde           = { workspace = true }
 uuid                = { workspace = true, features = ["v7", "std"] }
 assert_matches      = { workspace = true }
 tokio               = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
