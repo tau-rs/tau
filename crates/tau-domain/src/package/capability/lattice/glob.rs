@@ -152,6 +152,120 @@ pub fn glob_subset_set(children: &[String], parents: &[String]) -> Result<(), St
     Ok(())
 }
 
+/// Exact language intersection of two normalized patterns. `None` = ∅.
+pub fn pattern_intersect(a: &Pattern, b: &Pattern) -> Option<Pattern> {
+    let mut out = Vec::new();
+    if intersect_segs(&a.0, &b.0, &mut out) {
+        Some(Pattern(out))
+    } else {
+        None
+    }
+}
+
+/// Recursive segment-wise intersection helper for [`pattern_intersect`].
+/// `StarStar` only ever appears trailing; its arms extend `out` with the
+/// *other* side's already-valid tail rather than fabricating a middle `**`.
+fn intersect_segs(a: &[Segment], b: &[Segment], out: &mut Vec<Segment>) -> bool {
+    match (a.first(), b.first()) {
+        // ** is ⊤ for suffixes: intersection is the *other* side's remaining tail
+        (Some(Segment::StarStar), _) => {
+            out.extend_from_slice(b);
+            true
+        }
+        (_, Some(Segment::StarStar)) => {
+            out.extend_from_slice(a);
+            true
+        }
+        (Some(Segment::Star), Some(Segment::Star)) => {
+            out.push(Segment::Star);
+            intersect_segs(&a[1..], &b[1..], out)
+        }
+        (Some(Segment::Star), Some(Segment::Literal(l)))
+        | (Some(Segment::Literal(l)), Some(Segment::Star)) => {
+            out.push(Segment::Literal(l.clone()));
+            intersect_segs(&a[1..], &b[1..], out)
+        }
+        (Some(Segment::Literal(x)), Some(Segment::Literal(y))) if x == y => {
+            out.push(Segment::Literal(x.clone()));
+            intersect_segs(&a[1..], &b[1..], out)
+        }
+        (None, None) => true,
+        _ => false, // literal≠literal, or one exhausted while other needs more
+    }
+}
+
+/// Render a normalized `Pattern` back to its canonical string form, e.g.
+/// `/a/b/**`.
+pub fn render(pat: &Pattern) -> String {
+    let mut s = String::new();
+    for seg in &pat.0 {
+        s.push('/');
+        match seg {
+            Segment::Literal(l) => s.push_str(l),
+            Segment::Star => s.push('*'),
+            Segment::StarStar => s.push_str("**"),
+        }
+    }
+    if s.is_empty() {
+        s.push('/');
+    }
+    s
+}
+
+/// Normalize, dedup, absorb (drop any pattern that is ⊆ another), and sort.
+pub fn glob_canon(pats: &[String]) -> Vec<String> {
+    // parse+normalize (drop un-parseable — they are ⊥ and carry no grants)
+    let mut parsed: Vec<Pattern> = Vec::new();
+    for p in pats {
+        if let Some(arms) = expand(p) {
+            parsed.extend(arms);
+        }
+    }
+    // absorb: keep pattern i only if it is not ⊆ some other distinct pattern j
+    let mut kept: Vec<Pattern> = Vec::new();
+    'outer: for (i, pi) in parsed.iter().enumerate() {
+        for (j, pj) in parsed.iter().enumerate() {
+            if i != j && pattern_subset(pi, pj) && !(pattern_subset(pj, pi) && j < i) {
+                // pi ⊆ pj and pj is the survivor (or the earlier of an equal pair)
+                continue 'outer;
+            }
+        }
+        kept.push(pi.clone());
+    }
+    let mut rendered: Vec<String> = kept.iter().map(render).collect();
+    rendered.sort();
+    rendered.dedup();
+    rendered
+}
+
+/// meet = canon(all pairwise intersections).
+pub fn glob_meet(a: &[String], b: &[String]) -> Vec<String> {
+    let (ap, bp) = match (join_expand(a), join_expand(b)) {
+        (Some(ap), Some(bp)) => (ap, bp),
+        // any un-parseable side collapses that side's grants to what parses
+        _ => (join_expand(a).unwrap_or_default(), join_expand(b).unwrap_or_default()),
+    };
+    let mut inter: Vec<String> = Vec::new();
+    for x in &ap {
+        for y in &bp {
+            if let Some(p) = pattern_intersect(x, y) {
+                inter.push(render(&p));
+            }
+        }
+    }
+    glob_canon(&inter)
+}
+
+/// Expand and flatten all patterns in a slice into one `Vec<Pattern>`;
+/// `None` if any pattern fails to parse.
+fn join_expand(pats: &[String]) -> Option<Vec<Pattern>> {
+    let mut out = Vec::new();
+    for p in pats {
+        out.extend(expand(p)?);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +349,38 @@ mod tests {
             glob_subset_set(&children, &parents).unwrap_err(),
             "/proj/etc/**"
         );
+    }
+
+    #[test]
+    fn meet_exact_intersection_new_pattern() {
+        assert_eq!(glob_meet(&["/a/**".into()], &["/*/b/**".into()]), vec!["/a/b/**".to_string()]);
+    }
+    #[test]
+    fn meet_smaller_operand() {
+        assert_eq!(glob_meet(&["/a/*".into()], &["/a/**".into()]), vec!["/a/*".to_string()]);
+    }
+    #[test]
+    fn meet_disjoint_is_empty() {
+        assert!(glob_meet(&["/a/**".into()], &["/b/**".into()]).is_empty());
+    }
+    #[test]
+    fn meet_literal_under_star() {
+        assert_eq!(glob_meet(&["/a/b".into()], &["/a/*".into()]), vec!["/a/b".to_string()]);
+    }
+    #[test]
+    fn canon_absorbs_redundant() {
+        assert_eq!(glob_canon(&["/a/**".into(), "/a/b/**".into()]), vec!["/a/**".to_string()]);
+    }
+    #[test]
+    fn canon_normalizes_dotdot() {
+        assert_eq!(glob_canon(&["/proj/../etc/**".into()]), vec!["/etc/**".to_string()]);
+    }
+    #[test]
+    fn meet_is_subset_of_both_operands() {
+        let a = ["/a/**".to_string()];
+        let b = ["/*/b/**".to_string()];
+        let m = glob_meet(&a, &b);
+        assert!(glob_subset_set(&m, &a).is_ok());
+        assert!(glob_subset_set(&m, &b).is_ok());
     }
 }
