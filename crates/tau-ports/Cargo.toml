@@ -18,7 +18,6 @@ schemars     = { workspace = true, optional = true }
 chrono = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 zeroize = { workspace = true }
 tempfile     = { workspace = true, optional = true }
-tracing = { workspace = true, default-features = false, features = ["attributes"] }
 
 [features]
 default       = ["process"]
