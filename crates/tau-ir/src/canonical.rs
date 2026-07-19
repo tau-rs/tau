@@ -52,7 +52,10 @@ struct VersionPeek {
 pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, IrError> {
     use alloc::string::ToString;
 
-    // Phase 1: peek the version.
+    // Phase 1: peek the version. This re-parses `bytes` a second time in
+    // phase 2 on the same-major path; deliberate — bundle load is a cold,
+    // once-per-run path, and a peek-then-full split keeps the version gate
+    // ahead of the full-shape decode without a custom streaming parser.
     let peek: VersionPeek =
         serde_json::from_slice(bytes).map_err(|e| IrError::Decode(e.to_string()))?;
     let bundle_major = peek

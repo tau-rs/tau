@@ -51,9 +51,11 @@ impl IrFormatVersion {
 
     /// Parse the semver MAJOR out of the version string.
     ///
-    /// Strips an optional leading `v`, then parses the integer before the
-    /// first `.`. Returns `Err(())` for any string that does not start
-    /// `[v]<digits>.`.
+    /// Strips an optional leading `v`, then parses the integer up to the
+    /// first `.` (or the end of the string). Returns `Err(())` when that
+    /// leading segment is empty or not a `u64`, so `v2.4.0`, `2.4.0`, and a
+    /// dotless `v2` all yield the major, while `""`, `v.4`, and `garbage`
+    /// are rejected.
     // `Result<u64, ()>` is the pinned Task-2 interface (D8-B brief); the
     // caller only branches on Ok/Err and doesn't need a richer error type
     // here — `FormatUnparseable` carries the diagnostic instead.
