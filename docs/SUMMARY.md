@@ -131,6 +131,7 @@
 - [ADR-0055 — tau identity: two contracts; CLI = reference host](decisions/0055-tau-identity-two-contracts.md)
 - [ADR-0056 — The two contracts are the semver stability surface](decisions/0056-contract-versioning-stability-surface.md)
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
+- [ADR-0059 — One host semantic: exact hostnames + a typed `any`](decisions/0059-one-host-semantic-exact-typed-any.md)
 
 # Retrospectives
 

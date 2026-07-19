@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn collect_paths_returns_empty_for_no_match() {
         let plan = plan_from(serde_json::json!([
-            { "kind": "net.http", "hosts": [], "methods": [] },
+            { "kind": "net.http", "hosts": ["example.com"] },
         ]));
         let read = collect_paths(&plan, |c| match c {
             Capability::Filesystem(FsCapability::Read { paths, .. }) => Some(paths.clone()),
