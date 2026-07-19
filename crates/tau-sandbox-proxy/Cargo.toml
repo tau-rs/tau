@@ -9,6 +9,7 @@ authors.workspace = true
 description = "HTTP-CONNECT proxy for tau's sandboxed plugins (replaces F's veth+nft per ADR-0020)"
 
 [dependencies]
+tau-domain = { workspace = true }
 tokio     = { workspace = true, features = ["io-util", "macros", "net", "rt", "time"] }
 thiserror = { workspace = true }
 tracing   = { workspace = true }

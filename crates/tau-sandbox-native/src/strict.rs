@@ -390,25 +390,18 @@ pub(crate) fn apply_strict(
     // and wrap cmd with tau-net-bridge so the child dials through the proxy.
     // The proxy guard is returned inside the CapabilityHandle for LIFO cleanup.
     let proxy_handle = if has_network_http {
-        // Collect allowed hosts from all Http capabilities.
-        let mut allowed_hosts: Vec<String> = Vec::new();
-        for cap in &plan.capabilities {
-            if let tau_domain::Capability::Network(tau_domain::NetCapability::Http {
-                hosts, ..
-            }) = cap
-            {
-                allowed_hosts.extend(hosts.iter().cloned());
-            }
-        }
+        // Fold Http capabilities into an egress policy (Any = allow-all).
+        let policy = tau_sandbox_proxy::HostPolicy::from_capabilities(&plan.capabilities);
 
         // Validate hosts: rejects wildcards + non-loopback IP literals.
-        tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
+        // `Any` has nothing to validate.
+        policy.validate().map_err(|e| CapabilityError::Proxy {
             message: format!("host validation: {e}"),
         })?;
 
         // Spawn the proxy task in the parent's tokio runtime.
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(policy).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         let proxy_sock_path = handle.sock_path().to_path_buf();

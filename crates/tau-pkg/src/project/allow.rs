@@ -235,7 +235,7 @@ pub fn validate_allow(raw: UncheckedAllow) -> Result<AllowConfig, ProjectConfigE
 mod tests {
     use super::*;
 
-    use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
+    use tau_domain::{Capability, FsCapability, NetCapability, NetHosts, ProcessCapability};
 
     fn allow_from(toml: &str) -> UncheckedAllow {
         toml::from_str(toml).expect("parse [allow]")
@@ -258,7 +258,7 @@ mod tests {
         )));
         assert!(cfg.ceiling.iter().any(|c| matches!(
             c,
-            Capability::Network(NetCapability::Http { hosts, .. }) if hosts == &["api.weather.com".to_string()]
+            Capability::Network(NetCapability::Http { hosts: NetHosts::List(hosts), .. }) if hosts == &["api.weather.com".to_string()]
         )));
         assert!(cfg.ceiling.iter().any(|c| matches!(
             c,

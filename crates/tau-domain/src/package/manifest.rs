@@ -204,6 +204,7 @@ pub mod kinds {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct UncheckedManifest {
     /// Package name.
     pub name: PackageName,

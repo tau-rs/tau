@@ -46,9 +46,9 @@ pub use package::detect_format;
 pub use package::synthesize_manifest_from_skill_md;
 pub use package::{
     kinds, AgentCapability, Capability, CapabilityShape, CapabilityShapeSet, FsCapability,
-    GitLocation, NetCapability, PackageDep, PackageId, PackageKind, PackageManifest, PackageSource,
-    PluginKind, PluginManifest, PluginRequiredTier, PluginSandboxRequirements, PortKind,
-    ProcessCapability, SkillCapability, SkillFormat, SynthesizeError, UncheckedManifest,
+    GitLocation, NetCapability, NetHosts, PackageDep, PackageId, PackageKind, PackageManifest,
+    PackageSource, PluginKind, PluginManifest, PluginRequiredTier, PluginSandboxRequirements,
+    PortKind, ProcessCapability, SkillCapability, SkillFormat, SynthesizeError, UncheckedManifest,
 };
 pub use value::Value;
 pub use version::{Version, VersionReq};

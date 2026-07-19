@@ -38,7 +38,6 @@ use std::sync::Arc;
 
 use tokio::sync::OnceCell;
 
-use tau_domain::{Capability, NetCapability};
 use tau_ports::{
     CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
     CapabilityShapeSet, ProcessCapabilityGate,
@@ -90,19 +89,11 @@ impl CapabilityGate for WindowsSandbox {
                 return Err(CapabilityError::ShapeUnsupported { shape });
             }
         }
-        let mut allowed_hosts: Vec<String> = Vec::new();
-        for cap in &plan.capabilities {
-            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                allowed_hosts.extend(hosts.iter().cloned());
-            }
-        }
-        if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| {
-                CapabilityError::Proxy {
-                    message: format!("host validation: {e}"),
-                }
+        tau_sandbox_proxy::HostPolicy::from_capabilities(&plan.capabilities)
+            .validate()
+            .map_err(|e| CapabilityError::Proxy {
+                message: format!("host validation: {e}"),
             })?;
-        }
         Ok(())
     }
 }

@@ -491,8 +491,16 @@ fn effective_to_bundle(
                 out.deny_exec.extend(e.deny.clone());
             }
             Capability::Network(NetCapability::Http { hosts, .. }) => {
-                out.allow_net_http
-                    .extend(e.allow_override.clone().unwrap_or_else(|| hosts.clone()));
+                // An explicit allow-override always narrows to a concrete list.
+                // Absent an override, `hosts = "any"` records the any-host
+                // grant; a list contributes its patterns (D7-B).
+                match &e.allow_override {
+                    Some(ov) => out.allow_net_http.extend(ov.clone()),
+                    None => match hosts {
+                        tau_domain::NetHosts::Any => out.any_net_http = true,
+                        tau_domain::NetHosts::List(h) => out.allow_net_http.extend(h.clone()),
+                    },
+                }
                 out.deny_net_http.extend(e.deny.clone());
             }
             Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {

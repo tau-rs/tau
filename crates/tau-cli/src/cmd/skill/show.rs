@@ -59,7 +59,10 @@ fn cap_to_json(c: &tau_domain::Capability) -> CapabilityJson {
         }
         C::Network(Net::Http { hosts, methods, .. }) => {
             out.kind = "net.http".into();
-            out.hosts = Some(hosts.clone());
+            out.hosts = Some(match hosts {
+                tau_domain::NetHosts::Any => vec!["any".to_string()],
+                tau_domain::NetHosts::List(h) => h.clone(),
+            });
             out.methods = Some(methods.clone());
         }
         C::Process(Proc::Spawn { commands, .. }) => {

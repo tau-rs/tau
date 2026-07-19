@@ -453,6 +453,7 @@ dependencies = []
 
 [[capabilities]]
 kind = "agent.spawn"
+allowed_kinds = ["worker"]
 "#,
         );
         let entry = tau_ports::target::lookup(&"linux-native-strict".parse().unwrap()).unwrap();

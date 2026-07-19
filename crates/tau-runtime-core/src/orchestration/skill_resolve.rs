@@ -410,7 +410,9 @@ mod tests {
         assert_eq!(out.len(), 1);
         match &out[0] {
             Capability::Network(NetCapability::Http {
-                hosts, methods: _, ..
+                hosts: tau_domain::NetHosts::List(hosts),
+                methods: _,
+                ..
             }) => {
                 assert_eq!(hosts[0], "api.example.com");
             }

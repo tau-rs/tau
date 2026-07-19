@@ -31,8 +31,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use tau_domain::{
-    AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
-    Value,
+    AgentCapability, Capability, FsCapability, NetCapability, NetHosts, ProcessCapability,
+    SkillCapability, Value,
 };
 
 /// Returns `true` iff `granted` covers `required` for one capability pair.
@@ -194,7 +194,7 @@ pub fn net_satisfies(granted: &NetCapability, required: &NetCapability) -> bool 
                 methods: rm,
                 ..
             },
-        ) => paths_subset(gh, rh) && string_subset(gm, rm),
+        ) => net_hosts_subsume(gh, rh) && string_subset(gm, rm),
         // Future `NetCapability` variants added in tau-domain default
         // to deny — additive evolution must not silently widen grants.
         _ => false,
@@ -326,6 +326,17 @@ fn paths_subset(granted: &[String], required: &[String]) -> bool {
 /// for HTTP methods and agent-spawn kinds — non-glob string sets.
 fn string_subset(granted: &[String], required: &[String]) -> bool {
     required.iter().all(|r| granted.contains(r))
+}
+
+/// Host subsumption for `net.http` (D7-B `NetHosts`). A granted `Any`
+/// subsumes everything; a granted list subsumes a required list under the
+/// host-glob rules but never subsumes a required `Any` (fail-closed).
+fn net_hosts_subsume(granted: &NetHosts, required: &NetHosts) -> bool {
+    match (granted, required) {
+        (NetHosts::Any, _) => true,
+        (NetHosts::List(_), NetHosts::Any) => false,
+        (NetHosts::List(g), NetHosts::List(r)) => paths_subset(g, r),
+    }
 }
 
 /// Glob matcher. Splits on `/`. `**` matches zero or more segments,

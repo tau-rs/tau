@@ -31,6 +31,61 @@ pub use connect::{parse_connect_request, peek_sni, ConnectRequest};
 pub use http::{parse_http_request, rewrite_request_line, HttpParseError, HttpRequest};
 pub use validate::{validate_hosts, ValidationError};
 
+use tau_domain::{Capability, NetCapability, NetHosts};
+
+/// The host egress policy the proxy enforces. Derived from a plan's
+/// `net.http` capabilities: [`NetHosts::Any`] anywhere yields
+/// [`HostPolicy::Any`] (unrestricted egress); otherwise the union of the
+/// explicit host lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostPolicy {
+    /// Unrestricted egress — every host is allowed (`net.http hosts = "any"`).
+    Any,
+    /// Egress restricted to this exact host allow-list.
+    List(Vec<String>),
+}
+
+impl HostPolicy {
+    /// Fold a plan's capabilities into a single egress policy. Any
+    /// `net.http` capability granting [`NetHosts::Any`] makes the whole
+    /// policy [`HostPolicy::Any`]; otherwise the host lists are unioned.
+    pub fn from_capabilities(caps: &[Capability]) -> Self {
+        let mut list = Vec::new();
+        for cap in caps {
+            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
+                match hosts {
+                    NetHosts::Any => return HostPolicy::Any,
+                    NetHosts::List(h) => list.extend(h.iter().cloned()),
+                }
+            }
+        }
+        HostPolicy::List(list)
+    }
+
+    /// `true` if `host` is permitted to egress under this policy.
+    pub fn allows(&self, host: &str) -> bool {
+        match self {
+            HostPolicy::Any => true,
+            HostPolicy::List(hosts) => hosts.iter().any(|h| h == host),
+        }
+    }
+
+    /// `true` if this policy permits no egress at all (empty explicit list).
+    pub fn is_empty(&self) -> bool {
+        matches!(self, HostPolicy::List(h) if h.is_empty())
+    }
+
+    /// Validate the host forms the proxy can enforce (rejects wildcards /
+    /// non-loopback IP literals). [`HostPolicy::Any`] has nothing to
+    /// validate.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        match self {
+            HostPolicy::Any => Ok(()),
+            HostPolicy::List(hosts) => validate_hosts(hosts),
+        }
+    }
+}
+
 // The async runtime code below is unix-only — it relies on Unix-domain
 // sockets (`tokio::net::Unix*`). The strict-tier sandbox is also unix-only
 // (landlock, seccomp, namespaces), so this module's runtime API is only
@@ -82,10 +137,10 @@ impl Drop for ProxyHandle {
 /// socket path (e.g. via landlock rules for native, bind-mount for container)
 /// so the bridge inside the sandbox can dial it.
 #[cfg(unix)]
-pub fn spawn_proxy(allowed_hosts: Vec<String>) -> std::io::Result<ProxyHandle> {
+pub fn spawn_proxy(policy: HostPolicy) -> std::io::Result<ProxyHandle> {
     let (sock_dir, sock_path) = make_run_dir_and_sock_path()?;
     let listener = UnixListener::bind(&sock_path)?;
-    let task = tokio::spawn(accept_loop(listener, allowed_hosts));
+    let task = tokio::spawn(accept_loop(listener, policy));
     Ok(ProxyHandle {
         sock_path,
         sock_dir,
@@ -125,13 +180,13 @@ fn make_run_dir_and_sock_path() -> std::io::Result<(PathBuf, PathBuf)> {
 }
 
 #[cfg(unix)]
-async fn accept_loop(listener: UnixListener, allowed_hosts: Vec<String>) {
+async fn accept_loop(listener: UnixListener, policy: HostPolicy) {
     loop {
         match listener.accept().await {
             Ok((mut conn, _)) => {
-                let hosts = allowed_hosts.clone();
+                let policy = policy.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(&mut conn, &hosts).await {
+                    if let Err(e) = handle_connection(&mut conn, &policy).await {
                         tracing::warn!(error = %e, "proxy connection failed");
                     }
                 });
@@ -147,7 +202,7 @@ async fn accept_loop(listener: UnixListener, allowed_hosts: Vec<String>) {
 #[cfg(unix)]
 async fn handle_connection(
     plugin_sock: &mut UnixStream,
-    allowed_hosts: &[String],
+    policy: &HostPolicy,
 ) -> std::io::Result<()> {
     let mut buf = [0u8; 4096];
     let n = plugin_sock.read(&mut buf).await?;
@@ -156,9 +211,9 @@ async fn handle_connection(
         None => &buf[..n],
     };
     if first_line.starts_with(b"CONNECT ") {
-        handle_connect(plugin_sock, &buf[..n], allowed_hosts).await
+        handle_connect(plugin_sock, &buf[..n], policy).await
     } else {
-        handle_http(plugin_sock, &buf[..n], allowed_hosts).await
+        handle_http(plugin_sock, &buf[..n], policy).await
     }
 }
 
@@ -166,7 +221,7 @@ async fn handle_connection(
 async fn handle_connect(
     plugin_sock: &mut UnixStream,
     initial: &[u8],
-    allowed_hosts: &[String],
+    policy: &HostPolicy,
 ) -> std::io::Result<()> {
     let req = match parse_connect_request(initial) {
         Ok(r) => r,
@@ -177,7 +232,7 @@ async fn handle_connect(
             return Ok(());
         }
     };
-    if !allowed_hosts.iter().any(|h| h == &req.host) {
+    if !policy.allows(&req.host) {
         plugin_sock
             .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             .await?;
@@ -297,7 +352,7 @@ fn http_port_allowed(host: &str, port: u16) -> bool {
 async fn handle_http(
     plugin_sock: &mut UnixStream,
     initial: &[u8],
-    allowed_hosts: &[String],
+    policy: &HostPolicy,
 ) -> std::io::Result<()> {
     let req = match parse_http_request(initial) {
         Ok(r) => r,
@@ -308,7 +363,7 @@ async fn handle_http(
             return Ok(());
         }
     };
-    if !allowed_hosts.iter().any(|h| h == &req.host) {
+    if !policy.allows(&req.host) {
         plugin_sock
             .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             .await?;
@@ -360,7 +415,7 @@ mod proxy_lifecycle_tests {
     #[tokio::test]
     async fn socket_lives_in_private_0700_dir() {
         use std::os::unix::fs::PermissionsExt;
-        let h = spawn_proxy(vec!["example.com".to_string()]).expect("spawn");
+        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
         let sock = h.sock_path().to_path_buf();
         let dir = sock
             .parent()
@@ -389,7 +444,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn proxy_handle_drop_unlinks_socket_file() {
-        let h = spawn_proxy(vec!["example.com".to_string()]).expect("spawn");
+        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
         let path = h.sock_path().to_path_buf();
         assert!(path.exists(), "socket file should exist after spawn");
         drop(h);
@@ -400,7 +455,8 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn forbidden_host_returns_403() {
-        let h = spawn_proxy(vec!["allowed.example.com".to_string()]).expect("spawn");
+        let h =
+            spawn_proxy(HostPolicy::List(vec!["allowed.example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(b"CONNECT denied.example.com:443 HTTP/1.1\r\n\r\n")
             .await
@@ -413,7 +469,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn malformed_request_returns_400() {
-        let h = spawn_proxy(vec!["example.com".to_string()]).expect("spawn");
+        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         // Use a truly malformed request (no newline at all) so it lands in the
         // HTTP parse error path and returns 400.
@@ -428,7 +484,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn non_443_port_returns_400() {
-        let h = spawn_proxy(vec!["example.com".to_string()]).expect("spawn");
+        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(b"CONNECT example.com:80 HTTP/1.1\r\n\r\n")
             .await
@@ -441,7 +497,8 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn http_forbidden_host_returns_403() {
-        let h = spawn_proxy(vec!["allowed.example.com".to_string()]).expect("spawn");
+        let h =
+            spawn_proxy(HostPolicy::List(vec!["allowed.example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(
             b"GET http://denied.example.com/ HTTP/1.1\r\nHost: denied.example.com\r\n\r\n",
@@ -456,7 +513,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn http_malformed_returns_400() {
-        let h = spawn_proxy(vec!["example.com".to_string()]).expect("spawn");
+        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(b"NOTAMETHOD / HTTP/1.1\r\n\r\n")
             .await
@@ -469,7 +526,8 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn http_non_loopback_non_80_port_returns_400() {
-        let h = spawn_proxy(vec!["allowed.example.com".to_string()]).expect("spawn");
+        let h =
+            spawn_proxy(HostPolicy::List(vec!["allowed.example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         // Allowlisted host, but plaintext on a non-80 port: must be rejected,
         // mirroring CONNECT's non-443 -> 400.
@@ -486,7 +544,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn http_loopback_arbitrary_port_not_rejected_by_port_gate() {
-        let h = spawn_proxy(vec!["127.0.0.1".to_string()]).expect("spawn");
+        let h = spawn_proxy(HostPolicy::List(vec!["127.0.0.1".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         // Loopback host on an arbitrary (closed) port: the port gate must NOT
         // reject it. It reaches the upstream-connect path, which fails to dial
@@ -576,7 +634,7 @@ mod splice_logging_tests {
             // drop -> clean close -> EOF on the remote->client copy direction
         });
 
-        let h = spawn_proxy(vec!["127.0.0.1".to_string()]).expect("spawn");
+        let h = spawn_proxy(HostPolicy::List(vec!["127.0.0.1".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         let req =
             format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");

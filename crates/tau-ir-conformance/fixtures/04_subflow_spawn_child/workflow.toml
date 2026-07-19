@@ -29,4 +29,4 @@ capabilities = []
 [tools.page]
 mcp          = "https://mcp.pager.example.com"
 description  = "Page the on-call rotation."
-capabilities = [{ kind = "net.http" }]
+capabilities = [{ kind = "net.http", hosts = "any" }]

@@ -81,20 +81,13 @@ impl CapabilityGate for DarwinSandbox {
             }
         }
         // Reject HTTP plans whose host allowlist contains forms the proxy
-        // can't validate (wildcards, non-loopback IP literals).
-        let mut allowed_hosts: Vec<String> = Vec::new();
-        for cap in &plan.capabilities {
-            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                allowed_hosts.extend(hosts.iter().cloned());
-            }
-        }
-        if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| {
-                CapabilityError::Proxy {
-                    message: format!("host validation: {e}"),
-                }
+        // can't validate (wildcards, non-loopback IP literals). `hosts = "any"`
+        // has nothing to validate (allow-all egress).
+        tau_sandbox_proxy::HostPolicy::from_capabilities(&plan.capabilities)
+            .validate()
+            .map_err(|e| CapabilityError::Proxy {
+                message: format!("host validation: {e}"),
             })?;
-        }
         Ok(())
     }
 }
@@ -162,14 +155,9 @@ async fn wrap_spawn_macos(
         .iter()
         .any(|c| matches!(c, Capability::Network(NetCapability::Http { .. })));
     let proxy_handle = if has_http {
-        let mut allowed_hosts: Vec<String> = Vec::new();
-        for cap in &plan.capabilities {
-            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                allowed_hosts.extend(hosts.iter().cloned());
-            }
-        }
+        let policy = tau_sandbox_proxy::HostPolicy::from_capabilities(&plan.capabilities);
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(policy).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         Some(handle)

@@ -134,11 +134,79 @@ pub enum NetCapability {
     /// HTTP requests to the allow-listed hosts and methods.
     #[non_exhaustive]
     Http {
-        /// Allowed hosts (exact match or glob).
-        hosts: Vec<String>,
+        /// Allowed hosts. Either an explicit allow-list ([`NetHosts::List`],
+        /// exact match or glob) or the any-host escape hatch
+        /// ([`NetHosts::Any`], `hosts = "any"`). Absent / empty at parse
+        /// time is a hard error (D7-B: `net.http` requires hosts).
+        hosts: NetHosts,
         /// Allowed HTTP methods (uppercase by convention, e.g. `["GET", "POST"]`).
         methods: Vec<String>,
     },
+}
+
+/// Host ceiling for a [`NetCapability::Http`] capability. Wire form is a
+/// string-or-list: `hosts = "any"` → [`NetHosts::Any`]; `hosts = ["a.com",
+/// "*.b.com"]` → [`NetHosts::List`]. An empty list is rejected at capability
+/// parse time (D7-B). `Any` denotes unrestricted egress and, in the
+/// capability lattice, subsumes every host list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetHosts {
+    /// Any host (`hosts = "any"`). Unrestricted egress; subsumes every list.
+    Any,
+    /// Explicit allow-list (exact match or glob). Non-empty by construction.
+    List(Vec<String>),
+}
+
+impl NetHosts {
+    /// The host globs as a slice, or `&[]` for [`NetHosts::Any`]. Callers
+    /// that must also honor `Any` (allow-all) should match the variant
+    /// directly rather than relying on this.
+    pub fn as_list(&self) -> &[String] {
+        match self {
+            NetHosts::Any => &[],
+            NetHosts::List(v) => v,
+        }
+    }
+
+    /// `true` for the any-host escape hatch.
+    pub fn is_any(&self) -> bool {
+        matches!(self, NetHosts::Any)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for NetHosts {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            NetHosts::Any => s.serialize_str("any"),
+            NetHosts::List(v) => v.serialize(s),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for NetHosts {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        // Accept either the string `"any"` or a sequence of host globs.
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Str(String),
+            List(Vec<String>),
+        }
+        match Repr::deserialize(d)? {
+            Repr::Str(s) if s == "any" => Ok(NetHosts::Any),
+            Repr::Str(s) => Err(D::Error::custom(alloc::format!(
+                "net.http hosts string must be \"any\" (got {s:?}); \
+                 use a list for specific hosts"
+            ))),
+            Repr::List(v) if v.is_empty() => Err(D::Error::custom(
+                "net.http hosts list must be non-empty (use \"any\" for unrestricted egress)",
+            )),
+            Repr::List(v) => Ok(NetHosts::List(v)),
+        }
+    }
 }
 
 /// Process capability verbs.
@@ -393,7 +461,7 @@ mod capability_de {
         #[serde(default)]
         max_bytes: Option<u64>,
         #[serde(default)]
-        hosts: Option<Vec<String>>,
+        hosts: Option<NetHosts>,
         #[serde(default)]
         methods: Option<Vec<String>>,
         #[serde(default)]
@@ -408,72 +476,187 @@ mod capability_de {
         rest: BTreeMap<String, Value>,
     }
 
+    impl RawCapability {
+        /// The named fields the caller actually supplied (excludes `kind` and
+        /// the `rest` flatten-map). Drives field-shape strictness (D7-B PR1).
+        fn present_named(&self) -> Vec<&'static str> {
+            let mut v = Vec::new();
+            if self.paths.is_some() {
+                v.push("paths");
+            }
+            if self.max_bytes.is_some() {
+                v.push("max_bytes");
+            }
+            if self.hosts.is_some() {
+                v.push("hosts");
+            }
+            if self.methods.is_some() {
+                v.push("methods");
+            }
+            if self.commands.is_some() {
+                v.push("commands");
+            }
+            if self.allowed_kinds.is_some() {
+                v.push("allowed_kinds");
+            }
+            if self.allowed_skills.is_some() {
+                v.push("allowed_skills");
+            }
+            if self.mode.is_some() {
+                v.push("mode");
+            }
+            v
+        }
+    }
+
+    /// Reject any field the caller supplied that is not valid for `kind`.
+    /// `allowed` is the exact set of named fields the kind accepts; anything
+    /// else (a named field OR an unknown flatten key) is an error that names
+    /// the offending field and the kind's expected shape (D7-B PR1: no more
+    /// silent `unwrap_or_default` conflation).
+    fn reject_extra_fields<E: serde::de::Error>(
+        raw: &RawCapability,
+        allowed: &[&str],
+        shape: &str,
+    ) -> Result<(), E> {
+        for field in raw.present_named() {
+            if !allowed.contains(&field) {
+                return Err(E::custom(alloc::format!(
+                    "capability kind {:?}: unexpected field {:?} ({} accepts: {})",
+                    raw.kind,
+                    field,
+                    raw.kind,
+                    shape
+                )));
+            }
+        }
+        if let Some((key, _)) = raw.rest.iter().next() {
+            return Err(E::custom(alloc::format!(
+                "capability kind {:?}: unexpected field {:?} ({} accepts: {})",
+                raw.kind,
+                key,
+                raw.kind,
+                shape
+            )));
+        }
+        Ok(())
+    }
+
     impl<'de> Deserialize<'de> for Capability {
         fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            use serde::de::Error as _;
             let raw = RawCapability::deserialize(d)?;
             Ok(match raw.kind.as_str() {
-                "fs.read" => Capability::Filesystem(FsCapability::Read {
-                    paths: raw.paths.unwrap_or_default(),
-                }),
-                "fs.write" => Capability::Filesystem(FsCapability::Write {
-                    paths: raw.paths.unwrap_or_default(),
-                    max_bytes: raw.max_bytes,
-                }),
-                "fs.exec" => Capability::Filesystem(FsCapability::Exec {
-                    paths: raw.paths.unwrap_or_default(),
-                }),
-                "net.http" => Capability::Network(NetCapability::Http {
-                    hosts: raw.hosts.unwrap_or_default(),
-                    methods: raw.methods.unwrap_or_default(),
-                }),
-                "process.spawn" => Capability::Process(ProcessCapability::Spawn {
-                    commands: raw.commands.unwrap_or_default(),
-                }),
-                "agent.spawn" => Capability::Agent(AgentCapability::Spawn {
-                    allowed_kinds: raw.allowed_kinds.unwrap_or_default(),
-                }),
-                "skill.spawn" => Capability::Skill(SkillCapability::Spawn {
-                    allowed_skills: raw.allowed_skills.unwrap_or_default(),
-                }),
-                "task_list" => match raw.mode.as_deref() {
-                    Some(m @ ("read" | "write" | "manage")) => Capability::TaskList {
-                        mode: m.to_string(),
-                    },
-                    _ => {
-                        // Unknown mode: fall back to Custom but preserve mode
-                        // in params so downstream tools (capability_satisfies)
-                        // can see all fields the caller supplied.
-                        let mut params = raw.rest;
-                        if let Some(m) = raw.mode {
-                            params.insert("mode".into(), Value::String(m));
+                "fs.read" => {
+                    reject_extra_fields(&raw, &["paths"], "paths")?;
+                    Capability::Filesystem(FsCapability::Read {
+                        paths: raw.paths.ok_or_else(|| {
+                            D::Error::custom("capability kind \"fs.read\": requires `paths`")
+                        })?,
+                    })
+                }
+                "fs.write" => {
+                    reject_extra_fields(&raw, &["paths", "max_bytes"], "paths, max_bytes")?;
+                    Capability::Filesystem(FsCapability::Write {
+                        paths: raw.paths.ok_or_else(|| {
+                            D::Error::custom("capability kind \"fs.write\": requires `paths`")
+                        })?,
+                        max_bytes: raw.max_bytes,
+                    })
+                }
+                "fs.exec" => {
+                    reject_extra_fields(&raw, &["paths"], "paths")?;
+                    Capability::Filesystem(FsCapability::Exec {
+                        paths: raw.paths.ok_or_else(|| {
+                            D::Error::custom("capability kind \"fs.exec\": requires `paths`")
+                        })?,
+                    })
+                }
+                "net.http" => {
+                    reject_extra_fields(&raw, &["hosts", "methods"], "hosts, methods")?;
+                    Capability::Network(NetCapability::Http {
+                        hosts: raw.hosts.ok_or_else(|| {
+                            D::Error::custom(
+                                "capability kind \"net.http\": requires `hosts` \
+                                 (a non-empty list, or \"any\" for unrestricted egress)",
+                            )
+                        })?,
+                        methods: raw.methods.unwrap_or_default(),
+                    })
+                }
+                "process.spawn" => {
+                    reject_extra_fields(&raw, &["commands"], "commands")?;
+                    Capability::Process(ProcessCapability::Spawn {
+                        commands: raw.commands.ok_or_else(|| {
+                            D::Error::custom(
+                                "capability kind \"process.spawn\": requires `commands`",
+                            )
+                        })?,
+                    })
+                }
+                "agent.spawn" => {
+                    reject_extra_fields(&raw, &["allowed_kinds"], "allowed_kinds")?;
+                    Capability::Agent(AgentCapability::Spawn {
+                        allowed_kinds: raw.allowed_kinds.ok_or_else(|| {
+                            D::Error::custom(
+                                "capability kind \"agent.spawn\": requires `allowed_kinds`",
+                            )
+                        })?,
+                    })
+                }
+                "skill.spawn" => {
+                    reject_extra_fields(&raw, &["allowed_skills"], "allowed_skills")?;
+                    Capability::Skill(SkillCapability::Spawn {
+                        allowed_skills: raw.allowed_skills.ok_or_else(|| {
+                            D::Error::custom(
+                                "capability kind \"skill.spawn\": requires `allowed_skills`",
+                            )
+                        })?,
+                    })
+                }
+                "task_list" => {
+                    reject_extra_fields(&raw, &["mode"], "mode")?;
+                    match raw.mode.as_deref() {
+                        Some(m @ ("read" | "write" | "manage")) => Capability::TaskList {
+                            mode: m.to_string(),
+                        },
+                        Some(other) => {
+                            return Err(D::Error::custom(alloc::format!(
+                                "capability kind \"task_list\": mode {other:?} unsupported \
+                                 (accepts \"read\", \"write\", \"manage\")"
+                            )))
                         }
-                        Capability::Custom {
-                            name: raw.kind,
-                            params,
+                        None => {
+                            return Err(D::Error::custom(
+                                "capability kind \"task_list\": requires `mode`",
+                            ))
                         }
                     }
-                },
-                "plan" => match raw.mode.as_deref() {
-                    Some(m @ ("read" | "write")) => Capability::Plan {
-                        mode: m.to_string(),
-                    },
-                    _ => {
-                        let mut params = raw.rest;
-                        if let Some(m) = raw.mode {
-                            params.insert("mode".into(), Value::String(m));
+                }
+                "plan" => {
+                    reject_extra_fields(&raw, &["mode"], "mode")?;
+                    match raw.mode.as_deref() {
+                        Some(m @ ("read" | "write")) => Capability::Plan {
+                            mode: m.to_string(),
+                        },
+                        Some(other) => {
+                            return Err(D::Error::custom(alloc::format!(
+                                "capability kind \"plan\": mode {other:?} unsupported \
+                                 (accepts \"read\", \"write\")"
+                            )))
                         }
-                        Capability::Custom {
-                            name: raw.kind,
-                            params,
+                        None => {
+                            return Err(D::Error::custom(
+                                "capability kind \"plan\": requires `mode`",
+                            ))
                         }
                     }
-                },
+                }
                 _ => {
-                    // For any unknown kind, the Custom fallback must
-                    // preserve every JSON field the caller supplied. Since
-                    // `mode` is a named field on RawCapability (added for
-                    // task_list/plan parsing), it does NOT live in `rest`
-                    // for non-task_list/plan kinds — re-insert it.
+                    // Unknown kind: PR1 keeps the permissive Custom fallback
+                    // (kind strictness + explicit `custom.` namespace is PR2).
+                    // Preserve every field the caller supplied. `mode` is a
+                    // named field on RawCapability, so re-insert it into params.
                     let mut params = raw.rest;
                     if let Some(m) = raw.mode {
                         params.insert("mode".into(), Value::String(m));
@@ -603,14 +786,19 @@ impl schemars::JsonSchema for Capability {
                         "paths": { "type": "array", "items": { "type": "string" } }
                     }
                 },
-                // net.http
+                // net.http  (hosts: "any" | non-empty list; methods optional)
                 {
                     "type": "object",
-                    "required": ["kind", "hosts", "methods"],
+                    "required": ["kind", "hosts"],
                     "additionalProperties": false,
                     "properties": {
                         "kind":    { "const": "net.http" },
-                        "hosts":   { "type": "array", "items": { "type": "string" } },
+                        "hosts":   {
+                            "oneOf": [
+                                { "const": "any" },
+                                { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+                            ]
+                        },
                         "methods": { "type": "array", "items": { "type": "string" } }
                     }
                 },
@@ -725,7 +913,7 @@ mod shape_tests {
     #[test]
     fn net_http_required_shape() {
         let cap = Capability::Network(NetCapability::Http {
-            hosts: vec!["api.example.com".into()],
+            hosts: NetHosts::List(vec!["api.example.com".into()]),
             methods: vec!["GET".into()],
         });
         assert_eq!(cap.required_shape(), CapabilityShape::NetworkHttp);
@@ -847,13 +1035,109 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn task_list_with_unknown_mode_falls_back_to_custom() {
+    fn task_list_with_unknown_mode_is_rejected() {
+        // D7-B PR1: unknown mode is a hard error, not a silent Custom fallback.
         let json = r#"{"kind":"task_list","mode":"bogus"}"#;
+        let err = serde_json::from_str::<Capability>(json).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("task_list"), "got: {msg}");
+        assert!(msg.contains("bogus"), "got: {msg}");
+    }
+
+    // ----- D7-B PR1: field-shape strictness -----
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn fs_read_requires_paths() {
+        let err = serde_json::from_str::<Capability>(r#"{"kind":"fs.read"}"#).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("fs.read") && msg.contains("paths"),
+            "got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn net_http_requires_hosts() {
+        // The canonical bare-net.http case that used to parse as empty hosts.
+        let err = serde_json::from_str::<Capability>(r#"{"kind":"net.http"}"#).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("net.http") && msg.contains("hosts"),
+            "got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn net_http_any_host_round_trips() {
+        let json = r#"{"kind":"net.http","hosts":"any","methods":[]}"#;
         let cap: Capability = serde_json::from_str(json).unwrap();
-        match cap {
-            Capability::Custom { name, .. } => assert_eq!(name, "task_list"),
-            other => panic!("expected Custom-fallback, got {other:?}"),
-        }
+        assert!(matches!(
+            cap,
+            Capability::Network(NetCapability::Http {
+                hosts: NetHosts::Any,
+                ..
+            })
+        ));
+        assert_eq!(serde_json::to_string(&cap).unwrap(), json);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn net_http_host_list_round_trips() {
+        let json = r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET"]}"#;
+        let cap: Capability = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            &cap,
+            Capability::Network(NetCapability::Http { hosts: NetHosts::List(h), .. }) if h == &["api.x.com".to_string()]
+        ));
+        assert_eq!(serde_json::to_string(&cap).unwrap(), json);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn net_http_empty_host_list_rejected() {
+        let err =
+            serde_json::from_str::<Capability>(r#"{"kind":"net.http","hosts":[]}"#).unwrap_err();
+        assert!(err.to_string().contains("non-empty"), "got: {err}");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn paths_on_net_http_rejected() {
+        let json = r#"{"kind":"net.http","hosts":"any","paths":["/x"]}"#;
+        let err = serde_json::from_str::<Capability>(json).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("net.http") && msg.contains("paths"),
+            "got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn hosts_on_fs_read_rejected() {
+        let json = r#"{"kind":"fs.read","paths":["/x"],"hosts":["a.com"]}"#;
+        let err = serde_json::from_str::<Capability>(json).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("fs.read") && msg.contains("hosts"),
+            "got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn unknown_field_on_known_kind_rejected() {
+        let json = r#"{"kind":"fs.read","paths":["/x"],"bogus":1}"#;
+        let err = serde_json::from_str::<Capability>(json).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("fs.read") && msg.contains("bogus"),
+            "got: {msg}"
+        );
     }
 
     #[cfg(feature = "serde")]

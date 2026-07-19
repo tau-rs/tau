@@ -7,7 +7,8 @@
 
 use super::glob_subset::is_glob_subset_set;
 use tau_domain::{
-    AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
+    AgentCapability, Capability, FsCapability, NetCapability, NetHosts, ProcessCapability,
+    SkillCapability,
 };
 
 /// A single child capability that exceeds the parent ceiling. The caller
@@ -119,10 +120,7 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
                     .map_err(|tok| (tok, "exceeds ceiling max_bytes".to_string())),
             }
         }
-        Capability::Network(NetCapability::Http { hosts, .. }) => {
-            let ph = gather_hosts(parents);
-            string_set_subset(hosts, &ph).map_err(|o| (o, "host not in ceiling".into()))
-        }
+        Capability::Network(NetCapability::Http { hosts, .. }) => hosts_subset(hosts, parents),
         Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
             let pc = gather_commands(parents);
             string_set_subset(commands, &pc).map_err(|o| (o, "command not in ceiling".into()))
@@ -193,11 +191,46 @@ fn gather_paths(parents: &[&Capability]) -> Vec<String> {
         .collect()
 }
 
+/// Host lattice for `net.http` (D7-B `NetHosts`). A parent granting
+/// [`NetHosts::Any`] subsumes any child; otherwise a child [`NetHosts::List`]
+/// must be a subset of the union of parent lists, and a child
+/// [`NetHosts::Any`] is only admitted by a parent `Any`.
+fn hosts_subset(child: &NetHosts, parents: &[&Capability]) -> Result<(), (String, String)> {
+    let parent_any = parents.iter().any(|p| {
+        matches!(
+            p,
+            Capability::Network(NetCapability::Http {
+                hosts: NetHosts::Any,
+                ..
+            })
+        )
+    });
+    if parent_any {
+        return Ok(());
+    }
+    match child {
+        NetHosts::Any => Err((
+            "any".to_string(),
+            "grants any host but ceiling is a specific host list".into(),
+        )),
+        NetHosts::List(c) => {
+            let ph = gather_hosts(parents);
+            string_set_subset(c, &ph).map_err(|o| (o, "host not in ceiling".into()))
+        }
+    }
+}
+
+/// Union of the explicit host lists across same-kind parents. `Any` parents
+/// are handled by [`hosts_subset`] before this is called, so they contribute
+/// nothing here.
 fn gather_hosts(parents: &[&Capability]) -> Vec<String> {
     parents
         .iter()
         .filter_map(|p| match p {
-            Capability::Network(NetCapability::Http { hosts, .. }) => Some(hosts.clone()),
+            Capability::Network(NetCapability::Http {
+                hosts: NetHosts::List(h),
+                ..
+            }) => Some(h.clone()),
             _ => None,
         })
         .flatten()

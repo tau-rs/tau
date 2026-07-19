@@ -157,7 +157,7 @@ fn lowering_refuses_on_capability_fit_mismatch() {
 
         [tools.weather]
         mcp = "https://example.com"
-        capabilities = [{ kind = "net.http" }]
+        capabilities = [{ kind = "net.http", hosts = "any" }]
     "#;
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     // Use a target triple that EXCLUDES NetworkHttp from required_shapes.

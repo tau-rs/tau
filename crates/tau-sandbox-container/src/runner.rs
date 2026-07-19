@@ -96,17 +96,12 @@ pub(crate) fn wrap_command(
     // are hard-refused — Windows/etc. container support is a future iteration.
     #[cfg(unix)]
     let (proxy_handle, proxy_config) = if has_network_http {
-        let mut allowed_hosts: Vec<String> = Vec::new();
-        for cap in &plan.capabilities {
-            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                allowed_hosts.extend(hosts.iter().cloned());
-            }
-        }
-        tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
+        let policy = tau_sandbox_proxy::HostPolicy::from_capabilities(&plan.capabilities);
+        policy.validate().map_err(|e| CapabilityError::Proxy {
             message: format!("host validation: {e}"),
         })?;
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(policy).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         let sock_path = handle.sock_path().to_path_buf();

@@ -249,11 +249,19 @@ fn cap_kind(cap: &Capability) -> &'static str {
 
 #[allow(dead_code)] // wired up by compute_effective, itself wired up by Task 5
 fn validate_allow_subset(cap: &Capability, allow: &[String]) -> Result<(), String> {
+    // `net.http` hosts is a `NetHosts` (Any | List), not a plain list — handle
+    // it before the generic list-field match. `Any` subsumes any narrowing.
+    if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
+        return match hosts {
+            tau_domain::NetHosts::Any => Ok(()),
+            tau_domain::NetHosts::List(h) => subset::string_set_subset(allow, h)
+                .map_err(|offender| format!("allow entry {offender:?} is not in package grant")),
+        };
+    }
     let parents = match cap {
         Capability::Filesystem(FsCapability::Read { paths, .. }) => paths,
         Capability::Filesystem(FsCapability::Write { paths, .. }) => paths,
         Capability::Filesystem(FsCapability::Exec { paths, .. }) => paths,
-        Capability::Network(NetCapability::Http { hosts, .. }) => hosts,
         Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands,
         _ => {
             return Err("allow narrowing not supported for this capability kind".into());

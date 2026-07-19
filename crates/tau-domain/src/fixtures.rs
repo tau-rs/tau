@@ -141,10 +141,17 @@ pub fn cap_fs_exec(paths: &[&str]) -> Capability {
 }
 
 /// Build a `Capability::Network(NetCapability::Http)` granting HTTP access to
-/// the given hosts with the given HTTP methods.
+/// the given hosts with the given HTTP methods. An empty `hosts` slice yields
+/// the any-host escape hatch ([`NetHosts::Any`]); a non-empty slice yields a
+/// [`NetHosts::List`].
 pub fn cap_net_http(hosts: &[&str], methods: &[&str]) -> Capability {
+    let hosts = if hosts.is_empty() {
+        crate::NetHosts::Any
+    } else {
+        crate::NetHosts::List(hosts.iter().map(|s| s.to_string()).collect())
+    };
     Capability::Network(NetCapability::Http {
-        hosts: hosts.iter().map(|s| s.to_string()).collect(),
+        hosts,
         methods: methods.iter().map(|s| s.to_string()).collect(),
     })
 }

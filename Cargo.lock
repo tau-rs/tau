@@ -4744,6 +4744,7 @@ dependencies = [
 name = "tau-sandbox-proxy"
 version = "0.0.0"
 dependencies = [
+ "tau-domain",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
