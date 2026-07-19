@@ -7,13 +7,13 @@
 //! end, both directions of build-accepts ⟺ run-enforces:
 //!
 //! 1. `hosts_any_passes_check_and_build` — a project authored `hosts = "any"`
-//!    (the typed sentinel) is accepted by `tau check governance`, by bare
-//!    `tau check` (all 8 categories), and by `tau build`; the built bundle's
-//!    lowered effective-capability set carries the literal `"any"` sentinel
-//!    (the serialized form of `HostSet::Any` — see
-//!    `tau_pkg::bundle::build::effective_to_bundle`'s `hosts.is_any()`
-//!    branch, which the strict-native adapter reads back into
-//!    `tau_sandbox_proxy::HostAllow::Any`, i.e. pass-all mode).
+//!    (the typed sentinel) is accepted by `tau check config`, `tau check
+//!    governance`, and `tau build`; and the built package manifest decodes its
+//!    `net.http` grant to `HostSet::Any` — the value the strict-native / darwin
+//!    / container adapters map to `tau_sandbox_proxy::HostAllow::Any` (pass-all
+//!    mode) at run time. (We assert on the package grant rather than the
+//!    bundle's `effective_capabilities` summary, which `bundle::build` only
+//!    populates when an agent declares capability *overrides*.)
 //! 2. `hosts_star_fails_at_parse` — a project authored `hosts = ["*"]` is
 //!    rejected at decode: both at the bare `tau_domain::Capability` serde
 //!    layer and, end to end, by `tau check` on a real `tau.toml` (exit 2,
@@ -253,10 +253,8 @@ fn hosts_star_fails_at_parse() {
     // Library-level: `tau_domain::Capability`'s custom `Deserialize` impl
     // rejects a bare `"*"` inside the `hosts` list (it is not a valid
     // `HostName` — see `HostName::parse`'s `Wildcard` rejection).
-    let e = serde_json::from_str::<tau_domain::Capability>(
-        r#"{"kind":"net.http","hosts":["*"]}"#,
-    )
-    .unwrap_err();
+    let e = serde_json::from_str::<tau_domain::Capability>(r#"{"kind":"net.http","hosts":["*"]}"#)
+        .unwrap_err();
     let msg = e.to_string().to_lowercase();
     assert!(
         msg.contains("any") || msg.contains("wildcard"),

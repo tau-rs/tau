@@ -1008,13 +1008,16 @@ mod net_http_serde_tests {
         assert!(
             matches!(&c, Capability::Network(NetCapability::Http { hosts, .. }) if hosts.is_any())
         );
-        assert_eq!(serde_json::to_value(&c).unwrap()["hosts"], serde_json::json!("any"));
+        assert_eq!(
+            serde_json::to_value(&c).unwrap()["hosts"],
+            serde_json::json!("any")
+        );
     }
 
     #[test]
     fn hosts_star_rejected_at_parse() {
-        let e = serde_json::from_str::<Capability>(r#"{"kind":"net.http","hosts":["*"]}"#)
-            .unwrap_err();
+        let e =
+            serde_json::from_str::<Capability>(r#"{"kind":"net.http","hosts":["*"]}"#).unwrap_err();
         assert!(
             e.to_string().contains("any") || e.to_string().to_lowercase().contains("wildcard"),
             "got: {e}"
@@ -1026,8 +1029,7 @@ mod net_http_serde_tests {
         let all: Capability =
             serde_json::from_str(r#"{"kind":"net.http","hosts":["a.com"]}"#).unwrap();
         let none: Capability =
-            serde_json::from_str(r#"{"kind":"net.http","hosts":["a.com"],"methods":[]}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"kind":"net.http","hosts":["a.com"],"methods":[]}"#).unwrap();
         let m = |c: &Capability| match c {
             Capability::Network(NetCapability::Http { methods, .. }) => methods.clone(),
             _ => unreachable!(),
