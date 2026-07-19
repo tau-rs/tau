@@ -189,7 +189,7 @@ impl ToolDispatcher for RetryDispatcher {
 fn writer_agent() -> Agent {
     Agent {
         id: AgentId("writer".into()),
-        prompt: String::new(),
+        prompt: tau_ir::prompt::PromptSource::inline(""),
         model_ref: tau_ir::ModelRef {
             backend: "seq-llm".into(),
             model_id: "seq-model".into(),

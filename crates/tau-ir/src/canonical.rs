@@ -45,7 +45,7 @@ mod pipeline_canonical_tests {
     use tau_ports::target::registry;
 
     #[test]
-    fn module_with_pipeline_round_trips_and_reports_v2_1() {
+    fn module_with_pipeline_round_trips_and_reports_current_version() {
         let target = registry::list_available().next().unwrap().triple;
         let wf = Workflow {
             pipeline: Some(Pipeline {
@@ -64,7 +64,7 @@ mod pipeline_canonical_tests {
             workflow: wf,
             triggers: alloc::vec::Vec::new(),
         };
-        assert_eq!(m.ir_format.0, "v2.4.0");
+        assert_eq!(m.ir_format.0, "v2.5.0");
         let bytes = to_canonical_bytes(&m);
         let back = from_canonical_bytes(&bytes).expect("round-trips");
         assert_eq!(m, back);
@@ -202,6 +202,77 @@ mod pipeline_canonical_tests {
             actual, golden,
             "canonical bytes of a pre-4.1 agent-only module must be byte-stable"
         );
+    }
+
+    #[test]
+    fn pre_2_5_inline_prompt_module_round_trips_byte_stable() {
+        // A genuine pre-2.5 module (ir_format v2.4.0) whose agent prompt is a
+        // bare string. Under the new `PromptSource` type it MUST parse (bare
+        // string => Inline) and re-serialize to byte-identical canonical bytes.
+        // This is the additive-compat proof for the v2.4.0 -> v2.5.0 bump.
+        let golden = include_str!("../tests/golden/pre_2_5_inline_prompt_module.canonical.json");
+        let m = from_canonical_bytes(golden.as_bytes()).expect("pre-2.5 module parses");
+
+        // The bare-string prompt read back as `Inline`.
+        let agent = m.workflow.agents.values().next().expect("one agent");
+        assert_eq!(
+            agent.prompt,
+            crate::prompt::PromptSource::inline("You are a careful assistant."),
+            "bare-string prompt must deserialize as Inline"
+        );
+
+        // Byte-stable re-serialization.
+        let reserialized = String::from_utf8(to_canonical_bytes(&m)).unwrap();
+        assert_eq!(
+            reserialized, golden,
+            "pre-2.5 bare-string prompt must round-trip byte-identically under PromptSource"
+        );
+    }
+
+    #[test]
+    fn agent_with_asset_prompt_serializes_as_object_and_round_trips() {
+        let target = registry::list_available().next().unwrap().triple;
+        let hash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("w".into()),
+            crate::node::Agent {
+                id: AgentId("w".into()),
+                prompt: crate::prompt::PromptSource::asset(hash),
+                model_ref: crate::model_ref::ModelRef {
+                    backend: "anthropic".into(),
+                    model_id: "m".into(),
+                },
+                tool_refs: alloc::vec::Vec::new(),
+                context: None,
+                budget: crate::budget::AgentBudget {
+                    max_turns: None,
+                    max_tokens: None,
+                },
+                produces: alloc::vec::Vec::new(),
+                output_schema: None,
+                durable: None,
+            },
+        );
+        let wf = Workflow {
+            agents,
+            ..Workflow::default()
+        };
+        let m = IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target,
+            workflow: wf,
+            triggers: alloc::vec::Vec::new(),
+        };
+        let bytes = to_canonical_bytes(&m);
+        let s = String::from_utf8(bytes.clone()).unwrap();
+        assert!(
+            s.contains(&alloc::format!("\"prompt\":{{\"asset\":\"{hash}\"}}")),
+            "asset prompt must serialize as an object; got {s}"
+        );
+        let back = from_canonical_bytes(&bytes).expect("round-trips");
+        assert_eq!(m, back);
     }
 
     #[test]

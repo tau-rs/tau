@@ -238,7 +238,7 @@ where
             .clone(),
         JudgeRef::Default { model_ref } => Agent {
             id: AgentId(String::from("__judge")),
-            prompt: builtin_judge_prompt(must_satisfy),
+            prompt: tau_ir::prompt::PromptSource::inline(builtin_judge_prompt(must_satisfy)),
             model_ref: model_ref.clone(),
             tool_refs: alloc::vec::Vec::new(),
             context: None,

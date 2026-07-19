@@ -1,0 +1,1626 @@
+{
+  "$defs": {
+    "Agent": {
+      "description": "An LLM agent loop with tools and optional context block.",
+      "properties": {
+        "budget": {
+          "$ref": "#/$defs/AgentBudget",
+          "description": "Execution budget."
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional β.4 context-management config."
+        },
+        "durable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Durability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional durable-execution config (ADR-0053). `None` => not\ndurable (whole-bundle reentrant only). `Some` opts the agent into\nturn-level checkpoint/resume. `skip_serializing_if` keeps\nnon-durable agents byte-stable with pre-A-minimal modules."
+        },
+        "id": {
+          "$ref": "#/$defs/AgentId",
+          "description": "Identifier within the workflow."
+        },
+        "model_ref": {
+          "$ref": "#/$defs/ModelRef",
+          "description": "Resolved model selection (backend + vendor id), baked at lowering."
+        },
+        "output_schema": {
+          "description": "Optional JSON schema describing the agent's structured output.\nPlumbed from `[agents.<id>].output_schema`; consumed by a later\njudge-compat build-time check. `skip_serializing_if` keeps\nschema-less agents byte-stable."
+        },
+        "produces": {
+          "description": "Artifact loci this agent declares it produces (deliverable binding).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prompt": {
+          "$ref": "#/$defs/PromptSource",
+          "description": "System prompt source: an inline literal or a content-addressed asset\nreference (D6-B). `Inline` serializes as a bare string, keeping pre-2.5\nmodules byte-stable."
+        },
+        "tool_refs": {
+          "description": "Tools this agent is allowed to call.",
+          "items": {
+            "$ref": "#/$defs/ToolId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "model_ref",
+        "tool_refs",
+        "budget"
+      ],
+      "type": "object"
+    },
+    "AgentBudget": {
+      "additionalProperties": false,
+      "description": "Bounds on an agent's execution.",
+      "properties": {
+        "max_tokens": {
+          "description": "Maximum tokens (input + output) the agent may consume across the\nentire run. `None` defers.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_turns": {
+          "description": "Maximum number of turns the agent loop may take. `None` defers\nto the runtime default.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AgentId": {
+      "description": "Identifier for an [`crate::Agent`] node within a [`crate::Workflow`].",
+      "type": "string"
+    },
+    "AssetRef": {
+      "additionalProperties": false,
+      "description": "A content-addressed reference to a bundle asset.\n\nA distinct `deny_unknown_fields` struct (rather than an inline\n`Asset { asset }` variant) so the generated JSON Schema emits\n`additionalProperties: false` and rejects stray keys in the asset object.",
+      "properties": {
+        "asset": {
+          "description": "The asset hash, `\"sha256:\" + 64 lowercase hex`.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset"
+      ],
+      "type": "object"
+    },
+    "Backoff": {
+      "description": "Backoff parameters. Durations are stored as the author's verbatim\nduration strings (e.g. `\"30s\"`, `\"10m\"`) — they are host-honoured\nmetadata, not values the (no_std) IR interpreter ever computes with.",
+      "properties": {
+        "base": {
+          "description": "Base delay, duration string (e.g. `\"30s\"`).",
+          "type": "string"
+        },
+        "max": {
+          "description": "Cap on the computed delay, duration string (e.g. `\"10m\"`).",
+          "type": "string"
+        },
+        "strategy": {
+          "$ref": "#/$defs/BackoffStrategy",
+          "description": "`fixed` or `exponential`."
+        }
+      },
+      "required": [
+        "strategy",
+        "base",
+        "max"
+      ],
+      "type": "object"
+    },
+    "BackoffStrategy": {
+      "description": "Backoff strategy for trigger-level re-invocation (host-honoured).",
+      "oneOf": [
+        {
+          "const": "fixed",
+          "description": "Constant delay between attempts.",
+          "type": "string"
+        },
+        {
+          "const": "exponential",
+          "description": "Exponentially increasing delay, capped at `Backoff::max`.",
+          "type": "string"
+        }
+      ]
+    },
+    "Capability": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "fs.read"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "paths"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "fs.write"
+            },
+            "max_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "paths"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "fs.exec"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "paths"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hosts": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "net.http"
+            },
+            "methods": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "hosts",
+            "methods"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commands": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "process.spawn"
+            }
+          },
+          "required": [
+            "kind",
+            "commands"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_kinds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "agent.spawn"
+            }
+          },
+          "required": [
+            "kind",
+            "allowed_kinds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_skills": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "skill.spawn"
+            }
+          },
+          "required": [
+            "kind",
+            "allowed_skills"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "task_list"
+            },
+            "mode": {
+              "enum": [
+                "read",
+                "write",
+                "manage"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "plan"
+            },
+            "mode": {
+              "enum": [
+                "read",
+                "write"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "not": {
+                "enum": [
+                  "fs.read",
+                  "fs.write",
+                  "fs.exec",
+                  "net.http",
+                  "process.spawn",
+                  "agent.spawn",
+                  "skill.spawn",
+                  "task_list",
+                  "plan"
+                ]
+              },
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "capability"
+    },
+    "CapabilityRequirements": {
+      "description": "The capability-requirement set for one tool.\n\nRe-export shape over `Vec<tau_domain::Capability>` — the IR does not\nre-define what a capability *is*; it just carries the existing type\nacross the boundary. Future evolution (capability narrowing in the IR\npre-hash, etc.) lands here.",
+      "properties": {
+        "declared": {
+          "description": "Declared capabilities; order is taken from the source TOML verbatim\n(capability list order is taken from the source TOML verbatim; two\npermuted capability arrays produce different canonical bytes. If\norder-independent hashing becomes required, sort in the lowering\nparse stage — `Capability` needs `Ord` first.)",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "declared"
+      ],
+      "type": "object"
+    },
+    "CapabilityTable": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CapabilityRequirements"
+      },
+      "description": "Per-tool capability table for a `Workflow`.\n\nBuilt by the lowering pass from per-tool TOML declarations; consumed\nby the capability-fit check (D-3b) and embedded in the bundle's\n`tau.caps` custom section (D-3).",
+      "type": "object"
+    },
+    "Check": {
+      "description": "A postcondition evaluated at a point in the pipeline.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CheckId",
+          "description": "Identifier within the workflow."
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryPolicy",
+          "description": "Failure handling."
+        },
+        "verify": {
+          "$ref": "#/$defs/CheckVerify",
+          "description": "What is verified and how."
+        }
+      },
+      "required": [
+        "id",
+        "verify",
+        "retry"
+      ],
+      "type": "object"
+    },
+    "CheckId": {
+      "description": "Identifier for a postcondition [`Check`](crate::check::Check).",
+      "type": "string"
+    },
+    "CheckVerify": {
+      "description": "The two postcondition kinds.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Deterministic predicate over a read locus.",
+          "properties": {
+            "Goal": {
+              "properties": {
+                "evaluates": {
+                  "$ref": "#/$defs/Locus",
+                  "description": "Read locus."
+                },
+                "predicate": {
+                  "$ref": "#/$defs/GoalPredicate",
+                  "description": "Predicate to apply."
+                }
+              },
+              "required": [
+                "evaluates",
+                "predicate"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Goal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Produced artifact whose content an LLM judge evaluates.",
+          "properties": {
+            "Deliverable": {
+              "properties": {
+                "judge": {
+                  "$ref": "#/$defs/JudgeRef",
+                  "description": "Who judges the content."
+                },
+                "locus": {
+                  "$ref": "#/$defs/Locus",
+                  "description": "Produced locus."
+                },
+                "must_satisfy": {
+                  "description": "Natural-language acceptance criterion.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "locus",
+                "must_satisfy",
+                "judge"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Deliverable"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CheckpointGranularity": {
+      "description": "Checkpoint granularity.\n\nA-minimal ships `PerTurn` (commit after each completed turn,\nat-least-once for the crashed turn) and `PerToolCall` (narrower\nat-least-once window within a turn). Finer granularities are additive.",
+      "oneOf": [
+        {
+          "const": "per_turn",
+          "description": "Commit a checkpoint after each completed turn.",
+          "type": "string"
+        },
+        {
+          "const": "per_tool_call",
+          "description": "Commit a checkpoint after each completed tool call within a turn.\nNarrows (does not close) the at-least-once window — exactly-once\nstays A-full's job. Resume re-dispatches only the tools that had\nnot completed before the crash (ADR-0053 follow-up).",
+          "type": "string"
+        }
+      ]
+    },
+    "Condition": {
+      "description": "A deterministic predicate over a read locus — the condition for a\n`Branch`/`Loop` (EPIC 4.1) and structurally identical to the goal arm of a\n`Check` (`CheckVerify::Goal`).",
+      "properties": {
+        "evaluates": {
+          "$ref": "#/$defs/Locus",
+          "description": "The locus the predicate reads."
+        },
+        "predicate": {
+          "$ref": "#/$defs/GoalPredicate",
+          "description": "The predicate applied to the locus."
+        }
+      },
+      "required": [
+        "evaluates",
+        "predicate"
+      ],
+      "type": "object"
+    },
+    "ContextConfig": {
+      "description": "β.4 context-manager configuration attached to an [`crate::node::Agent`].\n\n`None` on the agent means \"no context management\" (full history every\nturn — pre-β.4 behavior). An empty `pipeline` serializes to `{}` so a\n`Some(ContextConfig::default())` is byte-identical to the legacy empty\nplaceholder.",
+      "properties": {
+        "pipeline": {
+          "description": "Ordered transformers, applied top-to-bottom each turn. The last\nstep must be the builtin `fit_budget` (typecheck-enforced).",
+          "items": {
+            "$ref": "#/$defs/ContextStep"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ContextNodeKind": {
+      "description": "Delivery vehicle for a context node.",
+      "oneOf": [
+        {
+          "const": "Builtin",
+          "description": "A tau-provided builtin transformer.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A user-supplied node resolved at runtime. `source` selects the lane.\n\nSee: [escape-hatches.md#contextnodekind-custom](../../docs/explanation/escape-hatches.md#contextnodekind-custom).",
+          "properties": {
+            "Custom": {
+              "properties": {
+                "package": {
+                  "description": "Package reference providing the node (e.g. `my-nodes@^0.1`).",
+                  "type": "string"
+                },
+                "source": {
+                  "description": "`native` (v1) | `wasm` (later) | `mcp` (later).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "package"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Custom"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ContextStep": {
+      "description": "One node in a context pipeline.",
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "description": "Per-node config (e.g. `keep_last_turns`, `max_bytes`, `max_tokens`).",
+          "type": "object"
+        },
+        "determinism": {
+          "$ref": "#/$defs/DeterminismClass",
+          "description": "Author-declared determinism class. Gates β.6 conformance and what\n`TransformCx` exposes at runtime."
+        },
+        "kind": {
+          "$ref": "#/$defs/ContextNodeKind",
+          "default": "Builtin",
+          "description": "Whether this is a builtin or a user-supplied custom node."
+        },
+        "transformer": {
+          "description": "Transformer name. For builtins: `trim_old`, `compact_tool_outputs`,\n`fit_budget`. For custom nodes: the user-chosen step name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transformer",
+        "determinism"
+      ],
+      "type": "object"
+    },
+    "DeterminismClass": {
+      "description": "Determinism class shared by the IR (this enum) and the runtime trait\n(`tau_runtime_core::context::ContextTransformer::determinism`).\nDefined here so both crates use one definition (no drift).",
+      "oneOf": [
+        {
+          "const": "Pure",
+          "description": "Pure function of (messages, config); v1's three transformers.",
+          "type": "string"
+        },
+        {
+          "const": "LlmBacked",
+          "description": "Calls an `LlmBackend` (β.4.3); conformance-gated via cassette replay.",
+          "type": "string"
+        },
+        {
+          "const": "Stateful",
+          "description": "Reads/writes a memory store (β.4.4); excluded from the conformance gate.",
+          "type": "string"
+        }
+      ]
+    },
+    "Deterministic": {
+      "description": "A pure-function step.",
+      "properties": {
+        "fn_ref": {
+          "$ref": "#/$defs/NativeFnRef",
+          "description": "Reference to the statically linked Rust function."
+        },
+        "id": {
+          "$ref": "#/$defs/StepId",
+          "description": "Identifier within the workflow."
+        },
+        "input_schema": {
+          "description": "JSON schema for the input."
+        },
+        "output_schema": {
+          "description": "JSON schema for the output."
+        }
+      },
+      "required": [
+        "id",
+        "fn_ref",
+        "input_schema",
+        "output_schema"
+      ],
+      "type": "object"
+    },
+    "Durability": {
+      "description": "Durable-execution config attached to an [`crate::node::Agent`].\n\nEither a high-level **intent** (the host picks granularity + store per\ntarget — EPIC 6.1) or the **explicit** A-minimal form (ADR-0053).\nAbsent (`None` on the agent) is byte-stable with pre-A-minimal modules.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "High-level intent. The host resolves it to a concrete granularity +\nstore for the run/build target (see `tau_runtime_core::durable_resolve`).",
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/DurabilityIntent"
+            }
+          },
+          "required": [
+            "intent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Explicit escape hatch: the author names the mechanism directly.",
+          "properties": {
+            "explicit": {
+              "properties": {
+                "checkpoint": {
+                  "$ref": "#/$defs/CheckpointGranularity",
+                  "description": "How often a checkpoint is committed."
+                },
+                "store": {
+                  "$ref": "#/$defs/DurableStore",
+                  "description": "Where checkpoints are written."
+                }
+              },
+              "required": [
+                "checkpoint",
+                "store"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "explicit"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DurabilityIntent": {
+      "description": "High-level durability intent. The host sizes it per target.\n\n`#[non_exhaustive]`: more intents are additive `MINOR` `ir_format` bumps.",
+      "oneOf": [
+        {
+          "const": "survive-restarts",
+          "description": "\"This run must survive a process restart.\" Resolves per target to the\ncoarsest checkpoint + store the target can durably provide.",
+          "type": "string"
+        }
+      ]
+    },
+    "DurableStore": {
+      "description": "Where durable state is written.\n\nA-minimal ships only `File` (`./.tau/runs/<run_id>/turn-<n>.json`).\n`Kv` (an MCP-contracted journal — never a built-in DB, per NG6) is an\nadditive follow-up belonging to A-full.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Per-turn snapshot files under `.tau/runs/<run_id>/`.",
+          "type": "string"
+        }
+      ]
+    },
+    "GoalPredicate": {
+      "description": "Deterministic goal predicate.",
+      "oneOf": [
+        {
+          "const": "Exists",
+          "description": "Locus resolves.",
+          "type": "string"
+        },
+        {
+          "const": "NonEmpty",
+          "description": "Resolves and non-empty.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Equals the literal.",
+          "properties": {
+            "Equals": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Equals"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Matches the regex.",
+          "properties": {
+            "Matches": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Matches"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "At least N items.",
+          "properties": {
+            "MinCount": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "MinCount"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Validates against the JSON schema.",
+          "properties": {
+            "SchemaValid": true
+          },
+          "required": [
+            "SchemaValid"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Registered native fn.",
+          "properties": {
+            "NativeFn": {
+              "$ref": "#/$defs/NativeFnRef"
+            }
+          },
+          "required": [
+            "NativeFn"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IrFormatVersion": {
+      "description": "Semver-shaped IR format version (D-6).\n\nBumps follow semver rules:\n- MAJOR for breaking shape changes (removed node type, removed\n  required field, changed lowering contract).\n- MINOR for additive changes (new optional field, new variant of a\n  `#[non_exhaustive]` enum).\n- PATCH for spec-only edits with no IR-shape effect.",
+      "type": "string"
+    },
+    "JudgeRef": {
+      "description": "Who evaluates a deliverable's content.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The canonical judge, on a build-time-resolved model.",
+          "properties": {
+            "Default": {
+              "properties": {
+                "model_ref": {
+                  "$ref": "#/$defs/ModelRef",
+                  "description": "Resolved model (alias resolved + producer-default applied at lowering)."
+                }
+              },
+              "required": [
+                "model_ref"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Default"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A user `[agents.*]` used as judge.",
+          "properties": {
+            "Agent": {
+              "$ref": "#/$defs/AgentId"
+            }
+          },
+          "required": [
+            "Agent"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Locus": {
+      "description": "A read/produce locus.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Filesystem path.",
+          "properties": {
+            "Path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Named pipeline-step output (`steps.<id>.output`).",
+          "properties": {
+            "Output": {
+              "$ref": "#/$defs/PipelineStepId"
+            }
+          },
+          "required": [
+            "Output"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ModelRef": {
+      "description": "A concrete, build-time-resolved model selection.",
+      "properties": {
+        "backend": {
+          "description": "Backend package name — the key the runtime resolves a backend by.",
+          "type": "string"
+        },
+        "model_id": {
+          "description": "Vendor model id placed into `CompletionRequest.model`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "backend",
+        "model_id"
+      ],
+      "type": "object"
+    },
+    "NativeFnRef": {
+      "description": "A reference to a statically linked native tool by symbolic name.\n\nThe symbolic name (e.g. `\"ReadTemp\"`) is the Rust identifier of the\n`impl Tool for X` type. The lowering pass resolves it against the\nproject's native tool registry; AOT (β.7) lowers the call site\ndirectly. v0's interpreter dispatches by name through a\n`NativeFnRegistry` injected at runtime.",
+      "properties": {
+        "name": {
+          "description": "Symbolic name of the Rust `Tool` impl.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "OnFail": {
+      "description": "`on_fail` discriminant.",
+      "oneOf": [
+        {
+          "const": "Abort",
+          "description": "Exit non-zero with the rationale.",
+          "type": "string"
+        },
+        {
+          "const": "Retry",
+          "description": "Rewind to the gate and re-run forward.",
+          "type": "string"
+        }
+      ]
+    },
+    "Pipeline": {
+      "description": "An ordered, engine-sequenced pipeline of steps.",
+      "properties": {
+        "steps": {
+          "description": "Steps, executed top-to-bottom in this order.",
+          "items": {
+            "$ref": "#/$defs/PipelineStep"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "type": "object"
+    },
+    "PipelineStep": {
+      "description": "One step in a [`Pipeline`].",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/PipelineStepId",
+          "description": "Handle for this step; its output is addressable as\n`steps.<id>.output` by later steps."
+        },
+        "input": {
+          "description": "Input template (`${input}`, `${steps.<id>.output}`).",
+          "type": "string"
+        },
+        "run": {
+          "$ref": "#/$defs/StepRun",
+          "description": "What this step runs."
+        }
+      },
+      "required": [
+        "id",
+        "run",
+        "input"
+      ],
+      "type": "object"
+    },
+    "PipelineStepId": {
+      "description": "Identifier for a [`crate::pipeline::PipelineStep`] within a\n[`crate::Workflow`]'s pipeline. Addressable as `steps.<id>.output`.",
+      "type": "string"
+    },
+    "PromptSource": {
+      "anyOf": [
+        {
+          "description": "A literal system prompt. On the wire: a bare JSON string.",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/AssetRef",
+          "description": "A content-addressed reference into the bundle's asset store.\nOn the wire: `{\"asset\":\"sha256:<64 hex>\"}`."
+        }
+      ],
+      "description": "Where an agent's system prompt comes from.\n\n`#[serde(untagged)]` keeps `Inline` on the wire as a bare string —\nbyte-identical to the pre-2.5 `prompt: String` field."
+    },
+    "RetryPolicy": {
+      "description": "Failure handling for a check.",
+      "properties": {
+        "gate": {
+          "$ref": "#/$defs/PipelineStepId",
+          "description": "Rewind point — at or before the producer step."
+        },
+        "max_attempts": {
+          "description": "Maximum check evaluations (>= 1).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "on_fail": {
+          "$ref": "#/$defs/OnFail",
+          "description": "Abort vs rewind-and-retry."
+        }
+      },
+      "required": [
+        "on_fail",
+        "max_attempts",
+        "gate"
+      ],
+      "type": "object"
+    },
+    "RetryPolicy2": {
+      "description": "Trigger-level re-invocation policy. This is **not** a per-node interpreter\nretry: the host (or host adapter) re-invokes the artifact; tau's\ninterpreter stays deterministic and stateless across invocations.",
+      "properties": {
+        "backoff": {
+          "$ref": "#/$defs/Backoff",
+          "description": "Backoff parameters."
+        },
+        "dead_letter": {
+          "description": "Where a run that exhausts `max_attempts` is sent — a **sink\nreference** (`mcp:<name>` or an already-granted capability target),\nnever a tau-owned queue. `None` ⇒ no dead-letter sink. The envelope\nshape is a runtime concern not modelled in slice 1 (see ADR-0044 §D2).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_attempts": {
+          "description": "Total attempts including the first; `1` = no retry.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_attempts",
+        "backoff"
+      ],
+      "type": "object"
+    },
+    "StepId": {
+      "description": "Identifier for a [`crate::Deterministic`] step within a [`crate::Workflow`].",
+      "type": "string"
+    },
+    "StepRun": {
+      "description": "What a [`PipelineStep`] executes — a reference to an existing node.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Run an agent node by id.",
+          "properties": {
+            "Agent": {
+              "$ref": "#/$defs/AgentId"
+            }
+          },
+          "required": [
+            "Agent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Invoke a tool node by id.",
+          "properties": {
+            "Tool": {
+              "$ref": "#/$defs/ToolId"
+            }
+          },
+          "required": [
+            "Tool"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run a deterministic step node by id.",
+          "properties": {
+            "Deterministic": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "required": [
+            "Deterministic"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Evaluate a postcondition check by id.\n\nThe referenced [`CheckId`](crate::ids::CheckId) must exist in\n`workflow.checks`; this is enforced by the typecheck stage.\nRuntime evaluation is implemented in `tau-runtime-core`'s\npipeline executor (Task 19).",
+          "properties": {
+            "Check": {
+              "$ref": "#/$defs/CheckId"
+            }
+          },
+          "required": [
+            "Check"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "EPIC 4.1: run `then` if `on` holds, else `otherwise` (may be empty).\nExecuted by the interpreter in 4.2.",
+          "properties": {
+            "Branch": {
+              "properties": {
+                "on": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "The branch condition."
+                },
+                "otherwise": {
+                  "description": "Steps run when `on` does not hold (may be empty).",
+                  "items": {
+                    "$ref": "#/$defs/PipelineStep"
+                  },
+                  "type": "array"
+                },
+                "then": {
+                  "description": "Steps run when `on` holds.",
+                  "items": {
+                    "$ref": "#/$defs/PipelineStep"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "on",
+                "then",
+                "otherwise"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Branch"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "EPIC 4.1: fork `branches`, run concurrently, join. Bounded fork-join\n(concurrency capped by the interpreter, 4.2).",
+          "properties": {
+            "Parallel": {
+              "properties": {
+                "branches": {
+                  "description": "Independent step sequences run in parallel.",
+                  "items": {
+                    "items": {
+                      "$ref": "#/$defs/PipelineStep"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "branches"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Parallel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "EPIC 4.1: run `body` until `until` holds or `max_iters` is hit\n(mandatory bound — no unbounded loops). Reuses `OnFail::Retry` rewind\nin the interpreter (4.2).",
+          "properties": {
+            "Loop": {
+              "properties": {
+                "body": {
+                  "description": "The loop body.",
+                  "items": {
+                    "$ref": "#/$defs/PipelineStep"
+                  },
+                  "type": "array"
+                },
+                "max_iters": {
+                  "description": "Hard iteration cap (`> 0`, enforced by typecheck).",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "until": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Exit condition, checked each iteration."
+                }
+              },
+              "required": [
+                "body",
+                "until",
+                "max_iters"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Loop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "EPIC 4.1: human-in-the-loop pause — checkpoint and wait for\n`resume_signal`, then seed-and-skip resume (ADR-0053 `per_tool_call`\ncheckpoint; round-trip in 4.3).",
+          "properties": {
+            "Suspend": {
+              "properties": {
+                "resume_signal": {
+                  "description": "Signal name that resumes the run.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "resume_signal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Suspend"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SubflowEdge": {
+      "description": "A subflow edge in a workflow.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SubflowId",
+          "description": "Identifier of this subflow within the workflow."
+        },
+        "kind": {
+          "$ref": "#/$defs/SubflowKind",
+          "description": "What kind of connection."
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "SubflowId": {
+      "description": "Identifier for a [`crate::Subflow`] edge within a [`crate::Workflow`].",
+      "type": "string"
+    },
+    "SubflowKind": {
+      "description": "The kind of subflow connection.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Spawn a sibling agent within the same module with a narrowed\ncapability set. Per the subset-of-parent rule, `cap_subset`\nMUST be a subset of the parent agent's grant; the lowering pass\nchecks this.",
+          "properties": {
+            "Spawn": {
+              "properties": {
+                "cap_subset": {
+                  "$ref": "#/$defs/CapabilityRequirements",
+                  "description": "Capability subset granted to the child."
+                },
+                "target_agent": {
+                  "$ref": "#/$defs/AgentId",
+                  "description": "Target agent within this module."
+                }
+              },
+              "required": [
+                "target_agent",
+                "cap_subset"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Spawn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Compose another full workflow as a subroutine. Used for\npipeline composition; v0 reserves the variant but the lowering\npass currently rejects it pending the multi-workflow framing\nin a future spec.",
+          "properties": {
+            "Compose": {
+              "properties": {
+                "target_workflow": {
+                  "$ref": "#",
+                  "description": "The sub-workflow's IR module."
+                }
+              },
+              "required": [
+                "target_workflow"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Compose"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TargetTriple": {
+      "description": "tau target triple, e.g. \"x86_64-unknown-linux-native-strict\"",
+      "title": "target triple",
+      "type": "string"
+    },
+    "Tool": {
+      "description": "A tool node.",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/CapabilityRequirements",
+          "description": "Declared capabilities. Used by the capability-fit check (D-3b)\nand by the runtime gate."
+        },
+        "id": {
+          "$ref": "#/$defs/ToolId",
+          "description": "Identifier within the workflow."
+        },
+        "impl_": {
+          "$ref": "#/$defs/ToolImpl",
+          "description": "How the tool's behavior is provided."
+        },
+        "spec": {
+          "$ref": "#/$defs/ToolSpec",
+          "description": "Tool specification (name, description, input schema) used by the\nLLM to decide when to call the tool."
+        }
+      },
+      "required": [
+        "id",
+        "impl_",
+        "capabilities",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "ToolId": {
+      "description": "Identifier for a [`crate::Tool`] node within a [`crate::Workflow`].",
+      "type": "string"
+    },
+    "ToolImpl": {
+      "description": "How a [`crate::Tool`] node's behavior is provided at runtime.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Statically linked native tool.",
+          "properties": {
+            "Native": {
+              "properties": {
+                "content_hash": {
+                  "description": "Hash of the impl's source bytes (Rust source, dependencies'\ncontent hashes). Participates in the IR module hash.",
+                  "items": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 32,
+                  "minItems": 32,
+                  "type": "array"
+                },
+                "fn_ref": {
+                  "$ref": "#/$defs/NativeFnRef",
+                  "description": "Reference to the native Rust impl by symbolic name."
+                }
+              },
+              "required": [
+                "fn_ref",
+                "content_hash"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Native"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "MCP-contracted external server.",
+          "properties": {
+            "Mcp": {
+              "properties": {
+                "capability_subset": {
+                  "$ref": "#/$defs/CapabilityRequirements",
+                  "description": "The subset of capabilities this MCP server is bounded to (a\nsubset of the contract's declared capabilities; narrowed by\n`tau.toml` overrides)."
+                },
+                "contract_hash": {
+                  "description": "Content hash of the MCP contract (the cached schema + capability\ndeclaration the server advertises at handshake). Participates in\nthe IR module hash so a contract drift invalidates the bundle.",
+                  "items": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 32,
+                  "minItems": 32,
+                  "type": "array"
+                },
+                "server_tool_name": {
+                  "description": "The name passed on the MCP wire (server-side tool name).\nDiffers from this `Tool` node's `ToolId` because lowering\nexpands one author-side entry (`weather`) into N IR nodes\n(`weather.get_forecast`, `weather.get_current`, ...); each\nexpanded node carries the server-side name to forward on\n`tools/call` requests.",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "MCP server URL (e.g. `\"https://mcp.weather.com\"`).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url",
+                "contract_hash",
+                "capability_subset",
+                "server_tool_name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Mcp"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sub-workflow spawn: invoking this tool runs the named agent (in the\nsame `IrModule`) as a child loop with empty initial history. The\nchild's final assistant text (or empty string) becomes the tool\nresult body.\n\nv0 limitation: tool input args are NOT forwarded to the child as a\nUser message — the child runs with empty initial messages and its\nown prompt + LLM script drive its behavior. β.7 (AOT codegen) is\nthe natural place to thread arg-forwarding.",
+          "properties": {
+            "Subflow": {
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AgentId",
+                  "description": "Agent id (within this `IrModule`'s `workflow.agents`) to spawn."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Subflow"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Deterministic step: invoking this tool calls the pure Rust function\nnamed by the step's `fn_ref` via the dispatcher's\n`deterministic_registry()`. The function's return value becomes the\ntool result body. No LLM, no I/O.",
+          "properties": {
+            "Step": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/StepId",
+                  "description": "Step id (within this `IrModule`'s `workflow.steps`)."
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Step"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolSpec": {
+      "description": "Tool specification surface used by the agent loop.\n\nMirror of `tau_ports::ToolSpec` adapted for IR storage. Provides the\nLLM-facing schema; not used for capability decisions.",
+      "properties": {
+        "description": {
+          "description": "LLM-visible description.",
+          "type": "string"
+        },
+        "input_schema": {
+          "description": "JSON schema for the tool's input."
+        },
+        "name": {
+          "description": "LLM-visible name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema"
+      ],
+      "type": "object"
+    },
+    "TriggerBinding": {
+      "description": "One named trigger binding. Canonically ordered by `name` within\n`IrModule.triggers`. A trigger is metadata about how tau is invoked,\nnever an executable node.\n\nOptional fields serialize verbatim (`None` → `null`, no skipping) to\nmatch the IR's canonical-encoding discipline (see `canonical.rs`). Only\nthe module-level `triggers` `Vec` skips-when-empty, to preserve\ntrigger-less hashes.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentId",
+          "description": "Entrypoint agent id (validated at lowering against the workflow)."
+        },
+        "kind": {
+          "$ref": "#/$defs/TriggerKind",
+          "description": "The kind of event this binds to."
+        },
+        "name": {
+          "description": "Trigger name (the `[trigger.<name>]` table key).",
+          "type": "string"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryPolicy2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Re-invocation policy (`None` = invoke once, no retry)."
+        },
+        "schedule": {
+          "description": "5-field cron expression (cron kind only; `None` otherwise).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "description": "IANA timezone name; defaults to `\"UTC\"` at config-validation time\n(cron kind only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "agent"
+      ],
+      "type": "object"
+    },
+    "TriggerKind": {
+      "description": "The kind of external event a trigger binds to.",
+      "oneOf": [
+        {
+          "const": "cron",
+          "description": "Fires on a cron schedule. Substrate = systemd/k8s/Lambda scheduler.",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "The default: tau is invoked by an external driver (a parent process,\nCI step, etc.). No scheduler descriptor is emitted.",
+          "type": "string"
+        }
+      ]
+    },
+    "Workflow": {
+      "description": "The set of nodes + edges that make up one workflow.",
+      "properties": {
+        "agents": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Agent"
+          },
+          "description": "Agent nodes by id.",
+          "type": "object"
+        },
+        "capability_table": {
+          "$ref": "#/$defs/CapabilityTable",
+          "description": "Per-tool capability requirements. Derived from `tools` but\nstored explicitly for the bundle's `tau.caps` custom section."
+        },
+        "checks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Check"
+          },
+          "description": "Postcondition checks, keyed by id. Positioned in the pipeline via\n`StepRun::Check`.",
+          "type": "object"
+        },
+        "edges": {
+          "description": "Subflow edges.",
+          "items": {
+            "$ref": "#/$defs/SubflowEdge"
+          },
+          "type": "array"
+        },
+        "pipeline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pipeline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional engine-sequenced pipeline. `None` preserves single-entry\nbehavior (run the named entry agent). `Some` => `run_pipeline`."
+        },
+        "steps": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Deterministic"
+          },
+          "description": "Deterministic step nodes by id.",
+          "type": "object"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Tool"
+          },
+          "description": "Tool nodes by id.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "agents",
+        "tools",
+        "steps",
+        "edges",
+        "capability_table"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://lebocqtitouan.github.io/tau/schemas/ir/v2.5.0/tau-ir.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The container for one workflow's IR.\n\n`tau build` emits one `IrModule` per workflow (one per project for\nv0). `tau verify --bundle` re-builds and asserts byte-equality of\nthe canonical form (D-6).",
+  "properties": {
+    "ir_format": {
+      "$ref": "#/$defs/IrFormatVersion",
+      "description": "IR language version (D-6 — separate from `tau_version`)."
+    },
+    "target": {
+      "$ref": "#/$defs/TargetTriple",
+      "description": "Target triple this module was lowered for."
+    },
+    "tau_version": {
+      "description": "tau compiler binary version that emitted this module.\nSemver-shaped (e.g. `\"0.X.Y\"`).",
+      "type": "string"
+    },
+    "triggers": {
+      "description": "Trigger bindings — invocation metadata, a SIBLING of `workflow`\n(triggers are about *how* tau is invoked, not the call graph).\n`skip_serializing_if` + `default` means a trigger-less module emits\nno `triggers` key and hashes identically to a pre-trigger module\n(Option B / ADR-0044 §D1); older modules with no key read back as empty.",
+      "items": {
+        "$ref": "#/$defs/TriggerBinding"
+      },
+      "type": "array"
+    },
+    "workflow": {
+      "$ref": "#/$defs/Workflow",
+      "description": "The workflow itself."
+    }
+  },
+  "required": [
+    "ir_format",
+    "tau_version",
+    "target",
+    "workflow"
+  ],
+  "title": "tau IR module (ir_format v2.5.0)",
+  "type": "object",
+  "x-tau-ir-format": "v2.5.0"
+}
