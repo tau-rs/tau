@@ -4370,10 +4370,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tau-infra"
-version = "0.0.0"
-
-[[package]]
 name = "tau-ir"
 version = "0.0.0"
 dependencies = [

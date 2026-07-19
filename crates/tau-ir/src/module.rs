@@ -83,8 +83,9 @@ impl IrFormatVersion {
 pub struct IrModule {
     /// IR language version (D-6 — separate from `tau_version`).
     pub ir_format: IrFormatVersion,
-    /// tau compiler binary version that emitted this module.
-    /// Semver-shaped (e.g. `"0.X.Y"`).
+    /// Version of the `tau-ir-lower` crate that emitted this module (stamped
+    /// from its `CARGO_PKG_VERSION` at lowering). Workspace-versioned, so it
+    /// equals the `tau` CLI binary version today. Semver-shaped (e.g. `"0.X.Y"`).
     pub tau_version: String,
     /// Target triple this module was lowered for.
     pub target: TargetTriple,
