@@ -382,21 +382,30 @@ fn run_reproducibility_check(
     let shipped_str = std::fs::read_to_string(bundle_path)?;
     let shipped = tau_pkg::bundle::BundleManifest::parse_str(&shipped_str)
         .map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
-    let ir_payload = if shipped.ir_payload.is_some() {
+    let (ir_payload, repro_assets) = if shipped.ir_payload.is_some() {
         // Shipped bundle has an IR payload → rebuild with the same IR lowering.
         // For reproducibility verification, skip live MCP resolution and use an
         // empty cache; the reproduce check compares manifests field-by-field and
         // MCP entries are expected to match via pinned contracts already on disk.
         let empty_mcp_cache = std::collections::BTreeMap::new();
-        crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target, &empty_mcp_cache, None).payload
+        let lowered =
+            crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target, &empty_mcp_cache, None);
+        // Re-derive the asset store from source so the rebuilt bundle's
+        // `[[assets]]` — and therefore its self-hash — matches the shipped one
+        // when the prompt files are unchanged (D6-B).
+        (
+            lowered.payload,
+            crate::cmd::build::ir_assets_to_bundle(lowered.assets),
+        )
     } else {
-        None
+        (None, Vec::new())
     };
 
     let report = match tau_pkg::bundle::verify_reproducible(tau_pkg::bundle::ReproOptions {
         bundle_path: bundle_path.to_path_buf(),
         project_root: cwd,
         ir_payload,
+        assets: repro_assets,
     }) {
         Ok(r) => r,
         Err(e) => {

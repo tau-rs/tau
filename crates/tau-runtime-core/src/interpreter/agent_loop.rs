@@ -472,20 +472,38 @@ where
     let domain_agent_id = DomainAgentId::from_str(&agent.id.0)
         .unwrap_or_else(|_| DomainAgentId::from_str("ir-agent").expect("ir-agent is always valid"));
 
-    // Resolve the agent's system prompt. `Inline` is the literal text.
-    // `Asset` references the bundle's content-addressed asset store, which is
-    // threaded through in the asset-store follow-up (D6-B); lowering does not
-    // emit `Asset` yet, so this arm is unreachable on real input today. Keep it
-    // a structured error rather than a panic — never trust input shape.
+    // Resolve the agent's system prompt (D6-B). `Inline` is the literal text.
+    // `Asset` references the bundle's content-addressed asset store, supplied
+    // by the host via `ToolDispatcher::assets()`; look up the blob by hash and
+    // decode its bytes as UTF-8. A missing store or missing/!utf-8 blob is a
+    // structured error, not a panic — never trust input shape (the host's
+    // load-time closed-world check should make the missing cases unreachable).
     let system_prompt = match &agent.prompt {
         tau_ir::prompt::PromptSource::Inline(s) => s.clone(),
         tau_ir::prompt::PromptSource::Asset(a) => {
-            return Err(RuntimeError::Internal {
+            let store = dispatcher.assets().ok_or_else(|| RuntimeError::Internal {
                 message: alloc::format!(
-                    "agent {:?}: asset-backed prompt {:?} requires the bundle asset store (not yet wired)",
-                    agent.id.0, a.asset,
+                    "agent {:?}: prompt references asset {:?} but the host supplied no asset store",
+                    agent.id.0,
+                    a.asset,
                 ),
-            });
+            })?;
+            let blob = store.get(&a.asset).ok_or_else(|| RuntimeError::Internal {
+                message: alloc::format!(
+                    "agent {:?}: prompt asset {:?} not found in the bundle asset store",
+                    agent.id.0,
+                    a.asset,
+                ),
+            })?;
+            alloc::string::String::from_utf8(blob.bytes.clone()).map_err(|_| {
+                RuntimeError::Internal {
+                    message: alloc::format!(
+                        "agent {:?}: prompt asset {:?} is not valid UTF-8",
+                        agent.id.0,
+                        a.asset,
+                    ),
+                }
+            })?
         }
     };
 
@@ -958,6 +976,123 @@ mod tests {
         assert_eq!(
             invocations[0].model, "claude-haiku-4-5",
             "CompletionRequest.model must be the model_id, not the backend package name"
+        );
+    }
+
+    #[tokio::test]
+    async fn asset_prompt_resolves_from_dispatcher_asset_store() {
+        use tau_ports::fixtures::{make_completion_response, MockLlmBackend};
+        use tau_ports::llm::StopReason;
+
+        // D6-B: an agent whose prompt is a `PromptSource::Asset` must run with
+        // the asset store's bytes as its system prompt — this is the run-side
+        // half of the `system_file` fix (the other half being lowering emitting
+        // the asset). Prove the resolved system prompt is the blob CONTENT.
+        const CONTENT: &str = "You are a careful assistant.";
+        let hash = tau_ir::asset::asset_hash(CONTENT.as_bytes());
+
+        let backend = alloc::sync::Arc::new(MockLlmBackend::new("my-backend").with_response(
+            make_completion_response("done".to_string(), alloc::vec![], StopReason::EndTurn, None),
+        ));
+
+        struct AssetDispatcher {
+            backend: alloc::sync::Arc<MockLlmBackend>,
+            assets:
+                Arc<alloc::collections::BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob>>,
+        }
+        impl ToolDispatcher for AssetDispatcher {
+            fn invoke<'a>(
+                &'a self,
+                _tool_id: &'a ToolId,
+                _args: &'a Value,
+            ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    Ok(ToolInvocationResult {
+                        body: None,
+                        error: None,
+                    })
+                })
+            }
+            fn llm_backend_for(
+                &self,
+                _backend: &str,
+            ) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+                Ok(self.backend.clone())
+            }
+            fn assets(
+                &self,
+            ) -> Option<
+                Arc<alloc::collections::BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob>>,
+            > {
+                Some(self.assets.clone())
+            }
+        }
+
+        let mut asset_map = alloc::collections::BTreeMap::new();
+        asset_map.insert(
+            hash.clone(),
+            tau_ir::asset::AssetBlob::prompt(CONTENT.as_bytes().to_vec()),
+        );
+        let dispatcher = alloc::sync::Arc::new(AssetDispatcher {
+            backend: backend.clone(),
+            assets: Arc::new(asset_map),
+        });
+
+        let module = alloc::sync::Arc::new(tau_ir::IrModule {
+            ir_format: tau_ir::IrFormatVersion::current(),
+            tau_version: env!("CARGO_PKG_VERSION").into(),
+            target: tau_ports::target::registry::list_available()
+                .next()
+                .expect("at least one target")
+                .triple,
+            workflow: tau_ir::Workflow {
+                agents: alloc::collections::BTreeMap::new(),
+                tools: alloc::collections::BTreeMap::new(),
+                steps: alloc::collections::BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: tau_ir::CapabilityTable(alloc::collections::BTreeMap::new()),
+                pipeline: None,
+                checks: alloc::collections::BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        });
+
+        let agent = tau_ir::node::Agent {
+            id: tau_ir::ids::AgentId("test-agent".into()),
+            prompt: tau_ir::prompt::PromptSource::asset(hash),
+            model_ref: tau_ir::model_ref::ModelRef {
+                backend: "my-backend".into(),
+                model_id: "claude-haiku-4-5".into(),
+            },
+            tool_refs: alloc::vec::Vec::new(),
+            context: None,
+            budget: tau_ir::budget::AgentBudget {
+                max_turns: Some(1),
+                max_tokens: None,
+            },
+            produces: alloc::vec::Vec::new(),
+            output_schema: None,
+            durable: None,
+        };
+
+        let user_msg = tau_domain::Message::new(
+            tau_domain::Address::User,
+            tau_domain::Address::Agent(tau_domain::AgentInstanceId::new()),
+            tau_domain::MessagePayload::Text {
+                content: "hello".into(),
+            },
+        );
+        run_agent(module, &agent, dispatcher, alloc::vec![user_msg])
+            .await
+            .expect("run_agent must succeed");
+
+        let invocations = backend.invocations();
+        assert_eq!(invocations.len(), 1, "expected exactly one LLM call");
+        assert_eq!(
+            invocations[0].system.as_deref(),
+            Some(CONTENT),
+            "an Asset prompt must resolve to the asset store's blob content"
         );
     }
 

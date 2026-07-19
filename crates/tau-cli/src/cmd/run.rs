@@ -126,6 +126,10 @@ pub async fn run(
                     })?;
                     let module = tau_ir::from_canonical_bytes(&bytes)
                         .map_err(|e| anyhow::anyhow!("decoding IR module from bundle: {e:?}"))?;
+                    // D6-B: decode + integrity-check the bundle's content-
+                    // addressed asset store (prompt bytes the IR references).
+                    let assets =
+                        crate::cmd::ir_dispatcher::asset_map_from_bundle(&report.manifest.assets)?;
 
                     if args.dry_run {
                         tracing::info!(
@@ -141,6 +145,7 @@ pub async fn run(
                     } else {
                         return crate::cmd::ir_dispatcher::run_via_ir(
                             module,
+                            assets,
                             args,
                             record_protocol,
                             force_passthrough,
@@ -435,17 +440,24 @@ async fn try_run_pipeline(
     // no skill resolution. A lowering failure is NOT fatal here — it just
     // means "no pipeline path", so we fall through to the legacy flow
     // (which has its own, independent validation/errors).
+    // D6-B: `system_file` prompts resolve relative to the cwd (the project
+    // root for `tau run`), matching how the bundle builder resolves them.
+    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let caches = tau_ir_lower::Caches {
         native_tool: &crate::cmd::build::native_tool_hash,
         mcp_contract: &|_url| None,
         skill: &|_name| None,
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, &project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
-    let module = match tau_ir_lower::lower_project(
+    let (module, assets) = match tau_ir_lower::lower_project(
         project,
         &tau_ports::target::TargetTriple::host(),
         &caches,
     ) {
-        Ok(m) => m,
+        Ok(out) => (out.module, out.assets),
         Err(e) => {
             tracing::debug!("pipeline lowering skipped (project did not lower): {e}");
             return None;
@@ -498,10 +510,10 @@ async fn try_run_pipeline(
             tools_by_id.insert(ir_tool_id.clone(), handle.clone());
         }
     }
-    let dispatcher = std::sync::Arc::new(crate::cmd::ir_dispatcher::ForwardingDispatcher::new(
-        llm_backends,
-        tools_by_id,
-    ));
+    let dispatcher = std::sync::Arc::new(
+        crate::cmd::ir_dispatcher::ForwardingDispatcher::new(llm_backends, tools_by_id)
+            .with_assets(assets),
+    );
 
     // Drive the pipeline, reusing the SAME input (`prompt_text`) and the
     // SAME dispatcher.
@@ -1090,6 +1102,7 @@ capabilities = {caps}
             agent_filter: None,
             ir_payload,
             governance: None,
+            assets: Vec::new(),
         })
         .expect("build must succeed")
         .path

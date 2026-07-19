@@ -573,7 +573,8 @@ mod tests {
             run = "agent:ghost"
         "#;
         let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let parsed =
+            crate::lower::parse::parse(&cfg, &crate::lower::parse::no_prompt_files).unwrap();
         let err = typecheck(&parsed).unwrap_err();
         assert!(
             matches!(err, LowerError::UnknownPipelineRun { .. }),
@@ -614,7 +615,8 @@ mod tests {
             run = "agent:b"
         "#;
         let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let parsed =
+            crate::lower::parse::parse(&cfg, &crate::lower::parse::no_prompt_files).unwrap();
         let err = typecheck(&parsed).unwrap_err();
         assert!(
             matches!(err, LowerError::ForwardOutputRef { .. }),
@@ -655,7 +657,8 @@ mod tests {
             input = "${steps.a.output}"
         "#;
         let cfg = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let parsed = crate::lower::parse::parse(&cfg).unwrap();
+        let parsed =
+            crate::lower::parse::parse(&cfg, &crate::lower::parse::no_prompt_files).unwrap();
         assert!(
             typecheck(&parsed).is_ok(),
             "valid backward reference should be accepted"
@@ -691,6 +694,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(
@@ -727,6 +731,7 @@ mod tests {
                 checks: BTreeMap::new(), // empty — "ghost" is not here
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("should reject unknown check ref");
         assert!(
@@ -790,6 +795,7 @@ mod tests {
                 checks,
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("should reject forward-referencing check locus");
         assert!(
@@ -913,6 +919,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("should reject unknown nested agent");
         assert!(
@@ -960,6 +967,7 @@ mod tests {
                 checks: BTreeMap::new(), // "ghost-check" absent
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("should reject nested unknown check ref");
         assert!(
@@ -1001,6 +1009,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("should reject max_iters == 0");
         assert!(
@@ -1060,6 +1069,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         assert!(
             typecheck(&parsed).is_ok(),
@@ -1113,6 +1123,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         typecheck(&parsed).expect("Loop.until may read its own body output");
     }
@@ -1158,6 +1169,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("Branch.on cannot read its own then-body");
         assert!(
@@ -1215,6 +1227,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("no cross-branch refs");
         assert!(
@@ -1295,6 +1308,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         typecheck(&parsed).expect("top-level may read a loop-body output");
     }
@@ -1367,6 +1381,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         typecheck(&parsed).expect("top-level may read a branch-arm output");
     }
@@ -1428,6 +1443,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed)
             .expect_err("top-level ref to a LATER block's nested id must still be rejected");
@@ -1490,6 +1506,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("nested ids share the global namespace");
         assert!(
@@ -1526,6 +1543,7 @@ mod tests {
                 checks: BTreeMap::new(),
             },
             triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
         };
         let err = typecheck(&parsed).expect_err("typecheck should reject");
         assert!(

@@ -41,6 +41,7 @@ fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'sta
             },
         )),
         skill: Box::leak(Box::new(|_name: &str| -> Option<[u8; 32]> { None })),
+        prompt_file: &|_| Ok(Vec::new()),
     }
 }
 
@@ -106,7 +107,9 @@ fn lowering_passes_minimal_workflow() {
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec!["ReadTemp".into(), "SetFan".into()], vec![]);
-    let module = lower_project(&config, &target, &caches).expect("lower");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
     assert_eq!(module.ir_format.0, IrFormatVersion::CURRENT);
     assert!(
         module
@@ -227,7 +230,9 @@ fn lowers_goals_and_deliverables_into_checks() {
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec!["WriteFile".into()], vec![]);
-    let ir = lower_project(&config, &target, &caches).expect("lower");
+    let ir = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
 
     // produces copied onto the IR Agent.
     assert_eq!(
@@ -288,7 +293,9 @@ max_tokens = 4000
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec![], vec![]);
-    let module = lower_project(&config, &target, &caches).expect("lower");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
     let agent = module
         .workflow
         .agents
@@ -362,7 +369,9 @@ fn explicit_check_placement_is_not_double_appended() {
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec!["WriteFile".into()], vec![]);
-    let ir = lower_project(&config, &target, &caches).expect("lower");
+    let ir = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
 
     let pipe = ir.workflow.pipeline.as_ref().expect("pipeline present");
 
@@ -435,7 +444,9 @@ output_schema = { type = "object" }
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec![], vec![]);
-    let module = lower_project(&config, &target, &caches).expect("lower");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
     let agent = module
         .workflow
         .agents
@@ -474,7 +485,8 @@ fn lowering_resolves_model_from_allow_models() {
     let target = lookup_first_available();
     let caches = caches_with(vec![], vec![]);
     let module = lower_project(&config, &target, &caches)
-        .expect("governed project with [allow.models] must lower");
+        .expect("governed project with [allow.models] must lower")
+        .module;
     assert!(
         module
             .workflow
@@ -482,4 +494,121 @@ fn lowering_resolves_model_from_allow_models() {
             .contains_key(&tau_ir::AgentId("monitor".into())),
         "expected agent 'monitor' in workflow"
     );
+}
+
+// ---------------------------------------------------------------------------
+// D6-B: `system_file` prompts lower to content-addressed assets.
+// ---------------------------------------------------------------------------
+
+/// Two agents referencing the SAME `system_file` lower to one deduped asset,
+/// each agent's prompt becomes a `PromptSource::Asset` with the content hash,
+/// and the blob carries the file bytes. Proves the non-hermetic path bug is
+/// fixed: the IR carries a content hash, never the path string.
+#[test]
+fn system_file_prompts_lower_to_deduped_content_addressed_assets() {
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "asset-demo"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+[agents.a.prompt]
+system_file = "shared.md"
+
+[agents.b]
+display_name = "B"
+package      = "demo@^0.1"
+model        = "default"
+[agents.b.prompt]
+system_file = "shared.md"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    const CONTENT: &[u8] = b"You are a careful assistant.";
+
+    let caches = Caches {
+        native_tool: &|_| None,
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+        prompt_file: &|p: &std::path::Path| {
+            assert_eq!(p, std::path::Path::new("shared.md"));
+            Ok(CONTENT.to_vec())
+        },
+    };
+    let out = lower_project(&config, &target, &caches).expect("lower");
+
+    let expected_hash = tau_ir::asset::asset_hash(CONTENT);
+    for id in ["a", "b"] {
+        let agent = out
+            .module
+            .workflow
+            .agents
+            .get(&tau_ir::AgentId(id.into()))
+            .unwrap_or_else(|| panic!("agent {id} present"));
+        assert_eq!(
+            agent.prompt.asset_hash(),
+            Some(expected_hash.as_str()),
+            "agent {id} prompt must be a content-addressed asset ref (never the path)"
+        );
+    }
+
+    // Dedup by construction: identical content across agents => one blob.
+    assert_eq!(
+        out.assets.len(),
+        1,
+        "identical prompts must dedup to one blob"
+    );
+    let blob = out.assets.get(&expected_hash).expect("asset blob present");
+    assert_eq!(blob.bytes, CONTENT, "blob carries the file content");
+    assert_eq!(blob.kind, tau_ir::asset::AssetKind::Prompt);
+}
+
+/// A missing/unreadable `system_file` prompt is a hard build error (D6-B moves
+/// prompt-file existence from run time to build time), naming the agent + path.
+#[test]
+fn missing_system_file_prompt_is_a_build_error() {
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "asset-missing"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+[agents.a.prompt]
+system_file = "gone.md"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+
+    let caches = Caches {
+        native_tool: &|_| None,
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+        prompt_file: &|p: &std::path::Path| {
+            Err(tau_ir_lower::PromptFileError(format!(
+                "no such file: {}",
+                p.display()
+            )))
+        },
+    };
+    match lower_project(&config, &target, &caches) {
+        Err(LowerError::PromptFileUnreadable { agent, path, .. }) => {
+            assert_eq!(agent.0, "a");
+            assert_eq!(path, "gone.md");
+        }
+        other => panic!("expected PromptFileUnreadable build error, got {other:?}"),
+    }
 }

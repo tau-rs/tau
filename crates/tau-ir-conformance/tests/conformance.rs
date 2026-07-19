@@ -767,8 +767,11 @@ fn fixture_15_lowers_distinct_models_and_judge_resolution() {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
-    let module = lower_project(&config, &target, &caches).expect("lower fixture-15");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower fixture-15")
+        .module;
 
     // Agents carry distinct resolved model ids.
     let gather = module

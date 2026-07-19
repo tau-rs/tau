@@ -136,6 +136,7 @@ fn e2e_build_produces_parseable_bundle_with_correct_facts() {
         agent_filter: None,
         ir_payload: None,
         governance: None,
+        assets: Vec::new(),
     })
     .expect("build");
 
@@ -210,6 +211,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         agent_filter: None,
         ir_payload: None,
         governance: None,
+        assets: Vec::new(),
     })
     .expect("first build");
 
@@ -224,6 +226,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         agent_filter: None,
         ir_payload: None,
         governance: None,
+        assets: Vec::new(),
     })
     .expect("second build");
 

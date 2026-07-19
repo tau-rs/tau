@@ -21,8 +21,11 @@ fn lower(toml: &str, target: &tau_ports::target::TargetTriple) -> tau_ir::IrModu
             })
         },
         skill: &|_n: &str| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
-    lower_project(&config, target, &caches).expect("lower")
+    lower_project(&config, target, &caches)
+        .expect("lower")
+        .module
 }
 
 #[test]
