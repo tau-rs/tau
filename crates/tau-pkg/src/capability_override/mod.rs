@@ -249,22 +249,28 @@ fn cap_kind(cap: &Capability) -> &'static str {
 
 #[allow(dead_code)] // wired up by compute_effective, itself wired up by Task 5
 fn validate_allow_subset(cap: &Capability, allow: &[String]) -> Result<(), String> {
-    let parents = match cap {
-        Capability::Filesystem(FsCapability::Read { paths, .. }) => paths,
-        Capability::Filesystem(FsCapability::Write { paths, .. }) => paths,
-        Capability::Filesystem(FsCapability::Exec { paths, .. }) => paths,
-        Capability::Network(NetCapability::Http { hosts, .. }) => hosts,
-        Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands,
+    // `Vec<String>` for the fs/process shapes; `net.http`'s `hosts` is now a
+    // `HostSet` (Task 5/6), so it's flattened to its canonical string form
+    // here (`exact_hosts()`; empty for `Any` — an override can't currently
+    // *express* "any" since `allow` is a plain string list, so narrowing
+    // under an `Any` package grant degenerates to "nothing admitted", same
+    // as any other package grant with an empty host list).
+    let parents: Vec<String> = match cap {
+        Capability::Filesystem(FsCapability::Read { paths, .. })
+        | Capability::Filesystem(FsCapability::Write { paths, .. })
+        | Capability::Filesystem(FsCapability::Exec { paths, .. }) => paths.clone(),
+        Capability::Network(NetCapability::Http { hosts, .. }) => hosts.exact_hosts(),
+        Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands.clone(),
         _ => {
             return Err("allow narrowing not supported for this capability kind".into());
         }
     };
     if matches!(cap, Capability::Filesystem(_)) {
-        subset::paths_subset(allow, parents).map_err(|offender| {
+        subset::paths_subset(allow, &parents).map_err(|offender| {
             format!("allow entry {offender:?} is not a subset of any package grant")
         })
     } else {
-        subset::string_set_subset(allow, parents)
+        subset::string_set_subset(allow, &parents)
             .map_err(|offender| format!("allow entry {offender:?} is not in package grant"))
     }
 }

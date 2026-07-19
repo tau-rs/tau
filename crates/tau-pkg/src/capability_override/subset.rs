@@ -7,7 +7,8 @@
 
 use super::glob_subset::is_glob_subset_set;
 use tau_domain::{
-    AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
+    AgentCapability, Capability, FsCapability, HostName, HostSet, HttpMethod, NetCapability,
+    ProcessCapability, SkillCapability,
 };
 
 /// A single child capability that exceeds the parent ceiling. The caller
@@ -119,9 +120,40 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
                     .map_err(|tok| (tok, "exceeds ceiling max_bytes".to_string())),
             }
         }
-        Capability::Network(NetCapability::Http { hosts, .. }) => {
-            let ph = gather_hosts(parents);
-            string_set_subset(hosts, &ph).map_err(|o| (o, "host not in ceiling".into()))
+        Capability::Network(NetCapability::Http { hosts, methods, .. }) => {
+            // Host axis: child HostSet must be subsumed by the union of parent
+            // HostSets. Any parent that is `Any` subsumes everything.
+            let host_ok = parents.iter().any(|p| matches!(
+                p,
+                Capability::Network(NetCapability::Http { hosts: ph, .. }) if ph.subsumes(hosts)
+            ));
+            if !host_ok {
+                let offender = match hosts {
+                    HostSet::Any => "any".to_string(),
+                    HostSet::Exact(_) => hosts
+                        .exact_hosts()
+                        .into_iter()
+                        .find(|h| !parents.iter().any(|p| matches!(
+                            p,
+                            Capability::Network(NetCapability::Http { hosts: ph, .. })
+                                if ph.subsumes(&HostSet::Exact(
+                                    core::iter::once(HostName::parse(h).expect("exact_hosts() output is a valid HostName")).collect()
+                                ))
+                        )))
+                        .unwrap_or_else(|| "host".to_string()),
+                };
+                return Err((offender, "host not in ceiling".into()));
+            }
+            // Method axis: child ⊆ some parent; None = the full set.
+            let method_ok = parents.iter().any(|p| matches!(
+                p,
+                Capability::Network(NetCapability::Http { methods: pm, .. })
+                    if methods_subset(methods.as_ref(), pm.as_ref())
+            ));
+            if !method_ok {
+                return Err(("methods".to_string(), "methods exceed ceiling".into()));
+            }
+            Ok(())
         }
         Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
             let pc = gather_commands(parents);
@@ -193,15 +225,17 @@ fn gather_paths(parents: &[&Capability]) -> Vec<String> {
         .collect()
 }
 
-fn gather_hosts(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Network(NetCapability::Http { hosts, .. }) => Some(hosts.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect()
+/// `child ⊆ parent` over HTTP methods, where `None` denotes the full method
+/// set. `None` child is admitted only by a `None` parent.
+fn methods_subset(
+    child: Option<&std::collections::BTreeSet<HttpMethod>>,
+    parent: Option<&std::collections::BTreeSet<HttpMethod>>,
+) -> bool {
+    match (child, parent) {
+        (_, None) => true,        // parent = all methods
+        (None, Some(_)) => false, // child = all, parent restricts
+        (Some(c), Some(p)) => c.is_subset(p),
+    }
 }
 
 fn gather_commands(parents: &[&Capability]) -> Vec<String> {
@@ -336,25 +370,41 @@ mod tests {
     }
 
     #[test]
-    fn net_http_host_in_ceiling_ok_method_diff_ignored() {
-        // methods differ but are NOT checked in 1.3
-        let child = vec![cap(
-            r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["POST"]}"#,
-        )];
+    fn net_http_host_and_method_subset_ok() {
+        let child = vec![cap(r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET"]}"#)];
         let parent = vec![cap(
-            r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET"]}"#,
+            r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET","POST"]}"#,
         )];
         assert!(capability_set_subset(&child, &parent).is_ok());
     }
 
     #[test]
+    fn net_http_method_exceeds_ceiling_rejected() {
+        // The audit witness: GET-only parent ⊉ POST child.
+        let child = vec![cap(r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["POST"]}"#)];
+        let parent = vec![cap(r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET"]}"#)];
+        assert!(capability_set_subset(&child, &parent).is_err());
+    }
+
+    #[test]
+    fn net_http_child_all_methods_under_capped_parent_rejected() {
+        // child methods absent (=all) but parent restricts → violation.
+        let child = vec![cap(r#"{"kind":"net.http","hosts":["api.x.com"]}"#)];
+        let parent = vec![cap(r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET"]}"#)];
+        assert!(capability_set_subset(&child, &parent).is_err());
+    }
+
+    #[test]
+    fn net_http_any_child_under_exact_parent_rejected() {
+        let child = vec![cap(r#"{"kind":"net.http","hosts":"any"}"#)];
+        let parent = vec![cap(r#"{"kind":"net.http","hosts":["api.x.com"]}"#)];
+        assert!(capability_set_subset(&child, &parent).is_err());
+    }
+
+    #[test]
     fn net_http_host_outside_ceiling_rejected() {
-        let child = vec![cap(
-            r#"{"kind":"net.http","hosts":["evil.com"],"methods":[]}"#,
-        )];
-        let parent = vec![cap(
-            r#"{"kind":"net.http","hosts":["api.x.com"],"methods":[]}"#,
-        )];
+        let child = vec![cap(r#"{"kind":"net.http","hosts":["evil.com"]}"#)];
+        let parent = vec![cap(r#"{"kind":"net.http","hosts":["api.x.com"]}"#)];
         let v = capability_set_subset(&child, &parent).unwrap_err();
         assert_eq!(v.offender, "evil.com");
     }
@@ -474,10 +524,10 @@ mod tests {
 
     #[test]
     fn multi_parent_net_http_union_admits_host_from_second_parent() {
-        let child = vec![cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":[]}"#)];
+        let child = vec![cap(r#"{"kind":"net.http","hosts":["b.com"]}"#)];
         let parent = vec![
-            cap(r#"{"kind":"net.http","hosts":["a.com"],"methods":[]}"#),
-            cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":[]}"#),
+            cap(r#"{"kind":"net.http","hosts":["a.com"]}"#),
+            cap(r#"{"kind":"net.http","hosts":["b.com"]}"#),
         ];
         assert!(capability_set_subset(&child, &parent).is_ok());
     }
