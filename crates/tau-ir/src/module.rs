@@ -22,6 +22,7 @@ use crate::trigger::TriggerBinding;
 ///   `#[non_exhaustive]` enum).
 /// - PATCH for spec-only edits with no IR-shape effect.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IrFormatVersion(pub String);
 
 impl IrFormatVersion {
@@ -33,7 +34,10 @@ impl IrFormatVersion {
     // MINOR v2.2.0: CheckpointGranularity::PerToolCall variant +
     // TurnCheckpoint.pending_tool_uses additive optional field (ADR-0053
     // follow-up). Byte-stable when durable absent / PerTurn.
-    pub const CURRENT: &'static str = "v2.2.0";
+    // MINOR v2.3.0: Durability gains the `Intent(survive-restarts)` variant
+    // (EPIC 6.1) alongside the explicit form. Optional field, additive shape.
+    // MINOR v2.4.0: StepRun gains Branch/Parallel/Loop/Suspend (additive; EPIC 4.1).
+    pub const CURRENT: &'static str = "v2.4.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -47,6 +51,7 @@ impl IrFormatVersion {
 /// v0). `tau verify --bundle` re-builds and asserts byte-equality of
 /// the canonical form (D-6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IrModule {
     /// IR language version (D-6 — separate from `tau_version`).
     pub ir_format: IrFormatVersion,
@@ -68,6 +73,7 @@ pub struct IrModule {
 
 /// The set of nodes + edges that make up one workflow.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Workflow {
     /// Agent nodes by id.
     pub agents: BTreeMap<AgentId, Agent>,
@@ -92,14 +98,27 @@ pub struct Workflow {
     pub checks: alloc::collections::BTreeMap<crate::ids::CheckId, crate::check::Check>,
 }
 
+#[cfg(all(test, feature = "schema"))]
+mod schema_tests {
+    use super::*;
+    #[test]
+    fn ir_module_schema_builds_and_is_object() {
+        let v = serde_json::to_value(&schemars::schema_for!(IrModule)).unwrap();
+        assert_eq!(v["type"], "object");
+        // ir_format is a required top-level property
+        let req = v["required"].as_array().expect("required present");
+        assert!(req.iter().any(|x| x == "ir_format"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_2_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.2.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.2.0");
+    fn ir_format_version_is_v2_4_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.4.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.4.0");
     }
 
     #[test]

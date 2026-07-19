@@ -83,12 +83,41 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, HexDecodeError> {
     Ok(out)
 }
 
+/// Governance verdict recorded in a bundle's `[governance]` section
+/// (ADR-0057 / D2). Every bundle produced by a governed-by-default `tau
+/// build` carries one; legacy v1–v3 bundles predate the field and parse
+/// with `governance == None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GovernanceVerdict {
+    /// A `[allow]` ceiling was declared and the build satisfied it
+    /// (`tau check governance` found no Error-severity violations).
+    Governed,
+    /// No `[allow]` ceiling was declared; the build was authorized with
+    /// `--allow-ungoverned`. The bundle has no capability ceiling.
+    Ungoverned,
+    /// A `[allow]` ceiling was declared but enforcement was skipped with
+    /// `--no-governance`. The ceiling exists but was not checked at build.
+    Skipped,
+}
+
+/// The `[governance]` record carried in a v4+ bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GovernanceRecord {
+    /// How this bundle was governed at build time. Hashed into the bundle
+    /// self-hash so a verdict cannot be silently rewritten post-build.
+    pub verdict: GovernanceVerdict,
+}
+
 /// Top-level bundle manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BundleManifest {
     /// Major schema version. v1 is the legacy line; v2 adds `ir_payload`;
     /// v3 adds the `[[trigger]]` section (emitted only when the project
-    /// declares triggers). v4+ is rejected by `parse_str` until supported.
+    /// declares triggers); v4 adds the `[governance]` record (emitted by
+    /// every governed-by-default build). v5+ is rejected by `parse_str`
+    /// until supported.
     pub schema_version: u32,
     /// Bundle-level metadata (sha + timestamp + tau version + target).
     pub bundle: BundleMeta,
@@ -112,6 +141,13 @@ pub struct BundleManifest {
     /// `[trigger.<name>]` convention.
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "trigger")]
     pub triggers: Vec<BundleTrigger>,
+    /// Governance record (ADR-0057 / D2). `Some` for every bundle built by
+    /// a governed-by-default `tau build`; the bundle's `schema_version` is
+    /// `4` whenever this is `Some`. `None` for legacy v1–v3 bundles built
+    /// before governance-by-default. Hashed into the bundle self-hash via
+    /// the canonical TOML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance: Option<GovernanceRecord>,
 }
 
 /// Bundle-level metadata.
@@ -348,7 +384,7 @@ impl BundleManifest {
     /// ```
     pub fn parse_str(s: &str) -> Result<Self, BundleParseError> {
         let manifest: BundleManifest = toml::from_str(s)?;
-        if manifest.schema_version < 1 || manifest.schema_version > 3 {
+        if manifest.schema_version < 1 || manifest.schema_version > 4 {
             return Err(BundleParseError::UnsupportedSchemaVersion {
                 found: manifest.schema_version,
             });
@@ -359,6 +395,14 @@ impl BundleManifest {
         // harmless and left permissive.)
         if !manifest.triggers.is_empty() && manifest.schema_version < 3 {
             return Err(BundleParseError::TriggerSchemaVersionMismatch {
+                schema_version: manifest.schema_version,
+            });
+        }
+        // Same discipline for governance: a `[governance]` record MUST
+        // declare schema_version >= 4 so an old tau rejects the bundle
+        // rather than silently ignoring the verdict.
+        if manifest.governance.is_some() && manifest.schema_version < 4 {
+            return Err(BundleParseError::GovernanceSchemaVersionMismatch {
                 schema_version: manifest.schema_version,
             });
         }
@@ -523,6 +567,7 @@ pub(crate) mod tests_helpers {
             }],
             ir_payload: None,
             triggers: Vec::new(),
+            governance: None,
         }
     }
 }
@@ -612,7 +657,7 @@ timezone = "UTC"
     }
 
     #[test]
-    fn parse_str_rejects_schema_version_4() {
+    fn parse_str_accepts_schema_version_4_with_governance() {
         let toml_str = r#"
 schema_version = 4
 
@@ -626,12 +671,115 @@ target = "passthrough"
 name = "x"
 version = "0.1.0"
 tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[governance]
+verdict = "governed"
 "#;
-        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v4");
+        let m = BundleManifest::parse_str(toml_str).expect("v4 must parse");
+        assert_eq!(m.schema_version, 4);
+        assert_eq!(
+            m.governance,
+            Some(GovernanceRecord {
+                verdict: GovernanceVerdict::Governed
+            })
+        );
+    }
+
+    #[test]
+    fn parse_str_rejects_schema_version_5() {
+        let toml_str = r#"
+schema_version = 5
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-06-13T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v5");
         match err {
-            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 4),
+            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 5),
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_str_rejects_governance_at_schema_version_3() {
+        // A governance record MUST carry schema_version >= 4 so an old tau
+        // rejects the bundle rather than silently ignoring the verdict.
+        let toml_str = r#"
+schema_version = 3
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-06-13T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[governance]
+verdict = "ungoverned"
+"#;
+        let err =
+            BundleManifest::parse_str(toml_str).expect_err("v3 + governance must be rejected");
+        match err {
+            BundleParseError::GovernanceSchemaVersionMismatch { schema_version } => {
+                assert_eq!(schema_version, 3);
+            }
+            other => panic!("expected GovernanceSchemaVersionMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn governance_verdict_serializes_kebab_case() {
+        // Wire form is a bare lowercase word — asserted against the raw TOML
+        // so a future rename of the Rust variant can't silently break bundles.
+        for (verdict, wire) in [
+            (GovernanceVerdict::Governed, "governed"),
+            (GovernanceVerdict::Ungoverned, "ungoverned"),
+            (GovernanceVerdict::Skipped, "skipped"),
+        ] {
+            let mut m = sample_manifest();
+            m.schema_version = 4;
+            m.governance = Some(GovernanceRecord { verdict });
+            let toml = m.to_canonical_toml();
+            assert!(
+                toml.contains(&format!("verdict = \"{wire}\"")),
+                "expected verdict {wire:?} in canonical TOML:\n{toml}"
+            );
+            let parsed = BundleManifest::parse_str(&toml).expect("round-trip");
+            assert_eq!(parsed.governance, m.governance);
+        }
+    }
+
+    #[test]
+    fn governed_bundle_round_trips_canonical_and_self_hash_stable() {
+        let mut m = sample_manifest();
+        m.schema_version = 4;
+        m.governance = Some(GovernanceRecord {
+            verdict: GovernanceVerdict::Governed,
+        });
+        let toml = m.to_canonical_toml();
+        let parsed = BundleManifest::parse_str(&toml).expect("round-trip");
+        assert_eq!(parsed, m);
+        // Canonical emission is deterministic so the self-hash is stable.
+        assert_eq!(m.to_canonical_toml(), m.to_canonical_toml());
+    }
+
+    #[test]
+    fn governance_omitted_from_canonical_when_none() {
+        let m = sample_manifest(); // governance: None, schema_version 2
+        let toml = m.to_canonical_toml();
+        assert!(!toml.contains("[governance]"), "got: {toml}");
     }
 
     #[test]

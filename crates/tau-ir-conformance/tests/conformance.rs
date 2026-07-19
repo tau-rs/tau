@@ -12,8 +12,9 @@
 //! `10_deliverable_retry`, `11_deliverable_no_producer`,
 //! `12_pipeline_reverse_alpha`, `13_context_pipeline`,
 //! `14_agent_output_schema`, `15_models_multi` (per-agent / per-judge
-//! model resolution), `16_durable_per_turn`, and
-//! `17_durable_per_tool_call` (per-tool-call checkpoint granularity).
+//! model resolution), `16_durable_per_turn`,
+//! `17_durable_per_tool_call` (per-tool-call checkpoint granularity), and
+//! `18_durable_intent` (EPIC 6.1 intent-form durable knob).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -909,6 +910,49 @@ async fn fixture_17_dev_mode_completed_with_per_tool_call() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_17_cross_mode_conformance() {
     let dir = fixture_dir("17_durable_per_tool_call");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 18 — durable intent form (EPIC 6.1) is additive + byte-stable
+// ---------------------------------------------------------------------------
+
+/// Fixture 18: mirrors fixture 16 (agent + one native tool, two turns) with
+/// the intent form `durable = "survive-restarts"` instead of an explicit
+/// `[agents.fan.durable]` sub-table. The intent is carried verbatim on the
+/// IR `Agent` as `Durability::Intent(DurabilityIntent::SurviveRestarts)`; it
+/// does not affect execution (the conformance harness drives the interpreter
+/// with no `CheckpointStore`, so no checkpoint is written). This dev-mode
+/// test proves the intent form lowers and runs to completion with the same
+/// single `read_temp` tool call as fixtures 01 / 16.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_18_dev_mode_completed_with_durable_intent() {
+    let dir = fixture_dir("18_durable_intent");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed, got: {:?}",
+        report.run_outcome
+    );
+    let total = count_tool_calls(&report, "read_temp");
+    assert_eq!(total, 1, "expected exactly 1 read_temp call; got {total}");
+}
+
+/// Cross-mode conformance for fixture 18: the agent's `durable` intent block
+/// round-trips through the bundle's canonical encoder/decoder (BundleMode
+/// asserts `canonical_hash` equality internally), and both modes produce the
+/// same side-effect multiset — intent-form durable is observationally inert.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_18_cross_mode_conformance() {
+    let dir = fixture_dir("18_durable_intent");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

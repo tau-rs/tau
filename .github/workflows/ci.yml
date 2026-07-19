@@ -398,6 +398,17 @@ jobs:
           fi
       - name: executor-agnostic smoke test
         run: cargo nextest run -p tau-runtime-core --test executor_agnostic_smoke
+      - name: run-loop no_std (with tool-validation) — EPIC 0 T9
+        # Prove that tool-arg validation RUNS (not just compiles) under the
+        # no_std feature set.  The test drives run_ir_streaming with a tool
+        # whose input_schema rejects the LLM's first args and asserts
+        # ToolCallCompleted { result: Err(_) } appears — proving the
+        # #[cfg(feature = "tool-validation")] block in stream.rs fires.
+        run: >-
+          cargo nextest run -p tau-runtime-core
+          --no-default-features
+          --features wasm-interpreter,tool-validation,test-fixtures
+          --test no_std_validation
 
   build-fixtures-linux:
     # Skip on tests-only PRs — downstream integration jobs that consume
@@ -481,6 +492,58 @@ jobs:
         run: cargo build -p tau-plugin-compat
       - name: Build tau-plugin-compat (integration-tests feature)
         run: cargo build -p tau-plugin-compat --features integration-tests --tests
+
+  schema-conformance:
+    name: IR schema (drift + conformance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Drift check + conformance kit validation
+        run: cargo test -p tau-ir --features schema --test schema_export --test schema_conformance
+
+  wit-host-drift:
+    name: WIT host world (drift + freeze)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: WIT host world drift + freeze test
+        run: cargo test -p tau-wasm-host --test wit_host_drift
+
+  ports-semver:
+    name: tau-ports ABI (cargo-semver-checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          fetch-depth: 0  # need origin/main as the semver baseline
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Install nightly (rustdoc JSON for cargo-semver-checks)
+        run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-semver-checks
+        with:
+          tool: cargo-semver-checks
+      - name: tau-ports ABI must not break without a version bump
+        run: cargo semver-checks --baseline-rev origin/main --package tau-ports
 
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's

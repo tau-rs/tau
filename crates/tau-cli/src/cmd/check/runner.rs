@@ -90,5 +90,6 @@ async fn run_one(ctx: &CheckCtx, cat: CheckCategory) -> CheckResult {
         CheckCategory::Plugins => super::categories::plugins::run_plugins(ctx).await,
         CheckCategory::Skills => super::categories::skills::run_skills(ctx),
         CheckCategory::McpContracts => super::categories::mcp_contracts::run_mcp_contracts(ctx),
+        CheckCategory::Governance => super::categories::governance::run_governance(ctx),
     }
 }

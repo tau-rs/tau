@@ -1,7 +1,7 @@
 # ADR-0057: Root `[allow]` governance + build-time enforcement
 
-**Status:** Proposed
-**Date:** 2026-06-22
+**Status:** Accepted
+**Date:** 2026-06-22 (accepted 2026-07-19; EPIC 1 shipped via #445/#451/#453)
 **Deciders:** titouanlebocq
 
 ## Context

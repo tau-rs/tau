@@ -20,11 +20,13 @@ pub enum CheckCategory {
     Skills,
     /// MCP pinned-contract drift checks.
     McpContracts,
+    /// [allow] constitution enforcement (ADR-0057).
+    Governance,
 }
 
 impl CheckCategory {
-    /// All 7 categories in stable order.
-    pub const ALL: [Self; 7] = [
+    /// All 8 categories in stable order.
+    pub const ALL: [Self; 8] = [
         Self::Config,
         Self::Lockfile,
         Self::Packages,
@@ -32,6 +34,7 @@ impl CheckCategory {
         Self::Plugins,
         Self::Skills,
         Self::McpContracts,
+        Self::Governance,
     ];
 
     /// Display name used in CLI output and JSON `category` fields.
@@ -44,6 +47,7 @@ impl CheckCategory {
             Self::Plugins => "plugins",
             Self::Skills => "skills",
             Self::McpContracts => "mcp_contracts",
+            Self::Governance => "governance",
         }
     }
 
@@ -65,6 +69,9 @@ pub enum Severity {
     NeedsSetup,
     /// Informational; does not affect exit code.
     Warning,
+    /// Purely informational transparency (e.g. resolved durability).
+    /// Does not affect exit code. Renders as SARIF `note`.
+    Note,
 }
 
 /// Source location for a finding, used by `--sarif` and `--json`.
@@ -142,6 +149,7 @@ pub fn compute_exit(results: &[CheckResult]) -> i32 {
                 Severity::Error => has_error = true,
                 Severity::NeedsSetup => has_setup = true,
                 Severity::Warning => {}
+                Severity::Note => {}
             }
         }
     }

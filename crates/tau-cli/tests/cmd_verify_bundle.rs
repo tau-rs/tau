@@ -120,7 +120,7 @@ fn make_tau_home(scratch: &std::path::Path) -> std::path::PathBuf {
 fn build_bundle(project: &std::path::Path, tau_home: &std::path::Path) -> std::path::PathBuf {
     let out = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(project)
         .env("TAU_HOME", tau_home)
         .assert()

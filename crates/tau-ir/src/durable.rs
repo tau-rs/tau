@@ -18,30 +18,51 @@ use serde::{Deserialize, Serialize};
 
 /// Durable-execution config attached to an [`crate::node::Agent`].
 ///
-/// Carried verbatim in the IR; the runtime reads it to decide whether to
-/// emit a checkpoint after each `TurnCompleted`. Absent (`None` on the
-/// agent) is byte-stable with pre-A-minimal modules.
+/// Either a high-level **intent** (the host picks granularity + store per
+/// target — EPIC 6.1) or the **explicit** A-minimal form (ADR-0053).
+/// Absent (`None` on the agent) is byte-stable with pre-A-minimal modules.
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Durability {
-    /// How often a checkpoint is committed.
-    pub checkpoint: CheckpointGranularity,
-    /// Where checkpoints are written.
-    pub store: DurableStore,
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Durability {
+    /// High-level intent. The host resolves it to a concrete granularity +
+    /// store for the run/build target (see `tau_runtime_core::durable_resolve`).
+    Intent(DurabilityIntent),
+    /// Explicit escape hatch: the author names the mechanism directly.
+    Explicit {
+        /// How often a checkpoint is committed.
+        checkpoint: CheckpointGranularity,
+        /// Where checkpoints are written.
+        store: DurableStore,
+    },
 }
 
 impl Durability {
-    /// Construct from explicit parts. Required because the struct is
-    /// `#[non_exhaustive]` — crates outside `tau-ir` (e.g. `tau-ir-lower`)
-    /// cannot use struct-literal syntax.
+    /// Construct the explicit form from parts. Required because the enum is
+    /// `#[non_exhaustive]` — crates outside `tau-ir` cannot use the variant
+    /// struct-literal directly.
     pub fn new(checkpoint: CheckpointGranularity, store: DurableStore) -> Self {
-        Self { checkpoint, store }
+        Self::Explicit { checkpoint, store }
     }
 
-    /// The A-minimal default: per-turn checkpoints to the filesystem.
+    /// The A-minimal default: explicit per-turn checkpoints to the filesystem.
     pub fn per_turn_file() -> Self {
         Self::new(CheckpointGranularity::PerTurn, DurableStore::File)
     }
+}
+
+/// High-level durability intent. The host sizes it per target.
+///
+/// `#[non_exhaustive]`: more intents are additive `MINOR` `ir_format` bumps.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum DurabilityIntent {
+    /// "This run must survive a process restart." Resolves per target to the
+    /// coarsest checkpoint + store the target can durably provide.
+    #[serde(rename = "survive-restarts")]
+    SurviveRestarts,
 }
 
 /// Checkpoint granularity.
@@ -51,6 +72,7 @@ impl Durability {
 /// at-least-once window within a turn). Finer granularities are additive.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CheckpointGranularity {
     /// Commit a checkpoint after each completed turn.
     #[serde(rename = "per_turn")]
@@ -70,6 +92,7 @@ pub enum CheckpointGranularity {
 /// additive follow-up belonging to A-full.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum DurableStore {
     /// Per-turn snapshot files under `.tau/runs/<run_id>/`.
     #[serde(rename = "file")]
@@ -81,7 +104,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn durability_round_trips() {
+    fn explicit_round_trips() {
         let d = Durability::per_turn_file();
         let json = serde_json::to_string(&d).expect("serialize");
         let back: Durability = serde_json::from_str(&json).expect("deserialize");
@@ -89,18 +112,31 @@ mod tests {
     }
 
     #[test]
-    fn granularity_and_store_serialize_snake_case() {
+    fn explicit_serializes_tagged_snake_case() {
         let d = Durability::per_turn_file();
         let json = serde_json::to_string(&d).expect("serialize");
+        // externally tagged: {"explicit":{"checkpoint":"per_turn","store":"file"}}
+        assert!(json.contains("\"explicit\""), "got: {json}");
         assert!(json.contains("per_turn"), "got: {json}");
-        assert!(json.contains("file"), "got: {json}");
+        assert!(json.contains("\"file\""), "got: {json}");
     }
 
     #[test]
-    fn per_tool_call_round_trips_snake_case() {
+    fn explicit_per_tool_call_round_trips() {
         let d = Durability::new(CheckpointGranularity::PerToolCall, DurableStore::File);
         let json = serde_json::to_string(&d).expect("serialize");
         assert!(json.contains("per_tool_call"), "got: {json}");
+        let back: Durability = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(d, back);
+    }
+
+    #[test]
+    fn intent_round_trips_and_serializes_kebab() {
+        let d = Durability::Intent(DurabilityIntent::SurviveRestarts);
+        let json = serde_json::to_string(&d).expect("serialize");
+        // {"intent":"survive-restarts"}
+        assert!(json.contains("\"intent\""), "got: {json}");
+        assert!(json.contains("survive-restarts"), "got: {json}");
         let back: Durability = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(d, back);
     }

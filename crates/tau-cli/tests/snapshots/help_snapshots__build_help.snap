@@ -1,6 +1,5 @@
 ---
 source: crates/tau-cli/tests/help_snapshots.rs
-assertion_line: 70
 expression: s
 ---
 Build a deployment bundle from this project (Phase 2 §C.2), or compile a workflow to WebAssembly (`tau build wasm <project>`)
@@ -32,6 +31,12 @@ Options:
           Also emit host-adapter descriptors for the project's cron triggers. `systemd` writes `.timer` + `.service` units; `k8s` writes `CronJob` manifests. Files are written next to the bundle. Manual triggers and cron schedules systemd can't auto-translate are skipped with a note
           
           [possible values: systemd, k8s]
+
+      --allow-ungoverned
+          Authorize a build of a project that declares NO `[allow]` ceiling (records bundle verdict `ungoverned`). Governed-by-default: without this, a missing `[allow]` is a hard error (GOV000). Distinct from `--no-governance`, which skips checking a ceiling that DOES exist
+
+      --no-governance
+          Build a project that HAS an `[allow]` ceiling without enforcing it (records bundle verdict `skipped`). Distinct from `--allow-ungoverned`, which authorizes having no ceiling at all
 
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)

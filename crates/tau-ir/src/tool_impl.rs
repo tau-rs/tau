@@ -23,6 +23,7 @@ pub type Hash256 = [u8; 32];
 /// directly. v0's interpreter dispatches by name through a
 /// `NativeFnRegistry` injected at runtime.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NativeFnRef {
     /// Symbolic name of the Rust `Tool` impl.
     pub name: String,
@@ -30,6 +31,7 @@ pub struct NativeFnRef {
 
 /// How a [`crate::Tool`] node's behavior is provided at runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolImpl {
     /// Statically linked native tool.
     Native {

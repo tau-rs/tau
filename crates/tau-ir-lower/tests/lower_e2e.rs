@@ -403,7 +403,7 @@ fn explicit_check_placement_is_not_double_appended() {
     assert!(
         matches!(&pipe.steps[3].run, StepRun::Agent(AgentId(id)) if id == "gather"),
         "step after the explicit check must be gather2 (agent:gather); got {:?}",
-        &pipe.steps[3].run
+        pipe.steps[3].run
     );
 
     // The PipelineStepId at position 2 is the one declared in TOML ("check-report").
@@ -444,5 +444,42 @@ output_schema = { type = "object" }
     assert_eq!(
         agent.output_schema,
         Some(serde_json::json!({"type": "object"}))
+    );
+}
+
+#[test]
+fn lowering_resolves_model_from_allow_models() {
+    // A governed project (ADR-0057 / EPIC 1.2) moves its model alias map under
+    // [allow.models] when an [allow] ceiling is declared. Lowering must resolve
+    // the alias there, not only from a top-level [models] table.
+    let toml = r#"
+        packages = ["mock-llm"]
+
+        [project]
+        name = "governed-monitor"
+
+        [allow]
+        "fs.read" = { paths = ["/proj/**"] }
+
+        [allow.models.default]
+        backend = "mock-llm"
+        model   = "mock-model"
+
+        [agents.monitor]
+        display_name = "Monitor"
+        package      = "monitor@^0.1"
+        model        = "default"
+    "#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches)
+        .expect("governed project with [allow.models] must lower");
+    assert!(
+        module
+            .workflow
+            .agents
+            .contains_key(&tau_ir::AgentId("monitor".into())),
+        "expected agent 'monitor' in workflow"
     );
 }

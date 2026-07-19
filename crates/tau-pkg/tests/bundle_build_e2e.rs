@@ -135,6 +135,7 @@ fn e2e_build_produces_parseable_bundle_with_correct_facts() {
         output_path: None,
         agent_filter: None,
         ir_payload: None,
+        governance: None,
     })
     .expect("build");
 
@@ -208,6 +209,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         output_path: Some(tmp.path().join("a.tau")),
         agent_filter: None,
         ir_payload: None,
+        governance: None,
     })
     .expect("first build");
 
@@ -221,6 +223,7 @@ fn e2e_two_builds_produce_identical_sha256() {
         output_path: Some(tmp.path().join("b.tau")),
         agent_filter: None,
         ir_payload: None,
+        governance: None,
     })
     .expect("second build");
 

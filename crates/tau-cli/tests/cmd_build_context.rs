@@ -83,7 +83,7 @@ fn build_rejects_context_pipeline_with_fit_budget_not_last() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()

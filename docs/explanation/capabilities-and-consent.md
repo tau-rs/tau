@@ -114,6 +114,96 @@ plugin less than it asked for, which is always safe.
 prompt — you're handing the plugin more than the lockfile knew
 about, which the user must have a chance to refuse.
 
+## Governed by default
+
+The `[allow]` section — the project's *constitution* (ADR-0057) — is
+the third quantity in the model. Where a package manifest *declares*
+what a plugin needs and the lockfile records what a user *granted*,
+`[allow]` is what the project as a whole *permits*: a ceiling over the
+capabilities, model aliases, MCP servers and tools any agent in the
+project may use. Every capability an agent or tool resolves to must
+fall inside that ceiling, or the build is refused.
+
+As of ADR-0057 (Decision D2), `tau build` and the dev-path `tau run`
+are **governed by default**. A project `tau.toml` with no `[allow]`
+section is a hard error:
+
+```text
+error[GOV000]: no [allow] section declared
+  = tau builds are governed by default; declare a ceiling or opt out explicitly
+  = help: run `tau init --allow` to scaffold a constitution from installed
+          packages' declared capabilities, or pass --allow-ungoverned
+```
+
+The command exits `2`. `tau init --allow` scaffolds the section for
+you, seeded with the commented least-privilege union of your installed
+packages' declared capabilities — uncomment and narrow the ones you
+actually need. The root ceiling uses kind-as-key entries; model
+aliases, MCP servers and tools each get a sub-table:
+
+```toml
+[allow]
+"fs.write" = { paths = ["${PROJECT}/**"] }
+"net.http" = { hosts = ["api.anthropic.com"] }
+
+[allow.models.default]
+backend = "anthropic"
+model   = "claude-haiku-4-5"
+
+[allow.mcp.weather]
+url = "https://api.weather.com/mcp"
+
+[allow.tools.write_file]
+native = "WriteFile"
+```
+
+> **Model aliases move under `[allow]`.** In a governed project, model
+> aliases live in `[allow.models.<alias>]`, not the top-level
+> `[models]` — an existing EPIC 1.2 rule. A governed project uses
+> `[allow.models.<alias>]`; a bare project uses `[models]`.
+
+### The two escape hatches
+
+Governance can be waived two different ways, and the difference is
+recorded, not silent:
+
+| Flag | Meaning | Recorded verdict |
+|---|---|---|
+| `--allow-ungoverned` | Build/run with **no** `[allow]` ceiling at all. | `ungoverned` |
+| `--no-governance` | The project **has** an `[allow]` ceiling; skip checking it this once. | `skipped` |
+| *(neither, with a valid `[allow]`)* | Ceiling present and enforced. | `governed` |
+
+The two flags are mutually exclusive on the CLI. The distinction is
+deliberate: `--allow-ungoverned` says "I have declared no ceiling on
+purpose"; `--no-governance` says "I have a ceiling but am deferring the
+check" — different security postures, so they leave different traces.
+`--no-governance` with no ceiling to skip still fails `GOV000`.
+
+### The bundle carries its verdict
+
+A built bundle records the outcome in a `[governance]` record whose
+`verdict` field is one of `governed` / `ungoverned` / `skipped`. The
+record is hashed into the bundle self-hash, so a verdict cannot be
+rewritten after the fact. Bundles that carry a `[governance]` record
+use bundle `schema_version = 4`; an older tau refuses such a bundle
+rather than silently ignoring the verdict.
+
+### Governed on both ends
+
+Governance is checked at *run* time too, not only at build. Running a
+bundle whose verdict is `ungoverned` requires `--allow-ungoverned`
+again — `tau run --bundle <ungoverned-bundle>` otherwise fails with
+`GOV000` (exit 2):
+
+```text
+error[GOV000]: bundle was built without a governance ceiling (verdict: ungoverned)
+  = running an ungoverned bundle is governed by default
+  = help: pass --allow-ungoverned to run it anyway
+```
+
+A `governed` or `skipped` bundle runs without the flag; only the
+"no ceiling ever" case (`ungoverned`) is gated on both ends.
+
 ## Enforcement: where the kernel stands
 
 Once granted, three places re-check the same set:

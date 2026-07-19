@@ -35,12 +35,13 @@ pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, serde_json::Error>
 #[cfg(test)]
 mod pipeline_canonical_tests {
     use super::*;
-    use crate::check::{Check, CheckVerify, JudgeRef, Locus, OnFail, RetryPolicy};
+    use crate::check::{Check, CheckVerify, Condition, JudgeRef, Locus, OnFail, RetryPolicy};
     use crate::ids::{AgentId, CheckId, PipelineStepId};
     use crate::module::{IrFormatVersion, IrModule, Workflow};
     use crate::pipeline::{Pipeline, PipelineStep, StepRun};
     use crate::GoalPredicate;
     use alloc::collections::BTreeMap;
+    use alloc::string::String;
     use tau_ports::target::registry;
 
     #[test]
@@ -63,7 +64,7 @@ mod pipeline_canonical_tests {
             workflow: wf,
             triggers: alloc::vec::Vec::new(),
         };
-        assert_eq!(m.ir_format.0, "v2.2.0");
+        assert_eq!(m.ir_format.0, "v2.4.0");
         let bytes = to_canonical_bytes(&m);
         let back = from_canonical_bytes(&bytes).expect("round-trips");
         assert_eq!(m, back);
@@ -168,6 +169,116 @@ mod pipeline_canonical_tests {
             obj["workflow"]["checks"].as_object().unwrap().len(),
             2,
             "expected 2 checks in serialized form"
+        );
+    }
+
+    #[test]
+    fn pre_4_1_module_canonical_bytes_are_byte_stable() {
+        // A module using ONLY the original leaf StepRuns must serialize to the
+        // exact same canonical bytes as before 4.1 (golden), proving the appended
+        // variants are non-disruptive. Build a minimal agent-only pipeline.
+        let target = registry::list_available().next().unwrap().triple;
+        let wf = Workflow {
+            pipeline: Some(Pipeline {
+                steps: alloc::vec![PipelineStep {
+                    id: PipelineStepId("a".into()),
+                    run: StepRun::Agent(AgentId("a".into())),
+                    input: "${input}".into(),
+                }],
+            }),
+            ..Workflow::default()
+        };
+        let m = IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target,
+            workflow: wf,
+            triggers: alloc::vec::Vec::new(),
+        };
+        let actual = String::from_utf8(to_canonical_bytes(&m)).unwrap();
+        // Golden: the canonical JSON of a one-Agent-step module.
+        let golden = include_str!("../tests/golden/pre_4_1_agent_module.canonical.json");
+        assert_eq!(
+            actual, golden,
+            "canonical bytes of a pre-4.1 agent-only module must be byte-stable"
+        );
+    }
+
+    #[test]
+    fn new_control_flow_variants_round_trip() {
+        let target = registry::list_available().next().unwrap().triple;
+
+        // A nested agent step used inside the new variants.
+        let inner_step = || PipelineStep {
+            id: PipelineStepId("inner".into()),
+            run: StepRun::Agent(AgentId("inner-agent".into())),
+            input: "${input}".into(),
+        };
+
+        // Branch with a GoalPredicate::Exists condition.
+        let branch_step = PipelineStep {
+            id: PipelineStepId("b".into()),
+            run: StepRun::Branch {
+                on: Condition {
+                    evaluates: Locus::Path("/flag".into()),
+                    predicate: GoalPredicate::Exists,
+                },
+                then: alloc::vec![inner_step()],
+                otherwise: alloc::vec![],
+            },
+            input: "${input}".into(),
+        };
+
+        // Parallel with two branches.
+        let parallel_step = PipelineStep {
+            id: PipelineStepId("p".into()),
+            run: StepRun::Parallel {
+                branches: alloc::vec![alloc::vec![inner_step()], alloc::vec![inner_step()]],
+            },
+            input: "${input}".into(),
+        };
+
+        // Loop with a Matches predicate and max_iters bound.
+        let loop_step = PipelineStep {
+            id: PipelineStepId("l".into()),
+            run: StepRun::Loop {
+                body: alloc::vec![inner_step()],
+                until: Condition {
+                    evaluates: Locus::Output(PipelineStepId("inner".into())),
+                    predicate: GoalPredicate::Matches("^done".into()),
+                },
+                max_iters: 5,
+            },
+            input: "${input}".into(),
+        };
+
+        // Suspend.
+        let suspend_step = PipelineStep {
+            id: PipelineStepId("s".into()),
+            run: StepRun::Suspend {
+                resume_signal: "human-approval".into(),
+            },
+            input: "${input}".into(),
+        };
+
+        let wf = Workflow {
+            pipeline: Some(Pipeline {
+                steps: alloc::vec![branch_step, parallel_step, loop_step, suspend_step],
+            }),
+            ..Workflow::default()
+        };
+        let m = IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target,
+            workflow: wf,
+            triggers: alloc::vec::Vec::new(),
+        };
+        let bytes = to_canonical_bytes(&m);
+        let back = from_canonical_bytes(&bytes).expect("round-trips");
+        assert_eq!(
+            back, m,
+            "new control-flow variants must survive a round-trip"
         );
     }
 }

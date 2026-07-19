@@ -44,6 +44,8 @@
 - [Sandbox platform support](reference/sandbox-platform-support.md)
 - [Serve mode protocol](reference/serve-mode-protocol.md)
 - [Skill manifest schema](reference/skill-manifest-schema.md)
+- [IR JSON Schema](reference/ir-json-schema.md)
+- [WIT host world](reference/wit-host-world.md)
 - [tau mcp](reference/tau-mcp.md)
 - [Target triple reference](reference/target-triples.md)
 
@@ -54,6 +56,7 @@
 - [tau as language (historical)](explanation/tau-as-language.md)
 - [Architecture overview](explanation/architecture-overview.md)
 - [Capabilities and consent](explanation/capabilities-and-consent.md)
+- [Contract compatibility & versioning](explanation/contract-compatibility.md)
 - [Crate map](explanation/crate-map.md)
 - [Escape hatches](explanation/escape-hatches.md)
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md)
@@ -128,6 +131,7 @@
 - [ADR-0055 — tau identity: two contracts; CLI = reference host](decisions/0055-tau-identity-two-contracts.md)
 - [ADR-0056 — The two contracts are the semver stability surface](decisions/0056-contract-versioning-stability-surface.md)
 - [ADR-0057 — Root allow-section governance + build-time enforcement](decisions/0057-root-allow-governance.md)
+- [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
 
 # Retrospectives
 

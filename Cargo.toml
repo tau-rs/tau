@@ -64,11 +64,12 @@ authors = ["Titouan Lebocq <75916953+LEBOCQTitouan@users.noreply.github.com>"]
 [workspace.dependencies]
 # β.7.5 wasm guest (wasm32-wasip2 only)
 wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
+wit-parser  = "0.251"
 dlmalloc    = { version = "0.2", features = ["global"] }
 # β.7.5 wasm host (std embedder; host targets only)
 wasmtime    = "45"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
-tau-ports           = { path = "crates/tau-ports",  version = "0.0.0", default-features = false }
+tau-ports           = { path = "crates/tau-ports",  version = "0.1.0", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
@@ -110,6 +111,7 @@ walkdir         = "2"
 globset         = "0.4"
 regex           = "1"
 jsonschema      = "0.46"
+schemars        = { version = "1", default-features = false }
 foldhash     = { version = "0.2", default-features = false }
 futures-core    = { version = "0.3", default-features = false, features = ["alloc"] }
 hashbrown    = { version = "0.17", default-features = false, features = ["default-hasher"] }

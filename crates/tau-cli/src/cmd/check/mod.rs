@@ -2,18 +2,25 @@
 //!
 //! See spec at `docs/superpowers/specs/2026-05-18-tau-check-design.md`.
 //!
-//! Bare `tau check` runs all 6 categories; subcommands run one each.
+//! Bare `tau check` runs all 8 categories; subcommands run one each.
 //! Output: human (default), `--json` (JSONL), `--sarif` (SARIF 2.1.0).
 //! Exit codes: 0 clean / 2 fixable / 3 needs-setup / 64 usage / 70 internal.
 
+mod agent_caps;
 mod categories;
+mod gate;
 mod output;
 mod result;
 mod runner;
 
+pub use gate::{
+    evaluate_governance, render_no_constitution, render_ungoverned_bundle_refused,
+    render_violations, GovernanceFlags, GovernanceOutcome,
+};
 pub use result::{
     compute_exit, CheckCategory, CheckFinding, CheckResult, CheckStatus, FindingLocation, Severity,
 };
+pub use runner::CheckCtx;
 
 use anyhow::Result;
 use std::str::FromStr;
@@ -86,6 +93,7 @@ pub async fn run(args: crate::cli::CheckArgs) -> Result<()> {
         Some("plugins") => vec![CheckCategory::Plugins],
         Some("skills") => vec![CheckCategory::Skills],
         Some("mcp-contracts") => vec![CheckCategory::McpContracts],
+        Some("governance") => vec![CheckCategory::Governance],
         Some(other) => anyhow::bail!("unknown check category: {other}"),
     };
 

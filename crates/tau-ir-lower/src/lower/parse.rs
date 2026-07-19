@@ -282,17 +282,26 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
 /// Producer binding and gate resolution were performed by tau-pkg's
 /// validator (`DeliverableEntry::producer` / `::gate`), so this is a pure
 /// structural copy — no re-derivation here.
-/// Resolve a model alias to a concrete [`ModelRef`] via `[models]`.
+/// Resolve a model alias to a concrete [`ModelRef`] via `[models]`, or via
+/// `[allow.models]` when the project declares an `[allow]` ceiling (a governed
+/// project moves its alias map under `[allow.models]`, per ADR-0057 / EPIC 1.2).
 ///
 /// Infallible in practice — `validate_models` (tau-pkg) guarantees the alias
-/// exists before lowering runs; the error arm is defense-in-depth.
+/// exists in one of the two tables before lowering runs; the error arm is
+/// defense-in-depth.
 fn resolve_model_ref(
     config: &ProjectConfig,
     alias: &str,
 ) -> Result<tau_ir::model_ref::ModelRef, LowerError> {
-    let m = config.models.get(alias).ok_or_else(|| {
-        LowerError::Parse(alloc::format!("model alias `{alias}` not in [models]"))
-    })?;
+    let m = config
+        .models
+        .get(alias)
+        .or_else(|| config.allow.as_ref().and_then(|a| a.models.get(alias)))
+        .ok_or_else(|| {
+            LowerError::Parse(alloc::format!(
+                "model alias `{alias}` not in [models] or [allow.models]"
+            ))
+        })?;
     Ok(tau_ir::model_ref::ModelRef {
         backend: m.backend.clone(),
         model_id: m.model.clone(),
@@ -428,24 +437,44 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context
     Some(cfg)
 }
 
+/// Convert a validated tau-pkg [`DurableEntry`] into the IR
+/// [`tau_ir::durable::Durability`] (ADR-0053).
+///
+/// tau-pkg's validator guarantees the strings are known values, so the
+/// mapping is total; the wildcard arms are defense-in-depth and resolve
+/// to the A-minimal defaults.
+pub fn durable_entry_to_ir(
+    entry: &tau_pkg::project::project::DurableEntry,
+) -> tau_ir::durable::Durability {
+    use tau_ir::durable::{CheckpointGranularity, Durability, DurabilityIntent, DurableStore};
+    use tau_pkg::project::project::DurableEntry;
+    match entry {
+        DurableEntry::Intent(s) => {
+            // tau-pkg validated the string; the mapping is total.
+            debug_assert_eq!(s, "survive-restarts");
+            Durability::Intent(DurabilityIntent::SurviveRestarts)
+        }
+        DurableEntry::Explicit {
+            checkpoint,
+            store: _,
+        } => {
+            // tau-pkg validated both strings; wildcard arms are defence-in-depth.
+            let checkpoint = match checkpoint.as_str() {
+                "per_tool_call" => CheckpointGranularity::PerToolCall,
+                _ => CheckpointGranularity::PerTurn,
+            };
+            // TODO: map store when DurableStore::Kv lands (A-full)
+            let store = DurableStore::File;
+            Durability::Explicit { checkpoint, store }
+        }
+    }
+}
+
 /// Lower the validated `[agents.<id>.durable]` block into an IR
 /// [`tau_ir::durable::Durability`] (ADR-0053). `None` when the agent is
-/// not durable. tau-pkg's validator guarantees the strings are known
-/// values, so the mapping is total; the wildcard arms are
-/// defense-in-depth and resolve to the A-minimal defaults.
+/// not durable.
 fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable::Durability> {
-    use tau_ir::durable::{CheckpointGranularity, Durability, DurableStore};
-    let d = entry.durable.as_ref()?;
-    let checkpoint = match d.checkpoint.as_str() {
-        "per_turn" => CheckpointGranularity::PerTurn,
-        "per_tool_call" => CheckpointGranularity::PerToolCall,
-        _ => CheckpointGranularity::PerTurn,
-    };
-    let store = match d.store.as_str() {
-        "file" => DurableStore::File,
-        _ => DurableStore::File,
-    };
-    Some(Durability::new(checkpoint, store))
+    entry.durable.as_ref().map(durable_entry_to_ir)
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].
@@ -738,18 +767,41 @@ checkpoint = "per_tool_call"
 store      = "file"
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
-        let agent = parsed
-            .workflow
-            .agents
-            .get(&tau_ir::AgentId("a".into()))
-            .expect("agent a present");
-        let durable = agent.durable.as_ref().expect("durable present");
+        let agent_entry = config.agents.get("a").expect("agent a");
+        let durable = super::lower_durable(agent_entry).expect("durable present");
         assert_eq!(
-            durable.checkpoint,
-            tau_ir::durable::CheckpointGranularity::PerToolCall,
-            "per_tool_call should lower to PerToolCall, not PerTurn"
+            durable,
+            tau_ir::durable::Durability::Explicit {
+                checkpoint: tau_ir::durable::CheckpointGranularity::PerToolCall,
+                store: tau_ir::durable::DurableStore::File,
+            }
         );
-        assert_eq!(durable.store, tau_ir::durable::DurableStore::File);
+    }
+
+    #[test]
+    fn lower_durable_maps_intent() {
+        let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "p"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "p@^0.1"
+model        = "default"
+tool_refs    = []
+durable      = "survive-restarts"
+"#;
+        let project = tau_pkg::project::project::ProjectConfig::parse_str(toml).expect("parse");
+        let agent_entry = project.agents.get("a").expect("agent a");
+        let durable = super::lower_durable(agent_entry).expect("durable present");
+        assert_eq!(
+            durable,
+            tau_ir::durable::Durability::Intent(tau_ir::durable::DurabilityIntent::SurviveRestarts)
+        );
     }
 }

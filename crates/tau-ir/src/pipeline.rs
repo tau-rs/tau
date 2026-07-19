@@ -6,17 +6,20 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
+use crate::check::Condition;
 use crate::ids::{AgentId, PipelineStepId, StepId, ToolId};
 
 /// An ordered, engine-sequenced pipeline of steps.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Pipeline {
     /// Steps, executed top-to-bottom in this order.
     pub steps: Vec<PipelineStep>,
 }
 
 /// One step in a [`Pipeline`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PipelineStep {
     /// Handle for this step; its output is addressable as
     /// `steps.<id>.output` by later steps.
@@ -28,7 +31,8 @@ pub struct PipelineStep {
 }
 
 /// What a [`PipelineStep`] executes — a reference to an existing node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum StepRun {
     /// Run an agent node by id.
     Agent(AgentId),
@@ -43,6 +47,40 @@ pub enum StepRun {
     /// Runtime evaluation is implemented in `tau-runtime-core`'s
     /// pipeline executor (Task 19).
     Check(crate::ids::CheckId),
+    /// EPIC 4.1: run `then` if `on` holds, else `otherwise` (may be empty).
+    /// Executed by the interpreter in 4.2.
+    Branch {
+        /// The branch condition.
+        on: Condition,
+        /// Steps run when `on` holds.
+        then: Vec<PipelineStep>,
+        /// Steps run when `on` does not hold (may be empty).
+        otherwise: Vec<PipelineStep>,
+    },
+    /// EPIC 4.1: fork `branches`, run concurrently, join. Bounded fork-join
+    /// (concurrency capped by the interpreter, 4.2).
+    Parallel {
+        /// Independent step sequences run in parallel.
+        branches: Vec<Vec<PipelineStep>>,
+    },
+    /// EPIC 4.1: run `body` until `until` holds or `max_iters` is hit
+    /// (mandatory bound — no unbounded loops). Reuses `OnFail::Retry` rewind
+    /// in the interpreter (4.2).
+    Loop {
+        /// The loop body.
+        body: Vec<PipelineStep>,
+        /// Exit condition, checked each iteration.
+        until: Condition,
+        /// Hard iteration cap (`> 0`, enforced by typecheck).
+        max_iters: u64,
+    },
+    /// EPIC 4.1: human-in-the-loop pause — checkpoint and wait for
+    /// `resume_signal`, then seed-and-skip resume (ADR-0053 `per_tool_call`
+    /// checkpoint; round-trip in 4.3).
+    Suspend {
+        /// Signal name that resumes the run.
+        resume_signal: String,
+    },
 }
 
 #[cfg(test)]

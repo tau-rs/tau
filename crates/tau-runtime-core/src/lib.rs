@@ -13,8 +13,11 @@
 
 extern crate alloc;
 
-#[cfg(any(test, feature = "host-fs", feature = "tool-validation"))]
+#[cfg(any(test, feature = "host-fs"))]
 extern crate std;
+
+pub mod durable_resolve;
+pub use durable_resolve::{resolve_durability, DurabilityUnsupported, ResolvedDurability, Support};
 
 pub mod error;
 pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError};
@@ -39,6 +42,8 @@ pub mod stream;
 #[doc(hidden)]
 pub mod vocabulary;
 
+#[cfg(feature = "tool-validation")]
+mod schema;
 #[cfg(feature = "tool-validation")]
 pub mod tool_args;
 

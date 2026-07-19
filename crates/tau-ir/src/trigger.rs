@@ -25,6 +25,7 @@ use crate::ids::AgentId;
 /// The kind of external event a trigger binds to.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum TriggerKind {
     /// Fires on a cron schedule. Substrate = systemd/k8s/Lambda scheduler.
@@ -37,6 +38,7 @@ pub enum TriggerKind {
 /// Backoff strategy for trigger-level re-invocation (host-honoured).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum BackoffStrategy {
     /// Constant delay between attempts.
@@ -55,6 +57,7 @@ pub enum BackoffStrategy {
 /// duration strings (e.g. `"30s"`, `"10m"`) — they are host-honoured
 /// metadata, not values the (no_std) IR interpreter ever computes with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Backoff {
     /// `fixed` or `exponential`.
     pub strategy: BackoffStrategy,
@@ -68,6 +71,7 @@ pub struct Backoff {
 /// retry: the host (or host adapter) re-invokes the artifact; tau's
 /// interpreter stays deterministic and stateless across invocations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RetryPolicy {
     /// Total attempts including the first; `1` = no retry.
     pub max_attempts: u32,
@@ -89,6 +93,7 @@ pub struct RetryPolicy {
 /// the module-level `triggers` `Vec` skips-when-empty, to preserve
 /// trigger-less hashes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TriggerBinding {
     /// Trigger name (the `[trigger.<name>]` table key).
     pub name: String,

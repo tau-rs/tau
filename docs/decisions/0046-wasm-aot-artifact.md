@@ -71,6 +71,10 @@ generation (supports `no_std`). `cargo-component` is experimental and std-leanin
 
 ### Decision 4 — The `tau:run` WIT world
 
+> **Amended 2026-06-22:** the package was renamed `tau:run` → `tau:host` to match
+> ADR-0056 (the embedding contract is `tau:host`). The historical text below is
+> preserved; see `docs/reference/wit-host-world.md` for the current contract.
+
 A single world `tau:run/runner`:
 
 ```wit

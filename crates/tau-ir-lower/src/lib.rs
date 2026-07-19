@@ -10,4 +10,5 @@ pub mod error;
 pub mod lower;
 
 pub use error::LowerError;
+pub use lower::parse::durable_entry_to_ir;
 pub use lower::{lower_project, Caches, McpBuildError, ResolvedMcpContract, ResolvedServerTool};

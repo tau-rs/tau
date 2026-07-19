@@ -16,6 +16,7 @@ pub fn render(results: &[CheckResult]) -> String {
                     Severity::Error => "error",
                     Severity::NeedsSetup => "warning",
                     Severity::Warning => "note",
+                    Severity::Note => "note",
                 },
                 "message": {"text": f.summary.clone()},
                 "locations": f.location.as_ref().map(|l| vec![json!({
@@ -32,6 +33,7 @@ pub fn render(results: &[CheckResult]) -> String {
                         Severity::Error => "error",
                         Severity::NeedsSetup => "needs-setup",
                         Severity::Warning => "warning",
+                        Severity::Note => "note",
                     },
                     "category": f.category.name(),
                     "structured": f.structured.clone(),

@@ -49,6 +49,7 @@ fn plugin_protocol_decode_emits_human_readable_transcript() {
             "--record-protocol",
             log_path.to_str().unwrap(),
             "run",
+            "--allow-ungoverned",
             "echo",
             "ping",
         ])
@@ -104,6 +105,7 @@ fn plugin_protocol_decode_json_emits_structured_lines() {
             "--record-protocol",
             log_path.to_str().unwrap(),
             "run",
+            "--allow-ungoverned",
             "echo",
             "ping",
         ])

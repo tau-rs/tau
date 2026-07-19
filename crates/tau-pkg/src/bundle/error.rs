@@ -31,6 +31,14 @@ pub enum BundleParseError {
         /// The bundle's declared schema_version.
         schema_version: u32,
     },
+    /// A bundle carries a `[governance]` record but its `schema_version` is
+    /// below 4. Governance requires schema_version 4 (an old tau must reject
+    /// a governance-bearing bundle rather than silently ignore the verdict).
+    #[error("bundle declares a [governance] record but schema_version is {schema_version} (governance requires schema_version >= 4)")]
+    GovernanceSchemaVersionMismatch {
+        /// The bundle's declared schema_version.
+        schema_version: u32,
+    },
 }
 
 /// Errors raised when reading + parsing a bundle from disk.

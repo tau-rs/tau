@@ -10,6 +10,7 @@ use crate::tool_impl::NativeFnRef;
 
 /// A postcondition evaluated at a point in the pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Check {
     /// Identifier within the workflow.
     pub id: CheckId,
@@ -19,8 +20,21 @@ pub struct Check {
     pub retry: RetryPolicy,
 }
 
+/// A deterministic predicate over a read locus — the condition for a
+/// `Branch`/`Loop` (EPIC 4.1) and structurally identical to the goal arm of a
+/// `Check` (`CheckVerify::Goal`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Condition {
+    /// The locus the predicate reads.
+    pub evaluates: Locus,
+    /// The predicate applied to the locus.
+    pub predicate: GoalPredicate,
+}
+
 /// The two postcondition kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CheckVerify {
     /// Deterministic predicate over a read locus.
     Goal {
@@ -42,6 +56,7 @@ pub enum CheckVerify {
 
 /// A read/produce locus.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Locus {
     /// Filesystem path.
     Path(String),
@@ -51,6 +66,7 @@ pub enum Locus {
 
 /// Deterministic goal predicate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum GoalPredicate {
     /// Locus resolves.
     Exists,
@@ -70,6 +86,7 @@ pub enum GoalPredicate {
 
 /// Who evaluates a deliverable's content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum JudgeRef {
     /// The canonical judge, on a build-time-resolved model.
     Default {
@@ -82,6 +99,7 @@ pub enum JudgeRef {
 
 /// Failure handling for a check.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RetryPolicy {
     /// Abort vs rewind-and-retry.
     pub on_fail: OnFail,
@@ -93,6 +111,7 @@ pub struct RetryPolicy {
 
 /// `on_fail` discriminant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OnFail {
     /// Exit non-zero with the rationale.
     Abort,
