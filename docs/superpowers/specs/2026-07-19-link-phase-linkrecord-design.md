@@ -44,7 +44,7 @@ the fn doc at `:771-780` already names the intended fix).
 `LinkRecord` in the bundle; three build-time/dev callers share it; `tau run
 --bundle` verifies-then-trusts the record instead of re-lowering.**
 
-- `link(cfg, module, lockfile, installed) -> Result<LinkRecord, Vec<LinkError>>`
+- `link(cfg, module, lockfile, scope) -> Result<LinkOutcome, Vec<LinkError>>`
   lives in a new `tau-pkg/src/link.rs` (flat sibling to `resolve.rs`/`install.rs`;
   tau-pkg has no `resolve/` submodule tree — precedent for multi-file features is
   `bundle/`).
@@ -89,36 +89,75 @@ resolve path → extract config → resolve_target → parse --agent
 ### 1. `LinkRecord` + `LinkError` (PR 1, `tau-pkg/src/link.rs`)
 
 ```rust
+// New serializable types in tau-pkg/src/link.rs. Naming avoids collision with
+// the existing runtime-port `tau_ports::skill_resolver::ResolvedSkill`.
 pub struct LinkRecord {
-    resolved_plugins: Vec<ResolvedPlugin>,  // name, version, binary sha256
-    resolved_skills:  Vec<ResolvedSkill>,   // name, content sha256, parsed_ok
-    tool_bindings:    BTreeMap<ToolId, PluginRef>,
-    model_bindings:   BTreeMap<ModelAlias, ModelRef>,  // final; no re-resolution
-    sandbox_plans:    Vec<PluginSandboxPlan>,          // platform-dependent, hence:
-    platform:         TargetTriple,
+    resolved_plugins: Vec<LinkedPlugin>,  // name, version, binary_sha256, provides
+    resolved_skills:  Vec<LinkedSkill>,   // name, content_sha256, parsed_ok
+    model_bindings:   BTreeMap<String, ModelRef>,       // alias → ModelRef (tau-ir); final
+    platform:         TargetTriple,                     // the IR target linked-for
     lockfile_sha256:  String,
 }
 
 pub enum LinkError {
     PluginNotInstalled { .. }, PluginPortMismatch { .. },
     VersionUnsatisfied { .. }, SkillMissing { .. }, SkillParse { .. },
-    ToolUnbound { .. }, ModelAliasUnknown { .. }, SandboxUnavailable { .. },
+    ModelAliasUnknown { .. },
 }
 
 pub fn link(
     cfg: &ProjectConfig, module: &IrModule,
-    lockfile: &Lockfile, installed: &InstalledSet,
-) -> Result<LinkRecord, Vec<LinkError>>;
+    lockfile: &LockFile, scope: &Scope,
+) -> Result<LinkOutcome, Vec<LinkError>>;
+
+// link() also returns the parsed-skill map (not serialized into the record) so
+// the caller can seed the runtime SkillResolver — see §2.
+pub struct LinkOutcome {
+    pub record: LinkRecord,
+    pub parsed_skills: BTreeMap<String, tau_domain::SkillContent>,
+}
 ```
 
+- **`link()` is a *static linker*, not a loader** (design decision, brainstorm
+  Q6→Option 1). It validates the *package-level symbol table* — packages exist at
+  satisfiable versions providing the right ports, model aliases resolve, skills
+  parse — all knowable from lockfile + manifests + disk with **no process
+  spawning**. Two checks are inherently the *dynamic loader*'s job and stay at
+  runtime: the `ToolId`→loaded-`DynTool::name()` match (there is no static
+  `ToolId`→package edge — `PluginManifest` carries only `{provides, kind, bin}`,
+  so binding a tool needs the plugin spawned), and sandbox adapter probing
+  (host-inherent). Hence **`tool_bindings` and the `ToolUnbound` variant are
+  dropped** — that binding cannot be computed in tau-pkg without loading plugins.
+  The record still lets `run --bundle` skip re-lowering and skip re-deriving
+  package/version/model/skill resolution; the cheap 5b tool-name match stays as
+  the loader half (adjusts PR 3, §4).
+- **Sandbox dropped from the record** (design decision, brainstorm Q5→A). Sandbox
+  plans (`build_plan`) live in `tau-runtime-tokio` — `tau-pkg` cannot call it
+  (cycle). Adapter *availability* is host-inherent (`resolve_adapter` probes the
+  live host) and cannot be soundly determined at build for a bundle that runs
+  elsewhere. The runtime host builds plans + probes adapters at run **as today**;
+  `build_plan` is pure/cheap. `resolved_plugins` carries `binary_sha256` and the
+  lockfile already carries each plugin's `required_shapes`, so nothing the run
+  path needs is lost. `platform` stays for run --bundle's platform-match check.
+- **Types are verified against HEAD, not the handoff's placeholders:** `ToolId`
+  and `ModelRef` come from `tau-ir` (`tau-pkg` gains a `tau-ir` dependency — no
+  cycle; `tau-ir` is the no_std base). `PluginRef`, `LinkedPlugin`, `LinkedSkill`
+  are **new** (none existed). Model alias keys are plain `String` (there is no
+  `ModelAlias` type; `[models]` keys are strings). The installed set is
+  `(scope: &Scope, lockfile: &LockFile)` — there is no `InstalledSet` type and we
+  do not introduce one; `link()` derives installed state via
+  `scope.package_dir(..)` + `lockfile.find(..)` + `crate::list(scope)`.
 - **Collect ALL errors** (`Vec`), never stop at the first — linker UX. Ordering
   is deterministic (sorted by a stable key) so identical inputs yield identical
   error lists across callers (the no-drift bar).
-- `link()` absorbs the logic currently at the scattered sites above; it does not
-  re-implement resolution primitives it can reuse (lockfile lookup, version
-  satisfiability, sandbox `build_plan`).
-- All `BTreeMap`/`Vec` fields carry deterministic ordering for reproducible
-  serialization into the manifest.
+- `link()` absorbs the logic currently at the scattered sites above; it reuses
+  existing primitives (`lockfile.find`, the `agent.rs` version-satisfiability
+  shape, `resolve_model_ref`'s semantics) rather than re-implementing them.
+- Derives match tau-pkg convention: record/entry structs
+  `#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]` + `#[non_exhaustive]`;
+  `LinkError` `#[non_exhaustive] #[derive(Debug, Clone, PartialEq, Eq, Error)]`
+  (thiserror), lowercase `#[error("…")]` messages, every variant/field documented
+  (`#![deny(missing_docs)]`).
 
 ### 2. Skills: parse-once, seed the resolver (resolves the handoff's contradiction)
 
@@ -180,8 +219,9 @@ findings via `build`, `check`, and dev-`run`.
     `"bundle was linked for <triple>"` error).
 - On pass: **TRUST**. Delete the duplicated startup re-resolution
   (`resolve_and_install_for_agent` at `ir_dispatcher.rs:94-99`, lockfile reload
-  `:167-173`); the 5b re-check (`ir_dispatcher.rs:184-210`) collapses to a debug
-  assertion.
+  `:167-173`). The 5b tool-name check (`ir_dispatcher.rs:184-210`) **stays** — it
+  is the dynamic-loader half (matches loaded `DynTool::name()` against IR
+  `ToolId`s) and cannot be pre-baked into the record (Q6). It is cheap; keep it.
 
 **The MCP fix:** where lowering-equivalence is still wanted (`tau verify
 --bundle`'s reproduce path), re-lower with contracts from the **pinned** resolver
@@ -259,3 +299,12 @@ rather than a footnote.
    hatch (Q3: A).
 4. **PR split** → 4 PRs; `AgentId .expect` cleanup in PR 2; credential flip
    isolated in PR 4 (Q4: 4-PR).
+5. **Sandbox in `LinkRecord`** → **dropped** (Q5: A). `build_plan` lives in
+   `tau-runtime-tokio` (tau-pkg cannot call it — cycle) and adapter availability
+   is host-inherent, so sandbox stays a runtime concern; the record keeps
+   `binary_sha256` + `platform` and the run path builds plans / probes adapters
+   at run as today.
+6. **`link()` static vs loading** → **static linker in tau-pkg** (Q6: Option 1).
+   No plugin spawning at build; `tool_bindings`/`ToolUnbound` dropped (no static
+   `ToolId`→package edge — `PluginManifest` has no tool names). The 5b tool-name
+   match + adapter probe stay as the runtime "dynamic loader" half.
