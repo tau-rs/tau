@@ -81,7 +81,7 @@ generated_at = "2024-01-01T00:00:00Z"
 
     let output = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -116,7 +116,7 @@ fn build_without_lockfile_exits_three_with_remediation_hint() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -157,7 +157,7 @@ installed_at = "2024-01-01T00:00:00Z"
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -186,7 +186,12 @@ fn build_with_output_flag_writes_to_custom_path() {
 
     let output = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "-o", out_path.to_str().unwrap()])
+        .args([
+            "build",
+            "--allow-ungoverned",
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -213,7 +218,7 @@ fn build_with_json_emits_artifact_object() {
 
     let output = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--json"])
+        .args(["build", "--allow-ungoverned", "--json"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -243,7 +248,12 @@ fn build_with_invalid_target_exits_two() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--target", "not-a-real-triple"])
+        .args([
+            "build",
+            "--allow-ungoverned",
+            "--target",
+            "not-a-real-triple",
+        ])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -266,7 +276,7 @@ fn build_with_available_target_succeeds() {
     // would be rejected by the --target Available gate.)
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--target", "passthrough"])
+        .args(["build", "--allow-ungoverned", "--target", "passthrough"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -326,7 +336,14 @@ fn build_agent_flag_slices_bundle() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--agent", "alpha", "-o", out.to_str().unwrap()])
+        .args([
+            "build",
+            "--allow-ungoverned",
+            "--agent",
+            "alpha",
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -349,7 +366,7 @@ fn build_agent_flag_unknown_exits_two() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--agent", "ghost"])
+        .args(["build", "--allow-ungoverned", "--agent", "ghost"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -372,6 +389,7 @@ fn build_agent_flag_repeatable() {
         .unwrap()
         .args([
             "build",
+            "--allow-ungoverned",
             "--agent",
             "alpha",
             "--agent",
@@ -390,5 +408,158 @@ fn build_agent_flag_repeatable() {
     assert_eq!(
         m.bundle.selected_agents,
         Some(vec!["alpha".to_string(), "beta".to_string()])
+    );
+}
+
+// ---- Governed-by-default gate (ADR-0057 / D2) --------------------------------
+
+/// A governed fixture: an `[allow]` ceiling plus `[allow.models]` (model
+/// aliases move under `[allow]` when a ceiling is declared) and one agent with
+/// no tools, so the governance lattice produces no Error-severity findings.
+fn write_governed_project(root: &std::path::Path, name: &str) {
+    std::fs::write(
+        root.join("tau.toml"),
+        format!(
+            r#"packages = ["anthropic"]
+
+[project]
+name = "{name}"
+version = "0.1.0"
+
+[allow]
+"fs.read" = {{ paths = ["/proj/**"] }}
+
+[allow.models.default]
+backend = "anthropic"
+model = "claude-haiku-4-5"
+
+[agents.solo]
+display_name = "Solo"
+package = "{name}@^0.1"
+model = "default"
+
+[agents.solo.prompt]
+system = "hi"
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tau.lock"),
+        "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+    )
+    .unwrap();
+}
+
+fn empty_lockfile(project: &std::path::Path) {
+    std::fs::write(
+        project.join("tau.lock"),
+        "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn build_without_allow_section_is_refused_with_gov000() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "ungov"); // no [allow]
+    empty_lockfile(&project);
+    let tau_home = make_tau_home(scratch.path());
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build"]) // NO --allow-ungoverned
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error[GOV000]"))
+        .stderr(predicate::str::contains("no [allow] section declared"))
+        .stderr(predicate::str::contains("--allow-ungoverned"));
+}
+
+#[test]
+fn build_allow_ungoverned_records_ungoverned_verdict() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "ungov"); // no [allow]
+    empty_lockfile(&project);
+    let out = project.join("out.tau");
+    let tau_home = make_tau_home(scratch.path());
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--allow-ungoverned", "-o", out.to_str().unwrap()])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+
+    let m = tau_pkg::bundle::manifest::BundleManifest::parse_str(
+        &std::fs::read_to_string(&out).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(m.schema_version, 4);
+    assert_eq!(
+        m.governance.map(|g| g.verdict),
+        Some(tau_pkg::bundle::GovernanceVerdict::Ungoverned)
+    );
+}
+
+#[test]
+fn build_with_allow_section_records_governed_verdict() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_governed_project(&project, "gov");
+    let out = project.join("out.tau");
+    let tau_home = make_tau_home(scratch.path());
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "-o", out.to_str().unwrap()]) // NO flags — governed by default
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+
+    let m = tau_pkg::bundle::manifest::BundleManifest::parse_str(
+        &std::fs::read_to_string(&out).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(m.schema_version, 4);
+    assert_eq!(
+        m.governance.map(|g| g.verdict),
+        Some(tau_pkg::bundle::GovernanceVerdict::Governed)
+    );
+}
+
+#[test]
+fn build_no_governance_records_skipped_verdict() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_governed_project(&project, "gov");
+    let out = project.join("out.tau");
+    let tau_home = make_tau_home(scratch.path());
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["build", "--no-governance", "-o", out.to_str().unwrap()])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+
+    let m = tau_pkg::bundle::manifest::BundleManifest::parse_str(
+        &std::fs::read_to_string(&out).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        m.governance.map(|g| g.verdict),
+        Some(tau_pkg::bundle::GovernanceVerdict::Skipped)
     );
 }

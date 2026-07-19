@@ -19,6 +19,6 @@ thiserror  = { workspace = true }
 tau-ir           = { workspace = true }
 tau-ir-lower     = { workspace = true }
 tau-pkg          = { workspace = true }
-tau-runtime-core = { workspace = true }
+tau-runtime-core = { workspace = true, features = ["std"] }
 tempfile         = { workspace = true }
 wit-parser       = { workspace = true }

@@ -38,6 +38,14 @@ pub struct BuildOptions {
     /// `tau_ir::lower::lower_project` and constructing the `IrPayload`
     /// before calling `build`.
     pub ir_payload: Option<IrPayload>,
+    /// Governance record to stamp into the bundle (ADR-0057 / D2). When
+    /// `Some`, the bundle's `schema_version` is written as `4` and the
+    /// verdict is hashed into the self-hash. The caller (tau-cli) computes
+    /// the verdict from the project's `[allow]` ceiling + build flags via
+    /// the governance gate. `None` produces a legacy-shaped (v2/v3) bundle
+    /// with no governance record — used by lower-level tests and by tooling
+    /// that predates governance-by-default.
+    pub governance: Option<crate::bundle::manifest::GovernanceRecord>,
 }
 
 /// Result of a successful build.
@@ -345,8 +353,18 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
 
     let tau_toml_sha256 = sha256_hex(&tau_toml_bytes);
 
+    // schema_version: a governance record forces v4 (highest); otherwise a
+    // trigger-bearing bundle is v3 and a plain bundle is v2.
+    let schema_version = if opts.governance.is_some() {
+        4
+    } else if triggers.is_empty() {
+        2
+    } else {
+        3
+    };
+
     let mut manifest = BundleManifest {
-        schema_version: if triggers.is_empty() { 2 } else { 3 },
+        schema_version,
         bundle: BundleMeta {
             // Placeholder — filled below after self-hash compute.
             sha256: String::new(),
@@ -364,6 +382,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         agents,
         ir_payload: opts.ir_payload,
         triggers,
+        governance: opts.governance,
     };
 
     // Compute and fill the self-hash. `compute_self_hash` zeros out
@@ -577,6 +596,7 @@ mod tests {
             output_path: None,
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         }
     }
 
@@ -908,6 +928,7 @@ installed_at = "2024-01-01T00:00:00Z"
             output_path: None,
             agent_filter: Some(ids.iter().map(|s| s.parse().unwrap()).collect()),
             ir_payload: None,
+            governance: None,
         }
     }
 
@@ -1090,6 +1111,7 @@ generated_at = "2024-01-01T00:00:00Z"
             output_path: Some(explicit.clone()),
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         };
         let artifact = build(o).expect("build");
         assert_eq!(artifact.path, explicit);
@@ -1475,6 +1497,32 @@ schedule = "0 3 * * *"
         assert_eq!(m.schema_version, 3);
         assert_eq!(m.triggers.len(), 1);
         assert_eq!(m.triggers[0].name, "nightly");
+        crate::bundle::hash::verify_self_hash(&m).expect("self-hash verifies");
+    }
+
+    #[test]
+    fn build_with_governance_emits_v4_and_records_verdict() {
+        use crate::bundle::manifest::{GovernanceRecord, GovernanceVerdict};
+        let tmp = tempdir().unwrap();
+        happy_path_project(tmp.path());
+        let o = BuildOptions {
+            governance: Some(GovernanceRecord {
+                verdict: GovernanceVerdict::Governed,
+            }),
+            ..opts(tmp.path())
+        };
+        let artifact = build(o).expect("build");
+        let m = crate::bundle::manifest::BundleManifest::parse_str(
+            &std::fs::read_to_string(&artifact.path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(m.schema_version, 4);
+        assert_eq!(
+            m.governance,
+            Some(GovernanceRecord {
+                verdict: GovernanceVerdict::Governed
+            })
+        );
         crate::bundle::hash::verify_self_hash(&m).expect("self-hash verifies");
     }
 

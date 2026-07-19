@@ -284,16 +284,15 @@ fn gather_skills(parents: &[&Capability]) -> Vec<String> {
 /// Most permissive ceiling cap: `None` (unlimited) if any matching parent is
 /// unlimited, else `Some(max of the limits)`.
 fn most_permissive_max_bytes(parents: &[&Capability]) -> Option<u64> {
-    let mut acc: Option<u64> = Some(0);
+    let mut acc: u64 = 0;
     for p in parents {
         if let Capability::Filesystem(FsCapability::Write { max_bytes, .. }) = p {
-            match max_bytes {
-                None => return None,
-                Some(m) => acc = acc.map(|a| a.max(*m)),
-            }
+            // Any unlimited parent makes the whole ceiling unlimited.
+            let m = (*max_bytes)?;
+            acc = acc.max(m);
         }
     }
-    acc
+    Some(acc)
 }
 
 /// Globbed path subset: every `child` path is a glob-subset of some `parent`

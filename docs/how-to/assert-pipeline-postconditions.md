@@ -260,6 +260,18 @@ durably in the trace, not only the final outcome.
 [project]
 name = "research"
 
+# Governance ceiling (ADR-0057). `tau build` is governed by default: it
+# refuses to build unless every capability the agents and tools use falls
+# inside this [allow] section. Here the only capability in play is the
+# writer's fs.write to /workspace. See "Capabilities and consent".
+[allow]
+"fs.write" = { paths = ["/workspace/**"] }
+
+# In a governed project, model aliases live under [allow.models.<alias>].
+[allow.models.claude-haiku-4-5]
+backend = "anthropic"
+model   = "claude-haiku-4-5"
+
 [agents.gather]
 model         = "claude-haiku-4-5"
 prompt.system = "Research the question; collect sources."

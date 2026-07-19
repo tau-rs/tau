@@ -274,6 +274,17 @@ pub struct BuildArgs {
     /// cron schedules systemd can't auto-translate are skipped with a note.
     #[arg(long = "emit-trigger", value_name = "ADAPTER", value_parser = ["systemd", "k8s"])]
     pub emit_trigger: Option<String>,
+    /// Authorize a build of a project that declares NO `[allow]` ceiling
+    /// (records bundle verdict `ungoverned`). Governed-by-default: without
+    /// this, a missing `[allow]` is a hard error (GOV000). Distinct from
+    /// `--no-governance`, which skips checking a ceiling that DOES exist.
+    #[arg(long, conflicts_with = "no_governance")]
+    pub allow_ungoverned: bool,
+    /// Build a project that HAS an `[allow]` ceiling without enforcing it
+    /// (records bundle verdict `skipped`). Distinct from `--allow-ungoverned`,
+    /// which authorizes having no ceiling at all.
+    #[arg(long)]
+    pub no_governance: bool,
 }
 
 /// `tau plugin <action>` — debug-tier helpers per spec §9.
@@ -433,6 +444,11 @@ pub struct InitArgs {
     /// Print what would be created without writing files.
     #[arg(long)]
     pub dry_run: bool,
+    /// Scaffold a least-privilege `[allow]` constitution (the commented union
+    /// of installed packages' declared capabilities) instead of the bare
+    /// stub. Use this to bootstrap a governed project (ADR-0057 / D2).
+    #[arg(long)]
+    pub allow: bool,
 }
 
 /// Arguments for `tau install`.
@@ -600,6 +616,15 @@ pub struct RunArgs {
     /// committed turns are not re-billed.
     #[arg(long, value_name = "RUN_ID")]
     pub resume: Option<String>,
+    /// Authorize running a project/bundle with no `[allow]` ceiling. On the
+    /// dev path a missing `[allow]` is otherwise a hard error (GOV000); on the
+    /// `--bundle` path this is required to run a bundle built `ungoverned`.
+    #[arg(long, conflicts_with = "no_governance")]
+    pub allow_ungoverned: bool,
+    /// Dev-run a project that HAS an `[allow]` ceiling without enforcing it.
+    /// No effect on `--bundle` runs (the bundle's verdict is already sealed).
+    #[arg(long)]
+    pub no_governance: bool,
 }
 
 /// Arguments for `tau chat`.

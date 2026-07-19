@@ -141,6 +141,14 @@ impl Output {
         }
     }
 
+    /// Emit a pre-rendered multi-line diagnostic to stderr verbatim, with no
+    /// `error:`/`warning:` prefix. Always emits regardless of `--quiet`. Used
+    /// for diagnostics that carry their own `error[CODE]:` header (e.g. the
+    /// governance `GOV000` gate and bundle-verify failures).
+    pub fn diagnostic(&mut self, block: impl Display) -> io::Result<()> {
+        writeln!(self.stderr, "{block}")
+    }
+
     /// Emit an error to stderr. Always emits regardless of `--quiet`.
     pub fn error(&mut self, msg: impl Display) -> io::Result<()> {
         match self.color {

@@ -18,7 +18,7 @@
 - **Deferred (do NOT implement):** suffix wildcards `*.x.com`, IPv6 literal hosts `[::1]`, runtime method enforcement in the proxy.
 - **Single PR**, `feat/hostset-exact-typed-any` branch, ordered commits. Workspace compiles green only at the end of the consumer commits — expected; CI gates on the merged result.
 - **Absent vs empty:** `methods` absent = `None` = all methods; `methods = []` = `Some(∅)` = deny all. Never `unwrap_or_default`.
-- **ADR number: 0059.** Conventional commits, imperative, scoped.
+- **ADR number: 0061.** Conventional commits, imperative, scoped.
 
 ---
 
@@ -35,7 +35,7 @@
 - **Modify** `crates/tau-sandbox-proxy/src/lib.rs` — `HostAllow`, `spawn_proxy` signature, pass-all + case-fold.
 - **Modify** adapters: `tau-sandbox-native/src/strict.rs`, `tau-sandbox-darwin/src/lib.rs`, `tau-sandbox-container/src/runner.rs`, `tau-sandbox-windows/src/lib.rs`.
 - **Modify** `crates/tau-runtime-core/src/orchestration/skill_resolve.rs` — test helper + assertion (test-only).
-- **Create** `docs/decisions/0059-one-host-semantic-exact-typed-any.md`; **Modify** `docs/SUMMARY.md`, `capability.rs:137` doc comment.
+- **Create** `docs/decisions/0061-one-host-semantic-exact-typed-any.md`; **Modify** `docs/SUMMARY.md`, `capability.rs:137` doc comment.
 - **Create/Modify** end-to-end divergence test in `crates/tau-cli/tests/`.
 
 ---
@@ -1197,15 +1197,15 @@ git commit -m "feat(sandbox): map HostSet -> HostAllow across adapters + bundle 
 
 ## Task 9: docs, ADR, migration sweep
 
-**Files:** Create `docs/decisions/0059-one-host-semantic-exact-typed-any.md`; Modify `docs/SUMMARY.md`, `crates/tau-domain/src/package/capability.rs` (doc comment), migration targets.
+**Files:** Create `docs/decisions/0061-one-host-semantic-exact-typed-any.md`; Modify `docs/SUMMARY.md`, `crates/tau-domain/src/package/capability.rs` (doc comment), migration targets.
 
 - [ ] **Step 1: Fix the doc comment (capability.rs — the `hosts` field, formerly :137)**
 
 Already changed in Task 4 Step 2 to "exact lowercase hostnames or the typed `Any`… Suffix wildcards are not yet supported." Verify it reads correctly.
 
-- [ ] **Step 2: Write ADR 0059**
+- [ ] **Step 2: Write ADR 0061**
 
-Create `docs/decisions/0059-one-host-semantic-exact-typed-any.md` following the repo's ADR template (status Accepted; context = the three-way divergence; decision = `HostSet` exact + typed `Any`, no derived hosts, typed `HttpMethod`, absent-vs-empty; consequences = build-accepts ⟺ run-enforces; deferred = suffix wildcards, IPv6 literals, runtime method enforcement). Reference the spec.
+Create `docs/decisions/0061-one-host-semantic-exact-typed-any.md` following the repo's ADR template (status Accepted; context = the three-way divergence; decision = `HostSet` exact + typed `Any`, no derived hosts, typed `HttpMethod`, absent-vs-empty; consequences = build-accepts ⟺ run-enforces; deferred = suffix wildcards, IPv6 literals, runtime method enforcement). Reference the spec.
 
 - [ ] **Step 3: SUMMARY.md entry** — add the ADR line under the decisions section (mirror the `0058` line's format).
 
@@ -1214,7 +1214,7 @@ Create `docs/decisions/0059-one-host-semantic-exact-typed-any.md` following the 
 - `crates/tau-cli/tests/cmd_build_mcp.rs:260` — `methods = []`: this asserts a bundle build; decide whether it meant "all" (drop key → `None`) or "deny all" (keep `[]`). Inspect the assertion around it; if it just needs *a* net.http cap, drop `methods` to mean all. Update expected bundle bytes/hash if asserted.
 - `crates/tau-sandbox-native/src/light.rs:376` — `{ "kind": "net.http", "hosts": [], "methods": [] }`: `hosts: []` → `Exact(∅)`, `methods: []` → `Some(∅)`. If this fixture just exercises "an http cap exists", set `hosts` to `["example.com"]` and drop `methods`. Verify the test's intent.
 - `[allow.mcp.*]` without `hosts` in `docs/superpowers/{plans,specs}/*.md` and `docs/superpowers/plans/vision-roadmap.md` — add explicit `hosts = [...]` to each example (they're prose examples; keep them valid).
-- `docs/decisions/0019-per-host-network-filter.md:105` — add a one-line "Superseded in part by ADR-0059 (hosts are now `HostSet`; `\"*\"` is a parse error, `\"any\"` is the sentinel)."
+- `docs/decisions/0019-per-host-network-filter.md:105` — add a one-line "Superseded in part by ADR-0061 (hosts are now `HostSet`; `\"*\"` is a parse error, `\"any\"` is the sentinel)."
 
 - [ ] **Step 5: Build the book**
 
@@ -1225,7 +1225,7 @@ Expected: only `[INFO]` lines. Then `rm -rf docs/book`.
 
 ```bash
 git add docs/ crates/tau-cli/tests/cmd_build_mcp.rs crates/tau-sandbox-native/src/light.rs
-git commit -m "docs(adr-0059): one host semantic; migrate methods=[] fixtures + mcp examples"
+git commit -m "docs(adr-0061): one host semantic; migrate methods=[] fixtures + mcp examples"
 ```
 
 > EPIC 1.6 hookup: the coarse-ceiling lint (branch `feat/epic-1.6-coarse-lint`, commit `57fe7c98`) should target `HostSet::Any` in `[allow]`, not a `"*"` string. Leave a note in that branch's design doc; do NOT implement it here unless 1.6 is trivial to fold in — out of this PR's scope.
@@ -1286,7 +1286,7 @@ Expected: PASS/clean.
 git add crates/tau-cli/tests/
 git commit -m "test(tau-cli): end-to-end hosts=any build-accepts <=> run-enforces; '*' fails at parse"
 git push -u origin feat/hostset-exact-typed-any
-gh pr create --base main --title "feat: one host semantic — HostSet exact + typed any (ADR-0059)" --body "Implements docs/superpowers/specs/2026-07-18-hostset-exact-plus-typed-any-design.md. Closes the hosts=['*'] build-accepts-but-run-rejects divergence."
+gh pr create --base main --title "feat: one host semantic — HostSet exact + typed any (ADR-0061)" --body "Implements docs/superpowers/specs/2026-07-18-hostset-exact-plus-typed-any-design.md. Closes the hosts=['*'] build-accepts-but-run-rejects divergence."
 ```
 
 ---

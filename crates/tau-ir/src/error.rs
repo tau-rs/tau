@@ -89,6 +89,16 @@ pub enum IrError {
         step: StepId,
     },
 
+    /// An agent's `PromptSource::Asset` reference is not a well-formed content
+    /// hash (`"sha256:" + 64 lowercase hex`). Structured — never `Parse`.
+    #[error("agent {agent:?}: malformed prompt asset hash {hash:?} (want \"sha256:\" + 64 lowercase hex)")]
+    MalformedAssetHash {
+        /// The agent whose prompt carries the bad reference.
+        agent: AgentId,
+        /// The offending hash string.
+        hash: String,
+    },
+
     /// Generic parse failure surfacing from the upstream TOML parser.
     #[error("tau.toml parse error: {0}")]
     Parse(String),
@@ -202,4 +212,66 @@ pub enum IrError {
         /// The referenced step id that is missing or comes at/after the check step.
         output: String,
     },
+
+    /// Canonical IR bytes are not valid JSON (structural decode failure).
+    /// Carries a stringified `serde_json::Error` (the crate is `no_std`;
+    /// the error is not stored by value).
+    #[error("canonical IR is not valid JSON: {0}")]
+    Decode(String),
+
+    /// The IR-format MAJOR of the loaded bundle does not match the MAJOR
+    /// this `tau` emits. A breaking IR-shape change: the bundle must be
+    /// rebuilt with a compatible `tau`.
+    #[error(
+        "IR format major {bundle_major} is incompatible with this tau \
+         (emits {current}); rebuild with a matching tau"
+    )]
+    FormatMajorMismatch {
+        /// The bundle's full `ir_format` string, e.g. `v3.0.0`.
+        bundle: String,
+        /// This tau's `ir_format`, e.g. `v2.4.0`.
+        current: String,
+        /// The parsed major of `bundle`.
+        bundle_major: u64,
+    },
+
+    /// The bundle's `ir_format` string is not a valid `vMAJOR.MINOR.PATCH`.
+    #[error("IR format version {value:?} is not a valid vMAJOR.MINOR.PATCH string")]
+    FormatUnparseable {
+        /// The offending `ir_format` value as read from the bundle.
+        value: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn format_major_mismatch_renders() {
+        let e = IrError::FormatMajorMismatch {
+            bundle: "v3.0.0".into(),
+            current: "v2.4.0".into(),
+            bundle_major: 3,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("major 3"), "got: {msg}");
+        assert!(msg.contains("v2.4.0"), "got: {msg}");
+        assert!(msg.contains("rebuild"), "got: {msg}");
+    }
+
+    #[test]
+    fn format_unparseable_renders() {
+        let e = IrError::FormatUnparseable {
+            value: "garbage".into(),
+        };
+        assert!(e.to_string().contains("garbage"));
+    }
+
+    #[test]
+    fn decode_renders() {
+        let e = IrError::Decode("expected value at line 1".into());
+        assert!(e.to_string().contains("not valid JSON"));
+    }
 }

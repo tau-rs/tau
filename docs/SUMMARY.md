@@ -63,6 +63,7 @@
 - [Packages](explanation/packages.md)
 - [Sandboxing](explanation/sandboxing.md)
 - [Serve mode](explanation/serve-mode.md)
+- [Slicing policy](explanation/slicing-policy.md)
 - [Testing strategy](explanation/testing-strategy.md)
 - [Two-layer skills](explanation/two-layer-skills.md)
 - [Trigger ingress](explanation/trigger-ingress.md)
@@ -130,8 +131,10 @@
 - [ADR-0054 — In-wasm MCP facilitator (β.7.5)](decisions/0054-in-wasm-mcp-facilitator.md)
 - [ADR-0055 — tau identity: two contracts; CLI = reference host](decisions/0055-tau-identity-two-contracts.md)
 - [ADR-0056 — The two contracts are the semver stability surface](decisions/0056-contract-versioning-stability-surface.md)
+- [ADR-0057 — Root allow-section governance + build-time enforcement](decisions/0057-root-allow-governance.md)
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
-- [ADR-0059 — One host semantic: exact hostnames + a typed `any`](decisions/0059-one-host-semantic-exact-typed-any.md)
+- [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
+- [ADR-0061 — One host semantic: exact hostnames + a typed `any`](decisions/0061-one-host-semantic-exact-typed-any.md)
 
 # Retrospectives
 

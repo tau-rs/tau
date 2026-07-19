@@ -273,7 +273,7 @@ capabilities = [{ kind = "net.http", hosts = ["api.weather.com"] }]
 
     let output = assert_cmd::Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--offline"])
+        .args(["build", "--allow-ungoverned", "--offline"])
         .current_dir(&project_root)
         .env("TAU_HOME", &tau_home)
         .assert()

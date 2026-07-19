@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 
-use tau_pkg::bundle::{build, BuildError, BuildOptions, BundleArtifact, IrPayload};
+use tau_pkg::bundle::{
+    build, BuildError, BuildOptions, BundleArtifact, GovernanceRecord, IrPayload,
+};
 use tau_pkg::lockfile::{LockedMcpEntry, LockedMcpExpandedTool};
 use tau_ports::target::TargetTriple;
 
@@ -65,6 +67,13 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
             std::process::exit(2);
         }
     };
+
+    // Governed-by-default gate (ADR-0057 / D2). Evaluate the `[allow]`
+    // constitution BEFORE any network I/O (MCP resolution): an absent ceiling
+    // is a hard error (GOV000) unless `--allow-ungoverned`, and a declared-
+    // but-violated ceiling refuses the build. The verdict is stamped into the
+    // bundle so `tau run --bundle` can enforce governed-by-default on its end.
+    let governance = evaluate_build_governance(&project_path, &target, args, output).await;
 
     // Map the repeatable `--agent` flag to the builder's filter. Empty
     // → None (build all). Parse each id to AgentId; a malformed id is a
@@ -124,6 +133,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         output_path: args.output.clone(),
         agent_filter,
         ir_payload,
+        governance,
     };
 
     let _ = output.status("Building bundle…");
@@ -154,6 +164,56 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         Err(e) => {
             let _ = output.error(format!("{e}"));
             std::process::exit(exit_code_for(&e) as i32);
+        }
+    }
+}
+
+/// Run the governed-by-default gate (ADR-0057 / D2) for `tau build`.
+///
+/// Loads the project through the same `CheckCtx` the `tau check governance`
+/// category uses, evaluates the `[allow]` constitution against the build
+/// flags, and either returns the [`GovernanceRecord`] to stamp into the
+/// bundle or terminates the process:
+///
+/// - `NoConstitution` → prints `GOV000` and exits 2.
+/// - `Violations`     → prints the refused-build diagnostic and exits 2.
+/// - malformed project → returns `None`; the bundle builder surfaces the
+///   precise parse/validation error (also exit 2) rather than a vague GOV000.
+async fn evaluate_build_governance(
+    project_path: &std::path::Path,
+    target: &TargetTriple,
+    args: &BuildArgs,
+    output: &mut Output,
+) -> Option<GovernanceRecord> {
+    use crate::cmd::check::{
+        evaluate_governance, render_no_constitution, render_violations, CheckCtx, GovernanceFlags,
+        GovernanceOutcome,
+    };
+
+    let flags = GovernanceFlags {
+        allow_ungoverned: args.allow_ungoverned,
+        no_governance: args.no_governance,
+    };
+    let ctx = match CheckCtx::load(project_path.to_path_buf(), false, Some(*target)).await {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = output.error(format!("cannot evaluate governance: {e}"));
+            std::process::exit(2);
+        }
+    };
+    let Some(project) = &ctx.project else {
+        // Unparseable project — defer to the bundle builder's precise error.
+        return None;
+    };
+    match evaluate_governance(project, &ctx, flags) {
+        GovernanceOutcome::Proceed(verdict) => Some(GovernanceRecord { verdict }),
+        GovernanceOutcome::NoConstitution => {
+            let _ = output.diagnostic(render_no_constitution());
+            std::process::exit(2);
+        }
+        GovernanceOutcome::Violations(findings) => {
+            let _ = output.diagnostic(render_violations(&findings));
+            std::process::exit(2);
         }
     }
 }
@@ -639,6 +699,8 @@ mod tests {
             agents: vec![],
             offline: false,
             emit_trigger: None,
+            allow_ungoverned: false,
+            no_governance: false,
         }
     }
 

@@ -14,6 +14,10 @@ quality bar but architecturally one host among peers (edge / browser /
 embedded are its equals). The phases below are framed engine-first on that
 basis.
 
+The **active backlog** (current epics + stories) lives in
+[`docs/superpowers/plans/vision-roadmap.md`](docs/superpowers/plans/vision-roadmap.md);
+this document is the historical phase record and forward framing.
+
 For per-issue tracking, see
 [GitHub Issues](https://github.com/LEBOCQTitouan/tau/issues).
 For the historical record of every Phase 0/1 sub-project, see
@@ -22,6 +26,12 @@ For the historical record of every Phase 0/1 sub-project, see
 ---
 
 ## Where we are (2026-05-29)
+
+> **As-of note (2026-07-19):** the snapshot below is historical (2026-05-29) and
+> is deliberately not rewritten in place. For current status see the active
+> backlog in
+> [`docs/superpowers/plans/vision-roadmap.md`](docs/superpowers/plans/vision-roadmap.md)
+> and [GitHub Issues](https://github.com/LEBOCQTitouan/tau/issues).
 
 ### Phase 0/1 — runnable runtime (complete)
 

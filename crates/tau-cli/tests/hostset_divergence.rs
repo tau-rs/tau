@@ -1,5 +1,5 @@
 //! Task 10 (capstone): end-to-end divergence test for HostSet exact+typed-any
-//! (ADR-0059, `docs/superpowers/specs/2026-07-18-hostset-exact-plus-typed-any-design.md`).
+//! (ADR-0061, `docs/superpowers/specs/2026-07-18-hostset-exact-plus-typed-any-design.md`).
 //!
 //! Before this feature, a manifest authored `hosts = ["*"]` sailed through
 //! parse → lattice → `tau check` → `tau build`, then FAILED only at run time
@@ -185,12 +185,16 @@ fn hosts_any_passes_check_and_build() {
     // code path that touches `hosts = "any"` decode/lattice logic.
 
     // `tau build` succeeds and produces a bundle whose agent carries the
-    // lowered `net.http` grant.
+    // lowered `net.http` grant. `--allow-ungoverned` opts out of the
+    // governed-by-default GOV000 gate (ADR-0057): this fixture deliberately
+    // declares no `[allow]` constitution (its `[models]` stays top-level so
+    // lowering resolves the backend), and this test is about HostSet
+    // acceptance, not governance.
     let scratch = tempfile::tempdir().unwrap();
     let tau_home = make_tau_home(scratch.path());
     let output = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(root)
         .env("TAU_HOME", &tau_home)
         .assert()

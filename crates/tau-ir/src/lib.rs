@@ -32,6 +32,7 @@ pub mod model_ref;
 pub mod module;
 pub mod node;
 pub mod pipeline;
+pub mod prompt;
 pub mod subflow;
 pub mod template;
 pub mod tool_impl;
