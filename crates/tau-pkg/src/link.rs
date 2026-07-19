@@ -242,6 +242,107 @@ fn resolve_models_from(
     bindings
 }
 
+/// Resolve every installed skill package against the on-disk `SKILL.md`,
+/// parsing it exactly once and recording the outcome.
+///
+/// Enumerates lockfile entries where `pkg.skill.is_some()` (the same
+/// filter [`crate::find_installed_skill`] uses internally), locates each
+/// package's install path via that helper, reads + hashes `SKILL.md`,
+/// and parses it via [`tau_domain::parse_skill_md`]. Every skill
+/// produces exactly one [`LinkedSkill`] entry (with `parsed_ok` set
+/// accordingly) except when the install path itself can't be resolved
+/// (missing `tau.toml` or a structurally invalid manifest), in which
+/// case only a [`LinkError`] is recorded. All errors are collected —
+/// this never stops at the first skill that fails.
+///
+/// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
+/// wires this in alongside `resolve_one_plugin`/`resolve_models`.
+#[allow(dead_code)]
+fn resolve_skills(
+    scope: &crate::scope::Scope,
+    lockfile: &crate::lockfile::LockFile,
+) -> (
+    Vec<LinkedSkill>,
+    BTreeMap<String, tau_domain::SkillContent>,
+    Vec<LinkError>,
+) {
+    let mut linked = Vec::new();
+    let mut parsed_map = BTreeMap::new();
+    let mut errors = Vec::new();
+
+    for pkg in &lockfile.packages {
+        if pkg.skill.is_none() {
+            continue; // not a skill package
+        }
+        let name = pkg.name.clone();
+        // Locate the install path + SKILL.md filename via the existing helper.
+        let installed = match crate::find_installed_skill(scope, name.as_str()) {
+            Ok(Some(s)) => s,
+            Ok(None) => continue, // not resolvable as a skill (shouldn't happen given the filter)
+            Err(crate::FindSkillError::InstallPathMissing { path, .. }) => {
+                errors.push(LinkError::SkillMissing {
+                    package: name.to_string(),
+                    path: path.display().to_string(),
+                });
+                continue;
+            }
+            Err(e) => {
+                errors.push(LinkError::SkillParse {
+                    package: name.to_string(),
+                    detail: e.to_string(),
+                });
+                continue;
+            }
+        };
+        let skill_md = installed.install_path.join(&installed.skill.content);
+        let bytes = match std::fs::read(&skill_md) {
+            Ok(b) => b,
+            Err(_) => {
+                errors.push(LinkError::SkillMissing {
+                    package: name.to_string(),
+                    path: skill_md.display().to_string(),
+                });
+                continue;
+            }
+        };
+        let content_sha256 = sha256_hex(&bytes);
+        let text = String::from_utf8_lossy(&bytes);
+        match tau_domain::parse_skill_md(&text) {
+            Ok(content) => {
+                linked.push(LinkedSkill {
+                    name: name.clone(),
+                    content_sha256,
+                    parsed_ok: true,
+                });
+                parsed_map.insert(name.to_string(), content);
+            }
+            Err(e) => {
+                linked.push(LinkedSkill {
+                    name: name.clone(),
+                    content_sha256,
+                    parsed_ok: false,
+                });
+                errors.push(LinkError::SkillParse {
+                    package: name.to_string(),
+                    detail: e.to_string(),
+                });
+            }
+        }
+    }
+    (linked, parsed_map, errors)
+}
+
+/// SHA-256 hex of `bytes`. `tree_hash::to_hex_lower` handles the
+/// digest-to-hex step; no crate-wide `sha256_hex(bytes) -> String`
+/// one-shot helper exists yet (`tree_hash::sha256_of_file` takes a
+/// path, not bytes), so this is the local equivalent.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    crate::tree_hash::to_hex_lower(&hasher.finalize())
+}
+
 /// Serialize [`TargetTriple`] as its `Display` string (tau-ports has no serde derive).
 mod target_triple_str {
     use super::{FromStr, TargetTriple};
@@ -492,5 +593,130 @@ mod tests {
 
         let bindings = resolve_models_from(&agents, &models);
         assert!(bindings.is_empty(), "got {bindings:?}");
+    }
+
+    // --- resolve_skills -----------------------------------------------
+    //
+    // Fixture recipe reused from `skill_resolve.rs`'s `make_critic_scope`
+    // (the exact installed-skill-tree builder: `.tau/config.toml` +
+    // `.tau/packages/<name>/<version>/{tau.toml,SKILL.md}` +
+    // `LockedPackage { skill: Some(LockedSkill::new(..)) }` saved to
+    // `tau-lock.toml`), parameterized here so the SKILL.md body/presence
+    // can vary per test.
+
+    use crate::lockfile::{LockedSkill, SkillFrontmatterSnapshot};
+    use crate::scope::Scope;
+    use tempfile::tempdir;
+
+    /// Build a scope with one installed skill package "greeter". Writes
+    /// `tau.toml` always; writes `SKILL.md` with `skill_md_body` unless
+    /// `write_skill_md` is `false` (to exercise the missing-file case).
+    fn skill_scope(
+        tmp: &std::path::Path,
+        skill_md_body: &str,
+        write_skill_md: bool,
+    ) -> (Scope, LockFile) {
+        let tau_dir = tmp.join(".tau");
+        std::fs::create_dir_all(&tau_dir).unwrap();
+        std::fs::write(
+            tau_dir.join("config.toml"),
+            "schema_version = 3\nkind = \"project\"\ncreated_at = \"2026-05-14T00:00:00Z\"\ncreated_by_tau_version = \"0.0.0\"\n\n[sandbox]\nrequired_tier = \"none\"\n",
+        )
+        .unwrap();
+
+        let install_dir = tau_dir.join("packages").join("greeter").join("0.1.0");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::write(
+            install_dir.join("tau.toml"),
+            r#"name = "greeter"
+version = "0.1.0"
+description = "Greets people."
+authors = []
+source = "https://example.com/greeter.git"
+kind = "skill"
+dependencies = []
+capabilities = []
+
+[skill]
+"#,
+        )
+        .unwrap();
+        if write_skill_md {
+            std::fs::write(install_dir.join("SKILL.md"), skill_md_body).unwrap();
+        }
+
+        let locked_pkg = LockedPackage {
+            name: PackageName::from_str("greeter").unwrap(),
+            active_version: Version::parse("0.1.0").unwrap(),
+            source: PackageSource::Git {
+                location: "https://example.com/greeter.git".parse().unwrap(),
+                rev: None,
+            },
+            installed_versions: vec![LockedVersion {
+                version: Version::parse("0.1.0").unwrap(),
+                rev: None,
+                resolved_commit: "0".repeat(40),
+                sha256: String::new(),
+                installed_at: SystemTime::UNIX_EPOCH,
+            }],
+            plugin: None,
+            skill: Some(LockedSkill::new(
+                "deadbeef".into(),
+                SkillFrontmatterSnapshot {
+                    name: "greeter".into(),
+                    description: "Greets people.".into(),
+                },
+            )),
+            synthesized_from: None,
+        };
+
+        let mut lf = LockFile::default();
+        lf.packages.push(locked_pkg);
+        lf.save(&tmp.join("tau-lock.toml")).unwrap();
+
+        (Scope::resolve(tmp).unwrap(), lf)
+    }
+
+    const VALID_SKILL_MD: &str = "---\nname: greeter\ndescription: Greets people.\n---\nHello!\n";
+
+    #[test]
+    fn resolve_skills_ok() {
+        let tmp = tempdir().unwrap();
+        let (scope, lf) = skill_scope(tmp.path(), VALID_SKILL_MD, true);
+
+        let (linked, parsed, errs) = resolve_skills(&scope, &lf);
+        assert!(errs.is_empty(), "got {errs:?}");
+        assert_eq!(linked.len(), 1, "got {linked:?}");
+        assert!(linked[0].parsed_ok, "got {:?}", linked[0]);
+        assert!(parsed.contains_key("greeter"), "got {parsed:?}");
+    }
+
+    #[test]
+    fn resolve_skills_missing_file() {
+        let tmp = tempdir().unwrap();
+        // tau.toml written, SKILL.md deliberately not written.
+        let (scope, lf) = skill_scope(tmp.path(), VALID_SKILL_MD, false);
+
+        let (_linked, _parsed, errs) = resolve_skills(&scope, &lf);
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, LinkError::SkillMissing { .. })),
+            "got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_skills_parse_error() {
+        let tmp = tempdir().unwrap();
+        // No leading `---` frontmatter delimiter — parse_skill_md fails.
+        let (scope, lf) = skill_scope(tmp.path(), "not frontmatter at all\n", true);
+
+        let (linked, _parsed, errs) = resolve_skills(&scope, &lf);
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, LinkError::SkillParse { .. })),
+            "got {errs:?}"
+        );
+        assert!(linked.iter().any(|s| !s.parsed_ok), "got {linked:?}");
     }
 }
