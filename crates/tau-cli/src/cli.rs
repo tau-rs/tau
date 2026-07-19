@@ -274,6 +274,12 @@ pub struct BuildArgs {
     /// cron schedules systemd can't auto-translate are skipped with a note.
     #[arg(long = "emit-trigger", value_name = "ADAPTER", value_parser = ["systemd", "k8s"])]
     pub emit_trigger: Option<String>,
+    /// Skip the `[allow]` governance gate (ADR-0059). The build proceeds
+    /// without enforcing the constitution and the bundle records
+    /// `governance.verdict = "skipped"`. Required to build a project that
+    /// declares no `[allow]` section.
+    #[arg(long = "no-governance")]
+    pub no_governance: bool,
 }
 
 /// `tau plugin <action>` — debug-tier helpers per spec §9.
@@ -600,6 +606,12 @@ pub struct RunArgs {
     /// committed turns are not re-billed.
     #[arg(long, value_name = "RUN_ID")]
     pub resume: Option<String>,
+    /// Skip the `[allow]` governance gate (ADR-0059) on the dev-mode run
+    /// path. Required to run a project that declares no `[allow]` section.
+    /// Ignored when running from a `--bundle` (bundle governance is checked
+    /// against its recorded constitution instead).
+    #[arg(long = "no-governance")]
+    pub no_governance: bool,
 }
 
 /// Arguments for `tau chat`.

@@ -56,7 +56,7 @@ schedule = "0 3 * * *"
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--emit-trigger", "systemd"])
+        .args(["build", "--no-governance", "--emit-trigger", "systemd"])
         .current_dir(root)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -117,7 +117,7 @@ schedule = "0 * * * *"
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--emit-trigger", "k8s"])
+        .args(["build", "--no-governance", "--emit-trigger", "k8s"])
         .current_dir(root)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -174,7 +174,7 @@ agent = "solo"
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--emit-trigger", "systemd"])
+        .args(["build", "--no-governance", "--emit-trigger", "systemd"])
         .current_dir(root)
         .env("TAU_HOME", &tau_home)
         .assert()

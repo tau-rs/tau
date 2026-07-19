@@ -295,7 +295,7 @@ fn run_pipeline_with_trailing_goal_check_succeeds_and_renders_writer_output() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "gather", "seed input"])
+        .args(["run", "gather", "seed input", "--no-governance"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .env("TAU_TESTING_ALLOW_MOCK_SANDBOX", "1")
@@ -326,7 +326,7 @@ fn run_drives_pipeline_and_renders_final_step_output() {
         .unwrap()
         // The entry agent id is the first pipeline step (`gather`); the
         // cwd path spawns its echo-llm backend, shared by both steps.
-        .args(["run", "gather", "seed input"])
+        .args(["run", "gather", "seed input", "--no-governance"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         // Force the mock sandbox so the toy plugin is spawned natively
@@ -361,7 +361,7 @@ fn run_pipeline_json_emits_completed_outcome() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "gather", "seed input", "--json"])
+        .args(["run", "gather", "seed input", "--json", "--no-governance"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .env("TAU_TESTING_ALLOW_MOCK_SANDBOX", "1")

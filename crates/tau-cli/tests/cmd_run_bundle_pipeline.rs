@@ -173,7 +173,7 @@ input = "${steps.gather.output}"
 fn build_bundle(project: &std::path::Path, tau_home: &std::path::Path) -> std::path::PathBuf {
     let out = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--no-governance"])
         .current_dir(project)
         .env("TAU_HOME", tau_home)
         .assert()

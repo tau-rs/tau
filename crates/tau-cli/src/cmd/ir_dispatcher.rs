@@ -115,7 +115,7 @@ pub(crate) async fn run_via_ir(
     let loaded = plugin_loader::load_plugins(
         agent_entry,
         &scope,
-        &project.models,
+        plugin_loader::model_aliases(&project),
         trace_context,
         host_options,
     )

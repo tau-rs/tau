@@ -83,7 +83,7 @@ fn run_completed_is_zero() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "ping"])
+        .args(["run", "echo", "ping", "--no-governance"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()
@@ -106,7 +106,7 @@ fn run_plugin_crash_is_two() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "anything"])
+        .args(["run", "echo", "anything", "--no-governance"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()

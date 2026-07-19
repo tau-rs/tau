@@ -81,7 +81,7 @@ generated_at = "2024-01-01T00:00:00Z"
 
     let output = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--no-governance"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -116,7 +116,7 @@ fn build_without_lockfile_exits_three_with_remediation_hint() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--no-governance"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -157,7 +157,7 @@ installed_at = "2024-01-01T00:00:00Z"
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build"])
+        .args(["build", "--no-governance"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -186,7 +186,7 @@ fn build_with_output_flag_writes_to_custom_path() {
 
     let output = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "-o", out_path.to_str().unwrap()])
+        .args(["build", "--no-governance", "-o", out_path.to_str().unwrap()])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -213,7 +213,7 @@ fn build_with_json_emits_artifact_object() {
 
     let output = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--json"])
+        .args(["build", "--no-governance", "--json"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -243,7 +243,7 @@ fn build_with_invalid_target_exits_two() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--target", "not-a-real-triple"])
+        .args(["build", "--no-governance", "--target", "not-a-real-triple"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -266,7 +266,7 @@ fn build_with_available_target_succeeds() {
     // would be rejected by the --target Available gate.)
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--target", "passthrough"])
+        .args(["build", "--no-governance", "--target", "passthrough"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -326,7 +326,14 @@ fn build_agent_flag_slices_bundle() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--agent", "alpha", "-o", out.to_str().unwrap()])
+        .args([
+            "build",
+            "--no-governance",
+            "--agent",
+            "alpha",
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -349,7 +356,7 @@ fn build_agent_flag_unknown_exits_two() {
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--agent", "ghost"])
+        .args(["build", "--no-governance", "--agent", "ghost"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
@@ -372,6 +379,7 @@ fn build_agent_flag_repeatable() {
         .unwrap()
         .args([
             "build",
+            "--no-governance",
             "--agent",
             "alpha",
             "--agent",

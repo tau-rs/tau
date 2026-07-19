@@ -121,7 +121,7 @@ fn run_dry_run_no_disk_change() {
 
     AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "hi", "--dry-run"])
+        .args(["run", "echo", "hi", "--dry-run", "--no-governance"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .assert()

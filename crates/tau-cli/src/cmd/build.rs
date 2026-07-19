@@ -118,6 +118,37 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         std::process::exit(2);
     }
 
+    // Governance gate (ADR-0059): the `[allow]` constitution is enforced at
+    // build time — not merely by `tau check` — so a bundle can never violate
+    // its own ceiling. `--no-governance` skips the gate (the bundle records
+    // `governance.verdict = "skipped"` in PR 2). For `.ts` projects the config
+    // is already parsed; for TOML projects re-load it (the file was just
+    // validated during lowering, so this succeeds).
+    let gov_project = match &ts_project {
+        Some(p) => p.clone(),
+        None => match tau_pkg::ProjectConfig::from_path(&project_root.join("tau.toml")) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = output.error(format!("{e}"));
+                std::process::exit(2);
+            }
+        },
+    };
+    let gov_scope = match tau_pkg::Scope::resolve(&project_root) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = output.error(format!("resolving scope for governance gate: {e}"));
+            std::process::exit(2);
+        }
+    };
+    // Outcome (Enforced / Skipped) is recorded in the bundle manifest by PR 2.
+    let _governance_outcome = crate::cmd::governance_gate::enforce_or_exit(
+        &gov_project,
+        &gov_scope,
+        args.no_governance,
+        output,
+    );
+
     let opts = BuildOptions {
         project_root: project_root.clone(),
         target,
@@ -639,6 +670,7 @@ mod tests {
             agents: vec![],
             offline: false,
             emit_trigger: None,
+            no_governance: false,
         }
     }
 

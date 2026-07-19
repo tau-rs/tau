@@ -36,6 +36,10 @@ export const a = agent({
             "project.ts",
             "-o",
             out_path.path().to_str().unwrap(),
+            // The TS authoring surface has no `[allow]` equivalent; this
+            // test only asserts the process exits with a status code, so
+            // skip the governance gate.
+            "--no-governance",
         ])
         .timeout(std::time::Duration::from_secs(20))
         .assert();

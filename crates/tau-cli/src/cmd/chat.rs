@@ -196,9 +196,14 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded =
-        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        entry,
+        &scope,
+        plugin_loader::model_aliases(&project),
+        trace_context,
+        host_options,
+    )
+    .await?;
 
     let runtime = loaded
         .builder

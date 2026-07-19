@@ -6,7 +6,6 @@
 //! Output: human (default), `--json` (JSONL), `--sarif` (SARIF 2.1.0).
 //! Exit codes: 0 clean / 2 fixable / 3 needs-setup / 64 usage / 70 internal.
 
-mod agent_caps;
 mod categories;
 mod output;
 mod result;

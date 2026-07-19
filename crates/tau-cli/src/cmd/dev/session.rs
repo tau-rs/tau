@@ -250,7 +250,7 @@ impl DevSession {
         let loaded = plugin_loader::load_plugins(
             &agent_entry,
             &scope,
-            &self.project.models,
+            plugin_loader::model_aliases(&self.project),
             trace_context,
             host_options,
         )

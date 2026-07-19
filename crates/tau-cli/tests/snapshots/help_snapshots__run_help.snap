@@ -41,6 +41,9 @@ Options:
       --resume <RUN_ID>
           Resume a durable run by its run id (ADR-0053). The entry agent must declare `[durable]`; the run rehydrates the latest checkpoint under `.tau/runs/<RUN_ID>/` and re-enters at the next turn, so already committed turns are not re-billed
 
+      --no-governance
+          Skip the `[allow]` governance gate (ADR-0059) on the dev-mode run path. Required to run a project that declares no `[allow]` section. Ignored when running from a `--bundle` (bundle governance is checked against its recorded constitution instead)
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

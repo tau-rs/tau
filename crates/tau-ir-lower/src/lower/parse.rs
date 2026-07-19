@@ -282,17 +282,27 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
 /// Producer binding and gate resolution were performed by tau-pkg's
 /// validator (`DeliverableEntry::producer` / `::gate`), so this is a pure
 /// structural copy — no re-derivation here.
-/// Resolve a model alias to a concrete [`ModelRef`] via `[models]`.
+/// Resolve a model alias to a concrete [`ModelRef`] via `[models]` or, when a
+/// constitution is declared, `[allow.models]`.
 ///
 /// Infallible in practice — `validate_models` (tau-pkg) guarantees the alias
-/// exists before lowering runs; the error arm is defense-in-depth.
+/// exists before lowering runs; the error arm is defense-in-depth. The lookup
+/// mirrors `validate_models`'s union: `[allow.models]` is the sole home for the
+/// alias map when `[allow]` is present (ADR-0057), and `[models]` cannot coexist
+/// with `[allow]`, so exactly one table carries any given alias.
 fn resolve_model_ref(
     config: &ProjectConfig,
     alias: &str,
 ) -> Result<tau_ir::model_ref::ModelRef, LowerError> {
-    let m = config.models.get(alias).ok_or_else(|| {
-        LowerError::Parse(alloc::format!("model alias `{alias}` not in [models]"))
-    })?;
+    let m = config
+        .models
+        .get(alias)
+        .or_else(|| config.allow.as_ref().and_then(|a| a.models.get(alias)))
+        .ok_or_else(|| {
+            LowerError::Parse(alloc::format!(
+                "model alias `{alias}` not in [models] or [allow.models]"
+            ))
+        })?;
     Ok(tau_ir::model_ref::ModelRef {
         backend: m.backend.clone(),
         model_id: m.model.clone(),

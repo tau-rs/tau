@@ -163,6 +163,16 @@ pub async fn run(
         output,
     )?;
 
+    // Governance gate (ADR-0059): the dev-mode run path lowers and executes the
+    // cwd project directly, so it enforces the same `[allow]` constitution as
+    // `tau build`. Run it *after* install so the agent's package manifest is
+    // present and the L1/L2 lattice is actually evaluated (an uninstalled
+    // package resolves to a non-fatal NeedsSetup, which would silently skip
+    // the lattice). `--no-governance` skips the gate. (The `--bundle` path
+    // above does not reach here; it validates governance against the bundle's
+    // recorded constitution in PR 2.)
+    crate::cmd::governance_gate::enforce_or_exit(&project, &scope, args.no_governance, output);
+
     let (agent_def, manifest) =
         crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
             .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
@@ -216,9 +226,14 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded =
-        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        entry,
+        &scope,
+        plugin_loader::model_aliases(&project),
+        trace_context,
+        host_options,
+    )
+    .await?;
 
     let runtime = loaded
         .builder

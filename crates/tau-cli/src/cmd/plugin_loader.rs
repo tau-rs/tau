@@ -130,6 +130,23 @@ pub(crate) async fn flush_recorders() {
 ///
 /// [`with_dyn_llm_backend`]: tau_runtime_tokio::RuntimeBuilder::with_dyn_llm_backend
 /// [`with_dyn_tool`]: tau_runtime_tokio::RuntimeBuilder::with_dyn_tool
+/// The active model-alias table for a project: `[allow.models]` when a
+/// constitution is declared (ADR-0057 — its sole home; `[models]` cannot
+/// coexist with `[allow]`), otherwise the top-level `[models]` table.
+///
+/// This mirrors `validate_models`'s union resolution so plugin loading and
+/// IR lowering agree with build-time validation on where a model alias lives.
+/// Pass the result as [`load_plugins`]'s `models` argument.
+pub(crate) fn model_aliases(
+    project: &tau_pkg::project::ProjectConfig,
+) -> &std::collections::BTreeMap<String, tau_pkg::project::project::ModelEntry> {
+    project
+        .allow
+        .as_ref()
+        .map(|a| &a.models)
+        .unwrap_or(&project.models)
+}
+
 pub(crate) async fn load_plugins(
     entry: &AgentEntry,
     scope: &Scope,
@@ -140,16 +157,18 @@ pub(crate) async fn load_plugins(
     let lockfile = LockFile::load(&scope.lockfile_path())
         .with_context(|| format!("loading lockfile {}", scope.lockfile_path().display()))?;
 
-    // Resolve the agent's LLM backend package name from the project `[models]`
+    // Resolve the agent's LLM backend package name from the project model-alias
     // table via its `model` alias (per-agent model resolution); the removed
-    // `AgentEntry.llm_backend` field no longer carries it. `validate_models`
-    // refuses an unknown alias at build time — the error arm is defensive.
+    // `AgentEntry.llm_backend` field no longer carries it. `models` is the
+    // active alias table — `[allow.models]` when a constitution is declared,
+    // else `[models]` (see [`model_aliases`]). `validate_models` refuses an
+    // unknown alias at build time — the error arm is defensive.
     let llm_backend_name = models
         .get(&entry.model)
         .map(|m| m.backend.clone())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "agent {:?} references model alias {:?} absent from [models]",
+                "agent {:?} references model alias {:?} absent from [models]/[allow.models]",
                 entry.id,
                 entry.model
             )

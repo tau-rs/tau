@@ -4,21 +4,22 @@
 //! `[allow.*]`. Model references are validated upstream by `validate_models`.
 //! Lattice: L0 (tool⊆ceiling), L1 (package manifest⊆root), L2 (IR tool⊆agent
 //! effective caps), L3 transparency Note (agent⊇spawn, runtime-enforced).
+//!
+//! This category is a thin presentation wrapper over the relocated core in
+//! [`tau_pkg::governance`] (ADR-0059) — `tau check` and `tau build` share one
+//! implementation of the lattice and cannot drift on what counts as a
+//! violation. The wrapper only maps [`GovSeverity`] → [`Severity`] and adds
+//! CLI presentation (source location + per-rule remediation).
 
 use std::path::Path;
 use std::time::Duration;
 
-use serde_json::json;
-
-use crate::cmd::check::agent_caps::{resolve_agent_caps, AgentCaps};
 use crate::cmd::check::result::{
     CheckCategory, CheckFinding, CheckResult, CheckStatus, FindingLocation, Severity,
 };
 use crate::cmd::check::runner::CheckCtx;
-use tau_domain::Capability;
-use tau_pkg::capability_override::{capability_set_subset, CeilingViolation};
-use tau_pkg::project::allow::AllowConfig;
-use tau_pkg::project::{ProjectConfig, ToolBinding};
+use tau_pkg::governance::{enforce_governance, GovFinding, GovSeverity};
+use tau_pkg::project::ProjectConfig;
 
 pub fn run_governance(ctx: &CheckCtx) -> CheckResult {
     let project = match &ctx.project {
@@ -49,296 +50,71 @@ pub(crate) fn governance_findings(
     tau_toml: &Path,
     ctx: &CheckCtx,
 ) -> Vec<CheckFinding> {
-    let Some(allow) = &project.allow else {
-        return vec![CheckFinding {
-            category: CheckCategory::Governance,
-            severity: Severity::Warning,
-            rule_id: "tau.governance.no_constitution",
-            summary: "no [allow] constitution declared; governance is not enforced".to_string(),
-            detail: None,
-            location: Some(loc(tau_toml)),
-            remediation: Some(
-                "add an [allow] section to tau.toml to enforce a capability ceiling".to_string(),
-            ),
-            structured: json!({ "check": "no_constitution" }),
-        }];
+    enforce_governance(project, &ctx.scope)
+        .into_iter()
+        .map(|g| to_check_finding(g, tau_toml))
+        .collect()
+}
+
+/// Map a presentation-free [`GovFinding`] to a `CheckFinding`, restoring the
+/// CLI-facing severity, source location, and remediation. The `summary` and
+/// `structured` fields carry over verbatim so text/JSON/SARIF output is
+/// byte-identical to the pre-relocation category.
+fn to_check_finding(g: GovFinding, tau_toml: &Path) -> CheckFinding {
+    let severity = match g.severity {
+        GovSeverity::Error => Severity::Error,
+        GovSeverity::NeedsSetup => Severity::NeedsSetup,
+        GovSeverity::Warning => Severity::Warning,
+        GovSeverity::Note => Severity::Note,
     };
-    let mut out = Vec::new();
-    over_reach(project, allow, tau_toml, &mut out);
-    closed_world(project, allow, tau_toml, &mut out);
-    lattice(project, allow, ctx, &mut out);
-    out
-}
-
-fn over_reach(
-    project: &ProjectConfig,
-    allow: &AllowConfig,
-    tau_toml: &Path,
-    out: &mut Vec<CheckFinding>,
-) {
-    for (name, tool) in &project.tools {
-        if let Err(v) = capability_set_subset(&tool.capabilities, &allow.ceiling) {
-            out.push(over_reach_finding(&format!("tool '{name}'"), &v, tau_toml));
-        }
-    }
-    for (name, entry) in &allow.tools {
-        if let Err(v) = capability_set_subset(&entry.ceiling, &allow.ceiling) {
-            out.push(over_reach_finding(
-                &format!("[allow.tools.{name}] ceiling"),
-                &v,
-                tau_toml,
-            ));
-        }
-    }
-    for agent in project.agents.values() {
-        for ov in &agent.capability_overrides {
-            let Some(list) = &ov.allow else { continue };
-            let Some(synth) = synth_cap(&ov.kind, list) else {
-                continue;
-            };
-            if let Err(v) = capability_set_subset(&[synth], &allow.ceiling) {
-                out.push(over_reach_finding(
-                    &format!("agent '{}': override", agent.id),
-                    &v,
-                    tau_toml,
-                ));
-            }
-        }
-    }
-}
-
-fn over_reach_finding(subject: &str, v: &CeilingViolation, tau_toml: &Path) -> CheckFinding {
+    let (remediation, located) = presentation(g.rule_id);
     CheckFinding {
         category: CheckCategory::Governance,
-        severity: Severity::Error,
-        rule_id: "tau.governance.over_reach",
-        summary: format!(
-            "{subject}: capability {} \"{}\" exceeds [allow] ceiling ({})",
-            v.kind, v.offender, v.reason
+        severity,
+        rule_id: g.rule_id,
+        summary: g.summary,
+        detail: None,
+        location: located.then(|| loc(tau_toml)),
+        remediation: remediation.map(str::to_string),
+        structured: g.structured,
+    }
+}
+
+/// Per-rule CLI presentation: remediation advice + whether the finding anchors
+/// to `tau.toml`. Keyed by `rule_id` so the mapping stays exhaustive as the
+/// core adds rules.
+fn presentation(rule_id: &str) -> (Option<&'static str>, bool) {
+    match rule_id {
+        "tau.governance.no_constitution" => (
+            Some("add an [allow] section to tau.toml to enforce a capability ceiling"),
+            true,
         ),
-        detail: None,
-        location: Some(loc(tau_toml)),
-        remediation: Some("narrow the capability or widen the [allow] ceiling".to_string()),
-        structured: json!({ "check": "over_reach", "subject": subject, "kind": v.kind, "offender": v.offender }),
-    }
-}
-
-fn closed_world(
-    project: &ProjectConfig,
-    allow: &AllowConfig,
-    tau_toml: &Path,
-    out: &mut Vec<CheckFinding>,
-) {
-    // Agent tool refs registered. (Model refs are validated upstream by validate_models.)
-    for agent in project.agents.values() {
-        for t in &agent.tool_refs {
-            if !allow.tools.contains_key(t) {
-                out.push(unregistered(
-                    "unregistered_tool",
-                    "tau.governance.unregistered_tool",
-                    &format!(
-                        "agent '{}' references unregistered tool '{t}' — add [allow.tools.{t}]",
-                        agent.id
-                    ),
-                    t,
-                    tau_toml,
-                ));
-            }
+        "tau.governance.over_reach" => (
+            Some("narrow the capability or widen the [allow] ceiling"),
+            true,
+        ),
+        "tau.governance.unregistered_tool"
+        | "tau.governance.unregistered_tool_def"
+        | "tau.governance.unregistered_mcp" => (
+            Some("register the resource in the corresponding [allow.*] table"),
+            true,
+        ),
+        "tau.governance.tool_exceeds_ceiling" => (
+            Some("narrow the tool or widen its [allow.tools] ceiling"),
+            true,
+        ),
+        "tau.governance.agent_caps_unresolved" => (Some("tau resolve"), true),
+        "tau.governance.override_expands_package" => {
+            (Some("narrow the agent's [capabilities] override"), true)
         }
-    }
-    // Defined tools registered.
-    for name in project.tools.keys() {
-        if !allow.tools.contains_key(name) {
-            out.push(unregistered(
-                "unregistered_tool_def",
-                "tau.governance.unregistered_tool_def",
-                &format!("tool '{name}' is defined but not registered in [allow.tools]"),
-                name,
-                tau_toml,
-            ));
+        "tau.governance.package_exceeds_allow" | "tau.governance.tool_exceeds_agent" => {
+            (Some("narrow the capability or widen the ceiling"), true)
         }
+        // Transparency note: no location, no remediation.
+        "tau.governance.spawn_runtime_enforced" => (None, false),
+        // Unknown rule: safe default (located, no advice).
+        _ => (None, true),
     }
-    // Tool→MCP bindings registered.
-    for (name, entry) in &allow.tools {
-        if let ToolBinding::Mcp(mcp_name) = &entry.binding {
-            if !allow.mcp.contains_key(mcp_name) {
-                out.push(unregistered(
-                    "unregistered_mcp",
-                    "tau.governance.unregistered_mcp",
-                    &format!(
-                        "[allow.tools.{name}] binds MCP '{mcp_name}' which is not registered in [allow.mcp]"
-                    ),
-                    mcp_name,
-                    tau_toml,
-                ));
-            }
-        }
-    }
-}
-
-fn unregistered(
-    check: &str,
-    rule_id: &'static str,
-    summary: &str,
-    subject: &str,
-    tau_toml: &Path,
-) -> CheckFinding {
-    CheckFinding {
-        category: CheckCategory::Governance,
-        severity: Severity::Error,
-        rule_id,
-        summary: summary.to_string(),
-        detail: None,
-        location: Some(loc(tau_toml)),
-        remediation: Some("register the resource in the corresponding [allow.*] table".to_string()),
-        structured: json!({ "check": check, "subject": subject }),
-    }
-}
-
-fn lattice(
-    project: &ProjectConfig,
-    allow: &AllowConfig,
-    ctx: &CheckCtx,
-    out: &mut Vec<CheckFinding>,
-) {
-    let tau_toml = ctx.project_root.join("tau.toml");
-    // L0: each defined tool's caps ⊆ its registered [allow.tools] ceiling.
-    for (name, def) in &project.tools {
-        if let Some(reg) = allow.tools.get(name) {
-            if let Err(v) = capability_set_subset(&def.capabilities, &reg.ceiling) {
-                out.push(CheckFinding {
-                    category: CheckCategory::Governance,
-                    severity: Severity::Error,
-                    rule_id: "tau.governance.tool_exceeds_ceiling",
-                    summary: format!(
-                        "tool '{name}': capability {} \"{}\" exceeds its [allow.tools.{name}] ceiling ({})",
-                        v.kind, v.offender, v.reason
-                    ),
-                    detail: None,
-                    location: Some(loc(&tau_toml)),
-                    remediation: Some(
-                        "narrow the tool or widen its [allow.tools] ceiling".to_string(),
-                    ),
-                    structured: json!({ "check": "tool_exceeds_ceiling", "tool": name, "kind": v.kind, "offender": v.offender }),
-                });
-            }
-        }
-    }
-
-    // L1/L2/L3: per-agent package capability lattice.
-    let mut any_spawn = false;
-    for agent in project.agents.values() {
-        match resolve_agent_caps(agent, ctx) {
-            AgentCaps::NotInstalled => {
-                out.push(CheckFinding {
-                    category: CheckCategory::Governance,
-                    severity: Severity::NeedsSetup,
-                    rule_id: "tau.governance.agent_caps_unresolved",
-                    summary: format!(
-                        "agent '{}' package '{}' not installed — run `tau resolve` to check the lattice",
-                        agent.id, agent.package
-                    ),
-                    detail: None,
-                    location: Some(loc(&tau_toml)),
-                    remediation: Some("tau resolve".to_string()),
-                    structured: json!({ "check": "agent_caps_unresolved", "agent": agent.id }),
-                });
-            }
-            AgentCaps::OverrideExpands(e) => {
-                out.push(CheckFinding {
-                    category: CheckCategory::Governance,
-                    severity: Severity::Error,
-                    rule_id: "tau.governance.override_expands_package",
-                    summary: format!("agent '{}': {}", agent.id, e),
-                    detail: None,
-                    location: Some(loc(&tau_toml)),
-                    remediation: Some("narrow the agent's [capabilities] override".to_string()),
-                    structured: json!({ "check": "override_expands_package", "agent": agent.id }),
-                });
-            }
-            AgentCaps::Resolved {
-                manifest,
-                effective,
-            } => {
-                // L1: package manifest ⊆ root.
-                if let Err(v) = capability_set_subset(&manifest, &allow.ceiling) {
-                    out.push(lattice_error(
-                        "package_exceeds_allow",
-                        "tau.governance.package_exceeds_allow",
-                        &format!(
-                            "agent '{}' package capability {} \"{}\" exceeds [allow] ceiling ({})",
-                            agent.id, v.kind, v.offender, v.reason
-                        ),
-                        &tau_toml,
-                    ));
-                }
-                // L2: each referenced IR tool ⊆ agent effective caps.
-                for t in &agent.tool_refs {
-                    if let Some(def) = project.tools.get(t) {
-                        if let Err(v) = capability_set_subset(&def.capabilities, &effective) {
-                            out.push(lattice_error(
-                                "tool_exceeds_agent",
-                                "tau.governance.tool_exceeds_agent",
-                                &format!(
-                                    "agent '{}': tool '{t}' capability {} \"{}\" exceeds the agent's effective grant ({})",
-                                    agent.id, v.kind, v.offender, v.reason
-                                ),
-                                &tau_toml,
-                            ));
-                        }
-                    }
-                }
-                // L3 transparency: agent ⊇ spawn is runtime-enforced + build-deferred.
-                if manifest.iter().any(|c| matches!(c, Capability::Agent(_))) {
-                    any_spawn = true;
-                }
-            }
-        }
-    }
-    if any_spawn {
-        out.push(CheckFinding {
-            category: CheckCategory::Governance,
-            severity: Severity::Note,
-            rule_id: "tau.governance.spawn_runtime_enforced",
-            summary: "agent ⊇ spawn is enforced at runtime; build-time enforcement is deferred pending per-kind agent definitions (EPIC 4)".to_string(),
-            detail: None,
-            location: None,
-            remediation: None,
-            structured: json!({ "check": "spawn_runtime_enforced" }),
-        });
-    }
-}
-
-fn lattice_error(
-    check: &str,
-    rule_id: &'static str,
-    summary: &str,
-    tau_toml: &Path,
-) -> CheckFinding {
-    CheckFinding {
-        category: CheckCategory::Governance,
-        severity: Severity::Error,
-        rule_id,
-        summary: summary.to_string(),
-        detail: None,
-        location: Some(loc(tau_toml)),
-        remediation: Some("narrow the capability or widen the ceiling".to_string()),
-        structured: json!({ "check": check }),
-    }
-}
-
-fn synth_cap(kind: &str, allow: &[String]) -> Option<Capability> {
-    let field = match kind {
-        "fs.read" | "fs.write" | "fs.exec" => "paths",
-        "net.http" => "hosts",
-        "process.spawn" => "commands",
-        _ => return None,
-    };
-    let v = json!({ "kind": kind, field: allow });
-    Some(
-        serde_json::from_value::<Capability>(v)
-            .expect("synth_cap builds a valid Capability for known kinds"),
-    )
 }
 
 fn loc(tau_toml: &Path) -> FindingLocation {
@@ -396,22 +172,9 @@ mod tests {
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].severity, Severity::Warning);
         assert_eq!(f[0].rule_id, "tau.governance.no_constitution");
-    }
-
-    #[test]
-    fn empty_allow_no_violations() {
-        let (cfg, dir) = proj(
-            r#"
-[project]
-name = "demo"
-
-[allow]
-"fs.read" = { paths = ["/proj/**"] }
-"#,
-        );
-        let ctx = ctx_for(&dir);
-        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
-        assert!(f.is_empty(), "got {}", summaries(&f));
+        // The wrapper restores CLI presentation.
+        assert!(f[0].location.is_some());
+        assert!(f[0].remediation.is_some());
     }
 
     #[test]
@@ -436,34 +199,11 @@ capabilities = [{ kind = "fs.read", paths = ["/etc/**"] }]
         let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
         assert!(
             f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
+                && x.severity == Severity::Error
                 && x.summary.contains("/etc/**")
                 && x.summary.contains("fetch")),
             "got: {}",
             summaries(&f)
-        );
-    }
-
-    #[test]
-    fn allow_tools_ceiling_exceeding_root_flagged() {
-        let (cfg, dir) = proj(
-            r#"
-[project]
-name = "demo"
-
-[allow]
-"net.http" = { hosts = ["api.x.com"] }
-
-[allow.tools.fetch]
-native = "Fetch"
-"net.http" = { hosts = ["evil.com"] }
-"#,
-        );
-        let ctx = ctx_for(&dir);
-        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
-        assert!(
-            f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
-                && x.summary.contains("evil.com")),
-            "got: {}", summaries(&f)
         );
     }
 
@@ -512,28 +252,50 @@ tool_refs = ["fetch"]
         );
     }
 
+    /// `tau check` and `tau build` MUST NOT drift: both consume the same
+    /// `tau_pkg::enforce_governance`, so the Error findings surfaced by the
+    /// check wrapper must equal — by `(rule_id, structured)` value, not by
+    /// rendered string — the Error findings the build gate filters on.
     #[test]
-    fn tool_binds_unregistered_mcp_flagged() {
-        let (cfg, dir) = proj(
-            r#"
+    fn check_and_build_agree_on_violations() {
+        use tau_pkg::governance::{enforce_governance, GovSeverity};
+        let toml = r#"
 [project]
 name = "demo"
 
 [allow]
-"net.http" = { hosts = ["api.x.com"] }
+"fs.read" = { paths = ["/proj/**"] }
 
-[allow.tools.weather]
-mcp = "weather"
-"#,
-        );
+[allow.tools.fetch]
+native = "Fetch"
+
+[tools.fetch]
+native = "Fetch"
+capabilities = [{ kind = "fs.read", paths = ["/etc/**"] }]
+"#;
+        let (cfg, dir) = proj(toml);
         let ctx = ctx_for(&dir);
-        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
-        assert!(
-            f.iter()
-                .any(|x| x.rule_id == "tau.governance.unregistered_mcp"
-                    && x.summary.contains("weather")),
-            "got: {}",
-            summaries(&f)
+
+        // Check path: relocated core → CheckFinding mapping.
+        let check_errors: Vec<(&'static str, serde_json::Value)> =
+            governance_findings(&cfg, Path::new("tau.toml"), &ctx)
+                .into_iter()
+                .filter(|f| f.severity == Severity::Error)
+                .map(|f| (f.rule_id, f.structured))
+                .collect();
+
+        // Build path: the gate filters the same core's Error findings.
+        let build_errors: Vec<(&'static str, serde_json::Value)> =
+            enforce_governance(&cfg, &ctx.scope)
+                .into_iter()
+                .filter(|f| f.severity == GovSeverity::Error)
+                .map(|f| (f.rule_id, f.structured))
+                .collect();
+
+        assert!(!check_errors.is_empty(), "fixture must produce violations");
+        assert_eq!(
+            check_errors, build_errors,
+            "check and build disagree on the violation set"
         );
     }
 
@@ -577,71 +339,6 @@ tool_refs = ["read_temp"]
         assert!(
             errs.is_empty(),
             "expected no errors, got: {}",
-            summaries(&f)
-        );
-    }
-
-    #[test]
-    fn tool_caps_exceeding_its_registered_ceiling_flagged() {
-        let (cfg, dir) = proj(
-            r#"
-[project]
-name = "demo"
-
-[allow]
-"fs.read" = { paths = ["/proj/**"] }
-
-[allow.tools.grep_tool]
-native = "Grep"
-"fs.read" = { paths = ["/proj/src/**"] }
-
-[tools.grep_tool]
-native = "Grep"
-capabilities = [{ kind = "fs.read", paths = ["/proj/**"] }]
-"#,
-        );
-        let ctx = ctx_for(&dir);
-        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
-        assert!(
-            f.iter()
-                .any(|x| x.rule_id == "tau.governance.tool_exceeds_ceiling"
-                    && x.summary.contains("grep_tool")
-                    && x.summary.contains("/proj/**")),
-            "got: {}",
-            summaries(&f)
-        );
-    }
-
-    #[test]
-    fn agent_override_exceeding_root_flagged() {
-        let (cfg, dir) = proj(
-            r#"
-packages = ["demo"]
-
-[project]
-name = "demo"
-
-[allow]
-"fs.read" = { paths = ["/proj/**"] }
-
-[allow.models.fast]
-backend = "demo"
-model = "m-1"
-
-[agents.solo]
-display_name = "Solo"
-package = "demo@^0.1"
-model = "fast"
-capabilities = [{ kind = "fs.read", allow_paths = ["/etc/**"] }]
-"#,
-        );
-        let ctx = ctx_for(&dir);
-        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
-        assert!(
-            f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
-                && x.summary.contains("/etc/**")
-                && x.summary.contains("solo")),
-            "got: {}",
             summaries(&f)
         );
     }

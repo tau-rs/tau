@@ -1,6 +1,5 @@
 ---
 source: crates/tau-cli/tests/help_snapshots.rs
-assertion_line: 70
 expression: s
 ---
 Build a deployment bundle from this project (Phase 2 §C.2), or compile a workflow to WebAssembly (`tau build wasm <project>`)
@@ -32,6 +31,9 @@ Options:
           Also emit host-adapter descriptors for the project's cron triggers. `systemd` writes `.timer` + `.service` units; `k8s` writes `CronJob` manifests. Files are written next to the bundle. Manual triggers and cron schedules systemd can't auto-translate are skipped with a note
           
           [possible values: systemd, k8s]
+
+      --no-governance
+          Skip the `[allow]` governance gate (ADR-0059). The build proceeds without enforcing the constitution and the bundle records `governance.verdict = "skipped"`. Required to build a project that declares no `[allow]` section
 
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
