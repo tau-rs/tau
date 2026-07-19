@@ -379,6 +379,25 @@ pub fn run_streaming_inner(
         // Multi-turn loop: continues until LLM responds with no tool uses
         // OR max_turns is reached.
         while total_turns < options.max_turns {
+            // Enforce the run budget (tokens / duration / agents) at each turn
+            // boundary. On breach, end the run with OutOfResources instead of
+            // spending another turn. RunState + budget are threaded via
+            // `orchestration_state`; guest/test paths without it skip the check.
+            if let Some(state_arc) = options.orchestration_state.as_ref() {
+                let now = crate::ids::now_utc(clock_ref(&options));
+                let breach = crate::orchestration::budget::BudgetWatchdog
+                    .tick(&state_arc.borrow(), now)
+                    .err();
+                if let Some(err) = breach {
+                    yield make_budget_exceeded_outcome(
+                        messages,
+                        total_turns,
+                        aggregated_tokens,
+                        err,
+                    );
+                    return;
+                }
+            }
             total_turns += 1;
             // Per ADR-0006 §3.9: wrap the turn body in a `runtime.turn`
             // span so child spans/events (llm.complete, dispatch.tool,
@@ -643,6 +662,15 @@ pub fn run_streaming_inner(
                     aggregated_tokens.output_tokens = aggregated_tokens
                         .output_tokens
                         .saturating_add(u64::from(usage.output_tokens));
+                    // Feed per-turn usage into the shared RunState so the
+                    // BudgetWatchdog (turn-boundary tick above) can enforce
+                    // `max_total_tokens`.
+                    if let Some(state_arc) = options.orchestration_state.as_ref() {
+                        state_arc.borrow().add_tokens(
+                            u64::from(usage.input_tokens)
+                                .saturating_add(u64::from(usage.output_tokens)),
+                        );
+                    }
                 }
             } // end else (normal LLM-drain prologue)
 
@@ -1867,6 +1895,29 @@ fn make_max_turns_outcome(
     }
 }
 
+/// Build the terminal `RunCompleted{Failed{OutOfResources}}` event for a
+/// [`crate::orchestration::budget::BudgetWatchdog`] breach (max tokens /
+/// duration / agents), mirroring [`make_max_turns_outcome`].
+fn make_budget_exceeded_outcome(
+    messages: Vec<Message>,
+    total_turns: u32,
+    token_usage: crate::options::TokenUsage,
+    err: crate::orchestration::error::OrchestrationError,
+) -> RunEvent {
+    use tau_domain::{AgentStatus, FailureKind};
+    RunEvent::RunCompleted {
+        outcome: RunOutcome::Failed {
+            status: AgentStatus::failed(
+                FailureKind::OutOfResources,
+                Some(format!("run budget exceeded: {err}")),
+            ),
+            all_messages: messages,
+            total_turns,
+            token_usage,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2891,6 +2942,94 @@ paths = ["/etc/**"]
             FailureKind::OutOfResources,
             "expected OutOfResources, got {:?}",
             kind
+        );
+    }
+
+    /// A run that exceeds `RunBudget::max_total_tokens` must abort with
+    /// `OutOfResources` at the next turn boundary rather than run on. Turn 1
+    /// burns 15 tokens against a 10-token budget; if the budget were NOT
+    /// enforced, turn 2's scripted text response would complete the run.
+    #[tokio::test]
+    async fn run_budget_max_tokens_exceeded_aborts_with_out_of_resources() {
+        use crate::orchestration::run_state::RunState;
+        use core::cell::RefCell;
+        use tau_domain::{AgentStatus, FailureKind};
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+        use tau_ports::RunBudget;
+
+        let spec = make_tool_spec("echo".into(), "echo tool".into(), Value::Null);
+        let tool_arc: Arc<dyn DynTool> = Arc::new(MockTool::new("echo", spec));
+        let (tools, validators, tool_specs_list) = make_tool_entry("echo", tool_arc);
+
+        let state = RunState::new(
+            "run-budget".into(),
+            "agent-1".into(),
+            RunBudget {
+                max_total_tokens: Some(10),
+                ..Default::default()
+            },
+            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
+        );
+        #[allow(clippy::arc_with_non_send_sync)]
+        let state_arc = Arc::new(RefCell::new(state));
+
+        let options = {
+            let mut o = test_run_options();
+            o.max_turns = 5; // high enough that max_turns is NOT the trigger
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // Turn 1: ToolUse + Finish(10 in / 5 out = 15). Turn 2 (only reached
+        // if the budget is NOT enforced): plain text that completes the run.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::new(vec![
+            Ok(CompletionChunk::ToolUse(tau_ports::fixtures::make_tool_use(
+                "call_1".into(),
+                "echo".into(),
+                Value::Null,
+            ))),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::ToolUse,
+                usage: Some(PortsTokenUsage::new(10, 5)),
+            }),
+            Ok(CompletionChunk::Text {
+                delta: "done".into(),
+            }),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::EndTurn,
+                usage: Some(PortsTokenUsage::new(1, 1)),
+            }),
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![],
+            tool_specs_list,
+            vec![],
+            vec![],
+        );
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
+
+        let Some(RunEvent::RunCompleted { outcome }) = events.last() else {
+            panic!("expected RunCompleted last, got {:?}", events.last())
+        };
+        let RunOutcome::Failed { status, .. } = outcome else {
+            panic!("budget breach must fail the run, got {outcome:?}")
+        };
+        let AgentStatus::Failed { kind, .. } = status else {
+            panic!("expected AgentStatus::Failed, got {status:?}")
+        };
+        assert_eq!(
+            *kind,
+            FailureKind::OutOfResources,
+            "expected OutOfResources from budget breach, got {kind:?}"
         );
     }
 
