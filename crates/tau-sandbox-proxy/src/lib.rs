@@ -52,6 +52,28 @@ impl HostAllow {
     }
 }
 
+// Platform-agnostic unit coverage for the host policy (the `#[cfg(unix)]`
+// integration tests below exercise the same logic through the proxy, but only
+// on unix; this proves the property deterministically, with no network).
+#[cfg(test)]
+mod host_allow_tests {
+    use super::HostAllow;
+
+    #[test]
+    fn any_permits_every_host() {
+        assert!(HostAllow::Any.permits("anything.example.com"));
+        assert!(HostAllow::Any.permits("EVEN.MIXED.Case"));
+    }
+
+    #[test]
+    fn exact_membership_is_case_insensitive() {
+        let policy = HostAllow::Exact(vec!["allowed.example.com".to_string()]);
+        assert!(policy.permits("allowed.example.com"));
+        assert!(policy.permits("ALLOWED.EXAMPLE.COM"));
+        assert!(!policy.permits("denied.example.com"));
+    }
+}
+
 // The async runtime code below is unix-only — it relies on Unix-domain
 // sockets (`tokio::net::Unix*`). The strict-tier sandbox is also unix-only
 // (landlock, seccomp, namespaces), so this module's runtime API is only
