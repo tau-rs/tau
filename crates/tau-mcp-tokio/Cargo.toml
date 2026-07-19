@@ -11,12 +11,18 @@ authors.workspace      = true
 [dependencies]
 tau-mcp           = { workspace = true, features = ["with-std-adapters"] }
 tau-domain        = { workspace = true, features = ["serde"] }
-tau-ports         = { workspace = true, features = ["serde"] }
-# Sandbox integration: tau-runtime-tokio::process_gate::wrap_spawn (PR-2).
-tau-runtime-tokio = { workspace = true }
+# Process-spawn gating goes through the `tau_ports::DynProcessGate` port
+# (ADR-0060) — the host injects the concrete gate. `process` brings the port
+# trait + `PassthroughGate`. tau-mcp-tokio deliberately does NOT depend on
+# tau-runtime-tokio, so the MCP transport stays off the host runtime's
+# tau-pkg / plugin-protocol / sandbox graph.
+tau-ports         = { workspace = true, features = ["serde", "process"] }
 serde             = { workspace = true, features = ["derive"] }
 serde_json        = { workspace = true }
-thiserror         = { workspace = true }
+# `std` for thiserror's `AsDisplay<PathBuf>` in host_lifecycle::error (formats a
+# cassette path). Previously unified in via tau-runtime-tokio's dep graph;
+# explicit now that the transport no longer depends on the host runtime.
+thiserror         = { workspace = true, features = ["std"] }
 tokio             = { workspace = true, features = [
     "rt",
     "rt-multi-thread",
@@ -33,12 +39,10 @@ bytes             = { workspace = true }
 futures           = { workspace = true }
 url               = { workspace = true }
 
-# NOTE: do NOT enable tau-runtime-tokio's "test-support" feature here.
-# PassthroughSandbox is unconditionally public; activating "test-support"
-# unifies feature flags workspace-wide and exposes tau-runtime-tokio's own
-# plugin_host_ipc_llm.rs test, which would compile silently broken until
-# someone activated the feature workspace-wide. (Fixed in PR #282, but
-# the principle holds: don't enable features you don't use.)
+# INVARIANT: tau-mcp-tokio must NOT depend on tau-runtime-tokio (or tau-pkg,
+# tau-plugin-protocol, or any tau-sandbox-* crate). The process gate reaches it
+# as the `tau_ports::DynProcessGate` port, injected by the host. A CI guard
+# (mcp-tokio-decoupled) asserts this manifest never names tau-runtime-tokio.
 [dev-dependencies]
 tokio    = { workspace = true, features = ["test-util", "fs"] }
 tempfile = { workspace = true }

@@ -4452,7 +4452,6 @@ dependencies = [
  "tau-domain",
  "tau-mcp",
  "tau-ports",
- "tau-runtime-tokio",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

@@ -1,7 +1,7 @@
 //! Confirms `host_lifecycle::open` propagates a sandbox refusal as
 //! `LifecycleError::StdioSpawn(StdioSpawnError::SandboxRefused)`.
 //!
-//! `DynProcessCapabilityGate` is a blanket impl over any
+//! `tau_ports::DynProcessGate` is a blanket impl over any
 //! `T: ProcessCapabilityGate + 'static`, so `AlwaysRefuseGate` implements
 //! the `CapabilityGate` + `ProcessCapabilityGate` sub-traits directly.
 
@@ -57,8 +57,7 @@ impl ProcessCapabilityGate for AlwaysRefuseGate {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandbox_refusal_propagates() {
     let url = format!("stdio:{}", mock_server_path().to_string_lossy());
-    let gate: Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> =
-        Arc::new(AlwaysRefuseGate);
+    let gate: Arc<dyn tau_ports::DynProcessGate> = Arc::new(AlwaysRefuseGate);
 
     let result = open(
         &url,
