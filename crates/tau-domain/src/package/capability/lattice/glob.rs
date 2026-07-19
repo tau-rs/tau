@@ -240,11 +240,8 @@ pub fn glob_canon(pats: &[String]) -> Vec<String> {
 
 /// meet = canon(all pairwise intersections).
 pub fn glob_meet(a: &[String], b: &[String]) -> Vec<String> {
-    let (ap, bp) = match (join_expand(a), join_expand(b)) {
-        (Some(ap), Some(bp)) => (ap, bp),
-        // any un-parseable side collapses that side's grants to what parses
-        _ => (join_expand(a).unwrap_or_default(), join_expand(b).unwrap_or_default()),
-    };
+    let ap = expand_salvage(a);
+    let bp = expand_salvage(b);
     let mut inter: Vec<String> = Vec::new();
     for x in &ap {
         for y in &bp {
@@ -256,14 +253,16 @@ pub fn glob_meet(a: &[String], b: &[String]) -> Vec<String> {
     glob_canon(&inter)
 }
 
-/// Expand and flatten all patterns in a slice into one `Vec<Pattern>`;
-/// `None` if any pattern fails to parse.
-fn join_expand(pats: &[String]) -> Option<Vec<Pattern>> {
-    let mut out = Vec::new();
+/// Expand each pattern, dropping only the individual un-parseable ones
+/// (matches `glob_canon`'s per-item salvage; an out-of-G2 grant is ⊥).
+fn expand_salvage(pats: &[String]) -> Vec<Pattern> {
+    let mut out: Vec<Pattern> = Vec::new();
     for p in pats {
-        out.extend(expand(p)?);
+        if let Some(arms) = expand(p) {
+            out.extend(arms);
+        }
     }
-    Some(out)
+    out
 }
 
 #[cfg(test)]
@@ -382,5 +381,14 @@ mod tests {
         let m = glob_meet(&a, &b);
         assert!(glob_subset_set(&m, &a).is_ok());
         assert!(glob_subset_set(&m, &b).is_ok());
+    }
+
+    #[test]
+    fn meet_salvages_valid_patterns_when_one_is_unparseable() {
+        // "/a/*x" is intra-segment (outside G2) → dropped; "/a/**" survives.
+        assert_eq!(
+            glob_meet(&["/a/**".into(), "/a/*x".into()], &["/a/**".into()]),
+            vec!["/a/**".to_string()]
+        );
     }
 }
