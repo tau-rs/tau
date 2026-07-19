@@ -67,13 +67,29 @@ checked against a backend's supported-feature set at two points:
   subset of the target's supported features, resolved target-aware via
   `tau_ports::target::registry`. This is strict, with no override flag, mirroring the
   existing `capability_fit` precedent (ADR-0036).
-- **LOAD**, at the single `tau-runtime-core` interpreter chokepoint that both the native
-  CLI and the wasm guest funnel through: `required_features(module)` must be a subset of
-  `SUPPORTED_FEATURES`, else a structured load error, not a mid-run
+- **LOAD**, at the two `tau-runtime-core` interpreter entry points an `IrModule` can be
+  executed through — the single entry-agent loop (`run_ir`/`run_ir_streaming`, which the
+  wasm guest also funnels through) and the engine-sequenced pipeline executor
+  (`run_pipeline`, which native pipeline paths such as `tau run --bundle` call directly on
+  a decoded bundle module, bypassing `run_ir`): both call the same `ensure_supported` gate
+  as their first statement, so `required_features(module)` must be a subset of
+  `SUPPORTED_FEATURES` at either entry, else a structured load error, not a mid-run
   `RuntimeError::Internal`.
 
-PR2 is not part of this branch; it is noted here for completeness because both halves
-share one ADR (Decision 3a below).
+As shipped in PR2: the LOAD error is `RuntimeError::UnsupportedFeature { features }`, and
+the mid-run `RuntimeError::Internal` control-flow arms in `pipeline.rs` are kept as
+defense-in-depth — with both entry points gated, those arms are now unreachable from any
+execution path. Build and load read one shared
+table, `tau_ir::feature::backend_features(AdapterFamily)`, which returns the same
+interpreter set for every adapter family today; the interpreter's `SUPPORTED_FEATURES`
+const is tied to that table by a drift-guard test, and a `wasm32-wasip2` round-trip test
+proves the guest rejects an unsupported-feature module across the WIT boundary. Because
+`AdapterFamily` is `#[non_exhaustive]` in `tau-ports`, `backend_features` keeps an explicit
+arm per known family plus a documented wildcard — a family added upstream lands on the
+wildcard (same set) rather than failing to compile, so the obligation to update the sets
+travels with the code review, not the type checker.
+
+Both halves share one ADR (Decision 3a below).
 
 ### Locked decisions
 
@@ -110,8 +126,9 @@ There is effectively one execution backend today: the `tau-runtime-core` interpr
 which the wasm guest reuses rather than reimplementing (the guest's single-agent,
 no-pipeline limit is a workflow-shape constraint orthogonal to feature support, not a
 second backend with its own feature set). Consequently PR2 needs one
-`SUPPORTED_FEATURES` set and one load-time enforcement chokepoint, not two parallel
-sets that could drift from each other.
+`SUPPORTED_FEATURES` set, gated at both interpreter entry points (`run_ir`/
+`run_ir_streaming` and `run_pipeline`), not two parallel sets that could drift from each
+other.
 
 ## Consequences
 
@@ -158,13 +175,16 @@ sets that could drift from each other.
   input, so each untagged arm would need an explicit accept and reject test. No `untagged`
   or `flatten` types exist in `tau-ir/src` today, so this is a caution for when such a type
   lands, not a current requirement.
-- EPIC 4.2 (#399), which lands execution for `Branch`/`Parallel`/`Loop`/`Suspend`, must
-  add those variants to `SUPPORTED_FEATURES` / `backend_features` once PR2 lands. Until
-  then, PR2's feature-set honesty test (one fixture per `IrFeature`, asserting
-  `feature ∈ SUPPORTED ⟹ executes past load` and `feature ∉ SUPPORTED ⟹ rejected at
-  load`) will fail for those four variants — this is intentional, and is what forces
-  EPIC 4.2 to flip the sets rather than let them silently drift from what the interpreter
-  actually executes.
+- Whoever lands execution for `Branch`/`Parallel`/`Loop`/`Suspend` (the EPIC 4.2
+  interpreter work — issue #399, now closed, though execution is not yet on `main`: the
+  `pipeline.rs` control-flow arms still return `RuntimeError::Internal`) MUST add those
+  variants to both `SUPPORTED_FEATURES` (in `tau-runtime-core`) and `backend_features` (in
+  `tau-ir`) at the same time. Two shipped tests guard this: the drift-guard
+  (`supported_features_matches_shared_table`) fails if the const and the shared table are
+  updated one-sidedly, and the load honesty test
+  (`branch_module_rejected_at_load_not_mid_run`) fails the moment a Branch module becomes
+  executable, forcing whoever adds execution to update the feature sets rather than let
+  them silently drift from what the interpreter actually runs.
 
 ## Alternatives considered
 

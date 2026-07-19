@@ -226,4 +226,14 @@ pub enum LowerError {
         /// The referenced step id that is missing or out of scope.
         output: String,
     },
+
+    /// The workflow uses IR feature(s) the build target's backend does not
+    /// support (walked feature-fit). Strict — no override flag.
+    #[error("workflow requires unsupported IR feature(s) on target {target:?}: {unsupported:?}")]
+    FeatureFitFailed {
+        /// Features required but not supported by the target's backend.
+        unsupported: alloc::vec::Vec<tau_ir::feature::IrFeature>,
+        /// The build target.
+        target: tau_ports::target::TargetTriple,
+    },
 }

@@ -11,6 +11,7 @@
 //! once per source change to drive the interpreter against a fresh IR).
 
 pub mod capability_fit;
+pub mod feature_fit;
 pub mod mcp_build_error;
 pub mod parse;
 pub mod resolve;
@@ -65,6 +66,8 @@ pub struct ResolvedMcpContract {
 /// 3. `typecheck` — agents' tool_refs exist, subflow targets exist,
 ///    cap_subset is a subset of parent grant.
 /// 4. `capability_fit` — every required shape supported by `target`.
+/// 5. `feature_fit` — every walked [`tau_ir::feature::IrFeature`] the
+///    module requires is supported by `target`'s backend.
 ///
 /// # Example
 ///
@@ -96,7 +99,9 @@ pub fn lower_project(
     let resolved = resolve::resolve(parsed, caches)?;
     typecheck::typecheck(&resolved)?;
     capability_fit::check(&resolved, target)?;
-    Ok(build_module(resolved, target))
+    let module = build_module(resolved, target);
+    feature_fit::check(&module, target)?;
+    Ok(module)
 }
 
 /// Caches the caller supplies for resolution. Each is a closure over an

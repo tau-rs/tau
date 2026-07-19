@@ -286,6 +286,15 @@ pub enum RuntimeError {
     #[error("SubflowKind::Compose is not supported in the v0 interpreter")]
     UnsupportedSubflowCompose,
 
+    /// The module walks IR feature(s) this interpreter does not implement yet.
+    /// Caught at load (before stepping), replacing the mid-run `Internal`
+    /// control-flow errors as the user-facing surface.
+    #[error("workflow requires IR feature(s) this runtime does not support: {features:?}")]
+    UnsupportedFeature {
+        /// The unsupported features, as debug names.
+        features: alloc::vec::Vec<alloc::string::String>,
+    },
+
     /// Boot-time drift: live tools/list hash differs from lockfile.
     #[error(
         "MCP contract drift at boot for entry {entry:?}: expected hash {expected_hash}, got {actual_hash}"

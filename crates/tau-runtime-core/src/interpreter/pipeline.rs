@@ -64,6 +64,8 @@ pub async fn run_pipeline<D>(
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
+    crate::interpreter::ensure_supported(&module)?;
+
     let pipeline = module
         .workflow
         .pipeline

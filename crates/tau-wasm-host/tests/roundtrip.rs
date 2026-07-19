@@ -129,6 +129,86 @@ system = "You are a trivial test agent. Reply and stop."
     tau_ir::to_canonical_bytes(&module)
 }
 
+/// Lower the trivial fixture (one agent) and graft on a `pipeline` whose
+/// single step is a `StepRun::Branch` — an IR feature the interpreter's load
+/// gate (`ensure_supported`, gating both `run_ir` and `run_ir_streaming`)
+/// does not list in `SUPPORTED_FEATURES`. Mirrors `trivial_ir_bytes` for the
+/// agent/target scaffolding and `new_control_flow_variants_round_trip` in
+/// `tau-ir/src/canonical.rs` for the Branch/Condition/Locus/GoalPredicate
+/// shape.
+fn branch_ir_bytes() -> Vec<u8> {
+    let mut module = {
+        let toml = r#"
+packages = ["anthropic"]
+
+[project]
+name = "trivial-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.main]
+display_name = "Main"
+package = "trivial-wasm@^0.1"
+model = "claude"
+
+[agents.main.prompt]
+system = "You are a trivial test agent. Reply and stop."
+"#;
+        let config = tau_pkg::project::ProjectConfig::parse_str(toml).expect("fixture parses");
+        let target: tau_ports::target::TargetTriple = "any-wasi-strict".parse().unwrap();
+        let caches = tau_ir_lower::Caches {
+            native_tool: &|_| Some([0u8; 32]),
+            mcp_contract: &|_| None,
+            skill: &|_| None,
+        };
+        tau_ir_lower::lower_project(&config, &target, &caches).expect("lowers")
+    };
+
+    assert_eq!(
+        module.workflow.agents.len(),
+        1,
+        "fixture must keep exactly one agent so the guest's single-agent check passes"
+    );
+
+    let branch_step = tau_ir::PipelineStep {
+        id: tau_ir::PipelineStepId("b".into()),
+        run: tau_ir::StepRun::Branch {
+            on: tau_ir::Condition {
+                evaluates: tau_ir::Locus::Path("/flag".into()),
+                predicate: tau_ir::GoalPredicate::Exists,
+            },
+            then: vec![],
+            otherwise: vec![],
+        },
+        input: "${input}".into(),
+    };
+    module.workflow.pipeline = Some(tau_ir::Pipeline {
+        steps: vec![branch_step],
+    });
+
+    tau_ir::to_canonical_bytes(&module)
+}
+
+#[test]
+#[ignore = "shells a wasm32-wasip2 build"]
+fn unsupported_feature_module_rejected_across_wit_boundary() {
+    let ir = branch_ir_bytes();
+    let component = build_guest_component(Some(&ir));
+    let err = run_component(&component, "hi", vec![]).unwrap_err();
+    match err {
+        tau_wasm_host::WasmHostError::Guest(s) => {
+            assert!(
+                s.contains("Branch"),
+                "expected Branch in rejection, got: {s}"
+            )
+        }
+        other => panic!("expected WasmHostError::Guest, got {other:?}"),
+    }
+}
+
 #[test]
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
 fn guest_with_no_baked_ir_errors() {
