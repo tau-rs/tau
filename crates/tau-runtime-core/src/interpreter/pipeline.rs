@@ -30,6 +30,10 @@ use crate::vocabulary::{
     SPAN_PIPELINE_CHECK, SPAN_PIPELINE_STEP,
 };
 
+/// Max `Parallel` branches in flight at once (nginx `worker_connections`
+/// analogue). Bounded cooperative fork-join — see ADR-0059.
+const PARALLEL_CAP: usize = 8;
+
 /// Drive an `IrModule`'s pipeline to completion, returning all step
 /// outputs.
 ///
@@ -39,9 +43,22 @@ use crate::vocabulary::{
 /// step, and records the step's output keyed by its pipeline-step id so
 /// later steps can reference it via `${steps.<id>.output}`.
 ///
-/// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`], and
-/// [`StepRun::Check`] steps are all supported. A `Check` step evaluates a
-/// postcondition (goal or deliverable) against the accumulated outputs.
+/// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`],
+/// [`StepRun::Check`], [`StepRun::Branch`], [`StepRun::Loop`], and
+/// [`StepRun::Parallel`] steps are all supported. A `Check` step evaluates a
+/// postcondition (goal or deliverable) against the accumulated outputs. A
+/// `Branch` evaluates its condition and recurses into the chosen arm
+/// (`then`/`otherwise`) against the same shared store; it stores no output
+/// of its own. A `Loop` runs its `body` up to `max_iters` times, checking
+/// `until` after each pass and threading a failed verdict's rationale into
+/// the next pass as feedback; exhausting `max_iters` without `until` holding
+/// is a hard error ([`RuntimeError::LoopExhausted`]). Like `Branch`, a
+/// `Loop` stores no output of its own. A `Parallel` forks each branch over
+/// an isolated read-only snapshot of the store (branches cannot see each
+/// other's outputs), drives them with bounded concurrency
+/// (`PARALLEL_CAP` in flight at once), and merges each branch's produced
+/// outputs back into the shared store in index order once all branches
+/// complete; like `Branch` and `Loop`, it stores no output of its own.
 ///
 /// # Failure handling: abort, or rewind-to-gate retry
 ///
@@ -73,17 +90,49 @@ where
         })?;
 
     let mut store = OutputStore::new();
+    run_steps(
+        &module,
+        &pipeline.steps,
+        &input,
+        &mut store,
+        &dispatcher,
+        None,
+    )
+    .await?;
+    Ok(store)
+}
 
+/// Execute a slice of pipeline steps against a shared [`OutputStore`].
+///
+/// Extracted from [`run_pipeline`] so nested blocks (Branch/Parallel/Loop)
+/// can drive their own step slices with the same gate-rewind, feedback, and
+/// check-dispatch semantics. `initial_feedback` seeds the per-slice feedback
+/// carried into the first gate agent step (used when a nested slice re-runs
+/// with a prior rejection rationale); top-level callers pass `None`.
+///
+/// See [`run_pipeline`]'s docs for the abort / rewind-to-gate retry model —
+/// the loop body lives here.
+#[allow(clippy::too_many_arguments)]
+async fn run_steps<D>(
+    module: &Arc<IrModule>,
+    steps: &[tau_ir::pipeline::PipelineStep],
+    input: &str,
+    store: &mut OutputStore,
+    dispatcher: &Arc<D>,
+    initial_feedback: Option<String>,
+) -> Result<(), RuntimeError>
+where
+    D: ToolDispatcher + Send + Sync + 'static,
+{
     // Per-check attempt counter (1-based on first eval), keyed by check id.
     let mut attempts: BTreeMap<String, u32> = BTreeMap::new();
     // Rationale of the most recent failed check that triggered a rewind. It
     // is injected as a prior turn at the gate's agent step and stays set
     // until the originating check resolves (pass clears it, fail updates it).
-    let mut feedback: Option<String> = None;
+    let mut feedback: Option<String> = initial_feedback;
     // gate-id -> pipeline-step index, so a failed retryable check can rewind
     // `i` to its gate without re-scanning the pipeline each time.
-    let gate_index: BTreeMap<&str, usize> = pipeline
-        .steps
+    let gate_index: BTreeMap<&str, usize> = steps
         .iter()
         .enumerate()
         .map(|(idx, step)| (step.id.0.as_str(), idx))
@@ -92,8 +141,8 @@ where
     // Index loop (not `for`) so a failed retryable check can rewind `i` to a
     // gate step. On the happy path `i` only ever advances by one.
     let mut i = 0;
-    while i < pipeline.steps.len() {
-        let step = &pipeline.steps[i];
+    while i < steps.len() {
+        let step = &steps[i];
 
         // Check steps have their own span/event vocabulary and store no
         // output, so dispatch them before the Agent/Tool/Deterministic path.
@@ -125,7 +174,7 @@ where
                     let verdict = evaluate_goal(
                         evaluates,
                         predicate,
-                        &store,
+                        store,
                         reader.as_ref().map(|a| a.as_ref()),
                         reg.as_ref(),
                     )?;
@@ -142,7 +191,7 @@ where
                         locus,
                         must_satisfy,
                         judge,
-                        &store,
+                        store,
                         reader.as_ref().map(|a| a.as_ref()),
                         dispatcher.clone(),
                     ))
@@ -211,6 +260,141 @@ where
             continue;
         }
 
+        // `Branch` blocks have their own early dispatch, mirroring `Check`
+        // above: they store no output of their own (the chosen arm's steps
+        // record their own outputs into the shared `store` as they run).
+        if let StepRun::Branch {
+            on,
+            then,
+            otherwise,
+        } = &step.run
+        {
+            let reg =
+                dispatcher
+                    .deterministic_registry()
+                    .ok_or_else(|| RuntimeError::Internal {
+                        message: format!("branch {} needs a deterministic registry", step.id.0),
+                    })?;
+            let reader = dispatcher.artifact_reader();
+            let verdict = crate::interpreter::check::eval_condition(
+                on,
+                store,
+                reader.as_ref().map(|a| a.as_ref()),
+                reg.as_ref(),
+            )?;
+            let arm = if verdict.met { then } else { otherwise };
+            Box::pin(run_steps(module, arm, input, store, dispatcher, None)).await?;
+            i += 1;
+            continue;
+        }
+
+        // `Loop` blocks have their own early dispatch, mirroring `Check` and
+        // `Branch` above: they store no output of their own (the body's
+        // steps record their own outputs into the shared `store` as they
+        // run, each pass overwriting the prior pass's). Runs `body` up to
+        // `max_iters` times, checking `until` after each pass; converges as
+        // soon as `until` holds, otherwise threads the failed verdict's
+        // rationale into the next pass as feedback (same
+        // "Previous attempt rejected: <rationale>" idiom `Check`'s
+        // rewind-to-gate retry uses). Exhausting `max_iters` without `until`
+        // holding is a hard error (ADR-0058 / ADR-0059) — a bounded loop
+        // that cannot reach its goal is a failure, not a silent success.
+        if let StepRun::Loop {
+            body,
+            until,
+            max_iters,
+        } = &step.run
+        {
+            let mut loop_feedback: Option<String> = None;
+            let mut converged = false;
+            for _iter in 0..*max_iters {
+                Box::pin(run_steps(
+                    module,
+                    body,
+                    input,
+                    store,
+                    dispatcher,
+                    loop_feedback.take(),
+                ))
+                .await?;
+                let reg =
+                    dispatcher
+                        .deterministic_registry()
+                        .ok_or_else(|| RuntimeError::Internal {
+                            message: format!("loop {} needs a deterministic registry", step.id.0),
+                        })?;
+                let reader = dispatcher.artifact_reader();
+                let verdict = crate::interpreter::check::eval_condition(
+                    until,
+                    store,
+                    reader.as_ref().map(|a| a.as_ref()),
+                    reg.as_ref(),
+                )?;
+                if verdict.met {
+                    converged = true;
+                    break;
+                }
+                loop_feedback = Some(verdict.rationale);
+            }
+            if !converged {
+                return Err(RuntimeError::LoopExhausted {
+                    step: step.id.0.clone(),
+                    max_iters: *max_iters,
+                });
+            }
+            i += 1;
+            continue;
+        }
+
+        // `Suspend` blocks have their own early dispatch, mirroring `Branch`,
+        // `Loop`, and `Parallel` above. HITL checkpoint/resume lands in EPIC
+        // 4.3; 4.2 aborts loudly with a named error rather than silently
+        // skip the block or fall through to a generic `Internal` error.
+        if let StepRun::Suspend { resume_signal } = &step.run {
+            return Err(RuntimeError::SuspendNotImplemented {
+                step: step.id.0.clone(),
+                resume_signal: resume_signal.clone(),
+            });
+        }
+
+        // `Parallel` blocks have their own early dispatch, mirroring `Branch`
+        // and `Loop` above: they store no output of their own. Each branch
+        // forks a read-only snapshot of `store` (branches are read-isolated
+        // from each other — a branch cannot see a sibling's outputs, only
+        // the pre-fork state), runs to completion, and returns its produced
+        // store. Branches are driven with bounded concurrency
+        // (`PARALLEL_CAP` in flight at once, nginx `worker_connections`
+        // style) and their outputs are merged back into the shared store in
+        // index order once all branches complete, so the merge is
+        // deterministic regardless of which branch's future resolves first.
+        if let StepRun::Parallel { branches } = &step.run {
+            use futures_util::stream::{self, StreamExt};
+            let futs = branches.iter().enumerate().map(|(idx, branch)| {
+                let module = module.clone();
+                let dispatcher = dispatcher.clone();
+                let input = input.to_string();
+                let mut snap = store.clone();
+                async move {
+                    run_steps(&module, branch, &input, &mut snap, &dispatcher, None).await?;
+                    Ok::<(usize, OutputStore), RuntimeError>((idx, snap))
+                }
+            });
+            let mut results: alloc::vec::Vec<(usize, OutputStore)> = stream::iter(futs)
+                .buffered(PARALLEL_CAP)
+                .collect::<alloc::vec::Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<_, _>>()?;
+            // `buffered` preserves input order, but sort by index defensively
+            // so the merge is deterministic regardless of driver scheduling.
+            results.sort_by_key(|(idx, _)| *idx);
+            for (_, produced) in results {
+                store.merge(produced);
+            }
+            i += 1;
+            continue;
+        }
+
         // NOTE: we do NOT call `.entered()` here — `EnteredSpan` mutates a
         // thread-local span stack, and tokio's multi-thread scheduler can
         // move this task to a different worker thread at any `.await`,
@@ -222,7 +406,7 @@ where
         let step_span = info_span!(SPAN_PIPELINE_STEP, id = step.id.0.as_str());
         tracing::info!(parent: &step_span, name = EV_PIPELINE_STEP_STARTED, id = step.id.0.as_str());
 
-        let rendered = tau_ir::template::resolve(&step.input, &input, &store.template_map())
+        let rendered = tau_ir::template::resolve(&step.input, input, &store.template_map())
             .map_err(|e| RuntimeError::Internal {
                 message: format!("pipeline step {}: {e}", step.id.0),
             })?;
@@ -308,42 +492,17 @@ where
                 crate::interpreter::deterministic::run_step(node, registry.as_ref(), &args)?
             }
             // `Check` steps are dispatched at the top of the loop and never
-            // reach this `match` (they store no output).
+            // reach this `match` (they store no output of their own).
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
-            // EPIC 4.1 control-flow blocks: execution is implemented in T2
-            // (the interpreter phase). Reaching these arms before T2 is a bug
-            // in the caller — panic loudly rather than silently skip.
-            StepRun::Branch { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                    "pipeline step {} is a Branch block — interpreter support lands in EPIC 4.2",
-                    step.id.0
-                ),
-                })
-            }
-            StepRun::Parallel { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                    "pipeline step {} is a Parallel block — interpreter support lands in EPIC 4.2",
-                    step.id.0
-                ),
-                })
-            }
-            StepRun::Loop { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                        "pipeline step {} is a Loop block — interpreter support lands in EPIC 4.2",
-                        step.id.0
-                    ),
-                })
-            }
-            StepRun::Suspend { .. } => {
-                return Err(RuntimeError::Internal {
-                    message: alloc::format!(
-                    "pipeline step {} is a Suspend block — interpreter support lands in EPIC 4.2",
-                    step.id.0
-                ),
-                })
+            // `Branch`, `Parallel`, `Loop`, and `Suspend` are all
+            // early-dispatched above (each either stores no output of its
+            // own, or — for `Suspend` — aborts before reaching here), so
+            // none of these ever reach this `match`.
+            StepRun::Branch { .. }
+            | StepRun::Parallel { .. }
+            | StepRun::Loop { .. }
+            | StepRun::Suspend { .. } => {
+                unreachable!("control-flow blocks are early-dispatched")
             }
         };
 
@@ -353,7 +512,7 @@ where
         i += 1;
     }
 
-    Ok(store)
+    Ok(())
 }
 
 /// Turn a rendered template string into the `Value` a tool/deterministic
