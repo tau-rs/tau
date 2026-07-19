@@ -204,7 +204,12 @@ pub mod kinds {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+// Deserialization routes through `RawManifest` (D7-B PR2) so `capabilities`
+// can be resolved vocab-aware: `capabilities` land as raw wire values, then
+// `vocab_version` gates whether unknown (non-`custom.`) kinds parse as
+// `Capability::Forward`. Strictness (`deny_unknown_fields`) lives on
+// `RawManifest`.
+#[cfg_attr(feature = "serde", serde(try_from = "RawManifest"))]
 pub struct UncheckedManifest {
     /// Package name.
     pub name: PackageName,
@@ -246,6 +251,83 @@ pub struct UncheckedManifest {
     /// `docs/decisions/0025-skills-foundation.md`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub skill: Option<crate::package::skill::SkillManifest>,
+    /// Declared capability-vocabulary generation (D7-B PR2). Absent ⇒
+    /// [`KNOWN_VOCAB`](crate::KNOWN_VOCAB) (strict, current). Only a value
+    /// *newer* than this tau's `KNOWN_VOCAB` opts unknown (non-`custom.`)
+    /// capability kinds into fail-closed [`Capability::Forward`] parsing.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "default_vocab", skip_serializing_if = "is_default_vocab")
+    )]
+    pub vocab_version: u32,
+}
+
+#[cfg(feature = "serde")]
+fn default_vocab() -> u32 {
+    crate::package::capability::KNOWN_VOCAB
+}
+
+#[cfg(feature = "serde")]
+fn is_default_vocab(v: &u32) -> bool {
+    *v == crate::package::capability::KNOWN_VOCAB
+}
+
+/// Wire-shape mirror of [`UncheckedManifest`] used only for deserialization
+/// (D7-B PR2). Identical fields except `capabilities` land as raw
+/// [`RawCapability`](crate::package::capability::RawCapability) values, which
+/// [`TryFrom`] then resolves under the declared `vocab_version`. This is where
+/// `deny_unknown_fields` (unknown top-level keys) is enforced.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawManifest {
+    name: PackageName,
+    version: Version,
+    description: String,
+    authors: Vec<String>,
+    license: Option<String>,
+    source: PackageSource,
+    kind: PackageKind,
+    dependencies: Vec<PackageDep>,
+    capabilities: Vec<crate::package::capability::RawCapability>,
+    #[serde(default)]
+    plugin: Option<PluginManifest>,
+    #[serde(default)]
+    sandbox: crate::package::sandbox::PluginSandboxRequirements,
+    #[serde(default)]
+    skill: Option<crate::package::skill::SkillManifest>,
+    #[serde(default = "default_vocab")]
+    vocab_version: u32,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<RawManifest> for UncheckedManifest {
+    type Error = String;
+
+    fn try_from(r: RawManifest) -> Result<Self, Self::Error> {
+        use crate::package::capability::{build_capability, VocabMode};
+        let mode = VocabMode::Vocab(r.vocab_version);
+        let capabilities = r
+            .capabilities
+            .into_iter()
+            .map(|raw| build_capability(raw, mode))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(UncheckedManifest {
+            name: r.name,
+            version: r.version,
+            description: r.description,
+            authors: r.authors,
+            license: r.license,
+            source: r.source,
+            kind: r.kind,
+            dependencies: r.dependencies,
+            capabilities,
+            plugin: r.plugin,
+            sandbox: r.sandbox,
+            skill: r.skill,
+            vocab_version: r.vocab_version,
+        })
+    }
 }
 
 /// Validated package manifest. By construction, satisfies all cross-field
@@ -386,6 +468,7 @@ mod manifest_tests {
             plugin: None,
             sandbox: crate::package::sandbox::PluginSandboxRequirements::default(),
             skill: None,
+            vocab_version: crate::KNOWN_VOCAB,
         }
     }
 
@@ -572,6 +655,7 @@ mod validation_tests {
             plugin: None,
             sandbox: crate::package::sandbox::PluginSandboxRequirements::default(),
             skill: None,
+            vocab_version: crate::KNOWN_VOCAB,
         }
     }
 
@@ -646,6 +730,50 @@ capabilities = []
         assert_eq!(skill.content, "SKILL.md");
         assert!(skill.requires_tools.is_empty());
         assert!(skill.requires_skills.is_empty());
+    }
+
+    // ----- D7-B PR2: manifest vocab_version gate -----
+
+    #[cfg(feature = "serde")]
+    fn manifest_with_unknown_cap(vocab_line: &str) -> Result<UncheckedManifest, toml::de::Error> {
+        let toml_src = alloc::format!(
+            r#"
+name = "future"
+version = "1.0.0"
+description = "declares a newer-vocab capability"
+authors = []
+source = "https://example.com/future.git"
+kind = "tool"
+dependencies = []
+{vocab_line}
+capabilities = [{{ kind = "gpu.compute", devices = ["nvidia"] }}]
+"#
+        );
+        toml::from_str::<UncheckedManifest>(&toml_src)
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn newer_vocab_manifest_parses_unknown_kind_as_forward() {
+        let u = manifest_with_unknown_cap("vocab_version = 2").expect("newer vocab parses");
+        assert_eq!(u.vocab_version, 2);
+        match &u.capabilities[0] {
+            Capability::Forward { kind, params } => {
+                assert_eq!(kind, "gpu.compute");
+                assert!(params.contains_key("devices"));
+            }
+            other => panic!("expected Forward, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn same_manifest_without_vocab_version_errors() {
+        // Undeclared vocab_version = current vocabulary, strict: the unknown
+        // kind is a hard error (did-you-mean, not a silent Forward).
+        let err = alloc::format!("{}", manifest_with_unknown_cap("").unwrap_err());
+        assert!(err.contains("unknown capability kind"), "got: {err}");
+        assert!(err.contains("gpu.compute"), "got: {err}");
     }
 
     #[cfg(feature = "serde")]

@@ -49,6 +49,7 @@ pub use package::{
     GitLocation, NetCapability, NetHosts, PackageDep, PackageId, PackageKind, PackageManifest,
     PackageSource, PluginKind, PluginManifest, PluginRequiredTier, PluginSandboxRequirements,
     PortKind, ProcessCapability, SkillCapability, SkillFormat, SynthesizeError, UncheckedManifest,
+    VocabMode, KNOWN_VOCAB,
 };
 pub use value::Value;
 pub use version::{Version, VersionReq};

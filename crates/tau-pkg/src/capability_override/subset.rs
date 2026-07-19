@@ -440,11 +440,37 @@ mod tests {
 
     #[test]
     fn custom_exact_match_ok_param_diff_rejected() {
-        let child = vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)];
-        let same = vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)];
-        let diff = vec![cap(r#"{"kind":"mcp.tool.use","tool":"y"}"#)];
+        let child = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#)];
+        let same = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#)];
+        let diff = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"y"}"#)];
         assert!(capability_set_subset(&child, &same).is_ok());
         assert!(capability_set_subset(&child, &diff).is_err());
+    }
+
+    #[test]
+    fn forward_capability_is_fail_closed_in_ceiling() {
+        // A `Forward` cap (unknown kind admitted via a newer `vocab_version`)
+        // subsumes nothing and is subsumed by nothing — even an empty ceiling
+        // rejects it (D7-B PR2 fail-closed lattice behavior).
+        let manifest_toml = r#"
+name = "future"
+version = "1.0.0"
+description = "declares a newer-vocab capability"
+authors = []
+source = "https://example.com/future.git"
+kind = "tool"
+dependencies = []
+vocab_version = 2
+capabilities = [{ kind = "gpu.compute", devices = ["nv"] }]
+"#;
+        let m: tau_domain::UncheckedManifest =
+            toml::from_str(manifest_toml).expect("newer-vocab manifest parses");
+        assert!(matches!(
+            m.capabilities[0],
+            tau_domain::Capability::Forward { .. }
+        ));
+        let err = capability_set_subset(&m.capabilities, &[]).unwrap_err();
+        assert_eq!(err.reason, "kind not in ceiling");
     }
 
     #[test]

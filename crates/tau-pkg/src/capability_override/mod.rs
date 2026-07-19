@@ -366,8 +366,8 @@ mod tests {
 
     #[test]
     fn custom_capability_not_narrowable() {
-        let pkg = vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)];
-        let over = vec![ov("mcp.tool.use", Some(vec![]), vec![], None)];
+        let pkg = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#)];
+        let over = vec![ov("custom.mcp.tool.use", Some(vec![]), vec![], None)];
         let err = compute_effective(&pkg, &over).unwrap_err();
         assert!(err.reason.contains("custom"), "got: {}", err.reason);
     }

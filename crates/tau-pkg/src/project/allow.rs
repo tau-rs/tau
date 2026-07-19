@@ -104,10 +104,14 @@ pub enum ToolBinding {
     Mcp(String),
 }
 
-/// Raw-cap kinds permitted as `[allow]` keys (and `[allow.tools.*]` ceiling
-/// keys). `agent.spawn` flows through the lattice's spawn link, not a raw
-/// ceiling entry; `custom`/anything else is not a narrowable ceiling kind.
-const ALLOWED_CAP_KINDS: &[&str] = &[
+/// Capability kinds accepted as `[allow]` ceiling entries (and
+/// `[allow.tools.*]` ceiling keys). This is the *semantic* allow-list, applied
+/// after the unified capability parser (D7-B PR2, Decision 4-A) — so a typo
+/// fails at the parser with a did-you-mean, while a valid-but-non-ceiling kind
+/// (`skill.spawn`, `task_list`, `custom.*`, …) fails here with a distinct
+/// message. `agent.spawn` flows through the lattice's spawn link, not a raw
+/// ceiling entry; nothing else is a narrowable ceiling kind.
+const ALLOW_CEILING_KINDS: &[&str] = &[
     "fs.read",
     "fs.write",
     "fs.exec",
@@ -122,15 +126,13 @@ fn err(message: impl Into<String>) -> ProjectConfigError {
 }
 
 /// Bridge one kind-as-key raw cap (`"fs.read" => { paths = [...] }`) into a
-/// canonical `Capability`, re-emitting it as `{ kind, ... }` for the domain
-/// deserializer. Rejects non-whitelisted kinds and non-table values.
+/// canonical `Capability`. The kind-as-key shape is re-emitted as
+/// `{ kind, ... }` and parsed through the **single** domain capability
+/// deserializer (Decision 4-A) — so `[allow]` and package manifests share one
+/// unknown-kind / typo / did-you-mean / field-shape path and cannot diverge.
+/// A distinct post-parse gate then rejects kinds that parse fine but aren't
+/// narrowable `[allow]` ceilings.
 fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConfigError> {
-    if !ALLOWED_CAP_KINDS.contains(&kind) {
-        return Err(err(format!(
-            "raw-cap kind {kind:?} is not permitted in [allow] \
-             (allowed: fs.read, fs.write, fs.exec, net.http, process.spawn)"
-        )));
-    }
     // toml::Value → serde_json::Value, then inject `kind`.
     let json: JsonValue = serde_json::to_value(value)
         .map_err(|e| err(format!("raw-cap {kind:?}: not serializable: {e}")))?;
@@ -138,8 +140,18 @@ fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConf
         return Err(err(format!("raw-cap {kind:?}: value must be a table")));
     };
     obj.insert("kind".to_string(), JsonValue::String(kind.to_string()));
-    serde_json::from_value::<Capability>(JsonValue::Object(obj))
-        .map_err(|e| err(format!("raw-cap {kind:?}: malformed: {e}")))
+    // Unified parse: typos, unknown kinds, and field-shape errors surface here
+    // (with a did-you-mean), exactly as they do for a package manifest.
+    let cap = serde_json::from_value::<Capability>(JsonValue::Object(obj))
+        .map_err(|e| err(format!("[allow] {e}")))?;
+    // Semantic gate: the kind parses, but is it a narrowable ceiling?
+    if !ALLOW_CEILING_KINDS.contains(&kind) {
+        return Err(err(format!(
+            "capability kind {kind:?} is valid but not permitted as an [allow] \
+             ceiling entry (ceilings: fs.read, fs.write, fs.exec, net.http, process.spawn)"
+        )));
+    }
+    Ok(cap)
 }
 
 /// Bridge a kind-as-key cap map into a sorted `Vec<Capability>`.
@@ -285,6 +297,41 @@ mod tests {
         let raw = allow_from(r#""fs.teleport" = { paths = ["/"] }"#);
         let err = validate_allow(raw).unwrap_err();
         assert!(format!("{err}").contains("fs.teleport"), "got: {err}");
+    }
+
+    // ----- D7-B PR2: unified parser + ceiling gate (Decision 4-A) -----
+
+    #[test]
+    fn typo_kind_errors_at_the_typo_with_did_you_mean() {
+        // The canonical D7 example: a typo in [allow] fails at the typo (a
+        // parse error with a did-you-mean), NOT as a downstream governance error.
+        let raw = allow_from(r#""fs.raed" = { paths = ["/x"] }"#);
+        let err = format!("{}", validate_allow(raw).unwrap_err());
+        assert!(err.contains("fs.raed"), "got: {err}");
+        assert!(
+            err.contains("fs.read"),
+            "should suggest fs.read; got: {err}"
+        );
+    }
+
+    #[test]
+    fn valid_but_non_ceiling_kind_rejected_distinctly() {
+        // `skill.spawn` is a valid capability, but not an [allow] ceiling —
+        // a distinct message from a typo.
+        let raw = allow_from(r#""skill.spawn" = { allowed_skills = ["critic"] }"#);
+        let err = format!("{}", validate_allow(raw).unwrap_err());
+        assert!(err.contains("skill.spawn"), "got: {err}");
+        assert!(err.contains("not permitted as an [allow]"), "got: {err}");
+    }
+
+    #[test]
+    fn field_shape_strictness_applies_in_allow() {
+        // net.http with `paths` (an fs field) is now a hard error in [allow]
+        // too — the shared parser enforces field-shape (D7-B).
+        let raw = allow_from(r#""net.http" = { paths = ["/x"] }"#);
+        let err = format!("{}", validate_allow(raw).unwrap_err());
+        assert!(err.contains("net.http"), "got: {err}");
+        assert!(err.contains("paths"), "got: {err}");
     }
 
     #[test]
