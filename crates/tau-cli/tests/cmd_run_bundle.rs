@@ -262,8 +262,8 @@ fn run_bundle_with_tampered_ir_format_is_rejected_by_source_cross_check() {
     let bundle_path = build_bundle(&project, &tau_home);
 
     let body = std::fs::read_to_string(&bundle_path).unwrap();
-    let mut manifest = tau_pkg::bundle::BundleManifest::parse_str(&body)
-        .expect("freshly-built bundle must parse");
+    let mut manifest =
+        tau_pkg::bundle::BundleManifest::parse_str(&body).expect("freshly-built bundle must parse");
     let ir = manifest
         .ir_payload
         .as_mut()
