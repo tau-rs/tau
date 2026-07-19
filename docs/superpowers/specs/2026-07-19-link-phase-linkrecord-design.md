@@ -3,7 +3,7 @@
 **Status:** Approved (brainstorm) — ready for `writing-plans`
 **Date:** 2026-07-19
 **Handoff:** `.context/attachments/w9FCSH/pasted_text_2026-07-19_13-03-44.txt` (D10-B)
-**ADR:** ADR-0059 (this design) lands in PR 1; credential-flip ADR at PR 4 (next-free then)
+**ADR:** ADR-0060 (this design) lands in PR 1; credential-flip ADR at PR 4 (next-free then)
 **Builds on:** #284 (pinned MCP resolver), ADR-0052 (per-agent model resolution)
 **Verified against:** `maseru` @ `e3aacd6f` (main advanced past the handoff's `d678802d`)
 
@@ -255,7 +255,7 @@ hatch**:
 
 | PR | Headline | Contents |
 |---|---|---|
-| **1** | `link()` + `LinkRecord` + ADR-0059 | New `tau-pkg/src/link.rs`; `LinkRecord`/`LinkError`; truth-table + multi-error tests. ADR + SUMMARY.md. Nothing calls it yet (unit-tested dead code). |
+| **1** | `link()` + `LinkRecord` + ADR-0060 | New `tau-pkg/src/link.rs`; `LinkRecord`/`LinkError`; truth-table + multi-error tests. ADR + SUMMARY.md. Nothing calls it yet (unit-tested dead code). |
 | **2** | 3 callers + cleanup | Wire build/dev-run/check; embed record in manifest; delete `"unresolved"` sentinel + redundant alias re-resolution; `AgentId .expect` → structured errors; no-drift test. |
 | **3** | run --bundle trust model + **MCP-bundle bugfix** | Stop re-lowering; verify-then-trust; MCP reproduce path uses pinned resolver; MCP-bundle-RUNS regression test. |
 | **4** | Credential posture flip | `Ok(None)` → hard error + `--allow-ambient-credentials` escape hatch + credential-flip ADR. |
@@ -285,7 +285,7 @@ rather than a footnote.
 
 ## Deliverables & conventions
 
-- ADR-0059 "tau build links; bundles carry a verified LinkRecord; run trusts
+- ADR-0060 "tau build links; bundles carry a verified LinkRecord; run trusts
   after verify" (0057 held by open #423, 0058 taken); add to
   `docs/decisions/` + `SUMMARY.md`. Credential-flip ADR at PR 4 (next-free then).
 - `feat/*` branches; conventional commits; CLAUDE.md cargo rules

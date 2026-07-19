@@ -1,4 +1,4 @@
-# ADR-0059: tau build links; bundles carry a verified LinkRecord; run trusts after verify.
+# ADR-0060: tau build links; bundles carry a verified LinkRecord; run trusts after verify.
 
 **Status:** Proposed
 **Date:** 2026-07-19
