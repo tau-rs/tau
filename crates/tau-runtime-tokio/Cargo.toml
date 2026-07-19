@@ -9,7 +9,7 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-tau-runtime-core      = { workspace = true }
+tau-runtime-core      = { workspace = true, features = ["std"] }
 tau-domain            = { workspace = true, features = ["serde"] }
 tau-observe           = { workspace = true }
 # TODO(future): tau-ports/test-fixtures is enabled in production deps to
@@ -118,4 +118,4 @@ fs-read            = { path = "../tau-plugins/fs-read" }
 tau-plugin-sdk     = { workspace = true }
 # Used by ir_smoke.rs integration test.
 tau-ir             = { workspace = true }
-tau-runtime-core   = { workspace = true, features = ["test-fixtures"] }
+tau-runtime-core   = { workspace = true, features = ["std", "test-fixtures"] }

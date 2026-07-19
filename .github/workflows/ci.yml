@@ -340,11 +340,20 @@ jobs:
       - name: Check each crate with --no-default-features
         run: |
           set -e
-          for crate in tau-domain tau-ports tau-pkg tau-runtime-tokio tau-cli tau-plugin-protocol tau-plugin-sdk; do
+          for crate in tau-domain tau-ports tau-pkg tau-runtime-tokio tau-cli tau-plugin-protocol tau-plugin-sdk tau-mcp tau-observe tau-native-tools; do
             echo "::group::$crate"
             cargo check -p "$crate" --no-default-features
             echo "::endgroup::"
           done
+      - name: tau-ports feature quadrants (serde / process independence)
+        # `process = ["serde?/std"]` in crates/tau-ports/Cargo.toml makes serde an
+        # OPTIONAL dep of process. Verify each feature builds WITHOUT the other so
+        # a consumer that enables only one never hits a missing-item error that the
+        # default (both-on) matrix would mask.
+        run: |
+          set -e
+          cargo check -p tau-ports --no-default-features --features serde
+          cargo check -p tau-ports --no-default-features --features process
 
   runtime-core-no-std:
     name: runtime-core no-std build + no-forbidden-imports / linux
