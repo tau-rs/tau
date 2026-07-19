@@ -8,7 +8,6 @@
 //! narrowed allow-list and deny-list onto an `EffectiveCapability` rather
 //! than re-constructing variants.
 
-pub(crate) mod glob_subset;
 pub mod subset;
 pub use subset::{capability_set_subset, CeilingViolation};
 

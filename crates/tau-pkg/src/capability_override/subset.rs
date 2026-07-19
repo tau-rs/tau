@@ -2,265 +2,24 @@
 //! per-field comparison helpers used by both `compute_effective` (per-package
 //! narrowing) and `capability_set_subset` (lattice-link ceiling checks).
 //!
-//! Story 1.3 scope: the primitive + helpers only. No enforcement wiring
-//! (`tau check` = 1.4; lattice traversal = 1.5).
+//! D3 task 6: `capability_set_subset` and `CeilingViolation` now delegate to
+//! the sound `tau-domain` lattice primitive (`capability_subset`); the
+//! sampling-era per-kind comparison logic that used to live here has been
+//! deleted. `paths_subset` delegates to the sound G2 glob engine
+//! (`tau_domain::package::capability::lattice::glob::glob_subset_set`).
+//! `string_set_subset` and `max_bytes_le` remain — `compute_effective`
+//! (mod.rs) still calls them directly for per-package allow/max_bytes
+//! narrowing, which is a distinct relation from the lattice-link ceiling
+//! check above.
 
-use super::glob_subset::is_glob_subset_set;
-use tau_domain::{
-    AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
-};
+use tau_domain::package::capability::lattice::glob::glob_subset_set;
 
-/// A single child capability that exceeds the parent ceiling. The caller
-/// (1.4 / 1.5) prepends agent/link framing; this type names only *what*
-/// exceeded.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CeilingViolation {
-    /// Capability kind that violated (`"fs.read"`, `"agent.spawn"`, `"custom"`, …).
-    pub kind: String,
-    /// The exact child entry that exceeded (a path / host / command / kind /
-    /// skill / mode token), or the kind name when the kind itself is unmatched.
-    pub offender: String,
-    /// Human-readable reason.
-    pub reason: String,
-}
-
-/// `child ⊆ parent` over full capability sets, matched by kind (`Custom` by
-/// `name`). Returns the first violation. A child kind with no matching parent
-/// kind is a violation (deny-by-default ceiling of ∅).
-pub fn capability_set_subset(
-    child: &[Capability],
-    parent: &[Capability],
-) -> Result<(), CeilingViolation> {
-    for c in child {
-        let kind = kind_str(c);
-        let matching: Vec<&Capability> = parent.iter().filter(|p| same_kind(c, p)).collect();
-        if matching.is_empty() {
-            return Err(CeilingViolation {
-                kind: kind.to_string(),
-                offender: kind.to_string(),
-                reason: "kind not in ceiling".to_string(),
-            });
-        }
-        if let Err((offender, reason)) = cap_subset_against(c, &matching) {
-            return Err(CeilingViolation {
-                kind: kind.to_string(),
-                offender,
-                reason,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Stable kind discriminator. `Custom` → `"custom"`; unknown future variants
-/// → `"unknown"` (which never matches a parent → deny-by-default).
-fn kind_str(cap: &Capability) -> &'static str {
-    match cap {
-        Capability::Filesystem(FsCapability::Read { .. }) => "fs.read",
-        Capability::Filesystem(FsCapability::Write { .. }) => "fs.write",
-        Capability::Filesystem(FsCapability::Exec { .. }) => "fs.exec",
-        Capability::Network(NetCapability::Http { .. }) => "net.http",
-        Capability::Process(ProcessCapability::Spawn { .. }) => "process.spawn",
-        Capability::Agent(AgentCapability::Spawn { .. }) => "agent.spawn",
-        Capability::Skill(SkillCapability::Spawn { .. }) => "skill.spawn",
-        Capability::TaskList { .. } => "task_list",
-        Capability::Plan { .. } => "plan",
-        Capability::Custom { .. } => "custom",
-        _ => "unknown",
-    }
-}
-
-/// Same kind for matching purposes. `Custom` matches `Custom` only when the
-/// `name` matches. `"unknown"` never matches (fail-closed).
-fn same_kind(a: &Capability, b: &Capability) -> bool {
-    match (a, b) {
-        (Capability::Custom { name: na, .. }, Capability::Custom { name: nb, .. }) => na == nb,
-        (Capability::Custom { .. }, _) | (_, Capability::Custom { .. }) => false,
-        _ => {
-            let k = kind_str(a);
-            k != "unknown" && k == kind_str(b)
-        }
-    }
-}
-
-fn mode_rank(mode: &str, allow_manage: bool) -> Option<u8> {
-    match mode {
-        "read" => Some(0),
-        "write" => Some(1),
-        "manage" if allow_manage => Some(2),
-        _ => None,
-    }
-}
-
-/// Compare one child cap against all parent caps of the same kind. Returns
-/// `Err((offender, reason))` on violation.
-fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(), (String, String)> {
-    match child {
-        Capability::Filesystem(FsCapability::Read { paths, .. })
-        | Capability::Filesystem(FsCapability::Exec { paths, .. }) => {
-            let pp = gather_paths(parents);
-            paths_subset(paths, &pp).map_err(|o| (o, "not a subset of any allowed path".into()))
-        }
-        Capability::Filesystem(FsCapability::Write {
-            paths, max_bytes, ..
-        }) => {
-            let pp = gather_paths(parents);
-            paths_subset(paths, &pp)
-                .map_err(|o| (o, "not a subset of any allowed path".to_string()))?;
-            let parent_mb = most_permissive_max_bytes(parents);
-            match (max_bytes, parent_mb) {
-                (_, None) => Ok(()),
-                (None, Some(_)) => Err((
-                    "max_bytes=unlimited".to_string(),
-                    "child is unlimited but ceiling caps max_bytes".to_string(),
-                )),
-                (Some(c), Some(_)) => max_bytes_le(*c, parent_mb)
-                    .map_err(|tok| (tok, "exceeds ceiling max_bytes".to_string())),
-            }
-        }
-        Capability::Network(NetCapability::Http { hosts, .. }) => {
-            let ph = gather_hosts(parents);
-            string_set_subset(hosts, &ph).map_err(|o| (o, "host not in ceiling".into()))
-        }
-        Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
-            let pc = gather_commands(parents);
-            string_set_subset(commands, &pc).map_err(|o| (o, "command not in ceiling".into()))
-        }
-        Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
-            let pk = gather_agent_kinds(parents);
-            string_set_subset(allowed_kinds, &pk)
-                .map_err(|o| (o, "agent kind not in ceiling".into()))
-        }
-        Capability::Skill(SkillCapability::Spawn { allowed_skills, .. }) => {
-            let ps = gather_skills(parents);
-            string_set_subset(allowed_skills, &ps).map_err(|o| (o, "skill not in ceiling".into()))
-        }
-        Capability::TaskList { mode } => mode_subset(mode, parents, true),
-        Capability::Plan { mode } => mode_subset(mode, parents, false),
-        Capability::Custom { name, params } => {
-            let ok = parents.iter().any(|p| {
-                matches!(p, Capability::Custom { name: pn, params: pp } if pn == name && pp == params)
-            });
-            if ok {
-                Ok(())
-            } else {
-                Err((name.clone(), "custom params do not match ceiling".into()))
-            }
-        }
-        _ => Err((
-            kind_str(child).to_string(),
-            "unsupported capability kind".into(),
-        )),
-    }
-}
-
-fn mode_subset(
-    mode: &str,
-    parents: &[&Capability],
-    allow_manage: bool,
-) -> Result<(), (String, String)> {
-    let child_rank = mode_rank(mode, allow_manage)
-        .ok_or_else(|| (format!("mode={mode}"), "unknown mode".to_string()))?;
-    let parent_rank = parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::TaskList { mode } | Capability::Plan { mode } => {
-                mode_rank(mode, allow_manage)
-            }
-            _ => None,
-        })
-        .max();
-    match parent_rank {
-        Some(pr) if child_rank <= pr => Ok(()),
-        Some(_) => Err((format!("mode={mode}"), "mode exceeds ceiling".to_string())),
-        None => Err((format!("mode={mode}"), "ceiling mode unknown".to_string())),
-    }
-}
-
-/// Callers MUST pass a same-kind-filtered parent slice (guaranteed by `same_kind` in
-/// `capability_set_subset`); this gathers Read/Write/Exec paths indiscriminately.
-fn gather_paths(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Filesystem(FsCapability::Read { paths, .. })
-            | Capability::Filesystem(FsCapability::Write { paths, .. })
-            | Capability::Filesystem(FsCapability::Exec { paths, .. }) => Some(paths.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect()
-}
-
-fn gather_hosts(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Network(NetCapability::Http { hosts, .. }) => Some(hosts.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect()
-}
-
-fn gather_commands(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
-                Some(commands.clone())
-            }
-            _ => None,
-        })
-        .flatten()
-        .collect()
-}
-
-fn gather_agent_kinds(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
-                Some(allowed_kinds.clone())
-            }
-            _ => None,
-        })
-        .flatten()
-        .collect()
-}
-
-fn gather_skills(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Skill(SkillCapability::Spawn { allowed_skills, .. }) => {
-                Some(allowed_skills.clone())
-            }
-            _ => None,
-        })
-        .flatten()
-        .collect()
-}
-
-/// Most permissive ceiling cap: `None` (unlimited) if any matching parent is
-/// unlimited, else `Some(max of the limits)`.
-fn most_permissive_max_bytes(parents: &[&Capability]) -> Option<u64> {
-    let mut acc: u64 = 0;
-    for p in parents {
-        if let Capability::Filesystem(FsCapability::Write { max_bytes, .. }) = p {
-            // Any unlimited parent makes the whole ceiling unlimited.
-            let m = (*max_bytes)?;
-            acc = acc.max(m);
-        }
-    }
-    Some(acc)
-}
+pub use tau_domain::{capability_subset as capability_set_subset, CeilingViolation};
 
 /// Globbed path subset: every `child` path is a glob-subset of some `parent`
 /// path. `Err(offender)` names the first child path with no admitting parent.
 pub(crate) fn paths_subset(child: &[String], parent: &[String]) -> Result<(), String> {
-    is_glob_subset_set(child, parent)
+    glob_subset_set(child, parent)
 }
 
 /// Exact-set inclusion: every `child` entry equals some `parent` entry.
@@ -312,6 +71,13 @@ mod tests {
 
     #[test]
     fn fs_write_max_bytes_higher_rejected() {
+        // D3: fs.write subset now requires JOINT per-grant coverage — a
+        // parent entry only "covers" the child if that SAME entry's
+        // max_bytes admits the child's max_bytes. Here the only parent
+        // entry (max_bytes=5000) does not cover the child's 9000, so it is
+        // excluded entirely and the child's path has zero eligible parent
+        // paths left to match against — the offender is now the path
+        // itself, not a "max_bytes=<n>" token.
         let child = vec![cap(
             r#"{"kind":"fs.write","paths":["/p/**"],"max_bytes":9000}"#,
         )];
@@ -320,39 +86,57 @@ mod tests {
         )];
         let v = capability_set_subset(&child, &parent).unwrap_err();
         assert_eq!(v.kind, "fs.write");
-        assert!(v.offender.contains("9000"), "got {}", v.offender);
+        assert_eq!(v.offender, "/p/**");
+        assert!(
+            v.reason.contains("max_bytes"),
+            "got reason: {}",
+            v.reason
+        );
     }
 
     #[test]
     fn fs_write_unlimited_child_under_capped_ceiling_rejected() {
+        // D3: same joint-coverage rule as above — an unlimited child is not
+        // covered by a capped parent entry, so that entry's paths are
+        // excluded and the offender names the uncovered path rather than a
+        // synthetic "max_bytes=unlimited" token.
         let child = vec![cap(r#"{"kind":"fs.write","paths":["/p/**"]}"#)];
         let parent = vec![cap(
             r#"{"kind":"fs.write","paths":["/p/**"],"max_bytes":5000}"#,
         )];
         let v = capability_set_subset(&child, &parent).unwrap_err();
         assert_eq!(v.kind, "fs.write");
-        assert_eq!(v.offender, "max_bytes=unlimited");
+        assert_eq!(v.offender, "/p/**");
     }
 
     #[test]
-    fn net_http_host_in_ceiling_ok_method_diff_ignored() {
-        // methods differ but are NOT checked in 1.3
+    fn net_http_method_outside_ceiling_now_rejected() {
+        // D3: methods are now enforced (were ignored by the old sampler).
+        // The child requests POST but the only ceiling entry for that host
+        // grants GET only, so no ceiling entry jointly covers (host, POST)
+        // and the request is denied.
         let child = vec![cap(
             r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["POST"]}"#,
         )];
         let parent = vec![cap(
             r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET"]}"#,
         )];
-        assert!(capability_set_subset(&child, &parent).is_ok());
+        assert!(capability_set_subset(&child, &parent).is_err());
     }
 
     #[test]
     fn net_http_host_outside_ceiling_rejected() {
+        // D3: `methods` now participate in the joint (host, method)
+        // coverage check, and an empty method list is vacuously satisfied
+        // (no method requested ⟹ nothing to cover). To keep exercising the
+        // host-mismatch path under the sound semantics, both sides now
+        // request a concrete method ("GET") so the per-method host check
+        // actually runs.
         let child = vec![cap(
-            r#"{"kind":"net.http","hosts":["evil.com"],"methods":[]}"#,
+            r#"{"kind":"net.http","hosts":["evil.com"],"methods":["GET"]}"#,
         )];
         let parent = vec![cap(
-            r#"{"kind":"net.http","hosts":["api.x.com"],"methods":[]}"#,
+            r#"{"kind":"net.http","hosts":["api.x.com"],"methods":["GET"]}"#,
         )];
         let v = capability_set_subset(&child, &parent).unwrap_err();
         assert_eq!(v.offender, "evil.com");
