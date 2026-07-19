@@ -40,6 +40,23 @@ declared cap_subsets.
 - **No materialized-meet / `granted_capabilities_override` reuse.** Rejected — see
   Appendix A.
 
+### Gating boundary (what the runtime gate does and does not cover)
+
+The `AttenuatedDispatcher` gates calls that route through `dispatcher.invoke` —
+i.e. `ToolImpl::Native` and `ToolImpl::Mcp` leaf tools, which is where all
+descendant *ambient* authority is exercised. Two `ToolImpl` variants are, by
+construction, not gated at their own invocation:
+
+- **`ToolImpl::Subflow`** invocations are not themselves denied — that is correct:
+  spawning a child grants no authority directly; the child's own leaf calls
+  traverse every ancestor frame, so descendant authority is still fully clamped.
+- **`ToolImpl::Step`** (deterministic registry) calls dispatch directly through
+  `deterministic_registry()`, bypassing `dispatcher.invoke`, so a Step tool
+  declaring caps outside the frame is not runtime-denied. This is pre-existing
+  (Step tools were never runtime-gated), low-severity (in-process pure functions
+  exercise no ambient authority), and covered by the build-time capability-fit
+  check. Out of scope here; noted so a future reader does not mistake it for a gap.
+
 ## Design
 
 ### 1. Data model & lowering — unchanged

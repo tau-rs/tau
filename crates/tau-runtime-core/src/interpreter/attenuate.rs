@@ -77,6 +77,11 @@ impl ToolDispatcher for AttenuatedDispatcher {
             .map(|t| t.capabilities.declared.as_slice())
             .unwrap_or(&[]);
 
+        // Uses the bare `check_capabilities`, not `check_capabilities_for_tool`:
+        // the wrapper owns the kernel's `capability.check` span + denial event
+        // vocabulary, which don't fit this soft-deny path (it emits its own
+        // `runtime.subflow.attenuation_denied` event below). Do not "simplify"
+        // to the wrapper.
         if let Some(missing) = crate::capability::check_capabilities(&self.grant.declared, required)
         {
             let kind = crate::capability::capability_kind_str(missing);
