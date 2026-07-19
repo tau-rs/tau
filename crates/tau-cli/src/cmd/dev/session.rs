@@ -36,6 +36,11 @@ pub struct DevSession {
     pub project: ProjectConfig,
     /// Lowered IR module for the current project.
     pub ir: IrModule,
+    /// Content-addressed asset store (D6-B) for the current IR — the
+    /// `system_file` prompt bytes `self.ir` references. Re-derived on
+    /// `:reload` alongside `self.ir`; handed to the interpreter so
+    /// `PromptSource::Asset` prompts resolve.
+    pub assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
     /// Name of the agent the REPL is currently driving.
     pub current_agent: String,
     /// Multi-turn conversation history (in-memory only in v1).
@@ -98,7 +103,8 @@ impl DevSession {
                 .clone(),
         };
 
-        let ir = lower_project_to_ir(&project).context("lower project to IR")?;
+        let (ir, assets) =
+            lower_project_to_ir(&project, &project_root).context("lower project to IR")?;
 
         let pending_reload = Arc::new(AtomicBool::new(false));
 
@@ -120,6 +126,7 @@ impl DevSession {
             project_root,
             project,
             ir,
+            assets,
             current_agent,
             history: Vec::new(),
             pending_reload,
@@ -167,8 +174,8 @@ impl DevSession {
             }
         };
 
-        let new_ir = match lower_project_to_ir(&new_project) {
-            Ok(ir) => ir,
+        let (new_ir, new_assets) = match lower_project_to_ir(&new_project, &self.project_root) {
+            Ok(pair) => pair,
             Err(e) => {
                 self.pending_reload.store(true, Ordering::Release);
                 return Err(anyhow!("lower IR: {e}"));
@@ -185,6 +192,7 @@ impl DevSession {
 
         self.project = new_project;
         self.ir = new_ir;
+        self.assets = new_assets;
         // history intentionally NOT touched
         Ok(true)
     }
@@ -305,7 +313,9 @@ impl DevSession {
             .iter()
             .map(|(name, handle)| (name.clone(), handle.clone()))
             .collect();
-        let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backends, tools_by_id));
+        let dispatcher = Arc::new(
+            ForwardingDispatcher::new(llm_backends, tools_by_id).with_assets(self.assets.clone()),
+        );
         let initial = Message::new(
             Address::User,
             Address::Agent(AgentInstanceId::new()),
@@ -373,13 +383,23 @@ impl DevSession {
 /// dev mode.
 ///
 /// Used by both `load` (Phase 2) and the `:reload` command (Phase 5).
-fn lower_project_to_ir(project: &ProjectConfig) -> Result<IrModule> {
+fn lower_project_to_ir(
+    project: &ProjectConfig,
+    project_root: &std::path::Path,
+) -> Result<(IrModule, BTreeMap<String, tau_ir::asset::AssetBlob>)> {
+    // `system_file` prompts resolve relative to the project root, matching
+    // `tau run` and the bundle builder (D6-B).
     let caches = Caches {
         native_tool: &|_| None,
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
     lower_project(project, &TargetTriple::PASSTHROUGH, &caches)
+        .map(|out| (out.module, out.assets))
         .map_err(|e| anyhow!("IR lowering failed: {e}"))
 }
 

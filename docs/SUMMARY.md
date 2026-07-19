@@ -136,6 +136,7 @@
 - [ADR-0057 — Root allow-section governance + build-time enforcement](decisions/0057-root-allow-governance.md)
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
 - [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
+- [ADR-0060 — Bundle content-addressed asset store](decisions/0060-bundle-asset-store.md)
 
 # Retrospectives
 

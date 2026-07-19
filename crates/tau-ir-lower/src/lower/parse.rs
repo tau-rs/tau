@@ -32,13 +32,23 @@ pub(super) struct Parsed {
     pub(super) workflow: Workflow,
     /// Trigger bindings, canonically ordered by name (BTreeMap iteration).
     pub(super) triggers: alloc::vec::Vec<TriggerBinding>,
+    /// Content-addressed asset blobs (currently `system_file` prompts) read
+    /// at build time, keyed by hash (`"sha256:" + 64 hex`). Deduped by hash.
+    pub(super) assets: BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob>,
 }
 
 /// Run the parse stage on a `ProjectConfig`.
-pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
+///
+/// `prompt_file` reads an agent `system_file` prompt's bytes (D6-B); see
+/// [`crate::Caches::prompt_file`].
+pub(super) fn parse(
+    config: &ProjectConfig,
+    prompt_file: &dyn Fn(&std::path::Path) -> Result<alloc::vec::Vec<u8>, crate::PromptFileError>,
+) -> Result<Parsed, LowerError> {
     let mut agents: BTreeMap<AgentId, Agent> = BTreeMap::new();
     let mut tools: BTreeMap<ToolId, Tool> = BTreeMap::new();
     let mut steps: BTreeMap<StepId, Deterministic> = BTreeMap::new();
+    let mut assets: BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob> = BTreeMap::new();
     let edges: alloc::vec::Vec<SubflowEdge> = alloc::vec::Vec::new();
     let mut capability_table: BTreeMap<ToolId, CapabilityRequirements> = BTreeMap::new();
 
@@ -99,15 +109,28 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
     for (name, entry) in config.agents.iter() {
         let agent_id = AgentId(name.clone());
         let tool_refs = entry.tool_refs.iter().cloned().map(ToolId).collect();
-        // Lower the prompt source. `Inline` maps straight through. `File`
-        // still maps the PATH into an inline string here — that is the
-        // `system_file` bug (the path, not the content, becomes the prompt).
-        // The asset-store follow-up (D6-B) reads the file at build time and
-        // emits a content-addressed `PromptSource::Asset` instead; this arm
-        // is the seam for that change.
+        // Lower the prompt source (D6-B). `Inline` maps straight through.
+        // `File` is read at build time via the injected `prompt_file` reader,
+        // hashed, and emitted as a content-addressed `PromptSource::Asset`;
+        // the bytes are collected into `assets` (deduped by hash). Paths never
+        // enter the IR, and a missing/unreadable file is a hard build error —
+        // this fixes the non-hermetic `system_file` bug (the IR used to carry
+        // the path string as the prompt).
         let prompt = match &entry.prompt {
             PromptEntry::Inline(s) => PromptSource::inline(s.clone()),
-            PromptEntry::File(p) => PromptSource::inline(p.to_string_lossy().into_owned()),
+            PromptEntry::File(p) => {
+                let bytes = prompt_file(p).map_err(|e| LowerError::PromptFileUnreadable {
+                    agent: agent_id.clone(),
+                    path: p.to_string_lossy().into_owned(),
+                    reason: e.0,
+                })?;
+                let hash = tau_ir::asset::asset_hash(&bytes);
+                // Identical content across agents dedupes to one blob.
+                assets
+                    .entry(hash.clone())
+                    .or_insert_with(|| tau_ir::asset::AssetBlob::prompt(bytes));
+                PromptSource::asset(hash)
+            }
             PromptEntry::None => PromptSource::inline(""),
             // Non_exhaustive — default to empty inline for any future variant.
             _ => PromptSource::inline(""),
@@ -271,7 +294,17 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
             checks,
         },
         triggers,
+        assets,
     })
+}
+
+/// Test-only stub reader for `parse`: no file prompts. Callers that don't
+/// exercise `system_file` prompts pass this so the reader is never invoked.
+#[cfg(test)]
+pub(crate) fn no_prompt_files(
+    _: &std::path::Path,
+) -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+    Ok(alloc::vec::Vec::new())
 }
 
 /// Lower `[goals.*]`/`[deliverables.*]` into IR [`Check`]s and position a
@@ -584,7 +617,7 @@ description = "Hand off to worker"
 capabilities = []
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
 
         let tool = parsed
             .workflow
@@ -619,7 +652,7 @@ tool_refs    = ["normalize"]
 deterministic = "parse_celsius"
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
 
         // Step registered in workflow.steps:
         assert!(parsed
@@ -668,7 +701,7 @@ capabilities = []
 deterministic = "do_foo"
 "#;
         let config = ProjectConfig::parse_str(toml).expect("toml parse");
-        let result = parse(&config);
+        let result = parse(&config, &no_prompt_files);
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("parse stage should reject collision but returned Ok"),
@@ -701,7 +734,7 @@ run = "agent:b"
 input = "${steps.a.output}"
 "#;
         let config = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let parsed = parse(&config).expect("parses");
+        let parsed = parse(&config, &no_prompt_files).expect("parses");
         let pipe = parsed.workflow.pipeline.expect("pipeline present");
         assert_eq!(pipe.steps.len(), 2);
         assert_eq!(pipe.steps[0].id.0, "a");
@@ -741,7 +774,7 @@ description = "Hand off to worker"
 capabilities = []
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
         assert!(
             parsed.workflow.edges.is_empty(),
             "expected no SubflowEdge entries; got {:?}",

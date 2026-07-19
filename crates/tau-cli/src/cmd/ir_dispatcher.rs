@@ -55,8 +55,45 @@ use crate::output::Output;
 /// [`anyhow::Error`] — matching the cwd-based path's error shape so
 /// `lib::run_main`'s downcast continues to map exit codes correctly.
 #[allow(clippy::too_many_arguments)]
+/// Build the runtime asset map from a bundle's `[[assets]]` store (D6-B),
+/// decoding each blob and verifying its bytes hash matches its key. The bundle
+/// self-hash proves the manifest is untampered as a unit, but not that each
+/// asset *key* matches its bytes — this re-hash closes that gap so the IR's
+/// content-addressed reference can be trusted.
+pub(crate) fn asset_map_from_bundle(
+    assets: &[tau_pkg::bundle::manifest::BundleAsset],
+) -> anyhow::Result<BTreeMap<String, tau_ir::asset::AssetBlob>> {
+    let mut map = BTreeMap::new();
+    for a in assets {
+        let bytes = a
+            .bytes()
+            .map_err(|e| anyhow::anyhow!("bundle asset {:?}: {e}", a.hash))?;
+        let computed = tau_ir::asset::asset_hash(&bytes);
+        if computed != a.hash {
+            return Err(anyhow::anyhow!(
+                "bundle asset key {:?} does not match its content hash {:?} — tampered bundle.",
+                a.hash,
+                computed
+            ));
+        }
+        let kind = match a.kind.as_str() {
+            "prompt" => tau_ir::asset::AssetKind::Prompt,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "bundle asset {:?} has unknown kind {:?}",
+                    a.hash,
+                    other
+                ))
+            }
+        };
+        map.insert(a.hash.clone(), tau_ir::asset::AssetBlob { kind, bytes });
+    }
+    Ok(map)
+}
+
 pub(crate) async fn run_via_ir(
     module: IrModule,
+    assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
     args: &RunArgs,
     record_protocol: Option<PathBuf>,
     force_passthrough: bool,
@@ -205,6 +242,34 @@ pub(crate) async fn run_via_ir(
         ));
     }
 
+    // 5c. Closed-world asset check (D6-B): every `PromptSource::Asset` the
+    //     module references must resolve to a bundle asset, and every bundle
+    //     asset must be referenced (no orphans) — keeps bundles canonical and
+    //     mirrors the tool_refs pre-check above. Load-time, before any tokens.
+    {
+        let mut referenced: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for agent in module.workflow.agents.values() {
+            if let Some(h) = agent.prompt.asset_hash() {
+                if !assets.contains_key(h) {
+                    return Err(anyhow::anyhow!(
+                        "IR agent {:?} prompt references asset {:?} not present in the bundle's \
+                         asset store — build/install skew or a tampered bundle.",
+                        agent.id.0,
+                        h
+                    ));
+                }
+                referenced.insert(h);
+            }
+        }
+        if let Some(orphan) = assets.keys().find(|k| !referenced.contains(k.as_str())) {
+            return Err(anyhow::anyhow!(
+                "bundle asset {:?} is not referenced by any agent prompt (orphan) — the bundle \
+                 is not canonical.",
+                orphan
+            ));
+        }
+    }
+
     // 5d. ADR-0053: wire durable checkpoint/resume when the entry agent
     //     declares `[durable]`. The store is rooted at the project scope so
     //     checkpoints land under `<scope>/.tau/runs/<run_id>/`. On
@@ -256,7 +321,9 @@ pub(crate) async fn run_via_ir(
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         dispatcher = dispatcher.with_durable(store, durable_run_id, resume, resolved.checkpoint);
     }
-    let dispatcher = Arc::new(dispatcher);
+    // D6-B: hand the interpreter the content-addressed asset store so it can
+    // resolve `PromptSource::Asset` prompt references (empty map => no-op).
+    let dispatcher = Arc::new(dispatcher.with_assets(assets));
 
     // 6. Build the initial prompt text from --prompt / stdin.
     let prompt_text = match &args.prompt {
@@ -363,6 +430,11 @@ pub(crate) struct ForwardingDispatcher {
     durable_resume: Option<tau_ports::TurnCheckpoint>,
     /// Host-resolved checkpoint granularity (EPIC 6.1). `None` for non-durable runs.
     durable_granularity: Option<tau_ir::durable::CheckpointGranularity>,
+    /// Content-addressed asset store (D6-B). `None` when the run has no
+    /// file-backed prompts; set via [`Self::with_assets`]. Surfaced to the
+    /// interpreter through [`ToolDispatcher::assets`] to resolve
+    /// `PromptSource::Asset` prompt references.
+    assets: Option<Arc<BTreeMap<String, tau_ir::asset::AssetBlob>>>,
 }
 
 impl ForwardingDispatcher {
@@ -377,7 +449,21 @@ impl ForwardingDispatcher {
             durable_run_id: None,
             durable_resume: None,
             durable_granularity: None,
+            assets: None,
         }
+    }
+
+    /// Attach the content-addressed asset store (D6-B) so the interpreter can
+    /// resolve `PromptSource::Asset` prompt references. Empty maps are elided
+    /// (`None`) so a no-file-prompt run behaves exactly as before.
+    pub(crate) fn with_assets(
+        mut self,
+        assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
+    ) -> Self {
+        if !assets.is_empty() {
+            self.assets = Some(Arc::new(assets));
+        }
+        self
     }
 
     /// Attach durable checkpoint/resume handles (ADR-0053). The
@@ -411,6 +497,7 @@ impl ForwardingDispatcher {
             durable_run_id: None,
             durable_resume: None,
             durable_granularity: None,
+            assets: None,
         }
     }
 }
@@ -615,6 +702,13 @@ impl ToolDispatcher for ForwardingDispatcher {
         &self,
     ) -> Option<Arc<dyn tau_runtime_core::interpreter::artifact::ArtifactReader>> {
         Some(crate::cmd::builtin_registry::make_artifact_reader())
+    }
+
+    /// Supply the content-addressed asset store (D6-B) when configured via
+    /// [`Self::with_assets`], so the interpreter can resolve
+    /// `PromptSource::Asset` prompt references. `None` for no-file-prompt runs.
+    fn assets(&self) -> Option<Arc<BTreeMap<String, tau_ir::asset::AssetBlob>>> {
+        self.assets.clone()
     }
 
     /// Supply durable checkpoint/resume handles (ADR-0053) when configured

@@ -34,11 +34,15 @@ fn toml_and_ts_produce_byte_equal_canonical_ir_with_agent_durable() {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
 
-    let toml_ir =
-        tau_ir_lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
-    let ts_ir = tau_ir_lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
+    let toml_ir = tau_ir_lower::lower_project(&toml_project, &target, &caches)
+        .expect("lower TOML to IR")
+        .module;
+    let ts_ir = tau_ir_lower::lower_project(&ts_project, &target, &caches)
+        .expect("lower TS to IR")
+        .module;
 
     // Sanity: the durable block actually lowered (not silently dropped on
     // either path) — otherwise byte-equality could be trivially satisfied by
@@ -95,11 +99,15 @@ fn toml_and_ts_produce_byte_equal_canonical_ir_with_durable_intent() {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
 
-    let toml_ir =
-        tau_ir_lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
-    let ts_ir = tau_ir_lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
+    let toml_ir = tau_ir_lower::lower_project(&toml_project, &target, &caches)
+        .expect("lower TOML to IR")
+        .module;
+    let ts_ir = tau_ir_lower::lower_project(&ts_project, &target, &caches)
+        .expect("lower TS to IR")
+        .module;
 
     // Sanity: the intent form actually lowered to
     // `Durability::Intent(DurabilityIntent::SurviveRestarts)` and was not
