@@ -8,10 +8,11 @@
 //! (PR 3). Tool-name binding and sandbox adapter probing are the runtime
 //! *loader*'s job and are out of scope here.
 //!
-//! This module currently defines only the linked-world types
-//! ([`LinkedPlugin`], [`LinkedSkill`], [`LinkRecord`], [`LinkOutcome`]) and
-//! their error type ([`LinkError`]). The `link()` entry point that
-//! produces a [`LinkOutcome`] lands in a later PR-1 task.
+//! This module defines the linked-world types ([`LinkedPlugin`],
+//! [`LinkedSkill`], [`LinkRecord`], [`LinkOutcome`]), their error type
+//! ([`LinkError`]), and the [`link()`](link) entry point that produces a
+//! [`LinkOutcome`] from a `ProjectConfig` + `IrModule` + `LockFile` +
+//! `Scope`.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -22,6 +23,7 @@ use thiserror::Error;
 use tau_domain::package::plugin::PortKind;
 use tau_domain::{PackageName, Version};
 use tau_ir::model_ref::ModelRef;
+use tau_ir::IrModule;
 use tau_ports::target::TargetTriple;
 
 use crate::project::project::{AgentEntry, ModelEntry, ProjectConfig};
@@ -138,9 +140,7 @@ pub enum LinkError {
 /// `tau-pkg`'s `project/agent.rs` (`build_agent_definition`) into a single
 /// pure helper returning a structured [`LinkError`] instead of `anyhow`.
 ///
-/// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
-/// wires this in alongside `resolve_models`/`resolve_skills`.
-#[allow(dead_code)]
+/// Called from [`link()`] for every model backend and required tool.
 fn resolve_one_plugin(
     lockfile: &crate::lockfile::LockFile,
     package: &PackageName,
@@ -209,9 +209,7 @@ fn resolve_one_plugin(
 /// Thin wrapper over [`resolve_models_from`], which exists so this
 /// function's logic stays directly unit-testable regardless.
 ///
-/// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
-/// wires this in alongside `resolve_one_plugin`/`resolve_skills`.
-#[allow(dead_code)]
+/// Called from [`link()`] to populate [`LinkRecord::model_bindings`].
 fn resolve_models(cfg: &ProjectConfig) -> BTreeMap<String, ModelRef> {
     resolve_models_from(&cfg.agents, &cfg.models)
 }
@@ -261,9 +259,8 @@ fn resolve_models_from(
 /// skill declared in `lockfile` is never silently dropped from the
 /// result.
 ///
-/// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
-/// wires this in alongside `resolve_one_plugin`/`resolve_models`.
-#[allow(dead_code)]
+/// Called from [`link()`] to populate [`LinkRecord::resolved_skills`] and
+/// [`LinkOutcome::parsed_skills`].
 fn resolve_skills(
     scope: &crate::scope::Scope,
     lockfile: &crate::lockfile::LockFile,
@@ -350,6 +347,116 @@ fn resolve_skills(
         }
     }
     (linked, parsed_map, errors)
+}
+
+/// Statically link the project against the installed set. Validates every
+/// referenced plugin, model backend, and skill; collects **all** errors
+/// (never stops at the first) so the operator sees the whole set at once.
+///
+/// On success returns a [`LinkOutcome`] carrying the serializable
+/// [`LinkRecord`] plus the parsed skill bodies (for seeding the runtime
+/// `SkillResolver`, PR 2). Does not spawn processes or probe sandbox
+/// adapters — that's the runtime *loader*'s job.
+///
+/// # Precondition
+///
+/// `lockfile` MUST be the same lockfile persisted at
+/// `scope.lockfile_path()`. Plugin resolution ([`resolve_one_plugin`])
+/// reads only the passed `lockfile`, but skill resolution
+/// ([`resolve_skills`]) and [`LinkRecord::lockfile_sha256`] both read
+/// straight from disk via `scope`. Passing a `lockfile` that has drifted
+/// from disk is undefined territory for skills specifically: a skill
+/// package listed in the passed `lockfile` but absent from the on-disk
+/// lockfile surfaces as [`LinkError::SkillMissing`] rather than being
+/// silently skipped (see [`resolve_skills`]'s doc comment). Callers (the
+/// `build`/`dev` entry points in PR 2) always pass the lockfile they just
+/// loaded from `scope.lockfile_path()`, so this invariant holds in
+/// practice.
+pub fn link(
+    cfg: &ProjectConfig,
+    module: &IrModule,
+    lockfile: &crate::lockfile::LockFile,
+    scope: &crate::scope::Scope,
+) -> Result<LinkOutcome, Vec<LinkError>> {
+    let mut errors = Vec::new();
+
+    // 1. Gather (package, version_req, expected_port) for every referenced
+    //    plugin: model backends (any version) and each agent's required
+    //    tools. Keyed by the package's string form — `PackageName` has no
+    //    `Ord`/`PartialOrd` impl, so it can't itself be a `BTreeMap` key.
+    let mut wanted: BTreeMap<String, (PackageName, semver::VersionReq, PortKind)> = BTreeMap::new();
+    for m in cfg.models.values() {
+        // validate() already guarantees every [models] backend parses as a
+        // package name; skip unparseable defensively rather than panic.
+        if let Ok(name) = PackageName::from_str(&m.backend) {
+            wanted.entry(name.to_string()).or_insert((
+                name,
+                semver::VersionReq::STAR,
+                PortKind::LlmBackend,
+            ));
+        }
+    }
+    for agent in cfg.agents.values() {
+        for tool in &agent.requires.tools {
+            wanted.entry(tool.name.to_string()).or_insert((
+                tool.name.clone(),
+                tool.version_req.clone(),
+                PortKind::Tool,
+            ));
+        }
+    }
+
+    // 2. Resolve every wanted plugin, collecting errors; keep successes
+    //    ordered by name (BTreeMap iteration is already name-ordered).
+    let mut resolved_plugins = Vec::new();
+    for (name, req, port) in wanted.values() {
+        match resolve_one_plugin(lockfile, name, req, *port) {
+            Ok(p) => resolved_plugins.push(p),
+            Err(e) => errors.push(e),
+        }
+    }
+    resolved_plugins.sort_by_key(|a| a.name.to_string());
+
+    // 3. Models — infallible; ProjectConfig::validate already guarantees
+    //    every agent's alias resolves.
+    let model_bindings = resolve_models(cfg);
+
+    // 4. Skills.
+    let (mut resolved_skills, parsed_skills, skill_errs) = resolve_skills(scope, lockfile);
+    errors.extend(skill_errs);
+    resolved_skills.sort_by_key(|a| a.name.to_string());
+
+    if !errors.is_empty() {
+        errors.sort_by_key(link_error_sort_key); // deterministic, no-drift bar
+        return Err(errors);
+    }
+
+    // lockfile_sha256 hashes the ON-DISK lockfile, not the passed one — see
+    // the precondition doc above. `run --bundle` re-derives this same hash
+    // from disk to detect drift.
+    let lockfile_sha256 = sha256_hex(&std::fs::read(scope.lockfile_path()).unwrap_or_default());
+
+    Ok(LinkOutcome {
+        record: LinkRecord {
+            resolved_plugins,
+            resolved_skills,
+            model_bindings,
+            platform: module.target,
+            lockfile_sha256,
+        },
+        parsed_skills,
+    })
+}
+
+/// Stable sort key for deterministic [`LinkError`] ordering across callers.
+fn link_error_sort_key(e: &LinkError) -> (u8, String) {
+    match e {
+        LinkError::PluginNotInstalled { package } => (0, package.clone()),
+        LinkError::PluginPortMismatch { package, .. } => (1, package.clone()),
+        LinkError::VersionUnsatisfied { package, .. } => (2, package.clone()),
+        LinkError::SkillMissing { package, .. } => (3, package.clone()),
+        LinkError::SkillParse { package, .. } => (4, package.clone()),
+    }
 }
 
 /// SHA-256 hex of `bytes`. `tree_hash::to_hex_lower` handles the
@@ -798,5 +905,206 @@ capabilities = []
             "got {errs:?}"
         );
         assert!(linked.iter().any(|s| !s.parsed_ok), "got {linked:?}");
+    }
+
+    // --- link() ---------------------------------------------------------
+    //
+    // Full-stack fixture: on-disk scope with a `greeter` skill plus (as
+    // requested) an `anthropic` LlmBackend plugin and — for the happy path
+    // only — a `curl` Tool plugin, all written to a single `tau-lock.toml`.
+    // `ProjectConfig` is built via `UncheckedProjectConfig::validate()` (the
+    // only public construction path — `ProjectConfig` is `#[non_exhaustive]`
+    // with no public struct-literal or builder), mirroring the pattern used
+    // throughout `project/project.rs`'s own tests.
+
+    use crate::project::project::UncheckedProjectConfig;
+    use tau_ir::{IrFormatVersion, Workflow};
+
+    /// Build a scope on disk with a `greeter` skill package and an
+    /// `anthropic` (LlmBackend) plugin package, optionally also a `curl`
+    /// (Tool) plugin package. `skill_md_body` controls the installed
+    /// skill's `SKILL.md` contents, so callers can produce a corrupt skill.
+    fn link_fixture_scope(
+        tmp: &std::path::Path,
+        include_tool_plugin: bool,
+        skill_md_body: &str,
+    ) -> (Scope, LockFile) {
+        let tau_dir = tmp.join(".tau");
+        std::fs::create_dir_all(&tau_dir).unwrap();
+        std::fs::write(
+            tau_dir.join("config.toml"),
+            "schema_version = 3\nkind = \"project\"\ncreated_at = \"2026-05-14T00:00:00Z\"\ncreated_by_tau_version = \"0.0.0\"\n\n[sandbox]\nrequired_tier = \"none\"\n",
+        )
+        .unwrap();
+
+        let install_dir = tau_dir.join("packages").join("greeter").join("0.1.0");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::write(
+            install_dir.join("tau.toml"),
+            r#"name = "greeter"
+version = "0.1.0"
+description = "Greets people."
+authors = []
+source = "https://example.com/greeter.git"
+kind = "skill"
+dependencies = []
+capabilities = []
+
+[skill]
+"#,
+        )
+        .unwrap();
+        std::fs::write(install_dir.join("SKILL.md"), skill_md_body).unwrap();
+
+        let mut lf = LockFile::default();
+        lf.packages.push(plugin_pkg(
+            "anthropic",
+            "1.0.0",
+            PortKind::LlmBackend,
+            &"ab".repeat(32),
+        ));
+        if include_tool_plugin {
+            lf.packages.push(plugin_pkg(
+                "curl",
+                "1.0.0",
+                PortKind::Tool,
+                &"cd".repeat(32),
+            ));
+        }
+        lf.packages.push(LockedPackage {
+            name: PackageName::from_str("greeter").unwrap(),
+            active_version: Version::parse("0.1.0").unwrap(),
+            source: PackageSource::Git {
+                location: "https://example.com/greeter.git".parse().unwrap(),
+                rev: None,
+            },
+            installed_versions: vec![LockedVersion {
+                version: Version::parse("0.1.0").unwrap(),
+                rev: None,
+                resolved_commit: "0".repeat(40),
+                sha256: String::new(),
+                installed_at: SystemTime::UNIX_EPOCH,
+            }],
+            plugin: None,
+            skill: Some(LockedSkill::new(
+                "deadbeef".into(),
+                SkillFrontmatterSnapshot {
+                    name: "greeter".into(),
+                    description: "Greets people.".into(),
+                },
+            )),
+            synthesized_from: None,
+        });
+        lf.save(&tmp.join("tau-lock.toml")).unwrap();
+
+        (Scope::resolve(tmp).unwrap(), lf)
+    }
+
+    /// A `ProjectConfig` with one agent (`reviewer`) whose model alias
+    /// `"fast"` resolves to backend `"anthropic"`, and which — when
+    /// `require_tool` is set — requires the `curl` tool.
+    fn link_fixture_cfg(require_tool: bool) -> ProjectConfig {
+        let tools_block = if require_tool {
+            r#"
+            [[agents.reviewer.requires.tools]]
+            name = "curl"
+            source = "https://example.com/curl.git"
+            version = "^1"
+            "#
+        } else {
+            ""
+        };
+        let toml_str = format!(
+            r#"
+            [project]
+            name = "demo"
+
+            [models]
+            fast = {{ backend = "anthropic", model = "claude-haiku-4-5" }}
+
+            [agents.reviewer]
+            display_name = "Reviewer"
+            package      = "anthropic@^1"
+            model        = "fast"
+            {tools_block}
+            "#
+        );
+        toml::from_str::<UncheckedProjectConfig>(&toml_str)
+            .expect("parse")
+            .validate()
+            .expect("valid config")
+    }
+
+    fn link_fixture_module() -> IrModule {
+        IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target: TargetTriple::host(),
+            workflow: Workflow::default(),
+            triggers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn link_happy_path_produces_record() {
+        let tmp = tempdir().unwrap();
+        let (scope, lf) = link_fixture_scope(tmp.path(), true, VALID_SKILL_MD);
+        let cfg = link_fixture_cfg(true);
+        let module = link_fixture_module();
+
+        let out = link(&cfg, &module, &lf, &scope).expect("link ok");
+
+        assert_eq!(out.record.platform, TargetTriple::host());
+        assert!(
+            out.record
+                .resolved_plugins
+                .iter()
+                .any(|p| p.provides == PortKind::LlmBackend),
+            "got {:?}",
+            out.record.resolved_plugins
+        );
+        assert!(
+            out.record
+                .resolved_plugins
+                .iter()
+                .any(|p| p.provides == PortKind::Tool),
+            "got {:?}",
+            out.record.resolved_plugins
+        );
+        assert!(
+            out.record.model_bindings.contains_key("fast"),
+            "got {:?}",
+            out.record.model_bindings
+        );
+        assert_eq!(out.record.lockfile_sha256.len(), 64);
+        assert_eq!(out.record.resolved_skills.len(), 1);
+        assert!(out.parsed_skills.contains_key("greeter"));
+    }
+
+    #[test]
+    fn link_collects_all_errors() {
+        // Two DISTINCT faults:
+        //  (a) the agent requires tool "curl", but no curl plugin is
+        //      installed -> PluginNotInstalled.
+        //  (b) the installed "greeter" skill has a corrupt SKILL.md
+        //      (no frontmatter) -> SkillParse.
+        let tmp = tempdir().unwrap();
+        let (scope, lf) = link_fixture_scope(tmp.path(), false, "not frontmatter at all\n");
+        let cfg = link_fixture_cfg(true);
+        let module = link_fixture_module();
+
+        let errs = link(&cfg, &module, &lf, &scope).unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, LinkError::PluginNotInstalled { .. })),
+            "got {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, LinkError::SkillParse { .. })),
+            "got {errs:?}"
+        );
+        assert!(errs.len() >= 2, "must collect all, got {errs:?}");
     }
 }
