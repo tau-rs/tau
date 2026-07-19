@@ -67,7 +67,6 @@ pub struct LinkRecord {
     /// Final model-alias → resolved [`ModelRef`] bindings; no later re-resolution.
     pub model_bindings: BTreeMap<String, ModelRef>,
     /// The IR target the bundle was linked for (run --bundle platform check).
-    #[serde(with = "target_triple_str")]
     pub platform: TargetTriple,
     /// SHA-256 (hex) of the lockfile bytes the record was linked against.
     pub lockfile_sha256: String,
@@ -122,7 +121,9 @@ pub enum LinkError {
         /// The expected `SKILL.md` path (lossy UTF-8).
         path: String,
     },
-    /// An installed skill package's `SKILL.md` failed to parse.
+    /// A skill package's `SKILL.md` failed to parse, or its `tau.toml`/
+    /// manifest (or the on-disk lockfile) couldn't be read/parsed;
+    /// `detail` names the specific cause.
     #[error("skill {package}: SKILL.md parse failed: {detail}")]
     SkillParse {
         /// The skill package name.
@@ -248,14 +249,18 @@ fn resolve_models_from(
 /// uses internally), locates each package's install path via that
 /// helper, reads + hashes `SKILL.md`, and parses it via
 /// [`tau_domain::parse_skill_md`]. Every skill produces exactly one
-/// [`LinkedSkill`] entry (with `parsed_ok` set accordingly) except when
-/// the install path itself can't be resolved (missing `tau.toml`, a
-/// structurally invalid manifest, or — because `find_installed_skill`
-/// re-resolves against the on-disk lockfile via `scope` rather than
-/// trusting the passed `lockfile` — a lockfile/disk divergence where the
-/// on-disk lockfile no longer lists this package as a skill), in which
-/// case only a [`LinkError::SkillMissing`] is recorded. All errors are
-/// collected — this never stops at the first skill that fails, and a
+/// [`LinkedSkill`] entry (with `parsed_ok` set accordingly), except for
+/// two classes of resolution failure that short-circuit before parsing:
+/// a missing install artifact — no `tau.toml` on disk
+/// (`FindSkillError::InstallPathMissing`), or — because
+/// `find_installed_skill` re-resolves against the on-disk lockfile via
+/// `scope` rather than trusting the passed `lockfile` — a lockfile/disk
+/// divergence where the on-disk lockfile no longer lists this package as
+/// a skill (`Ok(None)`) — surfaces as [`LinkError::SkillMissing`]; a
+/// present-but-unparseable `SKILL.md`, or a malformed `tau.toml`/
+/// manifest/lockfile (any other `find_installed_skill` error), surfaces
+/// as [`LinkError::SkillParse`] with the reason in `detail`. All errors
+/// are collected — this never stops at the first skill that fails, and a
 /// skill declared in `lockfile` is never silently dropped from the
 /// result.
 ///
@@ -468,20 +473,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     crate::tree_hash::to_hex_lower(&hasher.finalize())
-}
-
-/// Serialize [`TargetTriple`] as its `Display` string (tau-ports has no serde derive).
-mod target_triple_str {
-    use super::{FromStr, TargetTriple};
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(t: &TargetTriple, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&t.to_string())
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<TargetTriple, D::Error> {
-        let s = String::deserialize(d)?;
-        TargetTriple::from_str(&s).map_err(serde::de::Error::custom)
-    }
 }
 
 #[cfg(test)]
@@ -1106,5 +1097,47 @@ capabilities = []
             "got {errs:?}"
         );
         assert!(errs.len() >= 2, "must collect all, got {errs:?}");
+    }
+
+    #[test]
+    fn link_error_sort_key_orders_deterministically() {
+        // Deliberately out of order: variant rank descending in places,
+        // and "z" before "b"/"a" — pins the (variant_rank, package)
+        // ordering contract `link()` relies on for no-drift output.
+        let mut errs = vec![
+            LinkError::SkillParse {
+                package: "z".to_string(),
+                detail: "bad".to_string(),
+            },
+            LinkError::PluginNotInstalled {
+                package: "b".to_string(),
+            },
+            LinkError::PluginNotInstalled {
+                package: "a".to_string(),
+            },
+            LinkError::VersionUnsatisfied {
+                package: "m".to_string(),
+                req: "^1".to_string(),
+            },
+        ];
+
+        errs.sort_by_key(link_error_sort_key);
+
+        let got: Vec<&str> = errs
+            .iter()
+            .map(|e| match e {
+                LinkError::PluginNotInstalled { package } => package.as_str(),
+                LinkError::PluginPortMismatch { package, .. } => package.as_str(),
+                LinkError::VersionUnsatisfied { package, .. } => package.as_str(),
+                LinkError::SkillMissing { package, .. } => package.as_str(),
+                LinkError::SkillParse { package, .. } => package.as_str(),
+            })
+            .collect();
+        assert_eq!(got, vec!["a", "b", "m", "z"], "got {errs:?}");
+
+        assert!(matches!(errs[0], LinkError::PluginNotInstalled { .. }));
+        assert!(matches!(errs[1], LinkError::PluginNotInstalled { .. }));
+        assert!(matches!(errs[2], LinkError::VersionUnsatisfied { .. }));
+        assert!(matches!(errs[3], LinkError::SkillParse { .. }));
     }
 }
