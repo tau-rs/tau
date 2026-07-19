@@ -245,15 +245,21 @@ fn resolve_models_from(
 /// Resolve every installed skill package against the on-disk `SKILL.md`,
 /// parsing it exactly once and recording the outcome.
 ///
-/// Enumerates lockfile entries where `pkg.skill.is_some()` (the same
-/// filter [`crate::find_installed_skill`] uses internally), locates each
-/// package's install path via that helper, reads + hashes `SKILL.md`,
-/// and parses it via [`tau_domain::parse_skill_md`]. Every skill
-/// produces exactly one [`LinkedSkill`] entry (with `parsed_ok` set
-/// accordingly) except when the install path itself can't be resolved
-/// (missing `tau.toml` or a structurally invalid manifest), in which
-/// case only a [`LinkError`] is recorded. All errors are collected —
-/// this never stops at the first skill that fails.
+/// Enumerates lockfile entries in the *passed* `lockfile` where
+/// `pkg.skill.is_some()` (the same filter [`crate::find_installed_skill`]
+/// uses internally), locates each package's install path via that
+/// helper, reads + hashes `SKILL.md`, and parses it via
+/// [`tau_domain::parse_skill_md`]. Every skill produces exactly one
+/// [`LinkedSkill`] entry (with `parsed_ok` set accordingly) except when
+/// the install path itself can't be resolved (missing `tau.toml`, a
+/// structurally invalid manifest, or — because `find_installed_skill`
+/// re-resolves against the on-disk lockfile via `scope` rather than
+/// trusting the passed `lockfile` — a lockfile/disk divergence where the
+/// on-disk lockfile no longer lists this package as a skill), in which
+/// case only a [`LinkError::SkillMissing`] is recorded. All errors are
+/// collected — this never stops at the first skill that fails, and a
+/// skill declared in `lockfile` is never silently dropped from the
+/// result.
 ///
 /// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
 /// wires this in alongside `resolve_one_plugin`/`resolve_models`.
@@ -278,7 +284,21 @@ fn resolve_skills(
         // Locate the install path + SKILL.md filename via the existing helper.
         let installed = match crate::find_installed_skill(scope, name.as_str()) {
             Ok(Some(s)) => s,
-            Ok(None) => continue, // not resolvable as a skill (shouldn't happen given the filter)
+            Ok(None) => {
+                // The passed `lockfile` lists this package as a skill, but
+                // `find_installed_skill` re-resolves against the on-disk
+                // lockfile via `scope` and found no matching skill entry
+                // there (lockfile/disk divergence). That's a missing skill
+                // install, not "no skills" — record it instead of silently
+                // dropping it, or `resolve_skills` could return an empty
+                // result indistinguishable from "no skills declared".
+                let path = scope.package_dir(&name, &pkg.active_version);
+                errors.push(LinkError::SkillMissing {
+                    package: name.to_string(),
+                    path: path.display().to_string(),
+                });
+                continue;
+            }
             Err(crate::FindSkillError::InstallPathMissing { path, .. }) => {
                 errors.push(LinkError::SkillMissing {
                     package: name.to_string(),
@@ -698,6 +718,66 @@ capabilities = []
         let (scope, lf) = skill_scope(tmp.path(), VALID_SKILL_MD, false);
 
         let (_linked, _parsed, errs) = resolve_skills(&scope, &lf);
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, LinkError::SkillMissing { .. })),
+            "got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_skills_declared_but_unresolvable_is_missing() {
+        // Regression test for the "silent empty result" finding: the
+        // *passed* `lockfile` declares a skill package, but
+        // `find_installed_skill` re-resolves against the on-disk lockfile
+        // via `scope` (not the passed `lockfile`) and finds nothing there
+        // — no `tau-lock.toml` on disk at all, so `find_installed_skill`
+        // takes its `Ok(None)` branch (scope.lockfile_path() doesn't
+        // exist). Under the old `Ok(None) => continue` behavior this test
+        // would fail: `errs` would be empty and `resolve_skills` would
+        // return `(vec![], {}, vec![])`, indistinguishable from "no
+        // skills declared", even though `lockfile` lists one.
+        let tmp = tempdir().unwrap();
+        let tau_dir = tmp.path().join(".tau");
+        std::fs::create_dir_all(&tau_dir).unwrap();
+        std::fs::write(
+            tau_dir.join("config.toml"),
+            "schema_version = 3\nkind = \"project\"\ncreated_at = \"2026-05-14T00:00:00Z\"\ncreated_by_tau_version = \"0.0.0\"\n\n[sandbox]\nrequired_tier = \"none\"\n",
+        )
+        .unwrap();
+        // Deliberately no tau-lock.toml written to disk.
+        let scope = Scope::resolve(tmp.path()).unwrap();
+
+        let locked_pkg = LockedPackage {
+            name: PackageName::from_str("greeter").unwrap(),
+            active_version: Version::parse("0.1.0").unwrap(),
+            source: PackageSource::Git {
+                location: "https://example.com/greeter.git".parse().unwrap(),
+                rev: None,
+            },
+            installed_versions: vec![LockedVersion {
+                version: Version::parse("0.1.0").unwrap(),
+                rev: None,
+                resolved_commit: "0".repeat(40),
+                sha256: String::new(),
+                installed_at: SystemTime::UNIX_EPOCH,
+            }],
+            plugin: None,
+            skill: Some(LockedSkill::new(
+                "deadbeef".into(),
+                SkillFrontmatterSnapshot {
+                    name: "greeter".into(),
+                    description: "Greets people.".into(),
+                },
+            )),
+            synthesized_from: None,
+        };
+        let mut lf = LockFile::default();
+        lf.packages.push(locked_pkg);
+
+        let (linked, parsed, errs) = resolve_skills(&scope, &lf);
+        assert!(linked.is_empty(), "got {linked:?}");
+        assert!(parsed.is_empty(), "got {parsed:?}");
         assert!(
             errs.iter()
                 .any(|e| matches!(e, LinkError::SkillMissing { .. })),
