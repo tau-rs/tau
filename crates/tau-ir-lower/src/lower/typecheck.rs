@@ -269,7 +269,9 @@ fn collect_all_ids<'a>(
     for s in steps {
         out.push(s.id.0.as_str());
         match &s.run {
-            StepRun::Branch { then, otherwise, .. } => {
+            StepRun::Branch {
+                then, otherwise, ..
+            } => {
                 collect_all_ids(then, out);
                 collect_all_ids(otherwise, out);
             }
@@ -456,8 +458,8 @@ fn validate_step_run(
                 loop_scope.insert(nested.id.0.as_str());
             }
             if let Locus::Output(ref_step_id) = &until.evaluates {
-                let is_in_scope = ref_step_id.0 != outer_step_id
-                    && loop_scope.contains(ref_step_id.0.as_str());
+                let is_in_scope =
+                    ref_step_id.0 != outer_step_id && loop_scope.contains(ref_step_id.0.as_str());
                 if !is_in_scope {
                     return Err(LowerError::ConditionUnknownOutput {
                         step: outer_step_id.into(),

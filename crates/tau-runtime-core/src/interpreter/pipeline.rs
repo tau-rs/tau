@@ -379,13 +379,12 @@ where
                     Ok::<(usize, OutputStore), RuntimeError>((idx, snap))
                 }
             });
-            let mut results: alloc::vec::Vec<(usize, OutputStore)> =
-                stream::iter(futs)
-                    .buffered(PARALLEL_CAP)
-                    .collect::<alloc::vec::Vec<_>>()
-                    .await
-                    .into_iter()
-                    .collect::<Result<_, _>>()?;
+            let mut results: alloc::vec::Vec<(usize, OutputStore)> = stream::iter(futs)
+                .buffered(PARALLEL_CAP)
+                .collect::<alloc::vec::Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<_, _>>()?;
             // `buffered` preserves input order, but sort by index defensively
             // so the merge is deterministic regardless of driver scheduling.
             results.sort_by_key(|(idx, _)| *idx);
