@@ -10,14 +10,10 @@
 //! for tau-cli-authored workflows; this runtime half additionally clamps
 //! descendants under the runtime narrowing chain and catches hand-crafted IR.
 //!
-//! # Dead-code allow
-//!
-//! `AttenuatedDispatcher` is exercised by this module's `tests` submodule
-//! only until the follow-up task wires it into the subflow-spawn call site
-//! in `agent_loop.rs`; until then it warns under the `dead_code` lint
-//! (same rationale as the module-level allow in `crate::capability`).
-
-#![allow(dead_code)]
+//! Wired into the `ToolImpl::Subflow` spawn arm in `agent_loop.rs`: every
+//! recursive `run_ir` call for a subflow's target agent runs behind an
+//! `AttenuatedDispatcher` carrying that subflow tool's declared capabilities
+//! as the frame grant.
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
