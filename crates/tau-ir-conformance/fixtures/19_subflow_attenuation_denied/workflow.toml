@@ -1,7 +1,7 @@
 packages = ["mock-llm"]
 
 [project]
-name = "fixture-04"
+name = "fixture-19"
 
 [models.mock-1]
 backend = "mock-llm"
@@ -24,7 +24,7 @@ max_turns    = 3
 [tools.notify]
 subflow      = "worker"
 description  = "Hand off the alert to the worker agent."
-capabilities = [{ kind = "net.http" }]
+capabilities = []
 
 [tools.page]
 mcp          = "https://mcp.pager.example.com"

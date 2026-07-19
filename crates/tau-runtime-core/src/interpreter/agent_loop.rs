@@ -193,11 +193,36 @@ where
                 // the async-fn future type would be infinitely recursive.
                 let module = self.module.clone();
                 let target = target.clone();
-                let dispatcher = self.dispatcher.clone();
+
+                // Attenuation frame: this subflow tool's declared capabilities
+                // are the cap_subset the child (and its descendants) run
+                // under. Absent tool entry (shouldn't happen post-typecheck)
+                // falls back to an empty grant — deny-by-default.
+                let cap_subset = module
+                    .workflow
+                    .tools
+                    .get(&self.tool_id)
+                    .map(|t| t.capabilities.clone())
+                    .unwrap_or_default();
+                // Kept as a concrete `Arc<AttenuatedDispatcher>` (not
+                // widened to `Arc<dyn ToolDispatcher + Send + Sync>`) because
+                // `run_ir<D>` requires `D: Sized`; the inner-dispatcher
+                // coercion to the trait object happens at the `new(...)`
+                // call site instead, via `self.dispatcher.clone()`'s target
+                // type (`Arc<dyn ToolDispatcher + Send + Sync>`).
+                let child_dispatcher =
+                    Arc::new(crate::interpreter::attenuate::AttenuatedDispatcher::new(
+                        cap_subset,
+                        self.tool_id.clone(),
+                        target.0.clone(),
+                        module.clone(),
+                        self.dispatcher.clone(), // Arc<D> → Arc<dyn ToolDispatcher + Send + Sync>
+                    ));
+
                 let outcome = alloc::boxed::Box::pin(crate::interpreter::run_ir(
                     module,
                     &target,
-                    dispatcher,
+                    child_dispatcher,
                     Vec::new(),
                 ))
                 .await
