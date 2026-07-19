@@ -26,15 +26,10 @@ pub fn to_canonical_bytes(module: &IrModule) -> Vec<u8> {
     serde_json::to_vec(module).expect("IrModule serializes cleanly to JSON")
 }
 
-/// Deserialize canonical bytes back to an `IrModule`. Pure inverse of
-/// `to_canonical_bytes`.
-pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, serde_json::Error> {
-    serde_json::from_slice(bytes)
-}
-
 #[cfg(test)]
 mod pipeline_canonical_tests {
     use super::*;
+    use crate::decode::from_canonical_bytes;
     use crate::check::{Check, CheckVerify, Condition, JudgeRef, Locus, OnFail, RetryPolicy};
     use crate::ids::{AgentId, CheckId, PipelineStepId};
     use crate::module::{IrFormatVersion, IrModule, Workflow};

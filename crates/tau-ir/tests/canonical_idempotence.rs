@@ -1,7 +1,7 @@
 //! Property: `decode(encode(x)) == x` and `encode(decode(encode(x))) == encode(x)`.
 
-use tau_ir::canonical::{from_canonical_bytes, to_canonical_bytes};
-use tau_ir::{IrFormatVersion, IrModule, Workflow};
+use tau_ir::canonical::to_canonical_bytes;
+use tau_ir::{from_canonical_bytes, IrFormatVersion, IrModule, Workflow};
 use tau_ports::target::registry;
 
 fn sample_module() -> IrModule {

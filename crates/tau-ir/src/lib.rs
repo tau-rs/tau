@@ -23,6 +23,7 @@ pub mod canonical;
 pub mod capability;
 pub mod check;
 pub mod context;
+pub mod decode;
 pub mod durable;
 pub mod error;
 pub mod hash;
@@ -39,13 +40,14 @@ pub mod trigger;
 
 // Re-exports of the canonical public API surface.
 pub use budget::AgentBudget;
-pub use canonical::{from_canonical_bytes, to_canonical_bytes};
+pub use canonical::to_canonical_bytes;
 pub use capability::{CapabilityRequirements, CapabilityTable};
 // NB: `check::RetryPolicy` is intentionally NOT re-exported at the crate root
 // to avoid clashing with `trigger::RetryPolicy`. Both are reached via their
 // module path (`tau_ir::check::RetryPolicy` / `tau_ir::trigger::RetryPolicy`).
 pub use check::{Check, CheckVerify, Condition, GoalPredicate, JudgeRef, Locus, OnFail};
 pub use context::ContextConfig;
+pub use decode::{from_canonical_bytes, DecodeError};
 pub use durable::{CheckpointGranularity, Durability, DurableStore};
 pub use error::IrError;
 pub use hash::compute_hash;
