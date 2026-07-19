@@ -113,6 +113,7 @@ impl ExecutionMode for BundleMode {
                 output_path: None,
                 agent_filter: None,
                 ir_payload,
+                governance: None,
             };
             let artifact = match build_bundle(opts) {
                 Ok(a) => a,

@@ -176,6 +176,11 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
         output_path: Some(rebuilt_path.clone()),
         agent_filter,
         ir_payload: opts.ir_payload.clone(),
+        // Replay the shipped verdict so the governance record (hashed into
+        // the self-hash) reproduces identically. The verdict is a build-time
+        // decision the rebuild cannot re-derive, so it must be carried over
+        // from the shipped bundle — mirrors `selected_agents` replay above.
+        governance: shipped.governance,
     })
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
@@ -458,6 +463,7 @@ system = "hi"
             output_path: None,
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         })
         .unwrap();
         let s = std::fs::read_to_string(&artifact.path).unwrap();
@@ -616,6 +622,7 @@ system = "you are solo"
             output_path: None,
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         })
         .unwrap();
         artifact.path
@@ -739,6 +746,7 @@ system = "you are extra"
             output_path: None,
             agent_filter: Some(vec!["solo".parse().unwrap()]),
             ir_payload: None,
+            governance: None,
         })
         .unwrap();
         artifact.path
@@ -826,6 +834,7 @@ deny_paths = ["/data/secret/**"]
             output_path: None,
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         })
         .unwrap();
         // Sanity: the bundle actually recorded narrowed caps.

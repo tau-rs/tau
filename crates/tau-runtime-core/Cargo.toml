@@ -28,6 +28,7 @@ uuid         = { workspace = true, features = ["v4"] }
 # ULID generation for run-ids and trace-event-ids via `ids::ulid`.
 ulid         = { workspace = true, default-features = false }
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
+futures-util = { workspace = true, default-features = false, features = ["alloc"] }
 tracing      = { workspace = true, default-features = false, features = ["attributes"] }
 # Required by `stream::run_streaming_inner` (the async_stream::stream! macro).
 async-stream = { workspace = true }
