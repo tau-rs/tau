@@ -119,8 +119,9 @@ sets that could drift from each other.
 
 - A newer-but-incompatible bundle is rejected at decode with a clear message, instead of
   silently dropping semantics-bearing fields (closes hole 1).
-- `deny_unknown_fields` now spans the full IR type tree, turning "unknown field" from a
-  silently-ignored condition into a hard decode error within an accepted window.
+- `deny_unknown_fields` now spans the full `tau-ir`-owned IR type tree, turning "unknown
+  field" from a silently-ignored condition into a hard decode error within an accepted
+  window (see the known gap below for the one out-of-crate subtree not yet covered).
 - Feature support in PR2 is derived by walking the module (ground truth), not by trusting
   a declared list that could lie or drift.
 
@@ -130,10 +131,33 @@ sets that could drift from each other.
   `ir_format` minor+1, `ir_format` major+1 — all rejected.
 - `schemas/ir/conformance/README.md` is refreshed to `v2.4.0` (it was stale at v2.3.0
   while the schema and tests were already v2.4.0).
-- `serde(untagged)` types (e.g. `PromptSource`) interact with `deny_unknown_fields` in
-  non-obvious ways — untagged enums try each arm in order, and `deny_unknown_fields` on
-  the arms changes which arm matches an ambiguous input — so each untagged arm needs an
-  explicit accept and reject test.
+- **Known gap — the `tau_domain::Capability` subtree.** `Capability` (reached from
+  `IrModule` via `CapabilityRequirements.declared`) is deserialized by a hand-written impl
+  (`capability.rs`) over a `RawCapability` struct that uses `#[serde(flatten)] rest:
+  BTreeMap` to preserve unknown keys as `Custom`-capability params. That flatten catch-all
+  means unknown keys on the *known* capability kinds (`fs.read`, `net.http`, …) are
+  currently absorbed rather than rejected, so the closed decode stops at the `tau-ir` crate
+  boundary. The exposure is bounded — the version window already blocks cross-version minor
+  field-drop, and absorbed keys are dropped, never honored (no privilege escalation) — but
+  a hand-crafted same-version module can still carry stray keys inside a capability object.
+  Closing this requires distinguishing known-kind (reject unknown keys) from the
+  `Custom`-kind fallback (preserve them), a focused change to the security-critical
+  sandbox-grant deserializer with `tau.toml` manifest blast radius; it is tracked as a
+  follow-up rather than rushed into this PR.
+- **Schema tightening without a version bump.** Regenerating `tau-ir.v2.4.0.schema.json`
+  with `additionalProperties: false` across the tree flips the published schema from open
+  to closed for external producers on an unchanged `$id`/version. Although ADR-0056 treats
+  the published schema as part of the semver stability surface, this does *not* warrant an
+  `ir_format` bump: emitted canonical bytes are unchanged (decode-side tightening only —
+  `to_canonical_bytes` and all round-trip goldens are untouched), the schema was previously
+  under-specified (silently open), and the acceptance window rejects newer minors
+  regardless.
+- Forward-looking note: `#[serde(untagged)]` types (e.g. a future `PromptSource` from D6-B)
+  interact with `deny_unknown_fields` in non-obvious ways — untagged enums try each arm in
+  order, and `deny_unknown_fields` on the arms changes which arm matches an ambiguous
+  input, so each untagged arm would need an explicit accept and reject test. No `untagged`
+  or `flatten` types exist in `tau-ir/src` today, so this is a caution for when such a type
+  lands, not a current requirement.
 - EPIC 4.2 (#399), which lands execution for `Branch`/`Parallel`/`Loop`/`Suspend`, must
   add those variants to `SUPPORTED_FEATURES` / `backend_features` once PR2 lands. Until
   then, PR2's feature-set honesty test (one fixture per `IrFeature`, asserting

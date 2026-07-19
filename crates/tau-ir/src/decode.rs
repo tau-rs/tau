@@ -2,10 +2,18 @@
 //!
 //! Two phases: peek `ir_format` and apply the semver acceptance window
 //! (accept ⟺ major == CURRENT.major ∧ minor ≤ CURRENT.minor), then a full
-//! decode. The full decode is closed: every `Deserialize` type reachable
-//! from [`IrModule`] carries `#[serde(deny_unknown_fields)]`, so an
-//! unknown field inside an otherwise-accepted module is rejected as
+//! decode. The full decode is closed across the `tau-ir`-owned IR type tree:
+//! every `Deserialize` struct/enum defined in this crate that is reachable
+//! from [`IrModule`] carries `#[serde(deny_unknown_fields)]`, so an unknown
+//! field inside an otherwise-accepted module is rejected as
 //! [`DecodeError::Serde`].
+//!
+//! Known gap: the `tau_domain::Capability` subtree (reached via
+//! `CapabilityRequirements.declared`) uses a hand-written deserializer with a
+//! `#[serde(flatten)]` catch-all that preserves unknown keys for `Custom`
+//! capabilities, so unknown keys on the *known* capability kinds are not yet
+//! rejected. Tightening that (reject-on-known-kind while still preserving
+//! `Custom` params) is tracked as a follow-up — see ADR-0059.
 
 use alloc::string::{String, ToString};
 use serde::Deserialize;
@@ -46,12 +54,15 @@ pub enum DecodeError {
 
 /// Minimal partial-decode struct: peek ONLY `ir_format`. No
 /// `deny_unknown_fields` here, so unknown fields from a newer minor do not
-/// mask the version error. `ir_format` is `Option` so a totally-absent key
-/// is reported as [`DecodeError::BadFormat`] instead of a generic serde
-/// "missing field" error.
+/// mask the version error. `ir_format` is `Option<serde_json::Value>` (not
+/// `Option<IrFormatVersion>`) so a present-but-wrong-JSON-type value (e.g.
+/// a number or array) surfaces as [`DecodeError::BadFormat`] instead of
+/// failing this phase-1 peek as a generic serde type error. A totally-absent
+/// key is likewise reported as [`DecodeError::BadFormat`] instead of a
+/// generic serde "missing field" error.
 #[derive(Deserialize)]
 struct FormatPeek {
-    ir_format: Option<IrFormatVersion>,
+    ir_format: Option<serde_json::Value>,
 }
 
 /// Parse `vMAJOR.MINOR.PATCH` → `(major, minor, patch)`. Tolerates a missing
@@ -74,7 +85,13 @@ pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, DecodeError> {
     // Phase 1: peek ir_format only.
     let peek: FormatPeek = serde_json::from_slice(bytes)?;
     let found = match peek.ir_format {
-        Some(v) => v.0,
+        Some(serde_json::Value::String(s)) => s,
+        Some(other) => {
+            return Err(DecodeError::BadFormat {
+                found: other.to_string(),
+                detail: "ir_format must be a string".into(),
+            })
+        }
         None => {
             return Err(DecodeError::BadFormat {
                 found: alloc::string::String::new(),
@@ -195,6 +212,21 @@ mod tests {
         );
         assert!(matches!(
             from_canonical_bytes(stripped.as_bytes()),
+            Err(DecodeError::BadFormat { .. })
+        ));
+    }
+
+    #[test]
+    fn non_string_ir_format_is_bad_format() {
+        // A present-but-wrong-JSON-type ir_format (a number) must be routed to
+        // BadFormat by the lenient phase-1 peek, not surface as a raw serde
+        // type error.
+        let bytes = module_at("v2.4.0");
+        let json = alloc::string::String::from_utf8(bytes).unwrap();
+        let doctored = json.replace("\"ir_format\":\"v2.4.0\"", "\"ir_format\":42");
+        assert_ne!(doctored, json, "expected ir_format value to be replaceable");
+        assert!(matches!(
+            from_canonical_bytes(doctored.as_bytes()),
             Err(DecodeError::BadFormat { .. })
         ));
     }
