@@ -491,8 +491,13 @@ fn effective_to_bundle(
                 out.deny_exec.extend(e.deny.clone());
             }
             Capability::Network(NetCapability::Http { hosts, .. }) => {
+                let host_strs: Vec<String> = if hosts.is_any() {
+                    vec!["any".to_string()]
+                } else {
+                    hosts.exact_hosts()
+                };
                 out.allow_net_http
-                    .extend(e.allow_override.clone().unwrap_or_else(|| hosts.clone()));
+                    .extend(e.allow_override.clone().unwrap_or(host_strs));
                 out.deny_net_http.extend(e.deny.clone());
             }
             Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
