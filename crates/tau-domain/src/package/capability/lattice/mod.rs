@@ -435,27 +435,19 @@ fn cap_contained(inner: &Capability, outer: &Capability) -> bool {
     capability_subset(core::slice::from_ref(inner), core::slice::from_ref(outer)).is_ok()
 }
 
-/// Union `src`'s grant lists into `dst` (same kind guaranteed by the caller).
+/// Union `src`'s grant list into `dst` for a **single-dimension** kind (same
+/// kind guaranteed by `mergeable`). The two-dimensional kinds (`net.http`,
+/// `fs.write`) are intentionally ABSENT: unioning each of their dimensions
+/// independently is a bounding-box that widens the grant, so `mergeable` never
+/// routes them here — they stay as separate rectangles and are absorbed by 2-D
+/// containment in `canon_caps`. Adding an http/write arm here would reintroduce
+/// the unsound widening.
 fn union_into(dst: &mut Capability, src: &Capability) {
     use Capability::*;
     match (dst, src) {
         (Filesystem(FsCapability::Read { paths: d }), Filesystem(FsCapability::Read { paths: s }))
         | (Filesystem(FsCapability::Exec { paths: d }), Filesystem(FsCapability::Exec { paths: s })) => {
             d.extend(s.iter().cloned());
-        }
-        (
-            Filesystem(FsCapability::Write { paths: d, max_bytes: md }),
-            Filesystem(FsCapability::Write { paths: s, max_bytes: ms }),
-        ) => {
-            d.extend(s.iter().cloned());
-            *md = match (*md, *ms) { (None, _) | (_, None) => None, (Some(a), Some(b)) => Some(a.max(b)) };
-        }
-        (
-            Network(NetCapability::Http { hosts: dh, methods: dm }),
-            Network(NetCapability::Http { hosts: sh, methods: sm }),
-        ) => {
-            dh.extend(sh.iter().cloned());
-            dm.extend(sm.iter().cloned());
         }
         (Process(ProcessCapability::Spawn { commands: d }), Process(ProcessCapability::Spawn { commands: s })) => {
             d.extend(s.iter().cloned());

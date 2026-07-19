@@ -80,8 +80,9 @@ fn brace_expand(pat: &str, cap: usize) -> Option<Vec<String>> {
 fn parse_arm(s: &str) -> Option<Pattern> {
     let body = s.strip_prefix('/')?; // must be absolute
     let mut segs: Vec<Segment> = Vec::new();
+    let seg_count = body.split('/').count();
     for (i, raw) in body.split('/').enumerate() {
-        let last = i == raw_count(body) - 1;
+        let last = i == seg_count - 1;
         match raw {
             "" | "." => continue, // collapse // and .
             ".." => {
@@ -108,10 +109,6 @@ fn parse_arm(s: &str) -> Option<Pattern> {
         }
     }
     Some(Pattern(segs))
-}
-
-fn raw_count(body: &str) -> usize {
-    body.split('/').count()
 }
 
 /// `child ⊆ parent` on normalized, brace-free patterns.
