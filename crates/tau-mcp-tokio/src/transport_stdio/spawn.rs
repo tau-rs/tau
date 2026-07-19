@@ -1,8 +1,8 @@
 //! Sandboxed subprocess spawn for stdio MCP servers.
 //!
 //! Wraps a `tokio::process::Command` via
-//! `tau_runtime_tokio::process_gate::DynProcessCapabilityGate::wrap_spawn`
-//! exactly the same way `plugin_host::process::spawn` does — the
+//! `tau_ports::DynProcessGate::wrap_spawn` exactly the same way
+//! `plugin_host::process::spawn` does — the
 //! `CapabilityPlan` is honored at the OS boundary
 //! (landlock/seccomp/sandbox-exec/podman per the four sandbox adapters).
 //!
@@ -14,7 +14,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use tau_ports::CapabilityPlan;
-use tau_runtime_tokio::process_gate::DynProcessCapabilityGate;
+use tau_ports::DynProcessGate;
 use tokio::process::{Child, Command};
 
 use crate::transport_stdio::error::StdioSpawnError;
@@ -34,7 +34,7 @@ use crate::transport_stdio::error::StdioSpawnError;
 ///   failed (binary missing, permission denied, etc.).
 pub async fn spawn(
     mut cmd: Command,
-    gate: Arc<dyn DynProcessCapabilityGate>,
+    gate: Arc<dyn DynProcessGate>,
     plan: &CapabilityPlan,
 ) -> Result<Child, StdioSpawnError> {
     cmd.stdin(Stdio::piped())
