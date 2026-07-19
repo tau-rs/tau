@@ -70,6 +70,7 @@ fn realistic_bundle_round_trips_through_disk() {
         }],
         ir_payload: None,
         triggers: Vec::new(),
+        governance: None,
     };
 
     // Compute the self-hash and store it.
@@ -111,6 +112,7 @@ fn tampered_bundle_on_disk_fails_verification() {
         agents: vec![],
         ir_payload: None,
         triggers: Vec::new(),
+        governance: None,
     };
     manifest.bundle.sha256 = manifest.compute_self_hash();
 

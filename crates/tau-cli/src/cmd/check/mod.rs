@@ -8,13 +8,19 @@
 
 mod agent_caps;
 mod categories;
+mod gate;
 mod output;
 mod result;
 mod runner;
 
+pub use gate::{
+    evaluate_governance, render_no_constitution, render_ungoverned_bundle_refused,
+    render_violations, GovernanceFlags, GovernanceOutcome,
+};
 pub use result::{
     compute_exit, CheckCategory, CheckFinding, CheckResult, CheckStatus, FindingLocation, Severity,
 };
+pub use runner::CheckCtx;
 
 use anyhow::Result;
 use std::str::FromStr;

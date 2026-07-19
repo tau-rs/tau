@@ -35,7 +35,7 @@ fn run_emits_run_started_event_at_info() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "hi"])
+        .args(["run", "--allow-ungoverned", "echo", "hi"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         // Default filter is tau=info -> run_started (info!) shows up.
@@ -61,7 +61,7 @@ fn run_emits_turn_lifecycle_events_at_debug() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "hi"])
+        .args(["run", "--allow-ungoverned", "echo", "hi"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .env("RUST_LOG", "tau=debug")

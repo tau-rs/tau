@@ -33,6 +33,7 @@ export const a = agent({
         .current_dir(tmp.path())
         .args([
             "build",
+            "--allow-ungoverned",
             "project.ts",
             "-o",
             out_path.path().to_str().unwrap(),
