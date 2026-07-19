@@ -220,7 +220,8 @@ mcp = "https://mcp.example.com"
 capabilities = []
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = super::super::parse::parse(&config).expect("parse stage");
+        let parsed = super::super::parse::parse(&config, &super::super::parse::no_prompt_files)
+            .expect("parse stage");
 
         let bad_contract = ResolvedMcpContract {
             hash: [1u8; 32],
@@ -232,6 +233,7 @@ capabilities = []
             native_tool: &|_| None,
             mcp_contract: &|_url| Some(bad_contract.clone()),
             skill: &|_| None,
+            prompt_file: &|_| Ok(alloc::vec::Vec::new()),
         };
 
         let err = resolve(parsed, &caches).unwrap_err();
@@ -268,7 +270,8 @@ mcp = "https://mcp.example.com"
 capabilities = []
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = super::super::parse::parse(&config).expect("parse stage");
+        let parsed = super::super::parse::parse(&config, &super::super::parse::no_prompt_files)
+            .expect("parse stage");
 
         let contract = ResolvedMcpContract {
             hash: [2u8; 32],
@@ -280,6 +283,7 @@ capabilities = []
             native_tool: &|_| None,
             mcp_contract: &|_url| Some(contract.clone()),
             skill: &|_| None,
+            prompt_file: &|_| Ok(alloc::vec::Vec::new()),
         };
 
         let result = resolve(parsed, &caches).expect("resolve");

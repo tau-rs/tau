@@ -41,3 +41,6 @@ tau-ports = { workspace = true, features = ["test-fixtures"] }
 # out of tau-app's production build.
 tau-runtime-tokio = { workspace = true, features = ["mock-sandbox"] }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -114,6 +114,7 @@ fn lower_fixture(path: &std::path::Path) -> LowerFixtureOutcome {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
 
     match lower_project(&config, &target, &caches) {

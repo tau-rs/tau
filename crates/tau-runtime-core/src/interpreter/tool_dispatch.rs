@@ -120,6 +120,22 @@ pub trait ToolDispatcher {
         None
     }
 
+    /// Optional content-addressed asset store (D6-B).
+    ///
+    /// Maps an asset hash (`"sha256:" + 64 hex`) to its [`tau_ir::asset::AssetBlob`].
+    /// The interpreter calls this at agent-run assembly to resolve a
+    /// [`tau_ir::prompt::PromptSource::Asset`] prompt reference to bytes.
+    /// Returning `None` (the default) means "no asset store"; resolving an
+    /// `Asset` prompt then surfaces a structured [`RuntimeError`]. Hosts that
+    /// run bundles or `tau dev` supply the map (loaded from the bundle's
+    /// `[[assets]]` store or the fresh lowering output).
+    fn assets(
+        &self,
+    ) -> Option<Arc<alloc::collections::BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob>>>
+    {
+        None
+    }
+
     /// Optional registry of user-supplied native context nodes (β.4).
     ///
     /// The interpreter calls this when building the per-turn context

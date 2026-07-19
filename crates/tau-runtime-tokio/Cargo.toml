@@ -125,3 +125,6 @@ tau-plugin-sdk     = { workspace = true }
 # Used by ir_smoke.rs integration test.
 tau-ir             = { workspace = true }
 tau-runtime-core   = { workspace = true, features = ["std", "test-fixtures"] }
+
+[lints]
+workspace = true

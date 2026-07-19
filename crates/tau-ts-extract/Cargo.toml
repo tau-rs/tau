@@ -21,3 +21,6 @@ serde_json      = { workspace = true }
 tau-ir       = { workspace = true }
 tau-ir-lower = { workspace = true }
 tau-ports    = { workspace = true }
+
+[lints]
+workspace = true
