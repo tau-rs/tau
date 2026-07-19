@@ -72,8 +72,19 @@ checked against a backend's supported-feature set at two points:
   `SUPPORTED_FEATURES`, else a structured load error, not a mid-run
   `RuntimeError::Internal`.
 
-PR2 is not part of this branch; it is noted here for completeness because both halves
-share one ADR (Decision 3a below).
+As shipped in PR2: the LOAD error is `RuntimeError::UnsupportedFeature { features }`, and
+the mid-run `RuntimeError::Internal` control-flow arms in `pipeline.rs` are kept as
+defense-in-depth (now unreachable from any gated path). Build and load read one shared
+table, `tau_ir::feature::backend_features(AdapterFamily)`, which returns the same
+interpreter set for every adapter family today; the interpreter's `SUPPORTED_FEATURES`
+const is tied to that table by a drift-guard test, and a `wasm32-wasip2` round-trip test
+proves the guest rejects an unsupported-feature module across the WIT boundary. Because
+`AdapterFamily` is `#[non_exhaustive]` in `tau-ports`, `backend_features` keeps an explicit
+arm per known family plus a documented wildcard — a family added upstream lands on the
+wildcard (same set) rather than failing to compile, so the obligation to update the sets
+travels with the code review, not the type checker.
+
+Both halves share one ADR (Decision 3a below).
 
 ### Locked decisions
 
@@ -158,13 +169,16 @@ sets that could drift from each other.
   input, so each untagged arm would need an explicit accept and reject test. No `untagged`
   or `flatten` types exist in `tau-ir/src` today, so this is a caution for when such a type
   lands, not a current requirement.
-- EPIC 4.2 (#399), which lands execution for `Branch`/`Parallel`/`Loop`/`Suspend`, must
-  add those variants to `SUPPORTED_FEATURES` / `backend_features` once PR2 lands. Until
-  then, PR2's feature-set honesty test (one fixture per `IrFeature`, asserting
-  `feature ∈ SUPPORTED ⟹ executes past load` and `feature ∉ SUPPORTED ⟹ rejected at
-  load`) will fail for those four variants — this is intentional, and is what forces
-  EPIC 4.2 to flip the sets rather than let them silently drift from what the interpreter
-  actually executes.
+- Whoever lands execution for `Branch`/`Parallel`/`Loop`/`Suspend` (the EPIC 4.2
+  interpreter work — issue #399, now closed, though execution is not yet on `main`: the
+  `pipeline.rs` control-flow arms still return `RuntimeError::Internal`) MUST add those
+  variants to both `SUPPORTED_FEATURES` (in `tau-runtime-core`) and `backend_features` (in
+  `tau-ir`) at the same time. Two shipped tests guard this: the drift-guard
+  (`supported_features_matches_shared_table`) fails if the const and the shared table are
+  updated one-sidedly, and the load honesty test
+  (`branch_module_rejected_at_load_not_mid_run`) fails the moment a Branch module becomes
+  executable, forcing whoever adds execution to update the feature sets rather than let
+  them silently drift from what the interpreter actually runs.
 
 ## Alternatives considered
 
