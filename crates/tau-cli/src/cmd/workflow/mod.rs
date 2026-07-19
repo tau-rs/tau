@@ -157,7 +157,7 @@ pub(crate) async fn build_runtime_for_workflow(
     let loaded = crate::cmd::plugin_loader::load_plugins(
         entry,
         scope,
-        crate::cmd::plugin_loader::model_aliases(&project),
+        &project.models,
         trace_context,
         host_options,
     )

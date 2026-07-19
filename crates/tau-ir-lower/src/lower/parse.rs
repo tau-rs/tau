@@ -282,14 +282,13 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
 /// Producer binding and gate resolution were performed by tau-pkg's
 /// validator (`DeliverableEntry::producer` / `::gate`), so this is a pure
 /// structural copy — no re-derivation here.
-/// Resolve a model alias to a concrete [`ModelRef`] via `[models]` or, when a
-/// constitution is declared, `[allow.models]`.
+/// Resolve a model alias to a concrete [`ModelRef`] via `[models]`, or via
+/// `[allow.models]` when the project declares an `[allow]` ceiling (a governed
+/// project moves its alias map under `[allow.models]`, per ADR-0057 / EPIC 1.2).
 ///
 /// Infallible in practice — `validate_models` (tau-pkg) guarantees the alias
-/// exists before lowering runs; the error arm is defense-in-depth. The lookup
-/// mirrors `validate_models`'s union: `[allow.models]` is the sole home for the
-/// alias map when `[allow]` is present (ADR-0057), and `[models]` cannot coexist
-/// with `[allow]`, so exactly one table carries any given alias.
+/// exists in one of the two tables before lowering runs; the error arm is
+/// defense-in-depth.
 fn resolve_model_ref(
     config: &ProjectConfig,
     alias: &str,

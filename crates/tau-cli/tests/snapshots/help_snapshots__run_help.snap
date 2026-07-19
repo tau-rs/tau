@@ -41,8 +41,11 @@ Options:
       --resume <RUN_ID>
           Resume a durable run by its run id (ADR-0053). The entry agent must declare `[durable]`; the run rehydrates the latest checkpoint under `.tau/runs/<RUN_ID>/` and re-enters at the next turn, so already committed turns are not re-billed
 
+      --allow-ungoverned
+          Authorize running a project/bundle with no `[allow]` ceiling. On the dev path a missing `[allow]` is otherwise a hard error (GOV000); on the `--bundle` path this is required to run a bundle built `ungoverned`
+
       --no-governance
-          Skip the `[allow]` governance gate (ADR-0059) on the dev-mode run path. Required to run a project that declares no `[allow]` section. Ignored when running from a `--bundle` (bundle governance is checked against its recorded constitution instead)
+          Dev-run a project that HAS an `[allow]` ceiling without enforcing it. No effect on `--bundle` runs (the bundle's verdict is already sealed)
 
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)

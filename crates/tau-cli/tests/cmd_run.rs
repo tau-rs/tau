@@ -29,7 +29,7 @@ fn run_missing_project_tau_toml_exits_two() {
 
     AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "reviewer", "hello"])
+        .args(["run", "--allow-ungoverned", "reviewer", "hello"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .assert()
@@ -61,7 +61,7 @@ model        = "default"
 
     AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "ghost", "hi"])
+        .args(["run", "--allow-ungoverned", "ghost", "hi"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .assert()
@@ -84,10 +84,10 @@ fn run_dry_run_prints_preview_and_makes_no_llm_call() {
         .unwrap()
         .args([
             "run",
+            "--allow-ungoverned",
             "echo",
             "Review src/auth.rs",
             "--dry-run",
-            "--no-governance",
         ])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
@@ -110,7 +110,7 @@ fn run_completed_happy_path_emits_text() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "Review src/auth.rs", "--no-governance"])
+        .args(["run", "--allow-ungoverned", "echo", "Review src/auth.rs"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()
@@ -138,7 +138,7 @@ fn run_propagates_plugin_crash_as_exit_code_two() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "anything", "--no-governance"])
+        .args(["run", "--allow-ungoverned", "echo", "anything"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()
@@ -188,11 +188,11 @@ source = "file:///tmp/tau-nonexistent-fixture-DO-NOT-CREATE/missing.git"
         .unwrap()
         .args([
             "run",
+            "--allow-ungoverned",
             "reviewer",
             "test prompt",
             "--no-install",
             "--dry-run",
-            "--no-governance",
         ])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path())
@@ -287,10 +287,10 @@ version = "^0.1"
         .unwrap()
         .args([
             "run",
+            "--allow-ungoverned",
             "reviewer",
             "test prompt",
             "--dry-run",
-            "--no-governance",
         ])
         .current_dir(&proj)
         .env("TAU_HOME", &proj)
@@ -323,7 +323,7 @@ fn run_json_completed_emits_outcome_payload() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "ping", "--json", "--no-governance"])
+        .args(["run", "--allow-ungoverned", "echo", "ping", "--json"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()
@@ -370,7 +370,7 @@ fn run_stream_human_mode_emits_text_deltas_inline_to_stdout() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "hi", "--stream", "--no-governance"])
+        .args(["run", "--allow-ungoverned", "echo", "hi", "--stream"])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()
@@ -396,7 +396,14 @@ fn run_stream_json_mode_emits_one_event_per_line() {
 
     let output = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["run", "echo", "hi", "--stream", "--json", "--no-governance"])
+        .args([
+            "run",
+            "--allow-ungoverned",
+            "echo",
+            "hi",
+            "--stream",
+            "--json",
+        ])
         .current_dir(dir.path())
         .env("TAU_HOME", dir.path().join("global"))
         .output()

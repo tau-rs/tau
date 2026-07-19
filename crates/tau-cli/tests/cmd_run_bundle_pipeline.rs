@@ -173,7 +173,7 @@ input = "${steps.gather.output}"
 fn build_bundle(project: &std::path::Path, tau_home: &std::path::Path) -> std::path::PathBuf {
     let out = AssertCmd::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--no-governance"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(project)
         .env("TAU_HOME", tau_home)
         .assert()
@@ -198,6 +198,7 @@ fn run_bundle_drives_pipeline_and_renders_final_step_output() {
         // run path spawns its echo-llm backend, shared by both steps.
         .args([
             "run",
+            "--allow-ungoverned",
             "--bundle",
             bundle.to_str().unwrap(),
             "gather",

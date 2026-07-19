@@ -32,8 +32,11 @@ Options:
           
           [possible values: systemd, k8s]
 
+      --allow-ungoverned
+          Authorize a build of a project that declares NO `[allow]` ceiling (records bundle verdict `ungoverned`). Governed-by-default: without this, a missing `[allow]` is a hard error (GOV000). Distinct from `--no-governance`, which skips checking a ceiling that DOES exist
+
       --no-governance
-          Skip the `[allow]` governance gate (ADR-0059). The build proceeds without enforcing the constitution and the bundle records `governance.verdict = "skipped"`. Required to build a project that declares no `[allow]` section
+          Build a project that HAS an `[allow]` ceiling without enforcing it (records bundle verdict `skipped`). Distinct from `--allow-ungoverned`, which authorizes having no ceiling at all
 
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)

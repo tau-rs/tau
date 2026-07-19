@@ -22,7 +22,6 @@ pub mod bundle;
 pub mod capability_override;
 pub mod error;
 pub(crate) mod git;
-pub mod governance;
 pub mod install;
 pub mod install_sandbox;
 pub mod lockfile;
@@ -49,7 +48,6 @@ pub use bundle::{
 pub use error::{
     GitError, InstallError, ManifestReadError, RegistryError, ScopeError, UninstallError,
 };
-pub use governance::{enforce_governance, GovFinding, GovSeverity};
 pub use install::{
     install, install_with_options, uninstall, BuildOptions, InstallOptions, InstalledPackage,
 };

@@ -12,7 +12,6 @@ pub mod chat;
 pub mod check;
 pub mod dev;
 pub mod error_render;
-pub mod governance_gate;
 pub mod init;
 pub mod install;
 pub mod install_sandbox;

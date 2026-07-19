@@ -101,7 +101,7 @@ fn json_schema_run_completed() {
 
     let mut cmd = Command::cargo_bin("tau").unwrap();
     let output = cmd
-        .args(["run", "echo", "hi", "--json", "--no-governance"])
+        .args(["run", "--allow-ungoverned", "echo", "hi", "--json"])
         .current_dir(dir.path())
         .env("TAU_HOME", &global_dir)
         .output()

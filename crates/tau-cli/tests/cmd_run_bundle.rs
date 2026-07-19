@@ -86,7 +86,7 @@ fn make_tau_home(scratch: &std::path::Path) -> std::path::PathBuf {
 fn build_bundle(project: &std::path::Path, tau_home: &std::path::Path) -> std::path::PathBuf {
     let out = Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--no-governance"])
+        .args(["build", "--allow-ungoverned"])
         .current_dir(project)
         .env("TAU_HOME", tau_home)
         .assert()
@@ -118,6 +118,7 @@ fn run_bundle_with_tau_toml_drift_exits_three() {
         .unwrap()
         .args([
             "run",
+            "--allow-ungoverned",
             "--bundle",
             bundle.to_str().unwrap(),
             "solo",
@@ -174,6 +175,7 @@ installed_at = "2024-01-01T00:00:00Z"
         .unwrap()
         .args([
             "run",
+            "--allow-ungoverned",
             "--bundle",
             bundle.to_str().unwrap(),
             "solo",
@@ -214,6 +216,7 @@ fn run_bundle_self_hash_stale_exits_three() {
         .unwrap()
         .args([
             "run",
+            "--allow-ungoverned",
             "--bundle",
             bundle.to_str().unwrap(),
             "solo",
@@ -248,6 +251,7 @@ fn run_bundle_clean_fixture_passes_verify_gate() {
         .unwrap()
         .args([
             "run",
+            "--allow-ungoverned",
             "--bundle",
             bundle.to_str().unwrap(),
             "solo",
@@ -272,4 +276,35 @@ fn run_bundle_clean_fixture_passes_verify_gate() {
             && !stderr.contains("does not match host"),
         "clean fixture must not surface any verify-gate refusal; stderr was:\n{stderr}"
     );
+}
+
+#[test]
+fn run_bundle_ungoverned_is_refused_without_flag() {
+    // The bundle is built with --allow-ungoverned (verdict "ungoverned").
+    // Governed-by-default on the run end (ADR-0057 / D2): `tau run --bundle`
+    // must refuse it with GOV000 unless --allow-ungoverned is also passed.
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("ungov");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "ungov");
+    write_empty_lockfile(&project);
+    let tau_home = make_tau_home(scratch.path());
+
+    let bundle = build_bundle(&project, &tau_home);
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "run",
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "solo",
+            "--dry-run",
+        ]) // NO --allow-ungoverned
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error[GOV000]"))
+        .stderr(predicate::str::contains("ungoverned"));
 }

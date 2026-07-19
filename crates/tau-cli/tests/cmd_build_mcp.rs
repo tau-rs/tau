@@ -273,10 +273,7 @@ capabilities = [{ kind = "net.http", hosts = ["api.weather.com"], methods = [] }
 
     let output = assert_cmd::Command::cargo_bin("tau")
         .unwrap()
-        // The MCP fixture declares `[tools.weather]` (mcp + net.http caps)
-        // with no `[allow]` constitution; this test exercises the offline
-        // MCP lockfile path, not the governance gate, so skip it.
-        .args(["build", "--offline", "--no-governance"])
+        .args(["build", "--allow-ungoverned", "--offline"])
         .current_dir(&project_root)
         .env("TAU_HOME", &tau_home)
         .assert()

@@ -131,7 +131,7 @@
 - [ADR-0055 — tau identity: two contracts; CLI = reference host](decisions/0055-tau-identity-two-contracts.md)
 - [ADR-0056 — The two contracts are the semver stability surface](decisions/0056-contract-versioning-stability-surface.md)
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
-- [ADR-0059 — Governance is a build gate; bundles pin their constitution](decisions/0059-governance-build-gate.md)
+- [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
 
 # Retrospectives
 
