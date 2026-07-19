@@ -3,6 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-07-19
 **Deciders:** tau core
+**Design spec:** `docs/superpowers/specs/2026-07-19-link-phase-linkrecord-design.md` (not part of the published book)
 
 ## Context
 
