@@ -99,13 +99,9 @@ pub(crate) async fn run_via_ir(
     )?;
 
     // 4. Build plugin host options + spawn plugins (same flow the cwd path uses).
-    let run_id = format!(
-        "tau-run-bundle-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
+    // Trace-context id for log grouping; prefix kept for log filtering, suffix
+    // is a collision-resistant ULID (was `<nanos>`).
+    let run_id = format!("tau-run-bundle-{}", crate::cmd::run::mint_run_id());
     let trace_context = TraceContext::new(run_id, entry_agent_id.0.clone(), "root".to_string());
     let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
@@ -240,13 +236,11 @@ pub(crate) async fn run_via_ir(
                 (rid.clone(), resume)
             }
             None => {
-                let rid = format!(
-                    "run-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                );
+                // Collision-resistant ULID (matches `cmd::run`'s durable and
+                // workflow run-id minting). The previous `run-<nanos>` scheme
+                // could collide under fast successive runs or a backward clock
+                // step, corrupting the checkpoint directory shared by both runs.
+                let rid = crate::cmd::run::mint_run_id();
                 output.status(format!(
                     "durable run id: {rid} (resume after a crash with `tau run --resume {rid}`)"
                 ))?;
