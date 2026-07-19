@@ -63,6 +63,7 @@
 - [Packages](explanation/packages.md)
 - [Sandboxing](explanation/sandboxing.md)
 - [Serve mode](explanation/serve-mode.md)
+- [Slicing policy](explanation/slicing-policy.md)
 - [Testing strategy](explanation/testing-strategy.md)
 - [Two-layer skills](explanation/two-layer-skills.md)
 - [Trigger ingress](explanation/trigger-ingress.md)
