@@ -3,8 +3,9 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-//! Port (trait) definitions for tau's hexagonal architecture. Adapters in
-//! tau-infra implement these traits.
+//! Port (trait) definitions for tau's hexagonal architecture. Host crates
+//! (tau-runtime-tokio, the sandbox adapters, tau-pkg, …) implement these
+//! traits.
 //!
 //! tau-ports defines four trait families:
 //!

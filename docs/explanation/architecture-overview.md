@@ -121,7 +121,6 @@ flowchart TB
         APP[tau-app]
         WF[tau-workflow]
         OBS[tau-observe]
-        INF[tau-infra]
     end
     P --> D
     R --> P
@@ -146,7 +145,6 @@ flowchart TB
     APP --> R
     WF --> R
     OBS --> D
-    INF --> D
 ```
 
 The four layers reflect tau's hexagonal posture:

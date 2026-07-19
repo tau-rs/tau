@@ -1599,7 +1599,7 @@
       "description": "Target triple this module was lowered for."
     },
     "tau_version": {
-      "description": "tau compiler binary version that emitted this module.\nSemver-shaped (e.g. `\"0.X.Y\"`).",
+      "description": "Version of the `tau-ir-lower` crate that emitted this module (stamped\nfrom its `CARGO_PKG_VERSION` at lowering). Workspace-versioned, so it\nequals the `tau` CLI binary version today. Semver-shaped (e.g. `\"0.X.Y\"`).",
       "type": "string"
     },
     "triggers": {
