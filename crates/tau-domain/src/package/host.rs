@@ -6,7 +6,9 @@
 //! or IP-with-brackets. Suffix wildcards and IPv6 literals are deliberately
 //! deferred (additive later).
 
+use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::fmt;
 
 /// A validated bare hostname with an optional `:port`.
@@ -212,6 +214,67 @@ impl HttpMethod {
             HttpMethod::Trace => "TRACE",
             HttpMethod::Patch => "PATCH",
         }
+    }
+}
+
+/// The host ceiling of a `net.http` capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostSet {
+    /// Any host (authored `hosts = "any"`). Widest ceiling.
+    Any,
+    /// Exactly these hosts (authored `hosts = ["a.com", …]`).
+    Exact(BTreeSet<HostName>),
+}
+
+impl HostSet {
+    /// Ceiling subsumption: `self ⊇ child`.
+    /// `Any` ⊇ everything; `Exact(p)` ⊇ `Exact(c)` ⟺ `c ⊆ p`; `Exact` ⊉ `Any`.
+    pub fn subsumes(&self, child: &HostSet) -> bool {
+        match (self, child) {
+            (HostSet::Any, _) => true,
+            (HostSet::Exact(_), HostSet::Any) => false,
+            (HostSet::Exact(p), HostSet::Exact(c)) => c.is_subset(p),
+        }
+    }
+
+    /// True iff this is the `Any` sentinel.
+    pub fn is_any(&self) -> bool {
+        matches!(self, HostSet::Any)
+    }
+
+    /// Sorted canonical host strings; empty for `Any`.
+    pub fn exact_hosts(&self) -> Vec<String> {
+        match self {
+            HostSet::Any => Vec::new(),
+            HostSet::Exact(set) => set.iter().map(|h| h.as_str().to_string()).collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_set_tests {
+    use super::*;
+
+    fn exact(hosts: &[&str]) -> HostSet {
+        HostSet::Exact(hosts.iter().map(|h| HostName::parse(h).unwrap()).collect())
+    }
+
+    #[test]
+    fn subsumes_truth_table() {
+        assert!(HostSet::Any.subsumes(&exact(&["a.com"])));
+        assert!(HostSet::Any.subsumes(&HostSet::Any));
+        assert!(!exact(&["a.com"]).subsumes(&HostSet::Any)); // Exact ⊉ Any
+        assert!(exact(&["a.com", "b.com"]).subsumes(&exact(&["a.com"])));
+        assert!(!exact(&["a.com"]).subsumes(&exact(&["a.com", "b.com"])));
+    }
+
+    #[test]
+    fn exact_hosts_are_sorted_and_folded() {
+        assert_eq!(
+            exact(&["B.com", "a.com"]).exact_hosts(),
+            vec!["a.com", "b.com"]
+        );
+        assert!(HostSet::Any.exact_hosts().is_empty());
     }
 }
 
