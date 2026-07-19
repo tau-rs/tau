@@ -73,8 +73,13 @@ impl Scenario {
                 native_tool: &|name: &str| Some(sha256_name(name)),
                 mcp_contract: &|_| None,
                 skill: &|_| None,
+                // Conformance fixtures use inline prompts only, so the reader
+                // is never invoked; return empty for any `system_file`.
+                prompt_file: &|_| Ok(Vec::new()),
             };
-            lower_project(&config, &target, &caches).map_err(|e| format!("{e}"))?
+            lower_project(&config, &target, &caches)
+                .map_err(|e| format!("{e}"))?
+                .module
         };
 
         // 3. Entry agent: first in BTreeMap (alphabetical) order.

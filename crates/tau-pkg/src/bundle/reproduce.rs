@@ -23,6 +23,11 @@ pub struct ReproOptions {
     /// (tau-cli's `cmd/verify.rs`) is responsible for lowering the IR
     /// and supplying the payload to ensure both builds are comparable.
     pub ir_payload: Option<IrPayload>,
+    /// Content-addressed assets to embed in the rebuilt bundle (D6-B). The
+    /// caller re-lowers the source and supplies the freshly-derived blobs so
+    /// the rebuilt bundle's `[[assets]]` store — and therefore its self-hash —
+    /// matches the shipped bundle when the sources are unchanged.
+    pub assets: Vec<crate::bundle::manifest::BundleAsset>,
 }
 
 /// Result of a reproducibility check.
@@ -181,6 +186,10 @@ pub fn verify_reproducible(opts: ReproOptions) -> Result<ReproReport, ReproError
         // decision the rebuild cannot re-derive, so it must be carried over
         // from the shipped bundle — mirrors `selected_agents` replay above.
         governance: shipped.governance,
+        // Assets are re-derived from source by the caller (fresh lowering) and
+        // supplied here, so the rebuilt `[[assets]]` store matches the shipped
+        // one when the prompt files are unchanged.
+        assets: opts.assets.clone(),
     })
     .map_err(|e| ReproError::Rebuild { source: e })?;
 
@@ -464,6 +473,7 @@ system = "hi"
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         })
         .unwrap();
         let s = std::fs::read_to_string(&artifact.path).unwrap();
@@ -623,6 +633,7 @@ system = "you are solo"
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         })
         .unwrap();
         artifact.path
@@ -633,6 +644,7 @@ system = "you are solo"
             bundle_path: bundle,
             project_root: root.to_path_buf(),
             ir_payload: None,
+            assets: Vec::new(),
         }
     }
 
@@ -747,6 +759,7 @@ system = "you are extra"
             agent_filter: Some(vec!["solo".parse().unwrap()]),
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         })
         .unwrap();
         artifact.path
@@ -835,6 +848,7 @@ deny_paths = ["/data/secret/**"]
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         })
         .unwrap();
         // Sanity: the bundle actually recorded narrowed caps.

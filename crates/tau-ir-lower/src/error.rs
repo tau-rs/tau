@@ -89,6 +89,19 @@ pub enum LowerError {
         step: StepId,
     },
 
+    /// An agent's `system_file` prompt could not be read at build time.
+    /// This deliberately moves prompt-file existence from run time to build
+    /// time (D6-B): a missing or unreadable prompt file is a hard build error.
+    #[error("agent {agent:?}: cannot read prompt file {path:?}: {reason}")]
+    PromptFileUnreadable {
+        /// The agent whose `system_file` prompt failed to load.
+        agent: AgentId,
+        /// The prompt file path, as written in the config.
+        path: String,
+        /// Why the read failed (from the injected `prompt_file` reader).
+        reason: String,
+    },
+
     /// Generic parse failure surfacing from the upstream TOML parser.
     #[error("tau.toml parse error: {0}")]
     Parse(String),

@@ -117,6 +117,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         payload: ir_payload,
         triggers: trigger_bindings,
         lower_error,
+        assets: ir_assets,
     } = lower_ir(&project_root, &target, &mcp_cache_ir, ts_project.as_ref());
 
     // A typecheck/lowering error (e.g. an invalid context pipeline where
@@ -134,6 +135,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         agent_filter,
         ir_payload,
         governance,
+        assets: ir_assets_to_bundle(ir_assets),
     };
 
     let _ = output.status("Building bundle…");
@@ -414,6 +416,12 @@ pub(crate) struct LowerIrResult {
     /// e.g. an invalid context pipeline — is surfaced at build time rather
     /// than silently dropped (see ADR: build-time enforcement discipline).
     pub lower_error: Option<tau_ir_lower::LowerError>,
+    /// Content-addressed assets (currently `system_file` prompts) the module
+    /// references, keyed by hash (`"sha256:" + 64 hex`). Empty when lowering
+    /// failed or the project uses only inline prompts. `tau build` persists
+    /// these into the bundle's asset store; verify/dev use them to resolve
+    /// prompt references at run time (D6-B).
+    pub assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
 }
 
 /// Attempt to lower the project IR, returning `Some(IrPayload)` on
@@ -454,6 +462,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -465,6 +474,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -476,6 +486,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -493,21 +504,30 @@ pub(crate) fn lower_ir(
         native_tool: &|name: &str| Some(sha256_name(name)),
         mcp_contract: &|url| mcp_cache.get(url).cloned(),
         skill: &|_name| None,
+        // D6-B: read `system_file` prompts at build time (missing/unreadable
+        // => LowerError::PromptFileUnreadable => build fails). Routed through
+        // tau-pkg's `read_prompt_file` so the IR asset hash is computed over
+        // the same bytes as the bundle's `system_prompt_sha256`.
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
 
     match tau_ir_lower::lower_project(config, target, &caches) {
-        Ok(module) => {
-            let bytes = tau_ir::to_canonical_bytes(&module);
-            let hash_bytes = tau_ir::compute_hash(&module);
+        Ok(out) => {
+            let bytes = tau_ir::to_canonical_bytes(&out.module);
+            let hash_bytes = tau_ir::compute_hash(&out.module);
             let payload = Some(IrPayload {
-                ir_format: module.ir_format.0.clone(),
+                ir_format: out.module.ir_format.0.clone(),
                 canonical_ir_hash: hex_lower(&hash_bytes),
                 canonical_ir_bytes_hex: hex_lower(&bytes),
             });
             LowerIrResult {
                 payload,
-                triggers: module.triggers,
+                triggers: out.module.triggers,
                 lower_error: None,
+                assets: out.assets,
             }
         }
         Err(e) => {
@@ -516,9 +536,27 @@ pub(crate) fn lower_ir(
                 payload: None,
                 triggers: Vec::new(),
                 lower_error: Some(e),
+                assets: BTreeMap::new(),
             }
         }
     }
+}
+
+/// Convert the asset blobs `tau_ir_lower` collected into the bundle's
+/// `[[assets]]` shape (bytes hex-encoded), sorted by hash for determinism.
+/// Shared by `tau build` and `tau verify --bundle` so both derive an
+/// identical asset store from the same source (D6-B).
+pub(crate) fn ir_assets_to_bundle(
+    ir_assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
+) -> Vec<tau_pkg::bundle::manifest::BundleAsset> {
+    ir_assets
+        .into_iter()
+        .map(|(hash, blob)| tau_pkg::bundle::manifest::BundleAsset {
+            hash,
+            kind: blob.kind.as_str().to_string(),
+            bytes_hex: hex_lower(&blob.bytes),
+        })
+        .collect()
 }
 
 /// `Caches::native_tool`-shaped stand-in: `Some(SHA-256(name))`.
