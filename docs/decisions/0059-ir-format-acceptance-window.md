@@ -1,0 +1,178 @@
+# ADR-0059: ir_format acceptance window + walked feature-fit
+
+**Status:** Proposed
+**Date:** 2026-07-19
+**Deciders:** tau maintainers
+
+## Context
+
+`ir_format` is carried on every `IrModule` but never enforced. Two concrete holes exist,
+both verified against `main @ d678802d`:
+
+1. **Silent forward-incompatibility.** `from_canonical_bytes`
+   (`crates/tau-ir/src/canonical.rs:31`) is a plain `serde_json::from_slice`. `IrModule`
+   and its nested types do not use `deny_unknown_fields` (the only use in the crate is
+   `budget.rs:12`). So a newer runtime's semantics-bearing optional field — exactly what
+   `durable` once was (ADR-0053) — is silently dropped when decoded by an older `tau`.
+   The CLI bundle path only logs `ir_format`, and only on `--dry-run`
+   (`crates/tau-cli/src/cmd/run.rs:118-123`); the wasm guest never inspects it
+   (`crates/tau-wasm-guest/src/guest.rs:104`). Nothing rejects the mismatch; the older
+   runtime proceeds on an incomplete picture of the module's semantics.
+
+2. **Published-but-unrunnable schema.** `ir_format` v2.4.0 (ADR-0058) publishes
+   `Branch`/`Parallel`/`Loop`/`Suspend`, but no backend executes them: the interpreter
+   returns `RuntimeError::Internal` on all four
+   (`crates/tau-runtime-core/src/interpreter/pipeline.rs:316-347`), and the wasm guest
+   supports only single-agent, no-pipeline modules (`guest.rs:106-119`). An external
+   producer targeting the published JSON Schema can therefore build a module that is
+   valid by the schema but unrunnable by every backend, and only discovers this mid-run.
+
+This is the interchange half of the build-time capability policy: `ir_format` versioning
+is a wire/decode-level compatibility contract (ADR-0056), while feature-fit is a
+build/load-level capability contract (in the spirit of `capability_fit.rs`, ADR-0036).
+There is no separate ADR filed for the feature-fit half; this ADR covers both.
+
+## Decision
+
+### Interchange half (PR1, shipped on branch `feat/ir-format-acceptance-window`)
+
+`from_canonical_bytes` becomes a two-phase closed decode:
+
+1. **Peek `ir_format` only.** A minimal partial-decode struct (no
+   `deny_unknown_fields`) extracts just the `ir_format` string, so an unknown field
+   introduced by a newer minor version does not mask the version check behind a generic
+   serde error.
+2. **Apply the semver acceptance window.** Accept iff
+   `major == CURRENT.major ∧ minor ≤ CURRENT.minor`:
+   - a newer minor (`found.minor > CURRENT.minor`, same major) → `DecodeError::FormatTooNew`
+   - a different major → `DecodeError::FormatMajorMismatch`
+   - missing or unparseable `ir_format` → `DecodeError::BadFormat`
+3. **Closed full decode.** Only once the module falls inside the accepted window,
+   decode the whole `IrModule` with `#[serde(deny_unknown_fields)]` applied across the
+   full IR type tree (`IrModule`, `Workflow`, and nested step/pipeline/check/trigger
+   types). An unknown field surviving into an accepted window means the module is
+   corrupt or lying about its own format, and is rejected (`DecodeError::Serde`).
+
+`CURRENT` is `v2.4.0` (ADR-0058's version). The gate is wired at every
+`from_canonical_bytes` call site: CLI `run --bundle`, the wasm guest's `Err(string)` arm,
+and the conformance loader.
+
+### Feature-fit half (PR2, stacked follow-up on `feat/ir-feature-fit`)
+
+A walked `required_features(&IrModule) -> BTreeSet<IrFeature>` — derived by recursing the
+module's actual structure, not by reading a declared list carried in the module — is
+checked against a backend's supported-feature set at two points:
+
+- **BUILD**, in `tau-ir-lower`: after lowering, `required_features(module)` must be a
+  subset of the target's supported features, resolved target-aware via
+  `tau_ports::target::registry`. This is strict, with no override flag, mirroring the
+  existing `capability_fit` precedent (ADR-0036).
+- **LOAD**, at the single `tau-runtime-core` interpreter chokepoint that both the native
+  CLI and the wasm guest funnel through: `required_features(module)` must be a subset of
+  `SUPPORTED_FEATURES`, else a structured load error, not a mid-run
+  `RuntimeError::Internal`.
+
+PR2 is not part of this branch; it is noted here for completeness because both halves
+share one ADR (Decision 3a below).
+
+### Locked decisions
+
+- **1a — no diagnostic-code prefixes.** Errors are `thiserror` variants with prose
+  messages (`DecodeError::FormatTooNew { found, supported_up_to }`, etc.), matching every
+  existing `IrError` / `LowerError`. No `error[IR001]`-style bracket-code convention is
+  introduced — the repo has none today, and a one-off namespace for this feature alone
+  would be inconsistent.
+- **2a — wasm guest error surface unchanged.** The guest keeps returning
+  `result<string, string>` across the WIT boundary (`wit/tau-host.wit:26` is unchanged).
+  A rejection is the `Display` string of the underlying error. No structured WIT error,
+  no ABI churn.
+- **3a — two stacked PRs.** PR1 (this branch: version gate + closed decode) is
+  independently mergeable and valuable on its own — it closes hole 1 outright. PR2
+  (feature-fit, `feat/ir-feature-fit`) stacks on PR1 and closes hole 2. ADR-0059 and the
+  conformance README refresh land with PR1; this ADR documents both halves so the
+  decision record is not split across two documents for one design.
+
+## Design finding (from implementation)
+
+The version gate is load-bearing at the wasm guest and at any direct
+`from_canonical_bytes` consumer. On the CLI `tau run --bundle` path, however, it is
+pre-empted by an earlier check: that path re-lowers the live cwd source and cross-checks
+canonical-byte hashes (which include `ir_format`) *before* ever decoding the bundle's IR
+as JSON, so a forward-incompatible bundle is caught as source divergence first, not by
+the decode gate. `tau verify --bundle` never decodes IR as JSON at all — it only re-hashes
+bytes — so it needs no gate at all. The decode gate is therefore the primary defense for
+the wasm guest and any bundle-only consumer, and a secondary defense (unreachable in
+practice, but still correct) on the `run --bundle` path.
+
+## Key finding on backends
+
+There is effectively one execution backend today: the `tau-runtime-core` interpreter,
+which the wasm guest reuses rather than reimplementing (the guest's single-agent,
+no-pipeline limit is a workflow-shape constraint orthogonal to feature support, not a
+second backend with its own feature set). Consequently PR2 needs one
+`SUPPORTED_FEATURES` set and one load-time enforcement chokepoint, not two parallel
+sets that could drift from each other.
+
+## Consequences
+
+**Positive:**
+
+- A newer-but-incompatible bundle is rejected at decode with a clear message, instead of
+  silently dropping semantics-bearing fields (closes hole 1).
+- `deny_unknown_fields` now spans the full IR type tree, turning "unknown field" from a
+  silently-ignored condition into a hard decode error within an accepted window.
+- Feature support in PR2 is derived by walking the module (ground truth), not by trusting
+  a declared list that could lie or drift.
+
+**Negative / obligations:**
+
+- New conformance fixtures are required: unknown top-level field, unknown nested field,
+  `ir_format` minor+1, `ir_format` major+1 — all rejected.
+- `schemas/ir/conformance/README.md` is refreshed to `v2.4.0` (it was stale at v2.3.0
+  while the schema and tests were already v2.4.0).
+- `serde(untagged)` types (e.g. `PromptSource`) interact with `deny_unknown_fields` in
+  non-obvious ways — untagged enums try each arm in order, and `deny_unknown_fields` on
+  the arms changes which arm matches an ambiguous input — so each untagged arm needs an
+  explicit accept and reject test.
+- EPIC 4.2 (#399), which lands execution for `Branch`/`Parallel`/`Loop`/`Suspend`, must
+  add those variants to `SUPPORTED_FEATURES` / `backend_features` once PR2 lands. Until
+  then, PR2's feature-set honesty test (one fixture per `IrFeature`, asserting
+  `feature ∈ SUPPORTED ⟹ executes past load` and `feature ∉ SUPPORTED ⟹ rejected at
+  load`) will fail for those four variants — this is intentional, and is what forces
+  EPIC 4.2 to flip the sets rather than let them silently drift from what the interpreter
+  actually executes.
+
+## Alternatives considered
+
+**A. `error[IRxxx]` diagnostic-code prefixes.** Rejected (Decision 1a). No such
+convention exists anywhere in the codebase's error types; introducing one for this
+feature alone would be a one-off namespace inconsistent with every existing `IrError` /
+`LowerError` variant, which use plain prose `thiserror` messages.
+
+**B. Structured WIT error for the wasm guest.** Rejected (Decision 2a). The guest's
+`result<string, string>` boundary already gives a clear, catchable rejection via the
+`Display` string. A structured WIT error type would require ABI churn (WIT world change,
+host-embedder updates) disproportionate to the goal of a clear rejection message.
+
+**C. A declared feature list carried in the module.** Rejected. A module could declare a
+feature list that lies about or drifts from what it actually uses; walking the module's
+actual structure to derive `required_features` is ground truth and cannot drift from
+what the module contains.
+
+**D. Single combined PR for both halves.** Rejected (Decision 3a). The interchange half
+(version gate + closed decode) is independently valuable and mergeable on its own, and
+closes hole 1 without waiting on the larger feature-fit design. Splitting into stacked
+PRs keeps blast radius small per PR while still landing one ADR that documents the full
+design.
+
+## Cross-references
+
+- ADR-0058 — IR structured control-flow blocks (`Branch`/`Parallel`/`Loop`/`Suspend`,
+  `ir_format` v2.4.0) — the schema surface this ADR gates.
+- ADR-0056 — The two contracts are the semver stability surface — the versioning
+  convention this ADR's acceptance window enforces.
+- ADR-0036 — Capability vocabulary forward-compatibility — precedent for
+  `capability_fit`-style strict subset checks, mirrored by the feature-fit half.
+- Design spec: `docs/superpowers/specs/2026-07-19-ir-format-acceptance-window-design.md`
+- EPIC 4.2 (#399) — lands execution for the four control-flow variants; must flip
+  `SUPPORTED_FEATURES` once it does.
