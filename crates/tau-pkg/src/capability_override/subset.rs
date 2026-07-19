@@ -257,10 +257,12 @@ mod tests {
 
     #[test]
     fn multi_parent_net_http_union_admits_host_from_second_parent() {
-        let child = vec![cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":[]}"#)];
+        // D3: methods must be non-empty or the sound per-method check is vacuous.
+        // Child GET on b.com is granted by the second parent entry (b.com, GET).
+        let child = vec![cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":["GET"]}"#)];
         let parent = vec![
-            cap(r#"{"kind":"net.http","hosts":["a.com"],"methods":[]}"#),
-            cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":[]}"#),
+            cap(r#"{"kind":"net.http","hosts":["a.com"],"methods":["GET"]}"#),
+            cap(r#"{"kind":"net.http","hosts":["b.com"],"methods":["GET"]}"#),
         ];
         assert!(capability_set_subset(&child, &parent).is_ok());
     }
