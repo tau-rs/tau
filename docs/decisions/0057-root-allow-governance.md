@@ -161,20 +161,30 @@ contract without re-litigating the model. Enforcement scope is staged:
 | agent ⊇ dyn-region envelope | `StepRun::Dynamic` not built | **build** (envelope ⊆ agent) | declared here; enforced **EPIC 4** (4.4) |
 | dyn-region actual ⊇ spawn / tool | not built | **runtime** (membership + bounds counters) | declared here; enforced **EPIC 4** (4.5) |
 
-### 5. Backward compatibility: opt-in governance
+### 5. Backward compatibility: governed by default, with explicit opt-out
 
-Governance is **opt-in**, matching the philosophy's progressive-disclosure
-stance ("rigor turns on as you move toward release; you don't pay the ceremony
-until you ask for portability"):
+This ADR originally framed governance as *opt-in* (an absent `[allow]` block
+emitting only a warning). The shipped default is stricter: **D2 (ADR-0059,
+governance build gate, #455) makes governance the default**, consistent with the
+Rust-like build-enforcement stance — a missing constitution is a defect, not a
+soft nudge. The progressive-disclosure spirit is preserved through **explicit,
+named opt-out flags** rather than a silent warning:
 
-- **No `[allow]` block** = today's behavior (no root ceiling; packages and
-  overrides behave exactly as before). `tau check` emits a **warning** — "no
-  constitution declared" — to nudge toward adding one.
+- **No `[allow]` block** = **hard error `GOV000`** at `tau build` / `tau run` /
+  `tau check` (exit 2): "no constitution declared." A workflow does not build or
+  run ungoverned unless the author explicitly asks.
+- **Opt out per invocation:**
+  - `--allow-ungoverned` — proceed despite a *missing* `[allow]` ceiling
+    (ungoverned build/run, by explicit choice).
+  - `--no-governance` — skip governance checking even when a ceiling *does*
+    exist; the bundle records the governance verdict as `skipped`, so the
+    escape is auditable in the artifact.
 - **An `[allow]` block present** = strict. Anything unlisted is denied (§2's
   deny-by-default within `[allow]`, and §3's closed-world for references).
 
-This lets EPIC 1 ship without migrating every existing project and fixture,
-while making the strictness bite the moment an author writes `[allow]`.
+Existing projects and fixtures adopt an `[allow]` block (or an explicit opt-out
+flag) to build; the strictness bites the moment an author writes `[allow]`, and
+the *absence* of one is now surfaced as an error rather than tolerated silently.
 
 ## Consequences
 
@@ -221,13 +231,15 @@ while making the strictness bite the moment an author writes `[allow]`.
 | **Coarse category ceiling** (`network = ["*"]`, `filesystem = ["read","write"]`) distinct from the fine-grained `Capability`. | Two vocabularies plus a mapping; lattice links stop being homogeneous (root⊇agent coarse-vs-fine, agent⊇tool fine-vs-fine). Conviction 3 requires uniform declaration. The coarse forms become *lint-detectable patterns within the same shape* (Story 1.6), not a separate type. |
 | **`[allow.*]` as a thin name allow-list** (registers existence only, carries no ceiling). | Cannot stop a registered MCP from declaring wider network reach than the constitution intends; the registry would not participate in the lattice. Fails EPIC 1's goal of a governed resource ceiling. |
 | **`[allow.*]` as the canonical home, relocating concrete config (urls, bindings) into `[allow]`.** | Mixes governance with configuration noise; `[allow]` stops reading as a pure constitution. The chosen model keeps the *ceiling* in `[allow]` (incl. the url-as-grant for MCP) while excluding incidental config. |
-| **Strict deny-all when `[allow]` is absent.** | Instantly breaks every existing project and fixture; contradicts the philosophy's progressive-disclosure stance. Opt-in achieves the same strictness the moment `[allow]` is written, without a forced migration. |
+| **Strict deny-all when `[allow]` is absent** (no escape hatch). | A *silent* strict-by-default instantly breaks every existing project and fixture. What shipped (D2 / ADR-0059) is the middle ground §5 describes: a missing `[allow]` is a hard error (`GOV000`) **with an explicit per-invocation opt-out** (`--allow-ungoverned` / `--no-governance`), so the strictness is the default but the migration path stays open and auditable. |
 | **Enforce only root ⊇ agent in EPIC 1; let EPIC 4 define the rest of the lattice.** | A constitutional ADR should define the whole rule once. Declaring all five links now (even with staged enforcement) prevents EPIC 4 from redesigning the envelope contract. |
 
 ## References
 
 - ADR-0055 — tau identity; `[allow]` is the governance section of the authoring
   contract (not a separate ABI).
+- ADR-0059 — governance build gate (D2): a missing `[allow]` is a hard error
+  (`GOV000`) with `--allow-ungoverned` / `--no-governance` opt-out (§5).
 - ADR-0052 — per-agent model resolution (`[models]`, folded into
   `[allow.models]`).
 - ADR-0032 — `CapabilityOverride` relocation to `tau-pkg`.
