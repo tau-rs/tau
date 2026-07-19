@@ -29,8 +29,8 @@ pub fn to_canonical_bytes(module: &IrModule) -> Vec<u8> {
 #[cfg(test)]
 mod pipeline_canonical_tests {
     use super::*;
-    use crate::decode::from_canonical_bytes;
     use crate::check::{Check, CheckVerify, Condition, JudgeRef, Locus, OnFail, RetryPolicy};
+    use crate::decode::from_canonical_bytes;
     use crate::ids::{AgentId, CheckId, PipelineStepId};
     use crate::module::{IrFormatVersion, IrModule, Workflow};
     use crate::pipeline::{Pipeline, PipelineStep, StepRun};

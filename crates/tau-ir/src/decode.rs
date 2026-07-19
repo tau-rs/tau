@@ -1,9 +1,9 @@
-//! Version-gated, closed decode of canonical IR bytes.
+//! Version-gated decode of canonical IR bytes.
 //!
 //! Two phases: peek `ir_format` and apply the semver acceptance window
-//! (accept ⟺ major == CURRENT.major ∧ minor ≤ CURRENT.minor), then a
-//! `deny_unknown_fields` full decode. Within an accepted window an unknown
-//! field means a corrupt or lying module — rejected via the serde error.
+//! (accept ⟺ major == CURRENT.major ∧ minor ≤ CURRENT.minor), then a full
+//! decode. Closing the decode with `deny_unknown_fields` is added in a
+//! follow-up task; this commit only gates the version.
 
 use alloc::string::{String, ToString};
 use serde::Deserialize;
@@ -37,18 +37,19 @@ pub enum DecodeError {
         /// Why it could not be parsed.
         detail: String,
     },
-    /// serde-level decode failure — including an unknown field inside an
-    /// otherwise-accepted version window (`deny_unknown_fields`).
+    /// A serde-level decode failure (malformed JSON, wrong shape, etc.).
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
 }
 
 /// Minimal partial-decode struct: peek ONLY `ir_format`. No
 /// `deny_unknown_fields` here, so unknown fields from a newer minor do not
-/// mask the version error.
+/// mask the version error. `ir_format` is `Option` so a totally-absent key
+/// is reported as [`DecodeError::BadFormat`] instead of a generic serde
+/// "missing field" error.
 #[derive(Deserialize)]
 struct FormatPeek {
-    ir_format: IrFormatVersion,
+    ir_format: Option<IrFormatVersion>,
 }
 
 /// Parse `vMAJOR.MINOR.PATCH` → `(major, minor, patch)`. Tolerates a missing
@@ -66,11 +67,19 @@ fn parse_semver(s: &str) -> Result<(u64, u64, u64), ()> {
 }
 
 /// Deserialize canonical bytes to an [`IrModule`], enforcing the `ir_format`
-/// acceptance window and a closed (`deny_unknown_fields`) decode.
+/// acceptance window, then decoding the full module.
 pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, DecodeError> {
     // Phase 1: peek ir_format only.
     let peek: FormatPeek = serde_json::from_slice(bytes)?;
-    let found = peek.ir_format.0;
+    let found = match peek.ir_format {
+        Some(v) => v.0,
+        None => {
+            return Err(DecodeError::BadFormat {
+                found: alloc::string::String::new(),
+                detail: "missing ir_format field".into(),
+            })
+        }
+    };
     let current = IrFormatVersion::CURRENT;
 
     let (fmaj, fmin, _) = parse_semver(&found).map_err(|_| DecodeError::BadFormat {
@@ -93,7 +102,7 @@ pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, DecodeError> {
         });
     }
 
-    // Phase 3: closed full decode (deny_unknown_fields lands in Task 2).
+    // Phase 3: full decode (deny_unknown_fields closing lands in Task 2).
     let module: IrModule = serde_json::from_slice(bytes)?;
     Ok(module)
 }
@@ -167,6 +176,21 @@ mod tests {
         let bytes = module_at("banana");
         assert!(matches!(
             from_canonical_bytes(&bytes),
+            Err(DecodeError::BadFormat { .. })
+        ));
+    }
+
+    #[test]
+    fn missing_ir_format_field_is_bad_format() {
+        let bytes = module_at("v2.4.0");
+        let json = alloc::string::String::from_utf8(bytes).unwrap();
+        let stripped = json.replace("\"ir_format\":\"v2.4.0\",", "");
+        assert_ne!(
+            stripped, json,
+            "expected ir_format key to be present and removable"
+        );
+        assert!(matches!(
+            from_canonical_bytes(stripped.as_bytes()),
             Err(DecodeError::BadFormat { .. })
         ));
     }
