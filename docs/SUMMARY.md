@@ -137,7 +137,8 @@
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
 - [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
 - [ADR-0060 — Bundle content-addressed asset store](decisions/0060-bundle-asset-store.md)
-- [ADR-0061 — One host semantic: exact hostnames + a typed `any`](decisions/0061-one-host-semantic-exact-typed-any.md)
+- [ADR-0061 — Build links; verified LinkRecord](decisions/0061-build-links-verified-linkrecord.md)
+- [ADR-0062 — One host semantic: exact hostnames + a typed `any`](decisions/0062-one-host-semantic-exact-typed-any.md)
 
 # Retrospectives
 

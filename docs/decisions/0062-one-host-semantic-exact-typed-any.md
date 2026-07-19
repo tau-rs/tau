@@ -1,4 +1,4 @@
-# ADR-0061: One host semantic — exact hostnames + a typed `any`; no derived hosts
+# ADR-0062: One host semantic — exact hostnames + a typed `any`; no derived hosts
 
 **Status:** Accepted
 **Date:** 2026-07-18

@@ -3,7 +3,7 @@
 **Status:** approved (brainstorm) — ready for implementation plan
 **Date:** 2026-07-18
 **Branch target:** `main` @ `d678802d`
-**ADR:** 0061 (0057 is taken by open PR #423; 0058 is control-flow)
+**ADR:** 0062 (0057 is taken by open PR #423; 0058 is control-flow)
 **Origin:** handoff D4-B (`.context/attachments/55UnJ6/…`), verified against the tree 2026-07-18
 
 ## Problem
@@ -248,7 +248,7 @@ Plus:
 
 - **`hosts = ["*"]`**: none in any manifest/fixture (verified). Only prose ref is
   `docs/decisions/0019-per-host-network-filter.md:105` (superseded ADR) — leave,
-  or add a one-line "superseded by 0061" note.
+  or add a one-line "superseded by 0062" note.
 - **`methods = []`**: `tau-cli/tests/cmd_build_mcp.rs:260`,
   `tau-sandbox-native/src/light.rs:376`, and the `subset.rs` test corpus. Audit
   each: if it meant "all methods", drop the key (→ `None`); if it genuinely meant
@@ -259,7 +259,7 @@ Plus:
 
 ## Deliverables & conventions
 
-- **ADR 0061** — "one host semantic: exact + typed any; no derived hosts" — plus
+- **ADR 0062** — "one host semantic: exact + typed any; no derived hosts" — plus
   `docs/SUMMARY.md` entry.
 - One `feat/*` branch → single PR to `main`; ordered commits (domain → consumers →
   docs). Compiles green only at end of the consumers commit — expected, CI gates on
