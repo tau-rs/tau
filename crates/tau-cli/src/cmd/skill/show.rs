@@ -59,8 +59,18 @@ fn cap_to_json(c: &tau_domain::Capability) -> CapabilityJson {
         }
         C::Network(Net::Http { hosts, methods, .. }) => {
             out.kind = "net.http".into();
-            out.hosts = Some(hosts.clone());
-            out.methods = Some(methods.clone());
+            // `Any` renders as the literal "any" sentinel; `Exact` as its
+            // sorted lowercase hosts.
+            out.hosts = Some(if hosts.is_any() {
+                vec!["any".to_string()]
+            } else {
+                hosts.exact_hosts()
+            });
+            // `methods == None` means "all methods" (unrestricted) — leave the
+            // display field absent; `Some` renders the canonical UPPER verbs.
+            out.methods = methods
+                .as_ref()
+                .map(|set| set.iter().map(|m| m.as_str().to_string()).collect());
         }
         C::Process(Proc::Spawn { commands, .. }) => {
             out.kind = "process.spawn".into();
