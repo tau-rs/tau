@@ -349,11 +349,17 @@ mod tests {
 
     #[test]
     fn meet_exact_intersection_new_pattern() {
-        assert_eq!(glob_meet(&["/a/**".into()], &["/*/b/**".into()]), vec!["/a/b/**".to_string()]);
+        assert_eq!(
+            glob_meet(&["/a/**".into()], &["/*/b/**".into()]),
+            vec!["/a/b/**".to_string()]
+        );
     }
     #[test]
     fn meet_smaller_operand() {
-        assert_eq!(glob_meet(&["/a/*".into()], &["/a/**".into()]), vec!["/a/*".to_string()]);
+        assert_eq!(
+            glob_meet(&["/a/*".into()], &["/a/**".into()]),
+            vec!["/a/*".to_string()]
+        );
     }
     #[test]
     fn meet_disjoint_is_empty() {
@@ -361,15 +367,24 @@ mod tests {
     }
     #[test]
     fn meet_literal_under_star() {
-        assert_eq!(glob_meet(&["/a/b".into()], &["/a/*".into()]), vec!["/a/b".to_string()]);
+        assert_eq!(
+            glob_meet(&["/a/b".into()], &["/a/*".into()]),
+            vec!["/a/b".to_string()]
+        );
     }
     #[test]
     fn canon_absorbs_redundant() {
-        assert_eq!(glob_canon(&["/a/**".into(), "/a/b/**".into()]), vec!["/a/**".to_string()]);
+        assert_eq!(
+            glob_canon(&["/a/**".into(), "/a/b/**".into()]),
+            vec!["/a/**".to_string()]
+        );
     }
     #[test]
     fn canon_normalizes_dotdot() {
-        assert_eq!(glob_canon(&["/proj/../etc/**".into()]), vec!["/etc/**".to_string()]);
+        assert_eq!(
+            glob_canon(&["/proj/../etc/**".into()]),
+            vec!["/etc/**".to_string()]
+        );
     }
     #[test]
     fn meet_is_subset_of_both_operands() {

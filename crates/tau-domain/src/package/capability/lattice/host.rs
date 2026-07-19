@@ -5,11 +5,16 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-enum Host<'a> { Exact(&'a str), Suffix(&'a str) } // Suffix("example.com") = *.example.com
+enum Host<'a> {
+    Exact(&'a str),
+    Suffix(&'a str),
+} // Suffix("example.com") = *.example.com
 
 fn parse(h: &str) -> Option<Host<'_>> {
     if let Some(sfx) = h.strip_prefix("*.") {
-        if sfx.is_empty() || sfx.contains('*') { return None; }
+        if sfx.is_empty() || sfx.contains('*') {
+            return None;
+        }
         Some(Host::Suffix(sfx))
     } else if h.contains('*') {
         None
@@ -89,34 +94,66 @@ pub fn host_canon(hosts: &[String]) -> Vec<String> {
 }
 
 fn push_unique(v: &mut Vec<String>, s: &str) {
-    if !v.iter().any(|e| e == s) { v.push(s.to_string()); }
+    if !v.iter().any(|e| e == s) {
+        v.push(s.to_string());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn exact_equal() { assert!(host_subset("api.example.com", "api.example.com")); }
-    #[test] fn exact_under_suffix() { assert!(host_subset("api.example.com", "*.example.com")); }
-    #[test] fn suffix_under_suffix() { assert!(host_subset("*.a.example.com", "*.example.com")); }
-    #[test] fn suffix_not_under_exact() { assert!(!host_subset("*.example.com", "api.example.com")); }
-    #[test] fn disjoint() { assert!(!host_subset("api.other.com", "*.example.com")); }
-    #[test] fn embedded_star_fails_closed() { assert!(!host_subset("a*b.example.com", "*.example.com")); }
-    #[test] fn meet_exact_and_suffix() {
-        assert_eq!(host_meet(&["api.example.com".into()], &["*.example.com".into()]),
-                   vec!["api.example.com".to_string()]);
+    #[test]
+    fn exact_equal() {
+        assert!(host_subset("api.example.com", "api.example.com"));
     }
-    #[test] fn meet_disjoint_empty() {
+    #[test]
+    fn exact_under_suffix() {
+        assert!(host_subset("api.example.com", "*.example.com"));
+    }
+    #[test]
+    fn suffix_under_suffix() {
+        assert!(host_subset("*.a.example.com", "*.example.com"));
+    }
+    #[test]
+    fn suffix_not_under_exact() {
+        assert!(!host_subset("*.example.com", "api.example.com"));
+    }
+    #[test]
+    fn disjoint() {
+        assert!(!host_subset("api.other.com", "*.example.com"));
+    }
+    #[test]
+    fn embedded_star_fails_closed() {
+        assert!(!host_subset("a*b.example.com", "*.example.com"));
+    }
+    #[test]
+    fn meet_exact_and_suffix() {
+        assert_eq!(
+            host_meet(&["api.example.com".into()], &["*.example.com".into()]),
+            vec!["api.example.com".to_string()]
+        );
+    }
+    #[test]
+    fn meet_disjoint_empty() {
         assert!(host_meet(&["a.com".into()], &["*.example.com".into()]).is_empty());
     }
-    #[test] fn canon_absorbs_redundant_host() {
+    #[test]
+    fn canon_absorbs_redundant_host() {
         // api.example.com ⊆ *.example.com → absorbed
-        assert_eq!(host_canon(&["*.example.com".into(), "api.example.com".into()]),
-                   vec!["*.example.com".to_string()]);
+        assert_eq!(
+            host_canon(&["*.example.com".into(), "api.example.com".into()]),
+            vec!["*.example.com".to_string()]
+        );
     }
-    #[test] fn meet_absorbs_redundant_result() {
+    #[test]
+    fn meet_absorbs_redundant_result() {
         // a=*.example.com ∩ b=(*.example.com ∪ api.example.com) = *.example.com
-        assert_eq!(host_meet(&["*.example.com".into()],
-                             &["*.example.com".into(), "api.example.com".into()]),
-                   vec!["*.example.com".to_string()]);
+        assert_eq!(
+            host_meet(
+                &["*.example.com".into()],
+                &["*.example.com".into(), "api.example.com".into()]
+            ),
+            vec!["*.example.com".to_string()]
+        );
     }
 }

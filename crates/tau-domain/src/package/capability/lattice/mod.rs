@@ -4,11 +4,11 @@
 pub mod glob;
 pub mod host;
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use crate::{
     AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
 };
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 /// A single child capability that exceeds the parent ceiling. The caller
 /// (1.4 / 1.5) prepends agent/link framing; this type names only *what*
@@ -93,8 +93,14 @@ fn same_kind(a: &Capability, b: &Capability) -> bool {
 fn mergeable(a: &Capability, b: &Capability) -> bool {
     match (a, b) {
         (
-            Capability::Custom { name: na, params: pa },
-            Capability::Custom { name: nb, params: pb },
+            Capability::Custom {
+                name: na,
+                params: pa,
+            },
+            Capability::Custom {
+                name: nb,
+                params: pb,
+            },
         ) => na == nb && pa == pb,
         // Multi-dimensional rectangles never fold (would bounding-box).
         (
@@ -139,13 +145,20 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
             let eligible: Vec<String> = parents
                 .iter()
                 .filter_map(|p| match p {
-                    Capability::Filesystem(FsCapability::Write { paths: pp, max_bytes: pb }) => {
+                    Capability::Filesystem(FsCapability::Write {
+                        paths: pp,
+                        max_bytes: pb,
+                    }) => {
                         let covers = match (pb, max_bytes) {
-                            (None, _) => true,             // parent unlimited covers any child
-                            (Some(_), None) => false,      // child unlimited, parent capped
+                            (None, _) => true,        // parent unlimited covers any child
+                            (Some(_), None) => false, // child unlimited, parent capped
                             (Some(pbv), Some(cbv)) => pbv >= cbv,
                         };
-                        if covers { Some(pp.clone()) } else { None }
+                        if covers {
+                            Some(pp.clone())
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 })
@@ -163,11 +176,10 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
                 let hosts_for_m: Vec<String> = parents
                     .iter()
                     .filter_map(|p| match p {
-                        Capability::Network(NetCapability::Http { hosts: ph, methods: pm })
-                            if pm.contains(m) =>
-                        {
-                            Some(ph.clone())
-                        }
+                        Capability::Network(NetCapability::Http {
+                            hosts: ph,
+                            methods: pm,
+                        }) if pm.contains(m) => Some(ph.clone()),
                         _ => None,
                     })
                     .flatten()
@@ -317,49 +329,93 @@ pub fn meet(a: &[Capability], b: &[Capability]) -> Vec<Capability> {
 fn meet_pair(a: &Capability, b: &Capability) -> Option<Capability> {
     use Capability::*;
     match (a, b) {
-        (Filesystem(FsCapability::Read { paths: pa }), Filesystem(FsCapability::Read { paths: pb })) => {
+        (
+            Filesystem(FsCapability::Read { paths: pa }),
+            Filesystem(FsCapability::Read { paths: pb }),
+        ) => {
             let m = glob_meet(pa, pb);
             (!m.is_empty()).then_some(Filesystem(FsCapability::Read { paths: m }))
         }
-        (Filesystem(FsCapability::Exec { paths: pa }), Filesystem(FsCapability::Exec { paths: pb })) => {
+        (
+            Filesystem(FsCapability::Exec { paths: pa }),
+            Filesystem(FsCapability::Exec { paths: pb }),
+        ) => {
             let m = glob_meet(pa, pb);
             (!m.is_empty()).then_some(Filesystem(FsCapability::Exec { paths: m }))
         }
         (
-            Filesystem(FsCapability::Write { paths: pa, max_bytes: ma }),
-            Filesystem(FsCapability::Write { paths: pb, max_bytes: mb }),
+            Filesystem(FsCapability::Write {
+                paths: pa,
+                max_bytes: ma,
+            }),
+            Filesystem(FsCapability::Write {
+                paths: pb,
+                max_bytes: mb,
+            }),
         ) => {
             let m = glob_meet(pa, pb);
-            if m.is_empty() { return None; }
+            if m.is_empty() {
+                return None;
+            }
             let max_bytes = min_max_bytes(*ma, *mb);
-            Some(Filesystem(FsCapability::Write { paths: m, max_bytes }))
+            Some(Filesystem(FsCapability::Write {
+                paths: m,
+                max_bytes,
+            }))
         }
         (
-            Network(NetCapability::Http { hosts: ha, methods: mea }),
-            Network(NetCapability::Http { hosts: hb, methods: meb }),
+            Network(NetCapability::Http {
+                hosts: ha,
+                methods: mea,
+            }),
+            Network(NetCapability::Http {
+                hosts: hb,
+                methods: meb,
+            }),
         ) => {
             let hosts = host_meet(ha, hb);
             let methods = str_intersect(mea, meb);
             (!hosts.is_empty() && !methods.is_empty())
                 .then_some(Network(NetCapability::Http { hosts, methods }))
         }
-        (Process(ProcessCapability::Spawn { commands: a }), Process(ProcessCapability::Spawn { commands: b })) => {
+        (
+            Process(ProcessCapability::Spawn { commands: a }),
+            Process(ProcessCapability::Spawn { commands: b }),
+        ) => {
             let c = str_intersect(a, b);
             (!c.is_empty()).then_some(Process(ProcessCapability::Spawn { commands: c }))
         }
-        (Agent(AgentCapability::Spawn { allowed_kinds: a }), Agent(AgentCapability::Spawn { allowed_kinds: b })) => {
+        (
+            Agent(AgentCapability::Spawn { allowed_kinds: a }),
+            Agent(AgentCapability::Spawn { allowed_kinds: b }),
+        ) => {
             let k = str_intersect(a, b);
             (!k.is_empty()).then_some(Agent(AgentCapability::Spawn { allowed_kinds: k }))
         }
-        (Skill(SkillCapability::Spawn { allowed_skills: a }), Skill(SkillCapability::Spawn { allowed_skills: b })) => {
+        (
+            Skill(SkillCapability::Spawn { allowed_skills: a }),
+            Skill(SkillCapability::Spawn { allowed_skills: b }),
+        ) => {
             let s = str_intersect(a, b);
             (!s.is_empty()).then_some(Skill(SkillCapability::Spawn { allowed_skills: s }))
         }
-        (TaskList { mode: a }, TaskList { mode: b }) => min_mode(a, b, true).map(|mode| TaskList { mode }),
-        (Plan { mode: a }, Plan { mode: b }) => min_mode(a, b, false).map(|mode| Plan { mode }),
-        (Custom { name: na, params: pa }, Custom { name: nb, params: pb }) if na == nb && pa == pb => {
-            Some(Custom { name: na.clone(), params: pa.clone() })
+        (TaskList { mode: a }, TaskList { mode: b }) => {
+            min_mode(a, b, true).map(|mode| TaskList { mode })
         }
+        (Plan { mode: a }, Plan { mode: b }) => min_mode(a, b, false).map(|mode| Plan { mode }),
+        (
+            Custom {
+                name: na,
+                params: pa,
+            },
+            Custom {
+                name: nb,
+                params: pb,
+            },
+        ) if na == nb && pa == pb => Some(Custom {
+            name: na.clone(),
+            params: pa.clone(),
+        }),
         _ => None,
     }
 }
@@ -382,11 +438,20 @@ fn min_mode(a: &str, b: &str, allow_manage: bool) -> Option<String> {
     let ra = mode_rank(a, allow_manage)?;
     let rb = mode_rank(b, allow_manage)?;
     let lo = ra.min(rb);
-    Some(match lo { 0 => "read", 1 => "write", _ => "manage" }.to_string())
+    Some(
+        match lo {
+            0 => "read",
+            1 => "write",
+            _ => "manage",
+        }
+        .to_string(),
+    )
 }
 
 fn push_cap(out: &mut Vec<Capability>, cap: Capability) {
-    if !out.contains(&cap) { out.push(cap); }
+    if !out.contains(&cap) {
+        out.push(cap);
+    }
 }
 
 /// Canonical form of a capability set. Single-dimension same-kind caps are
@@ -415,17 +480,18 @@ pub fn canon_caps(caps: &[Capability]) -> Vec<Capability> {
     let mut kept: Vec<Capability> = Vec::new();
     'outer: for (i, ci) in canon.iter().enumerate() {
         for (j, cj) in canon.iter().enumerate() {
-            if i != j
-                && cap_contained(ci, cj)
-                && !(cap_contained(cj, ci) && j < i)
-            {
+            if i != j && cap_contained(ci, cj) && !(cap_contained(cj, ci) && j < i) {
                 continue 'outer;
             }
         }
         kept.push(ci.clone());
     }
     // 4. deterministic total order.
-    kept.sort_by(|x, y| kind_str(x).cmp(kind_str(y)).then_with(|| render_cap(x).cmp(&render_cap(y))));
+    kept.sort_by(|x, y| {
+        kind_str(x)
+            .cmp(kind_str(y))
+            .then_with(|| render_cap(x).cmp(&render_cap(y)))
+    });
     kept
 }
 
@@ -445,17 +511,32 @@ fn cap_contained(inner: &Capability, outer: &Capability) -> bool {
 fn union_into(dst: &mut Capability, src: &Capability) {
     use Capability::*;
     match (dst, src) {
-        (Filesystem(FsCapability::Read { paths: d }), Filesystem(FsCapability::Read { paths: s }))
-        | (Filesystem(FsCapability::Exec { paths: d }), Filesystem(FsCapability::Exec { paths: s })) => {
+        (
+            Filesystem(FsCapability::Read { paths: d }),
+            Filesystem(FsCapability::Read { paths: s }),
+        )
+        | (
+            Filesystem(FsCapability::Exec { paths: d }),
+            Filesystem(FsCapability::Exec { paths: s }),
+        ) => {
             d.extend(s.iter().cloned());
         }
-        (Process(ProcessCapability::Spawn { commands: d }), Process(ProcessCapability::Spawn { commands: s })) => {
+        (
+            Process(ProcessCapability::Spawn { commands: d }),
+            Process(ProcessCapability::Spawn { commands: s }),
+        ) => {
             d.extend(s.iter().cloned());
         }
-        (Agent(AgentCapability::Spawn { allowed_kinds: d }), Agent(AgentCapability::Spawn { allowed_kinds: s })) => {
+        (
+            Agent(AgentCapability::Spawn { allowed_kinds: d }),
+            Agent(AgentCapability::Spawn { allowed_kinds: s }),
+        ) => {
             d.extend(s.iter().cloned());
         }
-        (Skill(SkillCapability::Spawn { allowed_skills: d }), Skill(SkillCapability::Spawn { allowed_skills: s })) => {
+        (
+            Skill(SkillCapability::Spawn { allowed_skills: d }),
+            Skill(SkillCapability::Spawn { allowed_skills: s }),
+        ) => {
             d.extend(s.iter().cloned());
         }
         (TaskList { mode: d }, TaskList { mode: s }) if mode_rank(s, true) > mode_rank(d, true) => {
@@ -472,32 +553,55 @@ fn union_into(dst: &mut Capability, src: &Capability) {
 /// Canonicalize one merged cap's lists; `None` if its grant list is empty (⊥).
 fn canon_one(c: &Capability) -> Option<Capability> {
     use Capability::*;
-    fn sorted(v: &[String]) -> Vec<String> { let mut o = v.to_vec(); o.sort(); o.dedup(); o }
+    fn sorted(v: &[String]) -> Vec<String> {
+        let mut o = v.to_vec();
+        o.sort();
+        o.dedup();
+        o
+    }
     let cc = match c {
-        Filesystem(FsCapability::Read { paths }) => Filesystem(FsCapability::Read { paths: glob_canon(paths) }),
-        Filesystem(FsCapability::Exec { paths }) => Filesystem(FsCapability::Exec { paths: glob_canon(paths) }),
-        Filesystem(FsCapability::Write { paths, max_bytes }) =>
-            Filesystem(FsCapability::Write { paths: glob_canon(paths), max_bytes: *max_bytes }),
-        Network(NetCapability::Http { hosts, methods }) =>
-            Network(NetCapability::Http { hosts: host_canon(hosts), methods: sorted(methods) }),
-        Process(ProcessCapability::Spawn { commands }) =>
-            Process(ProcessCapability::Spawn { commands: sorted(commands) }),
-        Agent(AgentCapability::Spawn { allowed_kinds }) =>
-            Agent(AgentCapability::Spawn { allowed_kinds: sorted(allowed_kinds) }),
-        Skill(SkillCapability::Spawn { allowed_skills }) =>
-            Skill(SkillCapability::Spawn { allowed_skills: sorted(allowed_skills) }),
+        Filesystem(FsCapability::Read { paths }) => Filesystem(FsCapability::Read {
+            paths: glob_canon(paths),
+        }),
+        Filesystem(FsCapability::Exec { paths }) => Filesystem(FsCapability::Exec {
+            paths: glob_canon(paths),
+        }),
+        Filesystem(FsCapability::Write { paths, max_bytes }) => Filesystem(FsCapability::Write {
+            paths: glob_canon(paths),
+            max_bytes: *max_bytes,
+        }),
+        Network(NetCapability::Http { hosts, methods }) => Network(NetCapability::Http {
+            hosts: host_canon(hosts),
+            methods: sorted(methods),
+        }),
+        Process(ProcessCapability::Spawn { commands }) => Process(ProcessCapability::Spawn {
+            commands: sorted(commands),
+        }),
+        Agent(AgentCapability::Spawn { allowed_kinds }) => Agent(AgentCapability::Spawn {
+            allowed_kinds: sorted(allowed_kinds),
+        }),
+        Skill(SkillCapability::Spawn { allowed_skills }) => Skill(SkillCapability::Spawn {
+            allowed_skills: sorted(allowed_skills),
+        }),
         other => other.clone(),
     };
     let empty = match &cc {
-        Filesystem(FsCapability::Read { paths } | FsCapability::Exec { paths } | FsCapability::Write { paths, .. }) =>
-            paths.is_empty(),
+        Filesystem(
+            FsCapability::Read { paths }
+            | FsCapability::Exec { paths }
+            | FsCapability::Write { paths, .. },
+        ) => paths.is_empty(),
         Network(NetCapability::Http { hosts, methods }) => hosts.is_empty() || methods.is_empty(),
         Process(ProcessCapability::Spawn { commands }) => commands.is_empty(),
         Agent(AgentCapability::Spawn { allowed_kinds }) => allowed_kinds.is_empty(),
         Skill(SkillCapability::Spawn { allowed_skills }) => allowed_skills.is_empty(),
         _ => false,
     };
-    if empty { None } else { Some(cc) }
+    if empty {
+        None
+    } else {
+        Some(cc)
+    }
 }
 
 fn render_cap(c: &Capability) -> String {
@@ -506,20 +610,38 @@ fn render_cap(c: &Capability) -> String {
     match c {
         Capability::Filesystem(FsCapability::Read { paths })
         | Capability::Filesystem(FsCapability::Exec { paths }) => {
-            for p in paths { s.push('|'); s.push_str(p); }
+            for p in paths {
+                s.push('|');
+                s.push_str(p);
+            }
         }
         Capability::Filesystem(FsCapability::Write { paths, max_bytes }) => {
-            for p in paths { s.push('|'); s.push_str(p); }
+            for p in paths {
+                s.push('|');
+                s.push_str(p);
+            }
             match max_bytes {
-                Some(n) => { s.push('~'); s.push_str(&n.to_string()); }
+                Some(n) => {
+                    s.push('~');
+                    s.push_str(&n.to_string());
+                }
                 None => s.push_str("~*"),
             }
         }
         Capability::Network(NetCapability::Http { hosts, methods }) => {
-            for h in hosts { s.push('|'); s.push_str(h); }
-            for m in methods { s.push('#'); s.push_str(m); }
+            for h in hosts {
+                s.push('|');
+                s.push_str(h);
+            }
+            for m in methods {
+                s.push('#');
+                s.push_str(m);
+            }
         }
-        Capability::Custom { name, .. } => { s.push('|'); s.push_str(name); }
+        Capability::Custom { name, .. } => {
+            s.push('|');
+            s.push_str(name);
+        }
         _ => {}
     }
     s
@@ -591,7 +713,9 @@ mod tests {
     #[test]
     fn meet_drops_kind_absent_in_one() {
         let a = vec![read(&["/a/**"])];
-        let b = vec![Capability::Process(ProcessCapability::Spawn { commands: vec!["ls".into()] })];
+        let b = vec![Capability::Process(ProcessCapability::Spawn {
+            commands: vec!["ls".into()],
+        })];
         assert!(meet(&a, &b).is_empty());
     }
 
@@ -619,11 +743,20 @@ mod tests {
         let mut p2: BTreeMap<String, Value> = BTreeMap::new();
         p2.insert("k".into(), Value::Bool(true));
         let a = vec![
-            Capability::Custom { name: "x".into(), params: p1.clone() },
-            Capability::Custom { name: "x".into(), params: p2 },
+            Capability::Custom {
+                name: "x".into(),
+                params: p1.clone(),
+            },
+            Capability::Custom {
+                name: "x".into(),
+                params: p2,
+            },
         ];
         assert_eq!(canon_caps(&a).len(), 2); // distinct params ⟹ not merged
-        let b = vec![Capability::Custom { name: "x".into(), params: p1 }];
+        let b = vec![Capability::Custom {
+            name: "x".into(),
+            params: p1,
+        }];
         assert!(capability_subset(&a, &b).is_err());
     }
 
@@ -644,22 +777,34 @@ mod tests {
     fn canon_keeps_incomparable_http_rectangles() {
         // api×GET and *.ex×POST are incomparable → both survive (NOT
         // bounding-boxed into *.ex×{GET,POST}).
-        let a = vec![http(&["api.example.com"], &["GET"]), http(&["*.example.com"], &["POST"])];
+        let a = vec![
+            http(&["api.example.com"], &["GET"]),
+            http(&["*.example.com"], &["POST"]),
+        ];
         assert_eq!(canon_caps(&a).len(), 2);
     }
 
     #[test]
     fn canon_absorbs_contained_http_rectangle() {
         // api×GET ⊆ *.ex×{GET,POST} → absorbed to the single wider rectangle.
-        let a = vec![http(&["api.example.com"], &["GET"]), http(&["*.example.com"], &["GET", "POST"])];
-        assert_eq!(canon_caps(&a), vec![http(&["*.example.com"], &["GET", "POST"])]);
+        let a = vec![
+            http(&["api.example.com"], &["GET"]),
+            http(&["*.example.com"], &["GET", "POST"]),
+        ];
+        assert_eq!(
+            canon_caps(&a),
+            vec![http(&["*.example.com"], &["GET", "POST"])]
+        );
     }
 
     #[test]
     fn subset_and_meet_sound_for_multientry_http() {
         // Ceiling grants (api, GET) and (*.ex, POST) — never (*.ex, GET).
         let a = vec![http(&["*.example.com"], &["GET"])];
-        let b = vec![http(&["api.example.com"], &["GET"]), http(&["*.example.com"], &["POST"])];
+        let b = vec![
+            http(&["api.example.com"], &["GET"]),
+            http(&["*.example.com"], &["POST"]),
+        ];
         // subset: no single ceiling entry grants (*.ex, GET) → denied.
         assert!(capability_subset(&a, &b).is_err());
         // meet must NOT widen: the only overlap is api.example.com × GET.
@@ -686,8 +831,13 @@ mod tests {
         prop::collection::vec(seg, 1..4).prop_flat_map(|segs| {
             prop_oneof![Just(false), Just(true)].prop_map(move |dbl| {
                 let mut p = String::new();
-                for s in &segs { p.push('/'); p.push_str(s); }
-                if dbl { p.push_str("/**"); }
+                for s in &segs {
+                    p.push('/');
+                    p.push_str(s);
+                }
+                if dbl {
+                    p.push_str("/**");
+                }
                 p
             })
         })
@@ -697,16 +847,20 @@ mod tests {
     // yield two Reads → the merge path in canon_caps).
     fn cap_strat() -> impl Strategy<Value = Capability> {
         prop_oneof![
-            prop::collection::vec(path_strat(), 1..3).prop_map(|p| {
-                read(&p.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-            }),
-            prop::collection::vec(prop_oneof![Just("ls"), Just("cat"), Just("rm")], 1..3).prop_map(|c| {
-                Capability::Process(ProcessCapability::Spawn {
-                    commands: c.iter().map(|s| s.to_string()).collect(),
-                })
-            }),
+            prop::collection::vec(path_strat(), 1..3)
+                .prop_map(|p| { read(&p.iter().map(|s| s.as_str()).collect::<Vec<_>>()) }),
+            prop::collection::vec(prop_oneof![Just("ls"), Just("cat"), Just("rm")], 1..3).prop_map(
+                |c| {
+                    Capability::Process(ProcessCapability::Spawn {
+                        commands: c.iter().map(|s| s.to_string()).collect(),
+                    })
+                }
+            ),
             (
-                prop::collection::vec(prop_oneof![Just("api.example.com"), Just("*.example.com")], 1..3),
+                prop::collection::vec(
+                    prop_oneof![Just("api.example.com"), Just("*.example.com")],
+                    1..3
+                ),
                 prop::collection::vec(prop_oneof![Just("GET"), Just("POST")], 1..3),
             )
                 .prop_map(|(hosts, methods)| {
