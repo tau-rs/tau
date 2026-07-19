@@ -26,7 +26,10 @@ use crate::bundle::manifest::{BundleAgent, BundleManifest};
 use crate::bundle::verify_error::VerifyError;
 
 /// Maximum schema version this binary can verify.
-const MAX_SUPPORTED_SCHEMA_VERSION: u32 = 2;
+// v3 adds `[[trigger]]`; v4 adds the `[governance]` record. Both are
+// additive host-readable mirrors that don't change any verify step, so
+// `tau verify --bundle` / `tau run --bundle` accept them.
+const MAX_SUPPORTED_SCHEMA_VERSION: u32 = 4;
 
 /// Inputs to [`verify_bundle`].
 #[derive(Debug, Clone)]
@@ -384,6 +387,7 @@ system = "you are solo"
             output_path: None,
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         })
         .expect("build fixture bundle");
         artifact.path
@@ -457,7 +461,7 @@ system = "you are solo"
                 err,
                 VerifyError::UnsupportedSchemaVersion {
                     found: 99,
-                    supported: 2
+                    supported: 4
                 }
             ),
             "got {err:?}",
@@ -584,6 +588,7 @@ installed_at = "2024-01-01T00:00:00Z"
             output_path: None,
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         })
         .expect("build bundle with package");
         (artifact.path, pkg_dir)
@@ -671,6 +676,7 @@ system_file = "prompt.md"
             output_path: None,
             agent_filter: None,
             ir_payload: None,
+            governance: None,
         })
         .unwrap();
         // Mutate the prompt FILE after build (tau.toml unchanged, so step 6
