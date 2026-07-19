@@ -147,7 +147,7 @@ impl ToolDispatcher for CheckDispatcher {
 fn writer_agent() -> Agent {
     Agent {
         id: AgentId("writer".into()),
-        prompt: String::new(),
+        prompt: tau_ir::prompt::PromptSource::inline(""),
         model_ref: tau_ir::ModelRef {
             backend: "mock-llm".into(),
             model_id: "echo-model".into(),

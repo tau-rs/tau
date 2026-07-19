@@ -30,13 +30,14 @@ pub async fn spawn_root_agent_with_scope(
     budget: RunBudget,
     scope_root: PathBuf,
 ) -> Result<RunSnapshot, RuntimeError> {
-    use tau_ports::{DeterministicRandom, MockClock};
-
-    // Mint the run-id up front so the same id flows into the JSONL path
-    // and the RunState. We use the test-fixture clock/random until the
-    // tokio shell's `drive` entry hands us real ones (Phase β.1.4).
-    let clock: Arc<dyn tau_ports::Clock> = Arc::new(MockClock::new());
-    let random: Arc<dyn tau_ports::RandomSource> = Arc::new(DeterministicRandom::seeded(0));
+    // Mint the run-id up front so the same id flows into the JSONL path and the
+    // RunState. Use the tokio shell's real clock/random so every orchestrated run
+    // gets a unique, wall-clock-ordered ULID. (The previous MockClock +
+    // DeterministicRandom::seeded(0) minted a FIXED run-id on every call — a
+    // latent collision bug — and forced `tau-ports/test-fixtures` into the
+    // production dependency graph.)
+    let clock: Arc<dyn tau_ports::Clock> = Arc::new(crate::TokioClock);
+    let random: Arc<dyn tau_ports::RandomSource> = Arc::new(crate::OsRandom);
     let run_id = tau_runtime_core::ids::ulid(&clock, &random);
 
     // Build the JSONL subscriber via the tokio mpsc channel.

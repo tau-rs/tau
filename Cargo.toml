@@ -70,13 +70,16 @@ dlmalloc    = { version = "0.2", features = ["global"] }
 wasmtime    = "45"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
 tau-ports           = { path = "crates/tau-ports",  version = "0.1.0", default-features = false }
-tau-ir              = { path = "crates/tau-ir", version = "0.0.0" }
+tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
 tau-mcp-tokio       = { path = "crates/tau-mcp-tokio", version = "0.0.0", default-features = false }
 tau-native-tools    = { path = "crates/tau-native-tools", version = "0.0.0", default-features = false }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
-tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0" }
+# `default-features = false` so the no_std wasm guest can link this alias
+# directly (it opts into only `wasm-interpreter`/`tool-validation`). Host/std
+# consumers re-enable the full surface with `features = ["std"]`.
+tau-runtime-core    = { path = "crates/tau-runtime-core", version = "0.0.0", default-features = false }
 tau-runtime-tokio   = { path = "crates/tau-runtime-tokio", version = "0.0.0" }
 tau-plugin-protocol = { path = "crates/tau-plugin-protocol", version = "0.0.0" }
 tau-plugin-sdk      = { path = "crates/tau-plugin-sdk", version = "0.0.0" }
@@ -114,6 +117,7 @@ jsonschema      = "0.46"
 schemars        = { version = "1", default-features = false }
 foldhash     = { version = "0.2", default-features = false }
 futures-core    = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util    = { version = "0.3", default-features = false }
 hashbrown    = { version = "0.17", default-features = false, features = ["default-hasher"] }
 toml            = "1.1"
 fs4             = "0.8"

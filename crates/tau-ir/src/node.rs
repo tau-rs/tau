@@ -33,8 +33,10 @@ pub enum Node {
 pub struct Agent {
     /// Identifier within the workflow.
     pub id: AgentId,
-    /// System prompt.
-    pub prompt: String,
+    /// System prompt source: an inline literal or a content-addressed asset
+    /// reference (D6-B). `Inline` serializes as a bare string, keeping pre-2.5
+    /// modules byte-stable.
+    pub prompt: crate::prompt::PromptSource,
     /// Resolved model selection (backend + vendor id), baked at lowering.
     pub model_ref: crate::model_ref::ModelRef,
     /// Tools this agent is allowed to call.
@@ -145,7 +147,7 @@ mod tests {
     fn agent_empty_produces_omitted_from_json() {
         let agent = Agent {
             id: AgentId("gatherer".into()),
-            prompt: alloc::string::String::new(),
+            prompt: crate::prompt::PromptSource::inline(""),
             model_ref: crate::model_ref::ModelRef {
                 backend: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
@@ -172,7 +174,7 @@ mod tests {
     fn agent_output_schema_round_trips() {
         let agent = Agent {
             id: AgentId("judge".into()),
-            prompt: String::new(),
+            prompt: crate::prompt::PromptSource::inline(""),
             model_ref: crate::model_ref::ModelRef {
                 backend: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
@@ -197,7 +199,7 @@ mod tests {
     fn agent_empty_output_schema_omitted_from_json() {
         let agent = Agent {
             id: AgentId("gatherer".into()),
-            prompt: String::new(),
+            prompt: crate::prompt::PromptSource::inline(""),
             model_ref: crate::model_ref::ModelRef {
                 backend: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
@@ -224,7 +226,7 @@ mod tests {
     fn agent_durable_round_trips() {
         let agent = Agent {
             id: AgentId("fan-monitor".into()),
-            prompt: String::new(),
+            prompt: crate::prompt::PromptSource::inline(""),
             model_ref: crate::model_ref::ModelRef {
                 backend: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
@@ -250,7 +252,7 @@ mod tests {
     fn agent_non_durable_omitted_from_json() {
         let agent = Agent {
             id: AgentId("gatherer".into()),
-            prompt: String::new(),
+            prompt: crate::prompt::PromptSource::inline(""),
             model_ref: crate::model_ref::ModelRef {
                 backend: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),

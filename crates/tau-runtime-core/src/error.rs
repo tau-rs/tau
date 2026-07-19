@@ -351,6 +351,27 @@ pub enum RuntimeError {
         /// Human-readable message describing the internal failure.
         message: String,
     },
+
+    /// A `Loop` block ran `max_iters` iterations without its `until`
+    /// condition holding. A bounded loop that cannot reach its goal is a
+    /// failure, not a silent success (ADR-0058 / ADR-0059).
+    #[error("loop {step} exhausted {max_iters} iterations without its condition holding")]
+    LoopExhausted {
+        /// The pipeline-step id of the offending `Loop`.
+        step: String,
+        /// The loop's mandatory iteration bound.
+        max_iters: u64,
+    },
+
+    /// A `Suspend` block was reached. HITL checkpoint/resume lands in
+    /// EPIC 4.3; 4.2 aborts loudly rather than silently skip.
+    #[error("suspend {step} (signal {resume_signal}) is not yet implemented — lands in EPIC 4.3")]
+    SuspendNotImplemented {
+        /// The pipeline-step id of the `Suspend` block.
+        step: String,
+        /// The signal name a future 4.3 resume will wait for.
+        resume_signal: String,
+    },
 }
 
 /// Specific reason a plugin handshake (`meta.handshake` exchange)

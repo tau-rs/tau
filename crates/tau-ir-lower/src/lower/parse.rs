@@ -17,6 +17,7 @@ use tau_ir::ids::{AgentId, CheckId, PipelineStepId, StepId, ToolId};
 use tau_ir::module::Workflow;
 use tau_ir::node::{Agent, Deterministic, Tool, ToolSpec};
 use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+use tau_ir::prompt::PromptSource;
 use tau_ir::subflow::SubflowEdge;
 use tau_ir::tool_impl::{Hash256, NativeFnRef, ToolImpl};
 use tau_ir::trigger::{
@@ -98,15 +99,18 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
     for (name, entry) in config.agents.iter() {
         let agent_id = AgentId(name.clone());
         let tool_refs = entry.tool_refs.iter().cloned().map(ToolId).collect();
-        // Resolve the prompt string from the PromptEntry enum.
-        // PromptEntry::File is normalized to the path string; the
-        // interpreter (β.2.4) is responsible for loading the file.
+        // Lower the prompt source. `Inline` maps straight through. `File`
+        // still maps the PATH into an inline string here — that is the
+        // `system_file` bug (the path, not the content, becomes the prompt).
+        // The asset-store follow-up (D6-B) reads the file at build time and
+        // emits a content-addressed `PromptSource::Asset` instead; this arm
+        // is the seam for that change.
         let prompt = match &entry.prompt {
-            PromptEntry::Inline(s) => s.clone(),
-            PromptEntry::File(p) => p.to_string_lossy().into_owned(),
-            PromptEntry::None => alloc::string::String::new(),
-            // Non_exhaustive — default to empty string for any future variant.
-            _ => alloc::string::String::new(),
+            PromptEntry::Inline(s) => PromptSource::inline(s.clone()),
+            PromptEntry::File(p) => PromptSource::inline(p.to_string_lossy().into_owned()),
+            PromptEntry::None => PromptSource::inline(""),
+            // Non_exhaustive — default to empty inline for any future variant.
+            _ => PromptSource::inline(""),
         };
         agents.insert(
             agent_id.clone(),
@@ -282,17 +286,26 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
 /// Producer binding and gate resolution were performed by tau-pkg's
 /// validator (`DeliverableEntry::producer` / `::gate`), so this is a pure
 /// structural copy — no re-derivation here.
-/// Resolve a model alias to a concrete [`ModelRef`] via `[models]`.
+/// Resolve a model alias to a concrete [`ModelRef`] via `[models]`, or via
+/// `[allow.models]` when the project declares an `[allow]` ceiling (a governed
+/// project moves its alias map under `[allow.models]`, per ADR-0057 / EPIC 1.2).
 ///
 /// Infallible in practice — `validate_models` (tau-pkg) guarantees the alias
-/// exists before lowering runs; the error arm is defense-in-depth.
+/// exists in one of the two tables before lowering runs; the error arm is
+/// defense-in-depth.
 fn resolve_model_ref(
     config: &ProjectConfig,
     alias: &str,
 ) -> Result<tau_ir::model_ref::ModelRef, LowerError> {
-    let m = config.models.get(alias).ok_or_else(|| {
-        LowerError::Parse(alloc::format!("model alias `{alias}` not in [models]"))
-    })?;
+    let m = config
+        .models
+        .get(alias)
+        .or_else(|| config.allow.as_ref().and_then(|a| a.models.get(alias)))
+        .ok_or_else(|| {
+            LowerError::Parse(alloc::format!(
+                "model alias `{alias}` not in [models] or [allow.models]"
+            ))
+        })?;
     Ok(tau_ir::model_ref::ModelRef {
         backend: m.backend.clone(),
         model_id: m.model.clone(),

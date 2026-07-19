@@ -43,7 +43,28 @@ version = "^0.1"
 | Block | Cardinality | Purpose |
 |---|---|---|
 | `[project]` | exactly one | project identity. |
+| `[allow]` | zero or one | governance ceiling (the project *constitution*). |
 | `[agents.<id>]` | any | one entry per agent the project declares. |
+
+## Governance: the `[allow]` ceiling
+
+`tau build` and the dev-path `tau run` are **governed by default**
+(ADR-0057). A project `tau.toml` with no `[allow]` section is a hard
+error, `error[GOV000]: no [allow] section declared` (exit `2`). The
+`[allow]` section declares the ceiling of capabilities, model aliases,
+MCP servers and tools the project permits; every capability an agent
+or tool resolves to must fall inside it. Note that when `[allow]` is
+present, model aliases live under `[allow.models.<alias>]` rather than
+a top-level `[models]`.
+
+Scaffold one with `tau init --allow`. Two mutually-exclusive escape
+hatches waive governance and are recorded in the bundle's
+`[governance]` verdict: `--allow-ungoverned` (build/run with no ceiling
+at all → verdict `ungoverned`) and `--no-governance` (a ceiling exists
+but skip checking it → verdict `skipped`). A valid `[allow]` with
+neither flag yields verdict `governed`. The full model, including the
+`[allow]` sub-tables and running an `ungoverned` bundle, is in
+[Capabilities and consent](../explanation/capabilities-and-consent.md).
 
 ## `[project]`
 
@@ -184,6 +205,12 @@ project-config struct: typos in field names fail at parse time
 with a clear error rather than being silently ignored.
 
 ## Complete worked example
+
+This example illustrates the agent/prompt/override schema; to `tau build`
+it under governed-by-default you would add an `[allow]` ceiling covering
+the capabilities its packages declare (see
+[Governance](#governance-the-allow-ceiling) above), or pass
+`--allow-ungoverned`.
 
 ```toml
 [project]

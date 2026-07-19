@@ -497,6 +497,23 @@ where
     let domain_agent_id = DomainAgentId::from_str(&agent.id.0)
         .unwrap_or_else(|_| DomainAgentId::from_str("ir-agent").expect("ir-agent is always valid"));
 
+    // Resolve the agent's system prompt. `Inline` is the literal text.
+    // `Asset` references the bundle's content-addressed asset store, which is
+    // threaded through in the asset-store follow-up (D6-B); lowering does not
+    // emit `Asset` yet, so this arm is unreachable on real input today. Keep it
+    // a structured error rather than a panic — never trust input shape.
+    let system_prompt = match &agent.prompt {
+        tau_ir::prompt::PromptSource::Inline(s) => s.clone(),
+        tau_ir::prompt::PromptSource::Asset(a) => {
+            return Err(RuntimeError::Internal {
+                message: alloc::format!(
+                    "agent {:?}: asset-backed prompt {:?} requires the bundle asset store (not yet wired)",
+                    agent.id.0, a.asset,
+                ),
+            });
+        }
+    };
+
     let agent_def = AgentDefinition::new(
         domain_agent_id,
         agent.id.0.clone(),
@@ -506,7 +523,7 @@ where
         ),
         llm_backend_pkg_name,
     )
-    .with_system_prompt(agent.prompt.clone())
+    .with_system_prompt(system_prompt)
     .with_model(agent.model_ref.model_id.clone());
 
     let manifest = stub_manifest();
@@ -934,7 +951,7 @@ mod tests {
 
         let agent = tau_ir::node::Agent {
             id: tau_ir::ids::AgentId("test-agent".into()),
-            prompt: alloc::string::String::new(),
+            prompt: tau_ir::prompt::PromptSource::inline(""),
             model_ref: tau_ir::model_ref::ModelRef {
                 backend: "my-backend".into(),
                 model_id: "claude-haiku-4-5".into(),
