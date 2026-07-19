@@ -67,7 +67,6 @@ fn kind_str(cap: &Capability) -> &'static str {
         Capability::TaskList { .. } => "task_list",
         Capability::Plan { .. } => "plan",
         Capability::Custom { .. } => "custom",
-        _ => "unknown",
     }
 }
 
@@ -150,10 +149,6 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
                 Err((name.clone(), "custom params do not match ceiling".into()))
             }
         }
-        _ => Err((
-            kind_str(child).to_string(),
-            "unsupported capability kind".into(),
-        )),
     }
 }
 
@@ -327,11 +322,13 @@ mod tests {
         })];
         assert!(capability_subset(&child, &parent).is_ok());
     }
-    // The sampling-era admission that is now correctly denied:
+    // The real sampling-era witness: the old sampler expanded `*` to a fixed
+    // "seed" and wrongly admitted `/proj/*` under `/proj/seed*`. The parent
+    // `/proj/seed*` is intra-segment → outside G2 → now correctly denied.
     #[test]
     fn intra_segment_ceiling_now_fails_closed() {
-        let child = vec![read(&["/proj/x"])];
-        let parent = vec![read(&["/proj/seed*"])]; // outside G2 → deny
+        let child = vec![read(&["/proj/*"])];
+        let parent = vec![read(&["/proj/seed*"])];
         assert!(capability_subset(&child, &parent).is_err());
     }
 }
