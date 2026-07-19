@@ -37,7 +37,10 @@ impl IrFormatVersion {
     // MINOR v2.3.0: Durability gains the `Intent(survive-restarts)` variant
     // (EPIC 6.1) alongside the explicit form. Optional field, additive shape.
     // MINOR v2.4.0: StepRun gains Branch/Parallel/Loop/Suspend (additive; EPIC 4.1).
-    pub const CURRENT: &'static str = "v2.4.0";
+    // MINOR v2.5.0: Agent.prompt String -> PromptSource (untagged: Inline | Asset)
+    // for the content-addressed asset store (D6-B). `Inline` serializes as a bare
+    // string, so pre-2.5 modules parse and re-serialize byte-identically.
+    pub const CURRENT: &'static str = "v2.5.0";
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
@@ -116,9 +119,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_4_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.4.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.4.0");
+    fn ir_format_version_is_v2_5_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.5.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.5.0");
     }
 
     #[test]

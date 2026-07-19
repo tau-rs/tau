@@ -89,6 +89,16 @@ pub enum IrError {
         step: StepId,
     },
 
+    /// An agent's `PromptSource::Asset` reference is not a well-formed content
+    /// hash (`"sha256:" + 64 lowercase hex`). Structured — never `Parse`.
+    #[error("agent {agent:?}: malformed prompt asset hash {hash:?} (want \"sha256:\" + 64 lowercase hex)")]
+    MalformedAssetHash {
+        /// The agent whose prompt carries the bad reference.
+        agent: AgentId,
+        /// The offending hash string.
+        hash: String,
+    },
+
     /// Generic parse failure surfacing from the upstream TOML parser.
     #[error("tau.toml parse error: {0}")]
     Parse(String),
