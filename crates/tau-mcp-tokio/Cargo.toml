@@ -12,7 +12,7 @@ authors.workspace      = true
 tau-mcp           = { workspace = true, features = ["with-std-adapters"] }
 tau-domain        = { workspace = true, features = ["serde"] }
 # Process-spawn gating goes through the `tau_ports::DynProcessGate` port
-# (ADR-0060) — the host injects the concrete gate. `process` brings the port
+# (ADR-0062) — the host injects the concrete gate. `process` brings the port
 # trait + `PassthroughGate`. tau-mcp-tokio deliberately does NOT depend on
 # tau-runtime-tokio, so the MCP transport stays off the host runtime's
 # tau-pkg / plugin-protocol / sandbox graph.

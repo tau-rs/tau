@@ -598,13 +598,13 @@ jobs:
           with-sccache: true
           with-mold: true
       - name: manifest must not name tau-runtime-tokio
-        # ADR-0060: the MCP transport reaches the process gate as the
+        # ADR-0062: the MCP transport reaches the process gate as the
         # `tau_ports::DynProcessGate` port; depending on tau-runtime-tokio would
         # drag the whole host runtime (tau-pkg / tau-plugin-protocol / the four
         # sandbox crates) under the transport.
         run: |
           if grep -qE '^[[:space:]]*tau-runtime-tokio[[:space:]]*=' crates/tau-mcp-tokio/Cargo.toml; then
-            echo "::error::tau-mcp-tokio/Cargo.toml names tau-runtime-tokio — the MCP transport must stay off the host runtime (ADR-0060)" >&2
+            echo "::error::tau-mcp-tokio/Cargo.toml names tau-runtime-tokio — the MCP transport must stay off the host runtime (ADR-0062)" >&2
             exit 1
           fi
       - name: dependency tree is free of the host runtime + its graph
@@ -612,7 +612,7 @@ jobs:
           set -euo pipefail
           tree=$(cargo tree -p tau-mcp-tokio -e normal)
           if echo "$tree" | grep -qE 'tau-runtime-tokio|tau-pkg|tau-plugin-protocol|tau-sandbox'; then
-            echo "::error::forbidden crate in tau-mcp-tokio dependency tree (ADR-0060)" >&2
+            echo "::error::forbidden crate in tau-mcp-tokio dependency tree (ADR-0062)" >&2
             echo "$tree" | grep -E 'tau-runtime-tokio|tau-pkg|tau-plugin-protocol|tau-sandbox' >&2
             exit 1
           fi
