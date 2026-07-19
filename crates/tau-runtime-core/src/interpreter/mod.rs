@@ -45,10 +45,11 @@ pub const SUPPORTED_FEATURES: &[tau_ir::feature::IrFeature] = &[
 
 /// Reject, at load (before any stepping), a module that walks an IR
 /// feature this interpreter does not implement. Called as the first
-/// statement of both [`run_ir`] and [`run_ir_streaming`] so the same gate
-/// covers the native CLI and the wasm guest (both funnel through this
-/// module).
-fn ensure_supported(module: &IrModule) -> Result<(), RuntimeError> {
+/// statement of [`run_ir`], [`run_ir_streaming`], and
+/// [`pipeline::run_pipeline`] — the two execution entry points (single
+/// entry-agent loop and engine-sequenced pipeline executor) that native
+/// callers (CLI, wasm guest) can reach an `IrModule` through.
+pub(crate) fn ensure_supported(module: &IrModule) -> Result<(), RuntimeError> {
     let supported: alloc::collections::BTreeSet<_> = SUPPORTED_FEATURES.iter().copied().collect();
     let required = tau_ir::feature::required_features(module);
     let missing: alloc::vec::Vec<_> = required

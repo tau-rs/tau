@@ -36,6 +36,7 @@ use tau_ports::{
 
 use tau_runtime_core::builder::DynLlmBackend;
 use tau_runtime_core::error::RuntimeError;
+use tau_runtime_core::interpreter::pipeline::run_pipeline;
 use tau_runtime_core::interpreter::run_ir_streaming;
 use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
 use tau_runtime_core::stream::RunEvent;
@@ -231,6 +232,50 @@ async fn branch_module_rejected_at_load_not_mid_run() {
             );
         }
         Ok(_) => panic!("Branch module must be rejected at load, not accepted"),
+        Err(other) => panic!("expected UnsupportedFeature, got a different error: {other}"),
+    }
+}
+
+/// The pipeline executor (`run_pipeline`) is the SECOND load-gated entry
+/// point: native pipeline paths (notably `tau run --bundle` on a decoded
+/// bundle module) call it directly, bypassing `run_ir`/`run_ir_streaming`
+/// entirely. A `StepRun::Branch` pipeline must be rejected by
+/// `run_pipeline` itself at load — before the step loop ever reaches the
+/// mid-run `StepRun::Branch => RuntimeError::Internal` arm — proving that
+/// arm is unreachable from this entry point too.
+#[tokio::test(flavor = "current_thread")]
+async fn branch_pipeline_rejected_at_load_by_run_pipeline_directly() {
+    let entry = AgentId("a".into());
+    let (mut workflow, dispatcher) = base_workflow(&entry);
+
+    let branch_step = PipelineStep {
+        id: PipelineStepId("b".into()),
+        run: StepRun::Branch {
+            on: Condition {
+                evaluates: Locus::Path("/f".into()),
+                predicate: GoalPredicate::Exists,
+            },
+            then: vec![],
+            otherwise: vec![],
+        },
+        input: "${input}".into(),
+    };
+    workflow.pipeline = Some(Pipeline {
+        steps: vec![branch_step],
+    });
+
+    let module = build_module(workflow);
+
+    let result = run_pipeline(Arc::new(module), "hi".into(), Arc::new(dispatcher)).await;
+
+    match result {
+        Err(RuntimeError::UnsupportedFeature { features }) => {
+            assert!(
+                features.iter().any(|f| f == "Branch"),
+                "expected Branch among unsupported features, got {features:?}"
+            );
+        }
+        Ok(_) => panic!("Branch pipeline must be rejected at load, not accepted"),
         Err(other) => panic!("expected UnsupportedFeature, got a different error: {other}"),
     }
 }

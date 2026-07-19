@@ -67,14 +67,19 @@ checked against a backend's supported-feature set at two points:
   subset of the target's supported features, resolved target-aware via
   `tau_ports::target::registry`. This is strict, with no override flag, mirroring the
   existing `capability_fit` precedent (ADR-0036).
-- **LOAD**, at the single `tau-runtime-core` interpreter chokepoint that both the native
-  CLI and the wasm guest funnel through: `required_features(module)` must be a subset of
-  `SUPPORTED_FEATURES`, else a structured load error, not a mid-run
+- **LOAD**, at the two `tau-runtime-core` interpreter entry points an `IrModule` can be
+  executed through — the single entry-agent loop (`run_ir`/`run_ir_streaming`, which the
+  wasm guest also funnels through) and the engine-sequenced pipeline executor
+  (`run_pipeline`, which native pipeline paths such as `tau run --bundle` call directly on
+  a decoded bundle module, bypassing `run_ir`): both call the same `ensure_supported` gate
+  as their first statement, so `required_features(module)` must be a subset of
+  `SUPPORTED_FEATURES` at either entry, else a structured load error, not a mid-run
   `RuntimeError::Internal`.
 
 As shipped in PR2: the LOAD error is `RuntimeError::UnsupportedFeature { features }`, and
 the mid-run `RuntimeError::Internal` control-flow arms in `pipeline.rs` are kept as
-defense-in-depth (now unreachable from any gated path). Build and load read one shared
+defense-in-depth — with both entry points gated, those arms are now unreachable from any
+execution path. Build and load read one shared
 table, `tau_ir::feature::backend_features(AdapterFamily)`, which returns the same
 interpreter set for every adapter family today; the interpreter's `SUPPORTED_FEATURES`
 const is tied to that table by a drift-guard test, and a `wasm32-wasip2` round-trip test
@@ -121,8 +126,9 @@ There is effectively one execution backend today: the `tau-runtime-core` interpr
 which the wasm guest reuses rather than reimplementing (the guest's single-agent,
 no-pipeline limit is a workflow-shape constraint orthogonal to feature support, not a
 second backend with its own feature set). Consequently PR2 needs one
-`SUPPORTED_FEATURES` set and one load-time enforcement chokepoint, not two parallel
-sets that could drift from each other.
+`SUPPORTED_FEATURES` set, gated at both interpreter entry points (`run_ir`/
+`run_ir_streaming` and `run_pipeline`), not two parallel sets that could drift from each
+other.
 
 ## Consequences
 

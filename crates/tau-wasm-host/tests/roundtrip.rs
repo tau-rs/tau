@@ -199,10 +199,12 @@ fn unsupported_feature_module_rejected_across_wit_boundary() {
     let component = build_guest_component(Some(&ir));
     let err = run_component(&component, "hi", vec![]).unwrap_err();
     match err {
-        tau_wasm_host::WasmHostError::Guest(s) => assert!(
-            s.contains("Branch") || s.contains("does not support"),
-            "expected a feature-rejection guest error, got: {s}"
-        ),
+        tau_wasm_host::WasmHostError::Guest(s) => {
+            assert!(
+                s.contains("Branch"),
+                "expected Branch in rejection, got: {s}"
+            )
+        }
         other => panic!("expected WasmHostError::Guest, got {other:?}"),
     }
 }

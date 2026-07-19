@@ -387,6 +387,16 @@ async fn try_run_pipeline(
         &caches,
     ) {
         Ok(m) => m,
+        // Build-time feature-fit failures (`LowerError::FeatureFitFailed`)
+        // must surface as a hard error, not a silent fall-through: falling
+        // through would silently run the single-agent path on a project
+        // that explicitly declares an unsupported pipeline feature, which
+        // is exactly the failure mode the load-time gate exists to catch.
+        // Every other lowering error still falls through to `None` — the
+        // legacy flow has its own independent validation for those.
+        Err(e @ tau_ir_lower::LowerError::FeatureFitFailed { .. }) => {
+            return Some(Err(e).context("pipeline lowering"));
+        }
         Err(e) => {
             tracing::debug!("pipeline lowering skipped (project did not lower): {e}");
             return None;
