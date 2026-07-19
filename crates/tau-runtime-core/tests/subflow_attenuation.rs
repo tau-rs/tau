@@ -103,7 +103,7 @@ fn tool(id: &str, impl_: ToolImpl, caps: Vec<tau_domain::Capability>) -> Tool {
 fn agent(id: &str, tools: &[&str]) -> Agent {
     Agent {
         id: AgentId(id.into()),
-        prompt: String::new(),
+        prompt: tau_ir::prompt::PromptSource::Inline(String::new()),
         model_ref: tau_ir::model_ref::ModelRef {
             backend: "mock-llm".into(),
             model_id: "m".into(),
