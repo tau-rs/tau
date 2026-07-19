@@ -112,7 +112,7 @@ pub async fn run(
                         anyhow::anyhow!("decoding bundle's canonical_ir_bytes_hex: {e:?}")
                     })?;
                     let module = tau_ir::from_canonical_bytes(&bytes)
-                        .map_err(|e| anyhow::anyhow!("decoding IR module from bundle: {e:?}"))?;
+                        .map_err(|e| anyhow::anyhow!("decoding IR module from bundle: {e}"))?;
 
                     if args.dry_run {
                         tracing::info!(

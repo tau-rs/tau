@@ -226,6 +226,100 @@ fn run_bundle_self_hash_stale_exits_three() {
         .stderr(predicate::str::contains("self-hash"));
 }
 
+/// Tamper a freshly-built bundle's `ir_payload` so the *embedded* IR
+/// bytes declare a newer `ir_format` (`v2.5.0`) than this `tau` accepts,
+/// re-hash the payload for internal consistency, and reseal the outer
+/// bundle self-hash — mirroring exactly what an attacker (or a bundle
+/// built by a newer `tau`) would produce.
+///
+/// This is expected to be rejected by `tau run --bundle`'s verify
+/// pipeline at the **source cross-check** step (`IrSourceDivergence`),
+/// not at `tau_ir::from_canonical_bytes`'s acceptance-window gate
+/// (`DecodeError::FormatTooNew`, "reads up to ..."). See the doc
+/// comment for why: the cross-check re-lowers the cwd source with
+/// *this* `tau` (which always stamps `IrFormatVersion::CURRENT`) and
+/// compares the resulting SHA-256 against the bundle's recorded
+/// `canonical_ir_hash`. Since that hash is computed over the full
+/// canonical bytes — `ir_format` included — any bundle whose embedded
+/// `ir_format` differs from `CURRENT` necessarily hashes differently
+/// from a genuine re-lowering, so the cross-check fails *before*
+/// `from_canonical_bytes` is ever called. This makes the decode-time
+/// `FormatTooNew` gate unreachable through this call path by
+/// construction (a SHA-256 preimage would be required to forge a
+/// match) — it is real defense-in-depth for load sites that don't
+/// re-lower and cross-check a live source tree (e.g.
+/// `tau-wasm-guest`'s baked-IR decode, `tau-ir-conformance`'s
+/// bundle-mode round-trip), not for `tau run --bundle` itself.
+#[test]
+fn run_bundle_with_tampered_ir_format_is_rejected_by_source_cross_check() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("badformat");
+    std::fs::create_dir(&project).unwrap();
+    write_minimal_project(&project, "badformat");
+    write_empty_lockfile(&project);
+    let tau_home = make_tau_home(scratch.path());
+
+    let bundle_path = build_bundle(&project, &tau_home);
+
+    let body = std::fs::read_to_string(&bundle_path).unwrap();
+    let mut manifest = tau_pkg::bundle::BundleManifest::parse_str(&body)
+        .expect("freshly-built bundle must parse");
+    let ir = manifest
+        .ir_payload
+        .as_mut()
+        .expect("a minimal single-agent project must lower to an ir_payload");
+
+    // Bump the *embedded* ir_format inside the canonical IR JSON, then
+    // re-derive canonical_ir_bytes_hex + canonical_ir_hash so the
+    // payload is internally self-consistent (verify step 9 alone would
+    // otherwise catch this as plain corruption, before we even get to
+    // exercise the cross-check).
+    let bytes = ir.canonical_ir_bytes().unwrap();
+    let json = String::from_utf8(bytes).unwrap();
+    let needle = format!("\"ir_format\":\"{}\"", ir.ir_format);
+    assert!(
+        json.contains(&needle),
+        "expected canonical IR JSON to contain {needle:?}"
+    );
+    let bumped_json = json.replacen(&needle, "\"ir_format\":\"v2.5.0\"", 1);
+    let bumped_bytes = bumped_json.into_bytes();
+
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&bumped_bytes);
+    let computed_hash_hex = hex_lower(&hasher.finalize());
+
+    ir.ir_format = "v2.5.0".to_string();
+    ir.canonical_ir_bytes_hex = hex_lower(&bumped_bytes);
+    ir.canonical_ir_hash = computed_hash_hex;
+
+    // Reseal the bundle's outer self-hash (step 3) so the only thing
+    // still wrong with the bundle is the IR-vs-source divergence.
+    manifest.bundle.sha256 = tau_pkg::bundle::compute_self_hash(&manifest);
+    std::fs::write(&bundle_path, manifest.to_canonical_toml()).unwrap();
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "run",
+            "--bundle",
+            bundle_path.to_str().unwrap(),
+            "solo",
+            "--dry-run",
+        ])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("diverges from the local tau.toml"));
+}
+
+/// Lowercase-hex encode, matching the encoding `IrPayload`'s hex fields
+/// use elsewhere in the bundle pipeline.
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[test]
 fn run_bundle_clean_fixture_passes_verify_gate() {
     let scratch = tempfile::tempdir().unwrap();
