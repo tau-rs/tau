@@ -10,7 +10,7 @@
 //!
 //! This lives in `tau-ports` (behind the `process` feature) rather than a host
 //! crate so a transport crate can depend on the *port* without pulling in a
-//! whole host runtime and its sandbox/plugin graph. See ADR-0060.
+//! whole host runtime and its sandbox/plugin graph. See ADR-0062.
 
 use core::future::Future;
 use core::pin::Pin;

@@ -1,4 +1,4 @@
-# ADR-0060: `DynProcessGate` port — decouple transports from the host runtime
+# ADR-0062: `DynProcessGate` port — decouple transports from the host runtime
 
 **Status:** Accepted
 **Date:** 2026-07-19

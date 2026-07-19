@@ -47,3 +47,6 @@ url               = { workspace = true }
 tokio    = { workspace = true, features = ["test-util", "fs"] }
 tempfile = { workspace = true }
 wiremock = { workspace = true }
+
+[lints]
+workspace = true

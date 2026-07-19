@@ -5,7 +5,7 @@
 //! None }`, supports every capability shape, validates every plan, and wraps a
 //! spawn as a no-op. Lives in `tau-ports` (behind the `process` feature) so a
 //! transport crate can use the default gate without depending on a host
-//! runtime's sandbox graph. See ADR-0060.
+//! runtime's sandbox graph. See ADR-0062.
 
 use std::process::Command;
 

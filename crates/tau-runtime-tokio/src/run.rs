@@ -217,6 +217,114 @@ mod tests {
         assert!(provider.is_empty());
     }
 
+    /// Every `tool_result.tool_use_id` MUST reference the id of the
+    /// `tool_use` it answers — not the result message's own id. Anthropic
+    /// rejects an orphaned tool_use/tool_result pair on multi-turn runs.
+    /// The link is carried on the result message's `parent_id`, pointing at
+    /// the tool-call message.
+    #[test]
+    fn tool_result_id_references_the_tool_use_it_answers() {
+        let call = Message::new(
+            Address::Agent(AgentInstanceId::new()),
+            Address::Tool("fs-read.read".into()),
+            MessagePayload::ToolCall { args: Value::Null },
+        );
+        let mut result = Message::new(
+            Address::Tool("fs-read.read".into()),
+            Address::Agent(AgentInstanceId::new()),
+            MessagePayload::ToolResult { body: Value::Null },
+        );
+        result.parent_id = Some(call.id);
+
+        let provider = agent_messages_to_provider_messages(&[call, result]);
+
+        let tool_use_ids: Vec<String> = provider
+            .iter()
+            .flat_map(|m| match m {
+                LlmProviderMessage::Assistant { content }
+                | LlmProviderMessage::User { content } => content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::ToolUse(tu) => Some(tu.id.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect();
+        let result_ids: Vec<String> = provider
+            .iter()
+            .filter_map(|m| match m {
+                LlmProviderMessage::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(result_ids.len(), 1, "expected exactly one tool_result");
+        for rid in &result_ids {
+            assert!(
+                tool_use_ids.contains(rid),
+                "tool_result id {rid} orphaned; tool_use ids = {tool_use_ids:?}",
+            );
+        }
+    }
+
+    /// The run loop pushes each tool-call immediately before its result and
+    /// does not set `parent_id`, so the projection must pair a result with
+    /// the nearest preceding tool-call. With two calls in one turn, each
+    /// result must reference its OWN call, not the other's.
+    #[test]
+    fn tool_results_pair_with_their_own_call_without_parent_id() {
+        let tool_call = |name: &str| {
+            Message::new(
+                Address::Agent(AgentInstanceId::new()),
+                Address::Tool(name.into()),
+                MessagePayload::ToolCall { args: Value::Null },
+            )
+        };
+        let tool_result = |name: &str| {
+            Message::new(
+                Address::Tool(name.into()),
+                Address::Agent(AgentInstanceId::new()),
+                MessagePayload::ToolResult { body: Value::Null },
+            )
+        };
+        // Interleaved as the run loop emits them: C1, R1, C2, R2. No parent_id.
+        let history = vec![
+            tool_call("a"),
+            tool_result("a"),
+            tool_call("b"),
+            tool_result("b"),
+        ];
+
+        let provider = agent_messages_to_provider_messages(&history);
+
+        // Collect the ordered (tool_use id) and (tool_result id) sequences.
+        let mut use_ids = Vec::new();
+        let mut result_ids = Vec::new();
+        for m in &provider {
+            match m {
+                LlmProviderMessage::Assistant { content } => {
+                    for b in content {
+                        if let ContentBlock::ToolUse(tu) = b {
+                            use_ids.push(tu.id.clone());
+                        }
+                    }
+                }
+                LlmProviderMessage::ToolResult { tool_use_id, .. } => {
+                    result_ids.push(tool_use_id.clone());
+                }
+                _ => {}
+            }
+        }
+        // Two distinct pairs, each result matching the call that precedes it.
+        assert_eq!(use_ids.len(), 2);
+        assert_eq!(
+            result_ids, use_ids,
+            "each result must reference its own call"
+        );
+    }
+
     #[test]
     fn append_assistant_response_appends_only_text_when_present() {
         let mut history: Vec<Message> = vec![];
