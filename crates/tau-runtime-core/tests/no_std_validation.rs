@@ -169,7 +169,7 @@ fn fixture_module() -> (IrModule, AgentId) {
 
     let agent_node = Agent {
         id: entry.clone(),
-        prompt: String::new(),
+        prompt: tau_ir::prompt::PromptSource::inline(""),
         model_ref: tau_ir::ModelRef {
             backend: "scripted".into(),
             model_id: "scripted-model".into(),

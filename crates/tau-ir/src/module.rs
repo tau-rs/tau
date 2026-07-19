@@ -37,11 +37,39 @@ impl IrFormatVersion {
     // MINOR v2.3.0: Durability gains the `Intent(survive-restarts)` variant
     // (EPIC 6.1) alongside the explicit form. Optional field, additive shape.
     // MINOR v2.4.0: StepRun gains Branch/Parallel/Loop/Suspend (additive; EPIC 4.1).
-    pub const CURRENT: &'static str = "v2.4.0";
+    // MINOR v2.5.0: Agent.prompt String -> PromptSource (untagged: Inline | Asset)
+    // for the content-addressed asset store (D6-B). `Inline` serializes as a bare
+    // string, so pre-2.5 modules parse and re-serialize byte-identically.
+    pub const CURRENT: &'static str = "v2.5.0";
+
+    /// Major component of `CURRENT`. Kept as a literal (const string
+    /// parsing is awkward) and pinned to `CURRENT` by
+    /// `current_major_agrees_with_current_string`.
+    pub const CURRENT_MAJOR: u64 = 2;
 
     /// Construct the version this crate emits.
     pub fn current() -> Self {
         Self(Self::CURRENT.into())
+    }
+
+    /// Parse the semver MAJOR out of the version string.
+    ///
+    /// Strips an optional leading `v`, then parses the integer up to the
+    /// first `.` (or the end of the string). Returns `Err(())` when that
+    /// leading segment is empty or not a `u64`, so `v2.4.0`, `2.4.0`, and a
+    /// dotless `v2` all yield the major, while `""`, `v.4`, and `garbage`
+    /// are rejected.
+    // `Result<u64, ()>` is the pinned Task-2 interface (D8-B brief); the
+    // caller only branches on Ok/Err and doesn't need a richer error type
+    // here — `FormatUnparseable` carries the diagnostic instead.
+    #[allow(clippy::result_unit_err)]
+    pub fn major(&self) -> Result<u64, ()> {
+        let s = self.0.strip_prefix('v').unwrap_or(&self.0);
+        let head = s.split('.').next().ok_or(())?;
+        if head.is_empty() {
+            return Err(());
+        }
+        head.parse::<u64>().map_err(|_| ())
     }
 }
 
@@ -116,9 +144,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_4_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.4.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.4.0");
+    fn ir_format_version_is_v2_5_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.5.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.5.0");
+    }
+
+    #[test]
+    fn major_parses_leading_v_and_bare() {
+        assert_eq!(IrFormatVersion("v2.4.0".into()).major(), Ok(2));
+        assert_eq!(IrFormatVersion("2.4.0".into()).major(), Ok(2));
+        assert_eq!(IrFormatVersion("v10.0.0".into()).major(), Ok(10));
+    }
+
+    #[test]
+    fn major_rejects_malformed() {
+        assert_eq!(IrFormatVersion("".into()).major(), Err(()));
+        assert_eq!(IrFormatVersion("garbage".into()).major(), Err(()));
+        assert_eq!(IrFormatVersion("v.4".into()).major(), Err(()));
+        assert_eq!(IrFormatVersion("v".into()).major(), Err(()));
+    }
+
+    #[test]
+    fn current_major_agrees_with_current_string() {
+        // A future CURRENT bump must not silently desync CURRENT_MAJOR.
+        assert_eq!(
+            IrFormatVersion::current().major(),
+            Ok(IrFormatVersion::CURRENT_MAJOR)
+        );
     }
 
     #[test]
