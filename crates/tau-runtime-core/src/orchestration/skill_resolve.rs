@@ -409,9 +409,7 @@ mod tests {
         let out = substitute_skill_dir(&caps, "/scope");
         assert_eq!(out.len(), 1);
         match &out[0] {
-            Capability::Network(NetCapability::Http {
-                hosts, methods: _, ..
-            }) => {
+            Capability::Network(NetCapability::Http { hosts, .. }) => {
                 assert_eq!(hosts.exact_hosts(), vec!["api.example.com".to_string()]);
             }
             other => panic!("expected net.http, got {other:?}"),
