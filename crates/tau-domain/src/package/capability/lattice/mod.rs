@@ -403,16 +403,20 @@ fn meet_pair(a: &Capability, b: &Capability) -> Option<Capability> {
             min_mode(a, b, true).map(|mode| TaskList { mode })
         }
         (Plan { mode: a }, Plan { mode: b }) => min_mode(a, b, false).map(|mode| Plan { mode }),
+        // Fully-qualified `Capability::Custom` (not the bare `use`d form) so the
+        // escape-hatch registry scanner doesn't mistake these match patterns for
+        // an undocumented variant declaration once rustfmt puts them on their own
+        // line. The documented declaration lives on the enum in capability.rs.
         (
-            Custom {
+            Capability::Custom {
                 name: na,
                 params: pa,
             },
-            Custom {
+            Capability::Custom {
                 name: nb,
                 params: pb,
             },
-        ) if na == nb && pa == pb => Some(Custom {
+        ) if na == nb && pa == pb => Some(Capability::Custom {
             name: na.clone(),
             params: pa.clone(),
         }),
