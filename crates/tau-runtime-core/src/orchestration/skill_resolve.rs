@@ -412,7 +412,7 @@ mod tests {
             Capability::Network(NetCapability::Http {
                 hosts, methods: _, ..
             }) => {
-                assert_eq!(hosts[0], "api.example.com");
+                assert_eq!(hosts.exact_hosts(), vec!["api.example.com".to_string()]);
             }
             other => panic!("expected net.http, got {other:?}"),
         }
