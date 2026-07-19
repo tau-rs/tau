@@ -9,6 +9,15 @@
 //! The static half (EPIC 1.5 lattice L2) checks cap_subset ⊆ agent-effective
 //! for tau-cli-authored workflows; this runtime half additionally clamps
 //! descendants under the runtime narrowing chain and catches hand-crafted IR.
+//!
+//! # Dead-code allow
+//!
+//! `AttenuatedDispatcher` is exercised by this module's `tests` submodule
+//! only until the follow-up task wires it into the subflow-spawn call site
+//! in `agent_loop.rs`; until then it warns under the `dead_code` lint
+//! (same rationale as the module-level allow in `crate::capability`).
+
+#![allow(dead_code)]
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
