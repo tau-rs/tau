@@ -136,6 +136,67 @@ pub enum LinkError {
     },
 }
 
+/// Resolve one plugin reference against the lockfile: installed, provides
+/// the expected port, and has an installed version satisfying `version_req`.
+///
+/// Ports the installed/port checks from `tau-cli`'s `plugin_loader.rs`
+/// (`resolve_plugin`) and the version-satisfiability search from
+/// `tau-pkg`'s `project/agent.rs` (`build_agent_definition`) into a single
+/// pure helper returning a structured [`LinkError`] instead of `anyhow`.
+///
+/// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
+/// wires this in alongside `resolve_models`/`resolve_skills`.
+#[allow(dead_code)]
+fn resolve_one_plugin(
+    lockfile: &crate::lockfile::LockFile,
+    package: &PackageName,
+    version_req: &semver::VersionReq,
+    expected: PortKind,
+) -> Result<LinkedPlugin, LinkError> {
+    let pkg = lockfile
+        .find(package)
+        .ok_or_else(|| LinkError::PluginNotInstalled {
+            package: package.to_string(),
+        })?;
+
+    // Highest installed version satisfying the requirement (agent.rs shape).
+    let version = pkg
+        .installed_versions
+        .iter()
+        .map(|v| &v.version)
+        .filter(|v| version_req.matches(v))
+        .max()
+        .cloned()
+        .ok_or_else(|| LinkError::VersionUnsatisfied {
+            package: package.to_string(),
+            req: version_req.to_string(),
+        })?;
+
+    // Must carry a [plugin] table and provide the required port
+    // (plugin_loader.rs shape). A data-only package (no [plugin] table)
+    // can't bind to a plugin reference, so it's PluginNotInstalled too.
+    let plugin = pkg
+        .plugin
+        .as_ref()
+        .ok_or_else(|| LinkError::PluginNotInstalled {
+            package: package.to_string(),
+        })?;
+    if plugin.manifest.provides != expected {
+        return Err(LinkError::PluginPortMismatch {
+            package: package.to_string(),
+            found: plugin.manifest.provides,
+            expected,
+        });
+    }
+
+    Ok(LinkedPlugin {
+        name: package.clone(),
+        version,
+        binary_sha256: plugin.binary_sha256.clone(),
+        provides: plugin.manifest.provides,
+    })
+}
+
 /// Serialize [`TargetTriple`] as its `Display` string (tau-ports has no serde derive).
 mod target_triple_str {
     use super::{FromStr, TargetTriple};
@@ -188,5 +249,105 @@ mod tests {
         let toml = toml::to_string(&rec).expect("serialize");
         let back: LinkRecord = toml::from_str(&toml).expect("deserialize");
         assert_eq!(rec, back);
+    }
+
+    use crate::lockfile::{LockFile, LockedPackage, LockedPlugin, LockedVersion};
+    use std::time::SystemTime;
+    use tau_domain::package::plugin::PluginManifest;
+    use tau_domain::{PackageSource, PluginKind};
+
+    fn plugin_pkg(name: &str, version: &str, provides: PortKind, sha: &str) -> LockedPackage {
+        let v = Version::parse(version).unwrap();
+        LockedPackage {
+            name: PackageName::from_str(name).unwrap(),
+            active_version: v.clone(),
+            source: PackageSource::Git {
+                location: "https://x/y.git".parse().unwrap(),
+                rev: None,
+            },
+            installed_versions: vec![LockedVersion {
+                version: v,
+                rev: None,
+                resolved_commit: "0".repeat(40),
+                sha256: String::new(),
+                installed_at: SystemTime::UNIX_EPOCH,
+            }],
+            plugin: Some(LockedPlugin::new(
+                PluginManifest::new(provides, PluginKind::RustCargo, "x".into()),
+                "/tmp/x".into(),
+                SystemTime::UNIX_EPOCH,
+                sha.to_string(),
+            )),
+            skill: None,
+            synthesized_from: None,
+        }
+    }
+
+    fn lf_with(pkg: LockedPackage) -> LockFile {
+        let mut lf = LockFile::default();
+        lf.packages.push(pkg);
+        lf
+    }
+
+    fn req(s: &str) -> semver::VersionReq {
+        semver::VersionReq::parse(s).unwrap()
+    }
+
+    #[test]
+    fn resolve_plugin_ok() {
+        let lf = lf_with(plugin_pkg(
+            "anthropic",
+            "1.2.0",
+            PortKind::LlmBackend,
+            &"ab".repeat(32),
+        ));
+        let name = PackageName::from_str("anthropic").unwrap();
+        let got = resolve_one_plugin(&lf, &name, &req("^1"), PortKind::LlmBackend).unwrap();
+        assert_eq!(got.version, Version::parse("1.2.0").unwrap());
+        assert_eq!(got.binary_sha256, "ab".repeat(32));
+        assert_eq!(got.provides, PortKind::LlmBackend);
+    }
+
+    #[test]
+    fn resolve_plugin_not_installed() {
+        let lf = LockFile::default();
+        let name = PackageName::from_str("anthropic").unwrap();
+        let r = resolve_one_plugin(&lf, &name, &req("^1"), PortKind::LlmBackend);
+        assert!(
+            matches!(r, Err(LinkError::PluginNotInstalled { .. })),
+            "got {r:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_port_mismatch() {
+        let lf = lf_with(plugin_pkg(
+            "some-tool",
+            "1.0.0",
+            PortKind::Tool,
+            &"ab".repeat(32),
+        ));
+        let name = PackageName::from_str("some-tool").unwrap();
+        let r = resolve_one_plugin(&lf, &name, &req("^1"), PortKind::LlmBackend);
+        assert!(
+            matches!(r, Err(LinkError::PluginPortMismatch { .. })),
+            "got {r:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_version_unsatisfied() {
+        let lf = lf_with(plugin_pkg(
+            "anthropic",
+            "1.0.0",
+            PortKind::LlmBackend,
+            &"ab".repeat(32),
+        ));
+        let name = PackageName::from_str("anthropic").unwrap();
+        let r = resolve_one_plugin(&lf, &name, &req("^2"), PortKind::LlmBackend);
+        assert!(
+            matches!(r, Err(LinkError::VersionUnsatisfied { .. })),
+            "got {r:?}"
+        );
     }
 }
