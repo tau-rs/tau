@@ -130,6 +130,7 @@
 - [ADR-0054 — In-wasm MCP facilitator (β.7.5)](decisions/0054-in-wasm-mcp-facilitator.md)
 - [ADR-0055 — tau identity: two contracts; CLI = reference host](decisions/0055-tau-identity-two-contracts.md)
 - [ADR-0056 — The two contracts are the semver stability surface](decisions/0056-contract-versioning-stability-surface.md)
+- [ADR-0057 — Root allow-section governance + build-time enforcement](decisions/0057-root-allow-governance.md)
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
 - [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
 
