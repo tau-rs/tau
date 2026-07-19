@@ -465,19 +465,18 @@ git commit -m "feat(link): resolve_one_plugin (installed/port/version) + truth-t
 - [ ] **Step 1: Write the failing tests**
 
 Add a helper to build a minimal `ProjectConfig`. `ProjectConfig` is `#[non_exhaustive]` and normally built via validation; for unit tests, construct it through the public builder path if one is exposed, else via `..Default::default()` if the crate provides a test constructor. **First grep** `crates/tau-pkg/src/project/` for an existing test that builds a `ProjectConfig` (e.g. `UncheckedProjectConfig { … }.validate()`); reuse that idiom. Sketch of the assertions:
+Test `resolve_models_from` on the two maps directly (`ProjectConfig` is `#[non_exhaustive]` and impractical to build in a unit test; build `AgentEntry`/`ModelEntry` via same-crate access). Sketch:
 ```rust
     #[test]
-    fn resolve_models_ok_and_unknown() {
-        // cfg has agents: {"a" -> model "fast", "b" -> model "missing"}
-        // and models: {"fast" -> ModelEntry { backend: "anthropic", model: "claude-haiku-4-5" }}
-        let cfg = /* build via the project validation idiom */;
-        let (bindings, errs) = resolve_models(&cfg);
+    fn resolve_models_ok() {
+        // agents: {"a" -> model "fast", "b" -> model "unknown"}
+        // models: {"fast" -> ModelEntry { backend: "anthropic", model: "claude-haiku-4-5" }}
+        let bindings = resolve_models_from(&agents, &models);
         assert_eq!(
             bindings.get("fast"),
             Some(&ModelRef { backend: "anthropic".into(), model_id: "claude-haiku-4-5".into() })
         );
-        assert_eq!(errs.len(), 1);
-        assert!(matches!(&errs[0], LinkError::ModelAliasUnknown { alias, .. } if alias == "missing"));
+        assert!(bindings.get("unknown").is_none()); // absent alias simply not inserted (no error)
     }
 ```
 
@@ -489,27 +488,28 @@ Expected: FAIL — `resolve_models` not found.
 - [ ] **Step 3: Implement `resolve_models`**
 
 ```rust
-fn resolve_models(cfg: &ProjectConfig) -> (BTreeMap<String, ModelRef>, Vec<LinkError>) {
+fn resolve_models(cfg: &ProjectConfig) -> BTreeMap<String, ModelRef> {
+    resolve_models_from(&cfg.agents, &cfg.models)
+}
+
+fn resolve_models_from(
+    agents: &BTreeMap<String, AgentEntry>,
+    models: &BTreeMap<String, ModelEntry>,
+) -> BTreeMap<String, ModelRef> {
     let mut bindings = BTreeMap::new();
-    let mut errors = Vec::new();
-    for (agent_id, agent) in &cfg.agents {
+    for agent in agents.values() {
         if agent.model.is_empty() {
             continue; // agent declares no model
         }
-        match cfg.models.get(&agent.model) {
-            Some(ModelEntry { backend, model }) => {
-                bindings.insert(
-                    agent.model.clone(),
-                    ModelRef { backend: backend.clone(), model_id: model.clone() },
-                );
-            }
-            None => errors.push(LinkError::ModelAliasUnknown {
-                agent: agent_id.clone(),
-                alias: agent.model.clone(),
-            }),
+        if let Some(m) = models.get(&agent.model) {
+            bindings.insert(
+                agent.model.clone(),
+                ModelRef { backend: m.backend.clone(), model_id: m.model.clone() },
+            );
         }
+        // absent alias: unreachable on validated input; simply not inserted (no error)
     }
-    (bindings, errors)
+    bindings
 }
 ```
 
