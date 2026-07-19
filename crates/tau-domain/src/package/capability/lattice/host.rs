@@ -63,9 +63,29 @@ pub fn host_meet(a: &[String], b: &[String]) -> Vec<String> {
             }
         }
     }
-    out.sort();
-    out.dedup();
-    out
+    host_canon(&out)
+}
+
+/// Canonical host list: drop un-parseable hosts, absorb any host that is a
+/// subset of another (e.g. `api.example.com` under `*.example.com`), sort,
+/// dedup. Shared by `host_meet` and the capability canonicalizer so `meet`
+/// and `canon` agree structurally (mirrors `glob::glob_canon`).
+pub fn host_canon(hosts: &[String]) -> Vec<String> {
+    let parsed: Vec<&String> = hosts.iter().filter(|h| parse(h).is_some()).collect();
+    let mut kept: Vec<String> = Vec::new();
+    'outer: for (i, hi) in parsed.iter().enumerate() {
+        for (j, hj) in parsed.iter().enumerate() {
+            // drop hi if it is ⊆ some other hj; for an equal pair, keep the
+            // earlier index (the `j < i` guard leaves exactly one survivor).
+            if i != j && host_subset(hi, hj) && !(host_subset(hj, hi) && j < i) {
+                continue 'outer;
+            }
+        }
+        kept.push((*hi).clone());
+    }
+    kept.sort();
+    kept.dedup();
+    kept
 }
 
 fn push_unique(v: &mut Vec<String>, s: &str) {
@@ -87,5 +107,16 @@ mod tests {
     }
     #[test] fn meet_disjoint_empty() {
         assert!(host_meet(&["a.com".into()], &["*.example.com".into()]).is_empty());
+    }
+    #[test] fn canon_absorbs_redundant_host() {
+        // api.example.com ⊆ *.example.com → absorbed
+        assert_eq!(host_canon(&["*.example.com".into(), "api.example.com".into()]),
+                   vec!["*.example.com".to_string()]);
+    }
+    #[test] fn meet_absorbs_redundant_result() {
+        // a=*.example.com ∩ b=(*.example.com ∪ api.example.com) = *.example.com
+        assert_eq!(host_meet(&["*.example.com".into()],
+                             &["*.example.com".into(), "api.example.com".into()]),
+                   vec!["*.example.com".to_string()]);
     }
 }

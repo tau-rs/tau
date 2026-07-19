@@ -83,6 +83,19 @@ fn same_kind(a: &Capability, b: &Capability) -> bool {
     }
 }
 
+/// Two caps merge in `canon_caps` iff they are the same kind AND, for `Custom`,
+/// identical (name+params) — distinct-params customs stay separate, matching
+/// how `meet_pair` keys custom identity.
+fn mergeable(a: &Capability, b: &Capability) -> bool {
+    match (a, b) {
+        (
+            Capability::Custom { name: na, params: pa },
+            Capability::Custom { name: nb, params: pb },
+        ) => na == nb && pa == pb,
+        _ => same_kind(a, b),
+    }
+}
+
 fn mode_rank(mode: &str, allow_manage: bool) -> Option<u8> {
     match mode {
         "read" => Some(0),
@@ -119,10 +132,12 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
                     .map_err(|tok| (tok, "exceeds ceiling max_bytes".to_string())),
             }
         }
-        Capability::Network(NetCapability::Http { hosts, .. }) => {
+        Capability::Network(NetCapability::Http { hosts, methods }) => {
             let ph = gather_hosts(parents);
             crate::package::capability::lattice::host::host_subset_set(hosts, &ph)
-                .map_err(|o| (o, "host not in ceiling".into()))
+                .map_err(|o| (o, "host not in ceiling".into()))?;
+            let pm = gather_methods(parents);
+            string_set_subset(methods, &pm).map_err(|o| (o, "method not in ceiling".into()))
         }
         Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
             let pc = gather_commands(parents);
@@ -195,6 +210,17 @@ fn gather_hosts(parents: &[&Capability]) -> Vec<String> {
         .iter()
         .filter_map(|p| match p {
             Capability::Network(NetCapability::Http { hosts, .. }) => Some(hosts.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+fn gather_methods(parents: &[&Capability]) -> Vec<String> {
+    parents
+        .iter()
+        .filter_map(|p| match p {
+            Capability::Network(NetCapability::Http { methods, .. }) => Some(methods.clone()),
             _ => None,
         })
         .flatten()
@@ -276,7 +302,7 @@ fn max_bytes_le(child: u64, parent: Option<u64>) -> Result<(), String> {
 }
 
 use crate::package::capability::lattice::glob::{glob_canon, glob_meet};
-use crate::package::capability::lattice::host::host_meet;
+use crate::package::capability::lattice::host::{host_canon, host_meet};
 
 /// Greatest lower bound of two capability sets. Total on G2.
 pub fn meet(a: &[Capability], b: &[Capability]) -> Vec<Capability> {
@@ -376,7 +402,7 @@ pub fn canon_caps(caps: &[Capability]) -> Vec<Capability> {
     // 1. merge every capability of the same kind into one
     let mut merged: Vec<Capability> = Vec::new();
     for c in caps {
-        if let Some(existing) = merged.iter_mut().find(|m| same_kind(m, c)) {
+        if let Some(existing) = merged.iter_mut().find(|m| mergeable(m, c)) {
             union_into(existing, c);
         } else {
             merged.push(c.clone());
@@ -444,7 +470,7 @@ fn canon_one(c: &Capability) -> Option<Capability> {
         Filesystem(FsCapability::Write { paths, max_bytes }) =>
             Filesystem(FsCapability::Write { paths: glob_canon(paths), max_bytes: *max_bytes }),
         Network(NetCapability::Http { hosts, methods }) =>
-            Network(NetCapability::Http { hosts: sorted(hosts), methods: sorted(methods) }),
+            Network(NetCapability::Http { hosts: host_canon(hosts), methods: sorted(methods) }),
         Process(ProcessCapability::Spawn { commands }) =>
             Process(ProcessCapability::Spawn { commands: sorted(commands) }),
         Agent(AgentCapability::Spawn { allowed_kinds }) =>
@@ -487,7 +513,7 @@ fn render_cap(c: &Capability) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Capability, FsCapability, NetCapability, ProcessCapability};
+    use crate::{Capability, FsCapability, NetCapability, ProcessCapability, Value};
     use alloc::vec;
 
     fn read(paths: &[&str]) -> Capability {
@@ -554,6 +580,38 @@ mod tests {
         assert!(meet(&a, &b).is_empty());
     }
 
+    #[test]
+    fn law_holds_for_net_http_methods() {
+        // Regression: subset once ignored methods → admitted GET under a
+        // POST-only ceiling, diverging from meet (which intersects methods).
+        let a = vec![Capability::Network(NetCapability::Http {
+            hosts: vec!["api.example.com".into()],
+            methods: vec!["GET".into()],
+        })];
+        let b = vec![Capability::Network(NetCapability::Http {
+            hosts: vec!["api.example.com".into()],
+            methods: vec!["POST".into()],
+        })];
+        assert!(capability_subset(&a, &b).is_err()); // methods now enforced
+        assert!(meet(&a, &b).is_empty()); // methods disjoint → cap dropped
+    }
+
+    #[test]
+    fn canon_keeps_distinct_params_customs() {
+        use alloc::collections::BTreeMap;
+        // p1 empty, p2 has one entry ⟹ params differ (the Value is irrelevant).
+        let p1: BTreeMap<String, Value> = BTreeMap::new();
+        let mut p2: BTreeMap<String, Value> = BTreeMap::new();
+        p2.insert("k".into(), Value::Bool(true));
+        let a = vec![
+            Capability::Custom { name: "x".into(), params: p1.clone() },
+            Capability::Custom { name: "x".into(), params: p2 },
+        ];
+        assert_eq!(canon_caps(&a).len(), 2); // distinct params ⟹ not merged
+        let b = vec![Capability::Custom { name: "x".into(), params: p1 }];
+        assert!(capability_subset(&a, &b).is_err());
+    }
+
     use proptest::prelude::*;
 
     // small G2 path generator over a fixed alphabet
@@ -581,6 +639,16 @@ mod tests {
                     commands: c.iter().map(|s| s.to_string()).collect(),
                 })
             }),
+            (
+                prop::collection::vec(prop_oneof![Just("api.example.com"), Just("*.example.com")], 1..3),
+                prop::collection::vec(prop_oneof![Just("GET"), Just("POST")], 1..3),
+            )
+                .prop_map(|(hosts, methods)| {
+                    Capability::Network(NetCapability::Http {
+                        hosts: hosts.iter().map(|s| s.to_string()).collect(),
+                        methods: methods.iter().map(|s| s.to_string()).collect(),
+                    })
+                }),
         ]
     }
     fn caps_strat() -> impl Strategy<Value = Vec<Capability>> {
