@@ -27,3 +27,6 @@ test-support = [] # no extra deps; just gates the module visibility
 proptest    = { workspace = true }
 tokio       = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-test  = "0.4"
+
+[lints]
+workspace = true

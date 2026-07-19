@@ -10,3 +10,6 @@ authors.workspace      = true
 
 [dependencies]
 serde_json = { workspace = true, default-features = false, features = ["alloc"] }
+
+[lints]
+workspace = true

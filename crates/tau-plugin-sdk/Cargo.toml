@@ -32,3 +32,6 @@ tau-domain          = { workspace = true, features = ["serde", "std"] }
 proptest            = { workspace = true }
 tokio               = { workspace = true, features = ["macros", "rt-multi-thread"] }
 uuid                = { workspace = true, features = ["v7", "std"] }
+
+[lints]
+workspace = true

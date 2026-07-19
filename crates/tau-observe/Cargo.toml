@@ -64,3 +64,6 @@ otlp = [
     "dep:tracing-opentelemetry",
     "dep:tonic",
 ]
+
+[lints]
+workspace = true
