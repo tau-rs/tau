@@ -13,7 +13,9 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-#[cfg(feature = "serde")]
+// `HostName` is used by the serde impls and by `shape_tests` (a non-serde
+// test); make it available in both configurations without warning when neither.
+#[cfg(any(feature = "serde", test))]
 use crate::package::host::HostName;
 use crate::package::host::{HostSet, HttpMethod};
 use crate::value::Value;
