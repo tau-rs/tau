@@ -9,15 +9,14 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-tau-runtime-core      = { workspace = true }
+tau-runtime-core      = { workspace = true, features = ["std"] }
 tau-domain            = { workspace = true, features = ["serde"] }
 tau-observe           = { workspace = true }
-# TODO(future): tau-ports/test-fixtures is enabled in production deps to
-# make MockSandbox reachable for the env-var-gated path
-# (TAU_TESTING_ALLOW_MOCK_SANDBOX=1) used by CLI integration tests via
-# cargo_bin("tau"). Future cleanup: move MockSandbox out of fixtures, or
-# build a dedicated test-only binary for the integration test harness.
-tau-ports             = { workspace = true, features = ["serde", "test-fixtures"] }
+# Production deps carry NO test-fixtures: the MockSandbox adapter is reachable
+# only under `cargo test` or the opt-in `mock-sandbox` feature (see [features]),
+# so a default `cargo build` of the `tau` binary contains no capability-gate
+# bypass.
+tau-ports             = { workspace = true, features = ["serde"] }
 tau-pkg               = { workspace = true }
 tau-plugin-protocol   = { workspace = true }
 tau-sandbox-native    = { workspace = true }
@@ -84,9 +83,16 @@ default = []
 # `PluginProcess` from a pre-paired reader+writer (no subprocess
 # spawn) and exercise the per-port IPC adapters end-to-end.
 test-support   = ["tau-plugin-protocol/test-support"]
-# Enables the MockSandbox adapter in `sandbox::chain`. Activated automatically
-# by the dev-dep on tau-ports with `test-fixtures`.
-test-fixtures  = ["tau-ports/test-fixtures"]
+# Makes the `SandboxAdapter::Mock` variant and its
+# `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` env-var injection path reachable. OFF by
+# default so a production `cargo build` of the `tau` binary contains neither the
+# mock code path nor the env-var string literal (CI asserts its absence). Enabled
+# ONLY via the dev-deps of crates whose tests need the mock (tau-cli, tau-app);
+# resolver v2 keeps dev-dependency features out of non-test builds, so this never
+# leaks into a release binary. tau-runtime-tokio's own unit tests reach the mock
+# via `cfg(test)` (see the `#[cfg(any(feature = "mock-sandbox", test))]` gates in
+# process_gate::resolver), backed by the dev-dep on tau-ports/test-fixtures below.
+mock-sandbox   = ["tau-ports/test-fixtures"]
 # Enables integration tests that require real OS sandboxing primitives
 # (landlock, seccomp, namespaces). Linux-only at v0.1; CI flips this on
 # the ubuntu-latest test slot.
@@ -118,7 +124,7 @@ fs-read            = { path = "../tau-plugins/fs-read" }
 tau-plugin-sdk     = { workspace = true }
 # Used by ir_smoke.rs integration test.
 tau-ir             = { workspace = true }
-tau-runtime-core   = { workspace = true, features = ["test-fixtures"] }
+tau-runtime-core   = { workspace = true, features = ["std", "test-fixtures"] }
 
 [lints]
 workspace = true

@@ -36,7 +36,10 @@ libc = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true, features = ["json"] }
 tau-ports = { workspace = true, features = ["test-fixtures"] }
-tau-runtime-tokio = { workspace = true }
+# `mock-sandbox` makes `SandboxAdapter::Mock` reachable for the serve-adapter
+# regression tests (see serve/lifecycle.rs). Dev-dep only — resolver v2 keeps it
+# out of tau-app's production build.
+tau-runtime-tokio = { workspace = true, features = ["mock-sandbox"] }
 tempfile = { workspace = true }
 
 [lints]

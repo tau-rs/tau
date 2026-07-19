@@ -185,7 +185,7 @@ impl ToolDispatcher for EchoWithRegistryDispatcher {
 fn agent(id: &str) -> Agent {
     Agent {
         id: AgentId(id.into()),
-        prompt: String::new(),
+        prompt: tau_ir::prompt::PromptSource::inline(""),
         model_ref: tau_ir::ModelRef {
             backend: "echo-llm".into(),
             model_id: "echo-model".into(),

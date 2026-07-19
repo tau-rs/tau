@@ -17,7 +17,7 @@ tau-domain          = { workspace = true, features = ["serde"] }
 tau-pkg             = { workspace = true }
 tau-ports           = { workspace = true }
 tau-plugin-protocol = { workspace = true }
-tau-runtime-core    = { workspace = true }
+tau-runtime-core    = { workspace = true, features = ["std"] }
 tau-runtime-tokio   = { workspace = true }
 tau-workflow        = { workspace = true }
 tau-app             = { workspace = true }
@@ -75,6 +75,12 @@ url              = { workspace = true }
 walkdir          = { workspace = true }
 # test-fixtures feature needed by tests/common/mock_llm.rs (T9: orchestration pattern tests).
 tau-ports        = { workspace = true, features = ["test-fixtures", "serde"] }
+# Enables the `mock-sandbox` feature on tau-runtime-tokio for tests only. Under
+# resolver v2 this dev-dep feature unifies onto the `tau` binary that the
+# integration tests spawn via `cargo_bin("tau")` (which reads
+# TAU_TESTING_ALLOW_MOCK_SANDBOX=1), and onto the in-crate resolve_helpers test —
+# without leaking the mock into a production `cargo build -p tau-cli`.
+tau-runtime-tokio = { workspace = true, features = ["mock-sandbox"] }
 # Task 4: e2e tau build wasm → wasmtime → typed RunEvent stream (β.7.5 PR-E2).
 tau-wasm-host    = { path = "../tau-wasm-host" }
 
