@@ -1,35 +1,79 @@
 //! Deterministic serialization of an `IrModule` to canonical bytes.
 //!
-//! Rules (per design spec D-6):
-//! 1. Deserialize once, re-serialize via the canonical encoder. The
-//!    canonical encoder writes fields in a fixed order, uses BTreeMap
-//!    iteration (alphabetical) for every map, and serializes optional
-//!    fields verbatim (None → null) — no skipping.
-//! 2. No `SystemTime` in the bytes (i64-ms only — enforced by the type
-//!    surface, not by this encoder).
-//! 3. The encoder is idempotent: `decode(encode(x)) == x` and
-//!    `encode(decode(encode(x))) == encode(x)`.
+//! `to_canonical_bytes` writes the derived `serde_json` compact encoding:
+//! fields in Rust declaration order, `BTreeMap` fields alphabetically,
+//! `skip_serializing_if` honored (absent optional fields are omitted, not
+//! `null`). Two successive calls yield identical bytes.
+//!
+//! `from_canonical_bytes` is version-gated (D8-B): it rejects a bundle whose
+//! `ir_format` MAJOR differs from this crate's before attempting a full decode.
+//!
+//! NOTE: the canonical form is scheduled to become a specification (sorted-key
+//! compact JSON) under D9-C / `ir_format 3.0.0`; until then it is the derived
+//! serde encoding described above.
 
 use alloc::vec::Vec;
 
-use crate::module::IrModule;
+use crate::error::IrError;
+use crate::module::{IrFormatVersion, IrModule};
+use serde::Deserialize;
 
 /// Serialize an `IrModule` to canonical bytes.
 ///
 /// Uses `serde_json`'s compact (no-pretty) encoder over the IrModule's
-/// derived `Serialize` impl. Map iteration is `BTreeMap` (alphabetical)
-/// because every map field in `IrModule`/`Workflow` is a `BTreeMap`.
-/// All fields serialize unconditionally: `Option::None` becomes JSON
-/// `null` (no `skip_serializing_if`), and `Vec` order is preserved
-/// as-given.
+/// derived `Serialize` impl. Fields serialize in Rust declaration order;
+/// map iteration is `BTreeMap` (alphabetical) because every map field in
+/// `IrModule`/`Workflow` is a `BTreeMap`. `skip_serializing_if` is
+/// honored, so absent optional fields are omitted rather than emitted as
+/// JSON `null`, and `Vec` order is preserved as-given.
 pub fn to_canonical_bytes(module: &IrModule) -> Vec<u8> {
     serde_json::to_vec(module).expect("IrModule serializes cleanly to JSON")
 }
 
-/// Deserialize canonical bytes back to an `IrModule`. Pure inverse of
-/// `to_canonical_bytes`.
-pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, serde_json::Error> {
-    serde_json::from_slice(bytes)
+/// Phase-1 peek: read only `ir_format` from the canonical bytes. serde
+/// ignores every other field, so this is shape-independent — it decodes
+/// even when the full `IrModule` shape has changed across a major.
+#[derive(Deserialize)]
+struct VersionPeek {
+    ir_format: IrFormatVersion,
+}
+
+/// Deserialize canonical bytes back to an `IrModule`, gated on IR-format
+/// MAJOR compatibility.
+///
+/// Two-phase:
+/// 1. Decode `VersionPeek` to read `ir_format`; compare its major against
+///    [`IrFormatVersion::CURRENT_MAJOR`]. A different major is a breaking
+///    IR-shape change → [`IrError::FormatMajorMismatch`] (the full decode
+///    is never attempted). An unparseable version →
+///    [`IrError::FormatUnparseable`].
+/// 2. Same major → full `IrModule` decode; a serde failure maps to
+///    [`IrError::Decode`].
+pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, IrError> {
+    use alloc::string::ToString;
+
+    // Phase 1: peek the version. This re-parses `bytes` a second time in
+    // phase 2 on the same-major path; deliberate — bundle load is a cold,
+    // once-per-run path, and a peek-then-full split keeps the version gate
+    // ahead of the full-shape decode without a custom streaming parser.
+    let peek: VersionPeek =
+        serde_json::from_slice(bytes).map_err(|e| IrError::Decode(e.to_string()))?;
+    let bundle_major = peek
+        .ir_format
+        .major()
+        .map_err(|()| IrError::FormatUnparseable {
+            value: peek.ir_format.0.clone(),
+        })?;
+    if bundle_major != IrFormatVersion::CURRENT_MAJOR {
+        return Err(IrError::FormatMajorMismatch {
+            bundle: peek.ir_format.0.clone(),
+            current: IrFormatVersion::CURRENT.to_string(),
+            bundle_major,
+        });
+    }
+
+    // Phase 2: full structural decode.
+    serde_json::from_slice(bytes).map_err(|e| IrError::Decode(e.to_string()))
 }
 
 #[cfg(test)]
@@ -351,5 +395,95 @@ mod pipeline_canonical_tests {
             back, m,
             "new control-flow variants must survive a round-trip"
         );
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+    use crate::error::IrError;
+    use crate::module::{IrFormatVersion, IrModule};
+    use alloc::string::ToString;
+    use tau_ports::target::registry;
+
+    /// A minimal, valid v2.4.0 module serialized to canonical bytes.
+    fn base_module() -> IrModule {
+        let target = registry::list_available().next().unwrap().triple;
+        IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target,
+            workflow: crate::module::Workflow::default(),
+            triggers: alloc::vec::Vec::new(),
+        }
+    }
+
+    /// Serialize `base_module`, then overwrite its `ir_format` field with
+    /// `version` and return the bytes.
+    fn bytes_with_version(version: &str) -> alloc::vec::Vec<u8> {
+        let m = base_module();
+        let mut v: serde_json::Value = serde_json::from_slice(&to_canonical_bytes(&m)).unwrap();
+        v["ir_format"] = serde_json::Value::String(version.to_string());
+        serde_json::to_vec(&v).unwrap()
+    }
+
+    #[test]
+    fn same_major_decodes_ok() {
+        for ver in ["v2.4.0", "v2.3.0", "v2.5.0", "v2.9.9"] {
+            let out = from_canonical_bytes(&bytes_with_version(ver));
+            assert!(out.is_ok(), "{ver} should decode: {out:?}");
+        }
+    }
+
+    #[test]
+    fn major_mismatch_is_rejected() {
+        for ver in ["v3.0.0", "v1.0.0"] {
+            match from_canonical_bytes(&bytes_with_version(ver)) {
+                Err(IrError::FormatMajorMismatch { bundle, .. }) => {
+                    assert_eq!(bundle, ver);
+                }
+                other => panic!("{ver} expected FormatMajorMismatch, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn unparseable_version_is_rejected() {
+        for ver in ["garbage", "", "v.4"] {
+            match from_canonical_bytes(&bytes_with_version(ver)) {
+                Err(IrError::FormatUnparseable { value }) => assert_eq!(value, ver),
+                other => panic!("{ver:?} expected FormatUnparseable, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_additive_field_is_tolerated() {
+        // Forward-compat: a same-major bundle carrying a field this tau
+        // does not know (future D6-B `assets`) still decodes.
+        let m = base_module();
+        let mut v: serde_json::Value = serde_json::from_slice(&to_canonical_bytes(&m)).unwrap();
+        v["ir_format"] = serde_json::Value::String("v2.5.0".to_string());
+        v["assets"] = serde_json::json!({ "logo": "deadbeef" });
+        let bytes = serde_json::to_vec(&v).unwrap();
+        assert!(from_canonical_bytes(&bytes).is_ok());
+    }
+
+    #[test]
+    fn valid_version_bad_body_is_decode_error() {
+        // ir_format ok, but the body is not an IrModule.
+        let bytes = br#"{"ir_format":"v2.4.0","nonsense":true}"#;
+        match from_canonical_bytes(bytes) {
+            Err(IrError::Decode(_)) => {}
+            other => panic!("expected Decode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_even_json_is_decode_error() {
+        match from_canonical_bytes(b"not json at all") {
+            Err(IrError::Decode(_)) => {}
+            other => panic!("expected Decode, got {other:?}"),
+        }
     }
 }
