@@ -6,6 +6,8 @@
 
 use alloc::collections::BTreeSet;
 
+use tau_ports::target::adapter_family::AdapterFamily;
+
 use crate::module::IrModule;
 use crate::pipeline::{PipelineStep, StepRun};
 use crate::tool_impl::ToolImpl;
@@ -80,6 +82,42 @@ pub fn required_features(m: &IrModule) -> BTreeSet<IrFeature> {
         }
     }
     f
+}
+
+/// The features an executing backend for `family` supports today. There is a
+/// single backend (the `tau-runtime-core` interpreter) behind every target,
+/// so every family maps to the same set until a divergent backend ships.
+/// EPIC 4.2 (#399) adds `Branch`/`Parallel`/`Loop`/`Suspend` here.
+pub fn backend_features(family: AdapterFamily) -> BTreeSet<IrFeature> {
+    let interpreter = || {
+        let mut f = BTreeSet::new();
+        for x in [
+            IrFeature::Pipeline,
+            IrFeature::Checks,
+            IrFeature::Subflow,
+            IrFeature::McpTools,
+            IrFeature::NativeTools,
+            IrFeature::DeterministicSteps,
+            IrFeature::Triggers,
+        ] {
+            f.insert(x);
+        }
+        f
+    };
+    match family {
+        AdapterFamily::Native
+        | AdapterFamily::Container
+        | AdapterFamily::Remote
+        | AdapterFamily::Wasi
+        | AdapterFamily::Passthrough => interpreter(),
+        // `AdapterFamily` is `#[non_exhaustive]` and defined in `tau-ports`, so
+        // rustc requires this wildcard even though every known variant is
+        // listed above. A future variant added upstream lands here silently
+        // (same interpreter set) rather than failing to compile — the
+        // exhaustive listing above is what actually forces a reviewer's eye
+        // when a new family is introduced.
+        _ => interpreter(),
+    }
 }
 
 /// Recurse one pipeline step, recording its feature and descending into any
@@ -160,6 +198,23 @@ mod tests {
         let f = required_features(&m);
         assert!(f.contains(&IrFeature::Pipeline));
         assert!(!f.contains(&IrFeature::Branch));
+    }
+
+    #[test]
+    fn backend_omits_unimplemented_control_flow_today() {
+        use tau_ports::target::adapter_family::AdapterFamily;
+        let native = backend_features(AdapterFamily::Native);
+        // Implemented today:
+        assert!(native.contains(&IrFeature::Pipeline));
+        assert!(native.contains(&IrFeature::Checks));
+        // NOT implemented until EPIC 4.2:
+        assert!(!native.contains(&IrFeature::Branch));
+        assert!(!native.contains(&IrFeature::Parallel));
+        assert!(!native.contains(&IrFeature::Loop));
+        assert!(!native.contains(&IrFeature::Suspend));
+        // One interpreter today ⇒ every family maps to the same set.
+        assert_eq!(native, backend_features(AdapterFamily::Wasi));
+        assert_eq!(native, backend_features(AdapterFamily::Passthrough));
     }
 
     #[test]
