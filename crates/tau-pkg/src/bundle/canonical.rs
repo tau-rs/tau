@@ -8,7 +8,7 @@ use std::fmt::Write;
 
 use crate::bundle::manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundlePackage,
-    BundleTrigger, IrPayload,
+    BundleTrigger, GovernanceRecord, GovernanceVerdict, IrPayload,
 };
 
 /// Emit the canonical TOML serialization of a `BundleManifest`.
@@ -64,6 +64,14 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
         write_trigger(&mut out, trigger);
     }
 
+    // [governance] — emitted when present so the verdict participates in the
+    // self-hash (a verdict must not be rewritable post-build).
+    if let Some(gov) = &manifest.governance {
+        out.push('\n');
+        out.push_str("[governance]\n");
+        write_governance(&mut out, gov);
+    }
+
     // [ir_payload] — emitted when present so the bytes participate in the self-hash.
     if let Some(ir) = &manifest.ir_payload {
         out.push('\n');
@@ -72,6 +80,21 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
     }
 
     out
+}
+
+fn write_governance(out: &mut String, gov: &GovernanceRecord) {
+    write_str_kv(out, "verdict", governance_verdict_to_str(gov.verdict));
+}
+
+/// Wire form of a governance verdict. MUST match the serde `kebab-case`
+/// rename on [`GovernanceVerdict`] so the canonical (hashed) emission and
+/// the serde round-trip agree byte-for-byte.
+fn governance_verdict_to_str(v: GovernanceVerdict) -> &'static str {
+    match v {
+        GovernanceVerdict::Governed => "governed",
+        GovernanceVerdict::Ungoverned => "ungoverned",
+        GovernanceVerdict::Skipped => "skipped",
+    }
 }
 
 fn write_package(out: &mut String, pkg: &BundlePackage) {

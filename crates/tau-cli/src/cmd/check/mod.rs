@@ -6,14 +6,21 @@
 //! Output: human (default), `--json` (JSONL), `--sarif` (SARIF 2.1.0).
 //! Exit codes: 0 clean / 2 fixable / 3 needs-setup / 64 usage / 70 internal.
 
+mod agent_caps;
 mod categories;
+mod gate;
 mod output;
 mod result;
 mod runner;
 
+pub use gate::{
+    evaluate_governance, render_no_constitution, render_ungoverned_bundle_refused,
+    render_violations, GovernanceFlags, GovernanceOutcome,
+};
 pub use result::{
     compute_exit, CheckCategory, CheckFinding, CheckResult, CheckStatus, FindingLocation, Severity,
 };
+pub use runner::CheckCtx;
 
 use anyhow::Result;
 use std::str::FromStr;

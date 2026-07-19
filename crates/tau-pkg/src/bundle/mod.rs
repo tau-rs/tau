@@ -27,7 +27,8 @@ pub use error::{BundleIntegrityError, BundleIoError, BundleParseError};
 pub use hash::{compute_self_hash, verify_self_hash};
 pub use manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
-    BundlePackage, BundleRetry, BundleTrigger, IrPayload, ProjectInfo,
+    BundlePackage, BundleRetry, BundleTrigger, GovernanceRecord, GovernanceVerdict, IrPayload,
+    ProjectInfo,
 };
 pub use reproduce::{
     verify_reproducible, ManifestDiff, ManifestSide, ReproOptions, ReproReport, Side,

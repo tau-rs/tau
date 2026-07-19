@@ -206,4 +206,24 @@ pub enum LowerError {
         /// The referenced step id that is missing or comes at/after the check step.
         output: String,
     },
+
+    /// A `StepRun::Loop` has `max_iters == 0`, which would never execute a
+    /// body iteration. The bound must be at least 1.
+    #[error("pipeline step '{step}': Loop.max_iters must be > 0")]
+    LoopMaxItersZero {
+        /// The pipeline step id containing the offending Loop.
+        step: String,
+    },
+
+    /// A `Condition::evaluates` is a `Locus::Output(id)` that names a step
+    /// not yet visible at this point in the pipeline.
+    #[error(
+        "condition in step '{step}' references unknown or out-of-scope output step '{output}'"
+    )]
+    ConditionUnknownOutput {
+        /// The pipeline step id containing the condition.
+        step: String,
+        /// The referenced step id that is missing or out of scope.
+        output: String,
+    },
 }

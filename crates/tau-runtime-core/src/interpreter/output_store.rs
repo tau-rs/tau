@@ -33,6 +33,15 @@ impl OutputStore {
         self.map.get(id)
     }
 
+    /// Merge another store's entries into this one (later keys win).
+    ///
+    /// Used to join a `Parallel` branch's produced outputs back into the
+    /// shared store. Branch reads are branch-isolated (they only add keys),
+    /// so a straight insertion is the correct join.
+    pub fn merge(&mut self, other: OutputStore) {
+        self.map.extend(other.map);
+    }
+
     /// Project to the `id -> String` map the templater consumes. A
     /// `Value::String` yields its inner text; any other value is
     /// compact-JSON encoded.
@@ -62,5 +71,16 @@ mod tests {
         let m = s.template_map();
         assert_eq!(m.get("a").unwrap(), "hi");
         assert_eq!(m.get("b").unwrap(), "{\"n\":1}");
+    }
+
+    #[test]
+    fn merge_inserts_other_keys() {
+        let mut a = OutputStore::new();
+        a.insert("x", Value::String("1".into()));
+        let mut b = OutputStore::new();
+        b.insert("y", Value::String("2".into()));
+        a.merge(b);
+        assert_eq!(a.get("x").unwrap(), &Value::String("1".into()));
+        assert_eq!(a.get("y").unwrap(), &Value::String("2".into()));
     }
 }

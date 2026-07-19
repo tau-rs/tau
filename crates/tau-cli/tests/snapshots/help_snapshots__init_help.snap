@@ -13,6 +13,9 @@ Options:
       --dry-run
           Print what would be created without writing files
 
+      --allow
+          Scaffold a least-privilege `[allow]` constitution (the commented union of installed packages' declared capabilities) instead of the bare stub. Use this to bootstrap a governed project (ADR-0057 / D2)
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

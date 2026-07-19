@@ -12,7 +12,7 @@ pub async fn run(args: McpShowArgs, _output: &mut Output) -> Result<()> {
     let project_root = std::env::current_dir().context("get cwd")?;
     let pin_path = project_root
         .join(".tau/mcp")
-        .join(format!("{}.contract.json", &args.name));
+        .join(format!("{}.contract.json", args.name));
     let bytes = std::fs::read(&pin_path)
         .with_context(|| format!("no pin file at {}", pin_path.display()))?;
     let pinned: PinnedContract =
@@ -28,13 +28,13 @@ pub async fn run(args: McpShowArgs, _output: &mut Output) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&sarif)?);
         }
         OutputFormat::Human => {
-            println!("name:       {}", &args.name);
-            println!("url:        {}", &pinned.url);
+            println!("name:       {}", args.name);
+            println!("url:        {}", pinned.url);
             println!(
                 "server:     {} v{}",
                 pinned.contract.server_info.name, pinned.contract.server_info.version
             );
-            println!("hash:       {}", &pinned.contract_hash_hex);
+            println!("hash:       {}", pinned.contract_hash_hex);
             println!("tools:      {}", pinned.contract.tools.len());
             for t in &pinned.contract.tools {
                 println!("  - {}", t.name);
