@@ -177,6 +177,14 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
     }
 
     let mut seen_ids: BTreeSet<&str> = BTreeSet::new();
+    // Nested descendants of PRIOR top-level steps are also visible to a
+    // later top-level step's template refs (EPIC 4.2 Decision 1: the store
+    // is flat and block-transparent, so a downstream step may read a
+    // Branch-arm or Loop-body output by bare id). Populated at the END of
+    // each iteration below, so at step `i` this holds exactly the subtree
+    // ids of steps `[0..i)` — never the current step's or a later step's
+    // nested descendants.
+    let mut visible_from_prior: BTreeSet<&str> = BTreeSet::new();
     for step in &pipeline.steps {
         let sid = step.id.0.as_str();
         // Global uniqueness was already enforced above; this insert only
@@ -234,19 +242,30 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
         })?;
         for r in refs {
             if let TemplateRef::StepOutput(ref_id) = r {
-                let exists_anywhere = pipeline.steps.iter().any(|s| s.id.0 == ref_id);
-                if !exists_anywhere {
+                // Existence is checked tree-wide (EPIC 4.2 Decision 1: nested
+                // Branch/Loop/Parallel steps share the same flat global
+                // namespace as top-level steps), not just among top-level ids.
+                if !all_ids.contains(ref_id.as_str()) {
                     return Err(LowerError::UnknownOutputRef {
                         step: sid.into(),
                         referenced: ref_id,
                     });
                 }
-                // seen_ids currently holds exactly the steps at-or-before this one
-                // (the current step's id was just inserted above).
-                // A reference is valid only to a STRICTLY earlier step.
-                // Guard self-reference explicitly; !seen_ids.contains catches
-                // forward references (later steps not yet inserted).
-                if ref_id == sid || !seen_ids.contains(ref_id.as_str()) {
+                // seen_ids currently holds exactly the top-level steps at-or-
+                // before this one (the current step's id was just inserted
+                // above). visible_from_prior holds the subtree ids of every
+                // STRICTLY earlier top-level step (Branch arms, Loop bodies,
+                // Parallel branches all included — a downstream step may
+                // read a block's result by bare id per Decision 1). A
+                // reference is valid iff it is a strictly earlier top-level
+                // step OR a nested descendant of one. Guard self-reference
+                // explicitly; the two `!contains` catches forward references
+                // (later top-level steps, or nested descendants of the
+                // current/later top-level steps).
+                if ref_id == sid
+                    || (!seen_ids.contains(ref_id.as_str())
+                        && !visible_from_prior.contains(ref_id.as_str()))
+                {
                     return Err(LowerError::ForwardOutputRef {
                         step: sid.into(),
                         referenced: ref_id,
@@ -254,6 +273,12 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
                 }
             }
         }
+
+        // Make this step's whole subtree (including its own id, which
+        // harmlessly overlaps seen_ids) visible to later top-level steps.
+        let mut sub = alloc::vec::Vec::new();
+        collect_all_ids(core::slice::from_ref(step), &mut sub);
+        visible_from_prior.extend(sub);
     }
     Ok(())
 }
@@ -1196,6 +1221,220 @@ mod tests {
             matches!(
                 err,
                 LowerError::UnknownOutputRef { .. } | LowerError::ForwardOutputRef { .. }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn top_level_step_reads_loop_body_output_typechecks() {
+        // seed = Agent, refine = Loop { body: [improve = Agent], until:
+        // Output(improve) NonEmpty, max_iters: 2 }, tail = Agent input
+        // "${steps.improve.output}".
+        // A TOP-LEVEL step reading a Loop-body output by bare id must
+        // ACCEPT (ADR-0059 Decision 1 — loop bodies always run ≥1x, so this
+        // is always safe once the loop step itself resolves).
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("seed".to_string()),
+            agent_with_tool_refs("seed", &[]),
+        );
+        agents.insert(
+            AgentId("improve".to_string()),
+            agent_with_tool_refs("improve", &[]),
+        );
+        agents.insert(
+            AgentId("tail".to_string()),
+            agent_with_tool_refs("tail", &[]),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![
+                        PipelineStep {
+                            id: PipelineStepId("seed".to_string()),
+                            run: StepRun::Agent(AgentId("seed".to_string())),
+                            input: "${input}".to_string(),
+                        },
+                        PipelineStep {
+                            id: PipelineStepId("refine".to_string()),
+                            run: StepRun::Loop {
+                                body: alloc::vec![PipelineStep {
+                                    id: PipelineStepId("improve".to_string()),
+                                    run: StepRun::Agent(AgentId("improve".to_string())),
+                                    input: "${steps.seed.output}".to_string(),
+                                }],
+                                until: Condition {
+                                    evaluates: Locus::Output(
+                                        PipelineStepId("improve".to_string(),)
+                                    ),
+                                    predicate: GoalPredicate::NonEmpty,
+                                },
+                                max_iters: 2,
+                            },
+                            input: "${input}".to_string(),
+                        },
+                        PipelineStep {
+                            id: PipelineStepId("tail".to_string()),
+                            run: StepRun::Agent(AgentId("tail".to_string())),
+                            input: "${steps.improve.output}".to_string(),
+                        },
+                    ],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        typecheck(&parsed).expect("top-level may read a loop-body output");
+    }
+
+    #[test]
+    fn top_level_step_reads_branch_arm_output_typechecks() {
+        // seed = Agent, gate = Branch { on: valid, then: [inner = Agent],
+        // otherwise: [] }, tail = Agent input "${steps.inner.output}".
+        // A TOP-LEVEL step reading a Branch-arm output by bare id must
+        // ACCEPT at typecheck (ADR-0059 Decision 1 + Known limitation: this
+        // is admitted here and only hard-errors at RUNTIME if the arm that
+        // defines `inner` did not execute — mirrors the interpreter e2e
+        // test `downstream_reads_block_output_by_bare_id`).
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("seed".to_string()),
+            agent_with_tool_refs("seed", &[]),
+        );
+        agents.insert(
+            AgentId("inner".to_string()),
+            agent_with_tool_refs("inner", &[]),
+        );
+        agents.insert(
+            AgentId("tail".to_string()),
+            agent_with_tool_refs("tail", &[]),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![
+                        PipelineStep {
+                            id: PipelineStepId("seed".to_string()),
+                            run: StepRun::Agent(AgentId("seed".to_string())),
+                            input: "${input}".to_string(),
+                        },
+                        PipelineStep {
+                            id: PipelineStepId("gate".to_string()),
+                            run: StepRun::Branch {
+                                on: Condition {
+                                    evaluates: Locus::Path("/flag".to_string()),
+                                    predicate: GoalPredicate::Exists,
+                                },
+                                then: alloc::vec![PipelineStep {
+                                    id: PipelineStepId("inner".to_string()),
+                                    run: StepRun::Agent(AgentId("inner".to_string())),
+                                    input: "${steps.seed.output}".to_string(),
+                                }],
+                                otherwise: alloc::vec![],
+                            },
+                            input: "${input}".to_string(),
+                        },
+                        PipelineStep {
+                            id: PipelineStepId("tail".to_string()),
+                            run: StepRun::Agent(AgentId("tail".to_string())),
+                            input: "${steps.inner.output}".to_string(),
+                        },
+                    ],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        typecheck(&parsed).expect("top-level may read a branch-arm output");
+    }
+
+    #[test]
+    fn top_level_forward_ref_to_later_nested_rejected() {
+        // tail = Agent input "${steps.inner.output}" comes BEFORE gate =
+        // Branch { then: [inner = Agent], otherwise: [] } — "inner" lives in
+        // a LATER top-level block, so this must still REJECT. Proves the
+        // Decision-1 fix (admit PRIOR-block nested descendants) did not
+        // loosen forward-reference ordering.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("tail".to_string()),
+            agent_with_tool_refs("tail", &[]),
+        );
+        agents.insert(
+            AgentId("inner".to_string()),
+            agent_with_tool_refs("inner", &[]),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![
+                        PipelineStep {
+                            id: PipelineStepId("tail".to_string()),
+                            run: StepRun::Agent(AgentId("tail".to_string())),
+                            input: "${steps.inner.output}".to_string(),
+                        },
+                        PipelineStep {
+                            id: PipelineStepId("gate".to_string()),
+                            run: StepRun::Branch {
+                                on: Condition {
+                                    evaluates: Locus::Path("/flag".to_string()),
+                                    predicate: GoalPredicate::Exists,
+                                },
+                                then: alloc::vec![PipelineStep {
+                                    id: PipelineStepId("inner".to_string()),
+                                    run: StepRun::Agent(AgentId("inner".to_string())),
+                                    input: "${input}".to_string(),
+                                }],
+                                otherwise: alloc::vec![],
+                            },
+                            input: "${input}".to_string(),
+                        },
+                    ],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        };
+        let err = typecheck(&parsed)
+            .expect_err("top-level ref to a LATER block's nested id must still be rejected");
+        assert!(
+            matches!(
+                err,
+                LowerError::ForwardOutputRef { .. } | LowerError::UnknownOutputRef { .. }
             ),
             "got {err:?}"
         );
