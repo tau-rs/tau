@@ -533,7 +533,7 @@ mod tests {
     fn agent_with_tool_refs(id: &str, refs: &[&str]) -> Agent {
         Agent {
             id: AgentId(id.to_string()),
-            prompt: String::new(),
+            prompt: tau_ir::prompt::PromptSource::inline(""),
             model_ref: tau_ir::model_ref::ModelRef {
                 backend: String::new(),
                 model_id: String::new(),

@@ -2,7 +2,8 @@
 
 Derived from the 2026-06-20 roadmap-challenge session. Source of record:
 `.context/SESSION-SYNTHESIS.md` (working notes) — this doc is the committed,
-implementable backlog.
+implementable backlog. This is the **active backlog**; for the historical phase
+record (Phase 0/1/α/β/γ/δ) see [`../../../ROADMAP.md`](../../../ROADMAP.md).
 
 **Vision (one line):** tau is a compiler+engine — declare what agents are *allowed* in a
 root `tau.toml` constitution, build workflows beautifully in any language (generated typed
@@ -104,15 +105,61 @@ public ABIs, and the source for generated SDKs.
 
 ## EPIC 4 — IR control flow: structured blocks + dynamic regions  [needs 2]
 **Goal:** Branch/Parallel/Loop/Suspend + capability-bounded dynamic regions; IR ≥ v2.3.0.
-- **4.1** ADR + IR bump: `StepRun` gains Branch/Parallel/Loop/Suspend (reuse
-  `Locus`/`GoalPredicate`/`OnFail::Retry` rewind). *Accept:* byte-stable when unused.
-- **4.2** Interpreter: recursive structured walk; bounded fork-join for Parallel.
-- **4.3** `Suspend` reuses the shipping `per_tool_call` checkpoint (HITL = checkpoint + wait
-  for signal + seed-and-skip resume). *Accept:* suspend/resume round-trip.
-- **4.4** `StepRun::Dynamic` + ceiling + bounds; build-time envelope verify (tier 2).
-- **4.5** Runtime gate: membership + attenuation + bounds counters for dynamic regions.
-- **4.6** Conformance: normalize parallel-branch event order by index; tier-3a CI conformance.
-**Epic DoD:** blocks + dynamic regions run + conformance-checked; envelope enforced.
+
+**Re-cut per-construct (D13-C, 2026-07-19).** The original 4.2–4.6 were layer-ordered
+(one PR = the interpreter for *all* constructs, another = conformance for all, …). Two of
+those horizontal layers shipped as **producer-without-consumer** merges — value that a user
+cannot yet reach:
+- **4.1 (#444, merged)** added Branch/Parallel/Loop/Suspend to the IR data model + typecheck
+  only. No `tau.toml` syntax produces them.
+- **4.2-interpreter (#454, merged)** made the interpreter *execute* Branch/Parallel/Loop
+  (recursive `run_steps` walk, flat-global nested scope, bounded fork-join). Still no syntax
+  produces them — `PipelineRunRef` (`tau-pkg` `project.rs`) is only Agent/Tool/Deterministic/Check.
+
+So the engine can run these blocks but **no author can write one.** The remaining work is the
+*authoring→lowering* consumer, cut vertically per construct. Each slice below builds the
+syntax→lowering→typecheck-reachability→wasm-parity→conformance→docs on top of the merged
+interpreter; see [slicing-policy.md](../../explanation/slicing-policy.md) (which cites 4.1 and
+4.2-interpreter as its worked producer-without-consumer examples).
+
+**Slice DoD template (identical in shape for 4.2a/4.2b/4.2c):**
+`tau.toml` syntax → lowering → typecheck (incl. user-reachability) → interpreter execution
+(already merged, #454) → the construct's `IrFeature` set flipped (D8's feature-set honesty
+test forces this) → wasm: parity OR explicit feature-reject at load → conformance fixture
+runs in CI → one docs example. **Merge = "a user can author and run `<construct>` end-to-end
+today."**
+
+- **4.2a** **Branch end-to-end.** `tau.toml` branch syntax → `PipelineRunRef::Branch` lowering
+  → user-reachable → docs example. *Delta:* a user can newly write a conditional branch in
+  `tau.toml` and run it.
+- **4.2b** **Parallel end-to-end.** *Delta:* a user can newly write a parallel fan-out/join in
+  `tau.toml` and run it (bounded fork-join already executes).
+- **4.2c** **Loop end-to-end.** Absorbs the nested-scope items that stop being deferrable once
+  Loop is user-reachable: `Loop.until` referencing its own body's output (rejected today,
+  ADR-0058:92), nested `PipelineStepId` uniqueness, nested `${steps.<id>.output}` template
+  visibility, **and the nested-input template-validation gap** (audit H5: typecheck never
+  parses nested step `.input` templates — `typecheck.rs:219-244` vs `:263-369`). *Delta:* a
+  user can newly write a bounded loop with feedback in `tau.toml` and run it.
+- **4.3** **Suspend end-to-end + checkpoint/resume round-trip.** Its natural pair; the existing
+  4.3 scope (reuse the shipping `per_tool_call` checkpoint — HITL = checkpoint + wait for signal
+  + seed-and-skip resume) merges in. Interpreter currently aborts Suspend with a named error
+  (deferred from #454). *Delta:* a user can newly suspend a run for a human/external signal and
+  resume it.
+- **4.4** **Dynamic regions** (`StepRun::Dynamic` + ceiling + bounds; build-time envelope verify,
+  tier 2) — scope unchanged, **and** now the tracking home for the **agent⊇spawn lattice check**
+  (deferred from 1.5 "to EPIC 4" but absent from every story). Give it a named sub-story here
+  with its prerequisite **per-kind agent definitions** called out (origin ADR-0024). *Delta:* a
+  user can newly declare a bounded dynamic region whose spawns are lattice-checked at build.
+- **4.5** **Runtime gate for dynamic regions** (membership + attenuation + bounds counters).
+  **MANDATORY cross-reference task before either 3.4 or 4.5 starts:** resolve the 3.4↔4.5
+  collision — 3.4 *removes* the in-guest wasm gate while 4.5 *adds* a runtime gate; on wasm
+  these interact. The D1-C attenuation handoff also touches this surface — link all three.
+  *Delta:* a dynamic region's runtime spawns are gated against its declared envelope.
+- **4.6** ~~Conformance~~ **DELETED as a story.** Conformance/parity is in every slice's DoD
+  above, never a trailing phase (per slicing-policy.md rule 4).
+
+**Epic DoD:** a user can author + run Branch/Parallel/Loop/Suspend and bounded dynamic regions
+from `tau.toml`; each construct is conformance-checked and its envelope enforced.
 
 ## EPIC 5 — Polyglot sourcing + DX  [needs 0,2]
 **Goal:** generated typed SDKs + `tau embed` + golden path + typed React/Angular; no surprises.

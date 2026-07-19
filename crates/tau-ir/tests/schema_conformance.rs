@@ -12,7 +12,7 @@ fn load(p: &str) -> serde_json::Value {
 }
 
 fn compiled() -> jsonschema::Validator {
-    jsonschema::validator_for(&load("tau-ir.v2.4.0.schema.json")).expect("schema compiles")
+    jsonschema::validator_for(&load("tau-ir.v2.5.0.schema.json")).expect("schema compiles")
 }
 
 #[test]
@@ -24,6 +24,7 @@ fn valid_samples_validate() {
         "triggers",
         "durable",
         "control_flow_branch",
+        "agent-asset-prompt",
     ] {
         let inst = load(&format!("conformance/valid/{name}.json"));
         assert!(v.is_valid(&inst), "valid/{name}.json should validate");
@@ -33,7 +34,12 @@ fn valid_samples_validate() {
 #[test]
 fn invalid_samples_are_rejected() {
     let v = compiled();
-    for name in ["missing-ir-format", "unknown-node-kind"] {
+    for name in [
+        "missing-ir-format",
+        "unknown-node-kind",
+        "bad-asset-hash",
+        "unknown-key-in-asset",
+    ] {
         let inst = load(&format!("conformance/invalid/{name}.json"));
         assert!(!v.is_valid(&inst), "invalid/{name}.json should be rejected");
     }
@@ -47,6 +53,7 @@ fn valid_samples_deserialize_through_tau_ir() {
         "triggers",
         "durable",
         "control_flow_branch",
+        "agent-asset-prompt",
     ] {
         let raw =
             std::fs::read_to_string(dir().join(format!("conformance/valid/{name}.json"))).unwrap();

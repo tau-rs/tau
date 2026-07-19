@@ -548,6 +548,10 @@ model        = "default"
 /// Set `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` exactly once per process, safely
 /// even when called from parallel test threads. All tau subprocesses
 /// spawned from this test binary will inherit the env var.
+// Opt out of the workspace `unsafe_code = "warn"` lint for this one test-only
+// `env::set_var` call (the crate's `#![forbid(unsafe_code)]` does not reach the
+// integration-test target).
+#[allow(unsafe_code)]
 fn set_mock_sandbox_env_once() {
     use std::sync::OnceLock;
     static MOCK_SANDBOX_SET: OnceLock<()> = OnceLock::new();

@@ -11,7 +11,7 @@ authors.workspace      = true
 [dependencies]
 tau-domain   = { workspace = true, default-features = false, features = ["serde"] }
 tau-ports    = { workspace = true, default-features = false, features = ["serde"] }
-tau-ir       = { workspace = true, default-features = false }
+tau-ir       = { workspace = true }
 thiserror    = { workspace = true, default-features = false }
 serde        = { workspace = true, default-features = false, features = ["alloc", "derive"] }
 serde_json   = { workspace = true }
@@ -63,7 +63,14 @@ tool-validation    = ["wasm-interpreter"]
 # in PR-0b.)
 host-fs            = ["dep:globset", "tau-domain/std"]
 
-default = ["process", "capability-override", "tool-validation", "host-fs"]
+# Host/std bundle — the full former default surface. Host consumers opt in via
+# `features = ["std"]` now that the `tau-runtime-core` workspace alias sets
+# `default-features = false` (so the no_std wasm guest can link the same alias
+# without dragging in std via `host-fs → tau-domain/std`). Includes
+# `tool-validation` so host builds keep running ADR-0010 schema validation.
+std = ["process", "capability-override", "tool-validation", "host-fs"]
+
+default = ["std"]
 # Activates DeterministicRandom fallback in invoke_tool for test paths.
 test-fixtures = ["tau-ports/test-fixtures"]
 
@@ -91,6 +98,9 @@ async-stream   = { workspace = true }
 # the lib with the clock/random auto-inject path in run_agent active —
 # `pipeline_executor.rs` drives `run_pipeline` -> `run_agent`, which
 # panics unless test-fixtures is enabled.
-tau-runtime-core = { workspace = true, features = ["test-fixtures"] }
+tau-runtime-core = { workspace = true, features = ["std", "test-fixtures"] }
 # tracing-subscriber: captured-events layer for pipeline trace-event tests.
 tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
