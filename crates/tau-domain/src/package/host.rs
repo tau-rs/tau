@@ -6,7 +6,7 @@
 //! or IP-with-brackets. Suffix wildcards and IPv6 literals are deliberately
 //! deferred (additive later).
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use core::fmt;
 
 /// A validated bare hostname with an optional `:port`.
@@ -141,5 +141,92 @@ mod host_name_tests {
         ));
         assert_eq!(HostName::parse("a.com:0"), Err(HostNameError::BadPort));
         assert_eq!(HostName::parse("a.com:99999"), Err(HostNameError::BadPort));
+    }
+}
+
+/// One of the 9 standard HTTP verbs. Obscure/extension verbs (PROPFIND, …)
+/// are a deliberate not-yet — additive later, like suffix wildcards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HttpMethod {
+    /// GET verb.
+    Get,
+    /// HEAD verb.
+    Head,
+    /// POST verb.
+    Post,
+    /// PUT verb.
+    Put,
+    /// DELETE verb.
+    Delete,
+    /// CONNECT verb.
+    Connect,
+    /// OPTIONS verb.
+    Options,
+    /// TRACE verb.
+    Trace,
+    /// PATCH verb.
+    Patch,
+}
+
+/// An unrecognized HTTP method token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpMethodError(pub String);
+
+impl fmt::Display for HttpMethodError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unknown HTTP method {:?} (expected one of GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH)",
+            self.0
+        )
+    }
+}
+
+impl HttpMethod {
+    /// Parse case-insensitively; canonical output is uppercase.
+    pub fn parse(s: &str) -> Result<HttpMethod, HttpMethodError> {
+        Ok(match s.to_ascii_uppercase().as_str() {
+            "GET" => HttpMethod::Get,
+            "HEAD" => HttpMethod::Head,
+            "POST" => HttpMethod::Post,
+            "PUT" => HttpMethod::Put,
+            "DELETE" => HttpMethod::Delete,
+            "CONNECT" => HttpMethod::Connect,
+            "OPTIONS" => HttpMethod::Options,
+            "TRACE" => HttpMethod::Trace,
+            "PATCH" => HttpMethod::Patch,
+            _ => return Err(HttpMethodError(s.to_string())),
+        })
+    }
+
+    /// The canonical uppercase verb.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "GET",
+            HttpMethod::Head => "HEAD",
+            HttpMethod::Post => "POST",
+            HttpMethod::Put => "PUT",
+            HttpMethod::Delete => "DELETE",
+            HttpMethod::Connect => "CONNECT",
+            HttpMethod::Options => "OPTIONS",
+            HttpMethod::Trace => "TRACE",
+            HttpMethod::Patch => "PATCH",
+        }
+    }
+}
+
+#[cfg(test)]
+mod http_method_tests {
+    use super::*;
+
+    #[test]
+    fn parses_case_insensitively_and_canonicalizes() {
+        assert_eq!(HttpMethod::parse("get").unwrap(), HttpMethod::Get);
+        assert_eq!(HttpMethod::parse("PoSt").unwrap().as_str(), "POST");
+    }
+
+    #[test]
+    fn rejects_unknown_verb() {
+        assert_eq!(HttpMethod::parse("GTE"), Err(HttpMethodError("GTE".into())));
     }
 }
