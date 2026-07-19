@@ -249,12 +249,18 @@ fn cap_kind(cap: &Capability) -> &'static str {
 
 #[allow(dead_code)] // wired up by compute_effective, itself wired up by Task 5
 fn validate_allow_subset(cap: &Capability, allow: &[String]) -> Result<(), String> {
-    // `Vec<String>` for the fs/process shapes; `net.http`'s `hosts` is now a
-    // `HostSet` (Task 5/6), so it's flattened to its canonical string form
-    // here (`exact_hosts()`; empty for `Any` — an override can't currently
-    // *express* "any" since `allow` is a plain string list, so narrowing
-    // under an `Any` package grant degenerates to "nothing admitted", same
-    // as any other package grant with an empty host list).
+    // A `net.http` grant of `HostSet::Any` subsumes every host, so any override
+    // list is a valid narrowing — short-circuit before the flat string-subset
+    // compare below. Without this, `Any` flattens to an EMPTY `exact_hosts()`
+    // list and `string_set_subset` would reject every non-empty override
+    // (falsely treating a narrowing as a grant expansion).
+    if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
+        if hosts.is_any() {
+            return Ok(());
+        }
+    }
+    // `Vec<String>` for the fs/process shapes; `net.http`'s `Exact` hosts are
+    // flattened to their canonical string form here (`exact_hosts()`).
     let parents: Vec<String> = match cap {
         Capability::Filesystem(FsCapability::Read { paths, .. })
         | Capability::Filesystem(FsCapability::Write { paths, .. })
@@ -305,6 +311,23 @@ mod tests {
         max_bytes: Option<u64>,
     ) -> CapabilityOverride {
         CapabilityOverride::new(kind.to_string(), allow, deny, max_bytes)
+    }
+
+    #[test]
+    fn net_http_any_grant_admits_any_narrowing_override() {
+        // An `Any` package grant subsumes every host, so a concrete override
+        // list is a valid narrowing — must NOT be rejected as a grant expansion.
+        let grant = cap(r#"{"kind":"net.http","hosts":"any"}"#);
+        assert!(validate_allow_subset(&grant, &["specific.com".to_string()]).is_ok());
+        assert!(validate_allow_subset(&grant, &[]).is_ok());
+    }
+
+    #[test]
+    fn net_http_exact_grant_rejects_override_outside_hosts() {
+        let grant = cap(r#"{"kind":"net.http","hosts":["api.x.com"]}"#);
+        assert!(validate_allow_subset(&grant, &["api.x.com".to_string()]).is_ok());
+        let err = validate_allow_subset(&grant, &["evil.com".to_string()]).unwrap_err();
+        assert!(err.contains("evil.com"), "got: {err}");
     }
 
     #[test]
