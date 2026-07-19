@@ -1430,7 +1430,7 @@ allow_paths = ["/data/**"]
         override_agent_project(tmp.path());
         let pkg_manifest = tmp.path().join(".tau/packages/homepkg/0.1.0/tau.toml");
         let mut body = std::fs::read_to_string(&pkg_manifest).unwrap();
-        body.push_str("\n[[capabilities]]\nkind = \"mcp.tool.use\"\nendpoint = \"x\"\n");
+        body.push_str("\n[[capabilities]]\nkind = \"custom.mcp.tool.use\"\nendpoint = \"x\"\n");
         std::fs::write(&pkg_manifest, body).unwrap();
         let caps = read_agent_caps(tmp.path());
         assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);

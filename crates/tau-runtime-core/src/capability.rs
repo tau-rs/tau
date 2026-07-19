@@ -622,11 +622,11 @@ allowed_skills = ["critic", "fact-checker"]
     #[test]
     fn custom_params_exact_match_satisfies() {
         let granted = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         let required = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         assert!(capability_satisfies(&granted, &required));
@@ -637,11 +637,11 @@ servers = ["fs-mcp"]
         // Required has an extra `mode` key not present in the grant —
         // conservative deny.
         let granted = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         let required = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 mode = "strict"
 "#);
@@ -651,11 +651,11 @@ mode = "strict"
     #[test]
     fn custom_different_names_fail() {
         let granted = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         let required = cap(r#"[cap]
-kind = "mcp.resource.read"
+kind = "custom.mcp.resource.read"
 servers = ["fs-mcp"]
 "#);
         assert!(!capability_satisfies(&granted, &required));

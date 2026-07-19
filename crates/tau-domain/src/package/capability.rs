@@ -59,14 +59,58 @@ pub enum Capability {
         /// Access mode.
         mode: String,
     },
-    /// Plugin-specific capability not yet typed in core.
+    /// Plugin-specific capability not yet typed in core. Requires an explicit
+    /// `custom.` kind prefix (D7-B PR2) — deliberate escape-hatch intent.
     /// See: [escape-hatches.md#capability-custom](../../../../../docs/explanation/escape-hatches.md#capability-custom).
     Custom {
-        /// Capability name (e.g. `"mcp.tool.use"`).
+        /// Capability name (e.g. `"custom.mcp.tool.use"`).
         name: String,
         /// Capability parameters.
         params: BTreeMap<String, Value>,
     },
+    /// A capability kind unknown to *this* tau's vocabulary, accepted only
+    /// because the manifest declared a newer `vocab_version` (D7-B PR2,
+    /// preserves Phase 2 §D forward-compat). Fail-closed in the lattice
+    /// (subsumes nothing, subsumed by nothing but an exact match / Any
+    /// ceiling) and surfaced by `tau check` as an info finding. Distinct from
+    /// [`Capability::Custom`], which is a deliberate local escape hatch.
+    /// See: [escape-hatches.md#capability-forward](../../../../../docs/explanation/escape-hatches.md#capability-forward).
+    Forward {
+        /// The forward (unknown-to-this-tau) capability kind.
+        kind: String,
+        /// Shape-checked parameter map as supplied.
+        params: BTreeMap<String, Value>,
+    },
+}
+
+/// Whether unknown (non-`custom.`) capability kinds are accepted during
+/// deserialization. Authoring surfaces (`tau.toml`, `[allow]`) and interchange
+/// readers use [`VocabMode::Strict`]; a package manifest declaring a
+/// `vocab_version` newer than [`KNOWN_VOCAB`] uses [`VocabMode::Vocab`], which
+/// admits unknown kinds as [`Capability::Forward`] instead of erroring
+/// (D7-B PR2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VocabMode {
+    /// Unknown non-`custom.` kinds are a hard error (with a did-you-mean).
+    Strict,
+    /// The declared capability-vocabulary generation. When greater than
+    /// [`KNOWN_VOCAB`], unknown non-`custom.` kinds parse as
+    /// [`Capability::Forward`].
+    Vocab(u32),
+}
+
+/// The capability-vocabulary generation this build of tau understands. A
+/// manifest may declare a `vocab_version` newer than this to opt unknown
+/// kinds into forward-compatible [`Capability::Forward`] parsing. Bump this
+/// when a kind graduates from `Forward` to a typed variant.
+pub const KNOWN_VOCAB: u32 = 1;
+
+impl VocabMode {
+    /// `true` if unknown non-`custom.` kinds should parse as
+    /// [`Capability::Forward`] rather than erroring.
+    fn forward_open(self) -> bool {
+        matches!(self, VocabMode::Vocab(v) if v > KNOWN_VOCAB)
+    }
 }
 
 /// Filesystem capability verbs.
@@ -443,6 +487,9 @@ impl Capability {
                 name: "plan".to_string(),
             },
             Capability::Custom { name, .. } => CapabilityShape::Custom { name: name.clone() },
+            // Forward caps have no known enforcement shape; adapters treat the
+            // Custom shape as fail-closed (may refuse to sandbox it).
+            Capability::Forward { kind, .. } => CapabilityShape::Custom { name: kind.clone() },
         }
     }
 }
@@ -454,7 +501,7 @@ mod capability_de {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     #[derive(Deserialize)]
-    struct RawCapability {
+    pub(crate) struct RawCapability {
         kind: String,
         #[serde(default)]
         paths: Option<Vec<String>>,
@@ -509,164 +556,261 @@ mod capability_de {
         }
     }
 
+    impl RawCapability {
+        /// Reconstruct the full parameter map for a `custom.`/`Forward`
+        /// capability: every field the caller supplied (typed reserved fields
+        /// plus the `rest` flatten-map), losslessly, so nothing is silently
+        /// dropped (D7-B).
+        fn into_params(self) -> BTreeMap<String, Value> {
+            let mut params = self.rest;
+            let str_array =
+                |items: Vec<String>| Value::Array(items.into_iter().map(Value::String).collect());
+            if let Some(paths) = self.paths {
+                params.insert("paths".to_string(), str_array(paths));
+            }
+            if let Some(mb) = self.max_bytes {
+                params.insert("max_bytes".to_string(), Value::Integer(mb as i64));
+            }
+            if let Some(hosts) = self.hosts {
+                let v = match hosts {
+                    NetHosts::Any => Value::String("any".to_string()),
+                    NetHosts::List(h) => str_array(h),
+                };
+                params.insert("hosts".to_string(), v);
+            }
+            for (k, list) in [
+                ("methods", self.methods),
+                ("commands", self.commands),
+                ("allowed_kinds", self.allowed_kinds),
+                ("allowed_skills", self.allowed_skills),
+            ] {
+                if let Some(items) = list {
+                    params.insert(k.to_string(), str_array(items));
+                }
+            }
+            if let Some(mode) = self.mode {
+                params.insert("mode".to_string(), Value::String(mode));
+            }
+            params
+        }
+    }
+
     /// Reject any field the caller supplied that is not valid for `kind`.
     /// `allowed` is the exact set of named fields the kind accepts; anything
     /// else (a named field OR an unknown flatten key) is an error that names
     /// the offending field and the kind's expected shape (D7-B PR1: no more
     /// silent `unwrap_or_default` conflation).
-    fn reject_extra_fields<E: serde::de::Error>(
+    fn reject_extra_fields(
         raw: &RawCapability,
         allowed: &[&str],
         shape: &str,
-    ) -> Result<(), E> {
+    ) -> Result<(), String> {
         for field in raw.present_named() {
             if !allowed.contains(&field) {
-                return Err(E::custom(alloc::format!(
+                return Err(alloc::format!(
                     "capability kind {:?}: unexpected field {:?} ({} accepts: {})",
                     raw.kind,
                     field,
                     raw.kind,
                     shape
-                )));
+                ));
             }
         }
         if let Some((key, _)) = raw.rest.iter().next() {
-            return Err(E::custom(alloc::format!(
+            return Err(alloc::format!(
                 "capability kind {:?}: unexpected field {:?} ({} accepts: {})",
                 raw.kind,
                 key,
                 raw.kind,
                 shape
-            )));
+            ));
         }
         Ok(())
+    }
+
+    /// The fixed capability kinds this tau vocabulary knows (excludes the
+    /// `custom.` escape-hatch namespace). Drives the did-you-mean suggestion.
+    const KNOWN_KINDS: &[&str] = &[
+        "fs.read",
+        "fs.write",
+        "fs.exec",
+        "net.http",
+        "process.spawn",
+        "agent.spawn",
+        "skill.spawn",
+        "task_list",
+        "plan",
+    ];
+
+    /// Levenshtein edit distance (no_std, `alloc`-only).
+    fn levenshtein(a: &str, b: &str) -> usize {
+        let b_chars: Vec<char> = b.chars().collect();
+        let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
+        let mut cur = alloc::vec![0usize; b_chars.len() + 1];
+        for (i, ca) in a.chars().enumerate() {
+            cur[0] = i + 1;
+            for (j, &cb) in b_chars.iter().enumerate() {
+                let cost = if ca == cb { 0 } else { 1 };
+                cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+            }
+            core::mem::swap(&mut prev, &mut cur);
+        }
+        prev[b_chars.len()]
+    }
+
+    /// Error message for an unrecognized (non-`custom.`) capability kind, with
+    /// a did-you-mean suggestion and a pointer to the escape hatch.
+    fn unknown_kind_error(kind: &str) -> String {
+        let suggestion = KNOWN_KINDS
+            .iter()
+            .map(|k| (*k, levenshtein(kind, k)))
+            .filter(|(_, d)| *d <= 3)
+            .min_by_key(|(_, d)| *d)
+            .map(|(k, _)| k);
+        match suggestion {
+            Some(k) => alloc::format!(
+                "unknown capability kind {kind:?}; did you mean {k:?}? \
+                 (for a plugin-defined capability use a `custom.` prefix — \
+                 see docs/explanation/escape-hatches.md)"
+            ),
+            None => alloc::format!(
+                "unknown capability kind {kind:?} \
+                 (for a plugin-defined capability use a `custom.` prefix — \
+                 see docs/explanation/escape-hatches.md)"
+            ),
+        }
+    }
+
+    /// Resolve a raw capability into a typed [`Capability`] under `mode`.
+    /// Shared by the [`Deserialize`] impl (always [`VocabMode::Strict`]) and
+    /// the package-manifest two-pass (vocab-aware). Returns a plain-`String`
+    /// error so both call sites can adapt it (D7-B PR2).
+    pub(crate) fn build_capability(
+        raw: RawCapability,
+        mode: VocabMode,
+    ) -> Result<Capability, String> {
+        Ok(match raw.kind.as_str() {
+            "fs.read" => {
+                reject_extra_fields(&raw, &["paths"], "paths")?;
+                Capability::Filesystem(FsCapability::Read {
+                    paths: raw
+                        .paths
+                        .ok_or("capability kind \"fs.read\": requires `paths`")?,
+                })
+            }
+            "fs.write" => {
+                reject_extra_fields(&raw, &["paths", "max_bytes"], "paths, max_bytes")?;
+                Capability::Filesystem(FsCapability::Write {
+                    paths: raw
+                        .paths
+                        .ok_or("capability kind \"fs.write\": requires `paths`")?,
+                    max_bytes: raw.max_bytes,
+                })
+            }
+            "fs.exec" => {
+                reject_extra_fields(&raw, &["paths"], "paths")?;
+                Capability::Filesystem(FsCapability::Exec {
+                    paths: raw
+                        .paths
+                        .ok_or("capability kind \"fs.exec\": requires `paths`")?,
+                })
+            }
+            "net.http" => {
+                reject_extra_fields(&raw, &["hosts", "methods"], "hosts, methods")?;
+                Capability::Network(NetCapability::Http {
+                    hosts: raw.hosts.ok_or(
+                        "capability kind \"net.http\": requires `hosts` \
+                         (a non-empty list, or \"any\" for unrestricted egress)",
+                    )?,
+                    methods: raw.methods.unwrap_or_default(),
+                })
+            }
+            "process.spawn" => {
+                reject_extra_fields(&raw, &["commands"], "commands")?;
+                Capability::Process(ProcessCapability::Spawn {
+                    commands: raw
+                        .commands
+                        .ok_or("capability kind \"process.spawn\": requires `commands`")?,
+                })
+            }
+            "agent.spawn" => {
+                reject_extra_fields(&raw, &["allowed_kinds"], "allowed_kinds")?;
+                Capability::Agent(AgentCapability::Spawn {
+                    allowed_kinds: raw
+                        .allowed_kinds
+                        .ok_or("capability kind \"agent.spawn\": requires `allowed_kinds`")?,
+                })
+            }
+            "skill.spawn" => {
+                reject_extra_fields(&raw, &["allowed_skills"], "allowed_skills")?;
+                Capability::Skill(SkillCapability::Spawn {
+                    allowed_skills: raw
+                        .allowed_skills
+                        .ok_or("capability kind \"skill.spawn\": requires `allowed_skills`")?,
+                })
+            }
+            "task_list" => {
+                reject_extra_fields(&raw, &["mode"], "mode")?;
+                match raw.mode.as_deref() {
+                    Some(m @ ("read" | "write" | "manage")) => Capability::TaskList {
+                        mode: m.to_string(),
+                    },
+                    Some(other) => {
+                        return Err(alloc::format!(
+                            "capability kind \"task_list\": mode {other:?} unsupported \
+                             (accepts \"read\", \"write\", \"manage\")"
+                        ))
+                    }
+                    None => return Err("capability kind \"task_list\": requires `mode`".into()),
+                }
+            }
+            "plan" => {
+                reject_extra_fields(&raw, &["mode"], "mode")?;
+                match raw.mode.as_deref() {
+                    Some(m @ ("read" | "write")) => Capability::Plan {
+                        mode: m.to_string(),
+                    },
+                    Some(other) => {
+                        return Err(alloc::format!(
+                            "capability kind \"plan\": mode {other:?} unsupported \
+                             (accepts \"read\", \"write\")"
+                        ))
+                    }
+                    None => return Err("capability kind \"plan\": requires `mode`".into()),
+                }
+            }
+            other if other.starts_with("custom.") => {
+                // Explicit escape-hatch intent (D7-B PR2). Arbitrary params.
+                let name = raw.kind.clone();
+                Capability::Custom {
+                    name,
+                    params: raw.into_params(),
+                }
+            }
+            other => {
+                // Unknown, non-`custom.` kind. Accepted as fail-closed
+                // `Forward` only when the manifest declared a newer vocab;
+                // otherwise a hard error with a did-you-mean (D7-B PR2).
+                if mode.forward_open() {
+                    let kind = raw.kind.clone();
+                    Capability::Forward {
+                        kind,
+                        params: raw.into_params(),
+                    }
+                } else {
+                    return Err(unknown_kind_error(other));
+                }
+            }
+        })
     }
 
     impl<'de> Deserialize<'de> for Capability {
         fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
             use serde::de::Error as _;
             let raw = RawCapability::deserialize(d)?;
-            Ok(match raw.kind.as_str() {
-                "fs.read" => {
-                    reject_extra_fields(&raw, &["paths"], "paths")?;
-                    Capability::Filesystem(FsCapability::Read {
-                        paths: raw.paths.ok_or_else(|| {
-                            D::Error::custom("capability kind \"fs.read\": requires `paths`")
-                        })?,
-                    })
-                }
-                "fs.write" => {
-                    reject_extra_fields(&raw, &["paths", "max_bytes"], "paths, max_bytes")?;
-                    Capability::Filesystem(FsCapability::Write {
-                        paths: raw.paths.ok_or_else(|| {
-                            D::Error::custom("capability kind \"fs.write\": requires `paths`")
-                        })?,
-                        max_bytes: raw.max_bytes,
-                    })
-                }
-                "fs.exec" => {
-                    reject_extra_fields(&raw, &["paths"], "paths")?;
-                    Capability::Filesystem(FsCapability::Exec {
-                        paths: raw.paths.ok_or_else(|| {
-                            D::Error::custom("capability kind \"fs.exec\": requires `paths`")
-                        })?,
-                    })
-                }
-                "net.http" => {
-                    reject_extra_fields(&raw, &["hosts", "methods"], "hosts, methods")?;
-                    Capability::Network(NetCapability::Http {
-                        hosts: raw.hosts.ok_or_else(|| {
-                            D::Error::custom(
-                                "capability kind \"net.http\": requires `hosts` \
-                                 (a non-empty list, or \"any\" for unrestricted egress)",
-                            )
-                        })?,
-                        methods: raw.methods.unwrap_or_default(),
-                    })
-                }
-                "process.spawn" => {
-                    reject_extra_fields(&raw, &["commands"], "commands")?;
-                    Capability::Process(ProcessCapability::Spawn {
-                        commands: raw.commands.ok_or_else(|| {
-                            D::Error::custom(
-                                "capability kind \"process.spawn\": requires `commands`",
-                            )
-                        })?,
-                    })
-                }
-                "agent.spawn" => {
-                    reject_extra_fields(&raw, &["allowed_kinds"], "allowed_kinds")?;
-                    Capability::Agent(AgentCapability::Spawn {
-                        allowed_kinds: raw.allowed_kinds.ok_or_else(|| {
-                            D::Error::custom(
-                                "capability kind \"agent.spawn\": requires `allowed_kinds`",
-                            )
-                        })?,
-                    })
-                }
-                "skill.spawn" => {
-                    reject_extra_fields(&raw, &["allowed_skills"], "allowed_skills")?;
-                    Capability::Skill(SkillCapability::Spawn {
-                        allowed_skills: raw.allowed_skills.ok_or_else(|| {
-                            D::Error::custom(
-                                "capability kind \"skill.spawn\": requires `allowed_skills`",
-                            )
-                        })?,
-                    })
-                }
-                "task_list" => {
-                    reject_extra_fields(&raw, &["mode"], "mode")?;
-                    match raw.mode.as_deref() {
-                        Some(m @ ("read" | "write" | "manage")) => Capability::TaskList {
-                            mode: m.to_string(),
-                        },
-                        Some(other) => {
-                            return Err(D::Error::custom(alloc::format!(
-                                "capability kind \"task_list\": mode {other:?} unsupported \
-                                 (accepts \"read\", \"write\", \"manage\")"
-                            )))
-                        }
-                        None => {
-                            return Err(D::Error::custom(
-                                "capability kind \"task_list\": requires `mode`",
-                            ))
-                        }
-                    }
-                }
-                "plan" => {
-                    reject_extra_fields(&raw, &["mode"], "mode")?;
-                    match raw.mode.as_deref() {
-                        Some(m @ ("read" | "write")) => Capability::Plan {
-                            mode: m.to_string(),
-                        },
-                        Some(other) => {
-                            return Err(D::Error::custom(alloc::format!(
-                                "capability kind \"plan\": mode {other:?} unsupported \
-                                 (accepts \"read\", \"write\")"
-                            )))
-                        }
-                        None => {
-                            return Err(D::Error::custom(
-                                "capability kind \"plan\": requires `mode`",
-                            ))
-                        }
-                    }
-                }
-                _ => {
-                    // Unknown kind: PR1 keeps the permissive Custom fallback
-                    // (kind strictness + explicit `custom.` namespace is PR2).
-                    // Preserve every field the caller supplied. `mode` is a
-                    // named field on RawCapability, so re-insert it into params.
-                    let mut params = raw.rest;
-                    if let Some(m) = raw.mode {
-                        params.insert("mode".into(), Value::String(m));
-                    }
-                    Capability::Custom {
-                        name: raw.kind,
-                        params,
-                    }
-                }
-            })
+            // Authoring/interchange deserialization is always strict; the
+            // vocab-aware path runs in the package-manifest two-pass.
+            build_capability(raw, VocabMode::Strict).map_err(D::Error::custom)
         }
     }
 
@@ -740,10 +884,25 @@ mod capability_de {
                     }
                     m.end()
                 }
+                Capability::Forward { kind, params } => {
+                    let mut m = s.serialize_map(Some(1 + params.len()))?;
+                    m.serialize_entry("kind", kind)?;
+                    for (k, v) in params {
+                        m.serialize_entry(k, v)?;
+                    }
+                    m.end()
+                }
             }
         }
     }
 }
+
+/// Vocab-aware capability resolution shared with the package-manifest
+/// two-pass (D7-B PR2). `RawCapability` deserializes the flat wire shape;
+/// `build_capability` applies field-shape strictness, the `custom.` escape
+/// hatch, and (under a newer `vocab_version`) `Forward` acceptance.
+#[cfg(feature = "serde")]
+pub(crate) use capability_de::{build_capability, RawCapability};
 
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for Capability {
@@ -1155,19 +1314,86 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn custom_round_trips_through_json() {
+        // D7-B PR2: Custom requires an explicit `custom.` kind prefix.
         let mut params = BTreeMap::new();
         params.insert(
             "servers".into(),
             Value::Array(vec![Value::String("fs-mcp".into())]),
         );
         let cap = Capability::Custom {
-            name: "mcp.tool.use".into(),
+            name: "custom.mcp.tool.use".into(),
             params,
         };
         let json = serde_json::to_string(&cap).unwrap();
-        assert_eq!(json, r#"{"kind":"mcp.tool.use","servers":["fs-mcp"]}"#);
+        assert_eq!(
+            json,
+            r#"{"kind":"custom.mcp.tool.use","servers":["fs-mcp"]}"#
+        );
         let back: Capability = serde_json::from_str(&json).unwrap();
         assert_eq!(cap, back);
+    }
+
+    // ----- D7-B PR2: kind strictness + explicit custom. + vocab/Forward -----
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn unprefixed_unknown_kind_errors_with_did_you_mean() {
+        let err = serde_json::from_str::<Capability>(r#"{"kind":"fs.raed","paths":["/x"]}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown capability kind"), "got: {err}");
+        assert!(
+            err.contains("fs.read"),
+            "should suggest fs.read; got: {err}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn unprefixed_far_kind_errors_without_suggestion() {
+        let err = serde_json::from_str::<Capability>(r#"{"kind":"zzzzzzzz"}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown capability kind"), "got: {err}");
+        assert!(
+            err.contains("custom."),
+            "should point to escape hatch; got: {err}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn custom_prefix_parses_as_custom() {
+        let cap: Capability =
+            serde_json::from_str(r#"{"kind":"custom.gpu","devices":["nv"]}"#).unwrap();
+        match cap {
+            Capability::Custom { name, params } => {
+                assert_eq!(name, "custom.gpu");
+                assert!(params.contains_key("devices"));
+            }
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn unknown_kind_forwards_only_under_newer_vocab() {
+        let raw: RawCapability =
+            serde_json::from_str(r#"{"kind":"gpu.compute","devices":["nv"]}"#).unwrap();
+        // Strict / current vocab → error.
+        assert!(build_capability(
+            serde_json::from_str(r#"{"kind":"gpu.compute"}"#).unwrap(),
+            VocabMode::Vocab(KNOWN_VOCAB)
+        )
+        .is_err());
+        // Newer vocab → Forward, params preserved.
+        match build_capability(raw, VocabMode::Vocab(KNOWN_VOCAB + 1)).unwrap() {
+            Capability::Forward { kind, params } => {
+                assert_eq!(kind, "gpu.compute");
+                assert!(params.contains_key("devices"));
+            }
+            other => panic!("expected Forward, got {other:?}"),
+        }
     }
 
     #[cfg(feature = "serde")]

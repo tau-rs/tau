@@ -62,6 +62,7 @@ pub fn any_unchecked_manifest() -> UncheckedManifest {
         plugin: None,
         sandbox: crate::package::sandbox::PluginSandboxRequirements::default(),
         skill: None,
+        vocab_version: crate::KNOWN_VOCAB,
     }
 }
 
