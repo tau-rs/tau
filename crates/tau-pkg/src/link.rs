@@ -24,6 +24,8 @@ use tau_domain::{PackageName, Version};
 use tau_ir::model_ref::ModelRef;
 use tau_ports::target::TargetTriple;
 
+use crate::project::project::{AgentEntry, ModelEntry, ProjectConfig};
+
 /// A plugin package resolved against the installed set during linking.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -199,6 +201,57 @@ fn resolve_one_plugin(
         binary_sha256: plugin.binary_sha256.clone(),
         provides: plugin.manifest.provides,
     })
+}
+
+/// Resolve every agent's `model` alias against `[models]`, producing the
+/// alias → [`ModelRef`] bindings [`LinkRecord::model_bindings`] carries,
+/// plus one [`LinkError::ModelAliasUnknown`] per agent whose alias isn't
+/// present. Agents with an empty `model` (no model declared) are skipped.
+///
+/// Thin wrapper over [`resolve_models_from`]: `ProjectConfig::validate`
+/// already rejects an agent whose `model` is empty
+/// (`ProjectConfigError::MissingAgentModel`) or absent from `[models]`
+/// (`ProjectConfigError::UnknownModelAlias`) at parse time, so a
+/// `ProjectConfig` carrying either defect can't be constructed through
+/// the public validation path — `resolve_models_from` exists so this
+/// function's logic stays directly unit-testable regardless.
+///
+/// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
+/// wires this in alongside `resolve_one_plugin`/`resolve_skills`.
+#[allow(dead_code)]
+fn resolve_models(cfg: &ProjectConfig) -> (BTreeMap<String, ModelRef>, Vec<LinkError>) {
+    resolve_models_from(&cfg.agents, &cfg.models)
+}
+
+/// Core logic for [`resolve_models`], taking the agent and model maps
+/// directly. See [`resolve_models`] for why this split exists.
+fn resolve_models_from(
+    agents: &BTreeMap<String, AgentEntry>,
+    models: &BTreeMap<String, ModelEntry>,
+) -> (BTreeMap<String, ModelRef>, Vec<LinkError>) {
+    let mut bindings = BTreeMap::new();
+    let mut errors = Vec::new();
+    for (agent_id, agent) in agents {
+        if agent.model.is_empty() {
+            continue; // agent declares no model
+        }
+        match models.get(&agent.model) {
+            Some(ModelEntry { backend, model }) => {
+                bindings.insert(
+                    agent.model.clone(),
+                    ModelRef {
+                        backend: backend.clone(),
+                        model_id: model.clone(),
+                    },
+                );
+            }
+            None => errors.push(LinkError::ModelAliasUnknown {
+                agent: agent_id.clone(),
+                alias: agent.model.clone(),
+            }),
+        }
+    }
+    (bindings, errors)
 }
 
 /// Serialize [`TargetTriple`] as its `Display` string (tau-ports has no serde derive).
@@ -390,5 +443,70 @@ mod tests {
             matches!(r, Err(LinkError::PluginNotInstalled { .. })),
             "got {r:?}"
         );
+    }
+
+    use crate::project::project::{PromptEntry, RequiresEntry};
+
+    fn agent_with_model(id: &str, model: &str) -> AgentEntry {
+        let mut agent = AgentEntry::new(
+            id.to_string(),
+            id.to_string(),
+            "some-pkg@^0.1".to_string(),
+            RequiresEntry::default(),
+            BTreeMap::new(),
+            PromptEntry::None,
+            vec![],
+        );
+        agent.model = model.to_string();
+        agent
+    }
+
+    #[test]
+    fn resolve_models_ok_and_unknown_alias() {
+        let mut agents = BTreeMap::new();
+        agents.insert("a".to_string(), agent_with_model("a", "fast"));
+        agents.insert("b".to_string(), agent_with_model("b", "missing"));
+
+        let mut models = BTreeMap::new();
+        models.insert(
+            "fast".to_string(),
+            ModelEntry {
+                backend: "anthropic".into(),
+                model: "claude-haiku-4-5".into(),
+            },
+        );
+
+        let (bindings, errs) = resolve_models_from(&agents, &models);
+
+        assert_eq!(
+            bindings.get("fast"),
+            Some(&ModelRef {
+                backend: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            }),
+            "got {bindings:?}"
+        );
+        assert_eq!(errs.len(), 1, "got {errs:?}");
+        assert!(
+            matches!(
+                &errs[0],
+                LinkError::ModelAliasUnknown { agent, alias }
+                    if agent == "b" && alias == "missing"
+            ),
+            "got {:?}",
+            errs[0]
+        );
+    }
+
+    #[test]
+    fn resolve_models_skips_agent_with_empty_model() {
+        let mut agents = BTreeMap::new();
+        agents.insert("c".to_string(), agent_with_model("c", ""));
+
+        let models: BTreeMap<String, ModelEntry> = BTreeMap::new();
+
+        let (bindings, errs) = resolve_models_from(&agents, &models);
+        assert!(bindings.is_empty(), "got {bindings:?}");
+        assert!(errs.is_empty(), "got {errs:?}");
     }
 }
