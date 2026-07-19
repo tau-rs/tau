@@ -319,11 +319,11 @@ fn meet_pair(a: &Capability, b: &Capability) -> Option<Capability> {
     match (a, b) {
         (Filesystem(FsCapability::Read { paths: pa }), Filesystem(FsCapability::Read { paths: pb })) => {
             let m = glob_meet(pa, pb);
-            (!m.is_empty()).then(|| Filesystem(FsCapability::Read { paths: m }))
+            (!m.is_empty()).then_some(Filesystem(FsCapability::Read { paths: m }))
         }
         (Filesystem(FsCapability::Exec { paths: pa }), Filesystem(FsCapability::Exec { paths: pb })) => {
             let m = glob_meet(pa, pb);
-            (!m.is_empty()).then(|| Filesystem(FsCapability::Exec { paths: m }))
+            (!m.is_empty()).then_some(Filesystem(FsCapability::Exec { paths: m }))
         }
         (
             Filesystem(FsCapability::Write { paths: pa, max_bytes: ma }),
@@ -341,19 +341,19 @@ fn meet_pair(a: &Capability, b: &Capability) -> Option<Capability> {
             let hosts = host_meet(ha, hb);
             let methods = str_intersect(mea, meb);
             (!hosts.is_empty() && !methods.is_empty())
-                .then(|| Network(NetCapability::Http { hosts, methods }))
+                .then_some(Network(NetCapability::Http { hosts, methods }))
         }
         (Process(ProcessCapability::Spawn { commands: a }), Process(ProcessCapability::Spawn { commands: b })) => {
             let c = str_intersect(a, b);
-            (!c.is_empty()).then(|| Process(ProcessCapability::Spawn { commands: c }))
+            (!c.is_empty()).then_some(Process(ProcessCapability::Spawn { commands: c }))
         }
         (Agent(AgentCapability::Spawn { allowed_kinds: a }), Agent(AgentCapability::Spawn { allowed_kinds: b })) => {
             let k = str_intersect(a, b);
-            (!k.is_empty()).then(|| Agent(AgentCapability::Spawn { allowed_kinds: k }))
+            (!k.is_empty()).then_some(Agent(AgentCapability::Spawn { allowed_kinds: k }))
         }
         (Skill(SkillCapability::Spawn { allowed_skills: a }), Skill(SkillCapability::Spawn { allowed_skills: b })) => {
             let s = str_intersect(a, b);
-            (!s.is_empty()).then(|| Skill(SkillCapability::Spawn { allowed_skills: s }))
+            (!s.is_empty()).then_some(Skill(SkillCapability::Spawn { allowed_skills: s }))
         }
         (TaskList { mode: a }, TaskList { mode: b }) => min_mode(a, b, true).map(|mode| TaskList { mode }),
         (Plan { mode: a }, Plan { mode: b }) => min_mode(a, b, false).map(|mode| Plan { mode }),
@@ -466,13 +466,14 @@ fn union_into(dst: &mut Capability, src: &Capability) {
         (Skill(SkillCapability::Spawn { allowed_skills: d }), Skill(SkillCapability::Spawn { allowed_skills: s })) => {
             d.extend(s.iter().cloned());
         }
-        (TaskList { mode: d }, TaskList { mode: s }) => {
-            if mode_rank(s, true) > mode_rank(d, true) { *d = s.clone(); }
+        (TaskList { mode: d }, TaskList { mode: s }) if mode_rank(s, true) > mode_rank(d, true) => {
+            *d = s.clone();
         }
-        (Plan { mode: d }, Plan { mode: s }) => {
-            if mode_rank(s, false) > mode_rank(d, false) { *d = s.clone(); }
+        (Plan { mode: d }, Plan { mode: s }) if mode_rank(s, false) > mode_rank(d, false) => {
+            *d = s.clone();
         }
-        _ => {} // custom: same-kind ⟹ same name+params (same_kind contract) — keep dst
+        // custom (same name+params per mergeable) and the lower-mode cases keep dst.
+        _ => {}
     }
 }
 
