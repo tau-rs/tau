@@ -128,14 +128,6 @@ pub enum LinkError {
         /// Parser detail.
         detail: String,
     },
-    /// An agent references a model alias absent from `[models]`.
-    #[error("agent {agent} references model alias {alias} absent from [models]")]
-    ModelAliasUnknown {
-        /// The agent id.
-        agent: String,
-        /// The unknown model alias.
-        alias: String,
-    },
 }
 
 /// Resolve one plugin reference against the lockfile: installed, provides
@@ -204,22 +196,23 @@ fn resolve_one_plugin(
 }
 
 /// Resolve every agent's `model` alias against `[models]`, producing the
-/// alias → [`ModelRef`] bindings [`LinkRecord::model_bindings`] carries,
-/// plus one [`LinkError::ModelAliasUnknown`] per agent whose alias isn't
-/// present. Agents with an empty `model` (no model declared) are skipped.
+/// alias → [`ModelRef`] bindings [`LinkRecord::model_bindings`] carries.
+/// Agents with an empty `model` (no model declared) are skipped.
 ///
-/// Thin wrapper over [`resolve_models_from`]: `ProjectConfig::validate`
-/// already rejects an agent whose `model` is empty
-/// (`ProjectConfigError::MissingAgentModel`) or absent from `[models]`
-/// (`ProjectConfigError::UnknownModelAlias`) at parse time, so a
-/// `ProjectConfig` carrying either defect can't be constructed through
-/// the public validation path — `resolve_models_from` exists so this
+/// Infallible: `ProjectConfig::validate` already rejects an agent whose
+/// `model` is empty (`ProjectConfigError::MissingAgentModel`) or absent
+/// from `[models]` (`ProjectConfigError::UnknownModelAlias`) at parse
+/// time, so a `ProjectConfig` carrying either defect can't be
+/// constructed through the public validation path — every alias this
+/// function looks up is guaranteed present.
+///
+/// Thin wrapper over [`resolve_models_from`], which exists so this
 /// function's logic stays directly unit-testable regardless.
 ///
 /// Not yet called outside `#[cfg(test)]` — `link()` (a later PR-1 task)
 /// wires this in alongside `resolve_one_plugin`/`resolve_skills`.
 #[allow(dead_code)]
-fn resolve_models(cfg: &ProjectConfig) -> (BTreeMap<String, ModelRef>, Vec<LinkError>) {
+fn resolve_models(cfg: &ProjectConfig) -> BTreeMap<String, ModelRef> {
     resolve_models_from(&cfg.agents, &cfg.models)
 }
 
@@ -228,30 +221,25 @@ fn resolve_models(cfg: &ProjectConfig) -> (BTreeMap<String, ModelRef>, Vec<LinkE
 fn resolve_models_from(
     agents: &BTreeMap<String, AgentEntry>,
     models: &BTreeMap<String, ModelEntry>,
-) -> (BTreeMap<String, ModelRef>, Vec<LinkError>) {
+) -> BTreeMap<String, ModelRef> {
     let mut bindings = BTreeMap::new();
-    let mut errors = Vec::new();
-    for (agent_id, agent) in agents {
+    for agent in agents.values() {
         if agent.model.is_empty() {
             continue; // agent declares no model
         }
-        match models.get(&agent.model) {
-            Some(ModelEntry { backend, model }) => {
-                bindings.insert(
-                    agent.model.clone(),
-                    ModelRef {
-                        backend: backend.clone(),
-                        model_id: model.clone(),
-                    },
-                );
-            }
-            None => errors.push(LinkError::ModelAliasUnknown {
-                agent: agent_id.clone(),
-                alias: agent.model.clone(),
-            }),
+        if let Some(ModelEntry { backend, model }) = models.get(&agent.model) {
+            bindings.insert(
+                agent.model.clone(),
+                ModelRef {
+                    backend: backend.clone(),
+                    model_id: model.clone(),
+                },
+            );
         }
+        // An absent alias is unreachable on validated input
+        // (ProjectConfig::validate rejects it) — no error, no panic.
     }
-    (bindings, errors)
+    bindings
 }
 
 /// Serialize [`TargetTriple`] as its `Display` string (tau-ports has no serde derive).
@@ -462,9 +450,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_models_ok_and_unknown_alias() {
+    fn resolve_models_ok() {
         let mut agents = BTreeMap::new();
         agents.insert("a".to_string(), agent_with_model("a", "fast"));
+        // "missing" isn't rejected here on purpose: ProjectConfig::validate
+        // guarantees a real ProjectConfig never carries an unresolvable
+        // alias, but resolve_models_from is exercised directly (without
+        // going through validate) to confirm it's infallible even then —
+        // an absent alias is simply omitted from the returned map.
         agents.insert("b".to_string(), agent_with_model("b", "missing"));
 
         let mut models = BTreeMap::new();
@@ -476,7 +469,7 @@ mod tests {
             },
         );
 
-        let (bindings, errs) = resolve_models_from(&agents, &models);
+        let bindings = resolve_models_from(&agents, &models);
 
         assert_eq!(
             bindings.get("fast"),
@@ -486,16 +479,8 @@ mod tests {
             }),
             "got {bindings:?}"
         );
-        assert_eq!(errs.len(), 1, "got {errs:?}");
-        assert!(
-            matches!(
-                &errs[0],
-                LinkError::ModelAliasUnknown { agent, alias }
-                    if agent == "b" && alias == "missing"
-            ),
-            "got {:?}",
-            errs[0]
-        );
+        assert!(!bindings.contains_key("missing"), "got {bindings:?}");
+        assert_eq!(bindings.len(), 1, "got {bindings:?}");
     }
 
     #[test]
@@ -505,8 +490,7 @@ mod tests {
 
         let models: BTreeMap<String, ModelEntry> = BTreeMap::new();
 
-        let (bindings, errs) = resolve_models_from(&agents, &models);
+        let bindings = resolve_models_from(&agents, &models);
         assert!(bindings.is_empty(), "got {bindings:?}");
-        assert!(errs.is_empty(), "got {errs:?}");
     }
 }
