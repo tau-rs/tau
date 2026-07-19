@@ -40,6 +40,27 @@ fn invalid_samples_are_rejected() {
 }
 
 #[test]
+fn decoder_rejects_forward_incompatible_and_unknown_fields() {
+    for name in [
+        "unknown-top-level-field",
+        "unknown-nested-field",
+        "ir-format-minor-plus-1",
+        "ir-format-major-plus-1",
+    ] {
+        let bytes = std::fs::read(
+            dir()
+                .join("conformance/invalid")
+                .join(format!("{name}.json")),
+        )
+        .unwrap_or_else(|_| panic!("read fixture {name}"));
+        assert!(
+            tau_ir::from_canonical_bytes(&bytes).is_err(),
+            "fixture {name} must be rejected by the decoder",
+        );
+    }
+}
+
+#[test]
 fn valid_samples_deserialize_through_tau_ir() {
     for name in [
         "minimal",

@@ -2,7 +2,7 @@
 
 Validate any tool's generated IR against the published schema in any language:
 
-1. Take the schema: `../tau-ir.v2.3.0.schema.json` (JSON Schema draft 2020-12).
+1. Take the schema: `../tau-ir.v2.4.0.schema.json` (JSON Schema draft 2020-12).
 2. Validate your generated `IrModule` JSON with any draft-2020-12 validator
    (Rust `jsonschema`, JS `ajv`, Python `jsonschema`, …).
 3. `valid/*.json` are modules that MUST validate; `invalid/*.json` MUST be
