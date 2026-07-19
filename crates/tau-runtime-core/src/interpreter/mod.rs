@@ -14,6 +14,7 @@
 
 pub mod agent_loop;
 pub mod artifact;
+pub(crate) mod attenuate;
 pub mod check;
 pub mod deterministic;
 pub mod output_store;
