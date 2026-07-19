@@ -141,6 +141,10 @@ pub struct CapabilityDenial {
     pub required_kind: String,
     /// Human-readable description of the capability that wasn't satisfied.
     pub required_detail: String,
+    /// When this denial came from subflow attenuation, the subflow tool id
+    /// whose cap_subset removed the capability. `None` for kernel-path
+    /// (non-subflow) denials.
+    pub narrowing_frame: Option<String>,
 }
 
 impl CapabilityDenial {
@@ -161,7 +165,15 @@ impl CapabilityDenial {
             tool_name: tool_name.into(),
             required_kind: required_kind.into(),
             required_detail: required_detail.into(),
+            narrowing_frame: None,
         }
+    }
+
+    /// Attach the subflow tool id that imposed the narrowing (provenance for
+    /// subflow attenuation denials).
+    pub fn with_narrowing_frame(mut self, frame: impl Into<String>) -> Self {
+        self.narrowing_frame = Some(frame.into());
+        self
     }
 }
 
@@ -175,7 +187,11 @@ impl core::fmt::Display for CapabilityDenial {
             self.required_kind,
             self.required_detail,
             self.tool_name,
-        )
+        )?;
+        if let Some(frame) = &self.narrowing_frame {
+            write!(f, " (narrowed by subflow `{frame}`)")?;
+        }
+        Ok(())
     }
 }
 
@@ -446,6 +462,7 @@ mod tests {
             tool_name: "file_read".into(),
             required_kind: "filesystem.read".into(),
             required_detail: "/etc/passwd".into(),
+            narrowing_frame: None,
         };
         let s = format!("{denial}");
         assert!(s.contains("agent-x"), "got: {s}");
@@ -651,5 +668,29 @@ mod tests {
             s, "check 'report' (deliverable) failed after attempt 2: nope",
             "got: {s}"
         );
+    }
+
+    #[test]
+    fn denial_with_narrowing_frame_renders_frame() {
+        let d = CapabilityDenial::new(
+            "worker",
+            "ir-agent",
+            "page",
+            "net.http",
+            "Network(Http { .. })",
+        )
+        .with_narrowing_frame("notify");
+        let s = d.to_string();
+        assert!(s.contains("page"), "{s}");
+        assert!(s.contains("net.http"), "{s}");
+        assert!(s.contains("narrowed by subflow `notify`"), "{s}");
+        assert_eq!(d.narrowing_frame.as_deref(), Some("notify"));
+    }
+
+    #[test]
+    fn denial_without_frame_is_unchanged() {
+        let d = CapabilityDenial::new("a", "p", "t", "k", "detail");
+        assert_eq!(d.narrowing_frame, None);
+        assert!(!d.to_string().contains("narrowed by subflow"));
     }
 }
