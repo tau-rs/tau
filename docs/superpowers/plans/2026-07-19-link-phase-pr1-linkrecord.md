@@ -48,7 +48,7 @@
       pub model_bindings: BTreeMap<String, ModelRef>, pub platform: TargetTriple, pub lockfile_sha256: String }
   pub struct LinkOutcome { pub record: LinkRecord, pub parsed_skills: BTreeMap<String, SkillContent> }
   pub enum LinkError { PluginNotInstalled{..}, PluginPortMismatch{..}, VersionUnsatisfied{..},
-      SkillMissing{..}, SkillParse{..}, ModelAliasUnknown{..} }
+      SkillMissing{..}, SkillParse{..} }  // no ModelAliasUnknown — validate() owns alias resolution
   ```
   Note `TargetTriple` is `Copy` and NOT `serde`-derived by default in `tau-ports`; it must serialize via its `Display`/`FromStr`. Use `#[serde(with = "...")]` or store `platform` as its string form internally — see Step 3.
 
@@ -203,14 +203,8 @@ pub enum LinkError {
         /// Parser detail.
         detail: String,
     },
-    /// An agent references a model alias absent from `[models]`.
-    #[error("agent {agent} references model alias {alias} absent from [models]")]
-    ModelAliasUnknown {
-        /// The agent id.
-        agent: String,
-        /// The unknown model alias.
-        alias: String,
-    },
+    // No ModelAliasUnknown: ProjectConfig::validate() already rejects unknown
+    // model aliases, so model resolution in link() is infallible.
 }
 
 /// Serialize [`TargetTriple`] as its `Display` string (tau-ports has no serde derive).
@@ -446,7 +440,12 @@ git commit -m "feat(link): resolve_one_plugin (installed/port/version) + truth-t
 
 ### Task 3: Model-binding resolver (`resolve_models`)
 
-For each agent in the IR, look up its model alias in `[models]`; unknown alias → `ModelAliasUnknown`; else record `alias → ModelRef`. Mirrors `resolve_model_ref` (`parse.rs:289-300`) semantics but keyed per agent and collecting errors. The agent's alias comes from `ProjectConfig.agents[*].model`.
+> **AMENDED (implemented):** `resolve_models` is **infallible** — `ProjectConfig::validate()`
+> already rejects unknown model aliases (`ProjectConfigError::UnknownModelAlias`), so there
+> is no `ModelAliasUnknown` error. For each agent with a non-empty `model`, look it up in
+> `[models]` and record `alias → ModelRef`; an absent alias is simply not inserted
+> (unreachable on validated input). The live "backend installed as an LlmBackend plugin"
+> check is `link()`'s plugin resolution (Task 5), not here.
 
 **Files:**
 - Modify: `crates/tau-pkg/src/link.rs`
@@ -455,9 +454,13 @@ For each agent in the IR, look up its model alias in `[models]`; unknown alias �
 **Interfaces:**
 - Produces (consumed by Task 5):
   ```rust
-  fn resolve_models(cfg: &ProjectConfig) -> (BTreeMap<String, ModelRef>, Vec<LinkError>);
+  fn resolve_models(cfg: &ProjectConfig) -> BTreeMap<String, ModelRef>;
+  // thin wrapper over the testable inner fn:
+  fn resolve_models_from(
+      agents: &BTreeMap<String, AgentEntry>, models: &BTreeMap<String, ModelEntry>,
+  ) -> BTreeMap<String, ModelRef>;
   ```
-  Returns the alias→ModelRef map for every alias referenced by some agent, plus one `ModelAliasUnknown` per agent whose alias is absent from `[models]`. Agents with an empty `model` string (no model) are skipped.
+  Returns the alias→ModelRef map for every alias referenced by some agent. Agents with an empty `model` string are skipped. (`ProjectConfig` is `#[non_exhaustive]` and hard to build in a unit test, so tests exercise `resolve_models_from` on the two maps directly.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -698,11 +701,15 @@ Compose Tasks 2–4. Enumerate plugins to resolve: each agent's model backend (`
 
     #[test]
     fn link_collects_all_errors() {
-        // cfg references an unknown model alias AND requires an uninstalled tool.
+        // Two DISTINCT faults so we prove multi-error collection:
+        //  (a) an uninstalled required tool  -> PluginNotInstalled
+        //  (b) an installed skill with a corrupt SKILL.md -> SkillParse
+        // (ModelAliasUnknown no longer exists — validate() owns that; pick two
+        //  faults that live in link()'s own resolution surface.)
         let (_td, scope, lf, cfg, module) = /* broken fixture (>=2 faults) */;
         let errs = link(&cfg, &module, &lf, &scope).unwrap_err();
-        assert!(errs.iter().any(|e| matches!(e, LinkError::ModelAliasUnknown { .. })), "got {errs:?}");
         assert!(errs.iter().any(|e| matches!(e, LinkError::PluginNotInstalled { .. })), "got {errs:?}");
+        assert!(errs.iter().any(|e| matches!(e, LinkError::SkillParse { .. })), "got {errs:?}");
         assert!(errs.len() >= 2, "must collect all, got {errs:?}");
     }
 ```
@@ -732,8 +739,9 @@ pub fn link(
     // 1. Gather (package, version_req, expected_port) for every referenced plugin.
     //    Model backends: from [models] entries referenced by an agent (port LlmBackend, any version).
     //    Tools: each agent's requires.tools (port Tool, the tool's version_req).
-    let (model_bindings, model_errs) = resolve_models(cfg);
-    errors.extend(model_errs);
+    // resolve_models is infallible — ProjectConfig::validate already guarantees
+    // aliases resolve; this only builds the final alias->ModelRef map.
+    let model_bindings = resolve_models(cfg);
 
     let mut wanted: BTreeMap<PackageName, (semver::VersionReq, PortKind)> = BTreeMap::new();
     for m in cfg.models.values() {
@@ -790,7 +798,6 @@ fn link_error_sort_key(e: &LinkError) -> (u8, String) {
         LinkError::VersionUnsatisfied { package, .. } => (2, package.clone()),
         LinkError::SkillMissing { package, .. } => (3, package.clone()),
         LinkError::SkillParse { package, .. } => (4, package.clone()),
-        LinkError::ModelAliasUnknown { agent, alias } => (5, format!("{agent}:{alias}")),
     }
 }
 

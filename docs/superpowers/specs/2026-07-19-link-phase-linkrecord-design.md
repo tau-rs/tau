@@ -102,8 +102,12 @@ pub struct LinkRecord {
 pub enum LinkError {
     PluginNotInstalled { .. }, PluginPortMismatch { .. },
     VersionUnsatisfied { .. }, SkillMissing { .. }, SkillParse { .. },
-    ModelAliasUnknown { .. },
 }
+// Note: no `ModelAliasUnknown` — `ProjectConfig::validate()` already rejects
+// unknown model aliases (ProjectConfigError::UnknownModelAlias), so model
+// resolution in link() is infallible (builds the alias→ModelRef map only).
+// The live model check (backend installed as an LlmBackend plugin) is part of
+// resolved_plugins, not a separate model error.
 
 pub fn link(
     cfg: &ProjectConfig, module: &IrModule,
