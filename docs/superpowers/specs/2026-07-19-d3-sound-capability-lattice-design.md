@@ -169,7 +169,53 @@ canonical patterns.
 - (⇐) If `meet(A,B) == canon(A)`, then `L(A) ⊆ L(B)`.
 
 This is the subtlest claim in the design; property tests (§6) guard it, and it
-relies on absorb-based `canon` being a true normal form on G2.
+relies on absorb-based `canon` being a true normal form on G2. (This holds for
+the **single-dimension** glob-pattern lists here; the capability-set level adds a
+wrinkle — see §4a.)
+
+## 4a. Multi-dimensional capability kinds (net.http, fs.write) — CORRECTION
+
+The initial design treated every capability kind as a single dimension whose
+grants a `canon` could union-merge, with the lattice law holding as *structural*
+equality. Implementation + property testing disproved that for the two
+**two-dimensional** kinds:
+
+- `net.http` grants a **rectangle** `hosts × methods`.
+- `fs.write` grants a **rectangle** `paths × max_bytes` (writable-up-to).
+
+A capability *set* is a **union of rectangles**. Two consequences:
+
+1. **`canon` must not bounding-box-merge distinct rectangles.** Unioning each
+   dimension independently (`{api}×{GET} ⊔ {*.ex}×{POST}` → `{api,*.ex}×{GET,POST}`)
+   *widens* the grant — and since `meet` ends in `canon`, that made `meet` itself
+   over-approximate (an **unsound clamp**: it could grant `*.ex×GET`, present in
+   neither operand). Fix: for these two kinds `canon` keeps rectangles **separate**
+   and only **absorbs by 2-D containment** (`Rᵢ ⊆ Rⱼ` iff hosts and methods —
+   resp. paths and byte-limit — are both covered). Single-dimension kinds still
+   merge losslessly.
+
+2. **`subset` must check joint coverage per grant, not per dimension.** A child
+   rectangle is covered iff, **for each method** it requests, its hosts ⊆ the
+   union of parent hosts among entries that *also* grant that method (and,
+   symmetrically for write, restrict to parent entries whose `max_bytes` ≥ the
+   child's, then check path coverage). The old independent-dimension union checked
+   the parent's *bounding box* and admitted ceiling-escalation. This closed a
+   soundness hole **pre-existing in tau-pkg** (hosts were always union-checked;
+   `fs.write` had the same latent `paths × max_bytes` gap).
+
+3. **Lattice equality is language-equivalence, not structural `==`.** A union of
+   2-D rectangles has **no unique minimal cover** (`{api×{GET,POST}}` and
+   `{api×GET, api×POST}` are the same language; a fixpoint merge is not
+   confluent). So the lattice law is stated as
+   `subset(a,b).is_ok() ⟺ meet(a,b) ≡ a`, where `≡` is **mutual subset**
+   (`subset(x,y) ∧ subset(y,x)`) — the actual definition of lattice equality
+   `a ⊑ b ⟺ a ⊓ b = a`. `meet` remains **sound** (exact pairwise rectangle
+   intersection; never widens); `subset` is **exact** (sound + complete). Only the
+   property's *equality operator* changed from `==` to `≡`.
+
+`canon` is therefore a **reduced antichain**, deterministically ordered, but not a
+unique structural normal form for the 2-D kinds — which is a mathematical
+necessity, not a shortcut.
 
 ## 5. Net hosts (small separate sub-grammar)
 
@@ -182,10 +228,15 @@ fail-closed. This is a smaller grammar than paths and is documented as such.
 
 - **Property tests** (proptest; runs under the std test harness even though the
   crate is `no_std`):
-  - `meet(a,b) ⊆ a` and `meet(a,b) ⊆ b`.
-  - idempotent: `meet(a,a) == canon(a)`.
-  - commutative: `meet(a,b) == meet(b,a)`.
-  - lattice law: `subset(a,b).is_ok() ⟺ meet(a,b) == canon(a)`.
+  - `meet(a,b) ⊆ a` and `meet(a,b) ⊆ b` (soundness — never widens).
+  - idempotent: `meet(a,a) == canon(a)` (structural).
+  - commutative: `meet(a,b) == meet(b,a)` (structural).
+  - lattice law (language-equivalence, per §4a): `subset(a,b).is_ok() ⟺
+    meet(a,b) ≡ a`, where `≡` is mutual subset.
+  - Generator emits `fs.read`, `process.spawn`, `net.http`, `fs.write` and
+    0..4 caps per set, so multi-entry rectangle-antichain shapes are sampled;
+    stressed to 32768 cases. Explicit regressions encode the multi-entry
+    http/write soundness witnesses.
 - **Witness regressions:** both audit witnesses (§Problem) fail-closed /
   normalize correctly.
 - **Migrated units:** sound cases from `glob_subset` tests survive; sampling-era

@@ -83,15 +83,28 @@ fn same_kind(a: &Capability, b: &Capability) -> bool {
     }
 }
 
-/// Two caps merge in `canon_caps` iff they are the same kind AND, for `Custom`,
-/// identical (name+params) — distinct-params customs stay separate, matching
-/// how `meet_pair` keys custom identity.
+/// Whether two caps fold into one in `canon_caps`. Single-dimension kinds
+/// (read/exec paths, token sets, modes) merge by kind because unioning their
+/// one dimension is language-preserving. The two-dimensional kinds — `net.http`
+/// (hosts × methods) and `fs.write` (paths × max_bytes) — must NOT fold, since
+/// unioning each dimension independently is a bounding-box that widens the
+/// grant; distinct rectangles stay separate and are absorbed by 2-D containment
+/// in `canon_caps`. `Custom` folds only on identical (name+params).
 fn mergeable(a: &Capability, b: &Capability) -> bool {
     match (a, b) {
         (
             Capability::Custom { name: na, params: pa },
             Capability::Custom { name: nb, params: pb },
         ) => na == nb && pa == pb,
+        // Multi-dimensional rectangles never fold (would bounding-box).
+        (
+            Capability::Network(NetCapability::Http { .. }),
+            Capability::Network(NetCapability::Http { .. }),
+        )
+        | (
+            Capability::Filesystem(FsCapability::Write { .. }),
+            Capability::Filesystem(FsCapability::Write { .. }),
+        ) => false,
         _ => same_kind(a, b),
     }
 }
@@ -118,26 +131,54 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
         Capability::Filesystem(FsCapability::Write {
             paths, max_bytes, ..
         }) => {
-            let pp = gather_paths(parents);
-            crate::package::capability::lattice::glob::glob_subset_set(paths, &pp)
-                .map_err(|o| (o, "not a subset of any allowed path".to_string()))?;
-            let parent_mb = most_permissive_max_bytes(parents);
-            match (max_bytes, parent_mb) {
-                (_, None) => Ok(()),
-                (None, Some(_)) => Err((
-                    "max_bytes=unlimited".to_string(),
-                    "child is unlimited but ceiling caps max_bytes".to_string(),
-                )),
-                (Some(c), Some(_)) => max_bytes_le(*c, parent_mb)
-                    .map_err(|tok| (tok, "exceeds ceiling max_bytes".to_string())),
-            }
+            // Sound joint coverage: each child path must be writable up to the
+            // child's max_bytes by a SINGLE parent entry (path + byte-limit from
+            // the same grant). Restrict to parent entries whose limit covers the
+            // child's (None = unlimited), then require path coverage against
+            // exactly those entries' paths.
+            let eligible: Vec<String> = parents
+                .iter()
+                .filter_map(|p| match p {
+                    Capability::Filesystem(FsCapability::Write { paths: pp, max_bytes: pb }) => {
+                        let covers = match (pb, max_bytes) {
+                            (None, _) => true,             // parent unlimited covers any child
+                            (Some(_), None) => false,      // child unlimited, parent capped
+                            (Some(pbv), Some(cbv)) => pbv >= cbv,
+                        };
+                        if covers { Some(pp.clone()) } else { None }
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            crate::package::capability::lattice::glob::glob_subset_set(paths, &eligible)
+                .map_err(|o| (o, "not writable within max_bytes in ceiling".to_string()))
         }
         Capability::Network(NetCapability::Http { hosts, methods }) => {
-            let ph = gather_hosts(parents);
-            crate::package::capability::lattice::host::host_subset_set(hosts, &ph)
-                .map_err(|o| (o, "host not in ceiling".into()))?;
-            let pm = gather_methods(parents);
-            string_set_subset(methods, &pm).map_err(|o| (o, "method not in ceiling".into()))
+            // Sound joint coverage: for each method the child requests, its hosts
+            // must be granted by parent entries that ALSO grant that method — a
+            // single grant must cover both dimensions, not the bounding box of
+            // independently-unioned hosts × methods.
+            for m in methods {
+                let hosts_for_m: Vec<String> = parents
+                    .iter()
+                    .filter_map(|p| match p {
+                        Capability::Network(NetCapability::Http { hosts: ph, methods: pm })
+                            if pm.contains(m) =>
+                        {
+                            Some(ph.clone())
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                crate::package::capability::lattice::host::host_subset_set(hosts, &hosts_for_m)
+                    .map_err(|o| {
+                        let reason = format!("host {o} not granted for method {m} in ceiling");
+                        (o, reason)
+                    })?;
+            }
+            Ok(())
         }
         Capability::Process(ProcessCapability::Spawn { commands, .. }) => {
             let pc = gather_commands(parents);
@@ -205,28 +246,6 @@ fn gather_paths(parents: &[&Capability]) -> Vec<String> {
         .collect()
 }
 
-fn gather_hosts(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Network(NetCapability::Http { hosts, .. }) => Some(hosts.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect()
-}
-
-fn gather_methods(parents: &[&Capability]) -> Vec<String> {
-    parents
-        .iter()
-        .filter_map(|p| match p {
-            Capability::Network(NetCapability::Http { methods, .. }) => Some(methods.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect()
-}
-
 fn gather_commands(parents: &[&Capability]) -> Vec<String> {
     parents
         .iter()
@@ -266,20 +285,6 @@ fn gather_skills(parents: &[&Capability]) -> Vec<String> {
         .collect()
 }
 
-/// Most permissive ceiling cap: `None` (unlimited) if any matching parent is
-/// unlimited, else `Some(max of the limits)`.
-fn most_permissive_max_bytes(parents: &[&Capability]) -> Option<u64> {
-    let mut acc: u64 = 0;
-    for p in parents {
-        if let Capability::Filesystem(FsCapability::Write { max_bytes, .. }) = p {
-            // Any unlimited parent makes the whole ceiling unlimited.
-            let m = (*max_bytes)?;
-            acc = acc.max(m);
-        }
-    }
-    Some(acc)
-}
-
 /// Exact-set inclusion: every `child` entry equals some `parent` entry.
 /// `Err(offender)` names the first child entry not present in `parent`.
 fn string_set_subset(child: &[String], parent: &[String]) -> Result<(), String> {
@@ -289,16 +294,6 @@ fn string_set_subset(child: &[String], parent: &[String]) -> Result<(), String> 
         }
     }
     Ok(())
-}
-
-/// `max_bytes` tightening: `child <= parent`. `parent == None` means the
-/// ceiling is unlimited (any child is admitted). `Err` carries the child value.
-fn max_bytes_le(child: u64, parent: Option<u64>) -> Result<(), String> {
-    match parent {
-        None => Ok(()),
-        Some(max) if child <= max => Ok(()),
-        Some(_) => Err(format!("max_bytes={child}")),
-    }
 }
 
 use crate::package::capability::lattice::glob::{glob_canon, glob_meet};
@@ -394,12 +389,16 @@ fn push_cap(out: &mut Vec<Capability>, cap: Capability) {
     if !out.contains(&cap) { out.push(cap); }
 }
 
-/// Canonical form: same-kind caps merged (their pattern/token lists unioned —
-/// the ceiling code's `gather_*` already treats a kind's grants as the union
-/// across entries), glob/host/token lists canonicalized, empty (⊥) caps
-/// dropped, result ordered so the lattice law holds as structural equality.
+/// Canonical form of a capability set. Single-dimension same-kind caps are
+/// merged (union is language-preserving); two-dimensional kinds (`net.http`,
+/// `fs.write`) are kept as separate rectangles and absorbed by 2-D containment
+/// rather than bounding-box-merged. Internal glob/host/token lists are
+/// canonicalized, empty (⊥) caps dropped, and the result is a deterministically
+/// ordered antichain — so `meet` never widens and the lattice law holds as
+/// structural equality.
 pub fn canon_caps(caps: &[Capability]) -> Vec<Capability> {
-    // 1. merge every capability of the same kind into one
+    // 1. fold single-dimension same-kind caps; multi-dimensional rectangles and
+    //    distinct-params customs stay separate (see `mergeable`).
     let mut merged: Vec<Capability> = Vec::new();
     for c in caps {
         if let Some(existing) = merged.iter_mut().find(|m| mergeable(m, c)) {
@@ -408,15 +407,32 @@ pub fn canon_caps(caps: &[Capability]) -> Vec<Capability> {
             merged.push(c.clone());
         }
     }
-    // 2. canonicalize each merged cap's lists; drop empties (⊥)
-    let mut out: Vec<Capability> = Vec::new();
-    for c in &merged {
-        if let Some(cc) = canon_one(c) {
-            out.push(cc);
+    // 2. canonicalize each cap's internal lists; drop empties (⊥).
+    let canon: Vec<Capability> = merged.iter().filter_map(canon_one).collect();
+    // 3. absorb: drop any cap that is a subset of another (2-D containment for
+    //    http/write rectangles; a no-op for the folded single-entry kinds). The
+    //    `j < i` guard keeps exactly one survivor for an equal pair.
+    let mut kept: Vec<Capability> = Vec::new();
+    'outer: for (i, ci) in canon.iter().enumerate() {
+        for (j, cj) in canon.iter().enumerate() {
+            if i != j
+                && cap_contained(ci, cj)
+                && !(cap_contained(cj, ci) && j < i)
+            {
+                continue 'outer;
+            }
         }
+        kept.push(ci.clone());
     }
-    out.sort_by(|x, y| kind_str(x).cmp(kind_str(y)).then_with(|| render_cap(x).cmp(&render_cap(y))));
-    out
+    // 4. deterministic total order.
+    kept.sort_by(|x, y| kind_str(x).cmp(kind_str(y)).then_with(|| render_cap(x).cmp(&render_cap(y))));
+    kept
+}
+
+/// `inner ⊆ outer` for two single capabilities, via the sound per-kind subset
+/// (2-D rectangle containment for http/write). Used by `canon_caps`'s absorb.
+fn cap_contained(inner: &Capability, outer: &Capability) -> bool {
+    capability_subset(core::slice::from_ref(inner), core::slice::from_ref(outer)).is_ok()
 }
 
 /// Union `src`'s grant lists into `dst` (same kind guaranteed by the caller).
@@ -496,9 +512,15 @@ fn render_cap(c: &Capability) -> String {
     let mut s = String::from(kind_str(c));
     match c {
         Capability::Filesystem(FsCapability::Read { paths })
-        | Capability::Filesystem(FsCapability::Exec { paths })
-        | Capability::Filesystem(FsCapability::Write { paths, .. }) => {
+        | Capability::Filesystem(FsCapability::Exec { paths }) => {
             for p in paths { s.push('|'); s.push_str(p); }
+        }
+        Capability::Filesystem(FsCapability::Write { paths, max_bytes }) => {
+            for p in paths { s.push('|'); s.push_str(p); }
+            match max_bytes {
+                Some(n) => { s.push('~'); s.push_str(&n.to_string()); }
+                None => s.push_str("~*"),
+            }
         }
         Capability::Network(NetCapability::Http { hosts, methods }) => {
             for h in hosts { s.push('|'); s.push_str(h); }
@@ -612,6 +634,57 @@ mod tests {
         assert!(capability_subset(&a, &b).is_err());
     }
 
+    fn http(hosts: &[&str], methods: &[&str]) -> Capability {
+        Capability::Network(NetCapability::Http {
+            hosts: hosts.iter().map(|s| s.to_string()).collect(),
+            methods: methods.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+    fn write(paths: &[&str], max_bytes: Option<u64>) -> Capability {
+        Capability::Filesystem(FsCapability::Write {
+            paths: paths.iter().map(|s| s.to_string()).collect(),
+            max_bytes,
+        })
+    }
+
+    #[test]
+    fn canon_keeps_incomparable_http_rectangles() {
+        // api×GET and *.ex×POST are incomparable → both survive (NOT
+        // bounding-boxed into *.ex×{GET,POST}).
+        let a = vec![http(&["api.example.com"], &["GET"]), http(&["*.example.com"], &["POST"])];
+        assert_eq!(canon_caps(&a).len(), 2);
+    }
+
+    #[test]
+    fn canon_absorbs_contained_http_rectangle() {
+        // api×GET ⊆ *.ex×{GET,POST} → absorbed to the single wider rectangle.
+        let a = vec![http(&["api.example.com"], &["GET"]), http(&["*.example.com"], &["GET", "POST"])];
+        assert_eq!(canon_caps(&a), vec![http(&["*.example.com"], &["GET", "POST"])]);
+    }
+
+    #[test]
+    fn subset_and_meet_sound_for_multientry_http() {
+        // Ceiling grants (api, GET) and (*.ex, POST) — never (*.ex, GET).
+        let a = vec![http(&["*.example.com"], &["GET"])];
+        let b = vec![http(&["api.example.com"], &["GET"]), http(&["*.example.com"], &["POST"])];
+        // subset: no single ceiling entry grants (*.ex, GET) → denied.
+        assert!(capability_subset(&a, &b).is_err());
+        // meet must NOT widen: the only overlap is api.example.com × GET.
+        assert_eq!(meet(&a, &b), vec![http(&["api.example.com"], &["GET"])]);
+    }
+
+    #[test]
+    fn subset_sound_for_multientry_write() {
+        // child wants /a/** up to 1000 bytes.
+        let a = vec![write(&["/a/**"], Some(1000))];
+        // ceiling: /a/** capped at 100, /b/** at 1000 — no single entry grants
+        // /a/** at 1000 → denied.
+        let b = vec![write(&["/a/**"], Some(100)), write(&["/b/**"], Some(1000))];
+        assert!(capability_subset(&a, &b).is_err());
+        // a single entry that does cover it → admitted.
+        assert!(capability_subset(&a, &[write(&["/a/**"], Some(1000))]).is_ok());
+    }
+
     use proptest::prelude::*;
 
     // small G2 path generator over a fixed alphabet
@@ -649,10 +722,24 @@ mod tests {
                         methods: methods.iter().map(|s| s.to_string()).collect(),
                     })
                 }),
+            // fs.write: two-dimensional (paths × max_bytes), exercises the
+            // write antichain / max_bytes-filtered subset.
+            (
+                prop::collection::vec(path_strat(), 1..3),
+                prop_oneof![Just(None), Just(Some(100u64)), Just(Some(1000u64))],
+            )
+                .prop_map(|(paths, max_bytes)| {
+                    Capability::Filesystem(FsCapability::Write {
+                        paths: paths.iter().map(|s| s.to_string()).collect(),
+                        max_bytes,
+                    })
+                }),
         ]
     }
+    // 0..4 so a single set can carry TWO http (or two write) entries → the
+    // multi-entry rectangle-antichain path in canon/meet/subset gets sampled.
     fn caps_strat() -> impl Strategy<Value = Vec<Capability>> {
-        prop::collection::vec(cap_strat(), 0..3)
+        prop::collection::vec(cap_strat(), 0..4)
     }
 
     proptest! {
@@ -672,9 +759,17 @@ mod tests {
         }
         #[test]
         fn prop_lattice_law(a in caps_strat(), b in caps_strat()) {
+            // Lattice equality is language-equivalence (mutual subset), NOT Rust
+            // structural ==: a union of 2-D rectangles (net.http hosts×methods,
+            // fs.write paths×max_bytes) has no unique minimal cover, so meet(a,b)
+            // and canon_caps(a) can denote the same language via different covers
+            // (e.g. {api×{GET,POST}} vs {api×GET, api×POST}). The lattice law is
+            // `a ⊑ b  ⟺  a ⊓ b = a` under that equality.
             let subset_ok = capability_subset(&a, &b).is_ok();
-            let meet_eq = meet(&a, &b) == canon_caps(&a);
-            prop_assert_eq!(subset_ok, meet_eq);
+            let m = meet(&a, &b);
+            let meet_lang_eq_a =
+                capability_subset(&m, &a).is_ok() && capability_subset(&a, &m).is_ok();
+            prop_assert_eq!(subset_ok, meet_lang_eq_a);
         }
     }
 }
