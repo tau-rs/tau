@@ -86,3 +86,6 @@ default = ["otlp"]
 # Forwards to `tau-observe/otlp`: enables the optional OpenTelemetry/OTLP
 # exporter wiring in the CLI.
 otlp = ["tau-observe/otlp"]
+
+[lints]
+workspace = true

@@ -22,3 +22,6 @@ tau-pkg          = { workspace = true }
 tau-runtime-core = { workspace = true }
 tempfile         = { workspace = true }
 wit-parser       = { workspace = true }
+
+[lints]
+workspace = true

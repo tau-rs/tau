@@ -94,3 +94,6 @@ async-stream   = { workspace = true }
 tau-runtime-core = { workspace = true, features = ["test-fixtures"] }
 # tracing-subscriber: captured-events layer for pipeline trace-event tests.
 tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

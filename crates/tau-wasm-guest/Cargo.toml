@@ -36,3 +36,6 @@ tau-runtime-core = { path = "../tau-runtime-core", default-features = false, fea
 tau-native-tools = { path = "../tau-native-tools", default-features = false }
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

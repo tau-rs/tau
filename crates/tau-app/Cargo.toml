@@ -38,3 +38,6 @@ insta = { workspace = true, features = ["json"] }
 tau-ports = { workspace = true, features = ["test-fixtures"] }
 tau-runtime-tokio = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true
