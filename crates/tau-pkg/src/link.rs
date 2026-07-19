@@ -159,22 +159,13 @@ fn resolve_one_plugin(
             package: package.to_string(),
         })?;
 
-    // Highest installed version satisfying the requirement (agent.rs shape).
-    let version = pkg
-        .installed_versions
-        .iter()
-        .map(|v| &v.version)
-        .filter(|v| version_req.matches(v))
-        .max()
-        .cloned()
-        .ok_or_else(|| LinkError::VersionUnsatisfied {
-            package: package.to_string(),
-            req: version_req.to_string(),
-        })?;
-
     // Must carry a [plugin] table and provide the required port
     // (plugin_loader.rs shape). A data-only package (no [plugin] table)
     // can't bind to a plugin reference, so it's PluginNotInstalled too.
+    // Checked before version satisfiability: structural validity (does
+    // this package even back a plugin?) takes precedence over "which
+    // version" — a data-only package is PluginNotInstalled regardless of
+    // what versions happen to be installed.
     let plugin = pkg
         .plugin
         .as_ref()
@@ -188,6 +179,19 @@ fn resolve_one_plugin(
             expected,
         });
     }
+
+    // Highest installed version satisfying the requirement (agent.rs shape).
+    let version = pkg
+        .installed_versions
+        .iter()
+        .map(|v| &v.version)
+        .filter(|v| version_req.matches(v))
+        .max()
+        .cloned()
+        .ok_or_else(|| LinkError::VersionUnsatisfied {
+            package: package.to_string(),
+            req: version_req.to_string(),
+        })?;
 
     Ok(LinkedPlugin {
         name: package.clone(),
@@ -283,6 +287,28 @@ mod tests {
         }
     }
 
+    fn data_only_pkg(name: &str, version: &str) -> LockedPackage {
+        let v = Version::parse(version).unwrap();
+        LockedPackage {
+            name: PackageName::from_str(name).unwrap(),
+            active_version: v.clone(),
+            source: PackageSource::Git {
+                location: "https://x/y.git".parse().unwrap(),
+                rev: None,
+            },
+            installed_versions: vec![LockedVersion {
+                version: v,
+                rev: None,
+                resolved_commit: "0".repeat(40),
+                sha256: String::new(),
+                installed_at: SystemTime::UNIX_EPOCH,
+            }],
+            plugin: None,
+            skill: None,
+            synthesized_from: None,
+        }
+    }
+
     fn lf_with(pkg: LockedPackage) -> LockFile {
         let mut lf = LockFile::default();
         lf.packages.push(pkg);
@@ -347,6 +373,21 @@ mod tests {
         let r = resolve_one_plugin(&lf, &name, &req("^2"), PortKind::LlmBackend);
         assert!(
             matches!(r, Err(LinkError::VersionUnsatisfied { .. })),
+            "got {r:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_data_only_not_installed() {
+        // Data-only package (no [plugin] table) whose installed version
+        // (1.0.0) also fails to satisfy the requested req (^2). Structural
+        // validity must be checked before version satisfiability, so this
+        // must be PluginNotInstalled, not VersionUnsatisfied.
+        let lf = lf_with(data_only_pkg("some-data-pkg", "1.0.0"));
+        let name = PackageName::from_str("some-data-pkg").unwrap();
+        let r = resolve_one_plugin(&lf, &name, &req("^2"), PortKind::LlmBackend);
+        assert!(
+            matches!(r, Err(LinkError::PluginNotInstalled { .. })),
             "got {r:?}"
         );
     }
