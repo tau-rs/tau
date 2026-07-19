@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Durability {
     /// High-level intent. The host resolves it to a concrete granularity +
     /// store for the run/build target (see `tau_runtime_core::durable_resolve`).

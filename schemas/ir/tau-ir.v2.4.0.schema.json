@@ -1,6 +1,7 @@
 {
   "$defs": {
     "Agent": {
+      "additionalProperties": false,
       "description": "An LLM agent loop with tools and optional context block.",
       "properties": {
         "budget": {
@@ -98,6 +99,7 @@
       "type": "string"
     },
     "Backoff": {
+      "additionalProperties": false,
       "description": "Backoff parameters. Durations are stored as the author's verbatim\nduration strings (e.g. `\"30s\"`, `\"10m\"`) — they are host-honoured\nmetadata, not values the (no_std) IR interpreter ever computes with.",
       "properties": {
         "base": {
@@ -350,6 +352,7 @@
       "title": "capability"
     },
     "CapabilityRequirements": {
+      "additionalProperties": false,
       "description": "The capability-requirement set for one tool.\n\nRe-export shape over `Vec<tau_domain::Capability>` — the IR does not\nre-define what a capability *is*; it just carries the existing type\nacross the boundary. Future evolution (capability narrowing in the IR\npre-hash, etc.) lands here.",
       "properties": {
         "declared": {
@@ -373,6 +376,7 @@
       "type": "object"
     },
     "Check": {
+      "additionalProperties": false,
       "description": "A postcondition evaluated at a point in the pipeline.",
       "properties": {
         "id": {
@@ -407,6 +411,7 @@
           "description": "Deterministic predicate over a read locus.",
           "properties": {
             "Goal": {
+              "additionalProperties": false,
               "properties": {
                 "evaluates": {
                   "$ref": "#/$defs/Locus",
@@ -434,6 +439,7 @@
           "description": "Produced artifact whose content an LLM judge evaluates.",
           "properties": {
             "Deliverable": {
+              "additionalProperties": false,
               "properties": {
                 "judge": {
                   "$ref": "#/$defs/JudgeRef",
@@ -479,6 +485,7 @@
       ]
     },
     "Condition": {
+      "additionalProperties": false,
       "description": "A deterministic predicate over a read locus — the condition for a\n`Branch`/`Loop` (EPIC 4.1) and structurally identical to the goal arm of a\n`Check` (`CheckVerify::Goal`).",
       "properties": {
         "evaluates": {
@@ -497,6 +504,7 @@
       "type": "object"
     },
     "ContextConfig": {
+      "additionalProperties": false,
       "description": "β.4 context-manager configuration attached to an [`crate::node::Agent`].\n\n`None` on the agent means \"no context management\" (full history every\nturn — pre-β.4 behavior). An empty `pipeline` serializes to `{}` so a\n`Some(ContextConfig::default())` is byte-identical to the legacy empty\nplaceholder.",
       "properties": {
         "pipeline": {
@@ -522,6 +530,7 @@
           "description": "A user-supplied node resolved at runtime. `source` selects the lane.\n\nSee: [escape-hatches.md#contextnodekind-custom](../../docs/explanation/escape-hatches.md#contextnodekind-custom).",
           "properties": {
             "Custom": {
+              "additionalProperties": false,
               "properties": {
                 "package": {
                   "description": "Package reference providing the node (e.g. `my-nodes@^0.1`).",
@@ -547,6 +556,7 @@
       ]
     },
     "ContextStep": {
+      "additionalProperties": false,
       "description": "One node in a context pipeline.",
       "properties": {
         "config": {
@@ -595,6 +605,7 @@
       ]
     },
     "Deterministic": {
+      "additionalProperties": false,
       "description": "A pure-function step.",
       "properties": {
         "fn_ref": {
@@ -641,6 +652,7 @@
           "description": "Explicit escape hatch: the author names the mechanism directly.",
           "properties": {
             "explicit": {
+              "additionalProperties": false,
               "properties": {
                 "checkpoint": {
                   "$ref": "#/$defs/CheckpointGranularity",
@@ -777,6 +789,7 @@
           "description": "The canonical judge, on a build-time-resolved model.",
           "properties": {
             "Default": {
+              "additionalProperties": false,
               "properties": {
                 "model_ref": {
                   "$ref": "#/$defs/ModelRef",
@@ -841,6 +854,7 @@
       ]
     },
     "ModelRef": {
+      "additionalProperties": false,
       "description": "A concrete, build-time-resolved model selection.",
       "properties": {
         "backend": {
@@ -859,6 +873,7 @@
       "type": "object"
     },
     "NativeFnRef": {
+      "additionalProperties": false,
       "description": "A reference to a statically linked native tool by symbolic name.\n\nThe symbolic name (e.g. `\"ReadTemp\"`) is the Rust identifier of the\n`impl Tool for X` type. The lowering pass resolves it against the\nproject's native tool registry; AOT (β.7) lowers the call site\ndirectly. v0's interpreter dispatches by name through a\n`NativeFnRegistry` injected at runtime.",
       "properties": {
         "name": {
@@ -887,6 +902,7 @@
       ]
     },
     "Pipeline": {
+      "additionalProperties": false,
       "description": "An ordered, engine-sequenced pipeline of steps.",
       "properties": {
         "steps": {
@@ -903,6 +919,7 @@
       "type": "object"
     },
     "PipelineStep": {
+      "additionalProperties": false,
       "description": "One step in a [`Pipeline`].",
       "properties": {
         "id": {
@@ -930,6 +947,7 @@
       "type": "string"
     },
     "RetryPolicy": {
+      "additionalProperties": false,
       "description": "Failure handling for a check.",
       "properties": {
         "gate": {
@@ -955,6 +973,7 @@
       "type": "object"
     },
     "RetryPolicy2": {
+      "additionalProperties": false,
       "description": "Trigger-level re-invocation policy. This is **not** a per-node interpreter\nretry: the host (or host adapter) re-invokes the artifact; tau's\ninterpreter stays deterministic and stateless across invocations.",
       "properties": {
         "backoff": {
@@ -1045,6 +1064,7 @@
           "description": "EPIC 4.1: run `then` if `on` holds, else `otherwise` (may be empty).\nExecuted by the interpreter in 4.2.",
           "properties": {
             "Branch": {
+              "additionalProperties": false,
               "properties": {
                 "on": {
                   "$ref": "#/$defs/Condition",
@@ -1083,6 +1103,7 @@
           "description": "EPIC 4.1: fork `branches`, run concurrently, join. Bounded fork-join\n(concurrency capped by the interpreter, 4.2).",
           "properties": {
             "Parallel": {
+              "additionalProperties": false,
               "properties": {
                 "branches": {
                   "description": "Independent step sequences run in parallel.",
@@ -1111,6 +1132,7 @@
           "description": "EPIC 4.1: run `body` until `until` holds or `max_iters` is hit\n(mandatory bound — no unbounded loops). Reuses `OnFail::Retry` rewind\nin the interpreter (4.2).",
           "properties": {
             "Loop": {
+              "additionalProperties": false,
               "properties": {
                 "body": {
                   "description": "The loop body.",
@@ -1148,6 +1170,7 @@
           "description": "EPIC 4.1: human-in-the-loop pause — checkpoint and wait for\n`resume_signal`, then seed-and-skip resume (ADR-0053 `per_tool_call`\ncheckpoint; round-trip in 4.3).",
           "properties": {
             "Suspend": {
+              "additionalProperties": false,
               "properties": {
                 "resume_signal": {
                   "description": "Signal name that resumes the run.",
@@ -1168,6 +1191,7 @@
       ]
     },
     "SubflowEdge": {
+      "additionalProperties": false,
       "description": "A subflow edge in a workflow.",
       "properties": {
         "id": {
@@ -1197,6 +1221,7 @@
           "description": "Spawn a sibling agent within the same module with a narrowed\ncapability set. Per the subset-of-parent rule, `cap_subset`\nMUST be a subset of the parent agent's grant; the lowering pass\nchecks this.",
           "properties": {
             "Spawn": {
+              "additionalProperties": false,
               "properties": {
                 "cap_subset": {
                   "$ref": "#/$defs/CapabilityRequirements",
@@ -1224,6 +1249,7 @@
           "description": "Compose another full workflow as a subroutine. Used for\npipeline composition; v0 reserves the variant but the lowering\npass currently rejects it pending the multi-workflow framing\nin a future spec.",
           "properties": {
             "Compose": {
+              "additionalProperties": false,
               "properties": {
                 "target_workflow": {
                   "$ref": "#",
@@ -1249,6 +1275,7 @@
       "type": "string"
     },
     "Tool": {
+      "additionalProperties": false,
       "description": "A tool node.",
       "properties": {
         "capabilities": {
@@ -1288,6 +1315,7 @@
           "description": "Statically linked native tool.",
           "properties": {
             "Native": {
+              "additionalProperties": false,
               "properties": {
                 "content_hash": {
                   "description": "Hash of the impl's source bytes (Rust source, dependencies'\ncontent hashes). Participates in the IR module hash.",
@@ -1323,6 +1351,7 @@
           "description": "MCP-contracted external server.",
           "properties": {
             "Mcp": {
+              "additionalProperties": false,
               "properties": {
                 "capability_subset": {
                   "$ref": "#/$defs/CapabilityRequirements",
@@ -1368,6 +1397,7 @@
           "description": "Sub-workflow spawn: invoking this tool runs the named agent (in the\nsame `IrModule`) as a child loop with empty initial history. The\nchild's final assistant text (or empty string) becomes the tool\nresult body.\n\nv0 limitation: tool input args are NOT forwarded to the child as a\nUser message — the child runs with empty initial messages and its\nown prompt + LLM script drive its behavior. β.7 (AOT codegen) is\nthe natural place to thread arg-forwarding.",
           "properties": {
             "Subflow": {
+              "additionalProperties": false,
               "properties": {
                 "target": {
                   "$ref": "#/$defs/AgentId",
@@ -1390,6 +1420,7 @@
           "description": "Deterministic step: invoking this tool calls the pure Rust function\nnamed by the step's `fn_ref` via the dispatcher's\n`deterministic_registry()`. The function's return value becomes the\ntool result body. No LLM, no I/O.",
           "properties": {
             "Step": {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "$ref": "#/$defs/StepId",
@@ -1410,6 +1441,7 @@
       ]
     },
     "ToolSpec": {
+      "additionalProperties": false,
       "description": "Tool specification surface used by the agent loop.\n\nMirror of `tau_ports::ToolSpec` adapted for IR storage. Provides the\nLLM-facing schema; not used for capability decisions.",
       "properties": {
         "description": {
@@ -1432,6 +1464,7 @@
       "type": "object"
     },
     "TriggerBinding": {
+      "additionalProperties": false,
       "description": "One named trigger binding. Canonically ordered by `name` within\n`IrModule.triggers`. A trigger is metadata about how tau is invoked,\nnever an executable node.\n\nOptional fields serialize verbatim (`None` → `null`, no skipping) to\nmatch the IR's canonical-encoding discipline (see `canonical.rs`). Only\nthe module-level `triggers` `Vec` skips-when-empty, to preserve\ntrigger-less hashes.",
       "properties": {
         "agent": {
@@ -1495,6 +1528,7 @@
       ]
     },
     "Workflow": {
+      "additionalProperties": false,
       "description": "The set of nodes + edges that make up one workflow.",
       "properties": {
         "agents": {
@@ -1560,6 +1594,7 @@
   },
   "$id": "https://lebocqtitouan.github.io/tau/schemas/ir/v2.4.0/tau-ir.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
   "description": "The container for one workflow's IR.\n\n`tau build` emits one `IrModule` per workflow (one per project for\nv0). `tau verify --bundle` re-builds and asserts byte-equality of\nthe canonical form (D-6).",
   "properties": {
     "ir_format": {

@@ -9,6 +9,7 @@ use crate::ids::{AgentId, SubflowId};
 /// The kind of subflow connection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub enum SubflowKind {
     /// Spawn a sibling agent within the same module with a narrowed
     /// capability set. Per the subset-of-parent rule, `cap_subset`
@@ -33,6 +34,7 @@ pub enum SubflowKind {
 /// A subflow edge in a workflow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SubflowEdge {
     /// Identifier of this subflow within the workflow.
     pub id: SubflowId,

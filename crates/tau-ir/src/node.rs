@@ -30,6 +30,7 @@ pub enum Node {
 /// An LLM agent loop with tools and optional context block.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Agent {
     /// Identifier within the workflow.
     pub id: AgentId,
@@ -63,6 +64,7 @@ pub struct Agent {
 /// A tool node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Tool {
     /// Identifier within the workflow.
     pub id: ToolId,
@@ -82,6 +84,7 @@ pub struct Tool {
 /// LLM-facing schema; not used for capability decisions.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ToolSpec {
     /// LLM-visible name.
     pub name: String,
@@ -94,6 +97,7 @@ pub struct ToolSpec {
 /// A pure-function step.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Deterministic {
     /// Identifier within the workflow.
     pub id: StepId,

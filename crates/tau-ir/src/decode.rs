@@ -2,8 +2,10 @@
 //!
 //! Two phases: peek `ir_format` and apply the semver acceptance window
 //! (accept ⟺ major == CURRENT.major ∧ minor ≤ CURRENT.minor), then a full
-//! decode. Closing the decode with `deny_unknown_fields` is added in a
-//! follow-up task; this commit only gates the version.
+//! decode. The full decode is closed: every `Deserialize` type reachable
+//! from [`IrModule`] carries `#[serde(deny_unknown_fields)]`, so an
+//! unknown field inside an otherwise-accepted module is rejected as
+//! [`DecodeError::Serde`].
 
 use alloc::string::{String, ToString};
 use serde::Deserialize;
@@ -102,7 +104,9 @@ pub fn from_canonical_bytes(bytes: &[u8]) -> Result<IrModule, DecodeError> {
         });
     }
 
-    // Phase 3: full decode (deny_unknown_fields closing lands in Task 2).
+    // Phase 3: full decode. Closed via `deny_unknown_fields` on every type
+    // reachable from `IrModule` — an unknown field anywhere in the tree
+    // surfaces here as `DecodeError::Serde`.
     let module: IrModule = serde_json::from_slice(bytes)?;
     Ok(module)
 }
@@ -193,5 +197,45 @@ mod tests {
             from_canonical_bytes(stripped.as_bytes()),
             Err(DecodeError::BadFormat { .. })
         ));
+    }
+
+    #[test]
+    fn unknown_top_level_field_is_rejected() {
+        let mut bytes = module_at("v2.4.0");
+        // Splice an unknown top-level key into the JSON object.
+        let json = String::from_utf8(bytes).unwrap();
+        let doctored = json.replacen('{', r#"{"bogus_top":1,"#, 1);
+        bytes = doctored.into_bytes();
+        assert!(matches!(
+            from_canonical_bytes(&bytes),
+            Err(DecodeError::Serde(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_nested_field_is_rejected() {
+        // Build a module with a pipeline, then inject an unknown key inside
+        // the nested "workflow" object.
+        let target = registry::list_available().next().unwrap().triple;
+        let m = IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target,
+            workflow: Workflow::default(),
+            triggers: alloc::vec::Vec::new(),
+        };
+        let json = String::from_utf8(to_canonical_bytes(&m)).unwrap();
+        let doctored = json.replace(r#""workflow":{"#, r#""workflow":{"ghost":true,"#);
+        assert!(matches!(
+            from_canonical_bytes(doctored.as_bytes()),
+            Err(DecodeError::Serde(_))
+        ));
+    }
+
+    #[test]
+    fn all_known_fields_still_decode() {
+        // The canonical bytes of a fully-populated module must still round-trip.
+        let bytes = module_at("v2.4.0");
+        assert!(from_canonical_bytes(&bytes).is_ok());
     }
 }

@@ -58,6 +58,7 @@ pub enum BackoffStrategy {
 /// metadata, not values the (no_std) IR interpreter ever computes with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Backoff {
     /// `fixed` or `exponential`.
     pub strategy: BackoffStrategy,
@@ -72,6 +73,7 @@ pub struct Backoff {
 /// interpreter stays deterministic and stateless across invocations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RetryPolicy {
     /// Total attempts including the first; `1` = no retry.
     pub max_attempts: u32,
@@ -94,6 +96,7 @@ pub struct RetryPolicy {
 /// trigger-less hashes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct TriggerBinding {
     /// Trigger name (the `[trigger.<name>]` table key).
     pub name: String,

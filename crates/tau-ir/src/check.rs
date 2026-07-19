@@ -11,6 +11,7 @@ use crate::tool_impl::NativeFnRef;
 /// A postcondition evaluated at a point in the pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Check {
     /// Identifier within the workflow.
     pub id: CheckId,
@@ -25,6 +26,7 @@ pub struct Check {
 /// `Check` (`CheckVerify::Goal`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Condition {
     /// The locus the predicate reads.
     pub evaluates: Locus,
@@ -35,6 +37,7 @@ pub struct Condition {
 /// The two postcondition kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub enum CheckVerify {
     /// Deterministic predicate over a read locus.
     Goal {
@@ -87,6 +90,7 @@ pub enum GoalPredicate {
 /// Who evaluates a deliverable's content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub enum JudgeRef {
     /// The canonical judge, on a build-time-resolved model.
     Default {
@@ -100,6 +104,7 @@ pub enum JudgeRef {
 /// Failure handling for a check.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RetryPolicy {
     /// Abort vs rewind-and-retry.
     pub on_fail: OnFail,

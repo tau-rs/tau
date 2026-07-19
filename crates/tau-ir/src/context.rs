@@ -20,6 +20,7 @@ use serde_json::Value;
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ContextConfig {
     /// Ordered transformers, applied top-to-bottom each turn. The last
     /// step must be the builtin `fit_budget` (typecheck-enforced).
@@ -30,6 +31,7 @@ pub struct ContextConfig {
 /// One node in a context pipeline.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ContextStep {
     /// Transformer name. For builtins: `trim_old`, `compact_tool_outputs`,
     /// `fit_budget`. For custom nodes: the user-chosen step name.
@@ -62,6 +64,7 @@ pub enum DeterminismClass {
 /// Delivery vehicle for a context node.
 #[derive(Debug, Clone, Eq, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub enum ContextNodeKind {
     /// A tau-provided builtin transformer.
     #[default]

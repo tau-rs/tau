@@ -16,6 +16,7 @@ use tau_domain::{Address, MessageId};
 
 /// The IR-owned message envelope.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Message {
     /// Globally unique message identifier.
     pub id: MessageId,
@@ -41,6 +42,7 @@ pub struct Message {
 /// Variants are 1:1 with `tau_domain::MessagePayload`. If a new variant
 /// is added there, the cross-crate shape test will catch the drift.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum MessagePayload {
     /// Plain text content.
     Text {

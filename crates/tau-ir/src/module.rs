@@ -52,6 +52,7 @@ impl IrFormatVersion {
 /// the canonical form (D-6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct IrModule {
     /// IR language version (D-6 — separate from `tau_version`).
     pub ir_format: IrFormatVersion,
@@ -74,6 +75,7 @@ pub struct IrModule {
 /// The set of nodes + edges that make up one workflow.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Workflow {
     /// Agent nodes by id.
     pub agents: BTreeMap<AgentId, Agent>,

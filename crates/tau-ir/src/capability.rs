@@ -21,6 +21,7 @@ use crate::ids::ToolId;
 /// pre-hash, etc.) lands here.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityRequirements {
     /// Declared capabilities; order is taken from the source TOML verbatim
     /// (capability list order is taken from the source TOML verbatim; two
