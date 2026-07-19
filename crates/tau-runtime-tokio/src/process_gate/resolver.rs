@@ -59,9 +59,11 @@ pub enum SandboxAdapter {
     Windows(WindowsSandbox),
     /// `tau-sandbox-container` docker/podman adapter.
     Container(ContainerSandbox),
-    /// `tau_ports::fixtures::MockCapabilityGate` — available in all builds but only
-    /// instantiable during `cargo test`, when the `test-fixtures` feature is
-    /// enabled, or when `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` is set.
+    /// `tau_ports::fixtures::MockCapabilityGate` — present ONLY under `cargo test`
+    /// or the opt-in `mock-sandbox` feature; absent from a default production
+    /// build. Instantiated solely via the `TAU_TESTING_ALLOW_MOCK_SANDBOX=1`
+    /// env-var injection path below, never as a silent fallback.
+    #[cfg(any(feature = "mock-sandbox", test))]
     Mock(tau_ports::fixtures::MockCapabilityGate),
     /// No isolation; explicit opt-out path.
     Passthrough(PassthroughSandbox),
@@ -76,6 +78,7 @@ impl std::fmt::Debug for SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(_) => f.debug_tuple("SandboxAdapter::Windows").finish(),
             SandboxAdapter::Container(_) => f.debug_tuple("SandboxAdapter::Container").finish(),
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(_) => f.debug_tuple("SandboxAdapter::Mock").finish(),
             SandboxAdapter::Passthrough(_) => f.debug_tuple("SandboxAdapter::Passthrough").finish(),
         }
@@ -102,6 +105,7 @@ impl SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(a) => a.name(),
             SandboxAdapter::Container(a) => a.name(),
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(a) => a.name(),
             SandboxAdapter::Passthrough(a) => a.name(),
         }
@@ -116,6 +120,7 @@ impl SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(a) => a.probe().await,
             SandboxAdapter::Container(a) => a.probe().await,
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(a) => a.probe().await,
             SandboxAdapter::Passthrough(a) => a.probe().await,
         }
@@ -130,6 +135,7 @@ impl SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(a) => a.supported_shapes(),
             SandboxAdapter::Container(a) => a.supported_shapes(),
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(a) => a.supported_shapes(),
             SandboxAdapter::Passthrough(a) => a.supported_shapes(),
         }
@@ -144,6 +150,7 @@ impl SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(a) => a.validate_plan(plan),
             SandboxAdapter::Container(a) => a.validate_plan(plan),
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(a) => a.validate_plan(plan),
             SandboxAdapter::Passthrough(a) => a.validate_plan(plan),
         }
@@ -162,6 +169,7 @@ impl SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(a) => a.wrap_spawn(plan, cmd).await,
             SandboxAdapter::Container(a) => a.wrap_spawn(plan, cmd).await,
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(a) => a.wrap_spawn(plan, cmd).await,
             SandboxAdapter::Passthrough(a) => a.wrap_spawn(plan, cmd).await,
         }
@@ -183,6 +191,7 @@ impl SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(a) => a.apply_post_spawn(plan, child_pid, handle).await,
             SandboxAdapter::Container(a) => a.apply_post_spawn(plan, child_pid, handle).await,
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(a) => a.apply_post_spawn(plan, child_pid, handle).await,
             SandboxAdapter::Passthrough(a) => a.apply_post_spawn(plan, child_pid, handle).await,
         }
@@ -198,6 +207,7 @@ impl CapabilityGate for SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(s) => s.name(),
             SandboxAdapter::Container(s) => s.name(),
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(s) => s.name(),
             SandboxAdapter::Passthrough(s) => s.name(),
         }
@@ -211,6 +221,7 @@ impl CapabilityGate for SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(s) => s.probe().await,
             SandboxAdapter::Container(s) => s.probe().await,
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(s) => s.probe().await,
             SandboxAdapter::Passthrough(s) => s.probe().await,
         }
@@ -224,6 +235,7 @@ impl CapabilityGate for SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(s) => s.supported_shapes(),
             SandboxAdapter::Container(s) => s.supported_shapes(),
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(s) => s.supported_shapes(),
             SandboxAdapter::Passthrough(s) => s.supported_shapes(),
         }
@@ -237,6 +249,7 @@ impl CapabilityGate for SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(s) => s.validate_plan(plan),
             SandboxAdapter::Container(s) => s.validate_plan(plan),
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(s) => s.validate_plan(plan),
             SandboxAdapter::Passthrough(s) => s.validate_plan(plan),
         }
@@ -256,6 +269,7 @@ impl ProcessCapabilityGate for SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(s) => s.wrap_spawn(plan, cmd).await,
             SandboxAdapter::Container(s) => s.wrap_spawn(plan, cmd).await,
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(s) => s.wrap_spawn(plan, cmd).await,
             SandboxAdapter::Passthrough(s) => s.wrap_spawn(plan, cmd).await,
         }
@@ -274,6 +288,7 @@ impl ProcessCapabilityGate for SandboxAdapter {
             #[cfg(target_os = "windows")]
             SandboxAdapter::Windows(s) => s.apply_post_spawn(plan, child_pid, handle).await,
             SandboxAdapter::Container(s) => s.apply_post_spawn(plan, child_pid, handle).await,
+            #[cfg(any(feature = "mock-sandbox", test))]
             SandboxAdapter::Mock(s) => s.apply_post_spawn(plan, child_pid, handle).await,
             SandboxAdapter::Passthrough(s) => s.apply_post_spawn(plan, child_pid, handle).await,
         }
@@ -341,6 +356,8 @@ pub async fn resolve_adapter(
     use tau_pkg::scope::SandboxRequiredTier;
 
     // Mock injection via env var — bypasses the registry entirely.
+    // Gated out of production builds so the env-var string never ships.
+    #[cfg(any(feature = "mock-sandbox", test))]
     if std::env::var("TAU_TESTING_ALLOW_MOCK_SANDBOX")
         .map(|v| v == "1")
         .unwrap_or(false)
@@ -524,6 +541,8 @@ pub async fn resolve_adapter(
 /// (same as `resolve_adapter`) so tests remain reliable across platforms.
 pub async fn resolve_strict_for_validation() -> Result<SandboxAdapter, ResolutionError> {
     // Mock injection — mirrors resolve_adapter behaviour.
+    // Gated out of production builds so the env-var string never ships.
+    #[cfg(any(feature = "mock-sandbox", test))]
     if std::env::var("TAU_TESTING_ALLOW_MOCK_SANDBOX")
         .map(|v| v == "1")
         .unwrap_or(false)
