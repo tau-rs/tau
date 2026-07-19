@@ -21,11 +21,11 @@ use serde::Deserialize;
 /// Serialize an `IrModule` to canonical bytes.
 ///
 /// Uses `serde_json`'s compact (no-pretty) encoder over the IrModule's
-/// derived `Serialize` impl. Map iteration is `BTreeMap` (alphabetical)
-/// because every map field in `IrModule`/`Workflow` is a `BTreeMap`.
-/// All fields serialize unconditionally: `Option::None` becomes JSON
-/// `null` (no `skip_serializing_if`), and `Vec` order is preserved
-/// as-given.
+/// derived `Serialize` impl. Fields serialize in Rust declaration order;
+/// map iteration is `BTreeMap` (alphabetical) because every map field in
+/// `IrModule`/`Workflow` is a `BTreeMap`. `skip_serializing_if` is
+/// honored, so absent optional fields are omitted rather than emitted as
+/// JSON `null`, and `Vec` order is preserved as-given.
 pub fn to_canonical_bytes(module: &IrModule) -> Vec<u8> {
     serde_json::to_vec(module).expect("IrModule serializes cleanly to JSON")
 }
@@ -329,7 +329,7 @@ mod gate_tests {
     use super::*;
     use crate::error::IrError;
     use crate::module::{IrFormatVersion, IrModule};
-    use alloc::string::{String, ToString};
+    use alloc::string::ToString;
     use tau_ports::target::registry;
 
     /// A minimal, valid v2.4.0 module serialized to canonical bytes.
