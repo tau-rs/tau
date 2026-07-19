@@ -806,9 +806,23 @@ Append to `lattice/mod.rs` tests module:
             })
         })
     }
+    // One cap of a randomly-chosen kind (Read paths or Process.Spawn commands),
+    // so property tests exercise cross-kind AND multi-same-kind (0..3 caps can
+    // yield two Reads → the merge path in canon_caps).
+    fn cap_strat() -> impl Strategy<Value = Capability> {
+        prop_oneof![
+            prop::collection::vec(path_strat(), 1..3).prop_map(|p| {
+                read(&p.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+            }),
+            prop::collection::vec(prop_oneof![Just("ls"), Just("cat"), Just("rm")], 1..3).prop_map(|c| {
+                Capability::Process(ProcessCapability::Spawn {
+                    commands: c.iter().map(|s| s.to_string()).collect(),
+                })
+            }),
+        ]
+    }
     fn caps_strat() -> impl Strategy<Value = Vec<Capability>> {
-        prop::collection::vec(path_strat(), 0..3)
-            .prop_map(|paths| if paths.is_empty() { vec![] } else { vec![read(&paths.iter().map(|s| s.as_str()).collect::<Vec<_>>())] })
+        prop::collection::vec(cap_strat(), 0..3)
     }
 
     proptest! {
@@ -938,31 +952,101 @@ fn push_cap(out: &mut Vec<Capability>, cap: Capability) {
     if !out.contains(&cap) { out.push(cap); }
 }
 
-/// Canonical form: path/host lists canonicalized, caps deduped and ordered so
-/// the lattice law holds as structural equality.
+/// Canonical form: same-kind caps merged (their pattern/token lists unioned —
+/// the ceiling code's `gather_*` already treats a kind's grants as the union
+/// across entries), glob/host/token lists canonicalized, empty (⊥) caps
+/// dropped, result ordered so the lattice law holds as structural equality.
 pub fn canon_caps(caps: &[Capability]) -> Vec<Capability> {
-    let mut out: Vec<Capability> = Vec::new();
+    // 1. merge every capability of the same kind into one
+    let mut merged: Vec<Capability> = Vec::new();
     for c in caps {
-        let cc = match c {
-            Capability::Filesystem(FsCapability::Read { paths }) =>
-                Capability::Filesystem(FsCapability::Read { paths: glob_canon(paths) }),
-            Capability::Filesystem(FsCapability::Exec { paths }) =>
-                Capability::Filesystem(FsCapability::Exec { paths: glob_canon(paths) }),
-            Capability::Filesystem(FsCapability::Write { paths, max_bytes }) =>
-                Capability::Filesystem(FsCapability::Write { paths: glob_canon(paths), max_bytes: *max_bytes }),
-            other => other.clone(),
-        };
-        // drop caps whose glob list canonicalized to empty (⊥)
-        if let Capability::Filesystem(fs) = &cc {
-            let empty = matches!(fs,
-                FsCapability::Read { paths } | FsCapability::Exec { paths } | FsCapability::Write { paths, .. }
-                if paths.is_empty());
-            if empty { continue; }
+        if let Some(existing) = merged.iter_mut().find(|m| same_kind(m, c)) {
+            union_into(existing, c);
+        } else {
+            merged.push(c.clone());
         }
-        push_cap(&mut out, cc);
+    }
+    // 2. canonicalize each merged cap's lists; drop empties (⊥)
+    let mut out: Vec<Capability> = Vec::new();
+    for c in &merged {
+        if let Some(cc) = canon_one(c) {
+            out.push(cc);
+        }
     }
     out.sort_by(|x, y| kind_str(x).cmp(kind_str(y)).then_with(|| render_cap(x).cmp(&render_cap(y))));
     out
+}
+
+/// Union `src`'s grant lists into `dst` (same kind guaranteed by the caller).
+fn union_into(dst: &mut Capability, src: &Capability) {
+    use Capability::*;
+    match (dst, src) {
+        (Filesystem(FsCapability::Read { paths: d }), Filesystem(FsCapability::Read { paths: s }))
+        | (Filesystem(FsCapability::Exec { paths: d }), Filesystem(FsCapability::Exec { paths: s })) => {
+            d.extend(s.iter().cloned());
+        }
+        (
+            Filesystem(FsCapability::Write { paths: d, max_bytes: md }),
+            Filesystem(FsCapability::Write { paths: s, max_bytes: ms }),
+        ) => {
+            d.extend(s.iter().cloned());
+            *md = match (*md, *ms) { (None, _) | (_, None) => None, (Some(a), Some(b)) => Some(a.max(b)) };
+        }
+        (
+            Network(NetCapability::Http { hosts: dh, methods: dm }),
+            Network(NetCapability::Http { hosts: sh, methods: sm }),
+        ) => {
+            dh.extend(sh.iter().cloned());
+            dm.extend(sm.iter().cloned());
+        }
+        (Process(ProcessCapability::Spawn { commands: d }), Process(ProcessCapability::Spawn { commands: s })) => {
+            d.extend(s.iter().cloned());
+        }
+        (Agent(AgentCapability::Spawn { allowed_kinds: d }), Agent(AgentCapability::Spawn { allowed_kinds: s })) => {
+            d.extend(s.iter().cloned());
+        }
+        (Skill(SkillCapability::Spawn { allowed_skills: d }), Skill(SkillCapability::Spawn { allowed_skills: s })) => {
+            d.extend(s.iter().cloned());
+        }
+        (TaskList { mode: d }, TaskList { mode: s }) => {
+            if mode_rank(s, true) > mode_rank(d, true) { *d = s.clone(); }
+        }
+        (Plan { mode: d }, Plan { mode: s }) => {
+            if mode_rank(s, false) > mode_rank(d, false) { *d = s.clone(); }
+        }
+        _ => {} // custom: same-kind ⟹ same name+params (same_kind contract) — keep dst
+    }
+}
+
+/// Canonicalize one merged cap's lists; `None` if its grant list is empty (⊥).
+fn canon_one(c: &Capability) -> Option<Capability> {
+    use Capability::*;
+    fn sorted(v: &[String]) -> Vec<String> { let mut o = v.to_vec(); o.sort(); o.dedup(); o }
+    let cc = match c {
+        Filesystem(FsCapability::Read { paths }) => Filesystem(FsCapability::Read { paths: glob_canon(paths) }),
+        Filesystem(FsCapability::Exec { paths }) => Filesystem(FsCapability::Exec { paths: glob_canon(paths) }),
+        Filesystem(FsCapability::Write { paths, max_bytes }) =>
+            Filesystem(FsCapability::Write { paths: glob_canon(paths), max_bytes: *max_bytes }),
+        Network(NetCapability::Http { hosts, methods }) =>
+            Network(NetCapability::Http { hosts: sorted(hosts), methods: sorted(methods) }),
+        Process(ProcessCapability::Spawn { commands }) =>
+            Process(ProcessCapability::Spawn { commands: sorted(commands) }),
+        Agent(AgentCapability::Spawn { allowed_kinds }) =>
+            Agent(AgentCapability::Spawn { allowed_kinds: sorted(allowed_kinds) }),
+        Skill(SkillCapability::Spawn { allowed_skills }) =>
+            Skill(SkillCapability::Spawn { allowed_skills: sorted(allowed_skills) }),
+        other => other.clone(),
+    };
+    let empty = match &cc {
+        Filesystem(FsCapability::Read { paths } | FsCapability::Exec { paths } | FsCapability::Write { paths, .. }) =>
+            paths.is_empty(),
+        Network(NetCapability::Http { hosts, methods }) => hosts.is_empty() || methods.is_empty(),
+        Process(ProcessCapability::Spawn { commands }) => commands.is_empty(),
+        Agent(AgentCapability::Spawn { allowed_kinds }) => allowed_kinds.is_empty(),
+        Skill(SkillCapability::Spawn { allowed_skills }) => allowed_skills.is_empty(),
+        _ => false,
+    };
+    if empty { None } else { Some(cc) }
 }
 
 fn render_cap(c: &Capability) -> String {
