@@ -293,3 +293,58 @@ mod http_method_tests {
         assert_eq!(HttpMethod::parse("GTE"), Err(HttpMethodError("GTE".into())));
     }
 }
+
+#[cfg(feature = "serde")]
+mod host_serde {
+    use super::*;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    impl Serialize for HostName {
+        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_str(self.as_str())
+        }
+    }
+    impl<'de> Deserialize<'de> for HostName {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(d)?;
+            HostName::parse(&s).map_err(serde::de::Error::custom)
+        }
+    }
+
+    impl Serialize for HttpMethod {
+        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_str(self.as_str())
+        }
+    }
+    impl<'de> Deserialize<'de> for HttpMethod {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(d)?;
+            HttpMethod::parse(&s).map_err(serde::de::Error::custom)
+        }
+    }
+
+    // HostSet derives via HostName's impls; a small manual impl keeps the
+    // `Any`/`Exact` shape explicit for the vestigial NetCapability derive path.
+    #[derive(Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum HostSetRepr {
+        Any,
+        Exact(BTreeSet<HostName>),
+    }
+    impl Serialize for HostSet {
+        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            match self {
+                HostSet::Any => HostSetRepr::Any.serialize(s),
+                HostSet::Exact(set) => HostSetRepr::Exact(set.clone()).serialize(s),
+            }
+        }
+    }
+    impl<'de> Deserialize<'de> for HostSet {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            Ok(match HostSetRepr::deserialize(d)? {
+                HostSetRepr::Any => HostSet::Any,
+                HostSetRepr::Exact(set) => HostSet::Exact(set),
+            })
+        }
+    }
+}

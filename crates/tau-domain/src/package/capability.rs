@@ -9,10 +9,13 @@
 //! `kind = "fs.read"` form. The custom `Deserialize` impl on
 //! [`Capability`] maps it onto the variant tree.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+#[cfg(feature = "serde")]
+use crate::package::host::HostName;
+use crate::package::host::{HostSet, HttpMethod};
 use crate::value::Value;
 
 /// A capability declaration.
@@ -134,10 +137,11 @@ pub enum NetCapability {
     /// HTTP requests to the allow-listed hosts and methods.
     #[non_exhaustive]
     Http {
-        /// Allowed hosts (exact match or glob).
-        hosts: Vec<String>,
-        /// Allowed HTTP methods (uppercase by convention, e.g. `["GET", "POST"]`).
-        methods: Vec<String>,
+        /// Allowed hosts: exact lowercase hostnames or the typed `Any`
+        /// (authored `hosts = "any"`). Suffix wildcards are not yet supported.
+        hosts: HostSet,
+        /// Allowed HTTP methods. `None` = all methods; `Some(set)` = only those.
+        methods: Option<BTreeSet<HttpMethod>>,
     },
 }
 
@@ -385,6 +389,50 @@ mod capability_de {
     use serde::ser::SerializeMap;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    /// `hosts` is authored as the exact string `"any"` OR a list of host
+    /// strings. Untagged so it works in both TOML (manifests) and JSON (the
+    /// `[allow]` bridge).
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawHosts {
+        Str(String),
+        List(Vec<String>),
+    }
+
+    fn parse_hosts_field<E: serde::de::Error>(raw: Option<RawHosts>) -> Result<HostSet, E> {
+        match raw {
+            None => Ok(HostSet::Exact(alloc::collections::BTreeSet::new())),
+            Some(RawHosts::Str(s)) if s == "any" => Ok(HostSet::Any),
+            Some(RawHosts::Str(s)) => Err(E::custom(alloc::format!(
+                "net.http hosts: bare string {s:?} is not valid; write hosts = \"any\" or a list of hosts"
+            ))),
+            Some(RawHosts::List(list)) => {
+                let mut set = alloc::collections::BTreeSet::new();
+                for h in list {
+                    set.insert(HostName::parse(&h).map_err(|e| {
+                        E::custom(alloc::format!("net.http host {h:?}: {e}"))
+                    })?);
+                }
+                Ok(HostSet::Exact(set))
+            }
+        }
+    }
+
+    fn parse_methods_field<E: serde::de::Error>(
+        raw: Option<Vec<String>>,
+    ) -> Result<Option<alloc::collections::BTreeSet<HttpMethod>>, E> {
+        match raw {
+            None => Ok(None),
+            Some(list) => {
+                let mut set = alloc::collections::BTreeSet::new();
+                for m in list {
+                    set.insert(HttpMethod::parse(&m).map_err(E::custom)?);
+                }
+                Ok(Some(set))
+            }
+        }
+    }
+
     #[derive(Deserialize)]
     struct RawCapability {
         kind: String,
@@ -393,7 +441,7 @@ mod capability_de {
         #[serde(default)]
         max_bytes: Option<u64>,
         #[serde(default)]
-        hosts: Option<Vec<String>>,
+        hosts: Option<RawHosts>,
         #[serde(default)]
         methods: Option<Vec<String>>,
         #[serde(default)]
@@ -422,10 +470,11 @@ mod capability_de {
                 "fs.exec" => Capability::Filesystem(FsCapability::Exec {
                     paths: raw.paths.unwrap_or_default(),
                 }),
-                "net.http" => Capability::Network(NetCapability::Http {
-                    hosts: raw.hosts.unwrap_or_default(),
-                    methods: raw.methods.unwrap_or_default(),
-                }),
+                "net.http" => {
+                    let hosts = parse_hosts_field(raw.hosts)?;
+                    let methods = parse_methods_field(raw.methods)?;
+                    Capability::Network(NetCapability::Http { hosts, methods })
+                }
                 "process.spawn" => Capability::Process(ProcessCapability::Spawn {
                     commands: raw.commands.unwrap_or_default(),
                 }),
@@ -513,10 +562,20 @@ mod capability_de {
                     m.end()
                 }
                 Capability::Network(NetCapability::Http { hosts, methods }) => {
-                    let mut m = s.serialize_map(Some(3))?;
+                    let len = 2 + usize::from(methods.is_some());
+                    let mut m = s.serialize_map(Some(len))?;
                     m.serialize_entry("kind", "net.http")?;
-                    m.serialize_entry("hosts", hosts)?;
-                    m.serialize_entry("methods", methods)?;
+                    match hosts {
+                        HostSet::Any => m.serialize_entry("hosts", "any")?,
+                        HostSet::Exact(set) => {
+                            let list: Vec<&str> = set.iter().map(|h| h.as_str()).collect();
+                            m.serialize_entry("hosts", &list)?;
+                        }
+                    }
+                    if let Some(set) = methods {
+                        let list: Vec<&str> = set.iter().map(|v| v.as_str()).collect();
+                        m.serialize_entry("methods", &list)?;
+                    }
                     m.end()
                 }
                 Capability::Process(ProcessCapability::Spawn { commands }) => {
@@ -606,12 +665,23 @@ impl schemars::JsonSchema for Capability {
                 // net.http
                 {
                     "type": "object",
-                    "required": ["kind", "hosts", "methods"],
+                    "required": ["kind", "hosts"],
                     "additionalProperties": false,
                     "properties": {
-                        "kind":    { "const": "net.http" },
-                        "hosts":   { "type": "array", "items": { "type": "string" } },
-                        "methods": { "type": "array", "items": { "type": "string" } }
+                        "kind":  { "const": "net.http" },
+                        "hosts": {
+                            "oneOf": [
+                                { "const": "any" },
+                                { "type": "array", "items": { "type": "string" } }
+                            ]
+                        },
+                        "methods": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["GET","HEAD","POST","PUT","DELETE","CONNECT","OPTIONS","TRACE","PATCH"]
+                            }
+                        }
                     }
                 },
                 // process.spawn
@@ -725,8 +795,12 @@ mod shape_tests {
     #[test]
     fn net_http_required_shape() {
         let cap = Capability::Network(NetCapability::Http {
-            hosts: vec!["api.example.com".into()],
-            methods: vec!["GET".into()],
+            hosts: HostSet::Exact(
+                [HostName::parse("api.example.com").unwrap()]
+                    .into_iter()
+                    .collect(),
+            ),
+            methods: Some([HttpMethod::Get].into_iter().collect()),
         });
         assert_eq!(cap.required_shape(), CapabilityShape::NetworkHttp);
     }
@@ -919,6 +993,64 @@ mod tests {
             allowed_skills: vec!["x".into()],
         });
         assert_eq!(cap.required_shape(), CapabilityShape::SkillSpawn);
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod net_http_serde_tests {
+    use super::*;
+
+    #[test]
+    fn hosts_any_round_trips() {
+        let c: Capability = serde_json::from_str(r#"{"kind":"net.http","hosts":"any"}"#).unwrap();
+        assert!(
+            matches!(&c, Capability::Network(NetCapability::Http { hosts, .. }) if hosts.is_any())
+        );
+        assert_eq!(serde_json::to_value(&c).unwrap()["hosts"], serde_json::json!("any"));
+    }
+
+    #[test]
+    fn hosts_star_rejected_at_parse() {
+        let e = serde_json::from_str::<Capability>(r#"{"kind":"net.http","hosts":["*"]}"#)
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("any") || e.to_string().to_lowercase().contains("wildcard"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn methods_absent_is_none_empty_is_some_empty() {
+        let all: Capability =
+            serde_json::from_str(r#"{"kind":"net.http","hosts":["a.com"]}"#).unwrap();
+        let none: Capability =
+            serde_json::from_str(r#"{"kind":"net.http","hosts":["a.com"],"methods":[]}"#)
+                .unwrap();
+        let m = |c: &Capability| match c {
+            Capability::Network(NetCapability::Http { methods, .. }) => methods.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(m(&all), None);
+        assert_eq!(m(&none), Some(alloc::collections::BTreeSet::new()));
+    }
+
+    #[test]
+    fn unknown_method_rejected() {
+        assert!(serde_json::from_str::<Capability>(
+            r#"{"kind":"net.http","hosts":["a.com"],"methods":["GTE"]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn exact_hosts_serialize_byte_stable_sorted() {
+        // hash-stability: already-lowercase input serializes identically regardless of input order.
+        let a: Capability =
+            serde_json::from_str(r#"{"kind":"net.http","hosts":["b.com","a.com"]}"#).unwrap();
+        assert_eq!(
+            serde_json::to_value(&a).unwrap()["hosts"],
+            serde_json::json!(["a.com", "b.com"])
+        );
     }
 }
 
