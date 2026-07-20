@@ -48,7 +48,7 @@ permissions:
   contents: read
 
 jobs:
-  # Tier 0 — the thin pre-merge gate (trunk-based CI, ADR-00NN).
+  # Tier 0 — the thin pre-merge gate (trunk-based CI, ADR-0063).
   # Full validation is the nightly tier2.yml run (authority for trunk
   # health, auto-bisect on red). `full-matrix` label pulls tier2 onto
   # a PR on demand; release.yml re-runs both tiers on tags.

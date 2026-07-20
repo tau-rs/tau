@@ -137,6 +137,7 @@
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
 - [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
 - [ADR-0060 — Bundle content-addressed asset store](decisions/0060-bundle-asset-store.md)
+- [ADR-0063 — CI tiering: thin pre-merge gate, nightly authority](decisions/0063-ci-tiering-nightly-authority.md)
 
 # Retrospectives
 

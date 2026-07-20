@@ -323,7 +323,7 @@ jobs:
 
   msrv-check:
     # MSRV is a rustc-version property, not an OS property. Moved from
-    # per-PR ci.yml to nightly (ADR-00NN): breaks are rare and bisect
+    # per-PR ci.yml to nightly (ADR-0063): breaks are rare and bisect
     # finds them trivially. release.yml re-asserts MSRV on tags.
     name: msrv-check / linux
     needs: gate
