@@ -15,6 +15,8 @@ use alloc::vec::Vec;
 
 use crate::value::Value;
 
+pub mod lattice;
+
 /// A capability declaration.
 ///
 /// # Example

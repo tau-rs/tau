@@ -525,17 +525,23 @@ capabilities = [{ kind = "fs.read", paths = ["/etc/**"] }]
 
     #[test]
     fn allow_tools_ceiling_exceeding_root_flagged() {
+        // D3: net.http subset now enforces joint (host, method) coverage per
+        // ceiling entry, and an omitted `methods` key parses to an empty
+        // set — which is the "grants nothing" bottom of the lattice (empty
+        // set of methods requested), not a wildcard. Both entries here now
+        // name an explicit method so the fixture still exercises a real
+        // (non-vacuous) host-ceiling check.
         let (cfg, dir) = proj(
             r#"
 [project]
 name = "demo"
 
 [allow]
-"net.http" = { hosts = ["api.x.com"] }
+"net.http" = { hosts = ["api.x.com"], methods = ["GET"] }
 
 [allow.tools.fetch]
 native = "Fetch"
-"net.http" = { hosts = ["evil.com"] }
+"net.http" = { hosts = ["evil.com"], methods = ["GET"] }
 "#,
         );
         let ctx = ctx_for(&dir);

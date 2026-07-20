@@ -256,6 +256,38 @@ jobs:
       - name: tau-ports ABI must not break without a version bump
         run: cargo semver-checks --baseline-rev origin/main --package tau-ports
 
+  mcp-tokio-decoupled:
+    name: tau-mcp-tokio stays off the host runtime / linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: manifest must not name tau-runtime-tokio
+        # ADR-0062: the MCP transport reaches the process gate as the
+        # `tau_ports::DynProcessGate` port; depending on tau-runtime-tokio would
+        # drag the whole host runtime (tau-pkg / tau-plugin-protocol / the four
+        # sandbox crates) under the transport.
+        run: |
+          if grep -qE '^[[:space:]]*tau-runtime-tokio[[:space:]]*=' crates/tau-mcp-tokio/Cargo.toml; then
+            echo "::error::tau-mcp-tokio/Cargo.toml names tau-runtime-tokio — the MCP transport must stay off the host runtime (ADR-0062)" >&2
+            exit 1
+          fi
+      - name: dependency tree is free of the host runtime + its graph
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p tau-mcp-tokio -e normal)
+          if echo "$tree" | grep -qE 'tau-runtime-tokio|tau-pkg|tau-plugin-protocol|tau-sandbox'; then
+            echo "::error::forbidden crate in tau-mcp-tokio dependency tree (ADR-0062)" >&2
+            echo "$tree" | grep -E 'tau-runtime-tokio|tau-pkg|tau-plugin-protocol|tau-sandbox' >&2
+            exit 1
+          fi
+          echo "OK: tau-mcp-tokio depends on none of tau-runtime-tokio / tau-pkg / tau-plugin-protocol / tau-sandbox-*"
+
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's
   # paths-ignore skips it entirely). See that file for the

@@ -4370,10 +4370,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tau-infra"
-version = "0.0.0"
-
-[[package]]
 name = "tau-ir"
 version = "0.0.0"
 dependencies = [
@@ -4452,7 +4448,6 @@ dependencies = [
  "tau-domain",
  "tau-mcp",
  "tau-ports",
- "tau-runtime-tokio",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -4506,6 +4501,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tau-domain",
+ "tau-ir",
  "tau-plugin-protocol",
  "tau-ports",
  "tempfile",
