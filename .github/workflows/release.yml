@@ -17,8 +17,8 @@ name: Release
 # Publication (build-release-binaries → sbom → attest → gh-release-create)
 # NEEDS the blocking gates above, so no artifact ships unless they pass.
 #
-# Coverage is NOT duplicated here — it is owned by the separate
-# coverage.yml lane (measurement-not-gating); preflight-tier2 also
+# Coverage is NOT duplicated here — it is owned by tier2.yml's
+# nightly coverage job (measurement-not-gating); preflight-tier2
 # re-runs it against the tag.
 
 on:
@@ -54,10 +54,10 @@ jobs:
     secrets: inherit
 
   msrv:
-    # Audit G5: MSRV runs per-PR in ci.yml but is not a distinct
+    # Audit G5: MSRV runs nightly in tier2.yml but is not a distinct
     # release gate. Re-assert it on the tagged commit — the version
     # you ship is the version whose MSRV claim you guarantee. Mirrors
-    # ci.yml `msrv-check` (toolchain 1.91, --locked). Blocks the release.
+    # tier2.yml `msrv-check` (toolchain 1.91, --locked). Blocks the release.
     name: msrv
     runs-on: ubuntu-latest
     timeout-minutes: 30
