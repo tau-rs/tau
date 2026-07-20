@@ -8,7 +8,7 @@ name: Release
 # tag means "this exact commit passed the full heavy suite", re-run
 # against the tagged SHA rather than trusted from a stale main run:
 #
-#   * preflight-tier1  (ci.yml)    — fmt/clippy/unit/doc/deny/build + feature matrix
+#   * preflight-tier1  (ci.yml)    — tier-0 gate: fmt/clippy/deny/gitleaks/unit/doc/no-std/semver + macos/windows check
 #   * preflight-tier2  (tier2.yml) — full OS matrix · conformance · sandbox/runtime e2e · coverage
 #   * msrv             (this file) — MSRV re-asserted as a distinct release gate (audit G5)
 #   * fuzz             (this file) — cargo-fuzz crash regression on the tagged commit (audit G1)

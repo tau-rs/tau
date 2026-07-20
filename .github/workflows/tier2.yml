@@ -5,7 +5,7 @@ name: Tier 2 — Heavy validation
 # - pull_request labeled `full-matrix` (opt-in pre-merge heavy run)
 # - workflow_dispatch (manual)
 #
-# Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 1
+# Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 0
 # (ci-summary) green; Tier 2 results are informational, posted as PR
 # comments or — on cron — as rolling regression issues.
 
@@ -169,10 +169,6 @@ jobs:
           with-nextest: true
           with-sccache: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "anthropic-plugin ollama-plugin openai-plugin"
@@ -196,10 +192,6 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "all"
@@ -238,10 +230,6 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "all"
@@ -287,10 +275,6 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "tau-controlled-env"
@@ -311,10 +295,6 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "tau-controlled-env"
