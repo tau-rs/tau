@@ -1,0 +1,152 @@
+services:
+  # ---------------------------------------------------------------
+  # tau — the main CLI / runtime
+  # ---------------------------------------------------------------
+  tau:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tau:dev
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_BEARER_TOKEN=${OLLAMA_BEARER_TOKEN:-}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - tau-home:/home/tau/.tau
+      - tau-projects:/home/tau/projects
+    stdin_open: true
+    tty: true
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------
+  # tau serve — JSON-RPC 2.0 server over NDJSON-framed stdio
+  # ---------------------------------------------------------------
+  tau-serve:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tau:dev
+    command: ["serve"]
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_BEARER_TOKEN=${OLLAMA_BEARER_TOKEN:-}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - tau-home:/home/tau/.tau
+      - tau-projects:/home/tau/projects
+    stdin_open: true
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+    profiles:
+      - serve
+
+  # ---------------------------------------------------------------
+  # Plugin base image — shared runtime base for all plugin images.
+  # Built first; plugins depend on it.
+  # ---------------------------------------------------------------
+  plugin-base:
+    build:
+      context: .
+      dockerfile: crates/tau-plugin-base/Dockerfile
+    image: tau-plugin-base:dev
+    entrypoint: ["true"]
+
+  # ---------------------------------------------------------------
+  # LLM backend plugins
+  # ---------------------------------------------------------------
+  plugin-anthropic:
+    build:
+      context: .
+      dockerfile: crates/tau-plugins/anthropic/Dockerfile
+    image: tau-plugin-anthropic-plugin:dev
+    entrypoint: ["true"]
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+    profiles:
+      - plugins
+
+  plugin-openai:
+    build:
+      context: .
+      dockerfile: crates/tau-plugins/openai/Dockerfile
+    image: tau-plugin-openai-plugin:dev
+    entrypoint: ["true"]
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+    profiles:
+      - plugins
+
+  plugin-ollama:
+    build:
+      context: .
+      dockerfile: crates/tau-plugins/ollama/Dockerfile
+    image: tau-plugin-ollama-plugin:dev
+    entrypoint: ["true"]
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+    profiles:
+      - plugins
+
+  # ---------------------------------------------------------------
+  # Tool plugins
+  # ---------------------------------------------------------------
+  plugin-fs-read:
+    build:
+      context: .
+      dockerfile: crates/tau-plugins/fs-read/Dockerfile
+    image: tau-plugin-fs-read-plugin:dev
+    entrypoint: ["true"]
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+    profiles:
+      - plugins
+
+  plugin-fs-write:
+    build:
+      context: .
+      dockerfile: crates/tau-plugins/fs-write/Dockerfile
+    image: tau-plugin-fs-write-plugin:dev
+    entrypoint: ["true"]
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+    profiles:
+      - plugins
+
+  plugin-shell:
+    build:
+      context: .
+      dockerfile: crates/tau-plugins/shell/Dockerfile
+    image: tau-plugin-shell-plugin:dev
+    entrypoint: ["true"]
+    depends_on:
+      plugin-base:
+        condition: service_completed_successfully
+    profiles:
+      - plugins
+
+  # ---------------------------------------------------------------
+  # Ollama — local LLM runner (optional, opt-in via profile)
+  # ---------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    profiles:
+      - ollama
+
+volumes:
+  tau-home:
+  tau-projects:
+  ollama-models:
