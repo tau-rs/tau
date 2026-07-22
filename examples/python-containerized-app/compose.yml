@@ -15,9 +15,9 @@ services:
       timeout: 3s
       retries: 5
 
-  app:
+  backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
@@ -34,6 +34,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "4200:80"
+    depends_on:
+      backend:
+        condition: service_healthy
 
 volumes:
   pgdata:
