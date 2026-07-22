@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.domain.models import Task
+
 
 class TaskCreate(BaseModel):
     title: str
@@ -23,7 +25,15 @@ class TaskOut(BaseModel):
     done: bool
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    @classmethod
+    def from_domain(cls, task: Task) -> TaskOut:
+        return cls(
+            id=task.id,  # type: ignore[arg-type]
+            title=task.title,
+            description=task.description,
+            done=task.done,
+            created_at=task.created_at,  # type: ignore[arg-type]
+        )
 
 
 class HealthResponse(BaseModel):

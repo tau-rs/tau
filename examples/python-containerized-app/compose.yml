@@ -22,9 +22,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://app:app@db:5432/app
-      - PORT=8000
-      - APP_VERSION=0.1.0
+      DATABASE_URL: "postgresql+asyncpg://app:app@db:5432/app"
+      PORT: "8000"
+      APP_VERSION: "0.1.0"
     depends_on:
       db:
         condition: service_healthy

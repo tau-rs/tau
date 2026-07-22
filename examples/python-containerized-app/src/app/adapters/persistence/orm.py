@@ -10,7 +10,7 @@ class Base(DeclarativeBase):
     pass
 
 
-class Task(Base):
+class TaskRow(Base):
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
