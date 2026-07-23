@@ -1,8 +1,11 @@
 //! Budget tracking + breach detection.
 //!
-//! The runtime calls `BudgetWatchdog::tick(&state)` at every turn
-//! boundary + after each tool result. On breach, returns
-//! `BudgetExceeded` — the caller is responsible for aborting agents.
+//! The streaming run loop (`stream::run_streaming_inner`) calls
+//! [`BudgetWatchdog::tick`] at each turn boundary, having fed the previous
+//! turn's token usage into [`RunState::add_tokens`]. On breach the loop ends
+//! the run with `RunOutcome::Failed { OutOfResources, .. }` (see
+//! `make_budget_exceeded_outcome`); `tick` itself is a pure check returning
+//! `BudgetExceeded`.
 
 use core::sync::atomic::Ordering;
 
