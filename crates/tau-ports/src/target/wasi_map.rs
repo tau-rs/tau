@@ -15,7 +15,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use tau_domain::{Capability, FsCapability, HostSet, HttpMethod, NetCapability};
+use tau_domain::{
+    AgentCapability, Capability, FsCapability, HostSet, HttpMethod, NetCapability,
+    ProcessCapability, SkillCapability,
+};
 
 /// WASI preview-2 version this table pins (wasip2, wasmtime-45, β.7.5).
 pub const WASI_VERSION: &str = "0.2.3";
@@ -150,7 +153,37 @@ pub fn map_capability(cap: &Capability) -> WasiMapping {
         Capability::Filesystem(FsCapability::Write { paths, .. }) => {
             fs_preopen(paths.clone(), PreopenAccess::ReadWrite)
         }
-        // Remaining arms added in Task 3.
+        Capability::Filesystem(FsCapability::Exec { .. }) => WasiMapping {
+            imports: Vec::new(),
+            config: WasiConfig::None,
+            disposition: Disposition::Unsupported {
+                reason: "wasm target has no exec surface",
+            },
+        },
+        Capability::Process(ProcessCapability::Spawn { .. }) => WasiMapping {
+            imports: Vec::new(),
+            config: WasiConfig::None,
+            disposition: Disposition::Unsupported {
+                reason: "wasm target cannot spawn OS processes",
+            },
+        },
+        Capability::Agent(AgentCapability::Spawn { .. })
+        | Capability::Skill(SkillCapability::Spawn { .. })
+        | Capability::TaskList { .. }
+        | Capability::Plan { .. } => WasiMapping {
+            imports: Vec::new(),
+            config: WasiConfig::None,
+            disposition: Disposition::InGuest,
+        },
+        Capability::Custom { .. } => WasiMapping {
+            imports: Vec::new(),
+            config: WasiConfig::None,
+            disposition: Disposition::HostMediated,
+        },
+        // Fail-closed: an unknown future capability (or future FsCapability /
+        // NetCapability / … variant, all `#[non_exhaustive]`) is NOT granted a
+        // WASI import. It maps to HostMediated so it can never silently reach
+        // the guest's WASI ABI.
         _ => WasiMapping {
             imports: Vec::new(),
             config: WasiConfig::None,
@@ -287,5 +320,69 @@ mod tests {
             }
             other => panic!("expected Preopens, got {other:?}"),
         }
+    }
+
+    use tau_domain::fixtures::{cap_agent_spawn, cap_custom, cap_fs_exec, cap_process_spawn};
+
+    #[test]
+    fn fs_exec_is_unsupported() {
+        let cap = cap_fs_exec(&["/bin/x"]);
+        let m = map_capability(&cap);
+        assert!(m.imports.is_empty());
+        assert!(matches!(m.config, WasiConfig::None));
+        match m.disposition {
+            Disposition::Unsupported { reason } => assert!(!reason.is_empty()),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_spawn_is_unsupported() {
+        let cap = cap_process_spawn(&["ls"]);
+        assert!(matches!(
+            map_capability(&cap).disposition,
+            Disposition::Unsupported { .. }
+        ));
+    }
+
+    // NOTE: SkillCapability::Spawn shares the exact same match arm as
+    // agent.spawn (see the OR'd `Capability::Agent(AgentCapability::Spawn { .. })
+    // | Capability::Skill(SkillCapability::Spawn { .. }) | ...` arm in
+    // `map_capability`), but it is not externally constructible for a
+    // standalone test: the variant is `#[non_exhaustive]` at the variant
+    // level and `tau_domain::fixtures` has no `cap_skill_spawn` constructor.
+    // It is covered structurally by the shared arm below, not by an
+    // independent assertion.
+    #[test]
+    fn agent_spawn_is_in_guest() {
+        let agent = cap_agent_spawn(&["worker"]);
+        let m = map_capability(&agent);
+        assert!(m.imports.is_empty());
+        assert!(matches!(m.config, WasiConfig::None));
+        assert!(matches!(m.disposition, Disposition::InGuest));
+    }
+
+    #[test]
+    fn tasklist_and_plan_are_in_guest() {
+        let tasks = Capability::TaskList {
+            mode: "read".into(),
+        };
+        let plan = Capability::Plan {
+            mode: "write".into(),
+        };
+        for cap in [tasks, plan] {
+            assert!(matches!(
+                map_capability(&cap).disposition,
+                Disposition::InGuest
+            ));
+        }
+    }
+
+    #[test]
+    fn custom_is_host_mediated() {
+        let cap = cap_custom("hw.fan");
+        let m = map_capability(&cap);
+        assert!(m.imports.is_empty());
+        assert!(matches!(m.disposition, Disposition::HostMediated));
     }
 }
