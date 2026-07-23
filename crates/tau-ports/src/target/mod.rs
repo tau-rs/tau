@@ -16,3 +16,7 @@ pub use platform::Platform;
 pub use profile::{TargetCapabilityProfile, TripleStatus};
 pub use registry::{list_all, list_available, lookup, TargetTripleEntry, REGISTRY};
 pub use triple::TargetTriple;
+pub use wasi_map::{
+    map_capability, Disposition, Preopen, PreopenAccess, WasiConfig, WasiMapping, WitInterface,
+    WASI_VERSION,
+};
