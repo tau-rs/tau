@@ -1039,7 +1039,7 @@ mod bundle_source_xcheck_tests {
     use tau_ports::target::TargetTriple;
 
     /// Write a native-tool project whose single tool declares `caps`
-    /// (a TOML capabilities array, e.g. `[]` or `[{ kind = "net.http" }]`).
+    /// (a TOML capabilities array, e.g. `[]` or `[{ kind = "net.http", hosts = "any" }]`).
     /// The capability set is what makes two otherwise-identical projects
     /// lower to different IR hashes.
     fn write_project(root: &std::path::Path, name: &str, caps: &str) {
@@ -1115,7 +1115,11 @@ capabilities = {caps}
         write_project(a.path(), "proj", "[]");
         // B: a divergent source the attacker lowered the IR from.
         let b = tempfile::tempdir().unwrap();
-        write_project(b.path(), "proj", "[{ kind = \"net.http\" }]");
+        write_project(
+            b.path(),
+            "proj",
+            "[{ kind = \"net.http\", hosts = \"any\" }]",
+        );
 
         let ir_b = lower(b.path());
         // Bundle records A's tau.toml hash, but carries B's IR.

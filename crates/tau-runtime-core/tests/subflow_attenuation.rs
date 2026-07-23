@@ -125,7 +125,7 @@ fn net_http() -> tau_domain::Capability {
     struct W {
         cap: tau_domain::Capability,
     }
-    toml::from_str::<W>("[cap]\nkind=\"net.http\"\n")
+    toml::from_str::<W>("[cap]\nkind=\"net.http\"\nhosts=\"any\"\n")
         .unwrap()
         .cap
 }

@@ -12,6 +12,7 @@ use tau_domain::Capability;
 /// validation has run. Use [`UncheckedProjectConfig::validate`] to
 /// produce a [`ProjectConfig`].
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedProjectConfig {
     /// Top-level `[project]` table.
     pub project: UncheckedProject,
@@ -53,16 +54,25 @@ pub struct UncheckedProjectConfig {
 
 /// `[project]` table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedProject {
     /// Free-form project name; required, validated non-empty.
     pub name: String,
     /// Optional human-readable description.
     #[serde(default)]
     pub description: String,
+    /// Optional project version (semver). Not propagated into the validated
+    /// [`ProjectConfig`] — `tau build` reads it from the raw TOML via
+    /// `extract_project_version` to stamp the bundle's `project.version` and
+    /// output filename. Modeled here (rather than silently dropped) so
+    /// `deny_unknown_fields` accepts it on the config-parse path (D7-B).
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// `[agents.<id>]` table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedAgent {
     /// Human-readable agent name displayed in UIs.
     pub display_name: String,
@@ -120,6 +130,7 @@ pub struct UncheckedAgent {
 
 /// `[[agents.<id>.credentials]]` entry — unchecked deserialization.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedAgentCredential {
     /// Logical credential id the chain resolves (e.g. `anthropic_api_key`).
     pub id: String,
@@ -138,6 +149,7 @@ pub struct AgentCredential {
 
 /// `[agents.<id>.requires]` sub-table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedRequires {
     /// Required tool packages with explicit source declarations.
     /// Replaces the v0.1 advisory-only `Vec<String>` schema (Tier 2
@@ -171,6 +183,7 @@ pub struct UncheckedRequiredTool {
 
 /// `[agents.<id>.prompt]` sub-table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedPrompt {
     /// Inline system prompt; mutually exclusive with `system_file`.
     #[serde(default)]
@@ -182,6 +195,7 @@ pub struct UncheckedPrompt {
 
 /// `[agents.<id>.context]` sub-table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedContext {
     /// Ordered `[[agents.<id>.context.pipeline]]` entries.
     #[serde(default)]
@@ -193,6 +207,7 @@ pub struct UncheckedContext {
 
 /// One `[[agents.<id>.context.pipeline]]` entry.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedContextStep {
     /// Transformer name (builtin or custom).
     pub transformer: String,
@@ -279,6 +294,7 @@ pub struct UncheckedCapabilityOverride {
 
 /// Raw `[pipeline]` table (pre-validation).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedPipeline {
     /// Ordered steps from `[[pipeline.steps]]`.
     #[serde(default)]
@@ -287,6 +303,7 @@ pub struct UncheckedPipeline {
 
 /// Raw `[[pipeline.steps]]` entry (pre-validation).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UncheckedPipelineStep {
     /// Step handle.
     pub id: String,
@@ -2394,6 +2411,34 @@ mod tests {
         unchecked.validate()
     }
 
+    // ----- D7-B PR1: struct strictness (deny_unknown_fields) -----
+
+    #[test]
+    fn unknown_top_level_key_rejected() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+            bogus_top_level = 1
+        "#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("bogus_top_level"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_agent_key_rejected() {
+        let toml_str = r#"
+            [project]
+            name = "x"
+
+            [agents.r]
+            display_name = "R"
+            package = "r@^0.1"
+            bogus_agent_key = true
+        "#;
+        let err = toml::from_str::<UncheckedProjectConfig>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("bogus_agent_key"), "got: {err}");
+    }
+
     #[test]
     fn model_entry_holds_backend_and_model() {
         let m = ModelEntry {
@@ -3103,16 +3148,17 @@ mod tests {
 
     #[test]
     fn parse_tool_with_net_http_capability() {
-        // Capability uses the struct form { kind = "net.http" }.
+        // Capability uses the struct form { kind = "net.http", hosts = "any" }.
         // In TOML, inline arrays-of-tables use the array-of-inline-tables
-        // syntax when embedded inline in a regular table.
+        // syntax when embedded inline in a regular table. D7-B requires
+        // `hosts` on net.http (a list, or "any" for unrestricted egress).
         let toml_str = r#"
             [project]
             name = "x"
 
             [tools.weather]
             mcp = "https://mcp.weather.example.com"
-            capabilities = [{ kind = "net.http" }]
+            capabilities = [{ kind = "net.http", hosts = "any" }]
         "#;
         let cfg = parse(toml_str).unwrap();
         let tool = cfg.tools.get("weather").unwrap();
@@ -4686,6 +4732,7 @@ mod proptests {
                 project: UncheckedProject {
                     name: project_name.clone(),
                     description: String::new(),
+                    version: None,
                 },
                 agents: agent_map.clone(),
                 tools: BTreeMap::new(),

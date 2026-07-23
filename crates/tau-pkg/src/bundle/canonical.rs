@@ -217,6 +217,10 @@ fn write_effective_capabilities(out: &mut String, caps: &BundleEffectiveCapabili
     if !caps.allow_net_http.is_empty() {
         write_string_array(out, "allow_net_http", caps.allow_net_http.clone());
     }
+    // Gated: only emitted when set, so pre-D7-B bundles hash identically.
+    if caps.any_net_http {
+        writeln!(out, "any_net_http = true").unwrap();
+    }
     if !caps.deny_net_http.is_empty() {
         write_string_array(out, "deny_net_http", caps.deny_net_http.clone());
     }

@@ -42,4 +42,4 @@ capabilities = []
 [tools.weather]
 mcp         = "cassette:./weather.cassette.jsonl"
 description = "Look up current weather via cassette replay."
-capabilities = [{ kind = "net.http" }]
+capabilities = [{ kind = "net.http", hosts = "any" }]

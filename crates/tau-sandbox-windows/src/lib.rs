@@ -267,7 +267,7 @@ mod tests {
     fn validate_plan_rejects_unsupported_shape() {
         let s = WindowsSandbox::new("windows");
         let plan_json = json!({
-            "capabilities": [{ "kind": "weird" }],
+            "capabilities": [{ "kind": "custom.weird" }],
             "context": null,
             "limits": null,
         });

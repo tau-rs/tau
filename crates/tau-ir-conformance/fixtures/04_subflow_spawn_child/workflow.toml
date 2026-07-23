@@ -24,9 +24,9 @@ max_turns    = 3
 [tools.notify]
 subflow      = "worker"
 description  = "Hand off the alert to the worker agent."
-capabilities = [{ kind = "net.http" }]
+capabilities = [{ kind = "net.http", hosts = "any" }]
 
 [tools.page]
 mcp          = "https://mcp.pager.example.com"
 description  = "Page the on-call rotation."
-capabilities = [{ kind = "net.http" }]
+capabilities = [{ kind = "net.http", hosts = "any" }]

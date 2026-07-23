@@ -11,7 +11,7 @@ pub mod source;
 
 pub use capability::{
     AgentCapability, Capability, CapabilityShape, CapabilityShapeSet, FsCapability, NetCapability,
-    ProcessCapability, SkillCapability,
+    ProcessCapability, SkillCapability, VocabMode, KNOWN_VOCAB,
 };
 pub use host::{HostName, HostNameError, HostSet, HttpMethod, HttpMethodError};
 pub use manifest::{kinds, PackageDep, PackageId, PackageKind, PackageManifest, UncheckedManifest};

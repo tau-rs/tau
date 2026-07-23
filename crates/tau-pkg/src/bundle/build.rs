@@ -525,13 +525,20 @@ fn effective_to_bundle(
                 out.deny_exec.extend(e.deny.clone());
             }
             Capability::Network(NetCapability::Http { hosts, .. }) => {
-                let host_strs: Vec<String> = if hosts.is_any() {
-                    vec!["any".to_string()]
-                } else {
-                    hosts.exact_hosts()
-                };
-                out.allow_net_http
-                    .extend(e.allow_override.clone().unwrap_or(host_strs));
+                // An explicit allow-override always narrows to a concrete list.
+                // Absent an override, `hosts = "any"` records the any-host
+                // grant via the typed `any_net_http` flag; a list contributes
+                // its exact hosts (D7-B).
+                match &e.allow_override {
+                    Some(ov) => out.allow_net_http.extend(ov.clone()),
+                    None => {
+                        if hosts.is_any() {
+                            out.any_net_http = true;
+                        } else {
+                            out.allow_net_http.extend(hosts.exact_hosts());
+                        }
+                    }
+                }
                 out.deny_net_http.extend(e.deny.clone());
             }
             Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
@@ -1479,7 +1486,7 @@ allow_paths = ["/data/**"]
         override_agent_project(tmp.path());
         let pkg_manifest = tmp.path().join(".tau/packages/homepkg/0.1.0/tau.toml");
         let mut body = std::fs::read_to_string(&pkg_manifest).unwrap();
-        body.push_str("\n[[capabilities]]\nkind = \"mcp.tool.use\"\nendpoint = \"x\"\n");
+        body.push_str("\n[[capabilities]]\nkind = \"custom.mcp.tool.use\"\nendpoint = \"x\"\n");
         std::fs::write(&pkg_manifest, body).unwrap();
         let caps = read_agent_caps(tmp.path());
         assert_eq!(caps.allow_fs_read, vec!["/data/**".to_string()]);

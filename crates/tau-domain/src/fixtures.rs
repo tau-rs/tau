@@ -63,6 +63,7 @@ pub fn any_unchecked_manifest() -> UncheckedManifest {
         plugin: None,
         sandbox: crate::package::sandbox::PluginSandboxRequirements::default(),
         skill: None,
+        vocab_version: crate::KNOWN_VOCAB,
     }
 }
 
@@ -142,7 +143,9 @@ pub fn cap_fs_exec(paths: &[&str]) -> Capability {
 }
 
 /// Build a `Capability::Network(NetCapability::Http)` granting HTTP access to
-/// the given hosts with the given HTTP methods.
+/// the given hosts with the given HTTP methods. Passing `["any"]` yields the
+/// any-host escape hatch ([`HostSet::Any`]); any other slice yields a
+/// [`HostSet::Exact`] over the parsed hostnames.
 pub fn cap_net_http(hosts: &[&str], methods: &[&str]) -> Capability {
     let hosts = if hosts == ["any"] {
         HostSet::Any

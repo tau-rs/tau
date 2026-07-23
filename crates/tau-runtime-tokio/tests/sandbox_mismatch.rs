@@ -9,7 +9,7 @@ use tau_runtime_tokio::process_gate::{build_plan, validate_plan_against_adapter}
 
 fn plan_with_custom_capability() -> tau_ports::CapabilityPlan {
     let plan_json = serde_json::json!({
-        "capabilities": [{ "kind": "weird.thing" }],
+        "capabilities": [{ "kind": "custom.weird.thing" }],
         "context": null,
         "limits": null,
     });

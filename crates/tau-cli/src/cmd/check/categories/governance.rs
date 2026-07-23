@@ -261,6 +261,31 @@ fn lattice(
                 manifest,
                 effective,
             } => {
+                // Info: surface any forward capability (a kind newer than this
+                // tau's vocabulary, admitted via the package's `vocab_version`).
+                // Fail-closed in the lattice; reported so it isn't invisible.
+                for cap in &manifest {
+                    if let Capability::Forward { kind, .. } = cap {
+                        out.push(CheckFinding {
+                            category: CheckCategory::Governance,
+                            severity: Severity::Note,
+                            rule_id: "tau.governance.forward_capability",
+                            summary: format!(
+                                "agent '{}' package declares forward capability '{}' \
+                                 (a kind newer than this tau's vocabulary; fail-closed in the lattice)",
+                                agent.id, kind
+                            ),
+                            detail: None,
+                            location: Some(loc(&tau_toml)),
+                            remediation: None,
+                            structured: json!({
+                                "check": "forward_capability",
+                                "agent": agent.id,
+                                "kind": kind,
+                            }),
+                        });
+                    }
+                }
                 // L1: package manifest ⊆ root.
                 if let Err(v) = capability_set_subset(&manifest, &allow.ceiling) {
                     out.push(lattice_error(

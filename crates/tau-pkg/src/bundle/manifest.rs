@@ -340,6 +340,12 @@ pub struct BundleEffectiveCapabilities {
     /// net.http allow-list patterns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_net_http: Vec<String>,
+    /// net.http any-host grant (`hosts = "any"`, D7-B). When `true`, egress is
+    /// unrestricted and `allow_net_http` is not consulted. Additive + gated:
+    /// omitted from the wire form (and thus the canonical hash) when `false`,
+    /// so pre-D7-B bundles hash identically.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub any_net_http: bool,
     /// net.http deny-list patterns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny_net_http: Vec<String>,
@@ -380,6 +386,7 @@ impl BundleEffectiveCapabilities {
             && self.allow_exec.is_empty()
             && self.deny_exec.is_empty()
             && self.allow_net_http.is_empty()
+            && !self.any_net_http
             && self.deny_net_http.is_empty()
             && self.allow_agent_spawn.is_empty()
             && self.deny_agent_spawn.is_empty()

@@ -152,6 +152,7 @@ pub fn synthesize_manifest_from_skill_md(
         plugin: None,
         sandbox: PluginSandboxRequirements::default(),
         skill: Some(skill),
+        vocab_version: crate::KNOWN_VOCAB,
     };
 
     unchecked

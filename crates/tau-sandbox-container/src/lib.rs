@@ -151,7 +151,7 @@ mod tests {
     fn validate_plan_rejects_custom() {
         let s = ContainerSandbox::new("ctr", ContainerRuntime::Auto);
         let plan_json = serde_json::json!({
-            "capabilities": [{ "kind": "weird" }],
+            "capabilities": [{ "kind": "custom.weird" }],
             "context": null,
             "limits": null,
         });

@@ -245,7 +245,12 @@ mod tests {
     #[test]
     fn denies_when_required_exceeds_frame_grant() {
         let reached = Arc::new(AtomicBool::new(false));
-        let module = module_with_tool("page", reqs(alloc::vec![cap("[cap]\nkind=\"net.http\"\n")]));
+        let module = module_with_tool(
+            "page",
+            reqs(alloc::vec![cap(
+                "[cap]\nkind=\"net.http\"\nhosts=\"any\"\n"
+            )]),
+        );
         let att = AttenuatedDispatcher::new(
             reqs(alloc::vec![]), // empty cap_subset
             ToolId("notify".into()),
@@ -267,9 +272,16 @@ mod tests {
     #[test]
     fn allows_when_required_within_frame_grant() {
         let reached = Arc::new(AtomicBool::new(false));
-        let module = module_with_tool("page", reqs(alloc::vec![cap("[cap]\nkind=\"net.http\"\n")]));
+        let module = module_with_tool(
+            "page",
+            reqs(alloc::vec![cap(
+                "[cap]\nkind=\"net.http\"\nhosts=\"any\"\n"
+            )]),
+        );
         let att = AttenuatedDispatcher::new(
-            reqs(alloc::vec![cap("[cap]\nkind=\"net.http\"\n")]),
+            reqs(alloc::vec![cap(
+                "[cap]\nkind=\"net.http\"\nhosts=\"any\"\n"
+            )]),
             ToolId("notify".into()),
             "worker".into(),
             module,
@@ -299,9 +311,16 @@ mod tests {
         // outer grant C2 = {fs.read /proj/**}; inner grant C1 = {net.http}.
         // tool needs net.http: allowed by C1 but not C2 -> denied at outer.
         let reached = Arc::new(AtomicBool::new(false));
-        let module = module_with_tool("page", reqs(alloc::vec![cap("[cap]\nkind=\"net.http\"\n")]));
+        let module = module_with_tool(
+            "page",
+            reqs(alloc::vec![cap(
+                "[cap]\nkind=\"net.http\"\nhosts=\"any\"\n"
+            )]),
+        );
         let inner = AttenuatedDispatcher::new(
-            reqs(alloc::vec![cap("[cap]\nkind=\"net.http\"\n")]),
+            reqs(alloc::vec![cap(
+                "[cap]\nkind=\"net.http\"\nhosts=\"any\"\n"
+            )]),
             ToolId("c1".into()),
             "child".into(),
             module.clone(),

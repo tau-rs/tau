@@ -166,8 +166,8 @@ mod tests {
         // Two Custom capabilities — MockCapabilityGate does not support CapabilityShape::Custom.
         let adapter = MockCapabilityGate::new("mock");
         let plan = plan_with(vec![
-            cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#),
-            cap(r#"{"kind":"mcp.tool.other","tool":"y"}"#),
+            cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#),
+            cap(r#"{"kind":"custom.mcp.tool.other","tool":"y"}"#),
         ]);
         let errors = validate_plan_against_adapter("test-plugin", &plan, &adapter)
             .expect_err("expected validation errors for Custom capabilities");
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn validation_includes_plan_id_in_each_error() {
         let adapter = MockCapabilityGate::new("mock");
-        let plan = plan_with(vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)]);
+        let plan = plan_with(vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#)]);
         let errors = validate_plan_against_adapter("test-plugin", &plan, &adapter)
             .expect_err("expected error for Custom capability");
         assert_eq!(errors.len(), 1);
@@ -204,11 +204,11 @@ mod tests {
 
     #[test]
     fn sandbox_validation_error_display_includes_id_and_reason() {
-        let cap_val = cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#);
+        let cap_val = cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#);
         let e = SandboxValidationError::new(
             "my-plugin",
             cap_val,
-            "adapter does not support shape Custom { name: \"mcp.tool.use\" } (supported: FilesystemRead)",
+            "adapter does not support shape Custom { name: \"custom.mcp.tool.use\" } (supported: FilesystemRead)",
         );
         let display = format!("{e}");
         assert!(

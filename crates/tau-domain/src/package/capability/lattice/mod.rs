@@ -98,6 +98,9 @@ fn kind_str(cap: &Capability) -> &'static str {
         Capability::TaskList { .. } => "task_list",
         Capability::Plan { .. } => "plan",
         Capability::Custom { .. } => "custom",
+        // Forward-compat escape hatch: opaque like `Custom`, refined by
+        // (kind + params) in `same_kind`/`cap_subset_against` (fail-closed).
+        Capability::Forward { .. } => "forward",
     }
 }
 
@@ -107,6 +110,8 @@ fn same_kind(a: &Capability, b: &Capability) -> bool {
     match (a, b) {
         (Capability::Custom { name: na, .. }, Capability::Custom { name: nb, .. }) => na == nb,
         (Capability::Custom { .. }, _) | (_, Capability::Custom { .. }) => false,
+        (Capability::Forward { kind: ka, .. }, Capability::Forward { kind: kb, .. }) => ka == kb,
+        (Capability::Forward { .. }, _) | (_, Capability::Forward { .. }) => false,
         _ => {
             let k = kind_str(a);
             k != "unknown" && k == kind_str(b)
@@ -133,6 +138,16 @@ fn mergeable(a: &Capability, b: &Capability) -> bool {
                 params: pb,
             },
         ) => na == nb && pa == pb,
+        (
+            Capability::Forward {
+                kind: ka,
+                params: pa,
+            },
+            Capability::Forward {
+                kind: kb,
+                params: pb,
+            },
+        ) => ka == kb && pa == pb,
         // Multi-dimensional rectangles never fold (would bounding-box).
         (
             Capability::Network(NetCapability::Http { .. }),
@@ -247,6 +262,18 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
                 Ok(())
             } else {
                 Err((name.clone(), "custom params do not match ceiling".into()))
+            }
+        }
+        // Forward-compat escape hatch: opaque, so subset only holds against an
+        // identical (kind + params) parent Forward — fail-closed otherwise.
+        Capability::Forward { kind, params } => {
+            let ok = parents.iter().any(|p| {
+                matches!(p, Capability::Forward { kind: pk, params: pp } if pk == kind && pp == params)
+            });
+            if ok {
+                Ok(())
+            } else {
+                Err((kind.clone(), "forward params do not match ceiling".into()))
             }
         }
     }

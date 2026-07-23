@@ -186,9 +186,9 @@ mod tests {
 
     #[test]
     fn custom_exact_match_ok_param_diff_rejected() {
-        let child = vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)];
-        let same = vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)];
-        let diff = vec![cap(r#"{"kind":"mcp.tool.use","tool":"y"}"#)];
+        let child = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#)];
+        let same = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#)];
+        let diff = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"y"}"#)];
         assert!(capability_set_subset(&child, &same).is_ok());
         assert!(capability_set_subset(&child, &diff).is_err());
     }
