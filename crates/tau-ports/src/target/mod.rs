@@ -8,6 +8,7 @@ pub mod platform;
 pub mod profile;
 pub mod registry;
 pub mod triple;
+pub mod wasi_map;
 
 pub use adapter_family::AdapterFamily;
 pub use parse::ParseError;
