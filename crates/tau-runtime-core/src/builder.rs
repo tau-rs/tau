@@ -61,11 +61,6 @@ use crate::error::{BuildError, PluginKind};
 /// without `std`-only `RandomState`.
 type Registry<V> = HashMap<String, V, foldhash::quality::FixedState>;
 
-#[allow(dead_code)]
-fn new_registry<V>() -> Registry<V> {
-    Registry::with_hasher(foldhash::quality::FixedState::default())
-}
-
 fn registry_with_capacity<V>(cap: usize) -> Registry<V> {
     Registry::with_capacity_and_hasher(cap, foldhash::quality::FixedState::default())
 }
