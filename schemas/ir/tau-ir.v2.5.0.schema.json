@@ -217,16 +217,34 @@
           "additionalProperties": false,
           "properties": {
             "hosts": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
+              "oneOf": [
+                {
+                  "const": "any"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
             },
             "kind": {
               "const": "net.http"
             },
             "methods": {
               "items": {
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "POST",
+                  "PUT",
+                  "DELETE",
+                  "CONNECT",
+                  "OPTIONS",
+                  "TRACE",
+                  "PATCH"
+                ],
                 "type": "string"
               },
               "type": "array"
@@ -234,8 +252,7 @@
           },
           "required": [
             "kind",
-            "hosts",
-            "methods"
+            "hosts"
           ],
           "type": "object"
         },

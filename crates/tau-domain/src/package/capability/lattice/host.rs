@@ -1,159 +1,126 @@
-//! Host glob sub-grammar: an exact host, or `*.suffix`. Anything else
-//! (embedded `*`, multiple `*`) → fail-closed. Deliberately smaller than the
-//! path grammar.
+//! Host dimension of the `net.http` capability lattice.
+//!
+//! Since ADR-0064 (HostSet), a host grant is `HostSet::Any` (the top element)
+//! or `HostSet::Exact(set)` of validated exact hostnames — there is no glob
+//! grammar (suffix wildcards are deferred). The host lattice operations are
+//! therefore plain set operations with a top:
+//!
+//! - subset: `parent.subsumes(child)` (defined on [`HostSet`]).
+//! - join (union): [`host_union`] — `Any` absorbs; else set union.
+//! - meet (glb): [`host_meet`] — `Any ∩ x = x`; else set intersection.
+//!
+//! `canon` is the identity (a `BTreeSet` is already sorted+deduped and there
+//! is no glob absorption), kept for symmetry with the path dimension's
+//! `glob_canon`.
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use crate::package::host::{HostName, HostSet};
+use alloc::collections::BTreeSet;
 
-enum Host<'a> {
-    Exact(&'a str),
-    Suffix(&'a str),
-} // Suffix("example.com") = *.example.com
-
-fn parse(h: &str) -> Option<Host<'_>> {
-    if let Some(sfx) = h.strip_prefix("*.") {
-        if sfx.is_empty() || sfx.contains('*') {
-            return None;
-        }
-        Some(Host::Suffix(sfx))
-    } else if h.contains('*') {
-        None
-    } else {
-        Some(Host::Exact(h))
-    }
-}
-
-/// `child ⊆ parent` on raw host strings: exact-equal, or child contained
-/// under a `*.suffix` parent. Any un-parseable operand → false (fail-closed).
-pub fn host_subset(child: &str, parent: &str) -> bool {
-    match (parse(child), parse(parent)) {
-        (Some(c), Some(p)) => match (c, p) {
-            (Host::Exact(a), Host::Exact(b)) => a == b,
-            (Host::Exact(a), Host::Suffix(s)) => a == s || a.ends_with(&dot(s)),
-            (Host::Suffix(a), Host::Suffix(s)) => a == s || a.ends_with(&dot(s)),
-            (Host::Suffix(_), Host::Exact(_)) => false, // wildcard can't fit under exact
-        },
-        _ => false,
-    }
-}
-
-fn dot(s: &str) -> String {
-    let mut d = String::from(".");
-    d.push_str(s);
-    d
-}
-
-/// Each child host ⊆ some parent host. `Err(child)` on first offender.
-pub fn host_subset_set(children: &[String], parents: &[String]) -> Result<(), String> {
-    for c in children {
-        if !parents.iter().any(|p| host_subset(c, p)) {
-            return Err(c.clone());
+/// Join (union) of a set of host grants. `HostSet::Any` is the top element
+/// (absorbs everything); otherwise the union of the exact host sets.
+pub fn host_union<'a>(sets: impl IntoIterator<Item = &'a HostSet>) -> HostSet {
+    let mut acc: BTreeSet<HostName> = BTreeSet::new();
+    for s in sets {
+        match s {
+            HostSet::Any => return HostSet::Any,
+            HostSet::Exact(hs) => acc.extend(hs.iter().cloned()),
         }
     }
-    Ok(())
+    HostSet::Exact(acc)
 }
 
-/// meet = for each pair, the more specific host if one ⊆ the other, else
-/// nothing contributed (the host grammar has no cross-produced pattern).
-pub fn host_meet(a: &[String], b: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for x in a {
-        for y in b {
-            // intersection of two host patterns = the more specific one if one
-            // ⊆ the other, else ∅ (host grammar has no cross-produced pattern).
-            if host_subset(x, y) {
-                push_unique(&mut out, x);
-            } else if host_subset(y, x) {
-                push_unique(&mut out, y);
-            }
+/// Meet (greatest lower bound / intersection). `Any ∩ x = x`; otherwise the
+/// intersection of the two exact host sets.
+pub fn host_meet(a: &HostSet, b: &HostSet) -> HostSet {
+    match (a, b) {
+        (HostSet::Any, x) | (x, HostSet::Any) => x.clone(),
+        (HostSet::Exact(sa), HostSet::Exact(sb)) => {
+            HostSet::Exact(sa.intersection(sb).cloned().collect())
         }
     }
-    host_canon(&out)
 }
 
-/// Canonical host list: drop un-parseable hosts, absorb any host that is a
-/// subset of another (e.g. `api.example.com` under `*.example.com`), sort,
-/// dedup. Shared by `host_meet` and the capability canonicalizer so `meet`
-/// and `canon` agree structurally (mirrors `glob::glob_canon`).
-pub fn host_canon(hosts: &[String]) -> Vec<String> {
-    let parsed: Vec<&String> = hosts.iter().filter(|h| parse(h).is_some()).collect();
-    let mut kept: Vec<String> = Vec::new();
-    'outer: for (i, hi) in parsed.iter().enumerate() {
-        for (j, hj) in parsed.iter().enumerate() {
-            // drop hi if it is ⊆ some other hj; for an equal pair, keep the
-            // earlier index (the `j < i` guard leaves exactly one survivor).
-            if i != j && host_subset(hi, hj) && !(host_subset(hj, hi) && j < i) {
-                continue 'outer;
-            }
-        }
-        kept.push((*hi).clone());
-    }
-    kept.sort();
-    kept.dedup();
-    kept
+/// `HostSet` is already canonical (the `Exact` `BTreeSet` is sorted+deduped
+/// and there is no glob absorption), so this is the identity — kept for
+/// symmetry with `glob_canon`.
+pub fn host_canon(hosts: &HostSet) -> HostSet {
+    hosts.clone()
 }
 
-fn push_unique(v: &mut Vec<String>, s: &str) {
-    if !v.iter().any(|e| e == s) {
-        v.push(s.to_string());
+/// A host grant denotes ⊥ (grants nothing) iff it is `Exact(∅)`. `Any` is
+/// never empty.
+pub fn host_is_empty(hosts: &HostSet) -> bool {
+    matches!(hosts, HostSet::Exact(s) if s.is_empty())
+}
+
+/// Name a host in `child` that the `union` grant does not cover, for error
+/// reporting. An uncovered `Any` child reports `"any"`.
+pub fn host_offender(child: &HostSet, union: &HostSet) -> alloc::string::String {
+    use alloc::string::ToString;
+    match child {
+        HostSet::Any => "any".to_string(),
+        HostSet::Exact(hs) => hs
+            .iter()
+            .find(|h| !union.subsumes(&HostSet::Exact(core::iter::once((*h).clone()).collect())))
+            .map(|h| h.as_str().to_string())
+            .unwrap_or_else(|| "host".to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn exact_equal() {
-        assert!(host_subset("api.example.com", "api.example.com"));
+
+    fn exact(hs: &[&str]) -> HostSet {
+        HostSet::Exact(hs.iter().map(|h| HostName::parse(h).unwrap()).collect())
     }
+
     #[test]
-    fn exact_under_suffix() {
-        assert!(host_subset("api.example.com", "*.example.com"));
-    }
-    #[test]
-    fn suffix_under_suffix() {
-        assert!(host_subset("*.a.example.com", "*.example.com"));
-    }
-    #[test]
-    fn suffix_not_under_exact() {
-        assert!(!host_subset("*.example.com", "api.example.com"));
-    }
-    #[test]
-    fn disjoint() {
-        assert!(!host_subset("api.other.com", "*.example.com"));
-    }
-    #[test]
-    fn embedded_star_fails_closed() {
-        assert!(!host_subset("a*b.example.com", "*.example.com"));
-    }
-    #[test]
-    fn meet_exact_and_suffix() {
+    fn union_any_absorbs() {
         assert_eq!(
-            host_meet(&["api.example.com".into()], &["*.example.com".into()]),
-            vec!["api.example.com".to_string()]
+            host_union([&exact(&["a.com"]), &HostSet::Any]),
+            HostSet::Any
         );
     }
+
     #[test]
-    fn meet_disjoint_empty() {
-        assert!(host_meet(&["a.com".into()], &["*.example.com".into()]).is_empty());
-    }
-    #[test]
-    fn canon_absorbs_redundant_host() {
-        // api.example.com ⊆ *.example.com → absorbed
+    fn union_of_exacts() {
         assert_eq!(
-            host_canon(&["*.example.com".into(), "api.example.com".into()]),
-            vec!["*.example.com".to_string()]
+            host_union([&exact(&["a.com"]), &exact(&["b.com"])]),
+            exact(&["a.com", "b.com"])
         );
     }
+
     #[test]
-    fn meet_absorbs_redundant_result() {
-        // a=*.example.com ∩ b=(*.example.com ∪ api.example.com) = *.example.com
+    fn meet_any_is_identity() {
         assert_eq!(
-            host_meet(
-                &["*.example.com".into()],
-                &["*.example.com".into(), "api.example.com".into()]
-            ),
-            vec!["*.example.com".to_string()]
+            host_meet(&HostSet::Any, &exact(&["a.com"])),
+            exact(&["a.com"])
         );
+        assert_eq!(host_meet(&HostSet::Any, &HostSet::Any), HostSet::Any);
+    }
+
+    #[test]
+    fn meet_intersects_exacts() {
+        assert_eq!(
+            host_meet(&exact(&["a.com", "b.com"]), &exact(&["b.com", "c.com"])),
+            exact(&["b.com"])
+        );
+    }
+
+    #[test]
+    fn empty_only_for_exact_empty() {
+        assert!(host_is_empty(&exact(&[])));
+        assert!(!host_is_empty(&exact(&["a.com"])));
+        assert!(!host_is_empty(&HostSet::Any));
+    }
+
+    #[test]
+    fn offender_names_uncovered_exact_host() {
+        assert_eq!(
+            host_offender(&exact(&["a.com", "b.com"]), &exact(&["a.com"])),
+            "b.com"
+        );
+        assert_eq!(host_offender(&HostSet::Any, &exact(&["a.com"])), "any");
     }
 }

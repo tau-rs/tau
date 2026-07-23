@@ -104,6 +104,7 @@ Until task 6.5 ships, `unshare_flags_for_plan` retains its v0.1 fallback behavio
 **Consequences:**
 - Plans that declare `hosts: ["*"]` (the "any host" escape hatch) will fail validation when the per-host filter is active.
 - Plugin authors who need unrestricted network access should declare no Network capability and use a non-strict tier.
+- Superseded in part by ADR-0064: hosts are now a `HostSet`; `"*"` is a decode error and `"any"` is the sentinel.
 
 **Alternatives considered:**
 - Allow wildcards and expand at resolution time: impractical with static nftables rules. Rejected.

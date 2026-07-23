@@ -365,11 +365,16 @@ fn coarse_hits(cap: &Capability) -> Vec<(&'static str, String)> {
             .filter(|p| coarse_path(p))
             .map(|p| ("fs.exec", p.clone()))
             .collect(),
-        Capability::Network(NetCapability::Http { hosts, .. }) => hosts
-            .iter()
-            .filter(|h| matches!(h.as_str(), "*" | "**"))
-            .map(|h| ("net.http", h.clone()))
-            .collect(),
+        // The coarse net.http form is the typed `HostSet::Any` sentinel
+        // (authored `hosts = "any"`) — `"*"` can no longer appear in an
+        // `Exact` set (it is a decode error). See ADR-0064.
+        Capability::Network(NetCapability::Http { hosts, .. }) => {
+            if hosts.is_any() {
+                vec![("net.http", "any".to_string())]
+            } else {
+                Vec::new()
+            }
+        }
         Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands
             .iter()
             .filter(|c| matches!(c.as_str(), "*" | "**"))
@@ -641,6 +646,7 @@ model = "m-1"
 
 [allow.mcp.weather]
 url = "https://api.weather.com/mcp"
+hosts = ["api.weather.com"]
 
 [allow.tools.read_temp]
 native = "ReadTemp"
@@ -699,14 +705,16 @@ capabilities = [{ kind = "fs.read", paths = ["/proj/**"] }]
     }
 
     #[test]
-    fn coarse_wildcard_host_flagged() {
+    fn coarse_any_host_flagged() {
+        // The coarse net.http form is now the typed `hosts = "any"` sentinel
+        // (`"*"` is a decode error, ADR-0064).
         let (cfg, dir) = proj(
             r#"
 [project]
 name = "demo"
 
 [allow]
-"net.http" = { hosts = ["*"] }
+"net.http" = { hosts = "any" }
 "#,
         );
         let ctx = ctx_for(&dir);
@@ -716,7 +724,7 @@ name = "demo"
                 .any(|x| x.rule_id == "tau.governance.coarse_ceiling"
                     && x.severity == Severity::Warning
                     && x.summary.contains("net.http")
-                    && x.summary.contains('*')),
+                    && x.summary.contains("any")),
             "got: {}",
             summaries(&f)
         );
@@ -761,7 +769,7 @@ name = "demo"
 
 [allow.tools.fetch]
 native = "Fetch"
-"net.http" = { hosts = ["api.x.com", "*"] }
+"net.http" = { hosts = "any" }
 "#,
         );
         let ctx = ctx_for(&dir);
@@ -832,27 +840,9 @@ name = "demo"
         );
     }
 
-    #[test]
-    fn coarse_double_star_host_flagged() {
-        let (cfg, dir) = proj(
-            r#"
-[project]
-name = "demo"
-
-[allow]
-"net.http" = { hosts = ["**"] }
-"#,
-        );
-        let ctx = ctx_for(&dir);
-        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
-        assert!(
-            f.iter()
-                .any(|x| x.rule_id == "tau.governance.coarse_ceiling"
-                    && x.summary.contains("net.http")),
-            "** host is coarse, got: {}",
-            summaries(&f)
-        );
-    }
+    // (Removed `coarse_double_star_host_flagged`: `hosts = ["**"]` is now a
+    // decode error, and the sole coarse net.http form — `hosts = "any"` — is
+    // covered by `coarse_any_host_flagged`. See ADR-0064.)
 
     #[test]
     fn agent_override_exceeding_root_flagged() {

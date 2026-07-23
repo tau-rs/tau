@@ -4,11 +4,42 @@
 pub mod glob;
 pub mod host;
 
+use crate::package::host::{HostSet, HttpMethod};
 use crate::{
     AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
 };
+use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+/// Concrete method set: `None` (the top element, "all methods") expands to the
+/// full nine-verb universe so the sound per-method coverage check below can
+/// iterate a finite set.
+fn method_set(m: &Option<BTreeSet<HttpMethod>>) -> BTreeSet<HttpMethod> {
+    match m {
+        None => HttpMethod::ALL.iter().copied().collect(),
+        Some(s) => s.clone(),
+    }
+}
+
+/// Meet (intersection) of two method grants, preserving `None` (= all) as the
+/// top element — so `meet(a, a)` structurally equals `canon(a)` for a `None`
+/// grant (the lattice idempotence law).
+fn method_meet(
+    a: &Option<BTreeSet<HttpMethod>>,
+    b: &Option<BTreeSet<HttpMethod>>,
+) -> Option<BTreeSet<HttpMethod>> {
+    match (a, b) {
+        (None, x) | (x, None) => x.clone(),
+        (Some(sa), Some(sb)) => Some(sa.intersection(sb).copied().collect()),
+    }
+}
+
+/// A method grant denotes ⊥ iff it is `Some(∅)` (deny all). `None` (= all
+/// methods) is never empty.
+fn method_is_empty(m: &Option<BTreeSet<HttpMethod>>) -> bool {
+    matches!(m, Some(s) if s.is_empty())
+}
 
 /// A single child capability that exceeds the parent ceiling. The caller
 /// (1.4 / 1.5) prepends agent/link framing; this type names only *what*
@@ -171,24 +202,25 @@ fn cap_subset_against(child: &Capability, parents: &[&Capability]) -> Result<(),
             // Sound joint coverage: for each method the child requests, its hosts
             // must be granted by parent entries that ALSO grant that method — a
             // single grant must cover both dimensions, not the bounding box of
-            // independently-unioned hosts × methods.
-            for m in methods {
-                let hosts_for_m: Vec<String> = parents
-                    .iter()
-                    .filter_map(|p| match p {
-                        Capability::Network(NetCapability::Http {
-                            hosts: ph,
-                            methods: pm,
-                        }) if pm.contains(m) => Some(ph.clone()),
-                        _ => None,
-                    })
-                    .flatten()
-                    .collect();
-                crate::package::capability::lattice::host::host_subset_set(hosts, &hosts_for_m)
-                    .map_err(|o| {
-                        let reason = format!("host {o} not granted for method {m} in ceiling");
-                        (o, reason)
-                    })?;
+            // independently-unioned hosts × methods. `methods = None` (all) is
+            // expanded to the finite nine-verb universe (see `method_set`).
+            use crate::package::capability::lattice::host;
+            for m in method_set(methods) {
+                let union = host::host_union(parents.iter().filter_map(|p| match p {
+                    Capability::Network(NetCapability::Http {
+                        hosts: ph,
+                        methods: pm,
+                    }) if method_set(pm).contains(&m) => Some(ph),
+                    _ => None,
+                }));
+                if !union.subsumes(hosts) {
+                    let offender = host::host_offender(hosts, &union);
+                    let reason = format!(
+                        "host {offender} not granted for method {} in ceiling",
+                        m.as_str()
+                    );
+                    return Err((offender, reason));
+                }
             }
             Ok(())
         }
@@ -309,7 +341,7 @@ fn string_set_subset(child: &[String], parent: &[String]) -> Result<(), String> 
 }
 
 use crate::package::capability::lattice::glob::{glob_canon, glob_meet};
-use crate::package::capability::lattice::host::{host_canon, host_meet};
+use crate::package::capability::lattice::host::{host_canon, host_is_empty, host_meet};
 
 /// Greatest lower bound of two capability sets. Total on G2.
 pub fn meet(a: &[Capability], b: &[Capability]) -> Vec<Capability> {
@@ -374,8 +406,8 @@ fn meet_pair(a: &Capability, b: &Capability) -> Option<Capability> {
             }),
         ) => {
             let hosts = host_meet(ha, hb);
-            let methods = str_intersect(mea, meb);
-            (!hosts.is_empty() && !methods.is_empty())
+            let methods = method_meet(mea, meb);
+            (!host_is_empty(&hosts) && !method_is_empty(&methods))
                 .then_some(Network(NetCapability::Http { hosts, methods }))
         }
         (
@@ -576,7 +608,9 @@ fn canon_one(c: &Capability) -> Option<Capability> {
         }),
         Network(NetCapability::Http { hosts, methods }) => Network(NetCapability::Http {
             hosts: host_canon(hosts),
-            methods: sorted(methods),
+            // `Option<BTreeSet<HttpMethod>>` is already canonical: `None` (all)
+            // stays `None`; a `BTreeSet` is sorted+deduped.
+            methods: methods.clone(),
         }),
         Process(ProcessCapability::Spawn { commands }) => Process(ProcessCapability::Spawn {
             commands: sorted(commands),
@@ -595,7 +629,9 @@ fn canon_one(c: &Capability) -> Option<Capability> {
             | FsCapability::Exec { paths }
             | FsCapability::Write { paths, .. },
         ) => paths.is_empty(),
-        Network(NetCapability::Http { hosts, methods }) => hosts.is_empty() || methods.is_empty(),
+        Network(NetCapability::Http { hosts, methods }) => {
+            host_is_empty(hosts) || method_is_empty(methods)
+        }
         Process(ProcessCapability::Spawn { commands }) => commands.is_empty(),
         Agent(AgentCapability::Spawn { allowed_kinds }) => allowed_kinds.is_empty(),
         Skill(SkillCapability::Spawn { allowed_skills }) => allowed_skills.is_empty(),
@@ -633,13 +669,23 @@ fn render_cap(c: &Capability) -> String {
             }
         }
         Capability::Network(NetCapability::Http { hosts, methods }) => {
-            for h in hosts {
-                s.push('|');
-                s.push_str(h);
+            match hosts {
+                HostSet::Any => s.push_str("|any"),
+                HostSet::Exact(hs) => {
+                    for h in hs {
+                        s.push('|');
+                        s.push_str(h.as_str());
+                    }
+                }
             }
-            for m in methods {
-                s.push('#');
-                s.push_str(m);
+            match methods {
+                None => s.push_str("#*"),
+                Some(ms) => {
+                    for m in ms {
+                        s.push('#');
+                        s.push_str(m.as_str());
+                    }
+                }
             }
         }
         Capability::Custom { name, .. } => {
@@ -654,6 +700,7 @@ fn render_cap(c: &Capability) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::host::{HostName, HostSet, HttpMethod};
     use crate::{Capability, FsCapability, NetCapability, ProcessCapability, Value};
     use alloc::vec;
 
@@ -688,15 +735,29 @@ mod tests {
     }
     #[test]
     fn host_child_within_ceiling_ok() {
-        let child = vec![Capability::Network(NetCapability::Http {
-            hosts: vec!["api.example.com".into()],
-            methods: vec!["GET".into()],
-        })];
-        let parent = vec![Capability::Network(NetCapability::Http {
-            hosts: vec!["*.example.com".into()],
-            methods: vec!["GET".into()],
-        })];
+        // Suffix globs are gone (ADR-0064); the wide ceiling is `Any`, which
+        // subsumes an exact child host.
+        let child = vec![http(&["api.example.com"], &["GET"])];
+        let parent = vec![http(&["any"], &["GET"])];
         assert!(capability_subset(&child, &parent).is_ok());
+    }
+
+    #[test]
+    fn exact_host_outside_exact_ceiling_violates() {
+        let child = vec![http(&["evil.com"], &["GET"])];
+        let parent = vec![http(&["api.example.com"], &["GET"])];
+        let v = capability_subset(&child, &parent).unwrap_err();
+        assert_eq!(v.kind, "net.http");
+        assert_eq!(v.offender, "evil.com");
+    }
+
+    #[test]
+    fn exact_child_not_under_any_child_ceiling() {
+        // `Any` child needs an `Any` grant for the method; an exact ceiling
+        // cannot subsume it.
+        let child = vec![http(&["any"], &["GET"])];
+        let parent = vec![http(&["api.example.com"], &["GET"])];
+        assert!(capability_subset(&child, &parent).is_err());
     }
     // The real sampling-era witness: the old sampler expanded `*` to a fixed
     // "seed" and wrongly admitted `/proj/*` under `/proj/seed*`. The parent
@@ -727,14 +788,8 @@ mod tests {
     fn law_holds_for_net_http_methods() {
         // Regression: subset once ignored methods → admitted GET under a
         // POST-only ceiling, diverging from meet (which intersects methods).
-        let a = vec![Capability::Network(NetCapability::Http {
-            hosts: vec!["api.example.com".into()],
-            methods: vec!["GET".into()],
-        })];
-        let b = vec![Capability::Network(NetCapability::Http {
-            hosts: vec!["api.example.com".into()],
-            methods: vec!["POST".into()],
-        })];
+        let a = vec![http(&["api.example.com"], &["GET"])];
+        let b = vec![http(&["api.example.com"], &["POST"])];
         assert!(capability_subset(&a, &b).is_err()); // methods now enforced
         assert!(meet(&a, &b).is_empty()); // methods disjoint → cap dropped
     }
@@ -765,9 +820,22 @@ mod tests {
     }
 
     fn http(hosts: &[&str], methods: &[&str]) -> Capability {
+        // `["any"]` → HostSet::Any; else an exact host set. Methods are always
+        // an explicit `Some(set)` here (tests that need "all methods" build the
+        // cap with `methods: None` directly).
+        let hosts = if hosts == ["any"] {
+            HostSet::Any
+        } else {
+            HostSet::Exact(hosts.iter().map(|h| HostName::parse(h).unwrap()).collect())
+        };
         Capability::Network(NetCapability::Http {
-            hosts: hosts.iter().map(|s| s.to_string()).collect(),
-            methods: methods.iter().map(|s| s.to_string()).collect(),
+            hosts,
+            methods: Some(
+                methods
+                    .iter()
+                    .map(|m| HttpMethod::parse(m).unwrap())
+                    .collect(),
+            ),
         })
     }
     fn write(paths: &[&str], max_bytes: Option<u64>) -> Capability {
@@ -779,40 +847,41 @@ mod tests {
 
     #[test]
     fn canon_keeps_incomparable_http_rectangles() {
-        // api×GET and *.ex×POST are incomparable → both survive (NOT
-        // bounding-boxed into *.ex×{GET,POST}).
+        // a×GET and b×POST are incomparable → both survive (NOT
+        // bounding-boxed into {a,b}×{GET,POST}).
         let a = vec![
-            http(&["api.example.com"], &["GET"]),
-            http(&["*.example.com"], &["POST"]),
+            http(&["a.example.com"], &["GET"]),
+            http(&["b.example.com"], &["POST"]),
         ];
         assert_eq!(canon_caps(&a).len(), 2);
     }
 
     #[test]
     fn canon_absorbs_contained_http_rectangle() {
-        // api×GET ⊆ *.ex×{GET,POST} → absorbed to the single wider rectangle.
+        // a×GET ⊆ {a,b}×{GET,POST} → absorbed to the single wider rectangle.
         let a = vec![
-            http(&["api.example.com"], &["GET"]),
-            http(&["*.example.com"], &["GET", "POST"]),
+            http(&["a.example.com"], &["GET"]),
+            http(&["a.example.com", "b.example.com"], &["GET", "POST"]),
         ];
         assert_eq!(
             canon_caps(&a),
-            vec![http(&["*.example.com"], &["GET", "POST"])]
+            vec![http(&["a.example.com", "b.example.com"], &["GET", "POST"])]
         );
     }
 
     #[test]
     fn subset_and_meet_sound_for_multientry_http() {
-        // Ceiling grants (api, GET) and (*.ex, POST) — never (*.ex, GET).
-        let a = vec![http(&["*.example.com"], &["GET"])];
+        // Ceiling grants (a, GET) and (b, POST) — never (b, GET).
+        let a = vec![http(&["a.example.com", "b.example.com"], &["GET"])];
         let b = vec![
-            http(&["api.example.com"], &["GET"]),
-            http(&["*.example.com"], &["POST"]),
+            http(&["a.example.com"], &["GET"]),
+            http(&["b.example.com"], &["POST"]),
         ];
-        // subset: no single ceiling entry grants (*.ex, GET) → denied.
+        // subset: for GET the ceiling only grants host a → child's b.example.com
+        // is uncovered → denied (no bounding-box union across methods).
         assert!(capability_subset(&a, &b).is_err());
-        // meet must NOT widen: the only overlap is api.example.com × GET.
-        assert_eq!(meet(&a, &b), vec![http(&["api.example.com"], &["GET"])]);
+        // meet must NOT widen: the only overlap is a.example.com × GET.
+        assert_eq!(meet(&a, &b), vec![http(&["a.example.com"], &["GET"])]);
     }
 
     #[test]
@@ -860,18 +929,32 @@ mod tests {
                     })
                 }
             ),
+            // net.http: two-dimensional (hosts × methods). Exercises BOTH top
+            // elements (`HostSet::Any`, `methods = None`) and finite `Exact` /
+            // `Some` sets, so the antichain / joint-coverage soundness is tested
+            // against the widest grants too.
             (
-                prop::collection::vec(
-                    prop_oneof![Just("api.example.com"), Just("*.example.com")],
-                    1..3
-                ),
-                prop::collection::vec(prop_oneof![Just("GET"), Just("POST")], 1..3),
+                prop_oneof![
+                    Just(HostSet::Any),
+                    prop::collection::vec(
+                        prop_oneof![Just("a.example.com"), Just("b.example.com")],
+                        1..3
+                    )
+                    .prop_map(|hs| HostSet::Exact(
+                        hs.iter().map(|h| HostName::parse(h).unwrap()).collect()
+                    )),
+                ],
+                prop_oneof![
+                    Just(None),
+                    prop::collection::vec(
+                        prop_oneof![Just(HttpMethod::Get), Just(HttpMethod::Post)],
+                        1..3
+                    )
+                    .prop_map(|ms| Some(ms.into_iter().collect())),
+                ],
             )
                 .prop_map(|(hosts, methods)| {
-                    Capability::Network(NetCapability::Http {
-                        hosts: hosts.iter().map(|s| s.to_string()).collect(),
-                        methods: methods.iter().map(|s| s.to_string()).collect(),
-                    })
+                    Capability::Network(NetCapability::Http { hosts, methods })
                 }),
             // fs.write: two-dimensional (paths × max_bytes), exercises the
             // write antichain / max_bytes-filtered subset.

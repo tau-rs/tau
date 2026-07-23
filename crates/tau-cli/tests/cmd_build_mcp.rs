@@ -258,7 +258,7 @@ name = "mcp_weather"
 
 [tools.weather]
 mcp = "https://mcp.example.com/weather"
-capabilities = [{ kind = "net.http", hosts = ["api.weather.com"], methods = [] }]
+capabilities = [{ kind = "net.http", hosts = ["api.weather.com"] }]
 "#,
     )
     .unwrap();
