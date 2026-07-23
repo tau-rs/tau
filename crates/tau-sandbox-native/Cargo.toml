@@ -45,3 +45,6 @@ integration-tests = []
 [[bin]]
 name = "tau-net-bridge"
 path = "src/bin/tau-net-bridge.rs"
+
+[lints]
+workspace = true

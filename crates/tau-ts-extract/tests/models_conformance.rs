@@ -34,11 +34,15 @@ fn toml_and_ts_produce_byte_equal_canonical_ir_with_models_table() {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
 
-    let toml_ir =
-        tau_ir_lower::lower_project(&toml_project, &target, &caches).expect("lower TOML to IR");
-    let ts_ir = tau_ir_lower::lower_project(&ts_project, &target, &caches).expect("lower TS to IR");
+    let toml_ir = tau_ir_lower::lower_project(&toml_project, &target, &caches)
+        .expect("lower TOML to IR")
+        .module;
+    let ts_ir = tau_ir_lower::lower_project(&ts_project, &target, &caches)
+        .expect("lower TS to IR")
+        .module;
 
     // The two agents must carry distinct resolved model ids (haiku vs opus),
     // proving per-agent aliases resolve independently.

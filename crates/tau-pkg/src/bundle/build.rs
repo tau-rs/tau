@@ -46,6 +46,12 @@ pub struct BuildOptions {
     /// with no governance record — used by lower-level tests and by tooling
     /// that predates governance-by-default.
     pub governance: Option<crate::bundle::manifest::GovernanceRecord>,
+    /// Content-addressed assets to embed in the bundle's `[[assets]]` store
+    /// (D6-B). When non-empty the bundle's `schema_version` is written as `5`
+    /// and each asset's bytes are hashed into the self-hash via the canonical
+    /// TOML. The caller (tau-cli) supplies the blobs `tau_ir_lower` collected
+    /// (the module's `PromptSource::Asset` references resolve into this set).
+    pub assets: Vec<crate::bundle::manifest::BundleAsset>,
 }
 
 /// Result of a successful build.
@@ -353,9 +359,17 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
 
     let tau_toml_sha256 = sha256_hex(&tau_toml_bytes);
 
-    // schema_version: a governance record forces v4 (highest); otherwise a
-    // trigger-bearing bundle is v3 and a plain bundle is v2.
-    let schema_version = if opts.governance.is_some() {
+    // Content-addressed asset store (D6-B), sorted by hash so container order
+    // can never leak into the self-hash (same discipline as `agents`).
+    let mut assets = opts.assets;
+    assets.sort_by(|a, b| a.hash.cmp(&b.hash));
+
+    // schema_version: an asset store forces v5 (highest); else a governance
+    // record forces v4; else a trigger-bearing bundle is v3 and a plain
+    // bundle is v2.
+    let schema_version = if !assets.is_empty() {
+        5
+    } else if opts.governance.is_some() {
         4
     } else if triggers.is_empty() {
         2
@@ -383,6 +397,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
         ir_payload: opts.ir_payload,
         triggers,
         governance: opts.governance,
+        assets,
     };
 
     // Compute and fill the self-hash. `compute_self_hash` zeros out
@@ -510,8 +525,13 @@ fn effective_to_bundle(
                 out.deny_exec.extend(e.deny.clone());
             }
             Capability::Network(NetCapability::Http { hosts, .. }) => {
+                let host_strs: Vec<String> = if hosts.is_any() {
+                    vec!["any".to_string()]
+                } else {
+                    hosts.exact_hosts()
+                };
                 out.allow_net_http
-                    .extend(e.allow_override.clone().unwrap_or_else(|| hosts.clone()));
+                    .extend(e.allow_override.clone().unwrap_or(host_strs));
                 out.deny_net_http.extend(e.deny.clone());
             }
             Capability::Agent(AgentCapability::Spawn { allowed_kinds, .. }) => {
@@ -555,16 +575,28 @@ pub(crate) fn resolve_agent_prompt_bytes(
 ) -> Result<Vec<u8>, std::io::Error> {
     match prompt {
         PromptEntry::Inline(s) => Ok(s.clone().into_bytes()),
-        PromptEntry::File(rel) => {
-            let abs = if rel.is_absolute() {
-                rel.clone()
-            } else {
-                project_root.join(rel)
-            };
-            std::fs::read(&abs)
-        }
+        PromptEntry::File(rel) => read_prompt_file(rel, project_root),
         PromptEntry::None => Ok(Vec::new()),
     }
+}
+
+/// Read an agent `system_file` prompt's bytes, resolving a relative path
+/// against `project_root` (absolute paths are used as-is).
+///
+/// The single source of truth for prompt-file *path resolution*, shared by
+/// the bundle builder ([`resolve_agent_prompt_bytes`]) and the lowering
+/// `prompt_file` closure (D6-B) so the IR asset hash and the bundle's
+/// `system_prompt_sha256` are computed over identical bytes.
+pub fn read_prompt_file(
+    rel: &std::path::Path,
+    project_root: &std::path::Path,
+) -> Result<Vec<u8>, std::io::Error> {
+    let abs = if rel.is_absolute() {
+        rel.to_path_buf()
+    } else {
+        project_root.join(rel)
+    };
+    std::fs::read(&abs)
 }
 
 /// SHA-256 of `bytes` as lowercase hex. The single source of truth for
@@ -592,6 +624,7 @@ mod tests {
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         }
     }
 
@@ -924,6 +957,7 @@ installed_at = "2024-01-01T00:00:00Z"
             agent_filter: Some(ids.iter().map(|s| s.parse().unwrap()).collect()),
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         }
     }
 
@@ -1107,6 +1141,7 @@ generated_at = "2024-01-01T00:00:00Z"
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         };
         let artifact = build(o).expect("build");
         assert_eq!(artifact.path, explicit);

@@ -94,8 +94,11 @@ fn simple_ir_bytes() -> Vec<u8> {
         native_tool: &|_| Some([1u8; 32]),
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
-    let module = tau_ir_lower::lower_project(&config, &target, &caches).expect("lowers");
+    let module = tau_ir_lower::lower_project(&config, &target, &caches)
+        .expect("lowers")
+        .module;
     tau_ir::to_canonical_bytes(&module)
 }
 

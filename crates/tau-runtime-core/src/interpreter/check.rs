@@ -198,12 +198,12 @@ fn parse_verdict(text: &str) -> CheckVerdict {
 ///
 /// 1. Resolves `locus` to `(present, content)`. If not present, returns
 ///    `met: false` without invoking the LLM (existence floor).
-/// 2. Builds the judge [`Agent`]: `JudgeRef::Builtin` synthesizes one with
+/// 2. Builds the judge [`Agent`]: `JudgeRef::Default` synthesizes one with
 ///    the canonical prompt; `JudgeRef::Agent(id)` clones from the module.
 /// 3. Runs the judge agent with the artifact content as the user turn.
 /// 4. Parses the last assistant text as `{met, rationale}`.
 ///
-/// `judge_model` inside `JudgeRef::Builtin` is stored in `Agent.model` but is
+/// The `model_ref` inside `JudgeRef::Default` is stored in `Agent.model` but is
 /// a runtime no-op in v1 — the ambient backend is always used (see Decision 6
 /// in the deliverables-and-goals plan).
 pub async fn evaluate_deliverable<D>(

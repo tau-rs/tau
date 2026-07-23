@@ -48,7 +48,6 @@ serve, read [Packages](packages.md).
 | `tau-app` | Programmatic-embedding entry point. A parent app (web server, CI job, desktop app) imports `tau-app` and drives the runtime without going through the CLI. |
 | `tau-workflow` | Linear pipeline runner (ADR-0022). `tau workflow {run, list, log, resume}` lives here. JSONL persistence + resume. |
 | `tau-observe` | Tracing / observability hooks. Emits structured logs for the kernel's RunEvent stream + agent transitions. |
-| `tau-infra` | Misc cross-cutting infra: filesystem helpers, time abstraction, path normalization. Kept thin. |
 
 ### Plugins (shipped reference implementations)
 

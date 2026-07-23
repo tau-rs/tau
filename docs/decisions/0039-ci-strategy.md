@@ -1,6 +1,6 @@
 # ADR-0039: CI Strategy — Three-Tier Model
 
-**Status:** Accepted
+**Status:** Accepted (superseded in part by ADR-0063 — per-PR Tier 1 job set)
 **Date:** 2026-06-09
 **Supersedes:** —
 

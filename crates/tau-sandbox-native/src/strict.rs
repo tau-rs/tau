@@ -390,25 +390,37 @@ pub(crate) fn apply_strict(
     // and wrap cmd with tau-net-bridge so the child dials through the proxy.
     // The proxy guard is returned inside the CapabilityHandle for LIFO cleanup.
     let proxy_handle = if has_network_http {
-        // Collect allowed hosts from all Http capabilities.
-        let mut allowed_hosts: Vec<String> = Vec::new();
+        // Collect a host policy across all Http capabilities. Any `HostSet::Any`
+        // ⇒ pass-all; otherwise the union of exact hosts.
+        let mut any = false;
+        let mut exact: Vec<String> = Vec::new();
         for cap in &plan.capabilities {
             if let tau_domain::Capability::Network(tau_domain::NetCapability::Http {
                 hosts, ..
             }) = cap
             {
-                allowed_hosts.extend(hosts.iter().cloned());
+                if hosts.is_any() {
+                    any = true;
+                } else {
+                    exact.extend(hosts.exact_hosts());
+                }
             }
         }
+        let policy = if any {
+            tau_sandbox_proxy::HostAllow::Any
+        } else {
+            tau_sandbox_proxy::HostAllow::Exact(exact.clone())
+        };
 
-        // Validate hosts: rejects wildcards + non-loopback IP literals.
-        tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| CapabilityError::Proxy {
+        // Validate the exact list (defense in depth): rejects wildcards +
+        // non-loopback IP literals.
+        tau_sandbox_proxy::validate_hosts(&exact).map_err(|e| CapabilityError::Proxy {
             message: format!("host validation: {e}"),
         })?;
 
         // Spawn the proxy task in the parent's tokio runtime.
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(policy).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         let proxy_sock_path = handle.sock_path().to_path_buf();

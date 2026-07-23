@@ -24,6 +24,7 @@ pub mod error;
 pub(crate) mod git;
 pub mod install;
 pub mod install_sandbox;
+pub mod link;
 pub mod lockfile;
 pub mod manifest;
 pub mod project;
@@ -52,6 +53,7 @@ pub use install::{
     install, install_with_options, uninstall, BuildOptions, InstallOptions, InstalledPackage,
 };
 pub use install_sandbox::{InstallSandbox, InstallSandboxError, InstallSandboxGuard};
+pub use link::{LinkError, LinkOutcome, LinkRecord, LinkedPlugin, LinkedSkill};
 pub use lockfile::{LockFile, LockedPackage, LockedPlugin, LockedVersion, SynthesizedSource};
 pub use manifest::read_manifest;
 pub use project::{

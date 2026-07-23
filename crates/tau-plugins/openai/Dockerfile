@@ -7,6 +7,7 @@ WORKDIR /workspace
 
 COPY rust-toolchain.toml ./
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 COPY crates ./crates
 COPY xtask ./xtask
 

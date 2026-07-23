@@ -5,7 +5,7 @@ name: Tier 2 — Heavy validation
 # - pull_request labeled `full-matrix` (opt-in pre-merge heavy run)
 # - workflow_dispatch (manual)
 #
-# Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 1
+# Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 0
 # (ci-summary) green; Tier 2 results are informational, posted as PR
 # comments or — on cron — as rolling regression issues.
 
@@ -169,10 +169,6 @@ jobs:
           with-nextest: true
           with-sccache: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "anthropic-plugin ollama-plugin openai-plugin"
@@ -196,10 +192,6 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "all"
@@ -238,10 +230,6 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "all"
@@ -287,10 +275,6 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "tau-controlled-env"
@@ -311,15 +295,217 @@ jobs:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "tau-controlled-env"
       - name: Test tau-runtime-tokio e2e
         run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --tests --verbose
+
+  msrv-check:
+    # MSRV is a rustc-version property, not an OS property. Moved from
+    # per-PR ci.yml to nightly (ADR-0063): breaks are rare and bisect
+    # finds them trivially. release.yml re-asserts MSRV on tags.
+    name: msrv-check / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.91"
+          shared-key: linux-1.91
+          with-sccache: true
+          with-mold: true
+      - run: cargo check --workspace --all-targets --locked
+
+  test-fixtures-ports:
+    name: test-fixtures-ports / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Test tau-ports (test-fixtures feature only)
+        run: cargo nextest run --profile ci -p tau-ports --features test-fixtures
+      - name: Doctests tau-ports (test-fixtures feature only)
+        # Workspace-level `cargo test --workspace --doc` (ci.yml doc-tests)
+        # runs doctests without features; the fixtures module is gated
+        # behind `test-fixtures`, so its doctests only compile here.
+        run: cargo test --doc -p tau-ports --features test-fixtures
+
+  conformance:
+    # β.6 conformance gate on the tau-conformance crate. Distinct from
+    # test-conformance above (plugin conformance suites).
+    name: conformance / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Run β.6 conformance gate (dev profile)
+        # The #[ignore]'d wasm-profile test is skipped by nextest until
+        # β.7.5 ships `tau build wasm`. See ADR-0048.
+        run: cargo nextest run --profile ci -p tau-conformance
+
+  test-credential-chain:
+    name: test-credential-chain / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Credential port tests (tau-ports)
+        run: cargo nextest run --profile ci -p tau-ports -E 'test(/credential/)'
+      - name: Credential provider tests (tau-runtime-tokio)
+        run: cargo nextest run --profile ci -p tau-runtime-tokio -E 'test(/credentials/)'
+
+  feature-flag-matrix:
+    name: feature-flag-matrix / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Check each crate with --no-default-features
+        run: |
+          set -e
+          for crate in tau-domain tau-ports tau-pkg tau-runtime-tokio tau-cli tau-plugin-protocol tau-plugin-sdk tau-mcp tau-observe tau-native-tools; do
+            echo "::group::$crate"
+            cargo check -p "$crate" --no-default-features
+            echo "::endgroup::"
+          done
+      - name: tau-ports feature quadrants (serde / process independence)
+        # `process = ["serde?/std"]` in crates/tau-ports/Cargo.toml makes serde an
+        # OPTIONAL dep of process. Verify each feature builds WITHOUT the other so
+        # a consumer that enables only one never hits a missing-item error that the
+        # default (both-on) matrix would mask.
+        run: |
+          set -e
+          cargo check -p tau-ports --no-default-features --features serde
+          cargo check -p tau-ports --no-default-features --features process
+
+  mock-sandbox-prod-gate:
+    name: mock-sandbox absent from default tau binary / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: MockSandbox must not be reachable in a default tau build
+        # The `mock-sandbox` feature (tau-runtime-tokio) makes the
+        # `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` capability-gate bypass reachable.
+        # It is enabled ONLY via dev-dependencies, so under resolver v2 a
+        # default `cargo build` of the `tau` binary must contain neither the
+        # mock code path nor the env-var string literal. A hit here means the
+        # feature leaked into the production dependency graph (e.g. moved from a
+        # dev-dep to a normal dep) or the
+        # `#[cfg(any(feature = "mock-sandbox", test))]` gates in
+        # process_gate::resolver were dropped.
+        run: |
+          set -euo pipefail
+          cargo build -p tau-cli
+          BIN=target/debug/tau
+          if strings "$BIN" | grep -q 'TAU_TESTING_ALLOW_MOCK_SANDBOX'; then
+            echo "::error::mock-sandbox leaked into the default tau binary — the TAU_TESTING_ALLOW_MOCK_SANDBOX gate is reachable in production" >&2
+            strings "$BIN" | grep 'TAU_TESTING_ALLOW_MOCK_SANDBOX' >&2 || true
+            exit 1
+          fi
+          echo "OK: no mock-sandbox env gate in the default tau binary"
+
+  build-checks-linux:
+    name: build-checks / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Build tau-plugin-test-support
+        run: cargo build -p tau-plugin-test-support
+      - name: Test tau-plugin-test-support
+        run: cargo nextest run --profile ci -p tau-plugin-test-support --all-targets
+      - name: Build tau-plugin-conformance
+        run: cargo build -p tau-plugin-conformance
+      - name: Build tau-plugin-compat
+        run: cargo build -p tau-plugin-compat
+      - name: Build tau-plugin-compat (integration-tests feature)
+        run: cargo build -p tau-plugin-compat --features integration-tests --tests
+
+  schema-conformance:
+    name: IR schema (drift + conformance)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Drift check + conformance kit validation
+        run: cargo test -p tau-ir --features schema --test schema_export --test schema_conformance
+
+  wit-host-drift:
+    name: WIT host world (drift + freeze)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: WIT host world drift + freeze test
+        run: cargo test -p tau-wasm-host --test wit_host_drift
 
   nightly-regression-handler:
     # Opens or updates a rolling issue on cron failure. Skips for PR-
@@ -334,6 +520,15 @@ jobs:
       - test-tau-plugin-compat-layer4-ignored
       - test-tau-sandbox-native-e2e
       - test-tau-runtime-e2e
+      - msrv-check
+      - test-fixtures-ports
+      - conformance
+      - test-credential-chain
+      - feature-flag-matrix
+      - mock-sandbox-prod-gate
+      - build-checks-linux
+      - schema-conformance
+      - wit-host-drift
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:

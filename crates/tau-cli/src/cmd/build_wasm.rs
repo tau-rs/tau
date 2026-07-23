@@ -47,9 +47,13 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
         native_tool: &|name: &str| native_tool_hash(name),
         mcp_contract: &|_url| None,
         skill: &|_name| None,
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, project)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
 
-    let module =
+    let out =
         tau_ir_lower::lower_project(&loaded.project, &target, &caches).map_err(|e| match e {
             LowerError::CapabilityFitFailed {
                 ref missing,
@@ -63,6 +67,18 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
             ),
             other => anyhow::anyhow!("lowering for {WASM_TARGET} failed: {other}"),
         })?;
+    // NOTE(D6-B PR3): embedding the content-addressed asset store into the
+    // wasm component (so the guest can resolve `PromptSource::Asset` prompts)
+    // lands with the wasm/WIT lane. Until then, warn rather than silently ship
+    // a wasm module whose prompt assets the guest cannot resolve.
+    if !out.assets.is_empty() {
+        tracing::warn!(
+            asset_count = out.assets.len(),
+            "wasm build: {WASM_TARGET} does not yet embed the prompt asset store (D6-B PR3); \
+             agents using `system_file` prompts will not resolve them in the wasm guest yet"
+        );
+    }
+    let module = out.module;
     let bytes = tau_ir::to_canonical_bytes(&module);
     Ok((module, bytes))
 }
