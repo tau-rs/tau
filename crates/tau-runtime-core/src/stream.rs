@@ -2982,11 +2982,9 @@ paths = ["/etc/**"]
         // Turn 1: ToolUse + Finish(10 in / 5 out = 15). Turn 2 (only reached
         // if the budget is NOT enforced): plain text that completes the run.
         let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::new(vec![
-            Ok(CompletionChunk::ToolUse(tau_ports::fixtures::make_tool_use(
-                "call_1".into(),
-                "echo".into(),
-                Value::Null,
-            ))),
+            Ok(CompletionChunk::ToolUse(
+                tau_ports::fixtures::make_tool_use("call_1".into(), "echo".into(), Value::Null),
+            )),
             Ok(CompletionChunk::Finish {
                 stop_reason: PortsStopReason::ToolUse,
                 usage: Some(PortsTokenUsage::new(10, 5)),
