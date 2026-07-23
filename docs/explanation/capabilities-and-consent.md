@@ -311,6 +311,8 @@ adjacent layers.
 
 ## See also
 
+- [The three-gate guarantee](three-gate-guarantee.md) — where the declared /
+  granted / allowed model sits in tau's three enforcement gates.
 - [Packages](packages.md) — the unit of extension; capabilities are
   declared inside the package manifest.
 - [Sandboxing](sandboxing.md) — how the kernel enforces the granted

@@ -292,7 +292,6 @@ fn persist_checkpoint_if_durable(
 
 /// Constructed inputs are pre-validated by the caller in Task 6
 /// (`Runtime::run_streaming`); here we trust them.
-#[allow(dead_code)] // wired up by Task 6
 #[allow(clippy::too_many_arguments)] // 12 params intentional: see Task 4 design doc
 pub fn run_streaming_inner(
     backend: Arc<dyn DynLlmBackend>,
