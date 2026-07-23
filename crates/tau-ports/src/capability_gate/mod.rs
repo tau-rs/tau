@@ -9,6 +9,10 @@
 //! handled by `#[non_exhaustive]` on every public type.
 
 #[cfg(feature = "process")]
+pub mod dyn_process;
+#[cfg(feature = "process")]
+pub mod passthrough;
+#[cfg(feature = "process")]
 pub mod process;
 
 use alloc::collections::BTreeMap;

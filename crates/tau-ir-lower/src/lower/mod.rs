@@ -42,6 +42,27 @@ pub struct ResolvedServerTool {
     pub input_schema: serde_json::Value,
 }
 
+/// Error returned by the injected `prompt_file` reader (see [`Caches`]).
+///
+/// Carries a human-readable reason (typically an `std::io::Error` rendered by
+/// the caller); lowering wraps it into [`LowerError::PromptFileUnreadable`].
+#[derive(Debug, Clone)]
+pub struct PromptFileError(pub alloc::string::String);
+
+/// Output of [`lower_project`]: the lowered module plus the content-addressed
+/// asset blobs (currently agent prompts) the bundle must carry (D6-B).
+///
+/// Assets are keyed by their hash (`"sha256:" + 64 lowercase hex`), matching
+/// the [`tau_ir::prompt::PromptSource::Asset`] references inside `module`.
+/// Identical content across agents dedupes to one blob by construction.
+#[derive(Debug)]
+pub struct LowerOutput {
+    /// The lowered IR module.
+    pub module: IrModule,
+    /// Content-addressed assets referenced by `module`, keyed by hash.
+    pub assets: alloc::collections::BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob>,
+}
+
 /// Resolved MCP contract for one author-side `[tools.<entry>]` entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedMcpContract {
@@ -83,20 +104,22 @@ pub struct ResolvedMcpContract {
 ///     native_tool: &|_| None,
 ///     mcp_contract: &|_| None,
 ///     skill: &|_| None,
+///     prompt_file: &|_| Ok(Vec::new()),
 /// };
-/// let module = lower_project(&config, &target, &caches).unwrap();
-/// assert_eq!(module.ir_format.0, tau_ir::IrFormatVersion::CURRENT);
+/// let out = lower_project(&config, &target, &caches).unwrap();
+/// assert_eq!(out.module.ir_format.0, tau_ir::IrFormatVersion::CURRENT);
+/// assert!(out.assets.is_empty());
 /// ```
 pub fn lower_project(
     config: &ProjectConfig,
     target: &TargetTriple,
     caches: &Caches,
-) -> Result<IrModule, LowerError> {
-    let parsed = parse::parse(config)?;
+) -> Result<LowerOutput, LowerError> {
+    let parsed = parse::parse(config, caches.prompt_file)?;
     let resolved = resolve::resolve(parsed, caches)?;
     typecheck::typecheck(&resolved)?;
     capability_fit::check(&resolved, target)?;
-    Ok(build_module(resolved, target))
+    Ok(build_output(resolved, target))
 }
 
 /// Caches the caller supplies for resolution. Each is a closure over an
@@ -115,18 +138,36 @@ pub struct Caches<'a> {
     /// The field stays in `Caches` to lock the resolver signature so
     /// adding `ToolImpl::Skill` later is non-breaking.
     pub skill: &'a dyn Fn(&str) -> Option<[u8; 32]>,
+    /// Reads an agent `system_file` prompt's bytes at build time (D6-B).
+    ///
+    /// Lowering hashes the returned bytes and emits a
+    /// [`tau_ir::prompt::PromptSource::Asset`] reference plus an asset blob
+    /// (collected into [`LowerOutput::assets`]). The closure resolves the
+    /// path (relative paths against the project root) and returns the
+    /// content; a read failure becomes a
+    /// [`LowerError::PromptFileUnreadable`] build error. Callers with no
+    /// file prompts may supply a `|_| Ok(Vec::new())` stub.
+    pub prompt_file: &'a dyn Fn(&std::path::Path) -> Result<alloc::vec::Vec<u8>, PromptFileError>,
 }
 
-fn build_module(parsed: crate::lower::parse::Parsed, target: &TargetTriple) -> IrModule {
-    // Option B (ADR-0044 §D1): ir_format is NOT bumped — it stays v1.0.0
-    // whether or not the module carries triggers. The `triggers` field's
-    // skip-empty serialization preserves trigger-less hashes; the appended
-    // array differentiates trigger-bearing hashes on its own.
-    IrModule {
+fn build_output(parsed: crate::lower::parse::Parsed, target: &TargetTriple) -> LowerOutput {
+    let crate::lower::parse::Parsed {
+        workflow,
+        triggers,
+        assets,
+    } = parsed;
+    // Option B (ADR-0044 §D1): triggers do NOT bump ir_format. ir_format is set
+    // to `IrFormatVersion::current()` (advanced since ADR-0044 for unrelated IR
+    // changes); the point here is that adding the `triggers` field did not force
+    // a bump. The `triggers` field's skip-empty serialization preserves
+    // trigger-less hashes; the appended array differentiates trigger-bearing
+    // hashes on its own.
+    let module = IrModule {
         ir_format: tau_ir::IrFormatVersion::current(),
         tau_version: env!("CARGO_PKG_VERSION").into(),
         target: *target,
-        workflow: parsed.workflow,
-        triggers: parsed.triggers,
-    }
+        workflow,
+        triggers,
+    };
+    LowerOutput { module, assets }
 }

@@ -12,7 +12,7 @@ what ships.
 | surface | versioned by | who tracks it |
 |---|---|---|
 | Authoring (IR JSON schema) | the IR `ir_format` field (e.g. `v2.3.0`) | frontend / SDK authors |
-| Embedding (WIT host world) | the WIT package version `package tau:run@x.y.z` | wasm-guest embedders (any language) |
+| Embedding (WIT host world) | the WIT package version `package tau:host@x.y.z` | wasm-guest embedders (any language) |
 | `tau-ports` (the embedding contract's Rust binding) | `tau-ports` crate semver (`0.1.0`) | no_std Rust embedders |
 
 The two *published, conformance-kitted* contracts are the IR schema and the WIT
@@ -50,9 +50,11 @@ backwards-compatibility guarantees.
 
 ## Naming & wording notes
 
-- The WIT package is **`tau:run`**, not `tau:host`. ADR-0056 wrote `tau:host@x.y.z`
-  *illustratively* (to show the version-by-WIT-package mechanism); the shipped
-  package is `tau:run` because it carries both the host imports and the `run` export.
+- The WIT package is **`tau:host`** — `wit/tau-host.wit` declares
+  `package tau:host@0.1.0`, matching ADR-0056. It was briefly named `tau:run`
+  during β.7.5 development and renamed to `tau:host` on 2026-06-22 (see ADR-0046
+  Decision 4). The world it exposes is `runner`, carrying both the host imports
+  and the `run` export.
 - ADR-0055 says the WIT world is "generated from the ports." Read this as **provably
   non-drifting**: there is no Rust-trait→WIT generator (and the boundary is
   JSON-stringly-typed by design), so the guarantee is delivered by the drift test,
@@ -63,7 +65,7 @@ backwards-compatibility guarantees.
 - **IR schema:** bump `ir_format` per ADR-0056 (major for a removed/retyped field,
   minor for additive), regenerate `schemas/ir/tau-ir.v<X>.schema.json`, update the
   conformance kit. The drift test enforces regeneration.
-- **WIT host world:** edit `wit/tau-run.wit` and update `wit_host_drift.rs` + the
+- **WIT host world:** edit `wit/tau-host.wit` and update `wit_host_drift.rs` + the
   bindings deliberately; bump the WIT package version. The freeze test is the
   tripwire.
 - **`tau-ports`:** make the change and bump `tau-ports`'s version. `cargo-semver-checks`

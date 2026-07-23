@@ -7,6 +7,9 @@
 //! without the no_std component machinery (custom allocator, panic
 //! handler, wasm import thunks) leaking into the host link.
 #![cfg_attr(target_arch = "wasm32", no_std)]
+// Opt out of the workspace `unsafe_code = "warn"` lint: the wasm32 guest needs
+// `unsafe` for its custom allocator, panic handler, and WIT import thunks.
+#![allow(unsafe_code)]
 
 #[cfg(target_arch = "wasm32")]
 mod baked;

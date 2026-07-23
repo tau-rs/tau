@@ -25,6 +25,7 @@ use crate::message::{Address, Message, MessagePayload};
 use crate::package::capability::{
     AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability,
 };
+use crate::package::host::{HostName, HostSet, HttpMethod};
 use crate::package::manifest::{PackageId, PackageKind, UncheckedManifest};
 use crate::package::{PackageManifest, PackageSource};
 use crate::value::Value;
@@ -143,10 +144,27 @@ pub fn cap_fs_exec(paths: &[&str]) -> Capability {
 /// Build a `Capability::Network(NetCapability::Http)` granting HTTP access to
 /// the given hosts with the given HTTP methods.
 pub fn cap_net_http(hosts: &[&str], methods: &[&str]) -> Capability {
-    Capability::Network(NetCapability::Http {
-        hosts: hosts.iter().map(|s| s.to_string()).collect(),
-        methods: methods.iter().map(|s| s.to_string()).collect(),
-    })
+    let hosts = if hosts == ["any"] {
+        HostSet::Any
+    } else {
+        HostSet::Exact(
+            hosts
+                .iter()
+                .map(|h| HostName::parse(h).expect("valid host"))
+                .collect(),
+        )
+    };
+    let methods = if methods.is_empty() {
+        None
+    } else {
+        Some(
+            methods
+                .iter()
+                .map(|m| HttpMethod::parse(m).expect("valid method"))
+                .collect(),
+        )
+    };
+    Capability::Network(NetCapability::Http { hosts, methods })
 }
 
 /// Build a `Capability::Process(ProcessCapability::Spawn)` granting permission

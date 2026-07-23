@@ -30,6 +30,7 @@
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
+- [Quarantine a flaky test](how-to/quarantine-flaky-tests.md)
 - [Run tau under a durable orchestrator](how-to/run-tau-under-a-durable-orchestrator.md)
 - [Use a mounted secret as a credential](how-to/use-mounted-secrets.md)
 - [Write a tool plugin](how-to/write-a-tool-plugin.md)
@@ -113,6 +114,7 @@
 - [ADR-0036 — Capability vocabulary forward-compatibility](decisions/0036-capability-forward-compatibility.md)
 - [0037: Workflow IR](decisions/0037-workflow-ir.md)
 - [ADR-0038 — MCP Facilitator](decisions/0038-mcp-facilitator.md)
+- [ADR-0039 — CI strategy (three-tier model)](decisions/0039-ci-strategy.md)
 - [ADR-0040 — `tau dev` REPL + β.7/β.7.5 split](decisions/0040-tau-dev-repl.md)
 - [ADR-0041 — β.8 TS authoring surface: declarations-only via static AST analysis](decisions/0041-ts-authoring-declarations-only.md)
 - [ADR-0042 — Cross-repo CI template sync (tau = source of truth)](decisions/0042-cross-repo-ci-template-sync.md)
@@ -134,6 +136,11 @@
 - [ADR-0057 — Root allow-section governance + build-time enforcement](decisions/0057-root-allow-governance.md)
 - [ADR-0058 — IR structured control-flow blocks](decisions/0058-ir-control-flow-blocks.md)
 - [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
+- [ADR-0060 — Bundle content-addressed asset store](decisions/0060-bundle-asset-store.md)
+- [ADR-0061 — Build links; verified LinkRecord](decisions/0061-build-links-verified-linkrecord.md)
+- [ADR-0062 — `DynProcessGate` port: decouple transports from the host runtime](decisions/0062-process-gate-port.md)
+- [ADR-0063 — CI tiering: thin pre-merge gate, nightly authority](decisions/0063-ci-tiering-nightly-authority.md)
+- [ADR-0064 — One host semantic: exact hostnames + a typed `any`](decisions/0064-one-host-semantic-exact-typed-any.md)
 
 # Retrospectives
 

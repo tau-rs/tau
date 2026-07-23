@@ -296,8 +296,12 @@ impl ExecutionMode for DevMode {
                     native_tool: &|name: &str| Some(crate::sha256_name(name)),
                     mcp_contract: &|_| None,
                     skill: &|_| None,
+                    // Conformance fixtures use inline prompts only.
+                    prompt_file: &|_| Ok(Vec::new()),
                 };
-                lower_project(&config, &target, &caches)
+                // Conformance fixtures carry no file prompts, so the asset map
+                // is always empty; keep the module only (D6-B).
+                lower_project(&config, &target, &caches).map(|out| out.module)
             }; // caches dropped here
 
             match module_result {

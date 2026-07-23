@@ -5,7 +5,7 @@ expression: rendered
 ✗ install aborted: plugin capability cross-check failed
 
   Manifest of 'ollama' declares this capability:
-    - Network(Http { hosts: ["api.example.com"], methods: ["GET"] })
+    - Network(Http { hosts: Exact({HostName("api.example.com")}), methods: Some({Get}) })
 
   But the binary's tool.describe_capabilities surface does not request it.
 
