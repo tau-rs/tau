@@ -129,6 +129,9 @@ These are tracked as Phase 2 hardening items.
 
 ## See also
 
+- [The three-gate guarantee](three-gate-guarantee.md) — the three
+  enforcement gates (types → `tau check` → conformance) these test
+  layers back.
 - [Architecture overview](architecture-overview.md) — what each
   layer protects.
 - [Sandboxing](sandboxing.md) — the four-layer enforcement model
