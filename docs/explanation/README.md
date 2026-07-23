@@ -10,6 +10,9 @@ into ADRs.
   essence (2026-05-29). The current canonical statement of what tau is, what
   it is not, and the three convictions that drive every architectural
   decision. New contributors should start here.
+- [**three-gate-guarantee.md**](three-gate-guarantee.md) — how the philosophy's
+  promise is enforced concretely: three independent gates (compile-time types →
+  `tau check` → conformance), each proving a property the other two cannot.
 
 ## Historical lineage
 

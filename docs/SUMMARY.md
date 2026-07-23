@@ -54,6 +54,7 @@
 
 - [Overview](explanation/README.md)
 - [Philosophy](explanation/tau-philosophy.md)
+- [The three-gate guarantee](explanation/three-gate-guarantee.md)
 - [tau as language (historical)](explanation/tau-as-language.md)
 - [Architecture overview](explanation/architecture-overview.md)
 - [Capabilities and consent](explanation/capabilities-and-consent.md)
