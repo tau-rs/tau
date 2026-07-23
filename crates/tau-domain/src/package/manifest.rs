@@ -607,15 +607,9 @@ impl UncheckedManifest {
         if self.description.is_empty() {
             return Err(PackageManifestError::EmptyDescription);
         }
-        // dependency names are already PackageName values (pre-validated),
-        // but the loop is here as a hook for future per-dep invariants
-        // (e.g. duplicate-name detection, version-range cross-checks).
-        // The `index` is kept so it can be threaded into
-        // `PackageManifestError::DependencyName { index, source }`.
-        #[allow(clippy::unused_enumerate_index)]
-        for (_index, _dep) in self.dependencies.iter().enumerate() {
-            // no-op at v0.1
-        }
+        // Per-dependency invariants (duplicate-name detection, version-range
+        // cross-checks) are not yet defined at v0.1; when they land, iterate
+        // `self.dependencies` here and raise `PackageManifestError::DependencyName`.
         for (i, cap) in self.capabilities.iter().enumerate() {
             if let Cap::Custom { name, .. } = cap {
                 if name.is_empty() {
