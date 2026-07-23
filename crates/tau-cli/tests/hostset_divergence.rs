@@ -1,5 +1,5 @@
 //! Task 10 (capstone): end-to-end divergence test for HostSet exact+typed-any
-//! (ADR-0062, `docs/superpowers/specs/2026-07-18-hostset-exact-plus-typed-any-design.md`).
+//! (ADR-0064, `docs/superpowers/specs/2026-07-18-hostset-exact-plus-typed-any-design.md`).
 //!
 //! Before this feature, a manifest authored `hosts = ["*"]` sailed through
 //! parse → lattice → `tau check` → `tau build`, then FAILED only at run time

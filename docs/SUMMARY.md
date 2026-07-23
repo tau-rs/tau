@@ -138,7 +138,9 @@
 - [ADR-0059 — IR control-flow interpreter semantics](decisions/0059-ir-control-flow-interpreter.md)
 - [ADR-0060 — Bundle content-addressed asset store](decisions/0060-bundle-asset-store.md)
 - [ADR-0061 — Build links; verified LinkRecord](decisions/0061-build-links-verified-linkrecord.md)
-- [ADR-0062 — One host semantic: exact hostnames + a typed `any`](decisions/0062-one-host-semantic-exact-typed-any.md)
+- [ADR-0062 — `DynProcessGate` port: decouple transports from the host runtime](decisions/0062-process-gate-port.md)
+- [ADR-0063 — CI tiering: thin pre-merge gate, nightly authority](decisions/0063-ci-tiering-nightly-authority.md)
+- [ADR-0064 — One host semantic: exact hostnames + a typed `any`](decisions/0064-one-host-semantic-exact-typed-any.md)
 
 # Retrospectives
 

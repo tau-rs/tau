@@ -2,7 +2,7 @@
 //!
 //! - `mock_server_path()` — builds the in-tree fixture binary on demand
 //!   and returns its path.
-//! - `passthrough_gate()` — returns a `DynProcessCapabilityGate` impl
+//! - `passthrough_gate()` — returns a `DynProcessGate` impl
 //!   that doesn't enforce anything (for tests that aren't exercising
 //!   sandbox refusal).
 //!
@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
-use tau_runtime_tokio::process_gate::DynProcessCapabilityGate;
+use tau_ports::DynProcessGate;
 
 static MOCK_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -43,9 +43,7 @@ pub fn mock_server_path() -> &'static PathBuf {
     })
 }
 
-/// A `DynProcessCapabilityGate` that allows everything. Reuses the
-/// existing `PassthroughSandbox` from `tau-runtime-tokio::process_gate`.
-pub fn passthrough_gate() -> Arc<dyn DynProcessCapabilityGate> {
-    use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
-    Arc::new(PassthroughSandbox::new())
+/// A `DynProcessGate` that allows everything. Uses `tau_ports::PassthroughGate`.
+pub fn passthrough_gate() -> Arc<dyn DynProcessGate> {
+    Arc::new(tau_ports::PassthroughGate::new())
 }

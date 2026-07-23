@@ -367,7 +367,7 @@ fn coarse_hits(cap: &Capability) -> Vec<(&'static str, String)> {
             .collect(),
         // The coarse net.http form is the typed `HostSet::Any` sentinel
         // (authored `hosts = "any"`) — `"*"` can no longer appear in an
-        // `Exact` set (it is a decode error). See ADR-0062.
+        // `Exact` set (it is a decode error). See ADR-0064.
         Capability::Network(NetCapability::Http { hosts, .. }) => {
             if hosts.is_any() {
                 vec![("net.http", "any".to_string())]
@@ -530,17 +530,23 @@ capabilities = [{ kind = "fs.read", paths = ["/etc/**"] }]
 
     #[test]
     fn allow_tools_ceiling_exceeding_root_flagged() {
+        // D3: net.http subset now enforces joint (host, method) coverage per
+        // ceiling entry, and an omitted `methods` key parses to an empty
+        // set — which is the "grants nothing" bottom of the lattice (empty
+        // set of methods requested), not a wildcard. Both entries here now
+        // name an explicit method so the fixture still exercises a real
+        // (non-vacuous) host-ceiling check.
         let (cfg, dir) = proj(
             r#"
 [project]
 name = "demo"
 
 [allow]
-"net.http" = { hosts = ["api.x.com"] }
+"net.http" = { hosts = ["api.x.com"], methods = ["GET"] }
 
 [allow.tools.fetch]
 native = "Fetch"
-"net.http" = { hosts = ["evil.com"] }
+"net.http" = { hosts = ["evil.com"], methods = ["GET"] }
 "#,
         );
         let ctx = ctx_for(&dir);
@@ -701,7 +707,7 @@ capabilities = [{ kind = "fs.read", paths = ["/proj/**"] }]
     #[test]
     fn coarse_any_host_flagged() {
         // The coarse net.http form is now the typed `hosts = "any"` sentinel
-        // (`"*"` is a decode error, ADR-0062).
+        // (`"*"` is a decode error, ADR-0064).
         let (cfg, dir) = proj(
             r#"
 [project]
@@ -836,7 +842,7 @@ name = "demo"
 
     // (Removed `coarse_double_star_host_flagged`: `hosts = ["**"]` is now a
     // decode error, and the sole coarse net.http form — `hosts = "any"` — is
-    // covered by `coarse_any_host_flagged`. See ADR-0062.)
+    // covered by `coarse_any_host_flagged`. See ADR-0064.)
 
     #[test]
     fn agent_override_exceeding_root_flagged() {

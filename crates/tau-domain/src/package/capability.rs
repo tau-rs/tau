@@ -20,6 +20,8 @@ use crate::package::host::HostName;
 use crate::package::host::{HostSet, HttpMethod};
 use crate::value::Value;
 
+pub mod lattice;
+
 /// A capability declaration.
 ///
 /// # Example

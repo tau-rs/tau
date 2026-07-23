@@ -185,6 +185,21 @@ impl fmt::Display for HttpMethodError {
 }
 
 impl HttpMethod {
+    /// All nine standard verbs — the finite universe that `methods = None`
+    /// (all methods) denotes. Used by the capability lattice to expand the
+    /// `None` top element into a concrete set for sound per-method coverage.
+    pub const ALL: [HttpMethod; 9] = [
+        HttpMethod::Get,
+        HttpMethod::Head,
+        HttpMethod::Post,
+        HttpMethod::Put,
+        HttpMethod::Delete,
+        HttpMethod::Connect,
+        HttpMethod::Options,
+        HttpMethod::Trace,
+        HttpMethod::Patch,
+    ];
+
     /// Parse case-insensitively; canonical output is uppercase.
     pub fn parse(s: &str) -> Result<HttpMethod, HttpMethodError> {
         Ok(match s.to_ascii_uppercase().as_str() {

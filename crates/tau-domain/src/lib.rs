@@ -40,6 +40,7 @@ pub use error::{
 };
 pub use id::{AgentId, AgentInstanceId, MessageId, PackageName};
 pub use message::{Address, Message, MessagePayload};
+pub use package::capability::lattice::{canon_caps, capability_subset, meet, CeilingViolation};
 #[cfg(feature = "std")]
 pub use package::detect_format;
 #[cfg(feature = "serde")]

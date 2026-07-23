@@ -39,6 +39,8 @@ pub mod tool;
 
 #[cfg(feature = "process")]
 pub use capability_gate::process::ProcessCapabilityGate;
+#[cfg(feature = "process")]
+pub use capability_gate::{dyn_process::DynProcessGate, passthrough::PassthroughGate};
 pub use capability_gate::{
     CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
     ResourceLimits, WorkingContext,
