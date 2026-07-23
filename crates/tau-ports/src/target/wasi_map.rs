@@ -8,8 +8,6 @@
 //!
 //! See `docs/superpowers/specs/2026-07-23-epic-3-1-cap-wit-table-design.md`.
 
-extern crate alloc;
-
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec;
@@ -27,7 +25,7 @@ pub const WASI_VERSION: &str = "0.2.3";
 /// returns the fully-qualified WIT package id, e.g.
 /// `"wasi:http/outgoing-handler@0.2.3"`.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WitInterface {
     /// `wasi:http/types` — HTTP request/response value types.
     WasiHttpTypes,
