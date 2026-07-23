@@ -128,6 +128,23 @@ impl Drop for ProxyHandle {
 pub fn spawn_proxy(hosts: HostAllow) -> std::io::Result<ProxyHandle> {
     let (sock_dir, sock_path) = make_run_dir_and_sock_path()?;
     let listener = UnixListener::bind(&sock_path)?;
+    // Make the socket inode other-writable (`0o666`). `connect(2)` to a Unix
+    // socket requires *write* permission on the inode, and the two legitimate
+    // callers reach it as neither owner nor a CAP_DAC_OVERRIDE-capable process:
+    // the container bridge bind-mounts the inode and, under rootful Docker,
+    // runs as uid 0 with `--cap-drop=ALL` (no DAC_OVERRIDE) while the socket is
+    // owned by the host user that spawned the proxy — so it is "other" and only
+    // the other-write bit lets it connect. (Rootless Podman maps container-root
+    // to the socket's owner, so owner-write sufficed there — which is why the
+    // OS-default `0o755` mode silently regressed only Docker CI.) The `0o700`
+    // per-run dir (see `make_run_dir_and_sock_path`) — not the socket mode —
+    // remains the access boundary against other *local* users, who cannot
+    // traverse into the dir to reach the socket regardless of its mode. This
+    // preserves the S6 hardening while restoring the container path.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o666))?;
+    }
     let task = tokio::spawn(accept_loop(listener, hosts));
     Ok(ProxyHandle {
         sock_path,
@@ -145,12 +162,13 @@ pub fn spawn_proxy(hosts: HostAllow) -> std::io::Result<ProxyHandle> {
 /// shared `/tmp`, which let any local user dial the proxy and relay egress to
 /// allowlisted hosts for the lifetime of a run (audit S6).
 ///
-/// The socket file is left at the OS default mode: no other local user can
-/// traverse the `0o700` directory to reach it, while the two legitimate
-/// callers are unaffected — the container bridge reaches the socket through a
-/// bind-mount of the inode (independent of host-side directory perms) and the
-/// native bridge runs as the same host user that owns the directory (so DAC
-/// traversal is permitted; landlock grants the socket path itself).
+/// The socket file itself is set other-writable (`0o666`) by [`spawn_proxy`]
+/// after bind — see the rationale there: a container-root bridge without
+/// CAP_DAC_OVERRIDE must be able to `connect(2)` to the bind-mounted inode. No
+/// other local user can traverse the `0o700` directory to reach the socket, so
+/// the socket mode is not the boundary; the native bridge runs as the same host
+/// user that owns the directory (so DAC traversal is permitted; landlock grants
+/// the socket path itself).
 #[cfg(unix)]
 fn make_run_dir_and_sock_path() -> std::io::Result<(PathBuf, PathBuf)> {
     use std::os::unix::fs::DirBuilderExt;
@@ -423,6 +441,31 @@ mod proxy_lifecycle_tests {
             mode & 0o777,
             0o700,
             "per-run dir must be 0o700, got {:o}",
+            mode & 0o777
+        );
+    }
+
+    #[tokio::test]
+    async fn socket_file_is_other_writable_for_container_root_connect() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = spawn_proxy(HostAllow::Exact(vec!["example.com".to_string()])).expect("spawn");
+        let mode = std::fs::metadata(h.sock_path())
+            .expect("sock metadata")
+            .permissions()
+            .mode();
+        // `connect(2)` to a Unix socket requires *write* permission on the
+        // socket inode. The container bridge reaches this socket through a
+        // bind-mount of the inode and, under rootful Docker, runs as uid 0
+        // with `--cap-drop=ALL` (no CAP_DAC_OVERRIDE) while the socket is
+        // owned by the host user that spawned the proxy — so container-root is
+        // "other" and can only connect if the other-write bit is set. The
+        // `0o700` parent dir (asserted in `socket_lives_in_private_0700_dir`)
+        // remains the real access boundary against other local users.
+        assert_eq!(
+            mode & 0o002,
+            0o002,
+            "proxy socket must be other-writable (got {:o}) so a container-root \
+             bridge without CAP_DAC_OVERRIDE can connect(2) via bind-mount",
             mode & 0o777
         );
     }
