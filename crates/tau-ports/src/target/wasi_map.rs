@@ -1,9 +1,9 @@
 //! Capability → WASI/WIT mapping table for the wasm target (EPIC 3.1).
 //!
-//! [`map_capability`] lowers one [`tau_domain::Capability`] to its WASI/WIT
+//! `map_capability` lowers one [`tau_domain::Capability`] to its WASI/WIT
 //! realization: the WIT interface [`WitInterface`] imports the generated world
-//! must declare (3.2), the [`WasiConfig`] fragment the host `WasiCtx` consumes
-//! (3.3), and the [`Disposition`] that says how the capability is satisfied on
+//! must declare (3.2), the `WasiConfig` fragment the host `WasiCtx` consumes
+//! (3.3), and the `Disposition` that says how the capability is satisfied on
 //! wasm (3.4). Pure, total, and read-only over `tau_domain`.
 //!
 //! See `docs/superpowers/specs/2026-07-23-epic-3-1-cap-wit-table-design.md`.
