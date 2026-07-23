@@ -12,6 +12,7 @@ fn caches() -> Caches<'static> {
         native_tool: &|_| None,
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     }
 }
 
@@ -46,7 +47,7 @@ fn lowers_cron_trigger_into_module() {
         dead_letter  = "dlq-sink"
     "#;
     let config = ProjectConfig::parse_str(toml).unwrap();
-    let module = lower_project(&config, &target(), &caches()).unwrap();
+    let module = lower_project(&config, &target(), &caches()).unwrap().module;
 
     assert_eq!(module.triggers.len(), 1);
     let t = &module.triggers[0];
@@ -86,7 +87,7 @@ fn trigger_less_module_keeps_v1_0_0() {
         model = "default"
     "#;
     let config = ProjectConfig::parse_str(toml).unwrap();
-    let module = lower_project(&config, &target(), &caches()).unwrap();
+    let module = lower_project(&config, &target(), &caches()).unwrap().module;
     assert!(module.triggers.is_empty());
     assert_eq!(module.ir_format.0, IrFormatVersion::CURRENT);
 }
@@ -115,7 +116,7 @@ fn triggers_are_sorted_by_name() {
         agent = "a"
     "#;
     let config = ProjectConfig::parse_str(toml).unwrap();
-    let module = lower_project(&config, &target(), &caches()).unwrap();
+    let module = lower_project(&config, &target(), &caches()).unwrap().module;
     let names: Vec<&str> = module.triggers.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, vec!["alpha", "zeta"], "canonical order is by name");
     assert!(

@@ -31,58 +31,46 @@ pub use connect::{parse_connect_request, peek_sni, ConnectRequest};
 pub use http::{parse_http_request, rewrite_request_line, HttpParseError, HttpRequest};
 pub use validate::{validate_hosts, ValidationError};
 
-use tau_domain::{Capability, NetCapability, NetHosts};
-
-/// The host egress policy the proxy enforces. Derived from a plan's
-/// `net.http` capabilities: [`NetHosts::Any`] anywhere yields
-/// [`HostPolicy::Any`] (unrestricted egress); otherwise the union of the
-/// explicit host lists.
+/// Host egress policy for the proxy. `Any` = pass-all (reachable only from a
+/// `HostSet::Any` capability); `Exact` = only these (pre-validated, lowercase)
+/// hosts. Case-insensitive matching at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HostPolicy {
-    /// Unrestricted egress — every host is allowed (`net.http hosts = "any"`).
+pub enum HostAllow {
+    /// Allow every host (pass-all).
     Any,
-    /// Egress restricted to this exact host allow-list.
-    List(Vec<String>),
+    /// Allow exactly these hosts (case-insensitive).
+    Exact(Vec<String>),
 }
 
-impl HostPolicy {
-    /// Fold a plan's capabilities into a single egress policy. Any
-    /// `net.http` capability granting [`NetHosts::Any`] makes the whole
-    /// policy [`HostPolicy::Any`]; otherwise the host lists are unioned.
-    pub fn from_capabilities(caps: &[Capability]) -> Self {
-        let mut list = Vec::new();
-        for cap in caps {
-            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                match hosts {
-                    NetHosts::Any => return HostPolicy::Any,
-                    NetHosts::List(h) => list.extend(h.iter().cloned()),
-                }
-            }
-        }
-        HostPolicy::List(list)
-    }
-
-    /// `true` if `host` is permitted to egress under this policy.
-    pub fn allows(&self, host: &str) -> bool {
+impl HostAllow {
+    /// True iff `host` is permitted. Case-folds both sides.
+    pub fn permits(&self, host: &str) -> bool {
         match self {
-            HostPolicy::Any => true,
-            HostPolicy::List(hosts) => hosts.iter().any(|h| h == host),
+            HostAllow::Any => true,
+            HostAllow::Exact(list) => list.iter().any(|h| h.eq_ignore_ascii_case(host)),
         }
     }
+}
 
-    /// `true` if this policy permits no egress at all (empty explicit list).
-    pub fn is_empty(&self) -> bool {
-        matches!(self, HostPolicy::List(h) if h.is_empty())
+// Platform-agnostic unit coverage for the host policy (the `#[cfg(unix)]`
+// integration tests below exercise the same logic through the proxy, but only
+// on unix; this proves the property deterministically, with no network).
+#[cfg(test)]
+mod host_allow_tests {
+    use super::HostAllow;
+
+    #[test]
+    fn any_permits_every_host() {
+        assert!(HostAllow::Any.permits("anything.example.com"));
+        assert!(HostAllow::Any.permits("EVEN.MIXED.Case"));
     }
 
-    /// Validate the host forms the proxy can enforce (rejects wildcards /
-    /// non-loopback IP literals). [`HostPolicy::Any`] has nothing to
-    /// validate.
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        match self {
-            HostPolicy::Any => Ok(()),
-            HostPolicy::List(hosts) => validate_hosts(hosts),
-        }
+    #[test]
+    fn exact_membership_is_case_insensitive() {
+        let policy = HostAllow::Exact(vec!["allowed.example.com".to_string()]);
+        assert!(policy.permits("allowed.example.com"));
+        assert!(policy.permits("ALLOWED.EXAMPLE.COM"));
+        assert!(!policy.permits("denied.example.com"));
     }
 }
 
@@ -137,10 +125,27 @@ impl Drop for ProxyHandle {
 /// socket path (e.g. via landlock rules for native, bind-mount for container)
 /// so the bridge inside the sandbox can dial it.
 #[cfg(unix)]
-pub fn spawn_proxy(policy: HostPolicy) -> std::io::Result<ProxyHandle> {
+pub fn spawn_proxy(hosts: HostAllow) -> std::io::Result<ProxyHandle> {
     let (sock_dir, sock_path) = make_run_dir_and_sock_path()?;
     let listener = UnixListener::bind(&sock_path)?;
-    let task = tokio::spawn(accept_loop(listener, policy));
+    // Make the socket inode other-writable (`0o666`). `connect(2)` to a Unix
+    // socket requires *write* permission on the inode, and the two legitimate
+    // callers reach it as neither owner nor a CAP_DAC_OVERRIDE-capable process:
+    // the container bridge bind-mounts the inode and, under rootful Docker,
+    // runs as uid 0 with `--cap-drop=ALL` (no DAC_OVERRIDE) while the socket is
+    // owned by the host user that spawned the proxy — so it is "other" and only
+    // the other-write bit lets it connect. (Rootless Podman maps container-root
+    // to the socket's owner, so owner-write sufficed there — which is why the
+    // OS-default `0o755` mode silently regressed only Docker CI.) The `0o700`
+    // per-run dir (see `make_run_dir_and_sock_path`) — not the socket mode —
+    // remains the access boundary against other *local* users, who cannot
+    // traverse into the dir to reach the socket regardless of its mode. This
+    // preserves the S6 hardening while restoring the container path.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o666))?;
+    }
+    let task = tokio::spawn(accept_loop(listener, hosts));
     Ok(ProxyHandle {
         sock_path,
         sock_dir,
@@ -157,12 +162,13 @@ pub fn spawn_proxy(policy: HostPolicy) -> std::io::Result<ProxyHandle> {
 /// shared `/tmp`, which let any local user dial the proxy and relay egress to
 /// allowlisted hosts for the lifetime of a run (audit S6).
 ///
-/// The socket file is left at the OS default mode: no other local user can
-/// traverse the `0o700` directory to reach it, while the two legitimate
-/// callers are unaffected — the container bridge reaches the socket through a
-/// bind-mount of the inode (independent of host-side directory perms) and the
-/// native bridge runs as the same host user that owns the directory (so DAC
-/// traversal is permitted; landlock grants the socket path itself).
+/// The socket file itself is set other-writable (`0o666`) by [`spawn_proxy`]
+/// after bind — see the rationale there: a container-root bridge without
+/// CAP_DAC_OVERRIDE must be able to `connect(2)` to the bind-mounted inode. No
+/// other local user can traverse the `0o700` directory to reach the socket, so
+/// the socket mode is not the boundary; the native bridge runs as the same host
+/// user that owns the directory (so DAC traversal is permitted; landlock grants
+/// the socket path itself).
 #[cfg(unix)]
 fn make_run_dir_and_sock_path() -> std::io::Result<(PathBuf, PathBuf)> {
     use std::os::unix::fs::DirBuilderExt;
@@ -180,13 +186,13 @@ fn make_run_dir_and_sock_path() -> std::io::Result<(PathBuf, PathBuf)> {
 }
 
 #[cfg(unix)]
-async fn accept_loop(listener: UnixListener, policy: HostPolicy) {
+async fn accept_loop(listener: UnixListener, hosts: HostAllow) {
     loop {
         match listener.accept().await {
             Ok((mut conn, _)) => {
-                let policy = policy.clone();
+                let hosts = hosts.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(&mut conn, &policy).await {
+                    if let Err(e) = handle_connection(&mut conn, &hosts).await {
                         tracing::warn!(error = %e, "proxy connection failed");
                     }
                 });
@@ -200,10 +206,7 @@ async fn accept_loop(listener: UnixListener, policy: HostPolicy) {
 }
 
 #[cfg(unix)]
-async fn handle_connection(
-    plugin_sock: &mut UnixStream,
-    policy: &HostPolicy,
-) -> std::io::Result<()> {
+async fn handle_connection(plugin_sock: &mut UnixStream, hosts: &HostAllow) -> std::io::Result<()> {
     let mut buf = [0u8; 4096];
     let n = plugin_sock.read(&mut buf).await?;
     let first_line: &[u8] = match buf[..n].iter().position(|&b| b == b'\n') {
@@ -211,9 +214,9 @@ async fn handle_connection(
         None => &buf[..n],
     };
     if first_line.starts_with(b"CONNECT ") {
-        handle_connect(plugin_sock, &buf[..n], policy).await
+        handle_connect(plugin_sock, &buf[..n], hosts).await
     } else {
-        handle_http(plugin_sock, &buf[..n], policy).await
+        handle_http(plugin_sock, &buf[..n], hosts).await
     }
 }
 
@@ -221,7 +224,7 @@ async fn handle_connection(
 async fn handle_connect(
     plugin_sock: &mut UnixStream,
     initial: &[u8],
-    policy: &HostPolicy,
+    hosts: &HostAllow,
 ) -> std::io::Result<()> {
     let req = match parse_connect_request(initial) {
         Ok(r) => r,
@@ -232,7 +235,7 @@ async fn handle_connect(
             return Ok(());
         }
     };
-    if !policy.allows(&req.host) {
+    if !hosts.permits(&req.host) {
         plugin_sock
             .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             .await?;
@@ -352,7 +355,7 @@ fn http_port_allowed(host: &str, port: u16) -> bool {
 async fn handle_http(
     plugin_sock: &mut UnixStream,
     initial: &[u8],
-    policy: &HostPolicy,
+    hosts: &HostAllow,
 ) -> std::io::Result<()> {
     let req = match parse_http_request(initial) {
         Ok(r) => r,
@@ -363,7 +366,7 @@ async fn handle_http(
             return Ok(());
         }
     };
-    if !policy.allows(&req.host) {
+    if !hosts.permits(&req.host) {
         plugin_sock
             .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             .await?;
@@ -415,7 +418,7 @@ mod proxy_lifecycle_tests {
     #[tokio::test]
     async fn socket_lives_in_private_0700_dir() {
         use std::os::unix::fs::PermissionsExt;
-        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
+        let h = spawn_proxy(HostAllow::Exact(vec!["example.com".to_string()])).expect("spawn");
         let sock = h.sock_path().to_path_buf();
         let dir = sock
             .parent()
@@ -443,8 +446,33 @@ mod proxy_lifecycle_tests {
     }
 
     #[tokio::test]
+    async fn socket_file_is_other_writable_for_container_root_connect() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = spawn_proxy(HostAllow::Exact(vec!["example.com".to_string()])).expect("spawn");
+        let mode = std::fs::metadata(h.sock_path())
+            .expect("sock metadata")
+            .permissions()
+            .mode();
+        // `connect(2)` to a Unix socket requires *write* permission on the
+        // socket inode. The container bridge reaches this socket through a
+        // bind-mount of the inode and, under rootful Docker, runs as uid 0
+        // with `--cap-drop=ALL` (no CAP_DAC_OVERRIDE) while the socket is
+        // owned by the host user that spawned the proxy — so container-root is
+        // "other" and can only connect if the other-write bit is set. The
+        // `0o700` parent dir (asserted in `socket_lives_in_private_0700_dir`)
+        // remains the real access boundary against other local users.
+        assert_eq!(
+            mode & 0o002,
+            0o002,
+            "proxy socket must be other-writable (got {:o}) so a container-root \
+             bridge without CAP_DAC_OVERRIDE can connect(2) via bind-mount",
+            mode & 0o777
+        );
+    }
+
+    #[tokio::test]
     async fn proxy_handle_drop_unlinks_socket_file() {
-        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
+        let h = spawn_proxy(HostAllow::Exact(vec!["example.com".to_string()])).expect("spawn");
         let path = h.sock_path().to_path_buf();
         assert!(path.exists(), "socket file should exist after spawn");
         drop(h);
@@ -456,7 +484,7 @@ mod proxy_lifecycle_tests {
     #[tokio::test]
     async fn forbidden_host_returns_403() {
         let h =
-            spawn_proxy(HostPolicy::List(vec!["allowed.example.com".to_string()])).expect("spawn");
+            spawn_proxy(HostAllow::Exact(vec!["allowed.example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(b"CONNECT denied.example.com:443 HTTP/1.1\r\n\r\n")
             .await
@@ -468,8 +496,39 @@ mod proxy_lifecycle_tests {
     }
 
     #[tokio::test]
+    async fn pass_all_permits_any_host() {
+        let h = spawn_proxy(HostAllow::Any).expect("spawn");
+        let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
+        // Non-443 port still 400s, but the host is NOT 403'd under Any:
+        conn.write_all(b"CONNECT anything.example.com:443 HTTP/1.1\r\n\r\n")
+            .await
+            .expect("write");
+        let mut resp = [0u8; 256];
+        let n = conn.read(&mut resp).await.expect("read");
+        let s = std::str::from_utf8(&resp[..n]).expect("utf8");
+        assert!(!s.starts_with("HTTP/1.1 403"), "Any must not 403, got: {s}");
+    }
+
+    #[tokio::test]
+    async fn exact_match_is_case_insensitive() {
+        let h =
+            spawn_proxy(HostAllow::Exact(vec!["allowed.example.com".to_string()])).expect("spawn");
+        let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
+        conn.write_all(b"CONNECT ALLOWED.EXAMPLE.COM:443 HTTP/1.1\r\n\r\n")
+            .await
+            .expect("write");
+        let mut resp = [0u8; 256];
+        let n = conn.read(&mut resp).await.expect("read");
+        let s = std::str::from_utf8(&resp[..n]).expect("utf8");
+        assert!(
+            !s.starts_with("HTTP/1.1 403"),
+            "case-folded host must not 403, got: {s}"
+        );
+    }
+
+    #[tokio::test]
     async fn malformed_request_returns_400() {
-        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
+        let h = spawn_proxy(HostAllow::Exact(vec!["example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         // Use a truly malformed request (no newline at all) so it lands in the
         // HTTP parse error path and returns 400.
@@ -484,7 +543,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn non_443_port_returns_400() {
-        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
+        let h = spawn_proxy(HostAllow::Exact(vec!["example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(b"CONNECT example.com:80 HTTP/1.1\r\n\r\n")
             .await
@@ -498,7 +557,7 @@ mod proxy_lifecycle_tests {
     #[tokio::test]
     async fn http_forbidden_host_returns_403() {
         let h =
-            spawn_proxy(HostPolicy::List(vec!["allowed.example.com".to_string()])).expect("spawn");
+            spawn_proxy(HostAllow::Exact(vec!["allowed.example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(
             b"GET http://denied.example.com/ HTTP/1.1\r\nHost: denied.example.com\r\n\r\n",
@@ -513,7 +572,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn http_malformed_returns_400() {
-        let h = spawn_proxy(HostPolicy::List(vec!["example.com".to_string()])).expect("spawn");
+        let h = spawn_proxy(HostAllow::Exact(vec!["example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         conn.write_all(b"NOTAMETHOD / HTTP/1.1\r\n\r\n")
             .await
@@ -527,7 +586,7 @@ mod proxy_lifecycle_tests {
     #[tokio::test]
     async fn http_non_loopback_non_80_port_returns_400() {
         let h =
-            spawn_proxy(HostPolicy::List(vec!["allowed.example.com".to_string()])).expect("spawn");
+            spawn_proxy(HostAllow::Exact(vec!["allowed.example.com".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         // Allowlisted host, but plaintext on a non-80 port: must be rejected,
         // mirroring CONNECT's non-443 -> 400.
@@ -544,7 +603,7 @@ mod proxy_lifecycle_tests {
 
     #[tokio::test]
     async fn http_loopback_arbitrary_port_not_rejected_by_port_gate() {
-        let h = spawn_proxy(HostPolicy::List(vec!["127.0.0.1".to_string()])).expect("spawn");
+        let h = spawn_proxy(HostAllow::Exact(vec!["127.0.0.1".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         // Loopback host on an arbitrary (closed) port: the port gate must NOT
         // reject it. It reaches the upstream-connect path, which fails to dial
@@ -634,7 +693,7 @@ mod splice_logging_tests {
             // drop -> clean close -> EOF on the remote->client copy direction
         });
 
-        let h = spawn_proxy(HostPolicy::List(vec!["127.0.0.1".to_string()])).expect("spawn");
+        let h = spawn_proxy(HostAllow::Exact(vec!["127.0.0.1".to_string()])).expect("spawn");
         let mut conn = UnixStream::connect(h.sock_path()).await.expect("connect");
         let req =
             format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");

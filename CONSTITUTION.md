@@ -107,7 +107,7 @@ These are not guidelines but consequences of the above. They are listed here so 
 - **Parent-process-spawned subprocess** is the primary production embedding model. The parent app (web server, desktop app, CI job) spawns `tau serve` as a child, talks to it over stdio or socket, kills it on shutdown. No system daemon, no custom compile step.
 - **npm/pip/etc. SDKs** wrap the serve-mode protocol. Phase 3+ distribution. The SDK bundles tau's binary for each platform (esbuild pattern).
 - **Package distribution via git URLs** initially (Phase 0-2); centralized registry later only if demand warrants.
-- **Crate scope:** `tau-runtime` is the canonical Rust crate; `tau-cli` is the binary; other core crates (`tau-domain`, `tau-ports`, `tau-infra`, `tau-app`, `tau-pkg`, `tau-observe`) follow hexagonal architecture.
+- **Crate scope:** `tau-runtime` is the canonical Rust crate; `tau-cli` is the binary; other core crates (`tau-domain`, `tau-ports`, `tau-app`, `tau-pkg`, `tau-observe`) follow hexagonal architecture.
 - **SDK is an addon package,** not part of core. `tau-sdk` (Rust) and `@tau/sdk` (npm) are separate distributions built on the public API.
 - **Stature** (the opinionated coding pipeline) is a separate downstream project, authored by the same maintainer but in its own repository; not part of tau's Phase 0.
 

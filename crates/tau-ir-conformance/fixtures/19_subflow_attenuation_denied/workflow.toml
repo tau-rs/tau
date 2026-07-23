@@ -1,0 +1,32 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-19"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.parent]
+display_name = "Parent"
+package      = "p@^0.1"
+model        = "mock-1"
+tool_refs    = ["notify"]
+max_turns    = 3
+
+[agents.worker]
+display_name = "Worker"
+package      = "p@^0.1"
+model        = "mock-1"
+tool_refs    = ["page"]
+max_turns    = 3
+
+[tools.notify]
+subflow      = "worker"
+description  = "Hand off the alert to the worker agent."
+capabilities = []
+
+[tools.page]
+mcp          = "https://mcp.pager.example.com"
+description  = "Page the on-call rotation."
+capabilities = [{ kind = "net.http" }]

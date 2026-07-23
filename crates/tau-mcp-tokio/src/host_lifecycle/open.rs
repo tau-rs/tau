@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use tau_ports::CapabilityPlan;
-use tau_runtime_tokio::process_gate::DynProcessCapabilityGate;
+use tau_ports::DynProcessGate;
 use tokio::process::Command;
 use tracing::{info, instrument};
 
@@ -23,7 +23,7 @@ use crate::transport_stdio::{server::McpStdioServer, spawn as stdio_spawn};
 pub async fn open(
     url: &str,
     plan: &CapabilityPlan,
-    gate: Arc<dyn DynProcessCapabilityGate>,
+    gate: Arc<dyn DynProcessGate>,
     options: McpClientOptions,
 ) -> Result<McpClient, LifecycleError> {
     let parsed = parse_url(url)?;
@@ -38,7 +38,7 @@ pub async fn open(
 async fn open_stdio(
     cmd: Vec<String>,
     plan: &CapabilityPlan,
-    gate: Arc<dyn DynProcessCapabilityGate>,
+    gate: Arc<dyn DynProcessGate>,
     options: McpClientOptions,
 ) -> Result<McpClient, LifecycleError> {
     let mut command = Command::new(&cmd[0]);

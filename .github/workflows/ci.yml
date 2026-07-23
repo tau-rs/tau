@@ -48,73 +48,17 @@ permissions:
   contents: read
 
 jobs:
-  changes:
-    # Detect whether the PR is safe to fast-path (skip the heavy
-    # build-fixtures-linux job and its tier-1 consumers).
-    #
-    # A PR is fast-pathable when BOTH conditions hold:
-    #   (1) every changed file is in the safe set — tests/benches,
-    #       per-crate Cargo.toml, or Cargo.lock; AND
-    #   (2) at least one tests/benches file actually changed.
-    #
-    # Condition (1) keeps source-code changes out of the fast path.
-    # Condition (2) prevents a Cargo.toml-only PR (e.g. a runtime dep
-    # bump with no test changes) from skipping the build-fixtures job —
-    # the path filter can't tell a dev-dep add from a runtime-dep
-    # bump, so the test-file requirement is the conservative gate.
-    #
-    # Workspace-root Cargo.toml is intentionally NOT in the safe set
-    # (workspace deps can affect many crates). Per-crate manifests are
-    # enumerated at two and three path-segment depths because dorny's
-    # picomatch glob behaves inconsistently with deeply-nested manifests
-    # (observed: `crates/**/Cargo.toml` did not match
-    # `crates/tau-plugins/ollama/Cargo.toml` in PR #158).
-    name: detect changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      skip_heavy_jobs: ${{ steps.compute.outputs.skip_heavy_jobs }}
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4
-        id: only_safe_paths
-        with:
-          # `every` → flag is true iff every changed file matches.
-          predicate-quantifier: 'every'
-          filters: |
-            ok:
-              - 'crates/**/tests/**'
-              - 'crates/**/benches/**'
-              - 'crates/*/Cargo.toml'
-              - 'crates/*/*/Cargo.toml'
-              - 'Cargo.lock'
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4
-        id: any_test_change
-        with:
-          # default `some` → flag is true if any changed file matches.
-          filters: |
-            ok:
-              - 'crates/**/tests/**'
-              - 'crates/**/benches/**'
-      - id: compute
-        env:
-          ONLY_SAFE: ${{ steps.only_safe_paths.outputs.ok }}
-          HAS_TEST: ${{ steps.any_test_change.outputs.ok }}
-        run: |
-          if [ "$ONLY_SAFE" = "true" ] && [ "$HAS_TEST" = "true" ]; then
-            echo "skip_heavy_jobs=true" >> "$GITHUB_OUTPUT"
-            echo "Fast-path eligible: tests + (optionally) dev-dep manifest changes only."
-          else
-            echo "skip_heavy_jobs=false" >> "$GITHUB_OUTPUT"
-            echo "Full matrix: only_safe=$ONLY_SAFE, has_test=$HAS_TEST."
-          fi
+  # Tier 0 — the thin pre-merge gate (trunk-based CI, ADR-0063).
+  # Full validation is the nightly tier2.yml run (authority for trunk
+  # health, auto-bisect on red). `full-matrix` label pulls tier2 onto
+  # a PR on demand; release.yml re-runs both tiers on tags.
 
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
@@ -128,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: ./.github/actions/setup-rust
         with:
           components: clippy
@@ -143,44 +87,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe  # v2
         with:
           command: check
           # check advisories + licenses + bans + sources per deny.toml at repo root.
           arguments: --all-features
 
-  cargo-audit:
-    # cargo-audit reads .cargo/audit.toml for the ignore list.
-    # Mirrors tau's deny.toml [advisories] policy.
-    name: cargo-audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998  # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  osv-scanner:
-    # osv-scanner reads osv-scanner.toml for IgnoredVulns.
-    # Mirrors tau's deny.toml [advisories] policy.
-    name: osv-scanner
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2  # v2.3.8
-        with:
-          scan-args: |-
-            -r .
-
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           fetch-depth: 0
       - name: Install gitleaks
@@ -195,7 +114,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -208,7 +127,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -224,7 +143,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -240,7 +159,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -251,107 +170,12 @@ jobs:
       # OS-specific paths in this workspace. Linux-only run is enough.
       - run: cargo test --workspace --doc
 
-  msrv-check:
-    # MSRV is a rustc-version property, not an OS property. The only
-    # cfg(target_os)-gated code in this workspace lives in
-    # tau-sandbox-windows (scaffold) and tau-sandbox-darwin (real),
-    # both already covered by `test-stable` on their native OS.
-    # Cross-OS MSRV signal is not worth the ~14 Linux-equivalent
-    # runner minutes per CI run.
-    name: msrv-check / linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: "1.91"
-          shared-key: linux-1.91
-          with-sccache: true
-          with-mold: true
-      - run: cargo check --workspace --all-targets --locked
-
-  test-fixtures-ports:
-    name: test-fixtures-ports / linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-sccache: true
-          with-mold: true
-      - name: Test tau-ports (test-fixtures feature only)
-        run: cargo nextest run --profile ci -p tau-ports --features test-fixtures
-      - name: Doctests tau-ports (test-fixtures feature only)
-        # Workspace-level `cargo test --workspace --doc` (test-stable job)
-        # runs doctests without features; the fixtures module is gated
-        # behind `test-fixtures`, so its doctests only compile here.
-        run: cargo test --doc -p tau-ports --features test-fixtures
-
-  conformance:
-    name: conformance / linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: stable
-          shared-key: linux-stable
-          with-nextest: true
-          with-sccache: true
-          with-mold: true
-      - name: Run β.6 conformance gate (dev profile)
-        # The #[ignore]'d wasm-profile test is skipped by nextest until
-        # β.7.5 ships `tau build wasm`. See ADR-0048.
-        run: cargo nextest run --profile ci -p tau-conformance
-
-  test-credential-chain:
-    name: test-credential-chain / linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-sccache: true
-          with-mold: true
-      - name: Credential port tests (tau-ports)
-        run: cargo nextest run --profile ci -p tau-ports -E 'test(/credential/)'
-      - name: Credential provider tests (tau-runtime-tokio)
-        run: cargo nextest run --profile ci -p tau-runtime-tokio -E 'test(/credentials/)'
-
-  feature-flag-matrix:
-    name: feature-flag-matrix / linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-sccache: true
-          with-mold: true
-      - name: Check each crate with --no-default-features
-        run: |
-          set -e
-          for crate in tau-domain tau-ports tau-pkg tau-runtime-tokio tau-cli tau-plugin-protocol tau-plugin-sdk; do
-            echo "::group::$crate"
-            cargo check -p "$crate" --no-default-features
-            echo "::endgroup::"
-          done
-
   runtime-core-no-std:
     name: runtime-core no-std build + no-forbidden-imports / linux
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
@@ -410,125 +234,12 @@ jobs:
           --features wasm-interpreter,tool-validation,test-fixtures
           --test no_std_validation
 
-  build-fixtures-linux:
-    # Skip on tests-only PRs — downstream integration jobs that consume
-    # these binaries are also gated below. fmt/clippy/msrv/test-stable
-    # still run.
-    name: build-fixtures / linux
-    needs: changes
-    if: needs.changes.outputs.skip_heavy_jobs != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-mold: true
-      - name: Build all release-mode binaries
-        # Two cargo invocations: cargo's `--bin <name>` is workspace-
-        # scoped, not per-package — combining `-p <pkg> -p <pkg> --bin
-        # <other>` builds ONLY that one binary across all packages, not
-        # all of pkg + that bin. Plugins (which each have one default
-        # binary) go in invocation 1; tau-net-bridge (a named binary
-        # inside tau-sandbox-native) goes in invocation 2.
-        run: |
-          cargo build --release \
-            -p anthropic -p ollama -p openai \
-            -p fs-read -p shell \
-            -p echo-llm -p echo-tool \
-            -p tau-cli
-          cargo build --release \
-            -p tau-sandbox-native --bin tau-net-bridge
-      - name: Build controlled-env binary
-        run: |
-          cargo build --release \
-            --manifest-path crates/tau-plugin-compat/fixtures/controlled-env-binary/Cargo.toml
-      - name: Stage binaries into flat _artifacts directory
-        # actions/upload-artifact@v7 preserves directory structure relative
-        # to the workspace root. Without this staging step, downstream jobs
-        # would see binaries under ./prebuilt/target/release/ and
-        # ./prebuilt/crates/.../target/release/ — different roots break the
-        # uniform `mv ./prebuilt/<name>` pattern downstream. Flattening into
-        # _artifacts/ gives consumers a single predictable path.
-        run: |
-          mkdir -p _artifacts
-          cp target/release/anthropic-plugin _artifacts/
-          cp target/release/ollama-plugin _artifacts/
-          cp target/release/openai-plugin _artifacts/
-          cp target/release/fs-read-plugin _artifacts/
-          cp target/release/shell-plugin _artifacts/
-          cp target/release/echo-llm _artifacts/
-          cp target/release/echo-tool _artifacts/
-          cp target/release/tau _artifacts/
-          cp target/release/tau-net-bridge _artifacts/
-          cp crates/tau-plugin-compat/fixtures/controlled-env-binary/target/release/tau-controlled-env _artifacts/
-      - name: Upload fixture binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: linux-fixture-binaries
-          retention-days: 1
-          path: _artifacts/
-
-  build-checks-linux:
-    name: build-checks / linux
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-sccache: true
-          with-mold: true
-      - name: Build tau-plugin-test-support
-        run: cargo build -p tau-plugin-test-support
-      - name: Test tau-plugin-test-support
-        run: cargo nextest run --profile ci -p tau-plugin-test-support --all-targets
-      - name: Build tau-plugin-conformance
-        run: cargo build -p tau-plugin-conformance
-      - name: Build tau-plugin-compat
-        run: cargo build -p tau-plugin-compat
-      - name: Build tau-plugin-compat (integration-tests feature)
-        run: cargo build -p tau-plugin-compat --features integration-tests --tests
-
-  schema-conformance:
-    name: IR schema (drift + conformance)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: stable
-          shared-key: linux-stable
-          with-sccache: true
-          with-mold: true
-      - name: Drift check + conformance kit validation
-        run: cargo test -p tau-ir --features schema --test schema_export --test schema_conformance
-
-  wit-host-drift:
-    name: WIT host world (drift + freeze)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: stable
-          shared-key: linux-stable
-          with-sccache: true
-          with-mold: true
-      - name: WIT host world drift + freeze test
-        run: cargo test -p tau-wasm-host --test wit_host_drift
-
   ports-semver:
     name: tau-ports ABI (cargo-semver-checks)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           fetch-depth: 0  # need origin/main as the semver baseline
       - uses: ./.github/actions/setup-rust
@@ -544,6 +255,38 @@ jobs:
           tool: cargo-semver-checks
       - name: tau-ports ABI must not break without a version bump
         run: cargo semver-checks --baseline-rev origin/main --package tau-ports
+
+  mcp-tokio-decoupled:
+    name: tau-mcp-tokio stays off the host runtime / linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: manifest must not name tau-runtime-tokio
+        # ADR-0062: the MCP transport reaches the process gate as the
+        # `tau_ports::DynProcessGate` port; depending on tau-runtime-tokio would
+        # drag the whole host runtime (tau-pkg / tau-plugin-protocol / the four
+        # sandbox crates) under the transport.
+        run: |
+          if grep -qE '^[[:space:]]*tau-runtime-tokio[[:space:]]*=' crates/tau-mcp-tokio/Cargo.toml; then
+            echo "::error::tau-mcp-tokio/Cargo.toml names tau-runtime-tokio — the MCP transport must stay off the host runtime (ADR-0062)" >&2
+            exit 1
+          fi
+      - name: dependency tree is free of the host runtime + its graph
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p tau-mcp-tokio -e normal)
+          if echo "$tree" | grep -qE 'tau-runtime-tokio|tau-pkg|tau-plugin-protocol|tau-sandbox'; then
+            echo "::error::forbidden crate in tau-mcp-tokio dependency tree (ADR-0062)" >&2
+            echo "$tree" | grep -E 'tau-runtime-tokio|tau-pkg|tau-plugin-protocol|tau-sandbox' >&2
+            exit 1
+          fi
+          echo "OK: tau-mcp-tokio depends on none of tau-runtime-tokio / tau-pkg / tau-plugin-protocol / tau-sandbox-*"
 
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's

@@ -27,7 +27,7 @@ Pick (or create) a directory and run:
 
 ```bash
 mkdir my-project && cd my-project
-tau init
+tau init --allow
 ```
 
 You'll see:
@@ -41,6 +41,18 @@ hint: add `.tau/` to your .gitignore
 `--force` errors out with `tau.toml already exists`. Add `--dry-run`
 to preview the file without writing.
 
+The `--allow` flag scaffolds a **governed** project — one with an
+`[allow]` constitution declaring the ceiling of capabilities the
+project permits. `tau build` and the dev-path `tau run` are governed
+by default (ADR-0057): a `tau.toml` with no `[allow]` section is a
+hard error, `error[GOV000]: no [allow] section declared` (exit 2).
+`tau init --allow` gives you a starting ceiling so you never hit that
+wall. (A bare `tau init` still works for exploring the layout, but
+building it later requires either adding `[allow]` or passing
+`--allow-ungoverned`.) See
+[Capabilities and consent](../explanation/capabilities-and-consent.md)
+for the full governance model.
+
 The hint matters: tau-pkg installs packages into the project's
 `.tau/` directory as machine-local state (per ADR-0004 §6). Treat
 it like `node_modules/` or `target/` — gitignore it.
@@ -53,6 +65,19 @@ Open `tau.toml`:
 [project]
 name = "my-project"
 
+# Governance ceiling (ADR-0057). `tau build` refuses to build unless every
+# capability your agents and tools use is within this [allow] section. The
+# scaffold seeds it with the commented least-privilege union of your installed
+# packages' declared capabilities — uncomment and narrow what you actually need.
+[allow]
+#   "fs.read" = { paths = ["./**"] }
+#   "net.http" = { hosts = ["api.example.com"] }
+
+# When an [allow] ceiling is declared, model aliases live under [allow.models]:
+#   [allow.models.default]
+#   backend = "anthropic"
+#   model   = "claude-haiku-4-5"
+
 [agents.example]
 display_name = "Example Agent"
 package      = ""
@@ -64,7 +89,19 @@ You are an example agent. Edit this prompt to give yourself a job.
 """
 ```
 
-Three blocks, three layers:
+Four blocks:
+
+### `[allow]`
+
+The project's governance ceiling (ADR-0057). `tau build` and dev
+`tau run` are governed by default: they refuse to run unless every
+capability the project's agents and tools resolve to falls inside
+this section. `tau init --allow` seeds it with the commented
+least-privilege union of your installed packages' declared
+capabilities — you uncomment and narrow what you need. Model aliases,
+when you add them, live under `[allow.models.<alias>]` rather than a
+top-level `[models]`. Full model: [Capabilities and
+consent](../explanation/capabilities-and-consent.md).
 
 ### `[project]`
 

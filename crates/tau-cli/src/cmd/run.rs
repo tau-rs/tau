@@ -107,12 +107,29 @@ pub async fn run(
                 return Err(bundle_verify_failure(&e).into());
             }
             Ok(report) => {
+                // Governed-by-default on the run end (ADR-0057 / D2): refuse to
+                // run a bundle built without a ceiling unless the operator opts
+                // in with --allow-ungoverned. Legacy bundles (no governance
+                // record) and `governed`/`skipped` verdicts run unconditionally.
+                if matches!(
+                    report.manifest.governance.as_ref().map(|g| g.verdict),
+                    Some(tau_pkg::bundle::GovernanceVerdict::Ungoverned)
+                ) && !args.allow_ungoverned
+                {
+                    let _ =
+                        output.diagnostic(crate::cmd::check::render_ungoverned_bundle_refused());
+                    std::process::exit(2);
+                }
                 if let Some(ir) = report.manifest.ir_payload.as_ref() {
                     let bytes = ir.canonical_ir_bytes().map_err(|e| {
                         anyhow::anyhow!("decoding bundle's canonical_ir_bytes_hex: {e:?}")
                     })?;
                     let module = tau_ir::from_canonical_bytes(&bytes)
                         .map_err(|e| anyhow::anyhow!("decoding IR module from bundle: {e:?}"))?;
+                    // D6-B: decode + integrity-check the bundle's content-
+                    // addressed asset store (prompt bytes the IR references).
+                    let assets =
+                        crate::cmd::ir_dispatcher::asset_map_from_bundle(&report.manifest.assets)?;
 
                     if args.dry_run {
                         tracing::info!(
@@ -128,6 +145,7 @@ pub async fn run(
                     } else {
                         return crate::cmd::ir_dispatcher::run_via_ir(
                             module,
+                            assets,
                             args,
                             record_protocol,
                             force_passthrough,
@@ -139,6 +157,13 @@ pub async fn run(
                 }
             }
         }
+    }
+
+    // Dev-path governed-by-default gate (ADR-0057 / D2). Only the non-bundle
+    // path enforces here; a `--bundle` run is already gated above by its sealed
+    // verdict, so re-checking the cwd source would double-enforce.
+    if args.bundle.is_none() {
+        evaluate_run_governance(&cwd, args, output).await;
     }
 
     let crate::cmd::project_load::LoadedProject { project, .. } =
@@ -347,6 +372,45 @@ pub async fn run(
     }
 }
 
+/// Run the governed-by-default gate (ADR-0057 / D2) for the dev (non-bundle)
+/// `tau run` path. Mirrors `tau build`'s gate: an absent `[allow]` ceiling is
+/// a hard error (GOV000) unless `--allow-ungoverned`, and a declared-but-
+/// violated ceiling refuses the run. The dev path records no verdict (there is
+/// no bundle), so `Proceed(_)` is a no-op regardless of the verdict.
+///
+/// A project that fails to load is left to the downstream `load_project` call,
+/// which surfaces the precise parse/validation error.
+async fn evaluate_run_governance(cwd: &std::path::Path, args: &RunArgs, output: &mut Output) {
+    use crate::cmd::check::{
+        evaluate_governance, render_no_constitution, render_violations, CheckCtx, GovernanceFlags,
+        GovernanceOutcome,
+    };
+
+    let flags = GovernanceFlags {
+        allow_ungoverned: args.allow_ungoverned,
+        no_governance: args.no_governance,
+    };
+    let ctx = match CheckCtx::load(cwd.to_path_buf(), false, None).await {
+        Ok(c) => c,
+        // Scope resolution failed — let the main path surface the error.
+        Err(_) => return,
+    };
+    let Some(project) = &ctx.project else {
+        return;
+    };
+    match evaluate_governance(project, &ctx, flags) {
+        GovernanceOutcome::Proceed(_) => {}
+        GovernanceOutcome::NoConstitution => {
+            let _ = output.diagnostic(render_no_constitution());
+            std::process::exit(2);
+        }
+        GovernanceOutcome::Violations(findings) => {
+            let _ = output.diagnostic(render_violations(&findings));
+            std::process::exit(2);
+        }
+    }
+}
+
 /// If `project` declares a `[[pipeline.steps]]` block, drive the whole
 /// pipeline and render the final step's output; otherwise return `None`
 /// so the caller falls through to the single-agent path unchanged.
@@ -376,17 +440,24 @@ async fn try_run_pipeline(
     // no skill resolution. A lowering failure is NOT fatal here — it just
     // means "no pipeline path", so we fall through to the legacy flow
     // (which has its own, independent validation/errors).
+    // D6-B: `system_file` prompts resolve relative to the cwd (the project
+    // root for `tau run`), matching how the bundle builder resolves them.
+    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let caches = tau_ir_lower::Caches {
         native_tool: &crate::cmd::build::native_tool_hash,
         mcp_contract: &|_url| None,
         skill: &|_name| None,
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, &project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
-    let module = match tau_ir_lower::lower_project(
+    let (module, assets) = match tau_ir_lower::lower_project(
         project,
         &tau_ports::target::TargetTriple::host(),
         &caches,
     ) {
-        Ok(m) => m,
+        Ok(out) => (out.module, out.assets),
         Err(e) => {
             tracing::debug!("pipeline lowering skipped (project did not lower): {e}");
             return None;
@@ -439,10 +510,10 @@ async fn try_run_pipeline(
             tools_by_id.insert(ir_tool_id.clone(), handle.clone());
         }
     }
-    let dispatcher = std::sync::Arc::new(crate::cmd::ir_dispatcher::ForwardingDispatcher::new(
-        llm_backends,
-        tools_by_id,
-    ));
+    let dispatcher = std::sync::Arc::new(
+        crate::cmd::ir_dispatcher::ForwardingDispatcher::new(llm_backends, tools_by_id)
+            .with_assets(assets),
+    );
 
     // Drive the pipeline, reusing the SAME input (`prompt_text`) and the
     // SAME dispatcher.
@@ -1030,6 +1101,8 @@ capabilities = {caps}
             output_path: None,
             agent_filter: None,
             ir_payload,
+            governance: None,
+            assets: Vec::new(),
         })
         .expect("build must succeed")
         .path

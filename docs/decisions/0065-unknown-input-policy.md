@@ -1,4 +1,4 @@
-# ADR-0059: Unknown-input policy — strict authoring surfaces, versioned interchange
+# ADR-0065: Unknown-input policy — strict authoring surfaces, versioned interchange
 
 **Status:** Accepted
 **Date:** 2026-07-19

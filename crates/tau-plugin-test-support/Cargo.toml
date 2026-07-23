@@ -19,3 +19,6 @@ serde_yaml  = "0.9"
 
 [dev-dependencies]
 reqwest     = { workspace = true }
+
+[lints]
+workspace = true

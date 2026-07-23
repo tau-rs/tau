@@ -36,14 +36,15 @@ pub struct UncheckedAllow {
     pub caps: BTreeMap<String, toml::Value>,
 }
 
-/// Unchecked `[allow.mcp.<name>]` block. The `url` is the grant of network
-/// reach; `hosts` (optional) widens/narrows the derived host ceiling.
+/// Unchecked `[allow.mcp.<name>]` block. `hosts` is the explicit host
+/// ceiling; it must be authored (non-empty) — URL-derived hosts are no
+/// longer supported.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncheckedMcpAllow {
     /// MCP server URL.
     pub url: String,
-    /// Explicit host ceiling override; empty = derive from `url`.
+    /// Explicit host ceiling; required (must be non-empty).
     #[serde(default)]
     pub hosts: Vec<String>,
 }
@@ -162,22 +163,6 @@ fn bridge_caps(
     caps.iter().map(|(k, v)| bridge_cap(k, v)).collect()
 }
 
-/// Derive the host from a URL without pulling in a URL crate: strip the
-/// scheme (`scheme://`), then take everything up to the first `/`, `:`, `?`,
-/// or `#`. Returns `None` for an empty/scheme-less/host-less string.
-fn derive_host(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest)?;
-    let host: String = after_scheme
-        .chars()
-        .take_while(|c| !matches!(c, '/' | ':' | '?' | '#'))
-        .collect();
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
-}
-
 /// Validate an `[allow]` constitution into an [`AllowConfig`].
 ///
 /// Story 1.2: raw-cap ceiling bridge + (Task 3) registry well-formedness.
@@ -206,17 +191,13 @@ pub fn validate_allow(raw: UncheckedAllow) -> Result<AllowConfig, ProjectConfigE
         if m.url.trim().is_empty() {
             return Err(err(format!("[allow.mcp.{name}]: url must be non-empty")));
         }
-        let hosts = if m.hosts.is_empty() {
-            let host = derive_host(&m.url).ok_or_else(|| {
-                err(format!(
-                    "[allow.mcp.{name}]: cannot derive host from url {:?}",
-                    m.url
-                ))
-            })?;
-            vec![host]
-        } else {
-            m.hosts
-        };
+        if m.hosts.is_empty() {
+            return Err(err(format!(
+                "[allow.mcp.{name}]: hosts must be non-empty \
+                 (URL-derived hosts are no longer supported; author them explicitly)"
+            )));
+        }
+        let hosts = m.hosts;
         mcp.insert(name, McpAllowEntry { url: m.url, hosts });
     }
 
@@ -247,7 +228,7 @@ pub fn validate_allow(raw: UncheckedAllow) -> Result<AllowConfig, ProjectConfigE
 mod tests {
     use super::*;
 
-    use tau_domain::{Capability, FsCapability, NetCapability, NetHosts, ProcessCapability};
+    use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
 
     fn allow_from(toml: &str) -> UncheckedAllow {
         toml::from_str(toml).expect("parse [allow]")
@@ -270,7 +251,8 @@ mod tests {
         )));
         assert!(cfg.ceiling.iter().any(|c| matches!(
             c,
-            Capability::Network(NetCapability::Http { hosts: NetHosts::List(hosts), .. }) if hosts == &["api.weather.com".to_string()]
+            Capability::Network(NetCapability::Http { hosts, .. })
+                if hosts.exact_hosts() == vec!["api.weather.com".to_string()]
         )));
         assert!(cfg.ceiling.iter().any(|c| matches!(
             c,
@@ -385,18 +367,24 @@ fast = { backend = "anthropic", model = "claude-haiku-4-5" }
     }
 
     #[test]
-    fn mcp_url_derives_host_when_absent() {
+    fn mcp_absent_hosts_now_rejected() {
         let raw = allow_from(
             r#"
 [mcp.weather]
 url = "https://api.weather.com/mcp"
 "#,
         );
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("hosts"), "got: {err}");
+    }
+
+    #[test]
+    fn allow_net_http_any_bridges_to_hostset_any() {
+        let raw = allow_from(r#""net.http" = { hosts = "any" }"#);
         let cfg = validate_allow(raw).expect("validate");
-        assert_eq!(
-            cfg.mcp["weather"].hosts,
-            vec!["api.weather.com".to_string()]
-        );
+        assert!(cfg.ceiling.iter().any(|c| matches!(
+            c, Capability::Network(NetCapability::Http { hosts, .. }) if hosts.is_any()
+        )));
     }
 
     #[test]
@@ -421,18 +409,6 @@ hosts = ["a.example.com", "b.example.com"]
             r#"
 [mcp.weather]
 url = ""
-"#,
-        );
-        let err = validate_allow(raw).unwrap_err();
-        assert!(format!("{err}").contains("weather"), "got: {err}");
-    }
-
-    #[test]
-    fn mcp_unparseable_url_rejected() {
-        let raw = allow_from(
-            r#"
-[mcp.weather]
-url = "not a url"
 "#,
         );
         let err = validate_allow(raw).unwrap_err();

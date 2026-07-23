@@ -25,6 +25,7 @@ use crate::message::{Address, Message, MessagePayload};
 use crate::package::capability::{
     AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability,
 };
+use crate::package::host::{HostName, HostSet, HttpMethod};
 use crate::package::manifest::{PackageId, PackageKind, UncheckedManifest};
 use crate::package::{PackageManifest, PackageSource};
 use crate::value::Value;
@@ -142,19 +143,31 @@ pub fn cap_fs_exec(paths: &[&str]) -> Capability {
 }
 
 /// Build a `Capability::Network(NetCapability::Http)` granting HTTP access to
-/// the given hosts with the given HTTP methods. An empty `hosts` slice yields
-/// the any-host escape hatch ([`NetHosts::Any`]); a non-empty slice yields a
-/// [`NetHosts::List`].
+/// the given hosts with the given HTTP methods. Passing `["any"]` yields the
+/// any-host escape hatch ([`HostSet::Any`]); any other slice yields a
+/// [`HostSet::Exact`] over the parsed hostnames.
 pub fn cap_net_http(hosts: &[&str], methods: &[&str]) -> Capability {
-    let hosts = if hosts.is_empty() {
-        crate::NetHosts::Any
+    let hosts = if hosts == ["any"] {
+        HostSet::Any
     } else {
-        crate::NetHosts::List(hosts.iter().map(|s| s.to_string()).collect())
+        HostSet::Exact(
+            hosts
+                .iter()
+                .map(|h| HostName::parse(h).expect("valid host"))
+                .collect(),
+        )
     };
-    Capability::Network(NetCapability::Http {
-        hosts,
-        methods: methods.iter().map(|s| s.to_string()).collect(),
-    })
+    let methods = if methods.is_empty() {
+        None
+    } else {
+        Some(
+            methods
+                .iter()
+                .map(|m| HttpMethod::parse(m).expect("valid method"))
+                .collect(),
+        )
+    };
+    Capability::Network(NetCapability::Http { hosts, methods })
 }
 
 /// Build a `Capability::Process(ProcessCapability::Spawn)` granting permission

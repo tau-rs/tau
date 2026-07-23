@@ -26,12 +26,12 @@
 
 #![allow(dead_code)]
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use tau_domain::{
-    AgentCapability, Capability, FsCapability, NetCapability, NetHosts, ProcessCapability,
+    AgentCapability, Capability, FsCapability, HttpMethod, NetCapability, ProcessCapability,
     SkillCapability, Value,
 };
 
@@ -194,10 +194,25 @@ pub fn net_satisfies(granted: &NetCapability, required: &NetCapability) -> bool 
                 methods: rm,
                 ..
             },
-        ) => net_hosts_subsume(gh, rh) && string_subset(gm, rm),
+        ) => gh.subsumes(rh) && methods_satisfies(gm.as_ref(), rm.as_ref()),
         // Future `NetCapability` variants added in tau-domain default
         // to deny — additive evolution must not silently widen grants.
         _ => false,
+    }
+}
+
+/// HTTP-method satisfies-relation: `required ⊆ granted`, where an absent
+/// `methods` field denotes the full method set. A bounded grant cannot
+/// cover an unbounded (`None`) request — same conservatism rule as
+/// [`max_bytes_satisfies`].
+fn methods_satisfies(
+    granted: Option<&BTreeSet<HttpMethod>>,
+    required: Option<&BTreeSet<HttpMethod>>,
+) -> bool {
+    match (granted, required) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(g), Some(r)) => r.is_subset(g),
     }
 }
 
@@ -328,17 +343,6 @@ fn string_subset(granted: &[String], required: &[String]) -> bool {
     required.iter().all(|r| granted.contains(r))
 }
 
-/// Host subsumption for `net.http` (D7-B `NetHosts`). A granted `Any`
-/// subsumes everything; a granted list subsumes a required list under the
-/// host-glob rules but never subsumes a required `Any` (fail-closed).
-fn net_hosts_subsume(granted: &NetHosts, required: &NetHosts) -> bool {
-    match (granted, required) {
-        (NetHosts::Any, _) => true,
-        (NetHosts::List(_), NetHosts::Any) => false,
-        (NetHosts::List(g), NetHosts::List(r)) => paths_subset(g, r),
-    }
-}
-
 /// Glob matcher. Splits on `/`. `**` matches zero or more segments,
 /// `*` matches exactly one segment (no `/`), other segments match
 /// literally. v0.1 does NOT support partial-segment globs like
@@ -397,7 +401,7 @@ fn segment_matches(pattern: &str, candidate: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[derive(serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize)]
     struct CapWrapper {
         cap: Capability,
     }
@@ -545,18 +549,24 @@ methods = ["DELETE"]
     }
 
     #[test]
-    fn net_http_host_glob_satisfies() {
-        let granted = cap(r#"[cap]
+    fn net_http_host_wildcard_rejected_at_decode() {
+        // Host-suffix globs (`*.example.com`) are deliberately deferred in
+        // `HostSet`/`HostName` (tau-domain) — a wildcard string is rejected
+        // at TOML decode, before `net_satisfies` is ever reached. This
+        // replaces the old glob-satisfies coverage now that host
+        // subsumption is exact-set (`HostSet::subsumes`), not glob-based.
+        let err = toml::from_str::<CapWrapper>(
+            r#"[cap]
 kind = "net.http"
 hosts = ["*.example.com"]
 methods = ["GET"]
-"#);
-        let required = cap(r#"[cap]
-kind = "net.http"
-hosts = ["api.example.com"]
-methods = ["GET"]
-"#);
-        assert!(capability_satisfies(&granted, &required));
+"#,
+        )
+        .expect_err("wildcard host must be rejected at decode");
+        assert!(
+            alloc::string::ToString::to_string(&err).contains("wildcard"),
+            "got: {err}"
+        );
     }
 
     // -------------------- Process --------------------
@@ -824,7 +834,7 @@ paths = ["/tmp/**"]
 "#),
             cap(r#"[cap]
 kind = "net.http"
-hosts = ["*.example.com"]
+hosts = ["api.example.com"]
 methods = ["GET", "POST"]
 "#),
         ];

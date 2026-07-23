@@ -683,6 +683,15 @@ pub fn build_policy_denied_outcome(
 /// projection point in the kernel.
 pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProviderMessage> {
     let mut out = Vec::with_capacity(history.len());
+    // Provider id of the most recent tool-call, so each tool-result
+    // references the `tool_use` it answers rather than its own message id.
+    // Anthropic rejects a `tool_result` whose `tool_use_id` matches no
+    // preceding `tool_use.id` (orphaned pair) on multi-turn tool runs.
+    // A result message's `parent_id` (the message it replies to) is the
+    // authoritative link; when absent we fall back to the nearest preceding
+    // tool-call — the run loop pushes each call immediately before its
+    // result, so calls and results strictly alternate in the history.
+    let mut last_tool_use_id: Option<String> = None;
     for m in history {
         match (&m.sender, &m.payload) {
             (tau_domain::Address::User, MessagePayload::Text { content }) => {
@@ -700,13 +709,15 @@ pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProvid
                     tau_domain::Address::Tool(name) => name.clone(),
                     _ => String::new(),
                 };
+                let tool_use_id = alloc::format!("toolu_{}", m.id);
+                last_tool_use_id = Some(tool_use_id.clone());
                 out.push(LlmProviderMessage::assistant(vec![ContentBlock::ToolUse(
-                    ToolUse::new(alloc::format!("toolu_{}", m.id), tool_name, args.clone()),
+                    ToolUse::new(tool_use_id, tool_name, args.clone()),
                 )]));
             }
             (tau_domain::Address::Tool(_), MessagePayload::ToolResult { body }) => {
                 out.push(LlmProviderMessage::tool_result(
-                    alloc::format!("toolu_{}", m.id),
+                    answered_tool_use_id(m, last_tool_use_id.as_deref()),
                     vec![ContentBlock::Text(value_to_preview_string(body))],
                     false,
                 ));
@@ -720,7 +731,7 @@ pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProvid
                 },
             ) => {
                 out.push(LlmProviderMessage::tool_result(
-                    alloc::format!("toolu_{}", m.id),
+                    answered_tool_use_id(m, last_tool_use_id.as_deref()),
                     vec![ContentBlock::Text(message.clone())],
                     true,
                 ));
@@ -729,6 +740,19 @@ pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProvid
         }
     }
     out
+}
+
+/// Provider `tool_use_id` for a tool-result/error message: prefer the
+/// message's `parent_id` (authoritative link to the tool-call it answers),
+/// then the nearest preceding tool-call id, then — for a malformed history
+/// with neither — the result's own id (degenerate, preserves old behavior).
+fn answered_tool_use_id(m: &Message, last_tool_use_id: Option<&str>) -> String {
+    match &m.parent_id {
+        Some(parent) => alloc::format!("toolu_{parent}"),
+        None => last_tool_use_id
+            .map(String::from)
+            .unwrap_or_else(|| alloc::format!("toolu_{}", m.id)),
+    }
 }
 
 /// Flatten a tool's content blocks into a single human-readable string.

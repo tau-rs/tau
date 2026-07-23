@@ -34,3 +34,6 @@ tau-ports   = { workspace = true, features = ["test-fixtures"] }
 # thread-local subscriber so `RunLog::append` (a `tracing::event!`
 # emitter post-Sub-project-D Task 3) actually materializes JSONL lines.
 tracing-subscriber = { workspace = true, features = ["registry"] }
+
+[lints]
+workspace = true

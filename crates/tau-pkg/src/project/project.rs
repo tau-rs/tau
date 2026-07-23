@@ -2048,7 +2048,7 @@ fn validate_deliverable(
 /// and unknown-retry-from for RETRY deliverables.
 /// Fills `DeliverableEntry::producer` and `DeliverableEntry::gate` as side-effects.
 fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigError> {
-    use crate::capability_override::glob_subset::is_glob_subset;
+    use crate::capability_override::subset::paths_subset;
     use tau_domain::FsCapability;
 
     // First pass: resolve producers, run capability checks, and for RETRY
@@ -2119,9 +2119,9 @@ fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigE
                 .flatten()
                 .collect();
 
-            let covered = write_paths
-                .iter()
-                .any(|cap_path| is_glob_subset(path, cap_path));
+            // D3: single-path subset over the sound G2 engine — a child path
+            // is covered if it is a glob-subset of *any* producer write path.
+            let covered = paths_subset(std::slice::from_ref(path), &write_paths).is_ok();
             if !covered {
                 return Err(ProjectConfigError::DeliverableProducerLacksCapability {
                     id: deliverable_id.clone(),

@@ -110,12 +110,15 @@ fn e2e_clean_rebuild_is_reproducible() {
         output_path: None,
         agent_filter: None,
         ir_payload: None,
+        governance: None,
+        assets: Vec::new(),
     })
     .unwrap();
     let report = verify_reproducible(ReproOptions {
         bundle_path: artifact.path,
         project_root: tmp.path().to_path_buf(),
         ir_payload: None,
+        assets: Vec::new(),
     })
     .unwrap();
     assert!(report.reproducible, "diffs={:?}", report.diffs);
@@ -131,6 +134,8 @@ fn e2e_mutated_package_breaks_reproducibility() {
         output_path: None,
         agent_filter: None,
         ir_payload: None,
+        governance: None,
+        assets: Vec::new(),
     })
     .unwrap();
     // Mutate a file inside an installed package. `fs-read/0.1.0/src/lib.rs`
@@ -141,6 +146,7 @@ fn e2e_mutated_package_breaks_reproducibility() {
         bundle_path: artifact.path,
         project_root: tmp.path().to_path_buf(),
         ir_payload: None,
+        assets: Vec::new(),
     })
     .unwrap();
     assert!(!report.reproducible);

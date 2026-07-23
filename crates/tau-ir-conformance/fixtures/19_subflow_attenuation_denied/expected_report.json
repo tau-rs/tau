@@ -1,0 +1,5 @@
+{
+  "run_outcome_kind": "Completed",
+  "tool_calls": {},
+  "_note": "notify's cap_subset is empty, so the worker's `page` (net.http) call is denied by AttenuatedDispatcher before dispatch. Contrast fixture 04 (notify grants net.http -> page:1). Soft-deny: the worker receives an is_error tool result and completes. Denial is also emitted as tracing event runtime.subflow.attenuation_denied."
+}

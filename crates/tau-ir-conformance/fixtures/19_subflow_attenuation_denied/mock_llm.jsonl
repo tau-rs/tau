@@ -1,0 +1,4 @@
+{"turn": 0, "response": {"tool_uses": [{"id": "p1", "name": "notify", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 1, "response": {"tool_uses": [{"id": "w1", "name": "page", "input": {}}], "stop_reason": "tool_use"}}
+{"turn": 2, "response": {"text": "paged", "stop_reason": "end_turn"}}
+{"turn": 3, "response": {"text": "done", "stop_reason": "end_turn"}}

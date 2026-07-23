@@ -38,6 +38,7 @@ use std::sync::Arc;
 
 use tokio::sync::OnceCell;
 
+use tau_domain::{Capability, NetCapability};
 use tau_ports::{
     CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
     CapabilityShapeSet, ProcessCapabilityGate,
@@ -89,11 +90,19 @@ impl CapabilityGate for WindowsSandbox {
                 return Err(CapabilityError::ShapeUnsupported { shape });
             }
         }
-        tau_sandbox_proxy::HostPolicy::from_capabilities(&plan.capabilities)
-            .validate()
-            .map_err(|e| CapabilityError::Proxy {
+        let mut exact: Vec<String> = Vec::new();
+        for cap in &plan.capabilities {
+            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
+                if !hosts.is_any() {
+                    exact.extend(hosts.exact_hosts());
+                }
+            }
+        }
+        if !exact.is_empty() {
+            tau_sandbox_proxy::validate_hosts(&exact).map_err(|e| CapabilityError::Proxy {
                 message: format!("host validation: {e}"),
             })?;
+        }
         Ok(())
     }
 }
@@ -291,7 +300,9 @@ mod tests {
 
     #[test]
     fn validate_plan_rejects_wildcard_host() {
-        let s = WindowsSandbox::new("windows");
+        // `HostSet`'s deserializer now rejects "*" as a non-hostname at
+        // decode time (before `validate_plan` even runs) — callers must
+        // spell pass-all as `hosts = "any"`, not a wildcard string.
         let plan_json = json!({
             "capabilities": [
                 { "kind": "net.http", "hosts": ["*"], "methods": ["GET"] }
@@ -299,13 +310,11 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
-        let err = s
-            .validate_plan(&plan)
-            .expect_err("wildcard must be rejected");
+        let err = serde_json::from_value::<CapabilityPlan>(plan_json)
+            .expect_err("wildcard host must be rejected at decode");
         assert!(
-            matches!(err, CapabilityError::Proxy { .. }),
-            "expected Proxy error, got {err:?}"
+            err.to_string().contains("wildcard"),
+            "expected wildcard-rejection error, got {err}"
         );
     }
 }

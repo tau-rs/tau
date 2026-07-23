@@ -9,6 +9,9 @@
 //! `CapabilityProbe::Unavailable` and all other methods return
 //! `CapabilityError::Unavailable`.
 
+// Opt out of the workspace `unsafe_code = "warn"` lint: the Linux exec path
+// legitimately calls libc/seccomp/landlock via `unsafe`. See `exec`/`light`.
+#![allow(unsafe_code)]
 #![deny(missing_docs)]
 
 mod shape;
