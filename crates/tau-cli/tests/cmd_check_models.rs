@@ -59,7 +59,15 @@ model        = "default"
     .unwrap();
 
     // Lockfile: `datatool` is installed and its plugin `provides = "tool"`.
-    let bin_str = bin_path.display().to_string();
+    // Normalize path separators to `/` so a Windows path like
+    // `C:\Users\RUNNER~1\...` doesn't produce invalid TOML: `\U` in a basic
+    // string is a unicode escape, which would make the lockfile unreadable
+    // and surface `tau.plugins.lockfile_unreadable` instead of the finding
+    // this test asserts. Windows APIs accept forward slashes. (Same idiom as
+    // the sibling pipeline tests.)
+    let bin_str = bin_path
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
     std::fs::write(
         root.join("tau-lock.toml"),
         format!(
