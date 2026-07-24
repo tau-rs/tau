@@ -9,6 +9,7 @@
 pub mod authoring;
 pub mod emit;
 pub mod emit_python;
+pub mod emit_ts;
 pub mod error;
 pub mod schema;
 
