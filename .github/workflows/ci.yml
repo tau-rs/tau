@@ -170,6 +170,27 @@ jobs:
       # OS-specific paths in this workspace. Linux-only run is enough.
       - run: cargo test --workspace --doc
 
+  rustdoc:
+    name: rustdoc / linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      # PR-time guard for broken intra-doc links. 16 crates carry
+      # #![deny(rustdoc::broken_intra_doc_links)], so a broken link makes
+      # `cargo doc` exit non-zero and fails this job — on the PR that
+      # introduced it. Runs the exact command docs-deploy runs, so it fails
+      # under the same conditions. Without this, link breakage was caught
+      # only inside docs-deploy's build job, which strands the entire mdBook
+      # publish (see docs-deploy.yml "Build rustdoc" step).
+      - run: cargo doc --no-deps --workspace
+
   runtime-core-no-std:
     name: runtime-core no-std build + no-forbidden-imports / linux
     runs-on: ubuntu-latest
