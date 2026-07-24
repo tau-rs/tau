@@ -6,7 +6,8 @@
 
 use std::path::PathBuf;
 
-use tau_cli::cmd::build_wasm::lower_to_wasm_ir;
+use tau_cli::cmd::build_wasm::{lower_to_wasm_ir, wasm_governance_gate, wasm_world_for_project};
+use tau_cli::cmd::check::GovernanceFlags;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -32,4 +33,44 @@ fn project_needing_process_exec_is_refused() {
         msg.contains("capability") || msg.contains("CapabilityFit"),
         "expected a capability-fit refusal, got: {msg}"
     );
+}
+
+#[test]
+fn trivial_project_generates_host_only_world() {
+    let world = wasm_world_for_project(&fixture("trivial")).expect("trivial world");
+    assert!(world.contains("import host;"));
+    assert!(
+        !world.contains("wasi:"),
+        "trivial should grant no wasi surface:\n{world}"
+    );
+}
+
+#[test]
+fn net_http_project_generates_http_world() {
+    let world = wasm_world_for_project(&fixture("net-http")).expect("net-http world");
+    assert!(
+        world.contains("import wasi:http/outgoing-handler@0.2.3;"),
+        "{world}"
+    );
+    assert!(world.contains("import wasi:io/streams@0.2.3;"), "{world}");
+}
+
+#[tokio::test]
+async fn ungoverned_project_is_refused_on_wasm_path() {
+    // `trivial` declares no `[allow]` ceiling → GOV000 unless opted out.
+    let err = wasm_governance_gate(&fixture("trivial"), GovernanceFlags::default())
+        .await
+        .expect_err("ungoverned must be refused");
+    assert!(err.contains("GOV000"), "expected GOV000, got: {err}");
+}
+
+#[tokio::test]
+async fn allow_ungoverned_flag_lets_it_proceed() {
+    let flags = GovernanceFlags {
+        allow_ungoverned: true,
+        no_governance: false,
+    };
+    wasm_governance_gate(&fixture("trivial"), flags)
+        .await
+        .expect("--allow-ungoverned proceeds");
 }

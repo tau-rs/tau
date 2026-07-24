@@ -1,0 +1,23 @@
+packages = ["anthropic"]
+
+[project]
+name = "net-http-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.main]
+display_name = "Main"
+package = "net-http-wasm@^0.1"
+model = "claude"
+tool_refs = ["fetch"]
+
+[agents.main.prompt]
+system = "Uses a net.http tool."
+
+[tools.fetch]
+native = "Fetch"
+description = "Fetch a URL over HTTP."
+capabilities = [{ kind = "net.http", hosts = ["api.anthropic.com"] }]
