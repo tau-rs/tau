@@ -7,7 +7,10 @@
 #![deny(missing_docs)]
 
 pub mod authoring;
+pub mod emit;
+pub mod emit_python;
 pub mod error;
 pub mod schema;
 
+pub use emit::generate;
 pub use error::CodegenError;
