@@ -74,3 +74,19 @@ async fn allow_ungoverned_flag_lets_it_proceed() {
         .await
         .expect("--allow-ungoverned proceeds");
 }
+
+#[tokio::test]
+async fn over_reaching_project_is_refused_on_wasm_path() {
+    // `over-reach` declares a `[allow]` ceiling of `net.http` scoped to
+    // `example.com`, but its `fetch` tool actually requires
+    // `api.anthropic.com` — a ceiling violation (`tau.governance.over_reach`),
+    // not an absent-ceiling GOV000. Proves Approach B's headline behavior
+    // (tool ⊆ agent-effective ⊆ root ceiling) is enforced on the wasm path too.
+    let err = wasm_governance_gate(&fixture("over-reach"), GovernanceFlags::default())
+        .await
+        .expect_err("over-reaching project must be refused");
+    assert!(
+        err.contains("tau.governance.over_reach"),
+        "expected an over_reach ceiling violation, got: {err}"
+    );
+}

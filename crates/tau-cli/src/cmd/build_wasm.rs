@@ -88,17 +88,13 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
     Ok((module, bytes))
 }
 
-/// Aggregate the lowered IR's used capabilities and generate the guest's WIT
-/// world. Separated from `run` so it is testable without shelling the wasm
-/// build. Governance is enforced separately by [`wasm_governance_gate`].
-///
-/// The used caps come from every tool's `declared` set in the IR capability
-/// table; they are canonicalized so cap order and duplicates never affect the
+/// Aggregate a lowered module's used capabilities and generate the guest's WIT
+/// world. The used caps come from every tool's `declared` set in the IR
+/// capability table; canonicalized so cap order and duplicates never affect the
 /// world. After the governance gate proceeds these caps are provably within
-/// `[allow]` (the gate enforces tool ⊆ agent-effective ⊆ root ceiling), so the
-/// generated world is the `[allow]`-bounded set — no redundant `meet`.
-pub fn wasm_world_for_project(project: &Path) -> Result<String> {
-    let (module, _bytes) = lower_to_wasm_ir(project)?;
+/// `[allow]` (tool ⊆ agent-effective ⊆ root ceiling), so the generated world is
+/// the `[allow]`-bounded set — no redundant `meet`.
+pub fn world_from_module(module: &tau_ir::IrModule) -> Result<String> {
     let used: Vec<tau_domain::Capability> = module
         .workflow
         .capability_table
@@ -108,6 +104,13 @@ pub fn wasm_world_for_project(project: &Path) -> Result<String> {
         .collect();
     let caps = tau_domain::canon_caps(&used);
     generate_world(&caps).map_err(|e| anyhow::anyhow!("wasm WIT-world generation failed: {e}"))
+}
+
+/// Lower a project and generate its WIT world. Test seam so world generation is
+/// exercisable without shelling the 60-90s wasm build.
+pub fn wasm_world_for_project(project: &Path) -> Result<String> {
+    let (module, _bytes) = lower_to_wasm_ir(project)?;
+    world_from_module(&module)
 }
 
 /// Governed-by-default gate for the wasm build path (ADR-0057 / D2), reusing
@@ -227,6 +230,18 @@ pub async fn run(args: &BuildWasmArgs, output: &mut Output) -> Result<()> {
     let (module, bytes) = lower_to_wasm_ir(&project)?;
     let ir_hash = hex_lower(&tau_ir::compute_hash(&module));
 
+    // Generate the cap-derived WIT world BEFORE the expensive guest build so an
+    // unsupported-on-wasm capability fails fast (exit 2) instead of after a
+    // 60-90s build that would leave an orphan `.wasm` with no `.wit`. Computed
+    // from the already-lowered `module` — no second lowering.
+    let world = match world_from_module(&module) {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = output.error(format!("{e}"));
+            std::process::exit(2);
+        }
+    };
+
     // Bake the IR bytes into a tempfile the guest build reads via TAU_IR_BYTES.
     // The file must stay alive until after the cargo call returns.
     let ir_file = tempfile::NamedTempFile::new().context("creating IR scratch file")?;
@@ -241,8 +256,7 @@ pub async fn run(args: &BuildWasmArgs, output: &mut Output) -> Result<()> {
         .unwrap_or_else(|| project.join(format!("{}.wasm", project_stem(&project))));
     std::fs::write(&out_path, &wasm).with_context(|| format!("writing {}", out_path.display()))?;
 
-    // Generate + write the cap-derived WIT world next to the component.
-    let world = wasm_world_for_project(&project)?;
+    // Write the (already-generated) WIT world next to the component.
     let wit_path = out_path.with_extension("wit");
     std::fs::write(&wit_path, &world)
         .with_context(|| format!("writing {}", wit_path.display()))?;
