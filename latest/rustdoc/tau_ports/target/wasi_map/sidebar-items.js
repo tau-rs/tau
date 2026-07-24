@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["WASI_VERSION"],"enum":["Disposition","PreopenAccess","WasiConfig","WitInterface"],"fn":["map_capability"],"struct":["Preopen","WasiMapping"]};

@@ -1,0 +1,703 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0007 — tau-cli - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0007-tau-cli.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0007-tau-cli--tau-runtime-amendments-capability-filter-run_with_history"><a class="header" href="#adr-0007-tau-cli--tau-runtime-amendments-capability-filter-run_with_history">ADR-0007: tau-cli + tau-runtime amendments (capability filter, run_with_history)</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-04-28
+<strong>Supersedes:</strong> —
+<strong>Amends:</strong> ADR-0006 §7 and §11 (refines typed-capability story by
+pre-filtering tools per-call; adds <code>Runtime::run_with_history</code> and the
+<code>history_len</code> span field as additive vocabulary).
+<strong>Refines:</strong> ADR-0002 (project <code>tau.toml</code> shares filename with package
+<code>tau.toml</code>; the two are distinct schemas keyed by their root tables).</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>tau-cli (sub-project 5, ROADMAP row 5) is the CLI binary surface for tau
+Phase 0 — the <code>tau</code> executable. It is the first sub-project producing a
+binary rather than a library, and it is the consumer that wires
+tau-runtime, tau-pkg, tau-domain, and the tau-ports plugin traits into a
+user-facing tool. Per ROADMAP row 5 the v0.1 scope is the solo path;
+multi-agent orchestration (G10) is Phase 1+.</p>
+<p>Per QG18, public API additions (the CLI subcommand surface, the project
+<code>tau.toml</code> schema) and additive plugin / runtime amendments require
+ADRs. This ADR bundles 18 tau-cli decisions plus 2 additive tau-runtime
+amendments per the ADR-0006 precedent (kernel + <code>Tool::capabilities()</code>
+amendment recorded together because the amendment was solely motivated
+by the kernel). Both amendments here are solely motivated by tau-cli —
+specifically by the capability-aware tool dispatch path and the REPL's
+need to thread conversation history across user turns. Bundling avoids
+splitting one motivated change across multiple ADRs; future tau-runtime
+amendments motivated by their own sub-projects will get their own ADRs
+(no promiscuous bundling).</p>
+<p>Relevant Constitution constraints: G6 (tau is a runtime, not a
+framework — the CLI is a thin shell), G9 (observable by default), G10
+(solo path; orchestration Phase 1+), NG6 (no persistent agent memory
+in core), NG9 (tau does not redact for the caller and does not manage
+credentials), NG11 (developer tool, not end-user product), NG12 (runtime
+not framework), QG2 (<code>thiserror</code> everywhere), QG18 (ADRs for public API
+additions). This is the last sub-project before the formal Phase 0
+retrospective (per PG4); decisions made here close out the Phase 0
+public surface.</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<h3 id="1-5-subcommand-surface-at-v01"><a class="header" href="#1-5-subcommand-surface-at-v01">1. 5-subcommand surface at v0.1</a></h3>
+<p><code>install</code>, <code>list</code>, <code>run</code>, <code>init</code>, <code>chat</code>. ROADMAP row 5 enumerates
+<code>install</code>, <code>list</code>, <code>run</code>. <code>init</code> is added per ADR-0004 §6 (the
+project-scaffolding verb that creates a starter <code>tau.toml</code> plus a stub
+agent). <code>chat</code> is added per the brainstorm's option-A REPL choice (see
+decision 6). Deferred to Phase 1+: <code>uninstall</code>, <code>update</code>, <code>verify</code>,
+<code>workflow</code> and any orchestration verbs. The deferred list is
+documented; v0.1 hard-rejects unknown subcommands rather than silently
+succeeding.</p>
+<p>Trigger to revisit: a real user workflow demanding any deferred verb.</p>
+<h3 id="2-tokiomain-async-at-the-entry"><a class="header" href="#2-tokiomain-async-at-the-entry">2. <code>#[tokio::main]</code> async at the entry</a></h3>
+<p>The CLI binary's <code>main</code> is <code>#[tokio::main(flavor = "current_thread")]</code>.
+<code>Runtime::run</code> and <code>Runtime::run_with_history</code> are async (per ADR-0006
+§2); sync tau-pkg calls run inline. tokio is in dev-deps for tau-runtime
+tests already; the CLI as the consumer picks it. <code>Runtime::run</code> itself
+remains async-runtime-agnostic per ADR-0006 §2 — only the binary
+commits. The current-thread flavor is sufficient because v0.1 has no
+internal concurrency in the CLI (no <code>tokio::spawn</code>, no parallel
+subcommand execution); a future multi-agent orchestration step in Phase
+1+ may upgrade to the multi-thread flavor.</p>
+<p>Trigger to revisit: a use case where async forces unwanted complexity
+on a small embedding (the runtime stance is unchanged; this decision
+only binds the binary).</p>
+<h3 id="3-project-tautoml-named-table-schema"><a class="header" href="#3-project-tautoml-named-table-schema">3. Project <code>tau.toml</code> named-table schema</a></h3>
+<p>A project's <code>tau.toml</code> has <code>[project]</code> and <code>[agents.&lt;id&gt;]</code> named tables
+(Cargo's <code>[dependencies.foo]</code> style) with optional sub-tables
+<code>requires</code>, <code>capabilities</code> (reserved — see decision 4), <code>config</code>,
+<code>prompt</code>. The project file is distinct from the package <code>tau.toml</code>
+defined by ADR-0002: the two share a filename modeled on Cargo's
+<code>[package]</code> (in a crate's <code>Cargo.toml</code>) vs <code>[workspace]</code> (in a
+workspace root) precedent — the root table tells the parser which
+schema applies. tau-cli's <code>config::read_project</code> rejects files that
+match neither schema with a typed <code>ProjectConfigError::AmbiguousFile</code>.</p>
+<p>Named tables (<code>[agents.foo]</code>) are chosen over array-of-tables
+(<code>[[agents]]</code> with an <code>id</code> field) because the named-table form makes
+the agent id visually obvious in the section header and matches
+Cargo's map-by-name idiom for the same role.</p>
+<p>Trigger to revisit: confusion between project and package files in
+real user reports — at which point the file extension or name should
+be split.</p>
+<h3 id="4-capability-override-intersect-only-lands-in-phase-1"><a class="header" href="#4-capability-override-intersect-only-lands-in-phase-1">4. Capability override (intersect-only) lands in Phase 1</a></h3>
+<p>The <code>[[agents.&lt;id&gt;.capabilities]]</code> array-of-tables in project tau.toml
+narrows — but never expands — the capabilities granted by an agent's
+package manifest. Each entry's <code>kind</code> discriminator must match a
+package-side capability; <code>allow_*</code> fields must be a glob-subset (or
+exact-match for hosts/commands) of the package's grant; <code>deny_*</code>
+fields are pure subtractions with deny-wins precedence. Validation
+runs at parse time AND at every runtime load, both fail-closed.</p>
+<p>Realized by the capability-override sub-project (Tier 2 priority 4):
+see <a href="../superpowers/specs/2026-04-30-capability-override-design.html"><code>docs/superpowers/specs/2026-04-30-capability-override-design.md</code></a>
+for the full design.</p>
+<p>The original v0.1 reservation (when this section was titled
+"Capability override is a Phase 1+ requirement") set the
+intersect-only invariant up-front so Phase 1 could not quietly
+choose expand-and-narrow — which would have let a project widen what
+an installed package was authorized to do, breaking the install-time
+security contract.</p>
+<p>Trigger to revisit: per-tool overrides (narrower than per-agent),
+hostname-glob narrowing, or <code>Capability::Custom</code> parameter narrowing
+— each deferred to a future sub-project.</p>
+<h3 id="5-per-agent-requirestools-auto-install-phase-1-active"><a class="header" href="#5-per-agent-requirestools-auto-install-phase-1-active">5. Per-agent <code>requires.tools</code> auto-install (Phase 1+ active)</a></h3>
+<p>Each <code>[[agents.&lt;id&gt;.requires.tools]]</code> array entry is a typed package
+declaration with <code>name</code>, <code>source</code> (typed <code>PackageSource</code>), and
+optional <code>version</code> (semver req, defaults to <code>"*"</code>). At <code>tau run</code> /
+<code>tau chat</code> time (or on-demand via <code>tau resolve</code>), missing entries are
+fetched + installed automatically; already-installed compatible
+versions are reused via the existing per-scope lockfile.</p>
+<p>Realized by the transitive-dependency-resolution sub-project (Tier 2
+priority 5): see <a href="../superpowers/specs/2026-04-30-transitive-deps-design.html"><code>docs/superpowers/specs/2026-04-30-transitive-deps-design.md</code></a>
+for the full design.</p>
+<p>The original v0.1 reservation (when this section was titled "Per-agent
+<code>requires.tools</code> advisory check") committed the auto-install path as
+the Phase 1+ trigger so the v0.1 advisory error would convert into the
+auto-install hook without breaking existing call sites.</p>
+<p>Trigger to revisit: recursive package-level <code>dependencies</code> resolution
+(ADR-0004 §10 deferral) — at which point the resolver gains a second
+input axis; the project-level half (this section) stays unchanged.</p>
+<h3 id="6-one-shot-tau-run--separate-tau-chat-repl"><a class="header" href="#6-one-shot-tau-run--separate-tau-chat-repl">6. One-shot <code>tau run</code> + separate <code>tau chat</code> REPL</a></h3>
+<p>Two distinct verbs, two mental models. <code>tau run &lt;id&gt; "&lt;prompt&gt;"</code> is
+strict 1:1 with <code>Runtime::run</code> — single prompt in, single outcome out,
+scriptable, predictable, no detection logic. <code>tau chat &lt;id&gt;</code> opens a
+REPL using <code>rustyline</code> (line editor) and <code>termimad</code> (Markdown rendering
+to ANSI), with in-memory-only history and a small slash-command surface
+(see decision 11). Overloading one verb (e.g., "if no prompt and stdin
+is a TTY, enter REPL") was rejected because CI scripts that forget a
+prompt argument would accidentally hang in a REPL; explicit verbs
+prevent the surprise.</p>
+<p>Trigger to revisit: a workflow that genuinely needs both modes from
+the same verb.</p>
+<h3 id="7-three-bucket-exit-codes-0--1--2"><a class="header" href="#7-three-bucket-exit-codes-0--1--2">7. Three-bucket exit codes (0 / 1 / 2)</a></h3>
+<p>The Outcome / Error dichotomy from ADR-0006 §9 maps cleanly to three
+exit codes:</p>
+<ul>
+<li><code>0</code> — success: <code>tau install/list/init</code> succeeded, or <code>tau run</code>
+produced <code>RunOutcome::Completed</code>.</li>
+<li><code>1</code> — <code>tau run</code> graceful failure: <code>RunOutcome::Failed</code> (any
+<code>FailureKind</code>). Reserved exclusively for <code>tau run</code>.</li>
+<li><code>2</code> — kernel/CLI broke: <code>Err(RuntimeError)</code>, parse errors, missing
+dependencies, unknown subcommand, IO errors.</li>
+</ul>
+<p>Three buckets give CI scripts the most common branching predicate
+(agent ran but failed vs. tau itself broke) without coupling exit codes
+to <code>FailureKind</code> variants. Finer-grained machine-readable detail comes
+through <code>--json</code> (see decision 8).</p>
+<p>Trigger to revisit: CI usage that needs finer granularity than <code>--json</code>
+provides.</p>
+<h3 id="8-strict-stdoutstderr-split----json-mode"><a class="header" href="#8-strict-stdoutstderr-split----json-mode">8. Strict stdout/stderr split + <code>--json</code> mode</a></h3>
+<p>Output discipline lives in the <code>Output</code> abstraction per spec §3.6:</p>
+<ul>
+<li><code>stdout</code> carries scriptable content only — agent text, list rows,
+JSON. Nothing else. Pipes (<code>tau run … | jq</code>, <code>tau list | wc -l</code>)
+must work.</li>
+<li><code>stderr</code> carries everything else — status messages, tracing output,
+errors, warnings. Tracing always goes to stderr regardless of mode.</li>
+</ul>
+<p><code>--json</code> switches stdout from human-formatted output to a
+schema-versioned JSON envelope per subcommand. <code>tau chat</code> rejects
+<code>--json</code> at argument parse time (REPL is interactive by definition).
+Insta JSON snapshots assert the envelopes don't drift.</p>
+<p>Trigger to revisit: a subcommand whose output convention legitimately
+breaks the split (none anticipated at v0.1).</p>
+<h3 id="9-verbosity-model"><a class="header" href="#9-verbosity-model">9. Verbosity model</a></h3>
+<p>Standard env_logger / tracing-subscriber conventions:</p>
+<ul>
+<li>Default: <code>INFO</code> scoped to <code>tau=*</code> (tau crates only — third-party
+noise stays at <code>WARN</code>).</li>
+<li><code>-v</code> → <code>DEBUG</code> (still scoped to <code>tau=*</code>).</li>
+<li><code>-vv</code> → <code>TRACE</code>.</li>
+<li><code>-q</code> → <code>WARN</code>.</li>
+<li><code>--debug</code> → <code>DEBUG</code> AND switches the top-level error printer from
+<code>Display</code> to <code>Debug</code> (see decision 12) — the single "everything"
+knob.</li>
+<li><code>RUST_LOG</code> env var, when present, overrides verbatim and ignores
+<code>-v/-vv/-q</code>.</li>
+</ul>
+<p>Trigger to revisit: production deployments demanding JSON-formatted
+tracing output (additive — a <code>--log-format json</code> flag at the binary
+level).</p>
+<h3 id="10-color-via-is-terminal----color--no_color"><a class="header" href="#10-color-via-is-terminal----color--no_color">10. Color via <code>is-terminal</code> + <code>--color</code> + <code>NO_COLOR</code></a></h3>
+<p>Standard CLI conventions, implemented exactly once in <code>Output</code>:</p>
+<ul>
+<li>Auto-detect: color enabled when stdout is a terminal (<code>is-terminal</code>).</li>
+<li><code>NO_COLOR</code> env var (any non-empty value): force-disable. Universal
+opt-out per the no-color.org convention.</li>
+<li><code>--color={auto,always,never}</code>: explicit override beats auto-detect.</li>
+</ul>
+<p>Trigger to revisit: terminals that lie about <code>IS_TERMINAL</code> and need a
+workaround switch.</p>
+<h3 id="11-repl-rustyline--termimad-in-memory-only-history-4-slash-commands"><a class="header" href="#11-repl-rustyline--termimad-in-memory-only-history-4-slash-commands">11. REPL: rustyline + termimad, in-memory-only history, 4 slash commands</a></h3>
+<p><code>tau chat</code> uses:</p>
+<ul>
+<li><code>rustyline</code> for line editing (arrow-key recall, emacs/vi mode,
+Ctrl-C / Ctrl-D handling).</li>
+<li><code>termimad</code> for rendering agent Markdown responses to ANSI.</li>
+<li>An in-memory <code>Vec&lt;Message&gt;</code> for conversation history, threaded into
+each <code>Runtime::run_with_history</code> call (see decision 15). The history
+is dropped on exit. This aligns with NG6 (no persistent agent memory
+in core); REPL history is a CLI-side concern, not a runtime
+responsibility.</li>
+<li>Four slash commands: <code>/exit</code> (quit), <code>/help</code> (show commands),
+<code>/clear</code> (drop in-memory history), <code>/history</code> (print messages so
+far). <code>/save</code>, <code>/load</code>, <code>/system</code>, <code>/model</code> etc. are deferred to
+Phase 1+.</li>
+</ul>
+<p>Trigger to revisit: a Phase 1+ feature demanding history persistence
+or a richer slash surface.</p>
+<h3 id="12-top-level-error-message-by-default---debug-expands-to-source-chain"><a class="header" href="#12-top-level-error-message-by-default---debug-expands-to-source-chain">12. Top-level error message by default; <code>--debug</code> expands to source chain</a></h3>
+<p>tau-cli uses <code>anyhow</code> only at the binary boundary (each subcommand
+returns <code>Result&lt;(), anyhow::Error&gt;</code> to a single top-level handler).
+The handler prints <code>eprintln!("error: {err}")</code> by default — anyhow's
+<code>Display</code> impl, which shows only the top-level message. With
+<code>--debug</code>, the handler switches to <code>eprintln!("error: {err:?}")</code> —
+anyhow's <code>Debug</code> impl, which prints the full source chain. This
+matches Cargo / rustc convention. Internal subcommand code uses
+<code>thiserror</code> (per QG2); <code>anyhow</code> lives only at the boundary.</p>
+<p>Trigger to revisit: rare cases where the chain is needed by default
+(none anticipated).</p>
+<h3 id="13---dry-run-on-installruninitchat-not-list"><a class="header" href="#13---dry-run-on-installruninitchat-not-list">13. <code>--dry-run</code> on install/run/init/chat (not list)</a></h3>
+<p><code>tau list</code> is read-only — <code>--dry-run</code> is meaningless and is rejected
+at argument parse time with a clear error. The other four have
+meaningful "would do X" semantics:</p>
+<ul>
+<li><code>tau install --dry-run</code>: clone + parse + validate, no registry
+write.</li>
+<li><code>tau run --dry-run</code>: build the <code>AgentDefinition</code>, validate
+<code>requires.tools</code>, but do NOT call the LLM.</li>
+<li><code>tau init --dry-run</code>: print the files that would be written, do
+NOT touch disk.</li>
+<li><code>tau chat --dry-run</code>: same validation as <code>tau run --dry-run</code>, then
+exit (do not enter the REPL).</li>
+</ul>
+<p>Stderr lines from dry-run mode are prefixed with <code>[dry-run]</code> for grep-
+ability.</p>
+<p>Trigger to revisit: a future read-only subcommand whose <code>--dry-run</code>
+could surface validation issues (at which point the rejection becomes
+selective).</p>
+<h3 id="14-tau-runtime-amendment-1-capability-filtered-tools"><a class="header" href="#14-tau-runtime-amendment-1-capability-filtered-tools">14. tau-runtime amendment 1: capability-filtered tools</a></h3>
+<p>This refines ADR-0006 §7's typed-capability story. Today the kernel
+checks tool invocations against the agent's manifest and denies
+mismatches with <code>FailureKind::PolicyDenied</code>. The amendment adds a
+pre-filter step before <code>LlmBackend::complete</code>: the kernel computes
+which registered tools are satisfied by the agent's package manifest
+and only those tools are sent in <code>CompletionRequest.tools</code>. Effect:</p>
+<ul>
+<li>Smaller LLM prompts (no point telling the model about a tool it
+can't call).</li>
+<li>No spurious denials when the model picks a denied tool just because
+the runtime mentioned it.</li>
+</ul>
+<p>Implementation: two new tracing events join the §3.9 vocabulary as
+additive (non-breaking per ADR-0006 §17):</p>
+<ul>
+<li><code>runtime.tool_filtered</code> at WARN, one per filtered tool, with fields
+<code>tool_name</code>, <code>agent_id</code>, <code>denial_kind</code>, <code>denial_detail</code>.</li>
+<li><code>runtime.tools_filtered</code> at DEBUG, one per turn, with summary
+counts (<code>requested</code>, <code>granted</code>, <code>filtered</code>).</li>
+</ul>
+<p>The defense-in-depth invoke-time check from ADR-0006 §7 is unchanged —
+if a tool somehow bypasses the filter (e.g., a future direct-dispatch
+path), the runtime still denies it. No new error variants per decision
+17 below.</p>
+<p>Trigger to revisit: future dynamic-capability tools where per-call
+grants might change between filter time and invoke time.</p>
+<h3 id="15-tau-runtime-amendment-2-runtimerun_with_history"><a class="header" href="#15-tau-runtime-amendment-2-runtimerun_with_history">15. tau-runtime amendment 2: <code>Runtime::run_with_history</code></a></h3>
+<p><code>tau chat</code> needs to thread conversation history across user turns. The
+kernel exposes:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub async fn run_with_history(
+    &amp;self,
+    agent_def: &amp;AgentDefinition,
+    manifest: &amp;PackageManifest,
+    history: Vec&lt;Message&gt;,
+    initial_message: Message,
+    options: RunOptions,
+) -&gt; Result&lt;RunOutcome, RuntimeError&gt;
+<span class="boring">}</span></code></pre></pre>
+<p><code>Runtime::run</code> becomes a thin wrapper that calls <code>run_with_history</code>
+with <code>history = Vec::new()</code>. Existing callers (sub-project 4's tests,
+tau-cli's <code>cmd::run</code>) are unchanged — the wrapper preserves the v0.1
+signature.</p>
+<p>The <code>runtime.agent_run</code> span gains a <code>history_len: usize</code> field —
+additive per ADR-0006 §17.</p>
+<p>This aligns with NG6: history is a CLI-side concern threaded into each
+kernel call. The kernel doesn't persist anything between
+<code>run_with_history</code> invocations; it's the REPL's job to carry the
+returned <code>all_messages</code> back into the next call.</p>
+<p>Trigger to revisit: history-aware features at the kernel level
+(summarization, sliding windows, automatic compaction) — at which
+point a richer <code>RunOptions</code> field or a dedicated session API lands.</p>
+<h3 id="16-agentdefinition-construction-lives-in-tau-cli"><a class="header" href="#16-agentdefinition-construction-lives-in-tau-cli">16. <code>AgentDefinition</code> construction lives in tau-cli</a></h3>
+<p><code>AgentDefinition</code> is a tau-domain data type, but the logic to
+construct one from a project <code>tau.toml</code> (resolve a package by
+<code>name@semver</code>, resolve the <code>llm_backend</code> reference, read the prompt
+from <code>[agents.&lt;id&gt;.prompt.path]</code> or <code>[agents.&lt;id&gt;.prompt.inline]</code>,
+validate <code>requires.tools</code>) is tau-cli's responsibility. tau-cli's
+<code>config::build_agent_definition</code> is the canonical builder for the
+project-<code>tau.toml</code> case. Other consumers — Phase 1+ workflow runners,
+embedded SDKs reading from a different config — write their own
+builders matching their config formats.</p>
+<p>This keeps tau-domain free of CLI / config concerns and tau-runtime
+free of file-format concerns; the dependency direction stays crisp.</p>
+<p>Trigger to revisit: a second consumer (Phase 1+ workflow runner, IDE
+plugin, library SDK) that wants the same logic — at which point the
+builder extracts to a shared crate.</p>
+<h3 id="17-no-new-error-variants-without-triggering-codepaths"><a class="header" href="#17-no-new-error-variants-without-triggering-codepaths">17. NO new error variants without triggering codepaths</a></h3>
+<p>Per the phase-0-mid memo. Both tau-runtime amendments (§14, §15) and
+tau-cli's own error taxonomies (<code>ProjectConfigError</code>,
+<code>AgentResolutionError</code>, <code>CliError</code>) add only variants with concrete
+reachable failure paths backed by ≥1 test. The capability-filter
+amendment (§14) is silent-but-traced: no new error variants — a
+filtered tool simply doesn't appear in <code>CompletionRequest.tools</code>.
+<code>run_with_history</code> (§15) reuses the existing <code>RuntimeError</code> variants.</p>
+<p>This codifies the discipline that bit ADR-0006 (the
+<code>PluginContractViolation</code> and <code>Sandbox(_)</code> variants are wired but
+trigger-pathless at v0.1). Going forward, any new variant ships with
+its trigger path or doesn't ship.</p>
+<p>Trigger to revisit: never — this is a process discipline that should
+always hold.</p>
+<h3 id="18-plugin-loading-deferred-to-phase-1"><a class="header" href="#18-plugin-loading-deferred-to-phase-1">18. Plugin loading deferred to Phase 1+</a></h3>
+<p>tau-pkg installs packages as source trees on disk, but tau-cli at v0.1
+has no mechanism to compile and dynamically load them as plugins. Real
+loading (in-process dlopen via <code>abi_stable</code>, out-of-process IPC,
+WASM/WASI) is a major design decision that benefits from Phase 1+
+requirements before being committed. v0.1 ships compiled-in mock
+plugins gated by <code>cfg(feature = "test-mock")</code> for integration testing
+end-to-end. <code>tau install</code> registers source trees in the registry, but
+those trees do not execute against <code>tau run</code> / <code>tau chat</code> until Phase
+1's loader lands.</p>
+<p>This is a material v0.1 limitation and is surfaced in <code>tau install</code>'s
+success message (a hint pointing at the Phase 1+ loader ADR slot).</p>
+<p>Trigger to revisit: Phase 1+ ADR for the plugin-loading mechanism.</p>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<h3 id="positive"><a class="header" href="#positive">Positive</a></h3>
+<ul>
+<li>v0.1 ships a 5-subcommand CLI with 88 unit + 64 integration + 12
+snapshot tests covering every public surface and the agent run loop
+end-to-end (against the <code>test-mock</code> backend).</li>
+<li>Three-bucket exit codes give CI scripts a clean branch on the
+Outcome / Error dichotomy without leaking <code>FailureKind</code> into the
+exit-code surface.</li>
+<li><code>--json</code> mode plus insta JSON snapshots make schema drift impossible
+to ship accidentally — every JSON envelope has a snapshot test.</li>
+<li>Project <code>tau.toml</code> schema lays the foundation for Phase 1+ workflow
+/ pipeline definitions; the <code>[project]</code> and <code>[agents.&lt;id&gt;]</code> tables
+give those features a natural home.</li>
+<li>tau-runtime amendments are additive — every existing caller
+(sub-project 4's tests, the tau-cli <code>cmd::run</code> path) is unchanged.</li>
+<li>The REPL provides the conversation-threading UX that one-shot
+<code>tau run</code> can't, without compromising scriptability — <code>tau run</code>
+stays strict 1:1 with <code>Runtime::run</code>.</li>
+<li><code>AgentDefinition</code> construction in tau-cli keeps tau-domain config-
+free and lets future consumers (workflow runners, SDKs) build
+agents from their own config formats without inheriting tau-cli's.</li>
+</ul>
+<h3 id="negative"><a class="header" href="#negative">Negative</a></h3>
+<ul>
+<li>Plugin loading deferred means v0.1 can install package source trees
+but cannot run user-supplied plugins. The compiled-in <code>test-mock</code>
+backend keeps integration tests viable but is not a production
+solution. Decision 18 makes the limitation explicit; users see a
+hint at install time.</li>
+<li>Project <code>tau.toml</code> shares a filename with package <code>tau.toml</code>. This
+is modeled on Cargo's <code>[package]</code> vs <code>[workspace]</code> precedent but is
+still a source of confusion for newcomers. Documented in decision 3
+and surfaced via <code>ProjectConfigError::AmbiguousFile</code>.</li>
+<li>Capability override schema slot reserved but rejected at v0.1 —
+Phase 1 must implement intersect semantics or accept a deprecation
+cycle if it picks differently.</li>
+<li>REPL UX is minimal at v0.1: terminal-mode features (arrow-key
+recall verification, color rendering correctness, terminal resize
+handling) are not covered by automated tests; they rely on
+rustyline + termimad's defaults and manual smoke testing.</li>
+<li><code>#[tokio::main]</code> couples the CLI binary to tokio. Documented in
+decision 2; replaceable but only tau-cli is affected — the runtime
+stays async-runtime-agnostic.</li>
+<li>The <code>tau install</code> source-tree-only behavior means a successful
+install does not imply a runnable agent at v0.1; the hint at install
+time mitigates but does not eliminate the surprise.</li>
+</ul>
+<h3 id="neutral--new-obligations"><a class="header" href="#neutral--new-obligations">Neutral / new obligations</a></h3>
+<ul>
+<li>Future tau-cli public API additions (new subcommands, new project
+<code>tau.toml</code> schema fields, new <code>--flags</code>) require their own ADRs
+(QG18). The CLI surface is now public.</li>
+<li>The bundled tau-runtime amendments mean future tau-runtime changes
+motivated by their own sub-project (or by a library consumer that
+is not tau-cli) get their own ADRs (don't bundle promiscuously).</li>
+<li>Mid-implementation additive items in this sub-project (the <code>Scope</code>
+/ <code>PackageSource</code> / <code>Capability</code> API findings recorded during Task
+9 + Task 11) are documented in the relevant commit bodies, not in
+this ADR — they are tau-pkg internal API surfaces that don't change
+Phase-0 semantics.</li>
+<li>The <code>runtime.tool_filtered</code> and <code>runtime.tools_filtered</code> tracing
+events join the ADR-0006 §3.9 (tracing) vocabulary as additive
+(non-breaking per ADR-0006 §17). Future renames or removals require
+an ADR.</li>
+<li>The <code>history_len</code> field on the <code>runtime.agent_run</code> span is
+similarly additive vocabulary.</li>
+<li>tau-cli's <code>lib.rs</code> exposes internal modules for integration testing.
+This is NOT considered a public API in the QG18 sense — tau-cli is
+a binary, not a library consumed by external code. The crate name
+is published only so the test binary can link against the same
+module tree as the binary.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<h3 id="a-sync-tau-cli-with-block_on-at-every-async-boundary"><a class="header" href="#a-sync-tau-cli-with-block_on-at-every-async-boundary">A. Sync <code>tau-cli</code> with <code>block_on</code> at every async boundary</a></h3>
+<p>Rejected. Forcing sync entry would require
+<code>tokio::runtime::Handle::current().block_on(...)</code> at each call site,
+which fails outside a running runtime. tokio is in the dependency
+graph regardless once real LLM plugins land (the canonical
+<code>reqwest</code>-based clients are tokio-native). See decision 2.</p>
+<h3 id="b-overload-tau-run-with-prompt-vs-no-prompt-detection-for-repl"><a class="header" href="#b-overload-tau-run-with-prompt-vs-no-prompt-detection-for-repl">B. Overload <code>tau run</code> with prompt-vs-no-prompt detection for REPL</a></h3>
+<p>Rejected. Entering a REPL on missing prompt + isatty detection is
+surprising — CI scripts that forget to pass a prompt accidentally
+enter a REPL and hang. A separate <code>tau chat</code> verb is cleaner and
+gives the REPL room to grow its own surface (slash commands, future
+history persistence) without polluting <code>tau run</code>. See decision 6.</p>
+<h3 id="c-two-bucket-exit-codes-ok-vs-not-ok"><a class="header" href="#c-two-bucket-exit-codes-ok-vs-not-ok">C. Two-bucket exit codes (Ok vs not-Ok)</a></h3>
+<p>Rejected. CI scripts need to distinguish "agent ran but failed" from
+"kernel broke" — the most common branching predicate in agent
+pipelines. Three buckets give that distinction without coupling exit
+codes to <code>FailureKind</code>. See decision 7.</p>
+<h3 id="d-agents-array-of-tables-instead-of-agentsid-named-tables"><a class="header" href="#d-agents-array-of-tables-instead-of-agentsid-named-tables">D. <code>[[agents]]</code> array-of-tables instead of <code>[agents.&lt;id&gt;]</code> named tables</a></h3>
+<p>Rejected. Array-of-tables is visually flat and requires a separate
+<code>id</code> field; named tables make the scope visually obvious (the section
+header IS the id) and match Cargo's <code>[dependencies.foo]</code> for the same
+map-by-name role. See decision 3.</p>
+<h3 id="e-tau-init-interactively-prompts-for-name--first-agent-details"><a class="header" href="#e-tau-init-interactively-prompts-for-name--first-agent-details">E. <code>tau init</code> interactively prompts for name + first agent details</a></h3>
+<p>Rejected. Adds prompt-handling complexity for marginal UX value at
+v0.1. The stub agent gives the user a concrete starting point to edit
+and is friendlier to scripted use (<code>tau init &lt;name&gt;</code> doesn't hang
+waiting for input). A future <code>tau init --interactive</code> is a natural
+Phase 1+ addition.</p>
+<h3 id="f-real-plugin-loading-at-v01-dlopen--abi_stable"><a class="header" href="#f-real-plugin-loading-at-v01-dlopen--abi_stable">F. Real plugin loading at v0.1 (dlopen / abi_stable)</a></h3>
+<p>Rejected. Plugin-loading mechanism choice (in-process dynamic linking
+via <code>abi_stable</code>, out-of-process IPC, WASI) is a major design decision
+that benefits from real Phase 1+ requirements before being committed.
+v0.1's compiled-in <code>test-mock</code> backend keeps integration tests viable
+without locking in a loading approach. See decision 18.</p>
+<h3 id="g-persisted-repl-session-history-at-v01"><a class="header" href="#g-persisted-repl-session-history-at-v01">G. Persisted REPL session history at v0.1</a></h3>
+<p>Rejected. Persistence raises "where does the file live", "garbage
+collection", "schema versioning", "encryption-at-rest" questions that
+don't have answers at v0.1 — and persistence interacts with NG6 (no
+persistent agent memory in core) in ways that need their own design
+pass. In-memory-only is the simplest correct option; persistence is
+additive when a real use case appears.</p>
+<h3 id="h-new-runtimerun-signature-instead-of-run_with_history--wrapper"><a class="header" href="#h-new-runtimerun-signature-instead-of-run_with_history--wrapper">H. New <code>Runtime::run</code> signature instead of <code>run_with_history</code> + wrapper</a></h3>
+<p>Rejected. Breaking the existing <code>Runtime::run</code> signature would force
+every existing caller (sub-project 4's tests + tau-cli's <code>cmd::run</code>)
+to update for a feature only <code>tau chat</code> uses today. Additive
+<code>run_with_history</code> plus a thin <code>Runtime::run</code> wrapper preserves
+source compatibility for every existing caller and isolates the
+history-threading complexity to the one consumer that needs it. See
+decision 15.</p>
+<h3 id="i---json-mode-on-tau-chat"><a class="header" href="#i---json-mode-on-tau-chat">I. <code>--json</code> mode on <code>tau chat</code></a></h3>
+<p>Rejected. <code>tau chat</code> is interactive — JSON output during a REPL would
+confuse both the user (they want rendered Markdown) and any
+hypothetical script (a script wanting JSON should use <code>tau run --json</code>
+in a loop). Hard-rejecting <code>--json</code> on <code>tau chat</code> at argument parse
+time is clearer than silently downgrading to plain text. See decision
+8.</p>
+<h3 id="j-per-failurekind-exit-code-sub-codes-eg-10--policydenied-11--outofresources"><a class="header" href="#j-per-failurekind-exit-code-sub-codes-eg-10--policydenied-11--outofresources">J. Per-<code>FailureKind</code> exit-code sub-codes (e.g., 10 = PolicyDenied, 11 = OutOfResources)</a></h3>
+<p>Rejected. Coupling exit codes to <code>FailureKind</code> variants forces every
+new <code>FailureKind</code> to allocate an exit code and forces CI scripts to
+maintain a code-to-kind mapping. The three-bucket scheme keeps exit
+codes stable across <code>FailureKind</code> additions; precision-needing
+consumers use <code>--json</code>. See decision 7.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0006-tau-runtime.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0008-plugin-loading.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0006-tau-runtime.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0008-plugin-loading.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

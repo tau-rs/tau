@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["lower_to_wasm_ir","run"]};
