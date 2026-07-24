@@ -29,8 +29,8 @@ where = ["."]
 
     out.insert(
         PathBuf::from("tau_sdk/__init__.py"),
-        "from .factories import agent, tool, models, model, render_project, print_toml\n\n\
-         __all__ = [\"agent\", \"tool\", \"models\", \"model\", \"render_project\", \"print_toml\"]\n"
+        "from .factories import agent, models, model, render_project, print_toml\n\n\
+         __all__ = [\"agent\", \"models\", \"model\", \"render_project\", \"print_toml\"]\n"
             .to_string(),
     );
 
@@ -57,12 +57,6 @@ class Model:
 
 
 @dataclass
-class ToolConfig:
-    native: str
-    description: Optional[str] = None
-
-
-@dataclass
 class AgentConfig:
     display_name: str
     package: str
@@ -75,10 +69,6 @@ def model(*, backend: str, model: str) -> Model:
 
 def models(**aliases: Model) -> dict:
     return dict(aliases)
-
-
-def tool(*, native: str, description: Optional[str] = None) -> ToolConfig:
-    return ToolConfig(native=native, description=description)
 
 
 def agent(*, display_name: str, package: str, model: str) -> AgentConfig:

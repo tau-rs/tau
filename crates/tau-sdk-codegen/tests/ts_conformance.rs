@@ -27,8 +27,9 @@ fn generated_ts_declares_fixture_factories() {
         .unwrap()
         .parent()
         .unwrap();
-    tau_sdk_codegen::generate(repo_root).expect("generate");
-    let src = std::fs::read_to_string(repo_root.join("sdk/ts/src/factories.ts")).unwrap();
+    let tmp = tempfile::TempDir::new().unwrap();
+    tau_sdk_codegen::generate_into(repo_root, tmp.path()).expect("generate");
+    let src = std::fs::read_to_string(tmp.path().join("sdk/ts/src/factories.ts")).unwrap();
     assert!(src.contains("export const agent"));
     assert!(src.contains("export const models"));
 }

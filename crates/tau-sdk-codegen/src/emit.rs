@@ -21,14 +21,20 @@ pub fn render_all(repo_root: &Path) -> Result<BTreeMap<PathBuf, String>, Codegen
     Ok(all)
 }
 
-/// Generate all SDK packages under `repo_root`.
-pub fn generate(repo_root: &Path) -> Result<(), CodegenError> {
+/// Render all SDK files (schema read from `repo_root`) and write them under
+/// `out_root`, i.e. `out_root/sdk/python/...` and `out_root/sdk/ts/...`.
+pub fn generate_into(repo_root: &Path, out_root: &Path) -> Result<(), CodegenError> {
     for (rel, contents) in render_all(repo_root)? {
-        let path = repo_root.join(&rel);
+        let path = out_root.join(&rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, contents)?;
     }
     Ok(())
+}
+
+/// Generate all SDK packages in-place under `repo_root` (writes the committed tree).
+pub fn generate(repo_root: &Path) -> Result<(), CodegenError> {
+    generate_into(repo_root, repo_root)
 }

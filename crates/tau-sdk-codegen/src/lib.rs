@@ -1,4 +1,5 @@
-//! Codegen for tau authoring SDKs from the frozen IR JSON schema.
+//! Codegen for tau authoring SDKs, pinned against the frozen IR JSON schema
+//! (which the generator loads and validates).
 //!
 //! The generated SDKs are *authoring front-ends*: they produce the same
 //! `ProjectConfig` the TOML surface parses to, so all three surfaces lower
@@ -13,5 +14,5 @@ pub mod emit_ts;
 pub mod error;
 pub mod schema;
 
-pub use emit::generate;
+pub use emit::{generate, generate_into};
 pub use error::CodegenError;

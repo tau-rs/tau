@@ -1,6 +1,7 @@
 # tau-sdk-codegen
 
-Generates tau's typed authoring SDKs from the frozen IR JSON schema:
+Generates tau's typed authoring SDKs, pinned against the frozen IR JSON
+schema (which the generator loads and validates):
 
 - `sdk/ts/`     — npm `@tau/sdk` (TypeScript)
 - `sdk/python/` — PyPI `tau-sdk` (import `tau_sdk`)

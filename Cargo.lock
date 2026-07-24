@@ -4771,6 +4771,7 @@ dependencies = [
  "tau-pkg",
  "tau-ports",
  "tau-ts-extract",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

@@ -9,14 +9,16 @@ fn generated_python_sdk_lowers_equal_to_toml() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest.parent().unwrap().parent().unwrap();
 
-    // Regenerate the SDK into the repo tree so the test drives current output.
-    tau_sdk_codegen::generate(repo_root).expect("generate SDK");
+    // Regenerate the SDK into a scratch dir so the test drives current output
+    // without dirtying the committed sdk/ tree.
+    let tmp = tempfile::TempDir::new().unwrap();
+    tau_sdk_codegen::generate_into(repo_root, tmp.path()).expect("generate SDK");
 
     let fixture = manifest.join("tests/fixtures/basic_agent");
     let toml = std::fs::read_to_string(fixture.join("tau.toml")).unwrap();
     let toml_bytes = common::lower_toml_bytes(&toml);
 
-    let sdk_python = repo_root.join("sdk/python");
+    let sdk_python = tmp.path().join("sdk/python");
     match common::run_python_toml(&fixture.join("project.py"), Some(&sdk_python)) {
         None => eprintln!("SKIP: python3 not available"),
         Some(py_toml) => {

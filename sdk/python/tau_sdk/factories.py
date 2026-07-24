@@ -11,12 +11,6 @@ class Model:
 
 
 @dataclass
-class ToolConfig:
-    native: str
-    description: Optional[str] = None
-
-
-@dataclass
 class AgentConfig:
     display_name: str
     package: str
@@ -29,10 +23,6 @@ def model(*, backend: str, model: str) -> Model:
 
 def models(**aliases: Model) -> dict:
     return dict(aliases)
-
-
-def tool(*, native: str, description: Optional[str] = None) -> ToolConfig:
-    return ToolConfig(native=native, description=description)
 
 
 def agent(*, display_name: str, package: str, model: str) -> AgentConfig:

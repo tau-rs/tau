@@ -45,7 +45,8 @@ impl SchemaModel {
         )
     }
 
-    /// The schema's top-level `$id`.
+    /// The schema's top-level `$id`. Returns `None` if `$id` is absent or
+    /// not a string.
     pub fn schema_id(&self) -> Option<&str> {
         self.root.get("$id").and_then(|v| v.as_str())
     }

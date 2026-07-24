@@ -10,7 +10,8 @@ use std::path::Path;
 fn toml_ts_python_lower_to_identical_ir() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest.parent().unwrap().parent().unwrap();
-    tau_sdk_codegen::generate(repo_root).expect("generate SDK");
+    let tmp = tempfile::TempDir::new().unwrap();
+    tau_sdk_codegen::generate_into(repo_root, tmp.path()).expect("generate SDK");
 
     let fixture = manifest.join("tests/fixtures/basic_agent");
 
@@ -30,7 +31,7 @@ fn toml_ts_python_lower_to_identical_ir() {
     );
 
     // Python (live)
-    let sdk_python = repo_root.join("sdk/python");
+    let sdk_python = tmp.path().join("sdk/python");
     match common::run_python_toml(&fixture.join("project.py"), Some(&sdk_python)) {
         None => eprintln!("SKIP: python3 unavailable; TOML==TS still asserted"),
         Some(py_toml) => {
