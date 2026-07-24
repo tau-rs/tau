@@ -52,19 +52,45 @@ pub struct Factory {
 }
 
 const AGENT_FIELDS: &[AuthField] = &[
-    AuthField { sdk_name: "display_name", toml_key: "display_name", ty: FieldTy::Str, required: true },
-    AuthField { sdk_name: "package",      toml_key: "package",      ty: FieldTy::Str, required: true },
-    AuthField { sdk_name: "model",        toml_key: "model",        ty: FieldTy::Str, required: true },
+    AuthField {
+        sdk_name: "display_name",
+        toml_key: "display_name",
+        ty: FieldTy::Str,
+        required: true,
+    },
+    AuthField {
+        sdk_name: "package",
+        toml_key: "package",
+        ty: FieldTy::Str,
+        required: true,
+    },
+    AuthField {
+        sdk_name: "model",
+        toml_key: "model",
+        ty: FieldTy::Str,
+        required: true,
+    },
 ];
 
-const MODELS_FIELDS: &[AuthField] = &[
-    AuthField { sdk_name: "models", toml_key: "models", ty: FieldTy::ModelMap, required: true },
-];
+const MODELS_FIELDS: &[AuthField] = &[AuthField {
+    sdk_name: "models",
+    toml_key: "models",
+    ty: FieldTy::ModelMap,
+    required: true,
+}];
 
 /// The authoring surface covered by the first conformance fixture.
 pub const SURFACE: &[Factory] = &[
-    Factory { name: "models", target: TomlTarget::KeyedTable("models"), fields: MODELS_FIELDS },
-    Factory { name: "agent",  target: TomlTarget::KeyedTable("agents"), fields: AGENT_FIELDS },
+    Factory {
+        name: "models",
+        target: TomlTarget::KeyedTable("models"),
+        fields: MODELS_FIELDS,
+    },
+    Factory {
+        name: "agent",
+        target: TomlTarget::KeyedTable("agents"),
+        fields: AGENT_FIELDS,
+    },
 ];
 
 #[cfg(test)]
@@ -81,7 +107,11 @@ mod tests {
     #[test]
     fn agent_has_required_display_name() {
         let agent = SURFACE.iter().find(|f| f.name == "agent").unwrap();
-        let dn = agent.fields.iter().find(|f| f.sdk_name == "display_name").unwrap();
+        let dn = agent
+            .fields
+            .iter()
+            .find(|f| f.sdk_name == "display_name")
+            .unwrap();
         assert!(dn.required);
         assert_eq!(dn.toml_key, "display_name");
     }

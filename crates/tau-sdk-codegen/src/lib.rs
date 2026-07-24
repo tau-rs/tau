@@ -6,8 +6,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod authoring;
 pub mod error;
 pub mod schema;
-pub mod authoring;
 
 pub use error::CodegenError;
