@@ -18,7 +18,7 @@
 //! `requires.tools` entry must be installed via `tau install` and
 //! carry a `[plugin]` table in their `tau.toml`; the host then spawns
 //! the recorded binary at run time. See
-//! [`crate::cmd::plugin_loader`] for the resolution logic.
+//! `crate::cmd::plugin_loader` for the resolution logic.
 
 use std::io::Read;
 use std::path::PathBuf;

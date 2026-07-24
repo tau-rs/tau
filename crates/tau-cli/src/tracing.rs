@@ -48,7 +48,8 @@ pub fn install(cli: &Cli) {
 /// Same as [`install`], but accepts caller-provided `extra_layers` that
 /// will be composed into the registry alongside the fmt layer.
 ///
-/// Used by `tau workflow run` to attach the [`WorkflowRunLogLayer`]
+/// Used by `tau workflow run` to attach the
+/// [`WorkflowRunLogLayer`](tau_observe::layers::workflow_run_log::WorkflowRunLogLayer)
 /// so step events emitted via `tracing::event!(target = "tau::workflow::step",
 /// ...)` materialize into the on-disk JSONL run log.
 pub fn install_with_extra_layers(
