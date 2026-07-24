@@ -1,32 +1,30 @@
-//! Orchestrates writing the generated SDK packages under the repo root.
+//! Orchestrates rendering + writing the generated SDK packages.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use crate::emit_python;
 use crate::emit_ts;
 use crate::error::CodegenError;
 use crate::schema::SchemaModel;
 
-/// Generate all SDK packages under `repo_root` (writes `sdk/python` and
-/// `sdk/ts`).
-pub fn generate(repo_root: &Path) -> Result<(), CodegenError> {
+/// Render every generated file, keyed by repo-relative path.
+pub fn render_all(repo_root: &Path) -> Result<BTreeMap<PathBuf, String>, CodegenError> {
     let schema = SchemaModel::load(repo_root)?;
-
-    let py = emit_python::render_package(&schema);
-    write_tree(&repo_root.join("sdk/python"), py)?;
-
-    let ts = emit_ts::render_package(&schema);
-    write_tree(&repo_root.join("sdk/ts"), ts)?;
-
-    Ok(())
+    let mut all = BTreeMap::new();
+    for (rel, contents) in emit_python::render_package(&schema) {
+        all.insert(PathBuf::from("sdk/python").join(rel), contents);
+    }
+    for (rel, contents) in emit_ts::render_package(&schema) {
+        all.insert(PathBuf::from("sdk/ts").join(rel), contents);
+    }
+    Ok(all)
 }
 
-fn write_tree(
-    base: &Path,
-    files: std::collections::BTreeMap<std::path::PathBuf, String>,
-) -> Result<(), CodegenError> {
-    for (rel, contents) in files {
-        let path = base.join(&rel);
+/// Generate all SDK packages under `repo_root`.
+pub fn generate(repo_root: &Path) -> Result<(), CodegenError> {
+    for (rel, contents) in render_all(repo_root)? {
+        let path = repo_root.join(&rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
