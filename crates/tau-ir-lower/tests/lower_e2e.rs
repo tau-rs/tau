@@ -307,6 +307,97 @@ max_tokens = 4000
     assert_eq!(ctx.pipeline[1].transformer, "fit_budget");
 }
 
+/// D7-B PR3: an explicit `llm_backed` / `stateful` determinism string lowers
+/// to the matching `DeterminismClass`. Guards the explicit match arms against
+/// regressing back to the silent `_ => Pure` default.
+#[test]
+fn known_determinism_strings_lower_to_their_class() {
+    use tau_ir::context::DeterminismClass;
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "det-lower"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+
+[[agents.a.context.pipeline]]
+transformer = "trim_old"
+determinism = "llm_backed"
+
+[[agents.a.context.pipeline]]
+transformer = "compact_tool_outputs"
+determinism = "stateful"
+
+[[agents.a.context.pipeline]]
+transformer = "fit_budget"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
+    let agent = module
+        .workflow
+        .agents
+        .get(&tau_ir::AgentId("a".into()))
+        .unwrap();
+    let ctx = agent.context.as_ref().expect("context present");
+    assert_eq!(ctx.pipeline[0].determinism, DeterminismClass::LlmBacked);
+    assert_eq!(ctx.pipeline[1].determinism, DeterminismClass::Stateful);
+    assert_eq!(ctx.pipeline[2].determinism, DeterminismClass::Pure);
+}
+
+/// D7-B PR3: an unknown determinism string is a hard build error, not a
+/// silent downgrade to `Pure` (the most permissive class). Per ADR-0065.
+#[test]
+fn unknown_determinism_string_is_rejected() {
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "det-bad"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+
+[[agents.a.context.pipeline]]
+transformer = "trim_old"
+determinism = "sometimes"
+
+[[agents.a.context.pipeline]]
+transformer = "fit_budget"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let err = lower_project(&config, &target, &caches).expect_err("must reject");
+    match err {
+        LowerError::UnknownDeterminism {
+            agent,
+            transformer,
+            determinism,
+        } => {
+            assert_eq!(agent, "a");
+            assert_eq!(transformer, "trim_old");
+            assert_eq!(determinism, "sometimes");
+        }
+        other => panic!("expected UnknownDeterminism, got {other:?}"),
+    }
+}
+
 #[test]
 fn explicit_check_placement_is_not_double_appended() {
     use tau_ir::pipeline::StepRun;
