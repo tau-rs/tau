@@ -417,9 +417,11 @@ Declare the owned authoring-surface descriptor: the factories and their fields, 
 - Produces:
   - `pub enum FieldTy { Str, Bool, ModelMap, ToolList }`
   - `pub struct AuthField { pub sdk_name: &'static str, pub toml_key: &'static str, pub ty: FieldTy, pub required: bool }`
-  - `pub enum TomlTarget { Table(&'static str), ArrayOfTables(&'static str) }`
+  - `pub enum TomlTarget { Table(&'static str), KeyedTable(&'static str) }` — `Table` is a single `[name]` table (e.g. `[project]`); `KeyedTable` is a map of named subtables `[name.<key>]` (e.g. `[models.<alias>]`, `[agents.<id>]`).
   - `pub struct Factory { pub name: &'static str, pub target: TomlTarget, pub fields: &'static [AuthField] }`
   - `pub const SURFACE: &[Factory]` — for the first fixture: `models`, `agent`.
+
+**IMPORTANT (schema fact, verified in Task 1):** the real `ProjectConfig` represents both `models` and `agents` as *keyed tables* — `[models.<alias>]` and `[agents.<id>]`, NOT `[[agents]]` array-of-tables. The agent's id is the table key. In TS authoring the id comes from the exported `const` name (`export const fast` → `agents.fast`); in Python authoring the id is the dict key the author supplies (`agents={"fast": fast}`).
 - Consumed by: `emit_ts` (Task 5), `emit_python` (Task 4).
 
 - [ ] **Step 1: Write the failing test**
@@ -491,10 +493,11 @@ pub struct AuthField {
 /// Where a factory writes in `tau.toml`.
 #[derive(Debug, Clone, Copy)]
 pub enum TomlTarget {
-    /// A single `[name]` table (e.g. `[models]`).
+    /// A single `[name]` table (e.g. `[project]`).
     Table(&'static str),
-    /// An array-of-tables `[[name]]` (e.g. `[[agents]]`).
-    ArrayOfTables(&'static str),
+    /// A map of named subtables `[name.<key>]` (e.g. `[models.<alias>]`,
+    /// `[agents.<id>]`). The key is the model alias / agent id.
+    KeyedTable(&'static str),
 }
 
 /// One authoring factory.
@@ -520,8 +523,8 @@ const MODELS_FIELDS: &[AuthField] = &[
 
 /// The authoring surface covered by the first conformance fixture.
 pub const SURFACE: &[Factory] = &[
-    Factory { name: "models", target: TomlTarget::Table("models"), fields: MODELS_FIELDS },
-    Factory { name: "agent",  target: TomlTarget::ArrayOfTables("agents"), fields: AGENT_FIELDS },
+    Factory { name: "models", target: TomlTarget::KeyedTable("models"), fields: MODELS_FIELDS },
+    Factory { name: "agent",  target: TomlTarget::KeyedTable("agents"), fields: AGENT_FIELDS },
 ];
 ```
 
@@ -566,14 +569,19 @@ Emit the Python `tau_sdk` package: typed dataclass builders plus a deterministic
 
 - [ ] **Step 1: Create the basic_agent fixture — tau.toml**
 
-`crates/tau-sdk-codegen/tests/fixtures/basic_agent/tau.toml`:
+`crates/tau-sdk-codegen/tests/fixtures/basic_agent/tau.toml` (real `ProjectConfig` shape — `[project]` + top-level `packages` + `[agents.<id>]` keyed table, verified in Task 1 against the proven `models_conformance` fixture):
 
 ```toml
+packages = ["anthropic"]
+
+[project]
+name = "basic-agent"
+
 [models.haiku]
 backend = "anthropic"
 model = "claude-haiku-4-5"
 
-[[agents]]
+[agents.fast]
 display_name = "Fast"
 package = "research@^0.1"
 model = "haiku"
@@ -581,7 +589,7 @@ model = "haiku"
 
 - [ ] **Step 2: Create the basic_agent fixture — project.py**
 
-`crates/tau-sdk-codegen/tests/fixtures/basic_agent/project.py` (authored against the generated `tau_sdk`; imported via PYTHONPATH pointing at `sdk/python`):
+`crates/tau-sdk-codegen/tests/fixtures/basic_agent/project.py` (authored against the generated `tau_sdk`; imported via PYTHONPATH pointing at `sdk/python`). Note: `agents` is a dict keyed by agent id (the id becomes `[agents.<id>]`), matching how TS derives the id from the exported const name:
 
 ```python
 from tau_sdk import agent, models, model, print_toml
@@ -589,7 +597,7 @@ from tau_sdk import agent, models, model, print_toml
 m = models(haiku=model(backend="anthropic", model="claude-haiku-4-5"))
 fast = agent(display_name="Fast", package="research@^0.1", model="haiku")
 
-print_toml(models=m, agents=[fast])
+print_toml(project="basic-agent", models=m, agents={"fast": fast})
 ```
 
 - [ ] **Step 3: Write the failing test**
@@ -722,15 +730,26 @@ def _toml_str(value: str) -> str:
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
-def render_project(models: Optional[dict] = None, agents=()) -> str:
+def render_project(project: str = "project", models: Optional[dict] = None, agents: Optional[dict] = None) -> str:
+    models = models or {}
+    agents = agents or {}
+    # `packages` must declare every model backend (ProjectConfig validation);
+    # it is authoring-only and dropped during lowering, so its exact contents
+    # do not affect the canonical IR — only that validation passes.
+    backends = sorted({m.backend for m in models.values()})
     lines = []
-    for alias, m in (models or {}).items():
+    lines.append("packages = [" + ", ".join(_toml_str(b) for b in backends) + "]")
+    lines.append("")
+    lines.append("[project]")
+    lines.append("name = " + _toml_str(project))
+    lines.append("")
+    for alias, m in models.items():
         lines.append("[models." + alias + "]")
         lines.append("backend = " + _toml_str(m.backend))
         lines.append("model = " + _toml_str(m.model))
         lines.append("")
-    for a in agents:
-        lines.append("[[agents]]")
+    for aid, a in agents.items():
+        lines.append("[agents." + aid + "]")
         lines.append("display_name = " + _toml_str(a.display_name))
         lines.append("package = " + _toml_str(a.package))
         lines.append("model = " + _toml_str(a.model))
@@ -738,9 +757,9 @@ def render_project(models: Optional[dict] = None, agents=()) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def print_toml(models: Optional[dict] = None, agents=()) -> None:
+def print_toml(project: str = "project", models: Optional[dict] = None, agents: Optional[dict] = None) -> None:
     import sys
-    sys.stdout.write(render_project(models=models, agents=agents))
+    sys.stdout.write(render_project(project=project, models=models, agents=agents))
 "#;
 ```
 
@@ -861,6 +880,8 @@ import { agent, models } from "tau";
 export const m = models({ haiku: { backend: "anthropic", model: "claude-haiku-4-5" } });
 export const fast = agent({ display_name: "Fast", package: "research@^0.1", model: "haiku" });
 ```
+
+Note: the TS fixture has no `[project]` name or `packages` even though the `tau.toml` fixture does. That is correct — `tau-ts-extract` synthesizes both internally (packages inferred from `[models]` backends), and both are authoring-only fields dropped during lowering, so they never reach the canonical IR. The agent id `fast` comes from the exported `const` name, matching the TOML `[agents.fast]` key. This is exactly the proven `crates/tau-ts-extract/tests/fixtures/models_conformance/` pattern.
 
 - [ ] **Step 2: Write the failing test**
 
