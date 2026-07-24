@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CrossCheckError"],"fn":["cross_check_plugin_capabilities"]};

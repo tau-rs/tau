@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["builder","capability_override","error","options","orchestration","outcome","plugin_host","sandbox","stream"],"struct":["CapabilityOverride","EffectiveCapability","OverrideExpandError"]};

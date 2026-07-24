@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Format","InstallError","Writer"],"fn":["install"],"struct":["InstallGuard","InstallOptions"]};

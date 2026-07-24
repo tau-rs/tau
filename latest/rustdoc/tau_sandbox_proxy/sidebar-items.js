@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["HttpParseError","ValidationError"],"fn":["parse_connect_request","parse_http_request","peek_sni","rewrite_request_line","spawn_proxy","validate_hosts"],"struct":["ConnectRequest","HttpRequest","ProxyHandle"]};

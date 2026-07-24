@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_SUPPORTED_LOCKFILE_SCHEMA_VERSION"],"enum":["SynthesizedSource"],"struct":["LockFile","LockedPackage","LockedPlugin","LockedSkill","LockedVersion","SkillFrontmatterSnapshot"]};

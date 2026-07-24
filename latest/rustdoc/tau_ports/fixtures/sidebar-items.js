@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["make_completion_request","make_completion_response","make_session_context","make_token_usage","make_tool_result","make_tool_spec","make_tool_use","plan_from_capabilities","plan_with_context","resource_limits","scratch_dir","working_context"],"struct":["MockLlmBackend","MockSandbox","MockStorage","MockTool"]};

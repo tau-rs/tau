@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ProjectConfigError","PromptEntry"],"struct":["AgentEntry","ProjectConfig","RequiresEntry","UncheckedAgent","UncheckedCapabilityOverride","UncheckedProject","UncheckedProjectConfig","UncheckedPrompt","UncheckedRequiredTool","UncheckedRequires"]};

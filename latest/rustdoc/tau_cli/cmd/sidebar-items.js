@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["chat","error_render","init","install","list","output_orchestration","plugin","resolve","run","sandbox","serve","session","skill","uninstall","update","verify","workflow"]};

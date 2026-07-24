@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["capability","manifest","plugin","sandbox","skill","skill_format","source"]};

@@ -1,9 +1,0 @@
-(function() {
-    const implementors = Object.fromEntries([["tau_cli",[["impl Subcommand for <a class=\"enum\" href=\"tau_cli/cli/enum.Command.html\" title=\"enum tau_cli::cli::Command\">Command</a>",0],["impl Subcommand for <a class=\"enum\" href=\"tau_cli/cli/enum.PluginAction.html\" title=\"enum tau_cli::cli::PluginAction\">PluginAction</a>",0],["impl Subcommand for <a class=\"enum\" href=\"tau_cli/cli/enum.PluginProtocolAction.html\" title=\"enum tau_cli::cli::PluginProtocolAction\">PluginProtocolAction</a>",0],["impl Subcommand for <a class=\"enum\" href=\"tau_cli/cli/enum.SandboxCommand.html\" title=\"enum tau_cli::cli::SandboxCommand\">SandboxCommand</a>",0],["impl Subcommand for <a class=\"enum\" href=\"tau_cli/cli/enum.SessionAction.html\" title=\"enum tau_cli::cli::SessionAction\">SessionAction</a>",0],["impl Subcommand for <a class=\"enum\" href=\"tau_cli/cli/enum.SkillSubcommand.html\" title=\"enum tau_cli::cli::SkillSubcommand\">SkillSubcommand</a>",0],["impl Subcommand for <a class=\"enum\" href=\"tau_cli/cli/enum.WorkflowSubcommand.html\" title=\"enum tau_cli::cli::WorkflowSubcommand\">WorkflowSubcommand</a>",0]]],["xtask",[["impl Subcommand for <a class=\"enum\" href=\"xtask/enum.Cmd.html\" title=\"enum xtask::Cmd\">Cmd</a>",0]]]]);
-    if (window.register_implementors) {
-        window.register_implementors(implementors);
-    } else {
-        window.pending_implementors = implementors;
-    }
-})()
-//{"start":59,"fragment_lengths":[1087,119]}
