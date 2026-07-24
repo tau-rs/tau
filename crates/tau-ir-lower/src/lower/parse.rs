@@ -132,8 +132,15 @@ pub(super) fn parse(
                 PromptSource::asset(hash)
             }
             PromptEntry::None => PromptSource::inline(""),
-            // Non_exhaustive — default to empty inline for any future variant.
-            _ => PromptSource::inline(""),
+            // `PromptEntry` is `#[non_exhaustive]`, so this wildcard is
+            // required. A future variant reaching here is fail-closed (D7-B /
+            // ADR-0065): it used to silently become an empty prompt.
+            other => {
+                return Err(LowerError::UnsupportedPromptKind {
+                    agent: agent_id.clone(),
+                    detail: alloc::format!("{other:?}"),
+                });
+            }
         };
         agents.insert(
             agent_id.clone(),
@@ -142,7 +149,7 @@ pub(super) fn parse(
                 prompt,
                 model_ref: resolve_model_ref(config, &entry.model)?,
                 tool_refs,
-                context: lower_context(entry),
+                context: lower_context(name, entry)?,
                 budget: AgentBudget {
                     max_turns: entry.max_turns,
                     max_tokens: entry.max_tokens,
@@ -439,23 +446,37 @@ fn lower_checks(
 /// IR [`ContextConfig`]. Returns `None` when no context pipeline is declared
 /// (the default behaviour — the agent loop applies no context transforms).
 ///
-/// tau-pkg's validator already shape-checked the determinism strings and
-/// custom-node `(source, package)` pairs, so this is a pure structural copy.
-fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context::ContextConfig> {
+/// tau-pkg's validator shape-checks the custom-node `(source, package)` pairs
+/// but does **not** constrain the determinism string (it passes any value
+/// through via `unwrap_or_else(|| "pure")`). D7-B / ADR-0065 makes an
+/// unrecognized determinism string a hard `LowerError::UnknownDeterminism`
+/// here — the only build-time gate — instead of the former silent
+/// `_ => DeterminismClass::Pure` downgrade.
+fn lower_context(
+    agent: &str,
+    entry: &tau_pkg::project::AgentEntry,
+) -> Result<Option<tau_ir::context::ContextConfig>, LowerError> {
     use tau_ir::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
     if entry.context.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let pipeline = entry
-        .context
-        .iter()
-        .map(|s| ContextStep {
+    let mut pipeline = alloc::vec::Vec::with_capacity(entry.context.len());
+    for s in entry.context.iter() {
+        let determinism = match s.determinism.as_str() {
+            "pure" => DeterminismClass::Pure,
+            "llm_backed" => DeterminismClass::LlmBacked,
+            "stateful" => DeterminismClass::Stateful,
+            _ => {
+                return Err(LowerError::UnknownDeterminism {
+                    agent: agent.into(),
+                    transformer: s.transformer.clone(),
+                    determinism: s.determinism.clone(),
+                });
+            }
+        };
+        pipeline.push(ContextStep {
             transformer: s.transformer.clone(),
-            determinism: match s.determinism.as_str() {
-                "llm_backed" => DeterminismClass::LlmBacked,
-                "stateful" => DeterminismClass::Stateful,
-                _ => DeterminismClass::Pure,
-            },
+            determinism,
             kind: match &s.custom {
                 Some((source, package)) => ContextNodeKind::Custom {
                     source: source.clone(),
@@ -464,14 +485,14 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context
                 None => ContextNodeKind::Builtin,
             },
             config: s.config.clone(),
-        })
-        .collect();
+        });
+    }
     // `ContextConfig` is `#[non_exhaustive]`; it cannot be built with a
     // struct literal from outside `tau-ir`. Build via `Default` + the
     // public `pipeline` field instead (behavior-identical).
     let mut cfg = ContextConfig::default();
     cfg.pipeline = pipeline;
-    Some(cfg)
+    Ok(Some(cfg))
 }
 
 /// Convert a validated tau-pkg [`DurableEntry`] into the IR

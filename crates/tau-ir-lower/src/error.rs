@@ -228,6 +228,34 @@ pub enum LowerError {
         step: String,
     },
 
+    /// A context step declares a determinism class string that lowering does
+    /// not recognize (D7-B / ADR-0065). Replaces the former silent
+    /// `_ => DeterminismClass::Pure` default, which downgraded an unknown
+    /// string to the most permissive class.
+    #[error("agent '{agent}': context transformer '{transformer}' declares unknown determinism '{determinism}' (want one of: pure, llm_backed, stateful)")]
+    UnknownDeterminism {
+        /// The agent id whose context pipeline is invalid.
+        agent: String,
+        /// The offending transformer name.
+        transformer: String,
+        /// The unrecognized determinism string as authored.
+        determinism: String,
+    },
+
+    /// Lowering encountered a `PromptEntry` variant it does not know how to
+    /// lower (D7-B / ADR-0065). Replaces the former silent wildcard that
+    /// mapped an unknown prompt kind to an empty prompt. Only reachable if a
+    /// future `#[non_exhaustive]` `PromptEntry` variant is added upstream
+    /// without a corresponding lowering arm — a fail-closed guard, not a
+    /// user-authoring error.
+    #[error("agent {agent:?}: unsupported prompt kind (this tau cannot lower {detail}); rebuild with a matching tau")]
+    UnsupportedPromptKind {
+        /// The agent whose prompt could not be lowered.
+        agent: AgentId,
+        /// Debug rendering of the offending `PromptEntry`.
+        detail: String,
+    },
+
     /// A `Condition::evaluates` is a `Locus::Output(id)` that names a step
     /// not yet visible at this point in the pipeline.
     #[error(
@@ -239,4 +267,41 @@ pub enum LowerError {
         /// The referenced step id that is missing or out of scope.
         output: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn unknown_determinism_renders_the_offending_values() {
+        let e = LowerError::UnknownDeterminism {
+            agent: "reviewer".into(),
+            transformer: "trim_old".into(),
+            determinism: "sometimes".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("reviewer"), "got: {msg}");
+        assert!(msg.contains("trim_old"), "got: {msg}");
+        assert!(msg.contains("sometimes"), "got: {msg}");
+        assert!(msg.contains("pure"), "should name the valid set: {msg}");
+    }
+
+    // `UnsupportedPromptKind` is only reachable if a future
+    // `#[non_exhaustive]` `PromptEntry` variant is added upstream without a
+    // lowering arm; it cannot be triggered through the public lowering API
+    // (the three current variants are all handled). This asserts its Display
+    // is actionable so the fail-closed message is not vacuous.
+    #[test]
+    fn unsupported_prompt_kind_renders_actionably() {
+        let e = LowerError::UnsupportedPromptKind {
+            agent: AgentId("writer".into()),
+            detail: "SomeFutureVariant".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("writer"), "got: {msg}");
+        assert!(msg.contains("SomeFutureVariant"), "got: {msg}");
+        assert!(msg.contains("rebuild"), "got: {msg}");
+    }
 }
