@@ -150,7 +150,7 @@ impl DevSession {
     /// `self.ir`. Conversation history is intentionally preserved so that
     /// the REPL retains multi-turn context across hot-reloads.
     ///
-    /// MCP clients are created per-turn in [`run_turn`] (the `_mcp_lifetime`
+    /// MCP clients are created per-turn in [`run_turn`][Self::run_turn] (the `_mcp_lifetime`
     /// binding), so there are no long-lived MCP handles to drop here —
     /// the next call to `run_turn` automatically picks up the new config.
     ///
@@ -210,9 +210,9 @@ impl DevSession {
     ///
     /// Mirrors the construction in `crate::cmd::ir_dispatcher::run_via_ir`:
     /// 1. Resolve the agent entry from `self.project`.
-    /// 2. Load the per-scope lockfile + plugins via [`plugin_loader`].
+    /// 2. Load the per-scope lockfile + plugins via `plugin_loader`.
     /// 3. Boot MCP servers from the project config + lockfile.
-    /// 4. Build a [`ForwardingDispatcher`].
+    /// 4. Build a `ForwardingDispatcher`.
     /// 5. Append the user prompt to `self.history` and call [`run_ir`].
     /// 6. Append the agent's reply to `self.history` and render the outcome.
     ///
