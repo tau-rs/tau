@@ -1,0 +1,13 @@
+packages = ["anthropic"]
+
+[project]
+name = "harness"
+
+[models.haiku]
+backend = "anthropic"
+model = "claude-haiku-4-5"
+
+[agents.fast]
+display_name = "Fast"
+package = "research@^0.1"
+model = "haiku"

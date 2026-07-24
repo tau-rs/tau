@@ -1,0 +1,24 @@
+[package]
+name = "tau-sdk-codegen"
+description = "Codegen for tau authoring SDKs (TypeScript @tau/sdk + Python tau-sdk) from the frozen IR JSON schema"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+serde_json = { workspace = true, features = ["std"] }
+thiserror  = { workspace = true }
+anyhow     = { workspace = true }
+
+[dev-dependencies]
+tau-pkg        = { workspace = true }
+tau-ts-extract = { workspace = true }
+tau-ir         = { workspace = true }
+tau-ir-lower   = { workspace = true }
+tau-ports      = { workspace = true }
+
+[lints]
+workspace = true

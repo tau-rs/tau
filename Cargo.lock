@@ -4761,6 +4761,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tau-sdk-codegen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tau-ir",
+ "tau-ir-lower",
+ "tau-pkg",
+ "tau-ports",
+ "tau-ts-extract",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tau-ts-extract"
 version = "0.0.0"
 dependencies = [
