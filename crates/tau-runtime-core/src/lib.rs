@@ -37,6 +37,8 @@ pub mod dispatch;
 pub mod options;
 pub mod orchestration;
 pub mod outcome;
+pub mod pacing;
+pub mod pid;
 #[cfg(feature = "wasm-interpreter")]
 pub mod stream;
 #[doc(hidden)]
