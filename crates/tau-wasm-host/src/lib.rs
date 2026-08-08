@@ -22,10 +22,15 @@
 //! guest returned.
 
 use std::collections::VecDeque;
+use std::path::Path;
 
 use tau_ports::llm::CompletionResponse;
+use tau_ports::target::wasi_map::PreopenAccess;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::{
+    DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
+};
 
 mod wasi;
 pub use wasi::{wasi_grants_from_caps, HostAccess, PreopenGrant, WasiGrants};
@@ -67,6 +72,9 @@ pub enum WasmHostError {
     /// been rejected at `tau build wasm`; belt-and-suspenders at host time).
     #[error("capability unsupported on wasm: {reason}")]
     UnsupportedCap { reason: String },
+    /// Building the WASI context (e.g. a preopen dir failed to open).
+    #[error("failed to configure WASI context: {0}")]
+    WasiConfig(#[source] anyhow::Error),
 }
 
 /// Store data backing the three `tau:host/host` imports with deterministic
@@ -80,14 +88,21 @@ struct HostState {
     clock_millis: u64,
     /// SplitMix64 state, seeded from [`PRNG_SEED`].
     prng_state: u64,
+    /// WASI 0.2 resource table (EPIC 3.3).
+    table: ResourceTable,
+    /// WASI 0.2 host context: exactly the preopens/network derived from the
+    /// component's allow-bounded caps (EPIC 3.3).
+    wasi: WasiCtx,
 }
 
 impl HostState {
-    fn new(responses: Vec<String>) -> Self {
+    fn new(responses: Vec<String>, wasi: WasiCtx) -> Self {
         Self {
             responses: responses.into(),
             clock_millis: 0,
             prng_state: PRNG_SEED,
+            table: ResourceTable::new(),
+            wasi,
         }
     }
 }
@@ -116,6 +131,35 @@ impl host::Host for HostState {
     }
 }
 
+impl WasiView for HostState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+/// Build a `WasiCtx` that grants exactly `grants.preopens` and denies all
+/// network egress by default (network is gated separately by the wasi-http
+/// filter in a later task; raw `wasi:sockets` stays default-deny).
+fn wasi_ctx_from_grants(grants: &WasiGrants) -> Result<WasiCtx, WasmHostError> {
+    let mut builder = WasiCtxBuilder::new();
+    for p in &grants.preopens {
+        // Ensure the host dir exists so preopen succeeds; the caller's
+        // sandbox_root scopes it.
+        std::fs::create_dir_all(&p.host_path).map_err(|e| WasmHostError::WasiConfig(e.into()))?;
+        let (dir_perms, file_perms) = match p.access {
+            PreopenAccess::ReadOnly => (DirPerms::READ, FilePerms::READ),
+            PreopenAccess::ReadWrite => (DirPerms::all(), FilePerms::all()),
+        };
+        builder
+            .preopened_dir(&p.host_path, &p.guest_path, dir_perms, file_perms)
+            .map_err(|e| WasmHostError::WasiConfig(e.into()))?;
+    }
+    Ok(builder.build())
+}
+
 /// Build the determinism `wasmtime::Config` (spec §7): canonicalise NaNs and
 /// turn off the nondeterministic relaxed-SIMD lowerings so float/SIMD codegen
 /// is bit-stable across hosts.
@@ -136,15 +180,23 @@ fn determinism_config() -> wasmtime::Result<Config> {
 ///
 /// Determinism contract: for fixed inputs the returned bytes are identical
 /// across calls and hosts — the property `WasmProfile` conformance relies on.
-pub fn run_component(
+/// EPIC 3.3: run a component whose WASI authority is bounded by `caps`.
+/// Filesystem globs resolve to preopens under `sandbox_root`; network egress
+/// is denied unless a `net.http` cap authorizes the target host.
+pub fn run_component_with_caps(
     wasm_bytes: &[u8],
     prompt: &str,
     llm_responses: Vec<String>,
+    caps: &[tau_domain::Capability],
+    sandbox_root: &Path,
 ) -> Result<String, WasmHostError> {
     // Fail fast on a malformed cassette before touching wasmtime.
     for resp in &llm_responses {
         serde_json::from_str::<CompletionResponse>(resp).map_err(WasmHostError::InvalidResponse)?;
     }
+
+    let grants = wasi_grants_from_caps(caps, sandbox_root)?;
+    let wasi = wasi_ctx_from_grants(&grants)?;
 
     let config = determinism_config().map_err(|e| WasmHostError::Instantiate(e.into()))?;
     let engine = Engine::new(&config).map_err(|e| WasmHostError::Instantiate(e.into()))?;
@@ -152,10 +204,12 @@ pub fn run_component(
         Component::new(&engine, wasm_bytes).map_err(|e| WasmHostError::Load(e.into()))?;
 
     let mut linker: Linker<HostState> = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+        .map_err(|e| WasmHostError::Instantiate(e.into()))?;
     Runner::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |state| state)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
-    let mut store = Store::new(&engine, HostState::new(llm_responses));
+    let mut store = Store::new(&engine, HostState::new(llm_responses, wasi));
     let runner = Runner::instantiate(&mut store, &component, &linker)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
@@ -164,6 +218,15 @@ pub fn run_component(
         Ok(Err(guest_err)) => Err(WasmHostError::Guest(guest_err)),
         Err(trap) => Err(WasmHostError::Trap(trap.into())),
     }
+}
+
+/// Determinism-conformance entry: no capabilities, so no WASI grants.
+pub fn run_component(
+    wasm_bytes: &[u8],
+    prompt: &str,
+    llm_responses: Vec<String>,
+) -> Result<String, WasmHostError> {
+    run_component_with_caps(wasm_bytes, prompt, llm_responses, &[], Path::new("."))
 }
 
 #[cfg(test)]
@@ -176,9 +239,14 @@ mod tests {
         r#"{"text":"","tool_uses":[],"stop_reason":"EndTurn","usage":null}"#.to_string()
     }
 
+    /// A `WasiCtx` with no preopens and no network — the no-caps baseline.
+    fn empty_wasi_ctx() -> WasiCtx {
+        WasiCtxBuilder::new().build()
+    }
+
     #[test]
     fn clock_advances_by_fixed_step() {
-        let mut state = HostState::new(vec![]);
+        let mut state = HostState::new(vec![], empty_wasi_ctx());
         assert_eq!(state.now_millis(), 0);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS * 2);
@@ -186,8 +254,8 @@ mod tests {
 
     #[test]
     fn prng_is_deterministic_and_seeded() {
-        let mut a = HostState::new(vec![]);
-        let mut b = HostState::new(vec![]);
+        let mut a = HostState::new(vec![], empty_wasi_ctx());
+        let mut b = HostState::new(vec![], empty_wasi_ctx());
         let seq_a: Vec<u64> = (0..4).map(|_| a.next_u64()).collect();
         let seq_b: Vec<u64> = (0..4).map(|_| b.next_u64()).collect();
         assert_eq!(seq_a, seq_b, "same seed must yield same sequence");
@@ -196,7 +264,10 @@ mod tests {
 
     #[test]
     fn complete_pops_responses_then_errors() {
-        let mut state = HostState::new(vec!["first".to_string(), "second".to_string()]);
+        let mut state = HostState::new(
+            vec!["first".to_string(), "second".to_string()],
+            empty_wasi_ctx(),
+        );
         assert_eq!(state.complete(String::new()), Ok("first".to_string()));
         assert_eq!(state.complete(String::new()), Ok("second".to_string()));
         assert!(
@@ -216,6 +287,19 @@ mod tests {
         // Empty bytes are a valid cassette but not a loadable component:
         // proves validation precedes the wasmtime load path.
         let err = run_component(&[], "p", vec![canned_response()]).unwrap_err();
+        assert!(matches!(err, WasmHostError::Load(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn run_component_with_caps_no_caps_matches_run_component() {
+        // Wiring smoke test: an empty caps slice must reach the same
+        // validation-then-load failure as the no-caps `run_component`
+        // wrapper — proves `wasi_grants_from_caps` + `wasi_ctx_from_grants`
+        // build a clean, no-preopen `WasiCtx` and don't blow up on an empty
+        // sandbox_root.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = run_component_with_caps(&[], "p", vec![canned_response()], &[], dir.path())
+            .unwrap_err();
         assert!(matches!(err, WasmHostError::Load(_)), "got: {err:?}");
     }
 }
