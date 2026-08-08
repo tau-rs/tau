@@ -68,6 +68,10 @@ fn recv_line(reader: &mut BufReader<std::process::ChildStdout>) -> Value {
 /// This ensures the streaming dispatch path is wired end-to-end and
 /// that unknown-agent errors propagate correctly from the real serve
 /// process (not just the in-memory harness used in Layer 2 tests).
+#[cfg_attr(
+    windows,
+    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
+)]
 #[test]
 fn unknown_agent_in_streaming_run_returns_32010() {
     e2e_common::ensure_home_env();
@@ -105,6 +109,10 @@ fn unknown_agent_in_streaming_run_returns_32010() {
 ///
 /// Exercises the batch run code path through the real binary, mirroring
 /// the streaming test above.
+#[cfg_attr(
+    windows,
+    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
+)]
 #[test]
 fn unknown_agent_in_batch_run_returns_32010() {
     e2e_common::ensure_home_env();

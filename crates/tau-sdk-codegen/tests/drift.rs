@@ -2,6 +2,10 @@ use std::path::Path;
 
 /// The checked-in sdk/ packages must equal a fresh render. If this fails, run
 /// `cargo run -p tau-sdk-codegen --bin gen` and commit the result.
+#[cfg_attr(
+    windows,
+    ignore = "git autocrlf / path-separator makes committed SDK differ on Windows; see #530"
+)]
 #[test]
 fn committed_sdk_matches_fresh_render() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
