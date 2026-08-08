@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PLUGINS"],"enum":["Cmd"],"fn":["build_args","build_base","build_plugin","detect_runtime","ensure_base","main","probe_one"],"struct":["Cli"]};

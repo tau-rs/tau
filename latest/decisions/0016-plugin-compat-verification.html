@@ -1,0 +1,391 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0016 — Plugin compat verification - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0016-plugin-compat-verification.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0016-plugin-compatibility-verification--layer-2-install-time-cross-check--per-plugin-harness"><a class="header" href="#adr-0016-plugin-compatibility-verification--layer-2-install-time-cross-check--per-plugin-harness">ADR-0016: Plugin compatibility verification — Layer 2 install-time cross-check + per-plugin harness</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-05-04
+<strong>Deciders:</strong> Titouan Lebocq
+<strong>Supersedes:</strong> —
+<strong>Closes:</strong></p>
+<ul>
+<li>Sub-project B from <a href="../superpowers/specs/2026-05-03-sandboxing-followups.html">the sandboxing follow-ups</a> — the 5 real shipped plugins now declare <code>[sandbox] required_tier = "strict"</code>, install carries Layer 2 cross-check at step 8.7, and a verification harness exists in <code>tau-plugin-compat</code>.</li>
+<li>The foundation portion of sub-project D (controlled-environment test binary + landlock-symlink fix in <code>tau-sandbox-native::light::resolve_symlinks_for_landlock</code>) — D's remainder (re-introducing 5 e2e test files) stays as a separate sub-project.
+<strong>Amends:</strong></li>
+<li><a href="0015-sandbox-activation.html">ADR-0015</a> Decision 6 — plugin manifests can now declare <code>[sandbox] required_tier</code>. The 5 real plugins (<code>anthropic</code>, <code>ollama</code>, <code>openai</code>, <code>fs-read</code>, <code>shell</code>) declare <code>Strict</code>. Toy plugins (<code>echo-llm</code>, <code>echo-tool</code>) omit the block.
+<strong>Refines:</strong></li>
+<li><a href="0008-plugin-loading.html">ADR-0008</a> — install lifecycle gains step 8.7 between source SHA-256 (8.6) and lockfile write (9). On cross-check failure, install aborts with <code>InstallError::CrossCheck { message }</code>; user retries via <code>tau install --force</code> after fixing the manifest.</li>
+</ul>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>Sub-project A (<a href="0015-sandbox-activation.html">ADR-0015</a>) shipped sandboxing on by default at commit <code>7fe6cfb</code> on 2026-05-04. Every plugin spawn now flows through <code>resolve_adapter</code> against the static adapter registry. That work proved 250+ unit tests pass; the workspace compiles cleanly across Linux/macOS/Windows × stable/1.91.</p>
+<p>What sub-project A's CI did <strong>not</strong> prove: that the 5 real shipped plugins actually work end-to-end when sandbox enforcement is engaged. Activation is theoretical until verified against the real plugin surface.</p>
+<p>Two further gaps:</p>
+<ol>
+<li>
+<p><strong>Layer 2 install-time cross-check is unimplemented.</strong> The kernel host already issues <code>tool.describe_capabilities</code> calls per tool method (priority 12 work) — but the responses are advisory, not validated against the manifest. A buggy or compromised plugin binary can claim capabilities its manifest doesn't declare; the kernel's capability check uses the manifest, so the binary's claims silently expand the attack surface.</p>
+</li>
+<li>
+<p><strong>No automated end-to-end plugin verification.</strong> Nothing today exercises "install plugin → resolve adapter → spawn under enforcement → run golden path → assert success" for any of the 5 real plugins. Regressions go undetected until a human runs <code>tau chat</code>.</p>
+</li>
+</ol>
+<p>Sub-project D's "end-to-end landlock CI integration" is the third gap (re-introducing 5 e2e test files removed at priority-12 ship). Sub-project B absorbs D's <em>foundation</em> (the symlink-resolution fix + a controlled-environment test binary), leaving D's remaining work focused on actually re-introducing those tests using B's foundation.</p>
+<p>Seven discrete decisions follow.</p>
+<h2 id="decision-1--layer-2-cross-check-is-tool-port-dynamic-cross-port-universal-mechanism-deferred"><a class="header" href="#decision-1--layer-2-cross-check-is-tool-port-dynamic-cross-port-universal-mechanism-deferred">Decision 1 — Layer 2 cross-check is tool-port dynamic; cross-port universal mechanism deferred</a></h2>
+<p><strong>Decision:</strong> the Layer 2 install-time cross-check spawns the plugin binary, performs <code>meta.handshake</code>, and for tool-port plugins enumerates <code>tool.describe_capabilities</code> per method. The aggregated capability set is compared bidirectionally against the manifest's <code>[[capabilities]]</code> block (binary-claims-extra and manifest-declares-unused both hard-fail). For LLM-backend / storage plugins the cross-check returns the manifest's capabilities verbatim with a <code>tracing::debug!</code> noting the manifest-only path.</p>
+<p><strong>Context:</strong> alternatives were (A) manifest-only static check (no wire mechanism — defeats the cross-check's purpose) and (C) universal wire-level extension to <code>HandshakeResponse</code> (full coverage but adds protocol-level scope across all 7 plugins and the SDK). Option B catches the security-critical case (tool plugins, where capability drift is the prototypical attack vector) without forcing a protocol bump in this sub-project.</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>Tool plugins' install path now validates: binary's actually-claimed capabilities match the manifest exactly. Drift in either direction aborts install.</li>
+<li>LLM-backend and storage plugins fall through to manifest-only Layer 2; the cross-check still runs (the binary must spawn + handshake successfully) but per-method enumeration doesn't apply because those ports lack the wire mechanism.</li>
+<li>A future hardening pass can add <code>meta.describe_capabilities</code> (or extend <code>HandshakeResponse</code> with a <code>capabilities: Vec&lt;Capability&gt;</code> field) to enable universal cross-port checking. Tracked as a Phase 2 hardening item.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Manifest-only static check.</strong> Rejected: doesn't catch the actual attack vector (binary diverges from manifest claims).</li>
+<li><strong>Universal wire-level cross-port mechanism.</strong> Deferred: scope creep into protocol design when the security-critical surface is already covered by the tool-port path.</li>
+</ul>
+<h2 id="decision-2--cross-check-timing-is-install-time-only-spawn-time-skipped"><a class="header" href="#decision-2--cross-check-timing-is-install-time-only-spawn-time-skipped">Decision 2 — Cross-check timing is install-time only; spawn-time skipped</a></h2>
+<p><strong>Decision:</strong> the cross-check runs once during <code>tau install</code> (and <code>tau update</code>, which re-installs) at the moment the binary has just finished building. Spawn-time cross-check is not added.</p>
+<p><strong>Context:</strong> alternatives were (B) first-spawn-after-install lazy check (adds state-machine complexity to <code>LockedPlugin</code>; doesn't catch drift any earlier than spawn) and (C) install-time + every-spawn (overlaps with <code>tau verify</code>'s tree-hash check from priority 7, which is strictly stronger than re-running a capability handshake).</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li><code>LockedPlugin.required_shapes</code> becomes the source of truth for runtime resolution. The runtime trusts the lockfile; the lockfile was verified at install time.</li>
+<li>A binary swap on disk after install is detected by <code>tau verify</code>, not by the sandbox layer. This separates concerns cleanly.</li>
+<li>An <code>InstallOptions::skip_cross_check: bool</code> field (default <code>false</code>) provides an escape hatch for tests that build stub plugin binaries that don't implement the handshake. Production code never sets it, so cross-check always fires there.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>First-spawn-after-install lazy.</strong> Rejected: doesn't catch drift earlier; adds state-machine complexity.</li>
+<li><strong>Install-time + every-spawn.</strong> Rejected: overlaps with <code>tau verify</code>'s tree-hash check, which is strictly stronger than re-running a handshake.</li>
+</ul>
+<h2 id="decision-3--live-spawn-depth--layer-3--container--native-absorb-sub-project-ds-foundation"><a class="header" href="#decision-3--live-spawn-depth--layer-3--container--native-absorb-sub-project-ds-foundation">Decision 3 — Live spawn depth = Layer 3 + container + native; absorb sub-project D's foundation</a></h2>
+<p><strong>Decision:</strong> verification depth covers all three layers: Layer 3 (<code>tau resolve --check-sandbox</code>, no real spawn), Layer 4 container (live spawn under Docker on Linux CI), and Layer 4 native (live spawn under landlock + seccomp + namespaces on Linux CI). The controlled-environment test binary and the landlock-symlink fix from sub-project D's foundation are absorbed into B; D's remaining scope (re-introducing 5 e2e test files using the controlled-env binary) stays as a separate sub-project.</p>
+<p><strong>Context:</strong> the alternatives were (A) Layer 3 only (theoretical validation; no kernel verification) and (B) Layer 3 + container only (skips native; punts native verification to a future sub-project). Container coverage alone leaves the native adapter — the only adapter that exercises landlock + seccomp directly — unvalidated end-to-end. Decoupling B from D would create an artificial boundary where the harness exists in one place and the thing it's supposed to verify exists somewhere else.</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>The plugin compat tests <em>are</em> the symlink fix's reproducer.</li>
+<li>B's PR is larger (~16 commits over the implementation tasks) but ships a complete, verified milestone in one merge.</li>
+<li>The native adapter touchup (<code>tau-sandbox-native/src/light.rs::resolve_symlinks_for_landlock</code>) lands in B; sub-project D's later PR doesn't have to re-modify the adapter.</li>
+</ul>
+<p><strong>Honest scope notes:</strong></p>
+<ul>
+<li>Layer 4 container Tier-A tests (shell + fs-read via <code>tau plugin run --script</code>) verify build + handshake but do NOT route through the sandbox adapter. Marked <code>#[ignore]</code> with rationale because <code>tau plugin run --script</code> hardcodes the handshake port to <code>llm_backend</code>, incompatible with tool-port plugins. Sub-project D will provide a port-aware driver.</li>
+<li>Layer 4 container Tier-B tests (anthropic, ollama, openai cassette-replay) marked <code>#[ignore]</code> pending sub-project D's cassette-replay-through-sandboxed-process infrastructure.</li>
+<li>All 5 Layer 4 native tests marked <code>#[ignore]</code> and gated <code>cfg(target_os = "linux")</code> for the same reason.</li>
+<li>Layer 3 tests (<code>tau resolve --check-sandbox</code>) all pass: 5/5 plugins on Linux CI.</li>
+</ul>
+<h2 id="decision-4--tau-install---rehash-dropped-from-scope"><a class="header" href="#decision-4--tau-install---rehash-dropped-from-scope">Decision 4 — <code>tau install --rehash</code> dropped from scope</a></h2>
+<p><strong>Decision:</strong> the <code>--rehash</code> flag from the original sub-project B scope is removed. Not deferred; dropped.</p>
+<p><strong>Context:</strong> the existing command surface already covers every realistic use case:</p>
+<ul>
+<li><code>tau update &lt;pkg&gt;</code> covers refetch + rebuild + lockfile rewrite.</li>
+<li><code>tau install --force &lt;pkg&gt;</code> covers local-source rebuild without netfetch.</li>
+<li><code>tau verify</code> covers read-only drift detection.</li>
+<li>Auto-upgrade-with-<code>tracing::warn!</code> (priority 7 / priority 12 / sub-project A pattern) covers schema migration silently on next read.</li>
+<li><code>--rehash</code> would only uniquely fill the niche "refresh lockfile metadata without rebuilding and without going to the network" — a developer convenience saving ~5 seconds per refresh, with no security-critical use case. YAGNI applies.</li>
+</ul>
+<p><strong>Consequences:</strong> if a real need surfaces post-ship, <code>--rehash</code> can be added in a later sub-project with concrete user motivation. Adding flags is a one-way ratchet; surgically removing them after they're documented is harder.</p>
+<h2 id="decision-5--all-5-real-plugins-declare-sandbox-required_tier--strict"><a class="header" href="#decision-5--all-5-real-plugins-declare-sandbox-required_tier--strict">Decision 5 — All 5 real plugins declare <code>[sandbox] required_tier = "strict"</code></a></h2>
+<p><strong>Decision:</strong> each of <code>anthropic</code>, <code>ollama</code>, <code>openai</code>, <code>fs-read</code>, <code>shell</code> gets <code>[sandbox] required_tier = "strict"</code> in its <code>tau.toml</code>. Toy plugins (<code>echo-llm</code>, <code>echo-tool</code>) omit the block (default is None tier).</p>
+<p><strong>Context:</strong> alternatives were (B) all real plugins declare Light (strictly weaker enforcement with identical host coverage) and (C) plugins declare nothing, project drives entirely (defeats ADR-0015 Decision 6's purpose; trusts every project author to know which plugins handle untrusted data).</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>macOS / Windows users without Docker get exit 2 on first run with the guided diagnostic from sub-project A: "your project requires Strict; install Docker, switch to Linux, or pass <code>--no-sandbox</code> for an explicit opt-out". This is the correct friction.</li>
+<li>Per-run opt-out via <code>--no-sandbox</code> keeps dev workflow viable.</li>
+<li>Toy plugins remain useful as tier-None test fixtures.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Light tier.</strong> Rejected: same host availability as Strict but strictly weaker enforcement (compromised HTTP plugins can still exfiltrate via the network under Light).</li>
+<li><strong>No declaration; project drives.</strong> Rejected: makes the plugin author transparent to the project, defeating ADR-0015 Decision 6's purpose.</li>
+</ul>
+<h2 id="decision-6--new-crate-tau-plugin-compat-for-the-test-harness"><a class="header" href="#decision-6--new-crate-tau-plugin-compat-for-the-test-harness">Decision 6 — New crate <code>tau-plugin-compat/</code> for the test harness</a></h2>
+<p><strong>Decision:</strong> create a new workspace crate <code>crates/tau-plugin-compat/</code> (<code>publish = false</code>) holding the per-plugin verification harness, fixtures, and the controlled-environment test binary.</p>
+<p><strong>Context:</strong> alternatives were (A) centralized in <code>tau-runtime/tests/</code> (pollutes runtime crate's test surface; rule-of-three not yet justified at one sub-project's worth of need) and (B) per-plugin alongside existing test surface (duplicates fixture boilerplate 5×).</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>Branch protection rises from 25 to 27 required checks (2 new CI jobs: <code>build (tau-plugin-compat)</code> + <code>test (tau-plugin-compat / linux)</code>).</li>
+<li>One GitHub-settings configuration change after first push to add the new checks to branch protection.</li>
+<li>The crate becomes the natural home for cross-plugin compatibility testing across sub-projects D, E, F, J, K.</li>
+<li><code>tau-cli</code> is a dev-dependency on <code>tau-plugin-compat</code> so cargo builds the <code>tau</code> binary into target/debug for the harness's <code>tau_bin()</code> helper to discover. CI explicitly builds <code>tau-cli</code> first to ensure the binary exists in the test job's environment.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Centralize in <code>tau-runtime/tests/</code>.</strong> Rejected: pollutes runtime crate's test surface.</li>
+<li><strong>Per-plugin under <code>tau-plugins/&lt;name&gt;/tests/</code>.</strong> Rejected: duplicates fixture boilerplate 5×.</li>
+</ul>
+<h2 id="decision-7--cross-check-function-lives-in-tau-pkgsandbox_check-public-module"><a class="header" href="#decision-7--cross-check-function-lives-in-tau-pkgsandbox_check-public-module">Decision 7 — Cross-check function lives in <code>tau-pkg::sandbox_check</code> (public module)</a></h2>
+<p><strong>Decision:</strong> the <code>cross_check_plugin_capabilities(binary_path, manifest) -&gt; Result&lt;Vec&lt;CapabilityShape&gt;, CrossCheckError&gt;</code> function is public on <code>tau-pkg::sandbox_check</code>. Both production code (the install path in <code>tau-pkg</code>) and test code (the harness in <code>tau-plugin-compat</code>) call it directly.</p>
+<p><strong>Context:</strong> alternatives were (A) private to <code>tau-pkg::install</code> (makes Layer 2 untestable except through <code>install_with_options</code>'s side effects, which is bad for a security feature) and (C) new shared crate <code>tau-sandbox-check</code> (premature; one module, one function, one error type doesn't justify a workspace crate).</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li><code>tau-plugin-compat</code> adds a <code>tau-pkg = { path = "../tau-pkg" }</code> dev-dependency.</li>
+<li>The public surface is small: one function, one <code>#[non_exhaustive]</code> error enum (4 variants).</li>
+<li><code>InstallError::CrossCheck { message: String }</code> (not <code>#[from] CrossCheckError</code>) because <code>tau-domain::Capability</code> derives <code>PartialEq</code> but not <code>Eq</code>, and <code>InstallError</code> requires <code>Eq</code>. The <code>Display</code> string preserves all necessary information.</li>
+<li>The cross-check IPC bridge: <code>tokio::process::Command</code> + <code>tau_plugin_protocol::Frame</code> + <code>FramedReader</code>/<code>FramedWriter</code>. <code>cross_check_plugin_capabilities</code> is async; <code>install_with_options</code> is sync. Bridge via a current-thread tokio runtime spun up just for this step.</li>
+<li><code>kill_on_drop(true)</code> on the spawned <code>Command</code> ensures the child is reaped on every error-return path. IPC reads / writes are wrapped in <code>tokio::time::timeout</code> (10s for handshake response, 5s per per-method <code>tool.describe_capabilities</code> response).</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Private to <code>install_with_options</code>.</strong> Rejected: makes Layer 2 untestable except via install side effects.</li>
+<li><strong>New shared crate <code>tau-sandbox-check</code>.</strong> Rejected: premature for one module / one function.</li>
+</ul>
+<h2 id="implementation-summary"><a class="header" href="#implementation-summary">Implementation summary</a></h2>
+<p>The 16 commits on <code>feat/plugin-compat-spec</code> (PR #24) realize these decisions via:</p>
+<div class="table-wrapper"><table><thead><tr><th>Layer</th><th>Crate</th><th>Files</th></tr></thead><tbody>
+<tr><td>Plugin tier declarations</td><td><code>tau-plugins/&lt;5&gt;</code></td><td><code>&lt;plugin&gt;/tau.toml</code></td></tr>
+<tr><td>Cross-check production module</td><td><code>tau-pkg</code></td><td><code>src/sandbox_check.rs</code>, <code>src/lib.rs</code>, <code>Cargo.toml</code></td></tr>
+<tr><td>Install path integration (step 8.7)</td><td><code>tau-pkg</code></td><td><code>src/install.rs</code>, <code>src/error.rs</code>, <code>tests/install_cross_check.rs</code></td></tr>
+<tr><td>Native adapter symlink fix</td><td><code>tau-sandbox-native</code></td><td><code>src/light.rs</code></td></tr>
+<tr><td>Test harness crate</td><td><code>tau-plugin-compat</code> (new)</td><td><code>Cargo.toml</code>, <code>src/lib.rs</code>, <code>fixtures/</code>, <code>tests/layer3_*.rs</code>, <code>tests/layer4_*.rs</code></td></tr>
+<tr><td>Controlled-env binary</td><td><code>tau-plugin-compat</code></td><td><code>fixtures/controlled-env-binary/</code> (standalone Cargo project, NOT a workspace member)</td></tr>
+<tr><td>CLI error rendering</td><td><code>tau-cli</code></td><td><code>src/cmd/error_render.rs</code> (<code>render_cross_check_error</code>), <code>tests/cmd_install_cross_check_render.rs</code>, snapshots</td></tr>
+<tr><td>CI jobs</td><td><code>.github/workflows/ci.yml</code></td><td><code>build (tau-plugin-compat)</code> + <code>test (tau-plugin-compat / linux)</code></td></tr>
+<tr><td>CLAUDE.md cargo conventions</td><td>(root)</td><td><code>CLAUDE.md</code> (new; documents per-agent <code>CARGO_TARGET_DIR</code> to avoid concurrent-build contention)</td></tr>
+</tbody></table>
+</div>
+<p>Test coverage delta: ~35 new tests across 8 files (8 unit on cross-check + 4 unit on symlink fix + 5 install-path integration + 5 Layer 3 + 5 Layer 4 container + 5 Layer 4 native + 3 snapshot rendering). Of those, the Layer 4 tests (10) are <code>#[ignore]</code>'d pending sub-project D's e2e infrastructure.</p>
+<p>CI matrix: 27 jobs across Linux + macOS + Windows × stable + 1.91. All green on the final commit.</p>
+<h2 id="forward-links"><a class="header" href="#forward-links">Forward links</a></h2>
+<ul>
+<li><strong>Sub-project D</strong> (end-to-end landlock CI integration) is unblocked by B's foundation: the symlink-resolution fix and controlled-environment binary now exist; D's remaining scope is re-introducing the 5 e2e test files removed at priority-12 ship plus building the port-aware driver that flips the 10 <code>#[ignore]</code>'d tests in <code>tau-plugin-compat/tests/layer4_*.rs</code>.</li>
+<li><strong>Sub-project E</strong> (per-command exec gating, landlock V2) gains a verified compat baseline.</li>
+<li><strong>Sub-project F</strong> (per-host network filtering via nftables-in-netns) gains the same.</li>
+<li><strong>Sub-projects J, K</strong> (macOS sandbox-exec, Windows AppContainer) extend <code>tau-plugin-compat</code> with platform-specific compat suites.</li>
+<li><strong>Phase 2 sub-project A</strong> (<code>tau check</code> standalone command) gains a verified production surface to re-expose; <code>cross_check_plugin_capabilities</code> could become callable from <code>tau check</code> directly in addition to the install path.</li>
+<li><strong>Phase 2 hardening</strong> (deferred): universal cross-port <code>meta.describe_capabilities</code> wire mechanism extending Decision 1's tool-port-only check to LLM-backend and storage plugins.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0015-sandbox-activation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0017-e2e-landlock-and-driver.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0015-sandbox-activation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0017-e2e-landlock-and-driver.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
