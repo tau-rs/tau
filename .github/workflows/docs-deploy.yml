@@ -53,7 +53,6 @@ jobs:
           GH_EVENT: ${{ github.event_name }}
           GH_REF: ${{ github.ref }}
           GH_REF_NAME: ${{ github.ref_name }}
-          GH_HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
           GH_PR_ACTION: ${{ github.event.action }}
           GH_PR_LABEL_NAME: ${{ github.event.label.name }}
           GH_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -87,11 +86,14 @@ jobs:
                 destination="$version_slug"
                 should_deploy=true
               elif [[ "$GH_REF" == refs/heads/main ]]; then
-                if echo "$GH_HEAD_COMMIT_MSG" | grep -q '\[publish-docs\]'; then
-                  mode=latest
-                  destination=latest
-                  should_deploy=true
-                fi
+                # Every merge to main republishes /latest/. No commit marker
+                # required — the old `[publish-docs]` gate meant squash-merge
+                # subjects (which never carry the marker) silently skipped the
+                # deploy, freezing the site for weeks. Redeploying on every main
+                # push is cheap and idempotent.
+                mode=latest
+                destination=latest
+                should_deploy=true
               fi
               ;;
             pull_request)
@@ -196,16 +198,23 @@ jobs:
         run: mdbook build
 
       - name: Build rustdoc (workspace, no deps)
+        id: rustdoc
+        continue-on-error: true
         env:
           CARGO_INCREMENTAL: 0
         run: |
-          # Warnings (broken intra-doc links, missing-docs) don't fail
-          # the deploy — the rustdoc still publishes, and the warnings
-          # surface in the build log for follow-up cleanup. Pre-existing
-          # broken intra-doc links are tracked separately.
+          # 16 crates carry #![deny(rustdoc::broken_intra_doc_links)], so a
+          # broken link makes `cargo doc` exit non-zero. This step is
+          # continue-on-error so that failure does NOT block the mdBook
+          # publish: the "Stage rustdoc" step below is gated on this step's
+          # outcome, so on failure we skip staging and the previously-published
+          # /rustdoc/ (kept via peaceiris keep_files) stays until the next
+          # green build. The real gate is the `rustdoc` job in ci.yml, which
+          # runs this same command at PR time and fails the PR on breakage.
           cargo doc --no-deps --workspace
 
       - name: Stage rustdoc into book payload
+        if: steps.rustdoc.outcome == 'success'
         run: |
           set -euo pipefail
           mkdir -p docs/book/html/rustdoc
