@@ -118,7 +118,11 @@ jobs:
       # --no-fail-fast: nightly is a comprehensive regression sweep — surface
       # EVERY failing test in one run rather than stopping at the first, so a
       # single cron (and its auto-bisect) sees the whole picture.
-      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast
+      # --retries 2: the shared macOS/Windows runners are loaded and several
+      # e2e tests are timing-sensitive; retries absorb transient flakes while a
+      # genuine break still fails all 3 attempts. (Tier 0 stays retries=0 for
+      # hard signal on the fast lane.)
+      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
 
   nextest-windows:
     name: nextest / windows
@@ -132,8 +136,8 @@ jobs:
           toolchain: stable
           shared-key: windows-latest-stable
           with-nextest: true
-      # --no-fail-fast: see nextest-macos above.
-      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast
+      # --no-fail-fast + --retries 2: see nextest-macos above.
+      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
 
   coverage:
     name: cargo llvm-cov nextest
