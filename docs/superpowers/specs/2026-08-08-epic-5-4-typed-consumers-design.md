@@ -94,24 +94,46 @@ Rejected:
 The callback path needs no async-component-model, reuses the existing host-import pattern,
 and yields structured-cloneable POJOs — required for the Web Worker path anyway.
 
-### D3 — Types: generated from a `RunEvent` schema + a normalize shim
+### D3 — Types: frozen `RunEvent` schema + hand-written TS union, both drift-guarded
 
-The DX an app developer feels comes from where the TS types are generated, not from the
-transport. Single source of truth:
+The DX an app developer feels comes from a typed, ergonomic event union that provably tracks
+the Rust enum — not from *how* the TS is produced. The 5.3 `tau-sdk-codegen` emitter is NOT
+a schema-driven type generator (`emit_ts::render_package` ignores its schema arg and returns
+a static template; `SchemaModel` handles only string-`enum` variants, not the
+externally-tagged `oneOf` object-union shape `RunEvent` produces). Building a general
+JSON-Schema→TS-union compiler is out of scope for this epic. Instead, a two-hop
+drift-guarded chain gives the same guarantee:
 
 ```
-tau-runtime-core: RunEvent  #[derive(Serialize, Deserialize, JsonSchema)]   ← add JsonSchema
-        │ schemars
+tau-runtime-core: RunEvent  #[cfg_attr(feature="schema", derive(schemars::JsonSchema))]
+        │ schemars (schema feature)
         ▼
-schemas/run-event/run-event.v1.schema.json   ← frozen + committed (like schemas/ir/)
-        │ tau-sdk-codegen (emit_ts)
+schemas/run-event/run-event.v1.schema.json   ← frozen + committed
+        │  ── HOP 1: schema-freeze test (schema tracks Rust) ──
+        │  ── HOP 2: TS-coverage test (TS tracks schema) ──
         ▼
-@tau/embed-js: RunEvent.ts   ← generated union, drift-tested, full autocomplete
+@tau/embed-js: RunEvent.ts   ← HAND-WRITTEN union, full autocomplete
 ```
+
+- **Hop 1 — schema-freeze test:** freshly-generated schemars output == committed
+  `run-event.v1.schema.json`, mirroring `crates/tau-ir/tests/schema_export.rs` (gated behind
+  a `schema` feature; `UPDATE_SCHEMA=1` regenerates; pretty-print + trailing newline +
+  string `assert_eq!`). Guarantees the schema can't drift from the Rust enum.
+- **Hop 2 — TS-coverage test:** parses the frozen schema, extracts its variant set, and
+  asserts `RunEvent.ts` covers exactly those variants (and `normalize.ts` handles each).
+  Guarantees a new Rust variant cannot ship without updating the TS.
+
+A new `RunEvent` variant therefore fails a test unless both the schema and the TS are
+updated — the drift protection we wanted, without a bespoke TS compiler. Upgrade to full
+generation later if more types need TS emission.
 
 `RunEvent` stays **externally tagged**; a small (~40-line) `normalize.ts` maps serde's
-`{"TextDelta":{"delta":"Hi"}}` → the ergonomic `{type:"text-delta", delta:"Hi"}`, and is
-unit-tested against the schema over every variant.
+`{"TextDelta":{"delta":"Hi"}}` → the ergonomic `{type:"text-delta", delta:"Hi"}`.
+
+Adding `JsonSchema` to `RunEvent` transitively requires it on its field types
+(`StopReason`, `TokenUsage`, `ToolResult` in tau-ports; `RunOutcome` in tau-runtime-core;
+`serde_json::Value` is natively supported). tau-ports/tau-domain already expose `schema`
+features to thread this through.
 
 Rejected for now: flipping `RunEvent` to internally-tagged serde
 (`#[serde(tag="type", rename_all="kebab-case")]`). That would make wire == schema == TS and
@@ -177,7 +199,7 @@ sdk/embed-js/        # emitted by `tau embed --host js` (5.2); scaffold COMMITTE
   src/
     component.ts     # jco transpile output (gitignored build artifact)
     normalize.ts     # RunEvent {"TextDelta":…} → {type:"text-delta",…} shim
-    RunEvent.ts      # generated from run-event.v1.schema.json (5.3 emitter)
+    RunEvent.ts      # hand-written union; drift-guarded by TS-coverage test vs schema
     index.ts         # loadTau / loadTauInWorker
     worker.ts        # Web-Worker host
 sdk/react/           # 5.4  "@tau/react"   peerDep react; dep @tau/embed-js
@@ -198,10 +220,14 @@ examples/streaming-demo/   # 5.4 acceptance: Vite React app renders `text` live
 
 ## Testing
 
-- **Rust** — `RunEvent` schema freeze test: schemars output == committed
-  `run-event.v1.schema.json` (mirrors the IR schema test).
+- **Rust** — `RunEvent` schema-freeze test (hop 1): schemars output == committed
+  `run-event.v1.schema.json` (mirrors `crates/tau-ir/tests/schema_export.rs`).
+- **Rust** — TS-coverage test (hop 2): parse the frozen schema, assert `RunEvent.ts`
+  covers exactly its variant set.
 - **Rust** — `tau embed --host js` drift test: committed scaffold == fresh emit (mirrors
-  5.3 `tests/drift.rs`).
+  5.3 `crates/tau-sdk-codegen/tests/drift.rs`).
+- **Rust** — `wit_host_drift.rs` update: the new `emit-event` host import must be added to
+  `HOST_PORT_REGISTRY` + param-shape assertions (ADR-0056 freeze test fails otherwise).
 - **TS** — `normalize.ts` unit tests over every `RunEvent` variant, fixtures derived from
   the schema.
 - **Acceptance** — the Vite demo renders a live streaming `text`.
