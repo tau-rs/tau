@@ -1,6 +1,6 @@
 //! v1 target triple registry. See spec §4.
 
-use tau_domain::{CapabilityShape, CapabilityShapeSet};
+use tau_domain::{CapabilityShape, CapabilityShapeSet, IrFeature};
 
 use crate::capability_gate::CapabilityTier;
 use crate::target::adapter_family::AdapterFamily;
@@ -19,6 +19,9 @@ pub struct TargetTripleEntry {
     pub triple: TargetTriple,
     /// Constructor for the set of capability shapes this target enforces.
     pub shapes_fn: fn() -> CapabilityShapeSet,
+    /// Optional IR execution features this target can run. A `const` slice
+    /// (unlike `shapes_fn`) because `IrFeature` is `Copy` — no allocation.
+    pub supported_features: &'static [IrFeature],
     /// Whether this triple ships in v1 or is reserved for future work.
     pub status: TripleStatus,
 }
@@ -29,6 +32,7 @@ impl TargetTripleEntry {
         TargetCapabilityProfile {
             triple: self.triple,
             required_shapes: (self.shapes_fn)(),
+            supported_features: self.supported_features,
             status: self.status,
         }
     }
@@ -70,6 +74,12 @@ fn all_shapes() -> CapabilityShapeSet {
 // ---------------------------------------------------------------------------
 
 /// All triples known to tau (Available + Reserved).
+///
+/// `supported_features`: every native/host target drives `run_pipeline` and can
+/// execute all control-flow (`IrFeature::ALL`). `any-wasi-strict` lists none —
+/// the wasm guest drives `run_ir_streaming`, which has no `run_pipeline`
+/// control-flow execution path, so a control-flow workflow is refused for wasm
+/// at build time (see `tau-ir-lower`'s `feature_fit`).
 pub static REGISTRY: &[TargetTripleEntry] = &[
     TargetTripleEntry {
         triple: TargetTriple {
@@ -78,6 +88,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
             tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
+        supported_features: IrFeature::ALL,
         status: TripleStatus::Available,
     },
     TargetTripleEntry {
@@ -87,6 +98,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
             tier: CapabilityTier::Light,
         },
         shapes_fn: fs_rw_exec_net,
+        supported_features: IrFeature::ALL,
         status: TripleStatus::Available,
     },
     TargetTripleEntry {
@@ -96,6 +108,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
             tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
+        supported_features: IrFeature::ALL,
         status: TripleStatus::Available,
     },
     TargetTripleEntry {
@@ -105,11 +118,13 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
             tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
+        supported_features: IrFeature::ALL,
         status: TripleStatus::Available,
     },
     TargetTripleEntry {
         triple: TargetTriple::PASSTHROUGH,
         shapes_fn: all_shapes,
+        supported_features: IrFeature::ALL,
         status: TripleStatus::Available,
     },
     TargetTripleEntry {
@@ -119,6 +134,8 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
             tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_net,
+        // Wasm guests cannot execute control-flow steps (no run_pipeline path).
+        supported_features: &[],
         status: TripleStatus::Available,
     },
     TargetTripleEntry {
@@ -128,6 +145,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
             tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_exec_net,
+        supported_features: IrFeature::ALL,
         status: TripleStatus::Reserved {
             reason: "windows AppContainer scaffold; probe Unavailable in v1",
         },
@@ -230,6 +248,32 @@ mod tests {
         assert_eq!(p.triple, t);
         assert!(matches!(p.status, TripleStatus::Available));
         assert!(p.required_shapes.contains(&CapabilityShape::FilesystemRead));
+    }
+
+    #[test]
+    fn any_wasi_strict_supports_no_control_flow_features() {
+        // Wasm guests drive run_ir_streaming, not run_pipeline; control-flow
+        // has no wasm execution path, so the profile must list no features.
+        let t: TargetTriple = "any-wasi-strict".parse().unwrap();
+        let e = lookup(&t).expect("any-wasi-strict must be registered");
+        assert!(
+            e.supported_features.is_empty(),
+            "wasi target must support no IR control-flow features, got {:?}",
+            e.supported_features
+        );
+    }
+
+    #[test]
+    fn native_targets_support_all_control_flow_features() {
+        for name in ["linux-native-strict", "darwin-native-strict"] {
+            let t: TargetTriple = name.parse().unwrap();
+            let e = lookup(&t).unwrap();
+            assert_eq!(
+                e.supported_features,
+                IrFeature::ALL,
+                "{name} should support all control-flow features"
+            );
+        }
     }
 
     #[test]

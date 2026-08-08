@@ -36,6 +36,18 @@ fn project_needing_process_exec_is_refused() {
 }
 
 #[test]
+fn project_using_control_flow_is_refused() {
+    // A `Parallel` pipeline is control-flow; wasm guests drive run_ir_streaming,
+    // not run_pipeline, so `tau build wasm` must refuse it (feature-fit, EPIC 4.2).
+    let err = lower_to_wasm_ir(&fixture("needs-control-flow")).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("feature-fit") && msg.contains("control-flow") && msg.contains("Parallel"),
+        "expected a feature-fit control-flow refusal naming Parallel, got: {msg}"
+    );
+}
+
+#[test]
 fn trivial_project_generates_host_only_world() {
     let world = wasm_world_for_project(&fixture("trivial")).expect("trivial world");
     assert!(world.contains("import host;"));

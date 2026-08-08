@@ -1,0 +1,3 @@
+{"turn": 0, "response": {"text": "sunny, 24C", "stop_reason": "end_turn"}}
+{"turn": 1, "response": {"text": "markets up 2%", "stop_reason": "end_turn"}}
+{"turn": 2, "response": {"text": "digest: sunny and markets up", "stop_reason": "end_turn"}}

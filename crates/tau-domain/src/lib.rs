@@ -20,6 +20,7 @@ extern crate std;
 pub mod agent;
 pub mod error;
 pub mod id;
+pub mod ir_feature;
 pub mod message;
 pub mod package;
 pub mod value;
@@ -39,6 +40,7 @@ pub use error::{
     PluginKindError, PortKindError,
 };
 pub use id::{AgentId, AgentInstanceId, MessageId, PackageName};
+pub use ir_feature::IrFeature;
 pub use message::{Address, Message, MessagePayload};
 pub use package::capability::lattice::{canon_caps, capability_subset, meet, CeilingViolation};
 #[cfg(feature = "std")]
