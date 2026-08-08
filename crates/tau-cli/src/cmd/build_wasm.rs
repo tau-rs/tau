@@ -258,8 +258,7 @@ pub async fn run(args: &BuildWasmArgs, output: &mut Output) -> Result<()> {
 
     // Write the (already-generated) WIT world next to the component.
     let wit_path = out_path.with_extension("wit");
-    std::fs::write(&wit_path, &world)
-        .with_context(|| format!("writing {}", wit_path.display()))?;
+    std::fs::write(&wit_path, &world).with_context(|| format!("writing {}", wit_path.display()))?;
 
     let _ = output.human(&format!(
         "built {} ({} bytes, ir {}) + {}",
