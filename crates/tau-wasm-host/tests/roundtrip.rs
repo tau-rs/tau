@@ -208,3 +208,76 @@ fn host_guest_roundtrip_is_deterministic() {
         "same inputs must yield byte-identical output"
     );
 }
+
+/// Lower a branch fixture to canonical IR bytes (`then` arm always taken).
+/// The condition `non_empty` on `triage`'s reply is always true, so the
+/// `then` arm (`arm`) runs — a deterministic parity scenario.
+fn branch_ir_bytes() -> Vec<u8> {
+    let toml = r#"
+packages = ["anthropic"]
+
+[project]
+name = "branch-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.triage]
+display_name = "Triage"
+package = "branch-wasm@^0.1"
+model = "claude"
+[agents.triage.prompt]
+system = "Reply and stop."
+
+[agents.arm]
+display_name = "Arm"
+package = "branch-wasm@^0.1"
+model = "claude"
+[agents.arm.prompt]
+system = "Reply and stop."
+
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "non_empty" }
+
+  [[pipeline.steps.then]]
+  id = "arm"
+  run = "agent:arm"
+  input = "${steps.triage.output}"
+"#;
+    let config = tau_pkg::project::ProjectConfig::parse_str(toml).expect("fixture parses");
+    let target: tau_ports::target::TargetTriple = "any-wasi-strict".parse().unwrap();
+    let caches = tau_ir_lower::Caches {
+        native_tool: &|_| Some([0u8; 32]),
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
+    };
+    let module = tau_ir_lower::lower_project(&config, &target, &caches)
+        .expect("lowers")
+        .module;
+    tau_ir::to_canonical_bytes(&module)
+}
+
+#[test]
+#[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
+fn guest_rejects_authored_branch_at_load() {
+    // The guest drives a single entry agent (run_ir_streaming), not the
+    // pipeline executor, so it rejects any pipeline-bearing IR (Branch
+    // included) at load rather than silently running only the entry agent.
+    // Native `tau run` executes the branch fully; driving run_pipeline
+    // in-wasm is a follow-up slice.
+    let component = build_guest_component(Some(&branch_ir_bytes()));
+    let err = run_component(&component, "hi", vec![]).unwrap_err();
+    assert!(
+        matches!(&err, tau_wasm_host::WasmHostError::Guest(m) if m.contains("pipelines")),
+        "expected an explicit pipeline reject from the guest, got {err:?}"
+    );
+}

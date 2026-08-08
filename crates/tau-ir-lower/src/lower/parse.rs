@@ -271,20 +271,7 @@ pub(super) fn parse(
 
     // --- Pipeline ---------------------------------------------------------
     let mut pipeline = config.pipeline.as_ref().map(|p| Pipeline {
-        steps: p
-            .steps
-            .iter()
-            .map(|s| PipelineStep {
-                id: PipelineStepId(s.id.clone()),
-                run: match &s.run {
-                    PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
-                    PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
-                    PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
-                    PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
-                },
-                input: s.input.clone(),
-            })
-            .collect(),
+        steps: p.steps.iter().map(lower_step).collect(),
     });
 
     // --- Checks (goals + deliverables) -----------------------------------
@@ -533,6 +520,42 @@ pub fn durable_entry_to_ir(
 /// not durable.
 fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable::Durability> {
     entry.durable.as_ref().map(durable_entry_to_ir)
+}
+
+/// Lower one validated pipeline step to an IR [`PipelineStep`], recursing
+/// into `Branch` arms. Reference/scope integrity is validated separately by
+/// the IR typecheck (`check_pipeline`), so this mapping stays infallible.
+fn lower_step(s: &tau_pkg::project::PipelineStepConfig) -> PipelineStep {
+    let run = match &s.run {
+        PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
+        PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
+        PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
+        PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
+        PipelineRunRef::Branch {
+            on,
+            then,
+            otherwise,
+        } => StepRun::Branch {
+            on: lower_condition(on),
+            then: then.iter().map(lower_step).collect(),
+            otherwise: otherwise.iter().map(lower_step).collect(),
+        },
+    };
+    PipelineStep {
+        id: PipelineStepId(s.id.clone()),
+        run,
+        input: s.input.clone(),
+    }
+}
+
+/// Lower a tau-pkg [`ConditionConfig`](tau_pkg::project::ConditionConfig) to an
+/// IR [`Condition`](tau_ir::check::Condition), reusing the same locus/predicate
+/// mappings as `[goals.*]`.
+fn lower_condition(c: &tau_pkg::project::ConditionConfig) -> tau_ir::check::Condition {
+    tau_ir::check::Condition {
+        evaluates: lower_locus(&c.evaluates),
+        predicate: lower_predicate(&c.predicate),
+    }
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].

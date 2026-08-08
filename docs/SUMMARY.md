@@ -28,6 +28,7 @@
 - [Install a skill](how-to/install-a-skill.md)
 - [Use MCP servers](how-to/mcp-servers.md)
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
+- [Author a conditional branch](how-to/authoring-a-branch.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
 - [Quarantine a flaky test](how-to/quarantine-flaky-tests.md)
