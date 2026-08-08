@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["check_drift"],"struct":["RunOpts","RunOutcome","Runner"]};

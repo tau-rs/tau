@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ToolContent"],"struct":["DenyEntry","SessionContext","StatelessAdapter","ToolResult"],"trait":["StatelessTool","Tool"]};
