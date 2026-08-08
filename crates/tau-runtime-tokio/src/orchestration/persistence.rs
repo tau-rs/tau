@@ -155,6 +155,7 @@ mod tests {
                 agent_id: "a".into(),
                 turn_index: 0,
                 duration_ms: 1,
+                tokens: 0,
             },
         }
     }

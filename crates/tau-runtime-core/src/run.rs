@@ -456,7 +456,7 @@ impl Runtime {
         loop {
             let next = core::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
             match next {
-                Some(RunEvent::TurnCompleted { turn, .. }) => {
+                Some(RunEvent::TurnCompleted { turn, usage, .. }) => {
                     // Translate the pump's per-turn signal into a multi-agent
                     // `Turn` trace event, timed off the injected clock.
                     if let Some((state, clock, random, agent_id)) = trace_ctx.as_ref() {
@@ -465,6 +465,11 @@ impl Runtime {
                             .map(|prev| (now - prev).num_milliseconds().max(0) as u64)
                             .unwrap_or(0);
                         last_turn_mark = Some(now);
+                        // input + output, matching how `aggregated_tokens`
+                        // (and thus the Summary header `tokens_used`) sums.
+                        let tokens = usage
+                            .map(|u| u64::from(u.input_tokens) + u64::from(u.output_tokens))
+                            .unwrap_or(0);
                         let s = state.borrow();
                         s.trace.emit(tau_ports::TraceEvent {
                             id: crate::ids::ulid(clock, random),
@@ -477,6 +482,7 @@ impl Runtime {
                                 // `TraceEventKind::Turn.turn_index` is 0-based.
                                 turn_index: turn.saturating_sub(1),
                                 duration_ms,
+                                tokens,
                             },
                         });
                     }
