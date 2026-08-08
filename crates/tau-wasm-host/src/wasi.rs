@@ -40,3 +40,177 @@ mod tests {
         assert!(!only.permits("c.com"));
     }
 }
+
+use std::path::{Path, PathBuf};
+
+use tau_domain::Capability;
+use tau_ports::target::wasi_map::{map_capability, Preopen, PreopenAccess, WasiConfig};
+
+/// One filesystem preopen the host will grant the guest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreopenGrant {
+    /// Real host directory to open (sandbox_root joined with the guest dir).
+    pub host_path: PathBuf,
+    /// Path as the guest sees it (the glob's static prefix directory).
+    pub guest_path: String,
+    /// Read-only or read-write.
+    pub access: PreopenAccess,
+}
+
+/// The full WASI grant set derived from a component's allow-bounded caps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WasiGrants {
+    pub hosts: HostAccess,
+    pub preopens: Vec<PreopenGrant>,
+}
+
+/// The leading `/`-rooted directory prefix of a glob pattern: the longest
+/// path prefix containing no glob metacharacter (`*`, `?`, `[`). `/data/**`
+/// -> `/data`; `/out` -> `/out`; `/data/*.txt` -> `/data`; `/a/b/c.txt` ->
+/// `/a/b`. Always returns an absolute path; a bare `/x` yields `/x`.
+fn glob_prefix_dir(pattern: &str) -> String {
+    let mut dir = String::from("/");
+    for (i, seg) in pattern.trim_start_matches('/').split('/').enumerate() {
+        if seg.is_empty() || seg.contains(['*', '?', '[']) {
+            break;
+        }
+        // A trailing non-glob segment with no further segments is itself a
+        // dir grant (e.g. `/out`); a path with parents returns the parent dir.
+        let is_last = i == pattern.trim_start_matches('/').split('/').count() - 1;
+        // Treat the last segment as a file resource if the path has multiple
+        // segments; otherwise treat it as a directory.
+        if is_last && pattern.trim_start_matches('/').contains('/') {
+            break;
+        }
+        if dir.len() > 1 {
+            dir.push('/');
+        }
+        dir.push_str(seg);
+    }
+    dir
+}
+
+/// Fold the caps' [`WasiConfig`]s into a [`WasiGrants`]. Reuses E3.1's
+/// [`map_capability`]; hardware / in-guest / host-mediated caps contribute
+/// nothing (they carry `WasiConfig::None`).
+pub fn wasi_grants_from_caps(
+    caps: &[Capability],
+    sandbox_root: &Path,
+) -> Result<WasiGrants, crate::WasmHostError> {
+    use tau_ports::target::wasi_map::Disposition;
+
+    let mut any = false;
+    let mut exact: BTreeSet<String> = BTreeSet::new();
+    let mut has_net = false;
+    // guest_path -> access, RW wins over RO for the same dir.
+    let mut preopen_map: std::collections::BTreeMap<String, PreopenAccess> =
+        std::collections::BTreeMap::new();
+
+    for cap in caps {
+        let mapping = map_capability(cap);
+        if let Disposition::Unsupported { reason } = &mapping.disposition {
+            return Err(crate::WasmHostError::UnsupportedCap {
+                reason: reason.to_string(),
+            });
+        }
+        match mapping.config {
+            WasiConfig::None => {}
+            WasiConfig::AllowedHosts { hosts, .. } => {
+                has_net = true;
+                if hosts.is_any() {
+                    any = true;
+                } else {
+                    exact.extend(hosts.exact_hosts());
+                }
+            }
+            WasiConfig::Preopens(preopens) => {
+                for Preopen { paths, access } in preopens {
+                    for pat in paths {
+                        let guest_path = glob_prefix_dir(&pat);
+                        let entry = preopen_map
+                            .entry(guest_path)
+                            .or_insert(PreopenAccess::ReadOnly);
+                        if access == PreopenAccess::ReadWrite {
+                            *entry = PreopenAccess::ReadWrite;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let hosts = if any {
+        HostAccess::Any
+    } else if has_net {
+        HostAccess::Only(exact)
+    } else {
+        HostAccess::DenyAll
+    };
+
+    let preopens = preopen_map
+        .into_iter()
+        .map(|(guest_path, access)| PreopenGrant {
+            host_path: sandbox_root.join(guest_path.trim_start_matches('/')),
+            guest_path,
+            access,
+        })
+        .collect();
+
+    Ok(WasiGrants { hosts, preopens })
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+    use tau_domain::fixtures::{cap_fs_read, cap_fs_write, cap_net_http};
+
+    #[test]
+    fn glob_prefix_rule() {
+        assert_eq!(glob_prefix_dir("/data/**"), "/data");
+        assert_eq!(glob_prefix_dir("/out"), "/out");
+        assert_eq!(glob_prefix_dir("/data/*.txt"), "/data");
+        assert_eq!(glob_prefix_dir("/a/b/c.txt"), "/a/b");
+    }
+
+    #[test]
+    fn no_net_cap_is_deny_all() {
+        let g = wasi_grants_from_caps(&[cap_fs_read(&["/data/**"])], Path::new("/tmp/root")).unwrap();
+        assert_eq!(g.hosts, HostAccess::DenyAll);
+    }
+
+    #[test]
+    fn exact_hosts_become_only() {
+        let g = wasi_grants_from_caps(
+            &[cap_net_http(&["a.com", "b.com"], &[])],
+            Path::new("/tmp/root"),
+        )
+        .unwrap();
+        assert_eq!(
+            g.hosts,
+            HostAccess::Only(["a.com".into(), "b.com".into()].into())
+        );
+    }
+
+    #[test]
+    fn fs_read_maps_to_readonly_preopen_under_root() {
+        let g = wasi_grants_from_caps(&[cap_fs_read(&["/data/**"])], Path::new("/tmp/root")).unwrap();
+        assert_eq!(g.preopens.len(), 1);
+        let p = &g.preopens[0];
+        assert_eq!(p.guest_path, "/data");
+        assert_eq!(p.host_path, PathBuf::from("/tmp/root/data"));
+        assert_eq!(p.access, PreopenAccess::ReadOnly);
+    }
+
+    #[test]
+    fn fs_write_wins_over_read_for_same_dir() {
+        let g = wasi_grants_from_caps(
+            &[cap_fs_read(&["/data/a"]), cap_fs_write(&["/data/b"], None)],
+            Path::new("/tmp/root"),
+        )
+        .unwrap();
+        // Both resolve to guest_path `/data`; RW must win.
+        assert_eq!(g.preopens.len(), 1);
+        assert_eq!(g.preopens[0].access, PreopenAccess::ReadWrite);
+    }
+}

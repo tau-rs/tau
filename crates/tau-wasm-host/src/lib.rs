@@ -28,7 +28,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
 mod wasi;
-pub use wasi::HostAccess;
+pub use wasi::{wasi_grants_from_caps, HostAccess, PreopenGrant, WasiGrants};
 
 wasmtime::component::bindgen!({
     path: "../../wit/tau-host.wit",
@@ -63,6 +63,10 @@ pub enum WasmHostError {
     /// fails before instantiation rather than mid-run.
     #[error("invalid canned completion response JSON: {0}")]
     InvalidResponse(#[source] serde_json::Error),
+    /// A capability maps to `Disposition::Unsupported` on wasm (should have
+    /// been rejected at `tau build wasm`; belt-and-suspenders at host time).
+    #[error("capability unsupported on wasm: {reason}")]
+    UnsupportedCap { reason: String },
 }
 
 /// Store data backing the three `tau:host/host` imports with deterministic
