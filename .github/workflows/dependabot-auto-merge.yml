@@ -4,10 +4,25 @@ name: Dependabot — auto-merge patches
 # - PR is labeled `dependencies` (dependabot adds this automatically)
 # - update-type is patch-level (semver patch bump)
 # - All Tier 1 checks pass (gated by `gh pr merge --auto` itself)
+#
+# QUEUE-METHOD TRAP (why the `heal` job below exists):
+# This repo's `main` uses a GitHub merge queue. `gh pr merge --auto`
+# enqueues a PR with a *null* merge method ONLY when the PR is already
+# green; on a not-yet-green PR (the state at `opened`/`synchronize`) gh
+# falls back to *classic* auto-merge and GitHub stamps the repo-default
+# method (`merge`). The merge queue silently refuses to dequeue any PR
+# whose `autoMergeRequest.mergeMethod` is non-null, so the `enroll` job
+# alone leaves patch PRs stuck: auto-merge "on" but never queued. Re-running
+# `--auto` is a no-op once auto-merge exists, so it never self-corrects.
+# The scheduled `heal` job re-enrolls stuck PRs (disable → bare --auto) once
+# they are green, which routes them into the queue with a null method.
 
 on:
   pull_request:
     types: [labeled, opened, synchronize]
+  schedule:
+    # Every 30 min: convert stuck classic-method enrollments into queue enrollments.
+    - cron: '*/30 * * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,7 +36,7 @@ jobs:
   auto-merge:
     name: enroll auto-merge if patch-level
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
     steps:
       - name: Fetch metadata
         id: metadata
@@ -34,3 +49,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge --auto "$PR_URL"
+
+  heal:
+    name: re-enroll queue-blocked dependabot PRs
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Re-enroll green PRs stuck on a classic merge method
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Only touch dependabot PRs that are mergeable-and-green (CLEAN).
+          prs=$(gh pr list --author 'app/dependabot' --state open \
+                  --json number,mergeStateStatus \
+                  -q '.[] | select(.mergeStateStatus == "CLEAN") | .number')
+          for pr in $prs; do
+            method=$(gh pr view "$pr" --json autoMergeRequest \
+                       -q '.autoMergeRequest.mergeMethod // "null"')
+            if [ "$method" != "null" ]; then
+              echo "PR #$pr: auto-merge method=$method blocks the queue — re-enrolling."
+              gh pr merge "$pr" --disable-auto
+              gh pr merge "$pr" --auto
+            fi
+          done
