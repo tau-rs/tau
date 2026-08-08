@@ -1,0 +1,604 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0012 — tau lifecycle commands - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0012-tau-lifecycle-commands.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0012-tau-update--verify--uninstall-lifecycle-commands"><a class="header" href="#adr-0012-tau-update--verify--uninstall-lifecycle-commands">ADR-0012: tau update / verify / uninstall lifecycle commands</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-05-01
+<strong>Deciders:</strong> Titouan Lebocq
+<strong>Supersedes:</strong> —
+<strong>Closes:</strong> <a href="0007-tau-cli.html">ADR-0007</a> §1 — <code>uninstall</code>, <code>update</code>,
+<code>verify</code> were explicitly deferred to Phase 1+ when the v0.1
+5-subcommand surface (<code>install</code>, <code>list</code>, <code>run</code>, <code>init</code>, <code>chat</code>) was
+locked.
+<strong>Amends:</strong> —
+<strong>Refines:</strong> <a href="0007-tau-cli.html">ADR-0007</a> §7 (three-bucket exit code
+policy — this ADR explicitly maps verify-drift and lifecycle errors
+into the 0/1/2 buckets).</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>Phase 0 priority 3 shipped <code>tau-pkg</code> and <code>tau install</code>. The
+<code>LockedVersion.sha256</code> field was reserved for "Phase-1 <code>tau verify</code>
+content hashing"; the <code>tau_pkg::uninstall(name, version, scope)</code>
+library function was already implemented at install.rs:612.
+ADR-0007 §1 deferred the three lifecycle subcommands explicitly:</p>
+<blockquote>
+<p>Deferred to Phase 1+: <code>uninstall</code>, <code>update</code>, <code>verify</code>, <code>workflow</code>
+and any orchestration verbs.</p>
+</blockquote>
+<p>After Tier 2 priorities 4 (capability override), 5 (transitive
+dependency resolution), 6 (tool-args schema validation), and 8
+(streaming LLM responses) shipped, only this priority and one Tier 2
+slot remained open. This ADR closes priority 7's scope.</p>
+<p>The constraints driving the four design decisions below:</p>
+<ol>
+<li><strong><code>PackageSource</code> is <code>#[non_exhaustive]</code></strong>. Today only the <code>Git</code>
+variant exists, but the marker explicitly anticipates future
+variants (registry, tarball, local path). Verify primitives that
+tie to git operations (<code>git rev-parse HEAD</code>, <code>git status --porcelain</code>) would need redesign for each new source — wrong
+coupling.</li>
+<li><strong>The library function <code>tau_pkg::uninstall</code> already exists</strong> and
+handles whole-package, per-version, active-version-promotion, and
+lockfile mutation. The CLI is a thin wrapper.</li>
+<li><strong>Multi-version cohabitation already works</strong> in the lockfile via
+<code>LockedPackage.installed_versions: Vec&lt;LockedVersion&gt;</code>. Update
+semantics build on top.</li>
+<li><strong>The exit-code policy from ADR-0007 §7</strong> (0 success, 1 agent
+failure, 2 kernel error) maps cleanly to verify drift (kernel
+trust → 2) and lifecycle errors (kernel error → 2).</li>
+</ol>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<p>Four inter-locking commitments:</p>
+<h3 id="1-whole-tree-sha-256-verify-source-agnostic"><a class="header" href="#1-whole-tree-sha-256-verify-source-agnostic">1. Whole-tree SHA-256 verify, source-agnostic</a></h3>
+<p><strong>Decision:</strong> At install time, after the source materializes the
+package files, compute a whole-tree SHA-256 over the install dir
+(excluding <code>.git/</code>, <code>target/</code>, and <code>*.tau-tmp/</code>). Store in
+<code>LockedVersion.sha256</code>. On verify, recompute and compare. Plugin
+binaries get a separate <code>LockedPlugin.binary_sha256</code> field
+(introduced in lockfile schema v3).</p>
+<p><strong>Rationale:</strong></p>
+<p><code>PackageSource</code> is <code>#[non_exhaustive]</code> — future variants are
+inevitable. A verify primitive that ties to git operations would
+need redesign for each new source. Tree-hashing works for any
+source: clone → hash, unpack tarball → hash, resolve local path →
+hash, fetch from registry → hash. The recompute step is identical
+regardless of how the install got there.</p>
+<p>Sub-100ms for typical packages (~100 files, &lt;1MB). Cheap enough to
+run on every <code>tau verify</code>, including in CI.</p>
+<h4 id="11-excluded-paths"><a class="header" href="#11-excluded-paths">1.1. Excluded paths</a></h4>
+<ul>
+<li><strong><code>.git/</code></strong> — git-specific noise. Changes on <code>git gc</code>, ref
+updates, shallow-clone metadata. Not part of what the runtime
+depends on.</li>
+<li><strong><code>target/</code></strong> — build artifacts. Recomputed on each <code>cargo build</code>, would always show drift. Plugin binaries are tracked
+separately via <code>LockedPlugin.binary_sha256</code>.</li>
+<li><strong><code>*.tau-tmp/</code></strong> — any stale temp dirs from interrupted operations.
+Defensive.</li>
+</ul>
+<h4 id="12-hash-algorithm"><a class="header" href="#12-hash-algorithm">1.2. Hash algorithm</a></h4>
+<pre><code class="language-text">1. Walk install dir with walkdir, follow_links(false).
+2. Skip `.git/`, `target/`, `*.tau-tmp/` directories.
+3. Sort entries lexicographically by relative path.
+4. For each file:
+     hasher.update(rel_path.as_bytes());
+     hasher.update(&amp;[0]);
+     hasher.update(file_contents);
+     hasher.update(&amp;[0]);
+5. Return format!("{:x}", hash.finalize()) — 64-char lowercase hex.
+</code></pre>
+<p>The <code>\0</code> separators prevent path-content ambiguity (e.g. <code>a/bcontent</code>
+vs <code>a/b\0content</code>). Symlinks are NOT followed; a symlink contributes
+its target path bytes (not the resolved file content) to the hash —
+preventing symlink-loop pitfalls during walk.</p>
+<h4 id="13-plugin-binary-hashing"><a class="header" href="#13-plugin-binary-hashing">1.3. Plugin binary hashing</a></h4>
+<p><code>LockedPlugin</code> (lockfile schema v2) gains a <code>binary_sha256: String</code>
+field at v3. Populated at install time after <code>cargo build</code> succeeds,
+via <code>sha256_of_file(LockedPlugin.binary_path)</code>. Verified separately
+from the source-tree hash because:</p>
+<ul>
+<li>Source tree drift = "did someone tamper with the package code on
+disk."</li>
+<li>Binary drift = "did someone replace the runtime artifact." These
+are different threat models with different remediations (rebuild
+vs reinstall).</li>
+</ul>
+<p>Older <code>LockedPlugin</code> entries from lockfile v2-leftover (no
+<code>binary_sha256</code>) are flagged <code>unverified</code> for the binary, NOT
+<code>drift</code>.</p>
+<h4 id="14-trigger-to-revisit"><a class="header" href="#14-trigger-to-revisit">1.4. Trigger to revisit</a></h4>
+<ul>
+<li>Per-file drift diagnosis ("file X changed at line Y") — would
+require additional manifest storage. Cheap to add later as a
+<code>--diff</code> flag on <code>tau verify</code>.</li>
+<li>Cryptographic signing (registry signing keys, GPG, Sigstore) —
+separate Phase 2+ ADR.</li>
+<li>Hash algorithm migration (BLAKE3, etc.) — hash field is opaque
+string; algorithm prefix (<code>sha256:...</code>) could be added later.</li>
+</ul>
+<h3 id="2-tau-update-defaults-to-latest-tag"><a class="header" href="#2-tau-update-defaults-to-latest-tag">2. <code>tau update</code> defaults to latest tag</a></h3>
+<p><strong>Decision:</strong> <code>tau update &lt;pkg&gt;</code> re-resolves the package against
+the source's latest published tag (using priority 5's
+<code>source_list::list_versions_at_source</code>). <code>tau update &lt;pkg&gt; --version 1.2.3</code> jumps to that exact version. Re-resolves
+transitive deps. Old versions stay installed by default; opt-in
+<code>--prune</code> removes the previous active version after the new
+install succeeds.</p>
+<p><strong>Rationale:</strong></p>
+<p>Dominant idiom (npm, cargo, gem). Users expect "give me the new
+version of X" by default. Multi-version cohabitation already exists
+in the lockfile (<code>LockedPackage.installed_versions: Vec&lt;LockedVersion&gt;</code>);
+rollback is <code>tau update &lt;pkg&gt; --version &lt;old&gt;</code> away.</p>
+<p>Re-resolving transitive deps means new <code>[[requires.tools]]</code>
+declarations in the new version automatically install. Priority 5's
+"highest-compatible" picker handles existing deps that are still
+satisfied without re-installing.</p>
+<h4 id="21-behavior-matrix"><a class="header" href="#21-behavior-matrix">2.1. Behavior matrix</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Command</th><th>Behavior</th></tr></thead><tbody>
+<tr><td><code>tau update &lt;pkg&gt;</code></td><td>Find latest tag matching package source's rev constraint. If newer than active, install + promote. Old versions kept.</td></tr>
+<tr><td><code>tau update &lt;pkg&gt; --version &lt;v&gt;</code></td><td>Validate <code>&lt;v&gt;</code> is reachable from source. Install + promote. Error if version not found.</td></tr>
+<tr><td><code>tau update &lt;pkg&gt; --prune</code></td><td>Same as <code>tau update &lt;pkg&gt;</code> plus <code>tau_pkg::uninstall(name, Some(old_active_version), scope)</code> after promotion.</td></tr>
+<tr><td><code>tau update &lt;pkg&gt; --json</code></td><td>Streaming-style JSON event output (post-call summary; library is synchronous).</td></tr>
+</tbody></table>
+</div>
+<h4 id="22-json-event-shape"><a class="header" href="#22-json-event-shape">2.2. JSON event shape</a></h4>
+<p>The library function returns synchronously after all work completes,
+so per-step progress events (resolving / installing / etc.) would
+require library refactoring. v0.1 emits a two-event pair:</p>
+<pre><code class="language-json">{"event":"update_started","name":"...","current":"1.0.0"}
+{"event":"update_completed","name":"...","from":"1.0.0","to":"1.1.0","pruned":true|false,"transitive_deps_changed":[...]}
+</code></pre>
+<p>On failure: <code>update_started</code> is emitted, then no <code>update_completed</code>
+follows. JSON consumers detect failure via exit code 2 + stderr.</p>
+<h4 id="23-no-tau-update-no-args-at-v01"><a class="header" href="#23-no-tau-update-no-args-at-v01">2.3. No <code>tau update</code> (no args) at v0.1</a></h4>
+<p>Updating every plugin in one command without per-package review is a
+footgun. The <code>Default&lt;Risky&gt;</code> posture from QG14 says "don't ship
+defaults that surprise the user with broad effects." <code>tau update</code>
+with no args is omitted; a future ADR can revisit if there's
+demonstrated demand.</p>
+<h4 id="24-trigger-to-revisit"><a class="header" href="#24-trigger-to-revisit">2.4. Trigger to revisit</a></h4>
+<ul>
+<li>Batch update (<code>tau update</code> no args) — needs an ADR amendment to
+lock the trust posture.</li>
+<li><code>tau update --dry-run</code> — print what would happen without modifying
+anything.</li>
+<li>Atomic install-then-prune (rollback on failure) — current design
+is install-then-prune-best-effort.</li>
+<li>Per-step progress JSON events — needs library refactoring to
+expose hooks.</li>
+</ul>
+<h3 id="3-tau-uninstall-is-permissive-no-cascade"><a class="header" href="#3-tau-uninstall-is-permissive-no-cascade">3. <code>tau uninstall</code> is permissive (no cascade)</a></h3>
+<p><strong>Decision:</strong> <code>tau uninstall &lt;pkg&gt;</code> operates on the lockfile and
+install tree only — no cross-project dep tracking. Print a
+remediation hint pointing to project <code>tau.toml</code>s and <code>tau resolve</code>
+for self-healing.</p>
+<p><strong>Rationale:</strong></p>
+<p>Tau's installed packages aren't a single shared system — they live
+in scopes (per-user, per-project). The <code>[[requires.tools]]</code> graph
+lives in <strong>project</strong> files, not the lockfile. <code>tau uninstall</code> operates
+on the lockfile + install tree; it has no project-level context.</p>
+<p>Cascade-detection would require scanning the entire user's home for
+<code>tau.toml</code>s — privacy-invasive and unreliable.</p>
+<p>Self-healing is the alternative: if a user uninstalls a package they
+still need, the next <code>tau run</code> / <code>tau chat</code> re-resolves and
+re-installs (priority 5's lazy resolve). The system "just works" again
+on next use.</p>
+<h4 id="31-remediation-hint"><a class="header" href="#31-remediation-hint">3.1. Remediation hint</a></h4>
+<p>Always printed (informational; ignorable for those who don't need
+it):</p>
+<pre><code class="language-text">✓ Uninstalled &lt;pkg&gt;@&lt;v&gt;.
+  Removed: &lt;scope&gt;/packages/&lt;pkg&gt;/&lt;v&gt;
+  Lockfile: &lt;scope&gt;/lock.toml
+
+If any project still depends on &lt;pkg&gt;:
+  • Remove or update the [[agents.&lt;id&gt;.requires.tools]] entry
+    for &lt;pkg&gt; in the project's tau.toml.
+  • Or re-install on next run: cd &lt;project&gt; &amp;&amp; tau resolve
+</code></pre>
+<p>The hint always prints because users can't always remember which
+projects depend on which packages. Cheap to print, actionable for
+those who need it.</p>
+<h4 id="32-behavior-matrix"><a class="header" href="#32-behavior-matrix">3.2. Behavior matrix</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Command</th><th>Behavior</th></tr></thead><tbody>
+<tr><td><code>tau uninstall &lt;pkg&gt;</code></td><td>Remove all versions; remove lockfile entry.</td></tr>
+<tr><td><code>tau uninstall &lt;pkg&gt; --version &lt;v&gt;</code></td><td>Remove single version; promote highest remaining as active; remove lockfile entry only if no versions remain.</td></tr>
+</tbody></table>
+</div>
+<p>The library function <code>tau_pkg::uninstall(name, version, scope)</code>
+already exists at <code>crates/tau-pkg/src/install.rs:612</code> (Phase 0) and
+handles all these cases — including active-version promotion. The
+CLI is a thin wrapper.</p>
+<h4 id="33-trigger-to-revisit"><a class="header" href="#33-trigger-to-revisit">3.3. Trigger to revisit</a></h4>
+<ul>
+<li><code>tau uninstall --force</code> to override a future cascade-detection
+feature.</li>
+<li><code>tau uninstall --dry-run</code> — preview what would be removed.</li>
+<li>Cross-scope uninstall (today: scope is determined by CWD's
+project).</li>
+</ul>
+<h3 id="4-verify-exit-codes-reuse-the-3-bucket-policy"><a class="header" href="#4-verify-exit-codes-reuse-the-3-bucket-policy">4. Verify exit codes reuse the 3-bucket policy</a></h3>
+<p><strong>Decision:</strong> <code>tau verify</code> exits 0 if all packages verified or
+unverified (v2-leftover); exits 2 if any drift detected (tree,
+binary, missing). Drift kinds are reported via JSON status field
+(<code>drift</code> with <code>kind: tree|binary|missing</code>) or human stderr lines.</p>
+<p><strong>Rationale:</strong></p>
+<p>Tampered packages are a kernel-trust issue, not an agent issue, so
+exit 2 (kernel error) is correct per ADR-0007 §7. The 3-bucket
+policy is:</p>
+<ul>
+<li><strong>0</strong> — success: lifecycle command succeeded.</li>
+<li><strong>1</strong> — agent failure: not applicable to lifecycle commands
+(reserved for <code>tau run</code>'s <code>RunOutcome::Failed</code>).</li>
+<li><strong>2</strong> — kernel error: lifecycle error OR verify drift.</li>
+</ul>
+<h4 id="41-drift-kinds"><a class="header" href="#41-drift-kinds">4.1. Drift kinds</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Kind</th><th>Trigger</th><th>Lockfile sha256</th><th>Disk</th></tr></thead><tbody>
+<tr><td><code>tree</code></td><td>Source files modified (manifest, src/, etc.)</td><td>populated</td><td>exists, hash differs</td></tr>
+<tr><td><code>binary</code></td><td>Plugin binary modified</td><td>populated (<code>binary_sha256</code>)</td><td>exists, hash differs</td></tr>
+<tr><td><code>missing</code></td><td>Install dir deleted</td><td>populated</td><td>absent</td></tr>
+<tr><td><code>unverified</code></td><td>v2-leftover, hash empty</td><td>empty</td><td>exists, no comparison possible</td></tr>
+</tbody></table>
+</div>
+<p><code>unverified</code> is <strong>informational, not drift</strong> — exit 0 unless other
+drifts exist. Printed with hint to "re-install <pkg> to populate
+hash" (deferred polish; current v0.1 just labels the status).</p>
+<h4 id="42-json-event-shape"><a class="header" href="#42-json-event-shape">4.2. JSON event shape</a></h4>
+<p>Mirrors ADR-0011's per-line streaming convention:</p>
+<pre><code class="language-json">{"event":"verify_started","total":N}
+{"event":"verify_package","name":"...","version":"...","status":"ok"}
+{"event":"verify_package","name":"...","version":"...","status":"drift","kind":"tree","expected":"...","actual":"..."}
+{"event":"verify_package","name":"...","version":"...","status":"unverified"}
+{"event":"verify_completed","total":N,"ok":N,"drift":M,"unverified":K}
+</code></pre>
+<h4 id="43-trigger-to-revisit"><a class="header" href="#43-trigger-to-revisit">4.3. Trigger to revisit</a></h4>
+<ul>
+<li>Per-file drift diagnosis (which file changed) — <code>--diff</code> flag.</li>
+<li><code>tau verify --fix</code> to auto-reinstall drifted packages.</li>
+<li>Parallel verify for many packages (current implementation is
+sequential).</li>
+<li>Orphaned install-dir detection (lockfile entry gone but install
+dir present) — currently scoped out of v0.1; can be added at the
+CLI layer without changing the library.</li>
+</ul>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<h3 id="negative--new-cost"><a class="header" href="#negative--new-cost">Negative / new cost</a></h3>
+<ul>
+<li><code>tau-pkg</code> gains transitive deps on <code>sha2 = "0.10"</code> and <code>walkdir = "2"</code> (~150KB compiled total). Negligible vs. existing
+<code>git2</code>/<code>tokio</code>/etc. footprint.</li>
+<li><code>tau-pkg</code> gains 3 new modules (<code>tree_hash</code>, <code>verify</code>, <code>update</code>)
+totaling ~700 LOC + tests. Code organization is clean: one module
+per logical responsibility.</li>
+<li><code>LockedPlugin</code> gains a <code>binary_sha256: String</code> field. Lockfile
+schema bumps v2 → v3. Additive: v2 lockfiles auto-upgrade on next
+save. v2-leftover entries (empty <code>binary_sha256</code> + empty
+<code>LockedVersion.sha256</code>) are flagged <code>unverified</code> by <code>tau verify</code>,
+NOT <code>drift</code>.</li>
+<li><code>tau install</code> is now O(file-count + file-bytes) at install time
+for the source-tree hash. Sub-100ms for typical packages; not a
+measurable regression.</li>
+<li><code>Runtime::run_with_history</code>-equivalent JSON-event-per-line
+convention now applies to <code>tau update --json</code> and <code>tau verify --json</code>. Future commands joining the convention should mirror.</li>
+</ul>
+<h3 id="positive"><a class="header" href="#positive">Positive</a></h3>
+<ul>
+<li><code>tau verify</code> provides the integrity-check primitive ADR-0006
+reserved at v0.1. Source-agnostic by design — future
+<code>PackageSource</code> variants reuse the verify primitive without
+redesign.</li>
+<li><code>tau update &lt;pkg&gt;</code> matches user expectations (npm/cargo/gem
+defaults). <code>--version</code> to pin, <code>--prune</code> to clean up.</li>
+<li><code>tau uninstall &lt;pkg&gt;</code> finally exists as a CLI surface. The
+library function existed since Phase 0; this just wires it up.</li>
+<li>Self-healing via lazy resolve (priority 5's lazy install)
+means <code>tau uninstall &lt;pkg&gt;</code> is non-destructive in practice — the
+next <code>tau run</code> / <code>tau chat</code> re-installs if needed. The remediation
+hint guides users to the right place.</li>
+<li>Lockfile schema v2 → v3 is forward-compatible with future drift
+diagnostics, signing, and per-file hashing.</li>
+</ul>
+<h3 id="neutral--new-obligations"><a class="header" href="#neutral--new-obligations">Neutral / new obligations</a></h3>
+<ul>
+<li>Future <code>tau verify</code> extensions (per-file diff, <code>--fix</code>, parallel
+verify) require their own ADRs (QG18). The hash format is locked
+at this ADR; any change requires a new ADR.</li>
+<li>The <code>sha2 = "0.10"</code> and <code>walkdir = "2"</code> workspace dep versions
+are pinned to the major. Major upgrades verify the public API
+surface.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<h3 id="a-git-revision-verify-git-rev-parse-head--git-status---porcelain"><a class="header" href="#a-git-revision-verify-git-rev-parse-head--git-status---porcelain">A. Git-revision verify (<code>git rev-parse HEAD</code> + <code>git status --porcelain</code>)</a></h3>
+<p>Rejected. Reuses git's content addressing for free; cheap to
+implement (~30 LOC). However: ties verify to the <code>Git</code> variant of
+<code>PackageSource</code>. Future variants (registry, tarball, local path)
+would need their own verify primitive. Wrong coupling.</p>
+<p>The early brainstorm leaned toward this option until the user
+flagged the non-git futures. Pivoting to whole-tree SHA-256
+makes verify source-agnostic from day one.</p>
+<h3 id="b-per-file-sha-256-manifest-taumanifestjson"><a class="header" href="#b-per-file-sha-256-manifest-taumanifestjson">B. Per-file SHA-256 manifest (<code>.tau/manifest.json</code>)</a></h3>
+<p>Rejected. Granular ("file X changed at line Y" reachable). Disk
+overhead per install (~50KB). Implementation complexity (manifest
+write at install, walk + diff at verify, manifest schema
+versioning).</p>
+<p>The whole-tree single-SHA approach is leaner for v0.1: same
+correctness primitive, smaller disk + code footprint, easier to
+reason about. Per-file granularity can land later as a
+<code>tau verify --diff</code> flag if real-world drift reports demand it.</p>
+<h3 id="c-tau-update-no-args-batch-update"><a class="header" href="#c-tau-update-no-args-batch-update">C. <code>tau update</code> (no args) batch update</a></h3>
+<p>Rejected. Updating every plugin in one command without per-package
+review is a footgun. ADR-0007's QG14 (<code>Default&lt;Risky&gt;</code>) argues
+against shipping defaults that surprise users with broad effects.
+v0.1: explicit per-package update only. Defer the batch case to a
+future ADR if there's demonstrated demand.</p>
+<h3 id="d-tau-uninstall-with-cascade-detection"><a class="header" href="#d-tau-uninstall-with-cascade-detection">D. <code>tau uninstall</code> with cascade detection</a></h3>
+<p>Rejected. Cross-project dep tracking would require scanning the
+user's entire home directory for <code>tau.toml</code>s — privacy-invasive,
+unreliable, and slow. Self-healing via priority 5's lazy resolve
+is the safer default. The remediation hint guides users to the right
+place if they need it.</p>
+<h3 id="e-cryptographic-signing-instead-of-or-alongside-hashing"><a class="header" href="#e-cryptographic-signing-instead-of-or-alongside-hashing">E. Cryptographic signing instead of (or alongside) hashing</a></h3>
+<p>Rejected for v0.1. Signing answers "did the publisher actually
+release this content?" — different question than "did it change
+since I installed it?" The hashing approach is the integrity
+primitive; signing is the authenticity primitive. They compose; ship
+hashing first. Signing belongs to a future Phase 2+ ADR (registry
+infrastructure, key management, revocation are all major scope).</p>
+<h3 id="f-track-lockedpluginbinary_sha256-inline-in-lockedversionsha256"><a class="header" href="#f-track-lockedpluginbinary_sha256-inline-in-lockedversionsha256">F. Track <code>LockedPlugin.binary_sha256</code> inline in <code>LockedVersion.sha256</code></a></h3>
+<p>Rejected. Conflating source-tree drift with binary drift muddies
+the threat model. Source = "package authors edited code"; binary =
+"build artifact replaced." Different remediations (rebuild from
+source vs reinstall from source). Separating the fields keeps
+<code>tau verify</code>'s output legible: <code>kind=tree</code> vs <code>kind=binary</code> is
+informational.</p>
+<h2 id="references"><a class="header" href="#references">References</a></h2>
+<ul>
+<li>Spec: <code>docs/superpowers/specs/2026-05-01-tau-lifecycle-design.md</code></li>
+<li>Plan: <code>docs/superpowers/plans/2026-05-01-tau-lifecycle.md</code></li>
+<li>ADR-0007 §1 — the deferral this ADR closes.</li>
+<li>ADR-0007 §7 — three-bucket exit code policy reused for verify.</li>
+<li>ADR-0009 — typed-error policy; new error variants follow this
+(<code>VerifyError</code>, <code>UpdateError</code>).</li>
+<li>ADR-0011 — JSON event-per-line streaming convention reused for
+<code>tau update --json</code> and <code>tau verify --json</code>.</li>
+<li><code>crates/tau-pkg/src/tree_hash.rs</code> — the source-agnostic walker.</li>
+<li><code>crates/tau-pkg/src/verify.rs</code> — drift detection.</li>
+<li><code>crates/tau-pkg/src/update.rs</code> — composition over existing APIs.</li>
+<li><code>crates/tau-pkg/src/install.rs:612</code> — pre-existing
+<code>tau_pkg::uninstall</code> from Phase 0.</li>
+<li><code>crates/tau-pkg/src/lockfile.rs</code> — <code>LockedPlugin.binary_sha256</code>
+field (lockfile schema v3).</li>
+<li><code>crates/tau-cli/src/cmd/{update,verify,uninstall}.rs</code> — CLI
+wrappers.</li>
+<li><code>crates/tau-cli/tests/cmd_{update,verify,uninstall}.rs</code> — e2e
+tests via <code>file://</code> git fixtures.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0011-streaming-llm-responses.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0013-repl-persistence.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0011-streaming-llm-responses.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0013-repl-persistence.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,567 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Package manifest schema - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./reference/package-manifest-schema.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="package-manifest-schema"><a class="header" href="#package-manifest-schema">Package manifest schema</a></h1>
+<p>Reference for <code>tau.toml</code>, the manifest every tau package ships. Read
+<a href="../explanation/packages.html">Packages</a> first for the model — this page
+is the precise field-by-field schema. The skill-specific
+<a href="skill-manifest-schema.html"><code>[skill]</code> block reference</a> covers that
+sub-section separately.</p>
+<p>The authoritative source is <code>crates/tau-domain/src/package/</code>. This
+page tracks v0.1 of the schema (ADR-0002). Adding fields is
+non-breaking (the structs are <code>#[non_exhaustive]</code>); removing or
+renaming is a pre-1.0 minor breaking change per QG11.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<pre><code class="language-toml"># Required top-level fields
+name        = "fs-tools"
+version     = "0.3.0"
+description = "Filesystem read/write tools."
+source      = "https://github.com/example/fs-tools.git"
+kind        = "tool"
+
+# Optional top-level
+authors      = ["Example Org &lt;hi@example.org&gt;"]
+license      = "Apache-2.0 OR MIT"
+dependencies = []
+
+# Optional tables
+[plugin]
+provides = "tool"
+kind     = "rust-cargo"
+bin      = "fs-tools-plugin"
+
+[sandbox]
+required_tier   = "strict"
+required_shapes = []
+
+[[capabilities]]
+kind  = "fs.read"
+paths = ["${PROJECT}/**"]
+
+[[capabilities]]
+kind = "net.http"
+hosts   = ["api.example.com"]
+methods = ["GET", "POST"]
+</code></pre>
+<h2 id="top-level-fields"><a class="header" href="#top-level-fields">Top-level fields</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>name</code></td><td><code>PackageName</code> (string)</td><td>yes</td><td>Validated; same shape across tau (kebab-case identifier).</td></tr>
+<tr><td><code>version</code></td><td>SemVer string</td><td>yes</td><td>E.g. <code>"0.3.0"</code>.</td></tr>
+<tr><td><code>description</code></td><td>string</td><td>yes</td><td>Must be non-empty (validation).</td></tr>
+<tr><td><code>authors</code></td><td>array of strings</td><td>no</td><td>Free-form, e.g. <code>"Acme &lt;hi@acme.dev&gt;"</code>. Default: empty.</td></tr>
+<tr><td><code>license</code></td><td>string</td><td>no</td><td>SPDX expression as opaque text. <code>None</code> = unlicensed.</td></tr>
+<tr><td><code>source</code></td><td>string | table</td><td>yes</td><td>See <a href="#source">Source</a>.</td></tr>
+<tr><td><code>kind</code></td><td>string</td><td>yes</td><td>One of the <a href="#kind">seven kinds</a>.</td></tr>
+<tr><td><code>dependencies</code></td><td>array of tables</td><td>no</td><td>See <a href="#dependencies">Dependencies</a>.</td></tr>
+<tr><td><code>[plugin]</code></td><td>table</td><td>iff package ships a runnable plugin</td><td>See <a href="#plugin-block"><code>[plugin]</code></a>.</td></tr>
+<tr><td><code>[sandbox]</code></td><td>table</td><td>no</td><td>See <a href="#sandbox-block"><code>[sandbox]</code></a>. Default: no tier floor.</td></tr>
+<tr><td><code>[[capabilities]]</code></td><td>array of tables</td><td>no</td><td>See <a href="#capabilities"><code>[[capabilities]]</code></a>.</td></tr>
+<tr><td><code>[skill]</code></td><td>table</td><td>iff <code>kind = "skill"</code></td><td>See <a href="skill-manifest-schema.html">Skill manifest schema</a>.</td></tr>
+</tbody></table>
+</div>
+<h3 id="kind"><a class="header" href="#kind"><code>kind</code></a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Value</th><th>Provides</th><th><code>[plugin]</code> block?</th><th>Trait loaded by runtime</th></tr></thead><tbody>
+<tr><td><code>"llm-backend"</code></td><td>LLM completion + streaming</td><td>yes</td><td><code>LlmBackend</code></td></tr>
+<tr><td><code>"tool"</code></td><td>Callable tool methods</td><td>yes</td><td><code>Tool</code></td></tr>
+<tr><td><code>"skill"</code></td><td>Reusable agent behaviour</td><td>no (rejected by validation)</td><td>n/a — invoked via <code>skill.&lt;name&gt;.spawn</code></td></tr>
+<tr><td><code>"pipeline"</code></td><td>Multi-agent coordination</td><td>yes</td><td><code>Pipeline</code></td></tr>
+<tr><td><code>"mcp-server"</code></td><td>MCP-server-as-tool</td><td>yes</td><td>wrapped as <code>Tool</code></td></tr>
+<tr><td><code>"storage"</code></td><td>Persistence backend</td><td>yes</td><td><code>Storage</code></td></tr>
+<tr><td><code>"sandbox"</code></td><td>Sandbox adapter</td><td>yes</td><td><code>Sandbox</code></td></tr>
+</tbody></table>
+</div>
+<p>A <code>kind</code> value not in this table parses as
+<code>PackageKind::Custom { kind: &lt;string&gt; }</code> — the <a href="../explanation/escape-hatches.html#packagekind-custom">escape
+hatch</a>. Custom
+kinds load no trait; the runtime can store and list them but does
+not <em>do</em> anything with them.</p>
+<h3 id="source"><a class="header" href="#source"><code>source</code></a></h3>
+<p>Both string-form and table-form are accepted. The string form is sugar
+for the table form.</p>
+<pre><code class="language-toml"># String form: https / http / ssh / git / file URL
+source = "https://github.com/example/repo.git"
+source = "file:///Users/me/work/local-pkg"
+source = "git@github.com:example/repo.git"   # scp-style address
+
+# Table form (use to pin a revision)
+[source]
+git = "https://github.com/example/repo.git"
+rev = "v0.3.1"        # branch, tag, or commit SHA
+</code></pre>
+<p><code>PackageSource</code> has one variant — <code>Git { location, rev }</code> — with
+<code>GitLocation::{Url, Scp}</code> for ordinary URLs vs scp-style addresses.
+"Local install" is just a <code>file://</code> URL.</p>
+<h3 id="dependencies"><a class="header" href="#dependencies"><code>dependencies</code></a></h3>
+<pre><code class="language-toml">[[dependencies]]
+name        = "fs-tools"
+version_req = "^0.3"
+
+[[dependencies]]
+name        = "shell-tools"
+version_req = "&gt;=0.2, &lt;0.4"
+</code></pre>
+<p>Each entry is a <code>PackageDep { name, version_req }</code>. Cycles are
+rejected at install time; conflicts resolve per ADR-0005.</p>
+<h2 id="plugin-block"><a class="header" href="#plugin-block"><code>[plugin]</code> block</a></h2>
+<p>Required when the package ships an executable binary the runtime
+will load. Omit for data-only packages (skills, manifest-only
+extensions).</p>
+<pre><code class="language-toml">[plugin]
+provides = "tool"          # required: PortKind
+kind     = "rust-cargo"    # required: PluginKind
+bin      = "fs-tools-plugin"  # required: Cargo bin target name
+</code></pre>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Type</th><th>Values</th></tr></thead><tbody>
+<tr><td><code>provides</code></td><td><code>PortKind</code></td><td><code>"llm_backend"</code>, <code>"tool"</code>, <code>"storage"</code>, <code>"sandbox"</code></td></tr>
+<tr><td><code>kind</code></td><td><code>PluginKind</code></td><td><code>"rust-cargo"</code> (only variant today)</td></tr>
+<tr><td><code>bin</code></td><td>string</td><td>The <code>[[bin]]</code> target name in the package's <code>Cargo.toml</code>.</td></tr>
+</tbody></table>
+</div>
+<p><code>tau-pkg</code> uses the <code>[plugin]</code> block to gate the build step during
+install (see ADR-0008). <code>provides</code> must match the trait the host
+wants to load.</p>
+<h2 id="sandbox-block"><a class="header" href="#sandbox-block"><code>[sandbox]</code> block</a></h2>
+<p>Plugin-side sandbox floor. Both fields default to "no floor" — a
+package with no <code>[sandbox]</code> block accepts any adapter the host can
+deliver.</p>
+<pre><code class="language-toml">[sandbox]
+required_tier   = "strict"   # "none" | "light" | "strict"
+required_shapes = []         # see CapabilityShape; defaults to auto-derived
+</code></pre>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Type</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>required_tier</code></td><td><code>"none"</code> | <code>"light"</code> | <code>"strict"</code></td><td>none (no floor)</td></tr>
+<tr><td><code>required_shapes</code></td><td>array of <code>CapabilityShape</code> strings</td><td>empty (auto-derived from <code>[[capabilities]]</code>)</td></tr>
+</tbody></table>
+</div>
+<p>Project-side sandbox configuration lives separately in
+<code>&lt;scope&gt;/config.toml</code>. The resolver intersects scope <code>required_tier</code>
+× plugin <code>required_tier</code> to pick an adapter. See
+<a href="../explanation/sandboxing.html">Sandboxing</a> for the model and the
+<a href="sandbox-platform-support.html">platform support reference</a> for which
+adapters deliver which tiers on which OS.</p>
+<p><code>CapabilityShape</code> values are PascalCase strings (current schema, kebab
+alignment is a deferred follow-up):</p>
+<div class="table-wrapper"><table><thead><tr><th>Shape</th><th>Source capability</th></tr></thead><tbody>
+<tr><td><code>"FilesystemRead"</code></td><td><code>kind = "fs.read"</code></td></tr>
+<tr><td><code>"FilesystemWrite"</code></td><td><code>kind = "fs.write"</code></td></tr>
+<tr><td><code>"ProcessExec"</code></td><td><code>kind = "fs.exec"</code> / <code>"process.spawn"</code></td></tr>
+<tr><td><code>"NetworkHttp"</code></td><td><code>kind = "net.http"</code></td></tr>
+<tr><td><code>"AgentSpawn"</code></td><td><code>kind = "agent.spawn"</code></td></tr>
+<tr><td><code>"SkillSpawn"</code></td><td><code>kind = "skill.spawn"</code></td></tr>
+<tr><td><code>"Custom"</code></td><td><code>Capability::Custom</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="capabilities"><a class="header" href="#capabilities"><code>[[capabilities]]</code></a></h2>
+<p>Every capability is an item of the <code>[[capabilities]]</code> array of
+tables. The serialization form is flat: <code>kind = "&lt;dot.namespaced&gt;"</code>
+plus the per-variant fields as siblings (ADR-0002 §3). The
+deserializer maps recognised <code>kind</code> strings onto typed variants;
+unknown <code>kind</code> falls through to <code>Capability::Custom</code>.</p>
+<h3 id="filesystem"><a class="header" href="#filesystem">Filesystem</a></h3>
+<pre><code class="language-toml">[[capabilities]]
+kind  = "fs.read"
+paths = ["${PROJECT}/**", "${HOME}/data/*.json"]
+</code></pre>
+<pre><code class="language-toml">[[capabilities]]
+kind      = "fs.write"
+paths     = ["${PROJECT}/build/**"]
+max_bytes = 10_485_760    # optional: per-file write cap
+</code></pre>
+<pre><code class="language-toml">[[capabilities]]
+kind  = "fs.exec"
+paths = ["/usr/bin/git", "/usr/local/bin/cargo"]
+</code></pre>
+<p><code>paths</code> are glob patterns. <code>${PROJECT}</code> and <code>${HOME}</code> are substituted
+at install / spawn time. <code>fs.exec</code> is per-command exec gating —
+landlock V1 <code>AccessFs::Execute</code> on Linux (ADR-0017 §3).</p>
+<h3 id="network"><a class="header" href="#network">Network</a></h3>
+<pre><code class="language-toml">[[capabilities]]
+kind    = "net.http"
+hosts   = ["api.anthropic.com", "*.openai.com"]
+methods = ["GET", "POST"]
+</code></pre>
+<p><code>hosts</code> are exact or glob; <code>methods</code> are uppercase by convention.
+Strict tier validates the SNI against <code>hosts</code> (no IPs, no wildcards
+inside literal IPs) per ADR-0020.</p>
+<h3 id="process"><a class="header" href="#process">Process</a></h3>
+<pre><code class="language-toml">[[capabilities]]
+kind     = "process.spawn"
+commands = ["git", "cargo"]
+</code></pre>
+<p>Allows spawning the named subprocesses. Combined with <code>fs.exec</code> for
+the actual landlock grant.</p>
+<h3 id="agent"><a class="header" href="#agent">Agent</a></h3>
+<pre><code class="language-toml">[[capabilities]]
+kind          = "agent.spawn"
+allowed_kinds = ["worker"]
+</code></pre>
+<p>Permits the parent agent to spawn sub-agents whose package <code>kind</code>
+matches <code>allowed_kinds</code>. Multi-agent orchestration (ADR-0024).</p>
+<h3 id="skill"><a class="header" href="#skill">Skill</a></h3>
+<pre><code class="language-toml">[[capabilities]]
+kind           = "skill.spawn"
+allowed_skills = ["critic", "fact-checker"]
+</code></pre>
+<p>Authorises the parent agent to invoke installed skills as child
+agents via <code>skill.&lt;name&gt;.spawn</code> (ADR-0028). The names match
+<code>LockedPackage.name</code> for <code>kind = "skill"</code> entries in the lockfile.</p>
+<h3 id="task-list--plan-virtual"><a class="header" href="#task-list--plan-virtual">Task-list / plan (virtual)</a></h3>
+<pre><code class="language-toml">[[capabilities]]
+kind = "task-list"
+mode = "read"      # "read" | "write" | "manage"
+
+[[capabilities]]
+kind = "plan"
+mode = "write"     # "read" | "write"
+</code></pre>
+<p>These are runtime-only — not OS-sandbox-enforced — gated at the
+virtual-tool dispatch layer in <code>tau-runtime</code>.</p>
+<h3 id="custom"><a class="header" href="#custom">Custom</a></h3>
+<p>Anything not in the typed table above:</p>
+<pre><code class="language-toml">[[capabilities]]
+kind = "mcp.tool.use"
+params = { server = "weather", tool = "current" }
+</code></pre>
+<p>Falls through to <code>Capability::Custom { name, params }</code>. <code>params</code> is a
+free-form table; <code>name</code> must be non-empty (validation). The dot
+convention is recommended but not mandated (ADR-0002 §4). Custom
+capabilities are tracked in the <a href="../explanation/escape-hatches.html">escape-hatch
+registry</a>.</p>
+<h2 id="validation"><a class="header" href="#validation">Validation</a></h2>
+<p><code>UncheckedManifest::validate()</code> checks invariants the field types
+can't enforce alone (<code>crates/tau-domain/src/package/manifest.rs</code>):</p>
+<div class="table-wrapper"><table><thead><tr><th>Rule</th><th>Error</th></tr></thead><tbody>
+<tr><td><code>description</code> is non-empty</td><td><code>EmptyDescription</code></td></tr>
+<tr><td>Every <code>Custom</code> capability has a non-empty <code>name</code></td><td><code>CapabilityEmptyName { index }</code></td></tr>
+<tr><td><code>kind = "skill"</code> packages MUST NOT carry a <code>[plugin]</code> block</td><td><code>SkillCannotHavePluginBlock</code></td></tr>
+</tbody></table>
+</div>
+<p>Per-dependency invariants (duplicate names, version-range
+cross-checks) are reserved hooks at v0.1 — no rules fire today, but
+the iteration is in place for future additions.</p>
+<h2 id="reserved-names"><a class="header" href="#reserved-names">Reserved names</a></h2>
+<p>ADR-0002 §3 reserves typed param names so they round-trip through
+<code>Capability::Custom</code> and re-promote into typed variants in a future
+v0.X:</p>
+<ul>
+<li><code>paths</code> (used by <code>fs.*</code>)</li>
+<li><code>max_bytes</code> (<code>fs.write</code>)</li>
+<li><code>hosts</code>, <code>methods</code> (<code>net.http</code>)</li>
+<li><code>commands</code> (<code>process.spawn</code>)</li>
+<li><code>allowed_kinds</code> (<code>agent.spawn</code>)</li>
+<li><code>allowed_skills</code> (<code>skill.spawn</code>)</li>
+</ul>
+<p>Don't repurpose them inside <code>Capability::Custom.params</code> for unrelated
+meanings.</p>
+<h2 id="complete-examples"><a class="header" href="#complete-examples">Complete examples</a></h2>
+<h3 id="a-tool-plugin-fs-tools"><a class="header" href="#a-tool-plugin-fs-tools">A tool plugin (<code>fs-tools</code>)</a></h3>
+<pre><code class="language-toml">name        = "fs-tools"
+version     = "0.3.0"
+description = "Filesystem read tools for tau agents."
+authors     = ["Example &lt;hi@example.org&gt;"]
+license     = "Apache-2.0 OR MIT"
+source      = "https://github.com/example/fs-tools.git"
+kind        = "tool"
+
+[plugin]
+provides = "tool"
+kind     = "rust-cargo"
+bin      = "fs-tools-plugin"
+
+[sandbox]
+required_tier = "strict"
+
+[[capabilities]]
+kind  = "fs.read"
+paths = ["${PROJECT}/**"]
+</code></pre>
+<h3 id="an-llm-backend-plugin-tauanthropic"><a class="header" href="#an-llm-backend-plugin-tauanthropic">An LLM-backend plugin (<code>@tau/anthropic</code>)</a></h3>
+<pre><code class="language-toml">name        = "tau-anthropic"
+version     = "0.1.4"
+description = "Anthropic Claude LLM backend."
+source      = { git = "https://github.com/example/tau-anthropic.git", rev = "v0.1.4" }
+kind        = "llm-backend"
+
+[plugin]
+provides = "llm_backend"
+kind     = "rust-cargo"
+bin      = "tau-anthropic"
+
+[sandbox]
+required_tier = "strict"
+
+[[capabilities]]
+kind    = "net.http"
+hosts   = ["api.anthropic.com"]
+methods = ["POST"]
+</code></pre>
+<h3 id="a-skill-package-praise-poet"><a class="header" href="#a-skill-package-praise-poet">A skill package (<code>praise-poet</code>)</a></h3>
+<pre><code class="language-toml">name        = "praise-poet"
+version     = "0.1.0"
+description = "Writes effusive praise for the topic at hand."
+source      = "file:///Users/me/work/praise-poet"
+kind        = "skill"
+
+[skill]
+content        = "SKILL.md"
+requires_tools = []
+requires_skills = []
+</code></pre>
+<p>No <code>[plugin]</code> block (validation rejects it for <code>kind = "skill"</code>);
+the <code>[skill]</code> block is specified separately — see the
+<a href="skill-manifest-schema.html">skill manifest schema</a>.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="../explanation/packages.html">Packages</a> — the conceptual model.</li>
+<li><a href="skill-manifest-schema.html">Skill manifest schema</a> — the
+<code>[skill]</code> block and <code>SKILL.md</code> frontmatter.</li>
+<li><a href="../explanation/sandboxing.html">Sandboxing</a> — tier model and
+resolver.</li>
+<li><a href="sandbox-platform-support.html">Sandbox platform support</a> — which
+adapter delivers which tier on which OS.</li>
+<li><a href="../explanation/escape-hatches.html">Escape hatches</a> — registry of
+every <code>Custom</code> variant in the schema.</li>
+<li><a href="../decisions/0002-manifest-format.html">ADR-0002</a> — manifest field
+set, capability canonicalisation, escape-hatch policy.</li>
+<li><a href="../decisions/0005-package-source-and-kind-serde.html">ADR-0005</a> —
+string-form <code>source</code> / <code>kind</code> serde shape.</li>
+<li><a href="../decisions/0008-plugin-loading.html">ADR-0008</a> — how <code>[plugin]</code>
+becomes a running process.</li>
+<li><a href="../decisions/0016-plugin-compat-verification.html">ADR-0016</a> —
+install-time Layer 2 cross-check between manifest and binary.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../reference/glossary.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../reference/project-manifest-schema.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../reference/glossary.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../reference/project-manifest-schema.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

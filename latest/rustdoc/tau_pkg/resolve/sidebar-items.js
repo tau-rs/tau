@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ResolveError"],"fn":["resolve_requires_tools"],"struct":["PlannedInstall","RequiredTool","ResolutionPlan","ReusedInstall"]};
