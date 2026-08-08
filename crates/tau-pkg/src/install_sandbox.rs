@@ -279,6 +279,10 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg_attr(
+        windows,
+        ignore = "path-separator assumption (\\ vs /) not portable to Windows; see #530"
+    )]
     #[test]
     fn build_envelope_grants_target_write_and_registry_net() {
         let dir = tempfile::tempdir().unwrap();

@@ -30,6 +30,10 @@ fn fixture_dir() -> PathBuf {
 /// Uses `--ready-on-stderr` to synchronize: we wait for the ready
 /// marker before closing stdin, so we know the process is fully up
 /// and listening (not still starting up) when we trigger shutdown.
+#[cfg_attr(
+    windows,
+    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
+)]
 #[test]
 fn child_exits_on_stdin_eof() {
     e2e_common::ensure_home_env();

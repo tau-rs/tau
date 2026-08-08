@@ -111,6 +111,10 @@ mod tests {
             .is_none());
     }
 
+    #[cfg_attr(
+        windows,
+        ignore = "Windows file-permission/ENOTDIR semantics differ; see #530"
+    )]
     #[tokio::test]
     async fn non_notfound_io_error_surfaces_as_io() {
         // Create a regular file, then use it as the "dir" so <file>/<filename>
