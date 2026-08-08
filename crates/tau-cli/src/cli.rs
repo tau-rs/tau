@@ -239,6 +239,14 @@ pub struct BuildWasmArgs {
     /// (default: `<project>/<name>-<version>.wasm`).
     #[arg(long, short = 'o', value_name = "PATH")]
     pub output: Option<std::path::PathBuf>,
+    /// Authorize a wasm build of a project that declares NO `[allow]` ceiling.
+    /// Governed-by-default: without this, a missing `[allow]` is a hard error
+    /// (GOV000). Distinct from `--no-governance` (skip an existing ceiling).
+    #[arg(long, conflicts_with = "no_governance")]
+    pub allow_ungoverned: bool,
+    /// Build a project that HAS an `[allow]` ceiling without enforcing it.
+    #[arg(long)]
+    pub no_governance: bool,
 }
 
 /// Arguments for `tau build` (bundle — Phase 2 §C.2).
