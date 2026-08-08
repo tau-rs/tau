@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["MCP_PROTOCOL_VERSION"],"fn":["drive_handshake"],"struct":["HandshakeOptions"]};
