@@ -171,22 +171,21 @@ pub struct WasiGrants {
     pub preopens: Vec<PreopenGrant>,
 }
 
-/// The leading `/`-rooted directory prefix of a glob pattern: the longest
-/// path prefix containing no glob metacharacter (`*`, `?`, `[`). `/data/**`
-/// -> `/data`; `/out` -> `/out`; `/data/*.txt` -> `/data`; `/a/b/c.txt` ->
-/// `/a/b`. Always returns an absolute path; a bare `/x` yields `/x`.
+/// The longest leading directory prefix of a glob pattern containing no glob
+/// metacharacter (`*`, `?`, `[`). Segments up to the first glob segment are
+/// kept verbatim; a pattern with no glob metacharacter is returned whole — its
+/// named path IS the preopen (tighter than preopening a parent directory, so
+/// the guest never gains authority over siblings the capability didn't name).
+/// `/data/**` -> `/data`; `/data/*.txt` -> `/data`; `/out` -> `/out`;
+/// `/data/logs` -> `/data/logs`; `/a/b/c.txt` -> `/a/b/c.txt`.
+///
+/// RULING (Option T, tight): a plain trailing segment is NEVER stripped. A cap
+/// that names a bare file would then fail-closed (no descriptor) rather than
+/// over-granting its parent dir; 3.4's in-guest gate does fine-grained matching.
 fn glob_prefix_dir(pattern: &str) -> String {
     let mut dir = String::from("/");
-    for (i, seg) in pattern.trim_start_matches('/').split('/').enumerate() {
+    for seg in pattern.trim_start_matches('/').split('/') {
         if seg.is_empty() || seg.contains(['*', '?', '[']) {
-            break;
-        }
-        // A trailing non-glob segment with no further segments is itself a
-        // dir grant (e.g. `/out`); an interior segment is a parent dir.
-        let is_last = i == pattern.trim_start_matches('/').split('/').count() - 1;
-        // Treat the last segment as a file only if the pattern names a file
-        // with an extension AND has a parent; otherwise treat it as a dir.
-        if is_last && seg.contains('.') && pattern.trim_start_matches('/').contains('/') {
             break;
         }
         if dir.len() > 1 {
@@ -276,7 +275,8 @@ mod grant_tests {
         assert_eq!(glob_prefix_dir("/data/**"), "/data");
         assert_eq!(glob_prefix_dir("/out"), "/out");
         assert_eq!(glob_prefix_dir("/data/*.txt"), "/data");
-        assert_eq!(glob_prefix_dir("/a/b/c.txt"), "/a/b");
+        assert_eq!(glob_prefix_dir("/data/logs"), "/data/logs");
+        assert_eq!(glob_prefix_dir("/a/b/c.txt"), "/a/b/c.txt");
     }
 
     #[test]
@@ -310,13 +310,14 @@ mod grant_tests {
 
     #[test]
     fn fs_write_wins_over_read_for_same_dir() {
+        // Both caps name the `/data` glob dir; the two preopens merge and RW wins.
         let g = wasi_grants_from_caps(
-            &[cap_fs_read(&["/data/a"]), cap_fs_write(&["/data/b"], None)],
+            &[cap_fs_read(&["/data/**"]), cap_fs_write(&["/data/**"], None)],
             Path::new("/tmp/root"),
         )
         .unwrap();
-        // Both resolve to guest_path `/data`; RW must win.
         assert_eq!(g.preopens.len(), 1);
+        assert_eq!(g.preopens[0].guest_path, "/data");
         assert_eq!(g.preopens[0].access, PreopenAccess::ReadWrite);
     }
 }
