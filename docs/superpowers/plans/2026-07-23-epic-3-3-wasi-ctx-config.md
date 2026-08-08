@@ -129,13 +129,19 @@ git -c user.name="Titouan Lebocq" -c user.email="lebocq.tit@gmail.com" commit --
 
 - [ ] **Step 1: Add the `tau-domain` dependency**
 
-In `crates/tau-wasm-host/Cargo.toml`, under `[dependencies]` (alongside `tau-ports`):
+In `crates/tau-wasm-host/Cargo.toml`, under `[dependencies]` (alongside `tau-ports`) — `Capability` appears in the public `wasi_grants_from_caps` / `run_component_with_caps` signatures, so it is a normal dep:
 
 ```toml
 tau-domain = { workspace = true }
 ```
 
-(`tau-ports` is already a dep; `map_capability`, `WasiConfig`, `Preopen`, `PreopenAccess` come from `tau_ports::target::wasi_map`. `HostSet` comes from `tau_domain::package::host`.)
+And under `[dev-dependencies]` (the cap constructors are gated behind `test-fixtures`, matching `tau-ports`'s dev-dep):
+
+```toml
+tau-domain = { workspace = true, features = ["test-fixtures"] }
+```
+
+(`tau-ports` is already a dep; `map_capability`, `WasiConfig`, `Preopen`, `PreopenAccess`, `Disposition` come from `tau_ports::target::wasi_map`. `HostSet` comes from `tau_domain::package::host`.)
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -263,7 +269,7 @@ pub fn wasi_grants_from_caps(
 #[cfg(test)]
 mod grant_tests {
     use super::*;
-    use tau_domain::fixtures::{cap_fs_read, cap_fs_write, cap_net_http_hosts};
+    use tau_domain::fixtures::{cap_fs_read, cap_fs_write, cap_net_http};
 
     #[test]
     fn glob_prefix_rule() {
@@ -282,7 +288,7 @@ mod grant_tests {
     #[test]
     fn exact_hosts_become_only() {
         let g = wasi_grants_from_caps(
-            &[cap_net_http_hosts(&["a.com", "b.com"])],
+            &[cap_net_http(&["a.com", "b.com"], &[])],
             Path::new("/tmp/root"),
         )
         .unwrap();
@@ -305,7 +311,7 @@ mod grant_tests {
     #[test]
     fn fs_write_wins_over_read_for_same_dir() {
         let g = wasi_grants_from_caps(
-            &[cap_fs_read(&["/data/a"]), cap_fs_write(&["/data/b"])],
+            &[cap_fs_read(&["/data/a"]), cap_fs_write(&["/data/b"], None)],
             Path::new("/tmp/root"),
         )
         .unwrap();
@@ -316,7 +322,7 @@ mod grant_tests {
 }
 ```
 
-> NOTE: verify the fixture helper names against `tau_domain::fixtures` before running (`grep -n "pub fn cap_" crates/tau-domain/src/fixtures*`). E3.1's doctest uses `cap_fs_read`. If `cap_net_http_hosts` / `cap_fs_write` differ, adjust the calls (the assertions stay). Add `tau-domain = { workspace = true }` to `[dev-dependencies]` too if `fixtures` is behind a feature.
+> NOTE: fixture signatures are confirmed — `cap_fs_read(&[&str])`, `cap_fs_write(&[&str], Option<u64>)`, `cap_net_http(&[&str] hosts, &[&str] methods)` where `hosts == ["any"]` yields `HostSet::Any`. They live in `tau_domain::fixtures` (module `pub mod fixtures;` in `tau-domain/src/lib.rs:29`), gated behind the `test-fixtures` feature added to the dev-dep in Step 1.
 
 - [ ] **Step 3: Add the `UnsupportedCap` error variant**
 
@@ -796,9 +802,9 @@ Append to `src/wasi.rs` `grant_tests`:
 ```rust
     #[test]
     fn any_host_cap_yields_any_policy() {
-        // A `net.http` cap with `hosts = "any"` must permit any authority.
+        // `cap_net_http(&["any"], &[])` yields `HostSet::Any` → permit any host.
         let g = wasi_grants_from_caps(
-            &[tau_domain::fixtures::cap_net_http_any()],
+            &[cap_net_http(&["any"], &[])],
             Path::new("/tmp/root"),
         )
         .unwrap();
@@ -807,7 +813,7 @@ Append to `src/wasi.rs` `grant_tests`:
     }
 ```
 
-> NOTE: if `tau_domain::fixtures` lacks an `any`-host helper, construct the cap inline via `Capability::Network(NetCapability::Http { hosts: HostSet::Any, methods: None })` (paths: `tau_domain::package::capability::NetCapability`, `tau_domain::package::host::HostSet`). Assertion unchanged.
+(`cap_net_http` is already imported in `grant_tests` from Task 2.)
 
 - [ ] **Step 6: Build, clippy, test, commit**
 
