@@ -307,6 +307,97 @@ max_tokens = 4000
     assert_eq!(ctx.pipeline[1].transformer, "fit_budget");
 }
 
+/// D7-B PR3: an explicit `llm_backed` / `stateful` determinism string lowers
+/// to the matching `DeterminismClass`. Guards the explicit match arms against
+/// regressing back to the silent `_ => Pure` default.
+#[test]
+fn known_determinism_strings_lower_to_their_class() {
+    use tau_ir::context::DeterminismClass;
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "det-lower"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+
+[[agents.a.context.pipeline]]
+transformer = "trim_old"
+determinism = "llm_backed"
+
+[[agents.a.context.pipeline]]
+transformer = "compact_tool_outputs"
+determinism = "stateful"
+
+[[agents.a.context.pipeline]]
+transformer = "fit_budget"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
+    let agent = module
+        .workflow
+        .agents
+        .get(&tau_ir::AgentId("a".into()))
+        .unwrap();
+    let ctx = agent.context.as_ref().expect("context present");
+    assert_eq!(ctx.pipeline[0].determinism, DeterminismClass::LlmBacked);
+    assert_eq!(ctx.pipeline[1].determinism, DeterminismClass::Stateful);
+    assert_eq!(ctx.pipeline[2].determinism, DeterminismClass::Pure);
+}
+
+/// D7-B PR3: an unknown determinism string is a hard build error, not a
+/// silent downgrade to `Pure` (the most permissive class). Per ADR-0065.
+#[test]
+fn unknown_determinism_string_is_rejected() {
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "det-bad"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+
+[[agents.a.context.pipeline]]
+transformer = "trim_old"
+determinism = "sometimes"
+
+[[agents.a.context.pipeline]]
+transformer = "fit_budget"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let err = lower_project(&config, &target, &caches).expect_err("must reject");
+    match err {
+        LowerError::UnknownDeterminism {
+            agent,
+            transformer,
+            determinism,
+        } => {
+            assert_eq!(agent, "a");
+            assert_eq!(transformer, "trim_old");
+            assert_eq!(determinism, "sometimes");
+        }
+        other => panic!("expected UnknownDeterminism, got {other:?}"),
+    }
+}
+
 #[test]
 fn explicit_check_placement_is_not_double_appended() {
     use tau_ir::pipeline::StepRun;
@@ -611,4 +702,155 @@ system_file = "gone.md"
         }
         other => panic!("expected PromptFileUnreadable build error, got {other:?}"),
     }
+}
+
+#[test]
+fn lowers_authored_branch_into_steprun_branch() {
+    use tau_ir::check::{GoalPredicate, Locus};
+    use tau_ir::pipeline::StepRun;
+
+    let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "branch-demo"
+[models.m]
+backend = "mock-llm"
+model = "m"
+[agents.triage]
+display_name = "Triage"
+package = "branch-demo@^0.1"
+model = "m"
+max_turns = 1
+[agents.oncall]
+display_name = "Oncall"
+package = "branch-demo@^0.1"
+model = "m"
+max_turns = 1
+[agents.writer]
+display_name = "Writer"
+package = "branch-demo@^0.1"
+model = "m"
+max_turns = 1
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "matches", pattern = "(?i)urgent" }
+[[pipeline.steps.then]]
+id = "escalate"
+run = "agent:oncall"
+input = "${steps.triage.output}"
+[[pipeline.steps.otherwise]]
+id = "ack"
+run = "agent:writer"
+input = "${steps.triage.output}"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
+
+    let pipe = module.workflow.pipeline.as_ref().expect("pipeline present");
+    assert_eq!(pipe.steps.len(), 2);
+    match &pipe.steps[1].run {
+        StepRun::Branch {
+            on,
+            then,
+            otherwise,
+        } => {
+            assert!(matches!(&on.evaluates, Locus::Output(s) if s.0 == "triage"));
+            assert!(matches!(&on.predicate, GoalPredicate::Matches(p) if p == "(?i)urgent"));
+            assert_eq!(then.len(), 1);
+            assert!(matches!(&then[0].run, StepRun::Agent(a) if a.0 == "oncall"));
+            assert_eq!(otherwise.len(), 1);
+            assert!(matches!(&otherwise[0].run, StepRun::Agent(a) if a.0 == "writer"));
+        }
+        other => panic!("expected Branch, got {other:?}"),
+    }
+}
+
+#[test]
+fn branch_arm_referencing_ghost_agent_is_rejected() {
+    let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "branch-ghost"
+[models.m]
+backend = "mock-llm"
+model = "m"
+[agents.triage]
+display_name = "Triage"
+package = "branch-ghost@^0.1"
+model = "m"
+max_turns = 1
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "non_empty" }
+[[pipeline.steps.then]]
+id = "boom"
+run = "agent:ghost"
+input = "${input}"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let err = lower_project(&config, &target, &caches).unwrap_err();
+    assert!(
+        matches!(err, LowerError::UnknownPipelineRun { .. }),
+        "expected UnknownPipelineRun for ghost arm agent, got {err:?}"
+    );
+}
+
+#[test]
+fn branch_condition_reading_out_of_scope_output_is_rejected() {
+    // `route` reads `steps.later.output`, but `later` runs AFTER `route`.
+    let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "branch-scope"
+[models.m]
+backend = "mock-llm"
+model = "m"
+[agents.triage]
+display_name = "Triage"
+package = "branch-scope@^0.1"
+model = "m"
+max_turns = 1
+[agents.later]
+display_name = "Later"
+package = "branch-scope@^0.1"
+model = "m"
+max_turns = 1
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.later.output", check = "non_empty" }
+[[pipeline.steps.then]]
+id = "arm"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "later"
+run = "agent:later"
+input = "${input}"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let err = lower_project(&config, &target, &caches).unwrap_err();
+    assert!(
+        matches!(err, LowerError::ConditionUnknownOutput { .. }),
+        "expected ConditionUnknownOutput, got {err:?}"
+    );
 }

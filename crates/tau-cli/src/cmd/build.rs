@@ -1,6 +1,6 @@
 //! `tau build` — see spec `2026-05-27-tau-build-design.md`.
 //!
-//! Thin CLI shim over [`tau_pkg::bundle::build`]. Resolves the project
+//! Thin CLI shim over [`tau_pkg::bundle::build`](tau_pkg::bundle::build()). Resolves the project
 //! root from the current directory, calls the bundle builder with the
 //! host target + default output path, prints progress to stderr and
 //! the bundle path to stdout, then exits with the appropriate code

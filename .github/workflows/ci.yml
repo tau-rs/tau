@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           components: clippy
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe  # v2
         with:
           command: check
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
       - name: Install gitleaks
@@ -114,7 +114,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -127,7 +127,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -138,12 +138,17 @@ jobs:
     name: test-stable / linux
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # GitHub-hosted ubuntu runners ship python3, so make its absence a hard
+    # failure: the tau-sdk-codegen byte-equal Python leg must run here, not
+    # self-skip (EPIC 5.3 hardening).
+    env:
+      TAU_REQUIRE_PYTHON3: "1"
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -159,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -170,12 +175,33 @@ jobs:
       # OS-specific paths in this workspace. Linux-only run is enough.
       - run: cargo test --workspace --doc
 
+  rustdoc:
+    name: rustdoc / linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      # PR-time guard for broken intra-doc links. 16 crates carry
+      # #![deny(rustdoc::broken_intra_doc_links)], so a broken link makes
+      # `cargo doc` exit non-zero and fails this job — on the PR that
+      # introduced it. Runs the exact command docs-deploy runs, so it fails
+      # under the same conditions. Without this, link breakage was caught
+      # only inside docs-deploy's build job, which strands the entire mdBook
+      # publish (see docs-deploy.yml "Build rustdoc" step).
+      - run: cargo doc --no-deps --workspace
+
   runtime-core-no-std:
     name: runtime-core no-std build + no-forbidden-imports / linux
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
@@ -239,7 +265,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # need origin/main as the semver baseline
       - uses: ./.github/actions/setup-rust
@@ -261,7 +287,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable

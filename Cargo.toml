@@ -32,6 +32,7 @@ members = [
     "crates/tau-sandbox-native",
     "crates/tau-sandbox-proxy",
     "crates/tau-sandbox-windows",
+    "crates/tau-sdk-codegen",
     "crates/tau-ts-extract",
     "crates/tau-workflow",
     "crates/tau-ir-conformance",
@@ -84,7 +85,7 @@ wit-bindgen = { version = "0.58", default-features = false, features = ["macros"
 wit-parser  = "0.251"
 dlmalloc    = { version = "0.2", features = ["global"] }
 # β.7.5 wasm host (std embedder; host targets only)
-wasmtime    = "45"
+wasmtime    = "47"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
 tau-ports           = { path = "crates/tau-ports",  version = "0.1.0", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
@@ -93,6 +94,7 @@ tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", defaul
 tau-mcp-tokio       = { path = "crates/tau-mcp-tokio", version = "0.0.0", default-features = false }
 tau-native-tools    = { path = "crates/tau-native-tools", version = "0.0.0", default-features = false }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
+tau-ts-extract      = { path = "crates/tau-ts-extract", version = "0.0.0" }
 # `default-features = false` so the no_std wasm guest can link this alias
 # directly (it opts into only `wasm-interpreter`/`tool-validation`). Host/std
 # consumers re-enable the full surface with `features = ["std"]`.
@@ -110,6 +112,7 @@ tau-sandbox-proxy       = { path = "crates/tau-sandbox-proxy",       version = "
 tau-workflow            = { path = "crates/tau-workflow",            version = "0.0.0" }
 tau-app                 = { path = "crates/tau-app",                 version = "0.0.0" }
 tau-observe             = { path = "crates/tau-observe",             version = "0.0.0" }
+tau-sdk-codegen     = { path = "crates/tau-sdk-codegen", version = "0.0.0" }
 # `default-features = false` on these aliases so no_std members can honour
 # their `default-features = false` declarations (cargo silently IGNORES a
 # member's `default-features = false` unless the workspace alias also sets

@@ -1,6 +1,6 @@
 //! Tool implementation references.
 //!
-//! A [`Tool`] node carries a [`ToolImpl`] that distinguishes native
+//! A [`Tool`](crate::Tool) node carries a [`ToolImpl`] that distinguishes native
 //! tools (statically linked Rust) from MCP-contracted tools (external
 //! servers reached via the MCP wire). The lowering pass resolves
 //! [`ToolImpl::Native::content_hash`] and [`ToolImpl::Mcp::contract_hash`]

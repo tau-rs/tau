@@ -302,15 +302,56 @@ pub struct UncheckedPipeline {
 }
 
 /// Raw `[[pipeline.steps]]` entry (pre-validation).
+///
+/// A step is either a **leaf** (`run = "<kind>:<id>"`) or a **branch**
+/// (`branch = { <condition> }` + nested `then`/`otherwise` step arrays).
+/// The two forms are mutually exclusive; `validate_pipeline` enforces this.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncheckedPipelineStep {
     /// Step handle.
     pub id: String,
-    /// `"agent:<id>"` | `"tool:<id>"` | `"deterministic:<id>"`.
-    pub run: String,
+    /// Leaf form: `"agent:<id>"` | `"tool:<id>"` | `"deterministic:<id>"` | `"check:<id>"`.
+    #[serde(default)]
+    pub run: Option<String>,
     /// Input template; defaults to `"${input}"` when omitted.
     pub input: Option<String>,
+    /// Branch form: the condition (mirrors the `[goals.*]` field-set).
+    #[serde(default)]
+    pub branch: Option<UncheckedCondition>,
+    /// Branch form: steps run when the condition holds (recursive).
+    #[serde(default)]
+    pub then: Vec<UncheckedPipelineStep>,
+    /// Branch form: steps run when it does not hold (recursive; may be empty).
+    #[serde(default)]
+    pub otherwise: Vec<UncheckedPipelineStep>,
+}
+
+/// Raw branch condition — the exact field-set of `[goals.*]` minus the
+/// table-key id. Reuses the goal predicate menu verbatim (no new grammar).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedCondition {
+    /// Read locus: a filesystem path or `steps.<id>.output`.
+    pub evaluates: String,
+    /// Menu predicate name (mutually exclusive with `fn`).
+    #[serde(default)]
+    pub check: Option<String>,
+    /// Regex for `check = "matches"`.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Expected value for `check = "equals"`.
+    #[serde(default)]
+    pub equals: Option<String>,
+    /// Threshold for `check = "min_count"`.
+    #[serde(default)]
+    pub min_count: Option<u64>,
+    /// JSON schema for `check = "schema_valid"`.
+    #[serde(default)]
+    pub schema: Option<serde_json::Value>,
+    /// Native-fn escape hatch (`<crate>::<path>`), mutually exclusive with `check`.
+    #[serde(default, rename = "fn")]
+    pub r#fn: Option<String>,
 }
 
 /// Validated pipeline.
@@ -344,6 +385,24 @@ pub enum PipelineRunRef {
     Deterministic(String),
     /// `check:<id>` — explicitly position a postcondition check.
     Check(String),
+    /// A conditional branch: run `then` if `on` holds, else `otherwise`.
+    Branch {
+        /// Branch condition (locus + predicate).
+        on: ConditionConfig,
+        /// Steps run when `on` holds.
+        then: Vec<PipelineStepConfig>,
+        /// Steps run when `on` does not hold (may be empty).
+        otherwise: Vec<PipelineStepConfig>,
+    },
+}
+
+/// A validated branch condition — mirrors `tau_ir::check::Condition`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConditionConfig {
+    /// Read locus.
+    pub evaluates: LocusConfig,
+    /// Predicate applied to the locus.
+    pub predicate: GoalPredicateConfig,
 }
 
 // ----- IR lowering structs (β.2.2) -----
@@ -1162,6 +1221,24 @@ pub enum ProjectConfigError {
         path: String,
     },
 
+    /// A `schema_valid` goal over `steps.<id>.output` requires a field or type
+    /// the producing agent's declared `output_schema` does not guarantee.
+    /// Surfaces judge/producer schema drift at build time rather than at run
+    /// time (Issue #470).
+    #[error(
+        "goal '{goal}' has check = \"schema_valid\" but producer agent '{agent}' \
+        does not guarantee it: {detail}"
+    )]
+    JudgeSchemaIncompatible {
+        /// Goal id whose `schema_valid` predicate the producer cannot satisfy.
+        goal: String,
+        /// The producing agent id resolved from the goal's `steps.<id>.output`
+        /// locus via the pipeline.
+        agent: String,
+        /// Which required field or type the producer fails to guarantee.
+        detail: String,
+    },
+
     // --- Task 5: gate-position + retry-span guarantees ---
     /// `retry_from` names a step that runs after the producer step.
     #[error(
@@ -1831,28 +1908,102 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
                 message: format!("step id {:?} declared more than once", s.id),
             });
         }
-        let run = match s.run.split_once(':') {
-            Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
-            Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
-            Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
-            Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
-            _ => {
-                return Err(ProjectConfigError::PipelineValidation {
-                    id: s.id.clone(),
-                    message: format!(
-                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {:?}",
-                    s.run
-                ),
-                })
-            }
-        };
-        steps.push(PipelineStepConfig {
-            id: s.id.clone(),
-            run,
-            input: s.input.clone().unwrap_or_else(|| "${input}".to_string()),
-        });
+        steps.push(validate_pipeline_step(s)?);
     }
     Ok(PipelineConfig { steps })
+}
+
+/// Validate one step — a leaf (`run`) or a branch (`branch` + arms). Nested
+/// arm steps recurse through this same function. Tree-wide id uniqueness and
+/// output-scope integrity are enforced later by the IR typecheck
+/// (`check_pipeline` / `validate_step_run`), which already walks nested blocks.
+fn validate_pipeline_step(
+    s: &UncheckedPipelineStep,
+) -> Result<PipelineStepConfig, ProjectConfigError> {
+    let has_branch = s.branch.is_some();
+    let has_run = s.run.is_some();
+    let has_arms = !s.then.is_empty() || !s.otherwise.is_empty();
+
+    let run = match (has_run, has_branch) {
+        (true, true) => {
+            return Err(ProjectConfigError::PipelineValidation {
+                id: s.id.clone(),
+                message: "a step has both `run` and `branch`; exactly one is allowed".into(),
+            })
+        }
+        (false, false) => {
+            return Err(ProjectConfigError::PipelineValidation {
+                id: s.id.clone(),
+                message: "a step must set either `run` or `branch`".into(),
+            })
+        }
+        (true, false) => {
+            if has_arms {
+                return Err(ProjectConfigError::PipelineValidation {
+                    id: s.id.clone(),
+                    message: "`then`/`otherwise` are only valid on a `branch` step".into(),
+                });
+            }
+            let run_str = s.run.as_deref().unwrap();
+            match run_str.split_once(':') {
+                Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
+                Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
+                Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
+                Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
+                _ => {
+                    return Err(ProjectConfigError::PipelineValidation {
+                        id: s.id.clone(),
+                        message: format!(
+                            "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {run_str:?}"
+                        ),
+                    })
+                }
+            }
+        }
+        (false, true) => {
+            let cond = s.branch.as_ref().unwrap();
+            let predicate = parse_predicate(
+                cond.check.as_deref(),
+                cond.pattern.clone(),
+                cond.equals.clone(),
+                cond.min_count,
+                cond.schema.clone(),
+                cond.r#fn.clone(),
+            )
+            .map_err(|e| ProjectConfigError::PipelineValidation {
+                id: s.id.clone(),
+                message: match e {
+                    PredicateParseError::BadRegex(m) => format!("branch condition: {m}"),
+                    PredicateParseError::Invalid(m) => format!("branch condition: {m}"),
+                },
+            })?;
+            let on = ConditionConfig {
+                evaluates: parse_locus(&cond.evaluates),
+                predicate,
+            };
+            let then = s
+                .then
+                .iter()
+                .map(validate_pipeline_step)
+                .collect::<Result<Vec<_>, _>>()?;
+            let otherwise = s
+                .otherwise
+                .iter()
+                .map(validate_pipeline_step)
+                .collect::<Result<Vec<_>, _>>()?;
+            PipelineRunRef::Branch {
+                on,
+                then,
+                otherwise,
+            }
+        }
+    };
+
+    Ok(PipelineStepConfig {
+        id: s.id.clone(),
+        run,
+        input: s.input.clone().unwrap_or_else(|| "${input}".to_string()),
+    })
 }
 
 /// Parse a locus string into a [`LocusConfig`].
@@ -1871,90 +2022,111 @@ pub fn parse_locus(s: &str) -> LocusConfig {
     LocusConfig::Path(s.to_string())
 }
 
-fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectConfigError> {
-    let evaluates = parse_locus(&raw.evaluates);
+/// Error from parsing a predicate menu shared by `[goals.*]` and branch
+/// conditions. Callers map these onto their own `ProjectConfigError` variant.
+pub(crate) enum PredicateParseError {
+    /// Structural problem (bad/missing selector or companion field).
+    Invalid(String),
+    /// `check = "matches"` pattern failed to compile.
+    BadRegex(String),
+}
 
-    // fn and check are mutually exclusive
-    match (&raw.r#fn, &raw.check) {
+/// Parse the predicate menu (`check`/`pattern`/`equals`/`min_count`/`schema`)
+/// or the `fn` escape hatch into a [`GoalPredicateConfig`]. `check` and `fn`
+/// are mutually exclusive and exactly one must be present. Shared by goals
+/// and branch conditions so the vocabulary can never drift between them.
+pub(crate) fn parse_predicate(
+    check: Option<&str>,
+    pattern: Option<String>,
+    equals: Option<String>,
+    min_count: Option<u64>,
+    schema: Option<serde_json::Value>,
+    r#fn: Option<String>,
+) -> Result<GoalPredicateConfig, PredicateParseError> {
+    match (r#fn, check) {
         (Some(_), Some(_)) => {
-            return Err(ProjectConfigError::GoalValidation {
-                id,
-                message: "only one of `fn` or `check` may be set".into(),
-            });
+            return Err(PredicateParseError::Invalid(
+                "only one of `fn` or `check` may be set".into(),
+            ))
         }
         (None, None) => {
-            return Err(ProjectConfigError::GoalValidation {
-                id,
-                message: "one of `fn` or `check` must be set".into(),
-            });
+            return Err(PredicateParseError::Invalid(
+                "one of `fn` or `check` must be set".into(),
+            ))
         }
-        (Some(fn_name), None) => {
-            return Ok(GoalEntry {
-                id,
-                evaluates,
-                predicate: GoalPredicateConfig::NativeFn(fn_name.clone()),
-            });
-        }
-        (None, Some(_)) => {} // fall through to check dispatch below
+        (Some(fn_name), None) => return Ok(GoalPredicateConfig::NativeFn(fn_name)),
+        (None, Some(_)) => {}
     }
-
-    let check = raw.check.as_deref().unwrap();
-    let predicate = match check {
+    let predicate = match check.unwrap() {
         "exists" => GoalPredicateConfig::Exists,
         "non_empty" => GoalPredicateConfig::NonEmpty,
-        "equals" => match raw.equals {
+        "equals" => match equals {
             Some(v) => GoalPredicateConfig::Equals(v),
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"equals\" requires the `equals` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"equals\" requires the `equals` field".into(),
+                ))
             }
         },
-        "matches" => match raw.pattern {
+        "matches" => match pattern {
             Some(p) => {
                 // Validate the regex compiles at build time.
                 if let Err(e) = regex::Regex::new(&p) {
-                    return Err(ProjectConfigError::BadGoalRegex {
-                        id,
-                        message: e.to_string(),
-                    });
+                    return Err(PredicateParseError::BadRegex(e.to_string()));
                 }
                 GoalPredicateConfig::Matches(p)
             }
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"matches\" requires the `pattern` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"matches\" requires the `pattern` field".into(),
+                ))
             }
         },
-        "min_count" => match raw.min_count {
+        "min_count" => match min_count {
             Some(n) => GoalPredicateConfig::MinCount(n),
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"min_count\" requires the `min_count` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"min_count\" requires the `min_count` field".into(),
+                ))
             }
         },
-        "schema_valid" => match raw.schema {
+        "schema_valid" => match schema {
             Some(s) => GoalPredicateConfig::SchemaValid(s),
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"schema_valid\" requires the `schema` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"schema_valid\" requires the `schema` field".into(),
+                ))
             }
         },
         other => {
-            return Err(ProjectConfigError::GoalValidation {
-                id,
-                message: format!("unknown check {other:?}; valid values: exists, non_empty, equals, matches, min_count, schema_valid"),
-            });
+            return Err(PredicateParseError::Invalid(format!(
+                "unknown check {other:?}; valid values: exists, non_empty, equals, matches, min_count, schema_valid"
+            )))
         }
     };
+    Ok(predicate)
+}
 
+fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectConfigError> {
+    let evaluates = parse_locus(&raw.evaluates);
+    let predicate = parse_predicate(
+        raw.check.as_deref(),
+        raw.pattern,
+        raw.equals,
+        raw.min_count,
+        raw.schema,
+        raw.r#fn,
+    )
+    .map_err(|e| match e {
+        PredicateParseError::BadRegex(message) => ProjectConfigError::BadGoalRegex {
+            id: id.clone(),
+            message,
+        },
+        PredicateParseError::Invalid(message) => ProjectConfigError::GoalValidation {
+            id: id.clone(),
+            message,
+        },
+    })?;
     Ok(GoalEntry {
         id,
         evaluates,
@@ -2230,7 +2402,158 @@ fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigE
         }
     }
 
+    // Fourth pass: build-time judge-compat schema check (Issue #470).
+    //
+    // A `schema_valid` goal over `steps.<id>.output` consumes the producing
+    // agent's declared `output_schema` at run time. Verify here that the
+    // producer guarantees everything the predicate's schema requires, so a
+    // producer/judge schema drift fails the build rather than a run. Absent
+    // producer `output_schema` passes — nothing is declared to contradict.
+    //
+    // Scope: only `Output` loci (the agent's structured output is exactly what
+    // `output_schema` describes); `Path` loci read file content, which is not
+    // the agent's declared output schema, so they are out of scope.
+    for (goal_id, goal) in &cfg.goals {
+        let GoalPredicateConfig::SchemaValid(consumer_schema) = &goal.predicate else {
+            continue;
+        };
+        let LocusConfig::Output(step_id) = &goal.evaluates else {
+            continue;
+        };
+        // Resolve the producing agent via the pipeline step named by the locus.
+        let Some(pipeline) = &cfg.pipeline else {
+            continue;
+        };
+        let Some(step) = pipeline.steps.iter().find(|s| &s.id == step_id) else {
+            continue; // dangling step id is not this check's concern
+        };
+        let PipelineRunRef::Agent(agent_id) = &step.run else {
+            continue; // tool/deterministic steps declare no output_schema
+        };
+        let Some(agent) = cfg.agents.get(agent_id) else {
+            continue;
+        };
+        let Some(producer_schema) = &agent.output_schema else {
+            continue; // absent output_schema → nothing to check → pass
+        };
+        if let Err(detail) = schema_covers(producer_schema, consumer_schema, "") {
+            return Err(ProjectConfigError::JudgeSchemaIncompatible {
+                goal: goal_id.clone(),
+                agent: agent_id.clone(),
+                detail,
+            });
+        }
+    }
+
     Ok(())
+}
+
+/// Structural schema-subset check for the build-time judge-compat gate
+/// (Issue #470).
+///
+/// Returns `Ok(())` when the `producer` schema is a refinement of `consumer` —
+/// i.e. every value that satisfies `producer` also satisfies `consumer`, so a
+/// downstream `schema_valid` predicate can always pass against a conforming
+/// producer output. On the first incompatibility it returns `Err(detail)`
+/// naming the field or type the producer fails to guarantee.
+///
+/// Scope: object `required`/`properties` field-presence and `type`
+/// compatibility, recursing into properties both schemas describe. Value-range
+/// keywords (numeric bounds, string lengths, enums, …) are intentionally not
+/// compared — this is a field/type-presence subset, not a full schema-refinement
+/// decision procedure. A field the producer marks `required` but leaves
+/// otherwise unconstrained is therefore treated as satisfying a constrained
+/// consumer property; tightening that is future work if it proves necessary.
+fn schema_covers(
+    producer: &serde_json::Value,
+    consumer: &serde_json::Value,
+    path: &str,
+) -> Result<(), String> {
+    // Only object schemas carry the structure we compare; a non-object schema
+    // node (e.g. `true`) constrains nothing we can check here.
+    let (Some(prod), Some(cons)) = (producer.as_object(), consumer.as_object()) else {
+        return Ok(());
+    };
+
+    let at = |p: &str| -> String {
+        if p.is_empty() {
+            String::new()
+        } else {
+            format!(" at '{p}'")
+        }
+    };
+
+    // Type compatibility: the producer's declared type(s) must all be permitted
+    // by the consumer's declared type(s). If either side omits `type`, it
+    // constrains nothing on that axis.
+    if let (Some(p_types), Some(c_types)) = (schema_types(prod), schema_types(cons)) {
+        if let Some(bad) = p_types.iter().find(|t| !c_types.contains(*t)) {
+            return Err(format!(
+                "producer output_schema{} may emit type '{}' but the check requires one of {:?}",
+                at(path),
+                bad,
+                c_types
+            ));
+        }
+    }
+
+    // Required coverage: every field the consumer requires must be *guaranteed*
+    // (also `required`) by the producer — a merely-optional producer field
+    // could be omitted, passing `producer` yet failing `consumer`.
+    let prod_required = schema_string_array(prod.get("required"));
+    for field in schema_string_array(cons.get("required")) {
+        if !prod_required.contains(&field) {
+            return Err(format!(
+                "producer output_schema{} does not guarantee required field '{}'",
+                at(path),
+                field
+            ));
+        }
+    }
+
+    // Recurse into properties both schemas describe.
+    if let (Some(serde_json::Value::Object(p_props)), Some(serde_json::Value::Object(c_props))) =
+        (prod.get("properties"), cons.get("properties"))
+    {
+        for (key, c_sub) in c_props {
+            if let Some(p_sub) = p_props.get(key) {
+                let child = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}/{key}")
+                };
+                schema_covers(p_sub, c_sub, &child)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract a schema node's declared `type` as a set of type-name strings, or
+/// `None` when `type` is absent (constrains nothing).
+fn schema_types(obj: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<String>> {
+    match obj.get("type")? {
+        serde_json::Value::String(s) => Some(std::vec![s.clone()]),
+        serde_json::Value::Array(arr) => Some(
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Read a schema keyword expected to be an array of strings (e.g. `required`)
+/// into a set; anything else yields the empty set.
+fn schema_string_array(v: Option<&serde_json::Value>) -> std::collections::BTreeSet<String> {
+    match v {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect(),
+        _ => std::collections::BTreeSet::new(),
+    }
 }
 
 /// Return the package name (the part before the first `@`) from a package
@@ -3564,6 +3887,98 @@ mod tests {
     }
 
     #[test]
+    fn parses_branch_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "triage"
+            run = "agent:triage"
+            input = "${input}"
+            [[pipeline.steps]]
+            id = "route"
+            branch = { evaluates = "steps.triage.output", check = "matches", pattern = "(?i)urgent" }
+            [[pipeline.steps.then]]
+            id = "escalate"
+            run = "agent:oncall"
+            input = "${steps.triage.output}"
+            [[pipeline.steps.otherwise]]
+            id = "ack"
+            run = "agent:writer"
+            input = "${steps.triage.output}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps.len(), 2);
+        match &pipe.steps[1].run {
+            PipelineRunRef::Branch {
+                on,
+                then,
+                otherwise,
+            } => {
+                assert_eq!(on.evaluates, LocusConfig::Output("triage".into()));
+                assert_eq!(
+                    on.predicate,
+                    GoalPredicateConfig::Matches("(?i)urgent".into())
+                );
+                assert_eq!(then.len(), 1);
+                assert_eq!(then[0].run, PipelineRunRef::Agent("oncall".into()));
+                assert_eq!(otherwise.len(), 1);
+                assert_eq!(otherwise[0].run, PipelineRunRef::Agent("writer".into()));
+            }
+            other => panic!("expected Branch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_one_armed_branch_defaults_otherwise_empty() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "route"
+            branch = { evaluates = "steps.x.output", check = "non_empty" }
+            [[pipeline.steps.then]]
+            id = "go"
+            run = "agent:go"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Branch { otherwise, .. } => assert!(otherwise.is_empty()),
+            other => panic!("expected Branch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_step_with_both_run_and_branch() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "bad"
+            run = "agent:x"
+            branch = { evaluates = "steps.x.output", check = "exists" }
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_then_without_branch() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "leaf"
+            run = "agent:x"
+            [[pipeline.steps.then]]
+            id = "orphan"
+            run = "agent:y"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
     fn rejects_unknown_run_kind() {
         let toml = r#"
             [project]
@@ -3877,6 +4292,104 @@ must_satisfy = "x"
             .validate()
             .unwrap();
         assert_eq!(cfg.deliverables["report"].producer, "writer");
+    }
+
+    // --- Issue #470: build-time judge-compat schema check ---
+
+    /// Shared fixture: a `schema_valid` goal over `steps.gather.output` whose
+    /// producer is `agents.researcher`. `producer_schema` is spliced into the
+    /// agent's `output_schema` (omit the field entirely to test the absent case).
+    fn cfg_with_schema_goal(producer_schema: Option<&str>) -> String {
+        let output_schema = match producer_schema {
+            Some(s) => format!("output_schema = {s}\n"),
+            None => String::new(),
+        };
+        format!(
+            r#"
+[project]
+name = "p"
+[models]
+default = {{ backend = "d", model = "model-v1" }}
+[agents.researcher]
+display_name = "R"
+package = "d@^0.1"
+model = "default"
+{output_schema}[[pipeline.steps]]
+id = "gather"
+run = "agent:researcher"
+input = "${{input}}"
+[goals.structured]
+evaluates = "steps.gather.output"
+check = "schema_valid"
+schema = {{ type = "object", required = ["title", "sources"], properties = {{ title = {{ type = "string" }}, sources = {{ type = "array" }} }} }}
+"#
+        )
+    }
+
+    #[test]
+    fn schema_goal_producer_missing_required_field_is_rejected() {
+        // Producer guarantees `title` only; the goal's schema also requires
+        // `sources` → the producer cannot satisfy the downstream check.
+        let schema = r#"{ type = "object", required = ["title"], properties = { title = { type = "string" } } }"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(Some(schema)))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        match err {
+            ProjectConfigError::JudgeSchemaIncompatible {
+                goal,
+                agent,
+                detail,
+            } => {
+                assert_eq!(goal, "structured");
+                assert_eq!(agent, "researcher");
+                assert!(
+                    detail.contains("sources"),
+                    "detail names the field: {detail}"
+                );
+            }
+            other => panic!("expected JudgeSchemaIncompatible, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_goal_producer_without_output_schema_passes() {
+        // Absent producer `output_schema` must PASS — nothing declared to
+        // contradict the downstream schema (no false build failure).
+        assert!(
+            toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(None))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn schema_goal_producer_guaranteeing_superset_passes() {
+        // Producer guarantees `title` + `sources` (superset of what the goal
+        // requires) → compatible.
+        let schema = r#"{ type = "object", required = ["title", "sources"], properties = { title = { type = "string" }, sources = { type = "array" } } }"#;
+        assert!(
+            toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(Some(schema)))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn schema_goal_producer_type_mismatch_is_rejected() {
+        // Producer guarantees `sources` but types it as a string where the goal
+        // requires an array → structurally incompatible.
+        let schema = r#"{ type = "object", required = ["title", "sources"], properties = { title = { type = "string" }, sources = { type = "string" } } }"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(Some(schema)))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::JudgeSchemaIncompatible { .. }
+        ));
     }
 
     // --- Task 5: gate position + retry-span + unknown retry_from ---

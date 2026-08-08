@@ -18,7 +18,7 @@
 //! `requires.tools` entry must be installed via `tau install` and
 //! carry a `[plugin]` table in their `tau.toml`; the host then spawns
 //! the recorded binary at run time. See
-//! [`crate::cmd::plugin_loader`] for the resolution logic.
+//! `crate::cmd::plugin_loader` for the resolution logic.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -305,7 +305,7 @@ pub async fn run(
     });
 
     if is_multi_agent {
-        use crate::cmd::output_orchestration::{print_summary, AgentStats};
+        use crate::cmd::output_orchestration::{print_summary, run_printer};
 
         let scope_root = scope.path().to_path_buf();
         // v1.1: spawn_root_agent takes `Arc<Runtime>` so the in-stream
@@ -317,28 +317,28 @@ pub async fn run(
             max_total_agents: args.max_total_agents,
         };
         let runtime_arc = std::sync::Arc::new(runtime);
-        let snapshot = tau_runtime_tokio::drive(
+
+        // Issue #469: render the trace live. `drive_with_live_trace`
+        // attaches a second subscriber alongside the JSONL writer and
+        // hands back its receiver; the printer drains it concurrently
+        // with the run future, so events surface as they happen instead
+        // of only in a post-run summary. `run_printer` honors `--json`.
+        let (rx, run_fut) = tau_runtime_tokio::drive_with_live_trace(
             runtime_arc.clone(),
             agent_def,
             manifest,
             initial,
             budget,
             scope_root,
-        )
-        .await
-        .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
+        );
+        let (snapshot_res, stats) = tokio::join!(run_fut, run_printer(rx, output));
+        let snapshot = snapshot_res
+            .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
 
         drop(runtime_arc);
         plugin_loader::flush_recorders().await;
 
-        // Print snapshot summary. Live trace rendering is deferred;
-        // v1 reads the JSONL log post-hoc. Stats are empty here because
-        // the printer was not wired to the trace stream — that wiring is
-        // a follow-up (requires subscribe-handle plumbing through
-        // spawn_root_agent).
-        let stats: std::collections::BTreeMap<String, AgentStats> =
-            std::collections::BTreeMap::new();
-        print_summary(&snapshot, &stats);
+        print_summary(&snapshot, &stats, output);
 
         return if matches!(snapshot.status, tau_ports::RunStatus::Completed) {
             Ok(())

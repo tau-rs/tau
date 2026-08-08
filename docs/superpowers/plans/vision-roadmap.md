@@ -165,7 +165,7 @@ from `tau.toml`; each construct is conformance-checked and its envelope enforced
 **Goal:** generated typed SDKs + `tau embed` + golden path + typed React/Angular; no surprises.
 - **5.1** `tau build --target wasm-guest | rust-lib`. *Accept:* both artifacts build.
 - **5.2** `tau embed --host c|rust|js` (generated host glue from WIT via wit-bindgen).
-- **5.3** Authoring-SDK codegen from the IR JSON schema (Smithy/JSON-Schema style); ship TS +
+- **5.3** ✅ Authoring-SDK codegen from the IR JSON schema (Smithy/JSON-Schema style); ship TS +
   Python. *Accept:* same agent in TOML/TS/Python → identical IR.
 - **5.4** Typed React hook + Angular service (jco + ergonomic `tau embed` wrappers; Web
   Worker; `RunEvent` stream). *Accept:* typed npm package; demo renders streaming.

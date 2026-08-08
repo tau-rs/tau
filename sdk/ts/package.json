@@ -1,0 +1,7 @@
+{
+  "name": "@tau/sdk",
+  "version": "0.0.0",
+  "description": "Typed TypeScript authoring SDK for tau agents",
+  "types": "src/factories.ts",
+  "main": "src/factories.ts"
+}

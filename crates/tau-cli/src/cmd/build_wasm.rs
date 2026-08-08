@@ -15,9 +15,14 @@ use std::process::Command;
 
 use anyhow::{bail, Context as _, Result};
 use tau_ir_lower::LowerError;
+use tau_ports::target::wit_world::generate_world;
 
 use crate::cli::BuildWasmArgs;
 use crate::cmd::build::{hex_lower, native_tool_hash};
+use crate::cmd::check::{
+    evaluate_governance, render_no_constitution, render_violations, CheckCtx, GovernanceFlags,
+    GovernanceOutcome,
+};
 use crate::cmd::project_load::load_project;
 use crate::output::Output;
 
@@ -81,6 +86,56 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
     let module = out.module;
     let bytes = tau_ir::to_canonical_bytes(&module);
     Ok((module, bytes))
+}
+
+/// Aggregate a lowered module's used capabilities and generate the guest's WIT
+/// world. The used caps come from every tool's `declared` set in the IR
+/// capability table; canonicalized so cap order and duplicates never affect the
+/// world. After the governance gate proceeds these caps are provably within
+/// `[allow]` (tool ⊆ agent-effective ⊆ root ceiling), so the generated world is
+/// the `[allow]`-bounded set — no redundant `meet`.
+pub fn world_from_module(module: &tau_ir::IrModule) -> Result<String> {
+    let used: Vec<tau_domain::Capability> = module
+        .workflow
+        .capability_table
+        .0
+        .values()
+        .flat_map(|req| req.declared.iter().cloned())
+        .collect();
+    let caps = tau_domain::canon_caps(&used);
+    generate_world(&caps).map_err(|e| anyhow::anyhow!("wasm WIT-world generation failed: {e}"))
+}
+
+/// Lower a project and generate its WIT world. Test seam so world generation is
+/// exercisable without shelling the 60-90s wasm build.
+pub fn wasm_world_for_project(project: &Path) -> Result<String> {
+    let (module, _bytes) = lower_to_wasm_ir(project)?;
+    world_from_module(&module)
+}
+
+/// Governed-by-default gate for the wasm build path (ADR-0057 / D2), reusing
+/// the `tau check governance` engine. Returns `Ok(())` to proceed or
+/// `Err(diagnostic)` — the caller prints the diagnostic and exits 2. `tau build
+/// wasm` produces no bundle, so the `GovernanceVerdict` is not stamped.
+pub async fn wasm_governance_gate(
+    project_path: &Path,
+    flags: GovernanceFlags,
+) -> std::result::Result<(), String> {
+    let target: tau_ports::target::TargetTriple = WASM_TARGET
+        .parse()
+        .expect("any-wasi-strict is a registered triple");
+    let ctx = CheckCtx::load(project_path.to_path_buf(), false, Some(target))
+        .await
+        .map_err(|e| format!("cannot evaluate governance: {e}"))?;
+    let Some(project) = &ctx.project else {
+        // Unparseable project — let the lowering path surface the precise error.
+        return Ok(());
+    };
+    match evaluate_governance(project, &ctx, flags) {
+        GovernanceOutcome::Proceed(_) => Ok(()),
+        GovernanceOutcome::NoConstitution => Err(render_no_constitution()),
+        GovernanceOutcome::Violations(findings) => Err(render_violations(&findings)),
+    }
 }
 
 /// Locate the tau source workspace root at compile time.
@@ -161,8 +216,31 @@ pub async fn run(args: &BuildWasmArgs, output: &mut Output) -> Result<()> {
         .clone()
         .unwrap_or_else(|| std::env::current_dir().expect("cwd is readable"));
 
+    // Governed-by-default gate (ADR-0057 / D2) — refuse an ungoverned or
+    // over-reaching project before doing any build work.
+    let flags = GovernanceFlags {
+        allow_ungoverned: args.allow_ungoverned,
+        no_governance: args.no_governance,
+    };
+    if let Err(diag) = wasm_governance_gate(&project, flags).await {
+        let _ = output.diagnostic(diag);
+        std::process::exit(2);
+    }
+
     let (module, bytes) = lower_to_wasm_ir(&project)?;
     let ir_hash = hex_lower(&tau_ir::compute_hash(&module));
+
+    // Generate the cap-derived WIT world BEFORE the expensive guest build so an
+    // unsupported-on-wasm capability fails fast (exit 2) instead of after a
+    // 60-90s build that would leave an orphan `.wasm` with no `.wit`. Computed
+    // from the already-lowered `module` — no second lowering.
+    let world = match world_from_module(&module) {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = output.error(format!("{e}"));
+            std::process::exit(2);
+        }
+    };
 
     // Bake the IR bytes into a tempfile the guest build reads via TAU_IR_BYTES.
     // The file must stay alive until after the cargo call returns.
@@ -178,11 +256,16 @@ pub async fn run(args: &BuildWasmArgs, output: &mut Output) -> Result<()> {
         .unwrap_or_else(|| project.join(format!("{}.wasm", project_stem(&project))));
     std::fs::write(&out_path, &wasm).with_context(|| format!("writing {}", out_path.display()))?;
 
+    // Write the (already-generated) WIT world next to the component.
+    let wit_path = out_path.with_extension("wit");
+    std::fs::write(&wit_path, &world).with_context(|| format!("writing {}", wit_path.display()))?;
+
     let _ = output.human(&format!(
-        "built {} ({} bytes, ir {})",
+        "built {} ({} bytes, ir {}) + {}",
         out_path.display(),
         wasm.len(),
-        ir_hash
+        ir_hash,
+        wit_path.display()
     ));
     Ok(())
 }

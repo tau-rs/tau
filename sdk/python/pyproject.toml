@@ -1,0 +1,8 @@
+[project]
+name = "tau-sdk"
+version = "0.0.0"
+description = "Typed Python authoring SDK for tau agents"
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["."]

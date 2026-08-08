@@ -51,16 +51,48 @@ fn error_to_finding(err: &ProjectConfigError, tau_toml: &std::path::Path) -> Che
     }
 }
 
+/// Map each `ProjectConfigError` variant to a stable PascalCase `kind`
+/// string. The kind is a contract consumed by `--json`/SARIF output and by
+/// tests, so existing strings must not be renamed. Every arm mirrors its
+/// variant name verbatim.
 fn variant_kind(err: &ProjectConfigError) -> &'static str {
     match err {
+        ProjectConfigError::NotFound => "NotFound",
         ProjectConfigError::Read { .. } => "Read",
         ProjectConfigError::Parse { .. } => "Parse",
+        ProjectConfigError::EmptyProjectName => "EmptyProjectName",
         ProjectConfigError::AgentValidation { .. } => "AgentValidation",
+        ProjectConfigError::AllowValidation { .. } => "AllowValidation",
         ProjectConfigError::CapabilityOverrideExpands { .. } => "CapabilityOverrideExpands",
         ProjectConfigError::PromptAmbiguous { .. } => "PromptAmbiguous",
         ProjectConfigError::RequiresToolsBareStringRejected { .. } => {
             "RequiresToolsBareStringRejected"
         }
+        ProjectConfigError::ParseStr { .. } => "ParseStr",
+        ProjectConfigError::ToolValidation { .. } => "ToolValidation",
+        ProjectConfigError::StepValidation { .. } => "StepValidation",
+        ProjectConfigError::TriggerValidation { .. } => "TriggerValidation",
+        ProjectConfigError::EmptyPipeline => "EmptyPipeline",
+        ProjectConfigError::PipelineValidation { .. } => "PipelineValidation",
+        ProjectConfigError::UnsupportedMcpUrl { .. } => "UnsupportedMcpUrl",
+        ProjectConfigError::GoalValidation { .. } => "GoalValidation",
+        ProjectConfigError::DeliverableValidation { .. } => "DeliverableValidation",
+        ProjectConfigError::JudgeAndModelConflict { .. } => "JudgeAndModelConflict",
+        ProjectConfigError::DeliverableNoProducer { .. } => "DeliverableNoProducer",
+        ProjectConfigError::DeliverableAmbiguousProducer { .. } => "DeliverableAmbiguousProducer",
+        ProjectConfigError::DeliverableProducerLacksCapability { .. } => {
+            "DeliverableProducerLacksCapability"
+        }
+        ProjectConfigError::GateAfterProducer { .. } => "GateAfterProducer",
+        ProjectConfigError::RetrySpanNoLlm { .. } => "RetrySpanNoLlm",
+        ProjectConfigError::UnknownRetryFrom { .. } => "UnknownRetryFrom",
+        ProjectConfigError::BadGoalRegex { .. } => "BadGoalRegex",
+        ProjectConfigError::UnknownJudgeAgent { .. } => "UnknownJudgeAgent",
+        ProjectConfigError::CredentialDeclaration { .. } => "CredentialDeclaration",
+        ProjectConfigError::MalformedModelEntry { .. } => "MalformedModelEntry",
+        ProjectConfigError::ModelBackendNotDeclared { .. } => "ModelBackendNotDeclared",
+        ProjectConfigError::UnknownModelAlias { .. } => "UnknownModelAlias",
+        ProjectConfigError::MissingAgentModel { .. } => "MissingAgentModel",
         // tau-pkg uses #[non_exhaustive] — surface unknown variants without panicking.
         _ => "Other",
     }
