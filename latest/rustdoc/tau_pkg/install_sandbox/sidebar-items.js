@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["InstallSandboxError","SandboxDecision"],"fn":["build_envelope","cross_check_envelope","git_dep_hosts","host_of_git_url","sandbox_decision"],"struct":["InstallSandboxGuard"],"trait":["InstallSandbox"]};
