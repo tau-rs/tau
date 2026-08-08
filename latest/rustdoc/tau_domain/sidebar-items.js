@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["agent","error","fixtures","id","message","package","value","version"],"struct":["Url","Uuid","Version","VersionReq"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Direction","RecordingSink"],"fn":["describe_plugin","load_llm_backend","load_storage","load_tool"],"struct":["PluginHostOptions","Recorder"],"type":["RecorderHandle"]};
