@@ -35,8 +35,8 @@ use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as WasiHttpErrorCod
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
 use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
 use wasmtime_wasi_http::p2::{
-    add_only_http_to_linker_sync, default_send_request, HttpResult, WasiHttpCtxView,
-    WasiHttpHooks, WasiHttpView,
+    add_only_http_to_linker_sync, default_send_request, HttpResult, WasiHttpCtxView, WasiHttpHooks,
+    WasiHttpView,
 };
 use wasmtime_wasi_http::WasiHttpCtx;
 

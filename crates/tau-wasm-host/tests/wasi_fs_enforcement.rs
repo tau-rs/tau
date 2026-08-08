@@ -14,8 +14,8 @@ use tau_wasm_host::{run_component_with_caps, WasmHostError};
 
 /// Build the fs-probe fixture for wasm32-wasip2 and return the component bytes.
 fn build_fs_probe() -> Vec<u8> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fs-probe/Cargo.toml");
+    let manifest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fs-probe/Cargo.toml");
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -98,17 +98,16 @@ fn granted_path_is_readable_ungranted_path_is_not() {
         sandbox.path(),
     );
     match sibling {
-        Ok(payload) => panic!(
-            "un-granted sibling file was reachable (preopen scope too broad): {payload}"
-        ),
+        Ok(payload) => {
+            panic!("un-granted sibling file was reachable (preopen scope too broad): {payload}")
+        }
         Err(WasmHostError::Guest(msg)) => assert!(msg.contains("denied"), "got: {msg}"),
         Err(WasmHostError::Trap(_)) => {}
         Err(other) => panic!("unexpected host error: {other:?}"),
     }
 
     // UN-GRANTED: /etc/secret has no preopen — the guest cannot reach it.
-    let denied =
-        run_component_with_caps(&component, "/etc/secret", vec![], &caps, sandbox.path());
+    let denied = run_component_with_caps(&component, "/etc/secret", vec![], &caps, sandbox.path());
     match denied {
         Ok(payload) => panic!("un-granted path was reachable: {payload}"),
         // The guest's `run` returned its Err arm ("denied: ...") — WASI gave

@@ -178,7 +178,8 @@ mod grant_tests {
 
     #[test]
     fn no_net_cap_is_deny_all() {
-        let g = wasi_grants_from_caps(&[cap_fs_read(&["/data/**"])], Path::new("/tmp/root")).unwrap();
+        let g =
+            wasi_grants_from_caps(&[cap_fs_read(&["/data/**"])], Path::new("/tmp/root")).unwrap();
         assert_eq!(g.hosts, HostAccess::DenyAll);
     }
 
@@ -197,7 +198,8 @@ mod grant_tests {
 
     #[test]
     fn fs_read_maps_to_readonly_preopen_under_root() {
-        let g = wasi_grants_from_caps(&[cap_fs_read(&["/data/**"])], Path::new("/tmp/root")).unwrap();
+        let g =
+            wasi_grants_from_caps(&[cap_fs_read(&["/data/**"])], Path::new("/tmp/root")).unwrap();
         assert_eq!(g.preopens.len(), 1);
         let p = &g.preopens[0];
         assert_eq!(p.guest_path, "/data");
@@ -208,8 +210,8 @@ mod grant_tests {
     #[test]
     fn any_host_cap_yields_any_policy() {
         // `cap_net_http(&["any"], &[])` yields `HostSet::Any` → permit any host.
-        let g = wasi_grants_from_caps(&[cap_net_http(&["any"], &[])], Path::new("/tmp/root"))
-            .unwrap();
+        let g =
+            wasi_grants_from_caps(&[cap_net_http(&["any"], &[])], Path::new("/tmp/root")).unwrap();
         assert_eq!(g.hosts, HostAccess::Any);
         assert!(g.hosts.permits("anything.example:443"));
     }
@@ -218,7 +220,10 @@ mod grant_tests {
     fn fs_write_wins_over_read_for_same_dir() {
         // Both caps name the `/data` glob dir; the two preopens merge and RW wins.
         let g = wasi_grants_from_caps(
-            &[cap_fs_read(&["/data/**"]), cap_fs_write(&["/data/**"], None)],
+            &[
+                cap_fs_read(&["/data/**"]),
+                cap_fs_write(&["/data/**"], None),
+            ],
             Path::new("/tmp/root"),
         )
         .unwrap();
@@ -232,10 +237,16 @@ mod grant_tests {
         // `..`-bearing absolute path.
         let err = wasi_grants_from_caps(&[cap_fs_read(&["/../etc"])], Path::new("/tmp/root"))
             .unwrap_err();
-        assert!(matches!(err, crate::WasmHostError::UnsafeCapPath { .. }), "got: {err:?}");
+        assert!(
+            matches!(err, crate::WasmHostError::UnsafeCapPath { .. }),
+            "got: {err:?}"
+        );
         // Relative path (no leading slash).
-        let err2 = wasi_grants_from_caps(&[cap_fs_read(&["data/x"])], Path::new("/tmp/root"))
-            .unwrap_err();
-        assert!(matches!(err2, crate::WasmHostError::UnsafeCapPath { .. }), "got: {err2:?}");
+        let err2 =
+            wasi_grants_from_caps(&[cap_fs_read(&["data/x"])], Path::new("/tmp/root")).unwrap_err();
+        assert!(
+            matches!(err2, crate::WasmHostError::UnsafeCapPath { .. }),
+            "got: {err2:?}"
+        );
     }
 }
