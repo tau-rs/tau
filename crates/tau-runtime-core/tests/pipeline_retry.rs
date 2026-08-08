@@ -36,7 +36,8 @@ use tracing_subscriber::Layer;
 
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::CapabilityTable;
-use tau_ir::check::{Check, CheckVerify, JudgeRef, Locus, OnFail, RetryPolicy};
+use tau_ir::check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail, RetryPolicy};
+use tau_ir::tool_impl::NativeFnRef;
 use tau_ir::ids::{AgentId, CheckId, PipelineStepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
@@ -530,5 +531,197 @@ async fn budget_cap_is_authoritative_below_max_attempts() {
         0,
         "no LLM call should have been made; backend received {} requests",
         requests.len()
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Multi-check-per-gate feedback isolation (issue #471).
+//
+// Two Goal checks `c1` and `c2` both gate the same `writer` step. A stateful
+// registry scripts the pass/fail schedule so that `c1` REGRESSES to failing
+// on a later pass while `c2`'s rejection is still outstanding — the one case
+// where two checks' feedback must coexist at the gate:
+//
+//   P1: writer#1              c1 -> FAIL "c1-fail-a"        (rewind to writer)
+//   P2: writer#2 (sees c1)    c1 -> PASS ; c2 -> FAIL "c2-fail"   (rewind)
+//   P3: writer#3 (sees c2)    c1 -> FAIL "c1-fail-b"        (rewind)
+//   P4: writer#4 (sees BOTH)  c1 -> PASS ; c2 -> PASS       (done)
+//
+// The single-slot `Option<String>` design loses `c2-fail` when `c1` fails at
+// P3 (last-writer-wins), so writer#4 would see only `c1-fail-b`. Keyed
+// feedback keeps both distinct, so writer#4 sees `c1-fail-b` AND `c2-fail`.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Stateful registry that scripts `c1_fn` / `c2_fn` verdicts by call index.
+struct MultiCheckRegistry {
+    c1_calls: Mutex<usize>,
+    c2_calls: Mutex<usize>,
+}
+
+impl DeterministicRegistry for MultiCheckRegistry {
+    fn invoke(&self, fn_name: &str, _args: &Value) -> Result<Value, RuntimeError> {
+        match fn_name {
+            "c1_fn" => {
+                let mut n = self.c1_calls.lock().expect("c1 mutex");
+                *n += 1;
+                Ok(match *n {
+                    1 => serde_json::json!({"met": false, "rationale": "c1-fail-a"}),
+                    3 => serde_json::json!({"met": false, "rationale": "c1-fail-b"}),
+                    _ => serde_json::json!({"met": true, "rationale": "c1-ok"}),
+                })
+            }
+            "c2_fn" => {
+                let mut n = self.c2_calls.lock().expect("c2 mutex");
+                *n += 1;
+                Ok(match *n {
+                    1 => serde_json::json!({"met": false, "rationale": "c2-fail"}),
+                    _ => serde_json::json!({"met": true, "rationale": "c2-ok"}),
+                })
+            }
+            other => Err(RuntimeError::Internal {
+                message: format!("MultiCheckRegistry: unknown fn {other}"),
+            }),
+        }
+    }
+}
+
+/// Dispatcher wiring the writer's LLM backend and the scripted registry.
+struct MultiCheckDispatcher {
+    backend: Arc<SeqLlmBackend>,
+    registry: Arc<MultiCheckRegistry>,
+}
+
+impl ToolDispatcher for MultiCheckDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a tau_ir::ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "MultiCheckDispatcher::invoke should never be called".into(),
+            })
+        })
+    }
+
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
+    }
+
+    fn deterministic_registry(&self) -> Option<Arc<dyn DeterministicRegistry>> {
+        Some(self.registry.clone())
+    }
+}
+
+/// Build `[agent:writer, check:c1, check:c2]` where both checks are Goal
+/// predicates over `steps.writer.output` and both gate `writer`.
+fn build_multi_check_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("writer".into()), writer_agent());
+
+    let mut checks = BTreeMap::new();
+    for (id, fn_name) in [("c1", "c1_fn"), ("c2", "c2_fn")] {
+        checks.insert(
+            CheckId(id.into()),
+            Check {
+                id: CheckId(id.into()),
+                verify: CheckVerify::Goal {
+                    evaluates: Locus::Output(PipelineStepId("writer".into())),
+                    predicate: GoalPredicate::NativeFn(NativeFnRef {
+                        name: fn_name.into(),
+                    }),
+                },
+                retry: RetryPolicy {
+                    on_fail: OnFail::Retry,
+                    max_attempts: 10,
+                    gate: PipelineStepId("writer".into()),
+                },
+            },
+        );
+    }
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("writer".into()),
+                run: StepRun::Agent(AgentId("writer".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("c1".into()),
+                run: StepRun::Check(CheckId("c1".into())),
+                input: String::new(),
+            },
+            PipelineStep {
+                id: PipelineStepId("c2".into()),
+                run: StepRun::Check(CheckId("c2".into())),
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks,
+        },
+        triggers: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn multi_check_feedback_stays_distinct_per_check() {
+    // Writer returns the same neutral text every call; the registry (not the
+    // LLM) drives the pass/fail schedule, so one scripted response suffices.
+    let backend = Arc::new(SeqLlmBackend::new(vec![response("draft text")]));
+    let registry = Arc::new(MultiCheckRegistry {
+        c1_calls: Mutex::new(0),
+        c2_calls: Mutex::new(0),
+    });
+    let dispatcher = Arc::new(MultiCheckDispatcher {
+        backend: backend.clone(),
+        registry,
+    });
+
+    let module = build_multi_check_module();
+    run_pipeline(Arc::new(module), "go".to_string(), dispatcher)
+        .await
+        .expect("both checks converge");
+
+    // The writer runs four times (P1..P4); the 4th request is the one that
+    // must carry BOTH outstanding rationales.
+    let requests = backend.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "writer should run exactly 4 times; got {}",
+        requests.len()
+    );
+    let p4 = user_texts(&requests[3]);
+    assert!(
+        p4.contains("c1-fail-b"),
+        "writer#4 must carry c1's outstanding rationale; got: {p4:?}"
+    );
+    assert!(
+        p4.contains("c2-fail"),
+        "writer#4 must ALSO carry c2's distinct rationale (not overwritten); got: {p4:?}"
+    );
+    // The superseded first-pass c1 rationale must NOT leak once c1 passed.
+    assert!(
+        !p4.contains("c1-fail-a"),
+        "writer#4 must not carry c1's stale (already-resolved) rationale; got: {p4:?}"
     );
 }

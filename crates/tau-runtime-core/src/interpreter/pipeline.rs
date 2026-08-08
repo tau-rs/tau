@@ -9,7 +9,6 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
-use alloc::vec;
 
 use serde_json::Value;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
@@ -66,13 +65,15 @@ const PARALLEL_CAP: usize = 8;
 /// decides what happens. If `on_fail == Abort`, or the attempt count has
 /// reached `max_attempts`, the pipeline aborts with
 /// [`RuntimeError::CheckFailed`]. Otherwise the loop emits
-/// [`EV_CHECK_RETRY`], stashes the judge's rationale as `feedback`, and
-/// rewinds the loop index to the check's `gate` step so the forward slice
-/// re-runs. On the next pass through the gate's agent step the feedback is
-/// injected as a prior turn (`"Previous attempt rejected: <rationale>"`) so
-/// the agent sees *why* it was rejected. The feedback stays set until the
-/// check that caused the rewind resolves: a pass clears it; a fresh failure
-/// updates it.
+/// [`EV_CHECK_RETRY`], stashes the judge's rationale as `feedback` keyed by
+/// the check's `gate` step and the check's id, and rewinds the loop index to
+/// that `gate` step so the forward slice re-runs. On the next pass through the
+/// gate's agent step every outstanding rationale registered for *that* gate is
+/// injected as a labelled prior turn (`"Previous attempt rejected: (check
+/// '<id>') <rationale>"`) so the agent sees *why* it was rejected. Keying by
+/// gate + check id keeps concurrently-failing checks distinct (a pass clears
+/// only its own check's entry; a fresh failure updates only its own) and
+/// confines each check's feedback to its own gate step.
 pub async fn run_pipeline<D>(
     module: Arc<IrModule>,
     input: String,
@@ -126,10 +127,19 @@ where
 {
     // Per-check attempt counter (1-based on first eval), keyed by check id.
     let mut attempts: BTreeMap<String, u32> = BTreeMap::new();
-    // Rationale of the most recent failed check that triggered a rewind. It
-    // is injected as a prior turn at the gate's agent step and stays set
-    // until the originating check resolves (pass clears it, fail updates it).
-    let mut feedback: Option<String> = initial_feedback;
+    // Rejection rationales of failed checks that triggered a rewind, keyed by
+    // the gate step they rewind to, then by check id (issue #471). Injecting
+    // only the entries whose key matches the current step id scopes each
+    // check's feedback to its own gate agent step (never leaking into
+    // unrelated agent steps in the rewound slice). Multiple checks gating one
+    // step keep distinct entries — a pass clears only its own check's entry, a
+    // fresh failure updates only its own — instead of last-writer-wins over a
+    // single shared slot.
+    let mut feedback: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    // Loop prior-iteration rationale (from `Loop.until`), which has no
+    // associated check or gate. Injected once, at the first agent step of this
+    // slice, then consumed. Top-level/branch/parallel callers pass `None`.
+    let mut pending_initial_feedback: Option<String> = initial_feedback;
     // gate-id -> pipeline-step index, so a failed retryable check can rewind
     // `i` to its gate without re-scanning the pipeline each time.
     let gate_index: BTreeMap<&str, usize> = steps
@@ -215,9 +225,15 @@ where
             );
 
             if verdict.met {
-                // Passed: clear any feedback carried in from a prior rewind
-                // and advance. Checks store no output.
-                feedback = None;
+                // Passed: clear only THIS check's feedback under its gate,
+                // leaving any sibling checks' outstanding rationales intact.
+                // Checks store no output.
+                if let Some(inner) = feedback.get_mut(&check.retry.gate.0) {
+                    inner.remove(&check_id.0);
+                    if inner.is_empty() {
+                        feedback.remove(&check.retry.gate.0);
+                    }
+                }
                 i += 1;
                 continue;
             }
@@ -255,7 +271,10 @@ where
                 next_attempt = attempt + 1,
             );
 
-            feedback = Some(verdict.rationale);
+            feedback
+                .entry(check.retry.gate.0.clone())
+                .or_default()
+                .insert(check_id.0.clone(), verdict.rationale);
             i = gate_idx;
             continue;
         }
@@ -424,15 +443,27 @@ where
                 // When a prior check rewound to this gate, inject its
                 // rationale as a prior turn so the agent sees *why* it was
                 // rejected. `split_history` (agent_loop.rs) treats all-but-last
-                // as history and the last as the live turn, so the feedback
-                // becomes a prior turn and `rendered` stays the live prompt.
-                let initial = match &feedback {
-                    Some(fb) => vec![
-                        user_message(&format!("Previous attempt rejected: {fb}")),
-                        user_message(&rendered),
-                    ],
-                    None => vec![user_message(&rendered)],
-                };
+                // as history and the last as the live turn, so each feedback
+                // message becomes a prior turn and `rendered` stays the live
+                // prompt.
+                let mut initial: alloc::vec::Vec<Message> = alloc::vec::Vec::new();
+                // Loop prior-iteration feedback (no check/gate): inject once,
+                // at the first agent step of the slice, then consume it.
+                if let Some(fb) = pending_initial_feedback.take() {
+                    initial.push(user_message(&format!("Previous attempt rejected: {fb}")));
+                }
+                // Check feedback gating THIS step: one labeled prior turn per
+                // outstanding check, so several checks on one gate stay
+                // distinct (issue #471). BTreeMap iteration is sorted by check
+                // id, so ordering is deterministic.
+                if let Some(inner) = feedback.get(&step.id.0) {
+                    for (cid, fb) in inner {
+                        initial.push(user_message(&format!(
+                            "Previous attempt rejected: (check '{cid}') {fb}"
+                        )));
+                    }
+                }
+                initial.push(user_message(&rendered));
                 let outcome = Box::pin(run_agent(
                     module.clone(),
                     &agent,
