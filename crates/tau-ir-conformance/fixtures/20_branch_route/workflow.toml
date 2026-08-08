@@ -1,0 +1,45 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-20"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.triage]
+display_name = "Triage"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.oncall]
+display_name = "Oncall"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.writer]
+display_name = "Writer"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+[[pipeline.steps]]
+id    = "triage"
+run   = "agent:triage"
+input = "${input}"
+
+[[pipeline.steps]]
+id     = "route"
+branch = { evaluates = "steps.triage.output", check = "non_empty" }
+
+  [[pipeline.steps.then]]
+  id    = "escalate"
+  run   = "agent:oncall"
+  input = "${steps.triage.output}"
+
+  [[pipeline.steps.otherwise]]
+  id    = "ack"
+  run   = "agent:writer"
+  input = "${steps.triage.output}"
