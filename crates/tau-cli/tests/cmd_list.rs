@@ -24,6 +24,11 @@ fn list_packages_empty_scope_says_no_packages() {
         .stdout(predicate::str::contains("no packages installed"));
 }
 
+// Real install → Strict sandbox adapter, absent on Windows (Phase-2 stub).
+#[cfg_attr(
+    windows,
+    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
+)]
 #[test]
 fn list_packages_after_install_shows_row() {
     let (fixture, url, _bare) = common::setup_local_package_fixture("hello-tool", "0.1.0");
@@ -50,6 +55,10 @@ fn list_packages_after_install_shows_row() {
         .stdout(predicate::str::contains("global"));
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
+)]
 #[test]
 fn list_packages_json_output_is_array_with_expected_fields() {
     let (fixture, url, _bare) = common::setup_local_package_fixture("hello-tool", "0.1.0");
