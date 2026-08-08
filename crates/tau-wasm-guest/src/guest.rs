@@ -103,6 +103,17 @@ impl Guest for Component {
         }
         let module = tau_ir::from_canonical_bytes(bytes).map_err(|e| e.to_string())?;
 
+        // The guest drives a single entry agent (run_ir_streaming below), not
+        // the pipeline executor (run_pipeline). Reject any pipeline-bearing IR
+        // — Branch/Parallel/Loop and linear pipelines alike — at load rather
+        // than silently running only the entry agent and skipping the pipeline.
+        // Driving run_pipeline in-wasm is a follow-up slice.
+        if module.workflow.pipeline.is_some() {
+            return Err(
+                "tau-wasm-guest: pipelines (incl. Branch) are not yet executed in-wasm".to_string(),
+            );
+        }
+
         // E2 scope: exactly one agent; it is the entry.
         if module.workflow.agents.len() != 1 {
             return Err(alloc::format!(
