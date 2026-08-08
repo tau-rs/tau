@@ -38,7 +38,7 @@
           "description": "Resolved model selection (backend + vendor id), baked at lowering."
         },
         "output_schema": {
-          "description": "Optional JSON schema describing the agent's structured output.\nPlumbed from `[agents.<id>].output_schema`; consumed by a later\njudge-compat build-time check. `skip_serializing_if` keeps\nschema-less agents byte-stable."
+          "description": "Optional JSON schema describing the agent's structured output.\nPlumbed from `[agents.<id>].output_schema`. The judge-compat\nbuild-time check (Issue #470) runs at the authoring-config layer\n(`validate_postconditions` in `tau-pkg`), comparing this schema\nagainst downstream `schema_valid` goals before lowering.\n`skip_serializing_if` keeps schema-less agents byte-stable."
         },
         "produces": {
           "description": "Artifact loci this agent declares it produces (deliverable binding).",
