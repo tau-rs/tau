@@ -1,0 +1,2 @@
+{"turn": 0, "response": {"text": "draft v1: needs work", "stop_reason": "end_turn"}}
+{"turn": 1, "response": {"text": "APPROVED: final draft", "stop_reason": "end_turn"}}
