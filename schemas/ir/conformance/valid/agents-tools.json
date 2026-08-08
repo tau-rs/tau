@@ -223,7 +223,7 @@
         },
         "capabilities": {
           "declared": [
-            { "kind": "mcp.tool.use" }
+            { "kind": "custom.mcp.tool.use" }
           ]
         },
         "spec": {
@@ -283,7 +283,7 @@
       },
       "custom_tool": {
         "declared": [
-          { "kind": "mcp.tool.use" }
+          { "kind": "custom.mcp.tool.use" }
         ]
       }
     }

@@ -77,6 +77,10 @@ impl SkillResolver for TauPkgSkillResolver {
 mod tests {
     use super::*;
 
+    #[cfg_attr(
+        windows,
+        ignore = "no Windows home/scope resolution (Scope::resolve fails, not NotFound); see #530"
+    )]
     #[test]
     fn no_lockfile_scope_returns_not_found() {
         // A tempdir with no `.tau/` anywhere up the tree resolves to a

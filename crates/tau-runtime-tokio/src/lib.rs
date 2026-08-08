@@ -46,7 +46,7 @@ pub use builder::{Runtime, RuntimeBuilder, TauRuntimeBuilder};
 pub use capability_override::{CapabilityOverride, EffectiveCapability, OverrideExpandError};
 pub use checkpoint::FileCheckpointStore;
 pub use clock::TokioClock;
-pub use drive::drive;
+pub use drive::{drive, drive_with_live_trace};
 pub use error::{BuildError, CapabilityDenial, HandshakeFailureReason, PluginKind, RuntimeError};
 pub use options::{RunOptions, TokenUsage};
 pub use outcome::RunOutcome;

@@ -59,3 +59,46 @@ fn tau_check_reports_deliverable_with_no_producer() {
         "expected 'has no producer' in stdout\nstdout: {stdout}\nstderr: {stderr}",
     );
 }
+
+/// `tau check config --json` must tag the finding with the typed
+/// `structured.kind = "DeliverableNoProducer"`, not the `"Other"` catch-all
+/// (issue #472). Guards the per-variant `variant_kind` mapping against
+/// regressing back to the wildcard.
+#[test]
+fn tau_check_json_emits_typed_kind_for_deliverable_no_producer() {
+    check_common::ensure_tau_home();
+
+    let tmp = TempDir::new().unwrap();
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir(&proj).unwrap();
+    std::fs::write(proj.join("tau.toml"), TAU_TOML_DELIVERABLE_NO_PRODUCER).unwrap();
+
+    let out = Command::cargo_bin("tau")
+        .unwrap()
+        .args(["check", "config", "--json"])
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // Find the finding's structured.kind across the JSONL stream.
+    let kind = stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v.get("findings").and_then(|f| f.as_array().cloned()))
+        .flatten()
+        .find_map(|f| {
+            f.get("structured")
+                .and_then(|s| s.get("kind"))
+                .and_then(|k| k.as_str())
+                .map(str::to_owned)
+        });
+
+    assert_eq!(
+        kind.as_deref(),
+        Some("DeliverableNoProducer"),
+        "expected typed kind, not \"Other\"\nstdout: {stdout}\nstderr: {stderr}",
+    );
+}

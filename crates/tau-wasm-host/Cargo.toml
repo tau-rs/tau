@@ -10,8 +10,8 @@ authors.workspace      = true
 
 [dependencies]
 wasmtime           = { workspace = true }
-wasmtime-wasi      = "45"
-wasmtime-wasi-http = "45"
+wasmtime-wasi      = "47"
+wasmtime-wasi-http = "47"
 # Only needed to name the `hyper::Request<HyperOutgoingBody>` type in the
 # `WasiHttpHooks::send_request` override signature (EPIC 3.3); no client
 # features required.
