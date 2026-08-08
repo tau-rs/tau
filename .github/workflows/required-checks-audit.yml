@@ -30,7 +30,12 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch origin "$BASE_REF" --depth 1
+          # `checkout` above uses fetch-depth: 0, so origin/$BASE_REF is
+          # already present with full history. Re-fetch WITHOUT --depth 1:
+          # a shallow fetch grafts origin/$BASE_REF to a single commit, which
+          # breaks the merge base the three-dot diff needs and fails with
+          # "fatal: origin/$BASE_REF...HEAD: no merge base".
+          git fetch origin "$BASE_REF"
           DIFF=$(git diff "origin/$BASE_REF...HEAD" -- '.github/workflows/*.yml')
           if echo "$DIFF" | grep -qE '^\+name:'; then
             echo "name_added=true" >> "$GITHUB_OUTPUT"
