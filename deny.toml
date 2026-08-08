@@ -14,10 +14,22 @@ yanked = "deny"
 # beyond our control — flagging them gives no actionable signal until
 # the consuming crate cuts a release using a maintained alternative.
 unmaintained = "workspace"
-# Empty ignore list — review and add specific RUSTSEC-IDs or
-# `{ crate = "...", reason = "..." }` entries here if a flagged
-# vulnerability has no upstream patch + an explicit accept rationale.
-ignore = []
+# Review and add specific RUSTSEC-IDs or `{ crate = "...", reason = "..." }`
+# entries here if a flagged vulnerability has no upstream patch (in our pinned
+# line) + an explicit accept rationale.
+ignore = [
+    # RUSTSEC-2026-0222 / GHSA-hgjw-h833-99q9 — wasmtime "Stores can mix up type
+    # indices between engines". No fix exists in the 45.x line we pin (patched
+    # lines: >=46.0.2 or >=47.0.3); moving off 45 is a wasmtime major bump that
+    # must migrate the tau-wasm-host embedder API, tracked separately. Accepted
+    # meanwhile because: (1) wasmtime is dev-graph-only here
+    # (wasmtime -> tau-wasm-host -> (dev) tau-cli), not in any shipped binary;
+    # (2) the bug is cross-engine type-index confusion, and
+    # tau-wasm-host::run_component builds a single Engine/Store per call and
+    # never shares types across engines. Remove once wasmtime is bumped to a
+    # patched line.
+    "RUSTSEC-2026-0222",
+]
 
 [licenses]
 version = 2
