@@ -31,6 +31,14 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{
     DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
 };
+use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as WasiHttpErrorCode;
+use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
+use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
+use wasmtime_wasi_http::p2::{
+    add_only_http_to_linker_sync, default_send_request, HttpResult, WasiHttpCtxView,
+    WasiHttpHooks, WasiHttpView,
+};
+use wasmtime_wasi_http::WasiHttpCtx;
 
 mod wasi;
 pub use wasi::{wasi_grants_from_caps, HostAccess, PreopenGrant, WasiGrants};
@@ -93,16 +101,25 @@ struct HostState {
     /// WASI 0.2 host context: exactly the preopens/network derived from the
     /// component's allow-bounded caps (EPIC 3.3).
     wasi: WasiCtx,
+    /// wasi:http resource bookkeeping (EPIC 3.3); the egress *decision* lives
+    /// in `host_access`, not here.
+    http: WasiHttpCtx,
+    /// Host-authority allow policy folded from the component's allow-bounded
+    /// caps (EPIC 3.3). Consulted by the `WasiHttpHooks::send_request`
+    /// override below before any outgoing request is sent.
+    host_access: HostAccess,
 }
 
 impl HostState {
-    fn new(responses: Vec<String>, wasi: WasiCtx) -> Self {
+    fn new(responses: Vec<String>, wasi: WasiCtx, host_access: HostAccess) -> Self {
         Self {
             responses: responses.into(),
             clock_millis: 0,
             prng_state: PRNG_SEED,
             table: ResourceTable::new(),
             wasi,
+            http: WasiHttpCtx::new(),
+            host_access,
         }
     }
 }
@@ -137,6 +154,41 @@ impl WasiView for HostState {
             ctx: &mut self.wasi,
             table: &mut self.table,
         }
+    }
+}
+
+impl WasiHttpView for HostState {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http,
+            table: &mut self.table,
+            // `host_access` doubles as the `WasiHttpHooks` impl (below) that
+            // gates every outgoing request; disjoint field borrow from
+            // `http`/`table` above so no aliasing conflict.
+            hooks: &mut self.host_access,
+        }
+    }
+}
+
+/// The egress gate: every `wasi:http` outgoing request is routed through
+/// `WasiHttpHooks::send_request` before wasmtime opens a socket. An authority
+/// that the allow-bounded caps didn't authorize is rejected here — the guest
+/// never gets a connection to it.
+impl WasiHttpHooks for HostAccess {
+    fn send_request(
+        &mut self,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+    ) -> HttpResult<HostFutureIncomingResponse> {
+        let authority = request
+            .uri()
+            .authority()
+            .map(|a| a.as_str().to_string())
+            .unwrap_or_default();
+        if !self.permits(&authority) {
+            return Err(WasiHttpErrorCode::HttpRequestDenied.into());
+        }
+        Ok(default_send_request(request, config))
     }
 }
 
@@ -197,6 +249,7 @@ pub fn run_component_with_caps(
 
     let grants = wasi_grants_from_caps(caps, sandbox_root)?;
     let wasi = wasi_ctx_from_grants(&grants)?;
+    let host_access = grants.hosts.clone();
 
     let config = determinism_config().map_err(|e| WasmHostError::Instantiate(e.into()))?;
     let engine = Engine::new(&config).map_err(|e| WasmHostError::Instantiate(e.into()))?;
@@ -206,10 +259,11 @@ pub fn run_component_with_caps(
     let mut linker: Linker<HostState> = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
+    add_only_http_to_linker_sync(&mut linker).map_err(|e| WasmHostError::Instantiate(e.into()))?;
     Runner::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |state| state)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
-    let mut store = Store::new(&engine, HostState::new(llm_responses, wasi));
+    let mut store = Store::new(&engine, HostState::new(llm_responses, wasi, host_access));
     let runner = Runner::instantiate(&mut store, &component, &linker)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
@@ -246,7 +300,7 @@ mod tests {
 
     #[test]
     fn clock_advances_by_fixed_step() {
-        let mut state = HostState::new(vec![], empty_wasi_ctx());
+        let mut state = HostState::new(vec![], empty_wasi_ctx(), HostAccess::DenyAll);
         assert_eq!(state.now_millis(), 0);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS * 2);
@@ -254,8 +308,8 @@ mod tests {
 
     #[test]
     fn prng_is_deterministic_and_seeded() {
-        let mut a = HostState::new(vec![], empty_wasi_ctx());
-        let mut b = HostState::new(vec![], empty_wasi_ctx());
+        let mut a = HostState::new(vec![], empty_wasi_ctx(), HostAccess::DenyAll);
+        let mut b = HostState::new(vec![], empty_wasi_ctx(), HostAccess::DenyAll);
         let seq_a: Vec<u64> = (0..4).map(|_| a.next_u64()).collect();
         let seq_b: Vec<u64> = (0..4).map(|_| b.next_u64()).collect();
         assert_eq!(seq_a, seq_b, "same seed must yield same sequence");
@@ -267,6 +321,7 @@ mod tests {
         let mut state = HostState::new(
             vec!["first".to_string(), "second".to_string()],
             empty_wasi_ctx(),
+            HostAccess::DenyAll,
         );
         assert_eq!(state.complete(String::new()), Ok("first".to_string()));
         assert_eq!(state.complete(String::new()), Ok("second".to_string()));

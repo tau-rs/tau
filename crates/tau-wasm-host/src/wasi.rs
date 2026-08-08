@@ -199,6 +199,15 @@ mod grant_tests {
     }
 
     #[test]
+    fn any_host_cap_yields_any_policy() {
+        // `cap_net_http(&["any"], &[])` yields `HostSet::Any` → permit any host.
+        let g = wasi_grants_from_caps(&[cap_net_http(&["any"], &[])], Path::new("/tmp/root"))
+            .unwrap();
+        assert_eq!(g.hosts, HostAccess::Any);
+        assert!(g.hosts.permits("anything.example:443"));
+    }
+
+    #[test]
     fn fs_write_wins_over_read_for_same_dir() {
         // Both caps name the `/data` glob dir; the two preopens merge and RW wins.
         let g = wasi_grants_from_caps(
