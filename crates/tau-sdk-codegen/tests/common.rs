@@ -44,12 +44,39 @@ pub fn python3_available() -> bool {
         .unwrap_or(false)
 }
 
+/// True if `TAU_REQUIRE_PYTHON3=1` — the CI lane that owns this crate sets it
+/// so a missing interpreter is a hard failure rather than a silent skip.
+pub fn python3_required() -> bool {
+    std::env::var("TAU_REQUIRE_PYTHON3")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// Pure policy for the Python leg: `Err` (callers must panic) only when
+/// python3 is *required* but *absent*. Factored out so it can be unit-tested
+/// without touching the real environment or PATH.
+pub fn require_python_decision(require: bool, available: bool) -> Result<(), String> {
+    if require && !available {
+        Err(
+            "TAU_REQUIRE_PYTHON3=1 but python3 is not on PATH: the byte-equal \
+             Python leg must not self-skip on this lane"
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
 /// Run a Python authoring script; return its stdout as a String, or `None` if
 /// `python3` is unavailable. `pythonpath` is prepended to PYTHONPATH so the
 /// script can `import tau_sdk`. Panics if python3 is present but the script
-/// exits non-zero.
+/// exits non-zero, or if `TAU_REQUIRE_PYTHON3=1` and python3 is absent.
 pub fn run_python_toml(script: &Path, pythonpath: Option<&Path>) -> Option<String> {
-    if !python3_available() {
+    let available = python3_available();
+    if let Err(msg) = require_python_decision(python3_required(), available) {
+        panic!("{msg}");
+    }
+    if !available {
         return None;
     }
     let mut cmd = Command::new("python3");
