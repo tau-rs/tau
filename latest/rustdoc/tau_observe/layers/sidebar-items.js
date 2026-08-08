@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["plugin_recording","workflow_run_log"]};
