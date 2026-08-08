@@ -84,6 +84,28 @@ fn granted_path_is_readable_ungranted_path_is_not() {
         "granted path should read, got: {ok:?}"
     );
 
+    // A real file that exists on the host OUTSIDE the granted `/data` preopen.
+    // If the preopen scope were wrongly broadened to the sandbox root, the guest
+    // could reach `/other/secret.txt`; with the tight `/data`-only preopen it cannot.
+    std::fs::create_dir_all(sandbox.path().join("other")).unwrap();
+    std::fs::write(sandbox.path().join("other/secret.txt"), b"top secret").unwrap();
+
+    let sibling = run_component_with_caps(
+        &component,
+        "/other/secret.txt",
+        vec![],
+        &caps,
+        sandbox.path(),
+    );
+    match sibling {
+        Ok(payload) => panic!(
+            "un-granted sibling file was reachable (preopen scope too broad): {payload}"
+        ),
+        Err(WasmHostError::Guest(msg)) => assert!(msg.contains("denied"), "got: {msg}"),
+        Err(WasmHostError::Trap(_)) => {}
+        Err(other) => panic!("unexpected host error: {other:?}"),
+    }
+
     // UN-GRANTED: /etc/secret has no preopen — the guest cannot reach it.
     let denied =
         run_component_with_caps(&component, "/etc/secret", vec![], &caps, sandbox.path());
