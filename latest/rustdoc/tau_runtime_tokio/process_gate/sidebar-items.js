@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_plan","validate_plan_against_adapter"],"mod":["dyn_gate","passthrough","registry","resolution_error","resolver","target_match"],"struct":["SandboxValidationError"],"trait":["DynProcessCapabilityGate"]};

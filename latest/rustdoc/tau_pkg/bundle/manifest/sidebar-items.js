@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["GovernanceVerdict"],"struct":["BackendRef","BundleAgent","BundleAsset","BundleEffectiveCapabilities","BundleManifest","BundleMeta","BundlePackage","BundleRetry","BundleTrigger","GovernanceRecord","HexDecodeError","IrPayload","ProjectInfo"]};
