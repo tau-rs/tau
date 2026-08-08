@@ -16,7 +16,8 @@
 //! `17_durable_per_tool_call` (per-tool-call checkpoint granularity),
 //! `18_durable_intent` (EPIC 6.1 intent-form durable knob), and
 //! `19_subflow_attenuation_denied` (runtime subflow cap_subset denial —
-//! contrast fixture 04's proper-narrowing allow).
+//! contrast fixture 04's proper-narrowing allow), and
+//! `20_branch_route` (EPIC 4.2a authored conditional `Branch`).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -406,6 +407,45 @@ async fn fixture_08_dev_mode_runs_pipeline() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_08_cross_mode_conformance() {
     let dir = fixture_dir("08_pipeline_sequence");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+/// Fixture 20: an authored conditional `Branch` (EPIC 4.2a). `triage` emits
+/// text matching the `route` branch condition (`matches "urgent"`), so the
+/// `then` arm (`escalate`) runs and the run reaches `Completed`. Proves the
+/// full author→lower→typecheck→interpret path for a Branch.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_20_dev_mode_runs_branch() {
+    let dir = fixture_dir("20_branch_route");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed branch run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed for the taken branch arm, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 20 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 20: DevMode and BundleMode both drive
+/// the same `run_pipeline` over the Branch IR. BundleMode round-trips through
+/// `to_canonical_bytes` → `from_canonical_bytes` (the same load path the wasm
+/// guest uses), so equal reports prove the Branch survives serialization and
+/// the load gate.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_20_cross_mode_conformance() {
+    let dir = fixture_dir("20_branch_route");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
