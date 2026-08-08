@@ -15,6 +15,15 @@ class AgentConfig:
     display_name: str
     package: str
     model: str
+    prompt: Optional[dict] = None
+    tool_refs: Optional[list] = None
+
+
+@dataclass
+class ToolConfig:
+    native: str
+    description: str = ""
+    capabilities: Optional[list] = None
 
 
 def model(*, backend: str, model: str) -> Model:
@@ -25,17 +34,39 @@ def models(**aliases: Model) -> dict:
     return dict(aliases)
 
 
-def agent(*, display_name: str, package: str, model: str) -> AgentConfig:
-    return AgentConfig(display_name=display_name, package=package, model=model)
+def tool(*, native: str, description: str = "", capabilities: Optional[list] = None) -> ToolConfig:
+    return ToolConfig(native=native, description=description, capabilities=capabilities or [])
+
+
+def agent(*, display_name: str, package: str, model: str, prompt: Optional[dict] = None, tool_refs: Optional[list] = None) -> AgentConfig:
+    return AgentConfig(display_name=display_name, package=package, model=model, prompt=prompt, tool_refs=tool_refs)
 
 
 def _toml_str(value: str) -> str:
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
-def render_project(project: str = "project", models: Optional[dict] = None, agents: Optional[dict] = None) -> str:
+def _toml_inline(value) -> str:
+    # Render a scalar / list / dict as a TOML inline value. Used for tool
+    # `capabilities` (a list of `{ kind, paths }` inline tables). `bool` is
+    # checked before `int` because `bool` is a subclass of `int` in Python.
+    if isinstance(value, str):
+        return _toml_str(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_inline(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(k + " = " + _toml_inline(v) for k, v in value.items()) + " }"
+    raise TypeError("unsupported TOML inline value: " + repr(value))
+
+
+def render_project(project: str = "project", models: Optional[dict] = None, agents: Optional[dict] = None, tools: Optional[dict] = None) -> str:
     models = models or {}
     agents = agents or {}
+    tools = tools or {}
     # `packages` must declare every model backend (ProjectConfig validation);
     # it is authoring-only and dropped during lowering, so its exact contents
     # do not affect the canonical IR — only that validation passes.
@@ -51,15 +82,31 @@ def render_project(project: str = "project", models: Optional[dict] = None, agen
         lines.append("backend = " + _toml_str(m.backend))
         lines.append("model = " + _toml_str(m.model))
         lines.append("")
+    for tname, t in tools.items():
+        lines.append("[tools." + tname + "]")
+        lines.append("native = " + _toml_str(t.native))
+        if t.description:
+            lines.append("description = " + _toml_str(t.description))
+        if t.capabilities:
+            lines.append("capabilities = [" + ", ".join(_toml_inline(c) for c in t.capabilities) + "]")
+        lines.append("")
     for aid, a in agents.items():
         lines.append("[agents." + aid + "]")
         lines.append("display_name = " + _toml_str(a.display_name))
         lines.append("package = " + _toml_str(a.package))
         lines.append("model = " + _toml_str(a.model))
+        if a.tool_refs:
+            lines.append("tool_refs = [" + ", ".join(_toml_str(r) for r in a.tool_refs) + "]")
         lines.append("")
+        # A prompt is a sub-table, so it must follow every top-level key of
+        # `[agents.<id>]` above.
+        if a.prompt and "system" in a.prompt:
+            lines.append("[agents." + aid + ".prompt]")
+            lines.append("system = " + _toml_str(a.prompt["system"]))
+            lines.append("")
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def print_toml(project: str = "project", models: Optional[dict] = None, agents: Optional[dict] = None) -> None:
+def print_toml(project: str = "project", models: Optional[dict] = None, agents: Optional[dict] = None, tools: Optional[dict] = None) -> None:
     import sys
-    sys.stdout.write(render_project(project=project, models=models, agents=agents))
+    sys.stdout.write(render_project(project=project, models=models, agents=agents, tools=tools))
