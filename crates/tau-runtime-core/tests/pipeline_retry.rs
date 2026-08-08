@@ -37,11 +37,11 @@ use tracing_subscriber::Layer;
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::CapabilityTable;
 use tau_ir::check::{Check, CheckVerify, GoalPredicate, JudgeRef, Locus, OnFail, RetryPolicy};
-use tau_ir::tool_impl::NativeFnRef;
 use tau_ir::ids::{AgentId, CheckId, PipelineStepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
 use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+use tau_ir::tool_impl::NativeFnRef;
 use tau_ports::{
     CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError, LlmProviderMessage,
 };
