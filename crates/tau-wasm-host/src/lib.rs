@@ -83,6 +83,10 @@ pub enum WasmHostError {
     /// Building the WASI context (e.g. a preopen dir failed to open).
     #[error("failed to configure WASI context: {0}")]
     WasiConfig(#[source] anyhow::Error),
+    /// An fs capability path is not absolute or contains a `..` segment, so it
+    /// could resolve outside the sandbox root. Rejected before any preopen.
+    #[error("unsafe capability path (not absolute or contains `..`): {path}")]
+    UnsafeCapPath { path: String },
 }
 
 /// Store data backing the three `tau:host/host` imports with deterministic

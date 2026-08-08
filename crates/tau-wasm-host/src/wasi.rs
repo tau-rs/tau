@@ -121,6 +121,13 @@ pub fn wasi_grants_from_caps(
             WasiConfig::Preopens(preopens) => {
                 for Preopen { paths, access } in preopens {
                     for pat in paths {
+                        // Defense-in-depth: governance (G2) already rejects non-absolute
+                        // and `..`-bearing globs, but `run_component_with_caps` is public
+                        // and accepts arbitrary caps. Refuse anything that could resolve
+                        // outside `sandbox_root` before it becomes a preopen.
+                        if !pat.starts_with('/') || pat.split('/').any(|seg| seg == "..") {
+                            return Err(crate::WasmHostError::UnsafeCapPath { path: pat.clone() });
+                        }
                         let guest_path = glob_prefix_dir(&pat);
                         let entry = preopen_map
                             .entry(guest_path)
@@ -218,5 +225,17 @@ mod grant_tests {
         assert_eq!(g.preopens.len(), 1);
         assert_eq!(g.preopens[0].guest_path, "/data");
         assert_eq!(g.preopens[0].access, PreopenAccess::ReadWrite);
+    }
+
+    #[test]
+    fn escaping_cap_path_is_rejected() {
+        // `..`-bearing absolute path.
+        let err = wasi_grants_from_caps(&[cap_fs_read(&["/../etc"])], Path::new("/tmp/root"))
+            .unwrap_err();
+        assert!(matches!(err, crate::WasmHostError::UnsafeCapPath { .. }), "got: {err:?}");
+        // Relative path (no leading slash).
+        let err2 = wasi_grants_from_caps(&[cap_fs_read(&["data/x"])], Path::new("/tmp/root"))
+            .unwrap_err();
+        assert!(matches!(err2, crate::WasmHostError::UnsafeCapPath { .. }), "got: {err2:?}");
     }
 }
