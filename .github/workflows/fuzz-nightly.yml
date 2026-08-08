@@ -59,7 +59,7 @@ jobs:
             target: frame_decode
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Skip if fuzz directory not present
         id: precheck
@@ -80,7 +80,7 @@ jobs:
 
       - name: Cache cargo-fuzz binary
         if: steps.precheck.outputs.skip != 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-bin-v1
@@ -97,7 +97,7 @@ jobs:
 
       - name: Restore accumulated corpus
         if: steps.precheck.outputs.skip != 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         with:
           # Per-target cache so harnesses don't clobber each other.
           path: ${{ matrix.fuzz_dir }}/corpus/${{ matrix.target }}

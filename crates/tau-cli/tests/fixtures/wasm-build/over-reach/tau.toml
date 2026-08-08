@@ -1,0 +1,29 @@
+packages = ["anthropic"]
+
+[project]
+name = "over-reach-wasm"
+version = "0.1.0"
+
+[allow]
+"net.http" = { hosts = ["example.com"] }
+
+[allow.models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[allow.tools.fetch]
+native = "Fetch"
+
+[agents.main]
+display_name = "Main"
+package = "over-reach-wasm@^0.1"
+model = "claude"
+tool_refs = ["fetch"]
+
+[agents.main.prompt]
+system = "Uses a net.http tool that exceeds the [allow] ceiling."
+
+[tools.fetch]
+native = "Fetch"
+description = "Fetch a URL over HTTP."
+capabilities = [{ kind = "net.http", hosts = ["api.anthropic.com"] }]
