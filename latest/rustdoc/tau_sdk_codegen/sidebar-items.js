@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["authoring","emit","emit_python","emit_ts","error","schema"]};

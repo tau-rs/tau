@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["WasmHostError"],"fn":["run_component"],"mod":["tau"],"struct":["Runner","RunnerIndices","RunnerPre"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["address_to_tool_name"]};

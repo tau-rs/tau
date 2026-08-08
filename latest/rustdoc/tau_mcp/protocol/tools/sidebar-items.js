@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ContentBlock"],"struct":["McpTool","McpToolInputSchema","ToolsCallRequest","ToolsCallResponse","ToolsListRequest","ToolsListResponse"]};
