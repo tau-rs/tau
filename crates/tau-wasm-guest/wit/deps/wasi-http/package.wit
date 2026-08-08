@@ -1,0 +1,9 @@
+// Upstream `wasi:http@0.2.3` declares its package id only in `proxy.wit`
+// (the world file), which we deliberately do NOT vendor because it imports
+// wasi:cli / wasi:sockets / wasi:random — packages outside this crate's
+// closed 4-package set (wasi-io, wasi-clocks, wasi-filesystem, wasi-http).
+// `types.wit` and `handler.wit` (vendored unmodified below) carry no
+// `package` header of their own, so this file supplies it, matching the
+// convention already used by every other vendored package where each file
+// repeats its own `package` line. See task-1-report.md for details.
+package wasi:http@0.2.3;
