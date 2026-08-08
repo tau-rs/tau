@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["asset","budget","canonical","capability","check","context","durable","error","hash","ids","message","model_ref","module","node","pipeline","prompt","subflow","template","tool_impl","trigger"]};
