@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ReplInput","SlashCommand"],"fn":["parse_input","run"]};

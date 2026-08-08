@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["JSONRPC_VERSION"],"enum":["JsonRpcMessage","RequestId"],"struct":["JsonRpcError","JsonRpcNotification","JsonRpcRequest","JsonRpcResponse"]};
