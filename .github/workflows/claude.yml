@@ -102,7 +102,7 @@ jobs:
           # Shallow checkout is enough; the action fetches more if needed.
           fetch-depth: 1
 
-      - uses: anthropics/claude-code-action@4d7e1f0cd85743fdc93b1c8040ab54395da024e2  # beta
+      - uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Pin the model explicitly. This action's pinned default
