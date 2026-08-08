@@ -312,6 +312,20 @@ pub struct WasiConfiguration {
     pub preopens: Vec<ResolvedPreopen>,
 }
 
+impl WasiConfiguration {
+    /// The fail-closed WASI configuration: deny-all egress (`HostSet::Exact(∅)`),
+    /// no method grants, no preopens. Identical to `resolve_wasi_config([])`.
+    /// The wasm host's no-caps entry (`run_component`) uses this so a component
+    /// with no declared capabilities receives no WASI authority.
+    pub fn deny_all() -> Self {
+        Self {
+            allowed_hosts: HostSet::Exact(BTreeSet::new()),
+            methods: None,
+            preopens: Vec::new(),
+        }
+    }
+}
+
 /// Fold a capability set into one host WASI configuration.
 ///
 /// Total and pure: every set yields a [`WasiConfiguration`]. Calls
@@ -722,5 +736,19 @@ mod tests {
         let cfg = resolve_wasi_config(&[cap_process_spawn(&["ls"]), cap_fs_exec(&["/bin/**"])]);
         assert_eq!(cfg.allowed_hosts, HostSet::Exact(BTreeSet::new()));
         assert!(cfg.preopens.is_empty());
+    }
+
+    #[test]
+    fn deny_all_equals_empty_fold() {
+        // The no-caps host config must be byte-identical to folding zero caps:
+        // deny-all egress, no method grants, no preopens.
+        let folded = resolve_wasi_config(core::iter::empty::<&Capability>());
+        assert_eq!(WasiConfiguration::deny_all(), folded);
+        assert_eq!(
+            WasiConfiguration::deny_all().allowed_hosts,
+            HostSet::Exact(Default::default())
+        );
+        assert!(WasiConfiguration::deny_all().methods.is_none());
+        assert!(WasiConfiguration::deny_all().preopens.is_empty());
     }
 }
