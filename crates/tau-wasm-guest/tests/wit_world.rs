@@ -24,6 +24,16 @@ fn vendored_wasi_versions_match_pin() {
     assert!(checked >= 4, "expected >=4 vendored wasi packages, found {checked}");
 }
 
+/// The committed baseline MUST be byte-identical to the empty-cap generator
+/// output, so the fallback world CI compiles cannot drift from generate_world.
+#[test]
+fn baseline_equals_empty_generate_world() {
+    let baseline = std::fs::read_to_string(guest_dir().join("wit-baseline/runner.wit"))
+        .expect("baseline present");
+    let generated = tau_ports::target::wit_world::generate_world(&[]).unwrap();
+    assert_eq!(baseline, generated);
+}
+
 fn walk_wit(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir).unwrap() {
