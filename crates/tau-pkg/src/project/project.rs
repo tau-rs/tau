@@ -1221,6 +1221,24 @@ pub enum ProjectConfigError {
         path: String,
     },
 
+    /// A `schema_valid` goal over `steps.<id>.output` requires a field or type
+    /// the producing agent's declared `output_schema` does not guarantee.
+    /// Surfaces judge/producer schema drift at build time rather than at run
+    /// time (Issue #470).
+    #[error(
+        "goal '{goal}' has check = \"schema_valid\" but producer agent '{agent}' \
+        does not guarantee it: {detail}"
+    )]
+    JudgeSchemaIncompatible {
+        /// Goal id whose `schema_valid` predicate the producer cannot satisfy.
+        goal: String,
+        /// The producing agent id resolved from the goal's `steps.<id>.output`
+        /// locus via the pipeline.
+        agent: String,
+        /// Which required field or type the producer fails to guarantee.
+        detail: String,
+    },
+
     // --- Task 5: gate-position + retry-span guarantees ---
     /// `retry_from` names a step that runs after the producer step.
     #[error(
@@ -2384,7 +2402,158 @@ fn validate_postconditions(cfg: &mut ProjectConfig) -> Result<(), ProjectConfigE
         }
     }
 
+    // Fourth pass: build-time judge-compat schema check (Issue #470).
+    //
+    // A `schema_valid` goal over `steps.<id>.output` consumes the producing
+    // agent's declared `output_schema` at run time. Verify here that the
+    // producer guarantees everything the predicate's schema requires, so a
+    // producer/judge schema drift fails the build rather than a run. Absent
+    // producer `output_schema` passes — nothing is declared to contradict.
+    //
+    // Scope: only `Output` loci (the agent's structured output is exactly what
+    // `output_schema` describes); `Path` loci read file content, which is not
+    // the agent's declared output schema, so they are out of scope.
+    for (goal_id, goal) in &cfg.goals {
+        let GoalPredicateConfig::SchemaValid(consumer_schema) = &goal.predicate else {
+            continue;
+        };
+        let LocusConfig::Output(step_id) = &goal.evaluates else {
+            continue;
+        };
+        // Resolve the producing agent via the pipeline step named by the locus.
+        let Some(pipeline) = &cfg.pipeline else {
+            continue;
+        };
+        let Some(step) = pipeline.steps.iter().find(|s| &s.id == step_id) else {
+            continue; // dangling step id is not this check's concern
+        };
+        let PipelineRunRef::Agent(agent_id) = &step.run else {
+            continue; // tool/deterministic steps declare no output_schema
+        };
+        let Some(agent) = cfg.agents.get(agent_id) else {
+            continue;
+        };
+        let Some(producer_schema) = &agent.output_schema else {
+            continue; // absent output_schema → nothing to check → pass
+        };
+        if let Err(detail) = schema_covers(producer_schema, consumer_schema, "") {
+            return Err(ProjectConfigError::JudgeSchemaIncompatible {
+                goal: goal_id.clone(),
+                agent: agent_id.clone(),
+                detail,
+            });
+        }
+    }
+
     Ok(())
+}
+
+/// Structural schema-subset check for the build-time judge-compat gate
+/// (Issue #470).
+///
+/// Returns `Ok(())` when the `producer` schema is a refinement of `consumer` —
+/// i.e. every value that satisfies `producer` also satisfies `consumer`, so a
+/// downstream `schema_valid` predicate can always pass against a conforming
+/// producer output. On the first incompatibility it returns `Err(detail)`
+/// naming the field or type the producer fails to guarantee.
+///
+/// Scope: object `required`/`properties` field-presence and `type`
+/// compatibility, recursing into properties both schemas describe. Value-range
+/// keywords (numeric bounds, string lengths, enums, …) are intentionally not
+/// compared — this is a field/type-presence subset, not a full schema-refinement
+/// decision procedure. A field the producer marks `required` but leaves
+/// otherwise unconstrained is therefore treated as satisfying a constrained
+/// consumer property; tightening that is future work if it proves necessary.
+fn schema_covers(
+    producer: &serde_json::Value,
+    consumer: &serde_json::Value,
+    path: &str,
+) -> Result<(), String> {
+    // Only object schemas carry the structure we compare; a non-object schema
+    // node (e.g. `true`) constrains nothing we can check here.
+    let (Some(prod), Some(cons)) = (producer.as_object(), consumer.as_object()) else {
+        return Ok(());
+    };
+
+    let at = |p: &str| -> String {
+        if p.is_empty() {
+            String::new()
+        } else {
+            format!(" at '{p}'")
+        }
+    };
+
+    // Type compatibility: the producer's declared type(s) must all be permitted
+    // by the consumer's declared type(s). If either side omits `type`, it
+    // constrains nothing on that axis.
+    if let (Some(p_types), Some(c_types)) = (schema_types(prod), schema_types(cons)) {
+        if let Some(bad) = p_types.iter().find(|t| !c_types.contains(*t)) {
+            return Err(format!(
+                "producer output_schema{} may emit type '{}' but the check requires one of {:?}",
+                at(path),
+                bad,
+                c_types
+            ));
+        }
+    }
+
+    // Required coverage: every field the consumer requires must be *guaranteed*
+    // (also `required`) by the producer — a merely-optional producer field
+    // could be omitted, passing `producer` yet failing `consumer`.
+    let prod_required = schema_string_array(prod.get("required"));
+    for field in schema_string_array(cons.get("required")) {
+        if !prod_required.contains(&field) {
+            return Err(format!(
+                "producer output_schema{} does not guarantee required field '{}'",
+                at(path),
+                field
+            ));
+        }
+    }
+
+    // Recurse into properties both schemas describe.
+    if let (Some(serde_json::Value::Object(p_props)), Some(serde_json::Value::Object(c_props))) =
+        (prod.get("properties"), cons.get("properties"))
+    {
+        for (key, c_sub) in c_props {
+            if let Some(p_sub) = p_props.get(key) {
+                let child = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}/{key}")
+                };
+                schema_covers(p_sub, c_sub, &child)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract a schema node's declared `type` as a set of type-name strings, or
+/// `None` when `type` is absent (constrains nothing).
+fn schema_types(obj: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<String>> {
+    match obj.get("type")? {
+        serde_json::Value::String(s) => Some(std::vec![s.clone()]),
+        serde_json::Value::Array(arr) => Some(
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Read a schema keyword expected to be an array of strings (e.g. `required`)
+/// into a set; anything else yields the empty set.
+fn schema_string_array(v: Option<&serde_json::Value>) -> std::collections::BTreeSet<String> {
+    match v {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect(),
+        _ => std::collections::BTreeSet::new(),
+    }
 }
 
 /// Return the package name (the part before the first `@`) from a package
@@ -4123,6 +4292,104 @@ must_satisfy = "x"
             .validate()
             .unwrap();
         assert_eq!(cfg.deliverables["report"].producer, "writer");
+    }
+
+    // --- Issue #470: build-time judge-compat schema check ---
+
+    /// Shared fixture: a `schema_valid` goal over `steps.gather.output` whose
+    /// producer is `agents.researcher`. `producer_schema` is spliced into the
+    /// agent's `output_schema` (omit the field entirely to test the absent case).
+    fn cfg_with_schema_goal(producer_schema: Option<&str>) -> String {
+        let output_schema = match producer_schema {
+            Some(s) => format!("output_schema = {s}\n"),
+            None => String::new(),
+        };
+        format!(
+            r#"
+[project]
+name = "p"
+[models]
+default = {{ backend = "d", model = "model-v1" }}
+[agents.researcher]
+display_name = "R"
+package = "d@^0.1"
+model = "default"
+{output_schema}[[pipeline.steps]]
+id = "gather"
+run = "agent:researcher"
+input = "${{input}}"
+[goals.structured]
+evaluates = "steps.gather.output"
+check = "schema_valid"
+schema = {{ type = "object", required = ["title", "sources"], properties = {{ title = {{ type = "string" }}, sources = {{ type = "array" }} }} }}
+"#
+        )
+    }
+
+    #[test]
+    fn schema_goal_producer_missing_required_field_is_rejected() {
+        // Producer guarantees `title` only; the goal's schema also requires
+        // `sources` → the producer cannot satisfy the downstream check.
+        let schema = r#"{ type = "object", required = ["title"], properties = { title = { type = "string" } } }"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(Some(schema)))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        match err {
+            ProjectConfigError::JudgeSchemaIncompatible {
+                goal,
+                agent,
+                detail,
+            } => {
+                assert_eq!(goal, "structured");
+                assert_eq!(agent, "researcher");
+                assert!(
+                    detail.contains("sources"),
+                    "detail names the field: {detail}"
+                );
+            }
+            other => panic!("expected JudgeSchemaIncompatible, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_goal_producer_without_output_schema_passes() {
+        // Absent producer `output_schema` must PASS — nothing declared to
+        // contradict the downstream schema (no false build failure).
+        assert!(
+            toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(None))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn schema_goal_producer_guaranteeing_superset_passes() {
+        // Producer guarantees `title` + `sources` (superset of what the goal
+        // requires) → compatible.
+        let schema = r#"{ type = "object", required = ["title", "sources"], properties = { title = { type = "string" }, sources = { type = "array" } } }"#;
+        assert!(
+            toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(Some(schema)))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn schema_goal_producer_type_mismatch_is_rejected() {
+        // Producer guarantees `sources` but types it as a string where the goal
+        // requires an array → structurally incompatible.
+        let schema = r#"{ type = "object", required = ["title", "sources"], properties = { title = { type = "string" }, sources = { type = "string" } } }"#;
+        let err = toml::from_str::<UncheckedProjectConfig>(&cfg_with_schema_goal(Some(schema)))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectConfigError::JudgeSchemaIncompatible { .. }
+        ));
     }
 
     // --- Task 5: gate position + retry-span + unknown retry_from ---
