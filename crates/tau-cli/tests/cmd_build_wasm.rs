@@ -73,8 +73,14 @@ fn emitted_world_is_deterministic_and_matches_generator() {
     let b = wasm_world_for_project(&fixture("net-http")).unwrap();
     assert_eq!(a, b, "world generation must be byte-deterministic");
     // The net-http fixture grants net → the world imports wasi:http, not wasi:filesystem.
-    assert!(a.contains("import wasi:http/outgoing-handler@0.2.3;"), "{a}");
-    assert!(!a.contains("wasi:filesystem"), "net-only must not grant fs:\n{a}");
+    assert!(
+        a.contains("import wasi:http/outgoing-handler@0.2.3;"),
+        "{a}"
+    );
+    assert!(
+        !a.contains("wasi:filesystem"),
+        "net-only must not grant fs:\n{a}"
+    );
 }
 
 #[cfg_attr(

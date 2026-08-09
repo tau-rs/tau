@@ -145,7 +145,9 @@ fn dod_guest_compiles_against_cap_exact_world() {
     // from "absent because unused", so they're kept (not deleted) as a
     // forward-looking tripwire.
     assert!(
-        !net_imports.iter().any(|i| i.starts_with("wasi:filesystem/")),
+        !net_imports
+            .iter()
+            .any(|i| i.starts_with("wasi:filesystem/")),
         "fs UNGRANTED → wasi:filesystem must be absent from the compiled component's \
          actual imports (3.4-forward regression guard): {net_imports:?}"
     );

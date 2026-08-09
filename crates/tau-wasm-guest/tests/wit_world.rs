@@ -21,7 +21,11 @@ fn vendored_wasi_versions_match_pin() {
         for line in text.lines() {
             let l = line.trim_start();
             if l.starts_with("package wasi:") {
-                assert!(l.contains(&pin), "unpinned package in {}: {l}", entry.display());
+                assert!(
+                    l.contains(&pin),
+                    "unpinned package in {}: {l}",
+                    entry.display()
+                );
                 checked += 1;
                 let name = l
                     .trim_start_matches("package ")
@@ -33,7 +37,10 @@ fn vendored_wasi_versions_match_pin() {
             }
         }
     }
-    assert!(checked >= 4, "expected >=4 vendored wasi packages, found {checked}");
+    assert!(
+        checked >= 4,
+        "expected >=4 vendored wasi packages, found {checked}"
+    );
     let expected: std::collections::BTreeSet<String> =
         ["wasi:io", "wasi:clocks", "wasi:filesystem", "wasi:http"]
             .into_iter()
@@ -59,8 +66,11 @@ fn walk_wit(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir).unwrap() {
         let p = e.unwrap().path();
-        if p.is_dir() { out.extend(walk_wit(&p)); }
-        else if p.extension().is_some_and(|x| x == "wit") { out.push(p); }
+        if p.is_dir() {
+            out.extend(walk_wit(&p));
+        } else if p.extension().is_some_and(|x| x == "wit") {
+            out.push(p);
+        }
     }
     out
 }

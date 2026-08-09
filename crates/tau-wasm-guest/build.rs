@@ -94,8 +94,9 @@ fn copy_dir_contents(src: &Path, dst: &Path) {
             std::fs::create_dir_all(&dest_path).expect("mkdir");
             copy_dir_contents(&path, &dest_path);
         } else {
-            std::fs::copy(&path, &dest_path)
-                .unwrap_or_else(|e| panic!("copying {} -> {}: {e}", path.display(), dest_path.display()));
+            std::fs::copy(&path, &dest_path).unwrap_or_else(|e| {
+                panic!("copying {} -> {}: {e}", path.display(), dest_path.display())
+            });
         }
     }
 }
