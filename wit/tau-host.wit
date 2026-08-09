@@ -15,6 +15,11 @@ interface host {
 
     /// Next u64 from the host RandomSource (deterministic in conformance).
     next-u64: func() -> u64;
+
+    /// Stream one RunEvent to the host as it is produced. `event-json` is a
+    /// serialized tau_runtime_core::stream::RunEvent (externally-tagged serde).
+    /// Fire-and-forget: no return, the guest does not observe host errors.
+    emit-event: func(event-json: string);
 }
 
 world runner {

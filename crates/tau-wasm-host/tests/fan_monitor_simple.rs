@@ -118,8 +118,13 @@ fn cassette() -> Vec<String> {
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
 fn simplified_fan_monitor_runs_in_guest() {
     let component = build_guest_with_ir(&simple_ir_bytes());
-    let out = tau_wasm_host::run_component(&component, "", cassette()).expect("guest runs");
-    let events: Vec<RunEvent> = serde_json::from_str(&out).expect("typed stream");
+    let (_out, state) =
+        tau_wasm_host::run_component(&component, "", cassette()).expect("guest runs");
+    let events: Vec<RunEvent> = state
+        .emitted
+        .iter()
+        .map(|e| serde_json::from_str(e).expect("each emitted entry is a RunEvent"))
+        .collect();
 
     // Both native tools were dispatched in-guest, in order.
     let tool_completions: Vec<&str> = events

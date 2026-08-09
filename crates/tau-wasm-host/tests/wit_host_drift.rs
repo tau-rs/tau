@@ -30,6 +30,10 @@ const HOST_PORT_REGISTRY: &[(&str, &str)] = &[
     ("complete", "LlmBackend"),
     ("now-millis", "Clock"),
     ("next-u64", "RandomSource"),
+    (
+        "emit-event",
+        "(none — streaming sink, not a tau-ports trait)",
+    ),
 ];
 
 fn wit_path() -> PathBuf {
@@ -102,6 +106,15 @@ fn host_function_param_shapes_are_frozen() {
     assert!(
         host.functions["next-u64"].params.is_empty(),
         "next-u64 takes no params"
+    );
+
+    // emit-event(event-json: string) — no return (fire-and-forget)
+    let emit_event = &host.functions["emit-event"];
+    let eparams: Vec<&str> = emit_event.params.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(eparams, vec!["event-json"], "emit-event params frozen");
+    assert!(
+        emit_event.result.is_none(),
+        "emit-event must not return a value"
     );
 }
 

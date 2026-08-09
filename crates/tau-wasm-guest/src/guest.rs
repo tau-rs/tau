@@ -135,8 +135,12 @@ impl Guest for Component {
         ))
         .map_err(|e| e.to_string())?;
 
-        let events = crate::executor::collect_stream(stream);
-        serde_json::to_string(&events).map_err(|e| e.to_string())
+        crate::executor::for_each_stream(stream, |event| {
+            if let Ok(json) = serde_json::to_string(&event) {
+                crate::wit_host::emit_event(&json);
+            }
+        });
+        Ok(String::new())
     }
 }
 
