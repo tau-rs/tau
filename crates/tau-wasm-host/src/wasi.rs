@@ -39,6 +39,16 @@ impl HttpHostGate {
         };
         host_ok && method_ok
     }
+
+    /// True iff a wasi:http request to `authority` with raw HTTP method token
+    /// `method_token` is authorized. An unparseable/unknown method token is in
+    /// no allow set → denied (fail-closed). Consulted by `send_request`.
+    pub fn permits_request(&self, authority: &str, method_token: &str) -> bool {
+        match HttpMethod::parse(method_token) {
+            Ok(method) => self.allows(authority, &method),
+            Err(_) => false,
+        }
+    }
 }
 
 /// The exact preopen set the embedder grants: `(host_dir, access)` per
@@ -108,6 +118,30 @@ mod tests {
         assert_eq!(
             preopen_dirs(&cfg),
             vec![("/work", PreopenAccess::ReadWrite)]
+        );
+    }
+
+    #[test]
+    fn permits_request_denies_unknown_method_token() {
+        let g = gate(&[cap_net_http(&["a.com"], &[])]);
+        assert!(
+            g.permits_request("a.com", "get"),
+            "case-insensitive parse permits GET"
+        );
+        assert!(
+            !g.permits_request("a.com", "BREW"),
+            "unknown method token denied"
+        );
+    }
+
+    #[test]
+    fn permits_request_port_bearing_authority_denied_fail_closed() {
+        // By-design exact-match: a bare-host grant does not cover an explicit port.
+        let g = gate(&[cap_net_http(&["a.com"], &[])]);
+        assert!(g.permits_request("a.com", "GET"));
+        assert!(
+            !g.permits_request("a.com:443", "GET"),
+            "port-bearing authority fails closed"
         );
     }
 

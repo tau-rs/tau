@@ -23,7 +23,6 @@
 
 use std::collections::VecDeque;
 
-use tau_domain::HttpMethod;
 use tau_ports::llm::CompletionResponse;
 use tau_ports::target::{PreopenAccess, WasiConfiguration};
 use wasmtime::component::{Component, HasSelf, Linker};
@@ -178,11 +177,7 @@ impl WasiHttpHooks for HttpHostGate {
             .authority()
             .map(|a| a.as_str().to_string())
             .unwrap_or_default();
-        // Unknown/custom method tokens are in no allow set → deny.
-        let permitted = match HttpMethod::parse(request.method().as_str()) {
-            Ok(method) => self.allows(&authority, &method),
-            Err(_) => false,
-        };
+        let permitted = self.permits_request(&authority, request.method().as_str());
         if !permitted {
             return Err(WasiHttpErrorCode::HttpRequestDenied.into());
         }
@@ -207,6 +202,13 @@ fn determinism_config() -> wasmtime::Result<Config> {
 /// separately by `HttpHostGate` in `send_request`.
 fn build_wasi_ctx(cfg: &WasiConfiguration) -> Result<WasiCtx, WasmHostError> {
     let mut builder = WasiCtxBuilder::new();
+    // Each `host_dir` here is already fully resolved (glob-expanded,
+    // absolute) by the allow-bounded build gate (EPIC 3.2/3.4), which owns
+    // `ResolvedPreopen.granularity` and any widening policy. The host grants
+    // it verbatim and intentionally does not re-check `granularity` — a
+    // legitimately widened grant (e.g. via an explicit escape hatch) must
+    // still be honoured here, not rejected. This function trusts the folded
+    // `WasiConfiguration` it is handed.
     for (host_dir, access) in preopen_dirs(cfg) {
         let (dir_perms, file_perms) = match access {
             PreopenAccess::ReadOnly => (DirPerms::READ, FilePerms::READ),
