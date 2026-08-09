@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["GitError","InstallError","ManifestReadError","RegistryError","ScopeError","UninstallError"]};
