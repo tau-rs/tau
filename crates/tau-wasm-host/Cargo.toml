@@ -9,12 +9,16 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-wasmtime   = { workspace = true }
-tau-ports  = { workspace = true, features = ["serde"] }
-tau-domain = { workspace = true }
-serde_json = { workspace = true }
-anyhow     = { workspace = true }
-thiserror  = { workspace = true }
+wasmtime           = { workspace = true }
+wasmtime-wasi      = "47"
+wasmtime-wasi-http = "47"
+# Only to name the `hyper::Request<HyperOutgoingBody>` type in the egress hook.
+hyper              = { version = "1", default-features = false }
+tau-ports          = { workspace = true, features = ["serde"] }
+tau-domain         = { workspace = true }
+serde_json         = { workspace = true }
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
 
 [dev-dependencies]
 tau-domain       = { workspace = true, features = ["test-fixtures"] }

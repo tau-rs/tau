@@ -23,9 +23,22 @@
 
 use std::collections::VecDeque;
 
+use tau_domain::HttpMethod;
 use tau_ports::llm::CompletionResponse;
+use tau_ports::target::{PreopenAccess, WasiConfiguration};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::{
+    DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
+};
+use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as WasiHttpErrorCode;
+use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
+use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
+use wasmtime_wasi_http::p2::{
+    add_only_http_to_linker_sync, default_send_request, HttpResult, WasiHttpCtxView, WasiHttpHooks,
+    WasiHttpView,
+};
+use wasmtime_wasi_http::WasiHttpCtx;
 
 mod wasi;
 pub use wasi::{preopen_dirs, HttpHostGate};
@@ -63,6 +76,10 @@ pub enum WasmHostError {
     /// fails before instantiation rather than mid-run.
     #[error("invalid canned completion response JSON: {0}")]
     InvalidResponse(#[source] serde_json::Error),
+    /// Building the WASI context failed — e.g. a preopen directory does not
+    /// exist on the host. Surfaced instead of silently creating it.
+    #[error("failed to configure WASI context: {0}")]
+    WasiConfig(#[source] anyhow::Error),
 }
 
 /// Store data backing the three `tau:host/host` imports with deterministic
@@ -76,14 +93,28 @@ struct HostState {
     clock_millis: u64,
     /// SplitMix64 state, seeded from [`PRNG_SEED`].
     prng_state: u64,
+    /// WASI 0.2 resource table (EPIC 3.3).
+    table: ResourceTable,
+    /// WASI 0.2 context: exactly the preopens derived from the component's
+    /// allow-bounded caps; no stdio/env/args/network inherited (EPIC 3.3).
+    wasi: WasiCtx,
+    /// wasi:http resource bookkeeping; the egress *decision* lives in `gate`.
+    http: WasiHttpCtx,
+    /// The allow-bounded network egress gate (EPIC 3.3), consulted by the
+    /// `WasiHttpHooks::send_request` override before any outgoing request.
+    gate: HttpHostGate,
 }
 
 impl HostState {
-    fn new(responses: Vec<String>) -> Self {
+    fn new(responses: Vec<String>, wasi: WasiCtx, gate: HttpHostGate) -> Self {
         Self {
             responses: responses.into(),
             clock_millis: 0,
             prng_state: PRNG_SEED,
+            table: ResourceTable::new(),
+            wasi,
+            http: WasiHttpCtx::new(),
+            gate,
         }
     }
 }
@@ -112,6 +143,53 @@ impl host::Host for HostState {
     }
 }
 
+impl WasiView for HostState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+impl WasiHttpView for HostState {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http,
+            table: &mut self.table,
+            // `gate` is the WasiHttpHooks impl below; disjoint borrow from
+            // `http`/`table`, so no aliasing conflict.
+            hooks: &mut self.gate,
+        }
+    }
+}
+
+/// The egress gate: every `wasi:http` outgoing request is routed here before
+/// wasmtime opens a socket. A host/method the allow-bounded caps did not
+/// authorize is rejected — the guest never gets a connection to it.
+impl WasiHttpHooks for HttpHostGate {
+    fn send_request(
+        &mut self,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+    ) -> HttpResult<HostFutureIncomingResponse> {
+        let authority = request
+            .uri()
+            .authority()
+            .map(|a| a.as_str().to_string())
+            .unwrap_or_default();
+        // Unknown/custom method tokens are in no allow set → deny.
+        let permitted = match HttpMethod::parse(request.method().as_str()) {
+            Ok(method) => self.allows(&authority, &method),
+            Err(_) => false,
+        };
+        if !permitted {
+            return Err(WasiHttpErrorCode::HttpRequestDenied.into());
+        }
+        Ok(default_send_request(request, config))
+    }
+}
+
 /// Build the determinism `wasmtime::Config` (spec §7): canonicalise NaNs and
 /// turn off the nondeterministic relaxed-SIMD lowerings so float/SIMD codegen
 /// is bit-stable across hosts.
@@ -122,25 +200,43 @@ fn determinism_config() -> wasmtime::Result<Config> {
     Ok(config)
 }
 
-/// Load `wasm_bytes` as a component, satisfy the three `tau:host/host` imports
-/// with deterministic stubs, instantiate it under a determinism `Config`,
-/// and drive the exported `run(prompt)`.
-///
-/// `llm_responses` is the cassette: each `complete` call pops the next entry
-/// (validated as `CompletionResponse` JSON up-front). Returns the JSON string
-/// the guest's `run` produced on its `ok` arm.
-///
-/// Determinism contract: for fixed inputs the returned bytes are identical
-/// across calls and hosts — the property `WasmProfile` conformance relies on.
-pub fn run_component(
+/// Build a `WasiCtx` granting exactly `cfg`'s preopens (RO for fs.read, RW for
+/// fs.write) and nothing else: no stdio/env/args/network inherited. A preopen
+/// whose host directory does not exist is a hard error — we never silently
+/// create it. Network egress is denied at the ctx level; `wasi:http` is gated
+/// separately by `HttpHostGate` in `send_request`.
+fn build_wasi_ctx(cfg: &WasiConfiguration) -> Result<WasiCtx, WasmHostError> {
+    let mut builder = WasiCtxBuilder::new();
+    for (host_dir, access) in preopen_dirs(cfg) {
+        let (dir_perms, file_perms) = match access {
+            PreopenAccess::ReadOnly => (DirPerms::READ, FilePerms::READ),
+            PreopenAccess::ReadWrite => (DirPerms::all(), FilePerms::all()),
+        };
+        // Identity map: the guest sees the same absolute path as the host dir.
+        builder
+            .preopened_dir(host_dir, host_dir, dir_perms, file_perms)
+            .map_err(|e| WasmHostError::WasiConfig(e.into()))?;
+    }
+    Ok(builder.build())
+}
+
+/// Run a component whose WASI authority is bounded by `wasi` (EPIC 3.3):
+/// fs preopens and a `wasi:http` egress allow-list built from the same
+/// allow-bounded caps that produced the component's WIT world (3.2). An
+/// un-granted host or path is unreachable at runtime.
+pub fn run_component_with_wasi(
     wasm_bytes: &[u8],
     prompt: &str,
     llm_responses: Vec<String>,
+    wasi: &WasiConfiguration,
 ) -> Result<String, WasmHostError> {
     // Fail fast on a malformed cassette before touching wasmtime.
     for resp in &llm_responses {
         serde_json::from_str::<CompletionResponse>(resp).map_err(WasmHostError::InvalidResponse)?;
     }
+
+    let wasi_ctx = build_wasi_ctx(wasi)?;
+    let gate = HttpHostGate::new(wasi);
 
     let config = determinism_config().map_err(|e| WasmHostError::Instantiate(e.into()))?;
     let engine = Engine::new(&config).map_err(|e| WasmHostError::Instantiate(e.into()))?;
@@ -148,10 +244,13 @@ pub fn run_component(
         Component::new(&engine, wasm_bytes).map_err(|e| WasmHostError::Load(e.into()))?;
 
     let mut linker: Linker<HostState> = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+        .map_err(|e| WasmHostError::Instantiate(e.into()))?;
+    add_only_http_to_linker_sync(&mut linker).map_err(|e| WasmHostError::Instantiate(e.into()))?;
     Runner::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |state| state)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
-    let mut store = Store::new(&engine, HostState::new(llm_responses));
+    let mut store = Store::new(&engine, HostState::new(llm_responses, wasi_ctx, gate));
     let runner = Runner::instantiate(&mut store, &component, &linker)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
@@ -160,6 +259,22 @@ pub fn run_component(
         Ok(Err(guest_err)) => Err(WasmHostError::Guest(guest_err)),
         Err(trap) => Err(WasmHostError::Trap(trap.into())),
     }
+}
+
+/// Determinism-conformance entry (`WasmProfile`): no capabilities, so no WASI
+/// grants — deny-all egress, zero preopens. Behaviourally identical to the
+/// pre-3.3 host for a guest that imports no WASI interfaces.
+pub fn run_component(
+    wasm_bytes: &[u8],
+    prompt: &str,
+    llm_responses: Vec<String>,
+) -> Result<String, WasmHostError> {
+    run_component_with_wasi(
+        wasm_bytes,
+        prompt,
+        llm_responses,
+        &WasiConfiguration::deny_all(),
+    )
 }
 
 #[cfg(test)]
@@ -172,9 +287,17 @@ mod tests {
         r#"{"text":"","tool_uses":[],"stop_reason":"EndTurn","usage":null}"#.to_string()
     }
 
+    fn empty_state(responses: Vec<String>) -> HostState {
+        HostState::new(
+            responses,
+            WasiCtxBuilder::new().build(),
+            HttpHostGate::new(&WasiConfiguration::deny_all()),
+        )
+    }
+
     #[test]
     fn clock_advances_by_fixed_step() {
-        let mut state = HostState::new(vec![]);
+        let mut state = empty_state(vec![]);
         assert_eq!(state.now_millis(), 0);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS * 2);
@@ -182,8 +305,8 @@ mod tests {
 
     #[test]
     fn prng_is_deterministic_and_seeded() {
-        let mut a = HostState::new(vec![]);
-        let mut b = HostState::new(vec![]);
+        let mut a = empty_state(vec![]);
+        let mut b = empty_state(vec![]);
         let seq_a: Vec<u64> = (0..4).map(|_| a.next_u64()).collect();
         let seq_b: Vec<u64> = (0..4).map(|_| b.next_u64()).collect();
         assert_eq!(seq_a, seq_b, "same seed must yield same sequence");
@@ -192,7 +315,7 @@ mod tests {
 
     #[test]
     fn complete_pops_responses_then_errors() {
-        let mut state = HostState::new(vec!["first".to_string(), "second".to_string()]);
+        let mut state = empty_state(vec!["first".to_string(), "second".to_string()]);
         assert_eq!(state.complete(String::new()), Ok("first".to_string()));
         assert_eq!(state.complete(String::new()), Ok("second".to_string()));
         assert!(
@@ -212,6 +335,21 @@ mod tests {
         // Empty bytes are a valid cassette but not a loadable component:
         // proves validation precedes the wasmtime load path.
         let err = run_component(&[], "p", vec![canned_response()]).unwrap_err();
+        assert!(matches!(err, WasmHostError::Load(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn run_component_with_wasi_no_grants_matches_run_component() {
+        // A deny-all config must reach the same validation→Load failure as the
+        // no-caps wrapper on empty bytes — proving build_wasi_ctx produces a clean
+        // no-preopen ctx and the dual WASI+http linker adds don't break setup.
+        let err = run_component_with_wasi(
+            &[],
+            "p",
+            vec![canned_response()],
+            &tau_ports::target::WasiConfiguration::deny_all(),
+        )
+        .unwrap_err();
         assert!(matches!(err, WasmHostError::Load(_)), "got: {err:?}");
     }
 }
