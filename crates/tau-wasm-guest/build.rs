@@ -37,6 +37,10 @@ fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let wit_gen = manifest.join("wit-gen");
     let wit_gen_deps = wit_gen.join("deps");
+    // Wipe any stale wit-gen/ tree before reassembling it fresh, so a since-
+    // removed vendored dep (or a stale runner.wit) can never linger and shadow
+    // this build's copy.
+    let _ = std::fs::remove_dir_all(&wit_gen);
     std::fs::create_dir_all(&wit_gen_deps).expect("mkdir wit-gen/deps");
 
     // Vendored WASI deps (committed under the crate's own `wit/deps/`).

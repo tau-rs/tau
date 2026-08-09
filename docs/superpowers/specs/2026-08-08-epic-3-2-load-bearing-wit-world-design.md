@@ -95,31 +95,57 @@ tau build wasm:
                                                  │  (mirrors TAU_IR_BYTES)
   cargo build -p tau-wasm-guest --target wasm32-wasip2
       │
-      ├─ guest build.rs:
-      │     TAU_WORLD_WIT set?  yes ─► write it     to  wit-gen/runner.wit
-      │                         no  ─► copy baseline from wit-baseline/runner.wit  (CI path)
-      │     rerun-if-env-changed=TAU_WORLD_WIT; rerun-if-changed=<tmp>
+      ├─ guest build.rs: assembles a self-contained wit-gen/ resolution root
+      │     wit-gen/deps/…               ◄─ copy of the crate's own wit/deps/ (vendored WASI)
+      │     wit-gen/deps/tau-host/tau-host.wit
+      │                                  ◄─ copy of the workspace-root frozen wit/tau-host.wit
+      │                                     (its own tau:host dep package)
+      │     wit-gen/runner.wit           ◄─ TAU_WORLD_WIT set? yes → its contents
+      │                                                        no  → wit-baseline/runner.wit (CI path)
+      │     rerun-if-env-changed=TAU_WORLD_WIT; rerun-if-changed=<tmp>/…/tau-host.wit
       │
       └─ guest.rs:
-            wit_bindgen::generate!({ world:"tau:generated/runner",
-                                     path:["wit-gen","wit"] })   ← cap-derived
+            wit_bindgen::generate!({ world: "tau:generated/runner",
+                                     path: "wit-gen", generate_all })   ← single self-contained root
 ```
 
-- `wit-gen/` is **gitignored**: the tree never goes dirty, no restore step, and
-  the standalone CI build (`ci.yml:234`, no env) still compiles via the baseline
-  fallback in `build.rs`.
-- The bindgen path is `["wit-gen", "wit"]`. `wit-gen/` holds the **only**
-  `runner.wit` on the path (the dynamic, cap-derived one — package
-  `tau:generated`); `wit/` holds `tau-host.wit` + `deps/` and contains **no**
-  `runner.wit` (so the `tau:generated` package is defined exactly once — no
-  duplicate-package resolve error).
+- `wit-gen/` is **gitignored** and rebuilt fresh on every `cargo build`: the
+  tree never goes dirty and needs no restore step. `build.rs` wipes it
+  (`remove_dir_all`) immediately before reassembling, so a since-removed
+  vendored dep cannot linger and shadow the fresh copy. The standalone CI
+  build (`ci.yml:234`, no env) still compiles via the baseline fallback.
+- The bindgen path is a **single** directory, `path: "wit-gen"`, with
+  `generate_all` set. `build.rs` makes `wit-gen/` self-contained by copying
+  three sources into it: the crate's own committed vendored WASI deps
+  (`wit/deps/*` → `wit-gen/deps/*`), the workspace-root frozen host contract
+  (`../../wit/tau-host.wit` → `wit-gen/deps/tau-host/tau-host.wit`, its own
+  `tau:host` dep package, distinct from the `tau:generated` package at the
+  root), and the cap-derived (or baseline) world (→ `wit-gen/runner.wit`).
+  The guest crate carries **no** `wit/tau-host.wit` of its own — only
+  `wit/deps/`. `generate_all` is required: without it `wit_bindgen` errors
+  `missing "with" mapping for wasi:io/poll@0.2.3` for an interface reachable
+  both directly and transitively.
+- The generator (`tau-ports::target::wit_world::generate_world`) emits a
+  **fully-qualified, version-pinned** `import tau:host/host@0.1.0;` — not the
+  bare `import host;` this spec originally described — so `tau:generated/runner`
+  resolves the `host` interface across the `tau:host` package boundary.
+  wit-parser's dependency toposort keys foreign deps by exact `PackageName`
+  (namespace+name+version); an unqualified/unversioned import silently drops
+  out of topological order and fails to resolve (`package 'tau:host' not
+  found`). This generator change was an accepted, necessary correctness fix
+  made by this follow-on, not a pre-existing behavior.
 - The committed empty-cap baseline lives at `wit-baseline/runner.wit`, **off the
   bindgen path**. `build.rs` copies it into `wit-gen/runner.wit` when
   `TAU_WORLD_WIT` is unset (the CI standalone build), so the guest always has a
   resolvable world without dirtying the tree or colliding on the path.
-- Concurrency: two simultaneous wasm builds race on `wit-gen/`. This is the same
-  pre-existing property as the shared in-workspace guest build (which also
-  races on `TAU_IR_BYTES`/`$OUT_DIR`); documented, not introduced here.
+- **Concurrency (single-writer limitation, stated plainly):** `wit-gen/` is a
+  **source-relative** directory written by `build.rs` under
+  `CARGO_MANIFEST_DIR`, **not** `$OUT_DIR`. Per-agent `CARGO_TARGET_DIR`
+  isolation therefore does **not** shield it — two concurrent `tau build wasm`
+  invocations (or two concurrent `cargo build -p tau-wasm-guest` runs with
+  different `TAU_WORLD_WIT` values) share and race on the same `wit-gen/`
+  tree. This is a documented single-writer limitation of the guest build, not
+  the same property as the `$OUT_DIR`-isolated `TAU_IR_BYTES` baking path.
 
 **Rejected alternatives.** In-place overwrite of a committed `runner.wit`
 dirties the tree mid-build and needs failure-safe restore. Scratch-crate copy
@@ -146,17 +172,22 @@ vendored `.wit` cannot drift apart.
 
 ### Baseline / generator invariant
 
-`generate_world(&[])` renders exactly `world runner { import host; export run:
-func(prompt: string) -> result<string, string>; }`. The committed baseline
+`generate_world(&[])` renders exactly `world runner { import
+tau:host/host@0.1.0; export run: func(prompt: string) -> result<string,
+string>; }` — a fully-qualified, version-pinned import of the frozen host
+contract's `host` interface (not the bare `import host;` this doc originally
+spec'd; see the generator note above). The committed baseline
 `wit-baseline/runner.wit` (package `tau:generated@0.1.0`) is byte-identical to
 that output. A test asserts `generate_world(&[]) ==
 read("wit-baseline/runner.wit")` so the baseline used by CI standalone builds
 cannot drift from the generator.
 
-`wit/tau-host.wit` remains frozen (its `interface host` is imported by the
-generated world; its own `world runner` is now unused by the guest but left in
-place so the drift test is untouched). The macro disambiguates with the fully
-qualified `world: "tau:generated/runner"`.
+The frozen `wit/tau-host.wit` stays at the **workspace root**, untouched; the
+guest crate holds **no** `wit/tau-host.wit` of its own, only `wit/deps/` (the
+vendored WASI packages). `build.rs` copies the workspace-root file into
+`wit-gen/deps/tau-host/tau-host.wit` as its own `tau:host` dep package on
+every build. The macro disambiguates with the fully qualified `world:
+"tau:generated/runner"`.
 
 ## Risks (design holes) and the gating spike
 
@@ -222,11 +253,16 @@ Both tiers preserve the reproducibility guarantee below.
 crates/tau-wasm-guest/
   wit-baseline/runner.wit NEW committed baseline (== generate_world(&[]); off bindgen path)
   wit/deps/…              NEW vendored WASI 0.2.3 (io, clocks, filesystem, http)
-  wit/tau-host.wit        unchanged (frozen); no runner.wit added here
-  wit-gen/runner.wit      NEW gitignored (build.rs writes the cap-derived world here)
-  build.rs                +TAU_WORLD_WIT handling (mirror TAU_IR_BYTES)
-  src/guest.rs            bindgen world→"tau:generated/runner", path ["wit-gen","wit"]
+  wit-gen/                NEW gitignored, build.rs-assembled resolution root:
+                             deps/…                     copy of wit/deps/ (vendored WASI)
+                             deps/tau-host/tau-host.wit  copy of the workspace-root frozen
+                                                          wit/tau-host.wit (own tau:host package)
+                             runner.wit                  cap-derived (or baseline) world
+  build.rs                +wit-gen/ assembly: wipe, copy deps + tau-host, write runner.wit
+  src/guest.rs            bindgen world→"tau:generated/runner", path "wit-gen", generate_all
   .gitignore              +wit-gen/
+../../wit/tau-host.wit    unchanged (frozen, workspace root); not copied into the guest
+                          crate's own committed tree, only into build.rs's wit-gen/ output
 crates/tau-cli/src/cmd/build_wasm.rs
   run(): set TAU_WORLD_WIT tempfile before build_guest_with_ir (keep <out>.wit emit)
 crates/tau-cli/tests/…    fixtures + e2e (Tier 1) or unit (Tier 2) DoD assertions

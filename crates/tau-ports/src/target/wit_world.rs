@@ -7,11 +7,16 @@
 //! `tau:host` `runner` world's superset with the cap-derived WASI imports
 //! added. An `Unsupported` capability (fs.exec, process.spawn) is a hard error.
 //!
-//! Output is a deterministic ABI *manifest*: without vendored WASI `.wit`
-//! packages it is not standalone-resolvable WIT (that is 3.3+). Determinism is
-//! the contract 3.5's `verify --bundle` byte-compare relies on.
+//! Output is a deterministic ABI manifest. A follow-on
+//! (`docs/superpowers/specs/2026-08-08-epic-3-2-load-bearing-wit-world-design.md`)
+//! vendors the WASI `.wit` packages this world imports and assembles them
+//! alongside the frozen `tau:host` contract into the guest's `wit-gen/`
+//! resolution root, making the world standalone-resolvable *and*
+//! load-bearing: `tau-wasm-guest` is compiled against exactly this generated
+//! world. Determinism is the contract 3.5's `verify --bundle` byte-compare
+//! relies on.
 //!
-//! See `docs/superpowers/specs/2026-07-24-epic-3-2-wit-world-gen-design.md`.
+//! See `docs/superpowers/specs/2026-08-08-epic-3-2-load-bearing-wit-world-design.md`.
 
 use alloc::collections::BTreeSet;
 use alloc::format;

@@ -4,7 +4,9 @@
 
 **Goal:** Make `tau build wasm` compile the guest component against the capability-derived WIT world (produced by the merged `generate_world`), so an ungranted capability's WASI interface is provably absent from the world the component is bound to.
 
-**Architecture:** Reuse the existing per-build injection pattern — `tau build wasm` writes the generated world to a tempfile and passes it via `TAU_WORLD_WIT`; the guest `build.rs` copies it into a gitignored `wit-gen/runner.wit` (falling back to a committed baseline when unset, for CI); `wit_bindgen::generate!` binds `tau:generated/runner` from `["wit-gen","wit"]` with vendored WASI 0.2.3 deps. A spike (Task 3) decides whether `no_std` + WASI bindgen compiles: pass → Tier 1 (Tasks 4–6); fail → Tier 2 fallback (Task 7, `wit-parser` validation instead of recompiling the guest against the world).
+**Architecture:** Reuse the existing per-build injection pattern — `tau build wasm` writes the generated world to a tempfile and passes it via `TAU_WORLD_WIT`; the guest `build.rs` assembles a self-contained, gitignored `wit-gen/` resolution root by copying the crate's own vendored WASI deps (`wit/deps/*` → `wit-gen/deps/*`), the workspace-root frozen `wit/tau-host.wit` (→ `wit-gen/deps/tau-host/tau-host.wit`, its own `tau:host` dep package), and the cap-derived world — or, when `TAU_WORLD_WIT` is unset, the committed baseline — into `wit-gen/runner.wit`; `wit_bindgen::generate!` binds `tau:generated/runner` from the **single** path `"wit-gen"` with `generate_all` set (required once the world imports WASI interfaces reachable both directly and transitively, e.g. `wasi:io/poll`). A spike (Task 3) decides whether `no_std` + WASI bindgen compiles: pass → Tier 1 (Tasks 4–6); fail → Tier 2 fallback (Task 7, `wit-parser` validation instead of recompiling the guest against the world).
+
+**Shipped note (reconciled after implementation):** the generator (`tau-ports::target::wit_world::generate_world`) was also changed to emit the fully-qualified, version-pinned `import tau:host/host@0.1.0;` rather than a bare `import host;`, so `tau:generated/runner` resolves the `host` interface across the `tau:host` package boundary (wit-parser's dependency toposort keys foreign deps by exact `PackageName`, and an unqualified/unversioned import fails to resolve). This was an accepted, necessary correctness fix made during implementation, not part of the original plan text below — Task 4's code snippets predate it and describe an earlier, simpler shape than what shipped; see `crates/tau-wasm-guest/build.rs` and `crates/tau-wasm-guest/src/guest.rs` for the actual assembly.
 
 **Tech Stack:** Rust, `wit-bindgen` 0.58 (`macros`,`realloc`), `wit-parser`/`wit-component` (already in tree), `wasm32-wasip2`, vendored WASI 0.2.3 `.wit`.
 
@@ -135,12 +137,12 @@ Expected: FAIL (file missing).
 package tau:generated@0.1.0;
 
 world runner {
-    import host;
+    import tau:host/host@0.1.0;
 
     export run: func(prompt: string) -> result<string, string>;
 }
 ```
-(If the assertion still fails, print `generate_world(&[])` and copy it verbatim — the generator is the source of truth, not this snippet.)
+(If the assertion still fails, print `generate_world(&[])` and copy it verbatim — the generator is the source of truth, not this snippet. **Shipped note:** the generator emits the fully-qualified, version-pinned `import tau:host/host@0.1.0;`, not a bare `import host;`, for cross-package resolution — see the reconciliation note in the Architecture section above.)
 
 - [ ] **Step 4: Run to verify it passes.** Same command as Step 2. Expected: PASS.
 
@@ -182,7 +184,11 @@ git commit -m "feat(epic-3-2): committed empty-cap baseline world + generator in
 
 **Interfaces:**
 - Consumes: env `TAU_WORLD_WIT` (path to cap-derived world text), set by Task 5.
-- Produces: a guest whose `wit_bindgen` world is `wit-gen/runner.wit` (dynamic) resolved with `wit/` (deps + tau-host); standalone builds (no env) fall back to `wit-baseline/runner.wit`.
+- Produces: a guest whose `wit_bindgen` world is `wit-gen/runner.wit`, resolved
+  against a self-contained `wit-gen/` (build.rs also copies `wit/deps/` and the
+  workspace-root frozen `tau-host.wit` into `wit-gen/deps/`, so the bindgen
+  `path` is a single directory, not `wit/`); standalone builds (no env) fall
+  back to `wit-baseline/runner.wit`.
 
 - [ ] **Step 1: Add `.gitignore`.** `crates/tau-wasm-guest/.gitignore`:
 ```
@@ -213,15 +219,30 @@ let world = match std::env::var_os("TAU_WORLD_WIT") {
 std::fs::write(wit_gen.join("runner.wit"), world).expect("writing wit-gen/runner.wit");
 ```
 
+**Shipped note:** this snippet is the minimal, superseded shape. The actual
+`build.rs` additionally wipes `wit-gen/` first (`remove_dir_all`, ignore
+not-found — build.rs hygiene fix), copies `wit/deps/*` into `wit-gen/deps/*`,
+and copies the workspace-root frozen `../../wit/tau-host.wit` into
+`wit-gen/deps/tau-host/tau-host.wit` as its own `tau:host` dep package — so
+`wit-gen/` is fully self-contained and the bindgen `path` can be the single
+directory `"wit-gen"` (Step 3). See `crates/tau-wasm-guest/build.rs` for the
+real assembly.
+
 - [ ] **Step 3: Switch the bindgen** in `guest.rs:12-15`:
 
 ```rust
 wit_bindgen::generate!({
     world: "tau:generated/runner",
-    path: ["wit-gen", "wit"],
+    path: "wit-gen",
+    generate_all,
 });
 ```
-Leave the `wit_host` re-export module below it unchanged — `import host` still resolves via `tau:host`.
+`generate_all` is required once the world imports WASI interfaces: without it
+`wit_bindgen` errors "missing `with` mapping for `wasi:io/poll@0.2.3`" for an
+interface reachable both directly (via `wasi:http`/`wasi:filesystem`) and
+transitively. Leave the `wit_host` re-export module below it unchanged —
+`import tau:host/host@0.1.0` still resolves via the `tau:host` dep package
+now vendored into `wit-gen/deps/tau-host/`.
 
 - [ ] **Step 4: Verify standalone build (baseline, no env) compiles.**
 `timeout 300 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/tau-build-wasm cargo build -p tau-wasm-guest --target wasm32-wasip2 --release`

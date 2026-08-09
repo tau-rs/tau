@@ -5,12 +5,17 @@ fn guest_dir() -> PathBuf {
 }
 
 /// Every vendored WASI package must be pinned to WASI_VERSION so the closure
-/// table (wit_world.rs) and the vendored .wit cannot drift apart.
+/// table (wit_world.rs) and the vendored .wit cannot drift apart. Also
+/// asserts the exact vendored package *set* — a floor of "at least 4" would
+/// silently pass if a package were swapped for a wrong one while another was
+/// duplicated, so pin the closed set the generator's transitive_closure table
+/// depends on.
 #[test]
 fn vendored_wasi_versions_match_pin() {
     let pin = format!("@{}", tau_ports::target::wasi_map::WASI_VERSION); // "@0.2.3"
     let deps = guest_dir().join("wit/deps");
     let mut checked = 0usize;
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for entry in walk_wit(&deps) {
         let text = std::fs::read_to_string(&entry).unwrap();
         for line in text.lines() {
@@ -18,10 +23,26 @@ fn vendored_wasi_versions_match_pin() {
             if l.starts_with("package wasi:") {
                 assert!(l.contains(&pin), "unpinned package in {}: {l}", entry.display());
                 checked += 1;
+                let name = l
+                    .trim_start_matches("package ")
+                    .split('@')
+                    .next()
+                    .expect("split always yields >=1 item")
+                    .to_string();
+                names.insert(name);
             }
         }
     }
     assert!(checked >= 4, "expected >=4 vendored wasi packages, found {checked}");
+    let expected: std::collections::BTreeSet<String> =
+        ["wasi:io", "wasi:clocks", "wasi:filesystem", "wasi:http"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+    assert_eq!(
+        names, expected,
+        "vendored WASI package set drifted from the expected closure"
+    );
 }
 
 /// The committed baseline MUST be byte-identical to the empty-cap generator
