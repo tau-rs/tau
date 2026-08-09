@@ -17,21 +17,31 @@ pub struct LauncherArgs {
 }
 
 /// Parse launcher argv (excluding argv[0]).
-pub fn parse_launcher_args(
-    argv: impl Iterator<Item = OsString>,
-) -> Result<LauncherArgs, String> {
+pub fn parse_launcher_args(argv: impl Iterator<Item = OsString>) -> Result<LauncherArgs, String> {
     let mut profile: Option<String> = None;
     let mut caps: Vec<OsString> = Vec::new();
     let mut caps_str: Vec<String> = Vec::new();
     let mut it = argv;
     while let Some(a) = it.next() {
         if a == "--" {
-            let program = it.next().ok_or_else(|| "missing program after --".to_string())?;
+            let program = it
+                .next()
+                .ok_or_else(|| "missing program after --".to_string())?;
             let rest: Vec<OsString> = it.collect();
             let profile = profile.ok_or_else(|| "missing --profile".to_string())?;
-            return Ok(LauncherArgs { profile, caps: caps_str, program, args: rest });
+            return Ok(LauncherArgs {
+                profile,
+                caps: caps_str,
+                program,
+                args: rest,
+            });
         } else if a == "--profile" {
-            profile = Some(it.next().ok_or("--profile needs a value")?.to_string_lossy().into_owned());
+            profile = Some(
+                it.next()
+                    .ok_or("--profile needs a value")?
+                    .to_string_lossy()
+                    .into_owned(),
+            );
         } else if a == "--cap" {
             let c = it.next().ok_or("--cap needs a value")?;
             caps_str.push(c.to_string_lossy().into_owned());
@@ -46,11 +56,16 @@ pub fn parse_launcher_args(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn os(v: &[&str]) -> Vec<OsString> { v.iter().map(OsString::from).collect() }
+    fn os(v: &[&str]) -> Vec<OsString> {
+        v.iter().map(OsString::from).collect()
+    }
 
     #[test]
     fn parses_profile_and_program() {
-        let a = parse_launcher_args(os(&["--profile", "tau-sbx-1", "--", "cargo", "build"]).into_iter()).unwrap();
+        let a = parse_launcher_args(
+            os(&["--profile", "tau-sbx-1", "--", "cargo", "build"]).into_iter(),
+        )
+        .unwrap();
         assert_eq!(a.profile, "tau-sbx-1");
         assert!(a.caps.is_empty());
         assert_eq!(a.program, OsString::from("cargo"));
@@ -59,7 +74,10 @@ mod tests {
 
     #[test]
     fn collects_repeated_caps() {
-        let a = parse_launcher_args(os(&["--profile", "p", "--cap", "A", "--cap", "B", "--", "prog"]).into_iter()).unwrap();
+        let a = parse_launcher_args(
+            os(&["--profile", "p", "--cap", "A", "--cap", "B", "--", "prog"]).into_iter(),
+        )
+        .unwrap();
         assert_eq!(a.caps, vec!["A".to_string(), "B".to_string()]);
         assert_eq!(a.program, OsString::from("prog"));
     }
