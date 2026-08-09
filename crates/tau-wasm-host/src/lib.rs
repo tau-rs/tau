@@ -206,14 +206,20 @@ fn wasi_ctx_from_config(
 ) -> Result<WasiCtx, WasmHostError> {
     let mut builder = WasiCtxBuilder::new();
     for p in &cfg.preopens {
-        // Map the guest-visible absolute `host_dir` under the sandbox root.
-        let host_path = sandbox_root.join(p.host_dir.trim_start_matches('/'));
-        if !host_path.starts_with(sandbox_root) {
+        // Defense-in-depth: `resolve_wasi_config` already drops non-G2 /
+        // `..`-bearing paths, but this is a public API over arbitrary caps, so
+        // re-check lexically. Scan segments explicitly — a component-wise
+        // `PathBuf::starts_with(sandbox_root)` AFTER `join` does NOT catch
+        // `..` (e.g. `<root>/../x` still `starts_with` `<root>`), so it would
+        // be a false guard.
+        if !p.host_dir.starts_with('/') || p.host_dir.split('/').any(|seg| seg == "..") {
             return Err(WasmHostError::WasiConfig(anyhow::anyhow!(
-                "resolved preopen escapes sandbox root: {}",
+                "unsafe preopen path (not absolute or contains `..`): {}",
                 p.host_dir
             )));
         }
+        // Map the guest-visible absolute `host_dir` under the sandbox root.
+        let host_path = sandbox_root.join(p.host_dir.trim_start_matches('/'));
         // Ensure the host dir exists so preopen succeeds.
         std::fs::create_dir_all(&host_path).map_err(|e| WasmHostError::WasiConfig(e.into()))?;
         let (dir_perms, file_perms) = match p.access {
@@ -380,5 +386,41 @@ mod tests {
         let err = run_component_with_caps(&[], "p", vec![canned_response()], &[], dir.path())
             .unwrap_err();
         assert!(matches!(err, WasmHostError::Load(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn preopen_with_dotdot_is_rejected_before_preopen() {
+        // Defense-in-depth: `resolve_wasi_config` never emits a `..` host_dir,
+        // but a hand-built config with one must be refused (a lexical
+        // component scan, since `join(..)` + `starts_with` would NOT catch it).
+        use tau_ports::target::{
+            PreopenAccess, PreopenGranularity, ResolvedPreopen, WasiConfiguration,
+        };
+        let cfg = WasiConfiguration {
+            allowed_hosts: tau_domain::package::host::HostSet::Exact(Default::default()),
+            methods: None,
+            preopens: vec![ResolvedPreopen {
+                host_dir: "/../etc".to_string(),
+                access: PreopenAccess::ReadOnly,
+                granularity: PreopenGranularity::Exact,
+                from: vec![],
+            }],
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Guard fires BEFORE any create_dir_all/preopen, so nothing is created
+        // outside the sandbox.
+        let escaped = dir.path().parent().unwrap().join("etc");
+        let existed_before = escaped.exists();
+        // `WasiCtx` isn't `Debug`, so match rather than `unwrap_err`.
+        let err = match wasi_ctx_from_config(&cfg, dir.path()) {
+            Ok(_) => panic!("escaping preopen was accepted"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, WasmHostError::WasiConfig(_)), "got: {err:?}");
+        assert_eq!(
+            escaped.exists(),
+            existed_before,
+            "guard must not create a dir outside the sandbox"
+        );
     }
 }
