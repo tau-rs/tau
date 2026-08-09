@@ -40,6 +40,17 @@ function toToolResult(raw: { Ok?: unknown; Err?: string }): ToolResult {
   return { err: raw.Err as string };
 }
 
+// `AgentStatus` wire shape: either a bare unit-variant string (e.g.
+// `"Ready"`) or the externally-tagged `{"Failed":{"kind":...,"detail":...}}`.
+// `RunOutcome::Failed.status` is documented as always the latter, but we
+// unwrap defensively rather than assume the wrapper is absent.
+function toFailedStatus(
+  raw: string | { Failed: { kind: string; detail?: string | null } },
+): { kind: string; detail?: string | null } {
+  if (typeof raw === "string") return { kind: raw };
+  return { kind: raw.Failed.kind, detail: raw.Failed.detail };
+}
+
 function toRunOutcome(raw: {
   Completed?: {
     final_message: unknown;
@@ -48,7 +59,7 @@ function toRunOutcome(raw: {
     token_usage: { input_tokens: number; output_tokens: number; total_tokens?: number | null };
   };
   Failed?: {
-    status: { kind: string; detail?: string | null } | string;
+    status: string | { Failed: { kind: string; detail?: string | null } };
     all_messages: unknown[];
     total_turns: number;
     token_usage: { input_tokens: number; output_tokens: number; total_tokens?: number | null };
@@ -67,7 +78,7 @@ function toRunOutcome(raw: {
   const f = raw.Failed!;
   return {
     kind: "failed",
-    status: typeof f.status === "string" ? { kind: f.status } : f.status,
+    status: toFailedStatus(f.status),
     allMessages: f.all_messages,
     totalTurns: f.total_turns,
     tokenUsage: toTokenUsage(f.token_usage),
@@ -141,12 +152,18 @@ export function normalize(raw: unknown): RunEvent {
     return { type: "run-completed", outcome: toRunOutcome(v.outcome) };
   }
   if ("FatalError" in obj) {
-    const v = obj.FatalError as { kind: string; detail: string; context_json?: string | null };
+    const v = obj.FatalError as {
+      kind: string;
+      detail: string;
+      context_json?: string | null;
+      tool_error_variant?: string | null;
+    };
     return {
       type: "fatal-error",
       kind: v.kind,
       detail: v.detail,
       contextJson: v.context_json ?? undefined,
+      toolErrorVariant: v.tool_error_variant ?? undefined,
     };
   }
 

@@ -47,4 +47,10 @@ export type RunEvent =
   | { type: "tool-call-completed"; id: string; name: string; result: ToolResult }
   | { type: "turn-completed"; stopReason: StopReason; usage?: TokenUsage; turn: number }
   | { type: "run-completed"; outcome: RunOutcome }
-  | { type: "fatal-error"; kind: string; detail: string; contextJson?: string };
+  | {
+      type: "fatal-error";
+      kind: string;
+      detail: string;
+      contextJson?: string;
+      toolErrorVariant?: string | null;
+    };
