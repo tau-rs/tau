@@ -55,6 +55,16 @@ fn net_http_project_generates_http_world() {
     assert!(world.contains("import wasi:io/streams@0.2.3;"), "{world}");
 }
 
+#[test]
+fn emitted_world_is_deterministic_and_matches_generator() {
+    let a = wasm_world_for_project(&fixture("net-http")).unwrap();
+    let b = wasm_world_for_project(&fixture("net-http")).unwrap();
+    assert_eq!(a, b, "world generation must be byte-deterministic");
+    // The net-http fixture grants net → the world imports wasi:http, not wasi:filesystem.
+    assert!(a.contains("import wasi:http/outgoing-handler@0.2.3;"), "{a}");
+    assert!(!a.contains("wasi:filesystem"), "net-only must not grant fs:\n{a}");
+}
+
 #[tokio::test]
 async fn ungoverned_project_is_refused_on_wasm_path() {
     // `trivial` declares no `[allow]` ceiling → GOV000 unless opted out.
