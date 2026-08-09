@@ -1,0 +1,388 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0015 — Sandbox activation - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0015-sandbox-activation.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0015-sandbox-activation-by-default--declarative-requirements--adapter-registry--resolver"><a class="header" href="#adr-0015-sandbox-activation-by-default--declarative-requirements--adapter-registry--resolver">ADR-0015: Sandbox activation by default — declarative requirements + adapter registry + resolver</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-05-04
+<strong>Deciders:</strong> Titouan Lebocq
+<strong>Supersedes:</strong> —
+<strong>Closes:</strong></p>
+<ul>
+<li>Sub-project A from <a href="../superpowers/specs/2026-05-03-sandboxing-followups.html">the sandboxing follow-ups</a> — sandboxing is now ON by default for every plugin spawn.</li>
+<li>ADR-0014 §1 (chain-based selection): the <code>Sandbox</code> port and the existing adapters are unchanged, but the <em>selection mechanism</em> is replaced (see Decision 5 below).
+<strong>Amends:</strong></li>
+<li><a href="0014-sandboxing.html">ADR-0014</a> §1 — <code>tau-runtime::sandbox::chain::select_adapter</code> is removed. Selection now flows through <code>tau-runtime::sandbox::resolver::resolve_adapter</code> against a static <code>AdapterRegistration</code> slice.</li>
+<li><a href="0014-sandboxing.html">ADR-0014</a> §5 — the <code>&lt;scope&gt;/config.toml [sandbox]</code> section is migrated from v2 (chain + minimum_tier) to v3 (required_tier + required_shapes). v2 lockfiles auto-load with a <code>tracing::warn!</code> and best-effort migration; v3 is canonical.
+<strong>Refines:</strong></li>
+<li><a href="0008-plugin-loading.html">ADR-0008</a> — <code>PluginHostOptions</code> now carries <code>sandbox_adapter</code>, <code>force_passthrough</code>, and <code>force_adapter_kind</code> fields; every spawn site (<code>describe_plugin</code>, <code>load_llm_backend</code>, <code>load_tool</code>, <code>load_storage</code>) flows through the resolver.</li>
+</ul>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>Tier 3 priority 12 (<a href="0014-sandboxing.html">ADR-0014</a>) shipped the sandbox infrastructure: a <code>tau_ports::Sandbox</code> port, two concrete adapter crates (<code>tau-sandbox-native</code>, <code>tau-sandbox-container</code>), Layer 3 pre-flight validation, and a chain-based <code>select_adapter</code> function. Activation was deferred: production plugin spawn sites still passed <code>None</code> for the sandbox argument. The result: zero plugins were actually sandboxed.</p>
+<p>Sub-project A from the followups doc closes that gap, but the original "chain" model surfaced design issues that justify revisiting it before activating it everywhere:</p>
+<ul>
+<li><strong>Chains conflate intent with mechanism.</strong> A chain like <code>[{ kind = "native" }, { kind = "container" }, { kind = "passthrough" }]</code> smushes together (a) what the project requires (Strict isolation), (b) which mechanisms can deliver it on this host, and (c) how to fall back. The user is forced to author the resolution algorithm.</li>
+<li><strong>Industry pattern is "declare requirements, let the toolchain pick the toolchain."</strong> Bazel's platforms/toolchains is the closest analogue: the BUILD declares <code>target_platform(cpu="arm64", os="linux")</code>, the toolchain registry advertises which toolchains support which <code>(cpu, os)</code> tuples, and Bazel's resolver picks. The user never writes a list of toolchains in priority order.</li>
+<li><strong>Probe results are runtime data; chain authoring is upfront.</strong> A chain in <code>tau.toml</code> can't react to "Docker isn't installed on this host" as cleanly as a resolver invoked at runtime against a registry of "what does each adapter advertise?".</li>
+<li><strong>Plugin-side requirements are first-class.</strong> A plugin that genuinely requires Strict tier (e.g. one that handles untrusted user input) needs to express that, and the project + plugin requirements need to <em>unify</em> before the resolver picks an adapter. A chain has no place for this.</li>
+<li><strong>Activation default needs a defensible failure mode.</strong> macOS without Docker has no Linux-native landlock, no container runtime — should tau refuse to start, fall back to no isolation with a warn, or something else? The chain model didn't have a clean answer.</li>
+</ul>
+<p>The design space (full options table in <a href="../superpowers/specs/2026-05-04-sandbox-activation-design.html">the design doc</a>) was explored fresh. The chain was rejected in favor of declarative requirements + a static adapter registry + a runtime resolver. Six discrete decisions follow.</p>
+<h2 id="decision-1--sandboxing-is-on-by-default-opt-out-is-explicit-and-visible"><a class="header" href="#decision-1--sandboxing-is-on-by-default-opt-out-is-explicit-and-visible">Decision 1 — Sandboxing is ON by default; opt-out is explicit and visible</a></h2>
+<p><strong>Decision:</strong> every <code>Runtime::run</code> builds a <code>SandboxPlan</code> per plugin, calls <code>resolve_adapter</code> to obtain a concrete <code>SandboxAdapter</code>, and passes both into <code>wrap_spawn</code> at the plugin host layer. The escape hatch is the explicit <code>--no-sandbox</code> global flag (or <code>[sandbox] required_tier = "none"</code> in scope config), which selects the <code>passthrough</code> adapter — never silent fall-through.</p>
+<p><strong>Context:</strong> the alternative was opt-in (a flag like <code>--enable-sandbox</code>). Defense in depth means the secure default must be the path of least resistance; if the user opts out, they declare it. Constitution G12 and ADR-0014 §6 already established "OS-level enforcement is the backstop"; not activating it by default would leave that promise unredeemed.</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>Existing tau projects with no <code>[sandbox]</code> block default to <code>required_tier = strict</code>. On Linux, the native adapter satisfies this. On macOS without Docker, resolution fails with a guided diagnostic (see Decision 3).</li>
+<li>The <code>passthrough</code> adapter (Decision 4) is a registered first-class adapter, not a "no sandbox" sentinel. <code>--no-sandbox</code> is honored by routing to passthrough; the user always knows which adapter is in play.</li>
+<li>Operators get a one-line CI rule: "no project ships without a <code>[sandbox]</code> block AND that block resolves on the target platform". <code>tau resolve --check-sandbox</code> is the gate.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Opt-in flag.</strong> Rejected: violates secure-by-default. Defense-in-depth is undermined when the kernel layer is dormant unless explicitly turned on.</li>
+<li><strong>Auto-fall-soft to passthrough on resolution failure.</strong> Rejected: silent demotion is the worst possible failure mode for a security feature. The user must learn that resolution failed, not discover via a post-mortem.</li>
+</ul>
+<h2 id="decision-2--pluginhostoptionssandbox_adapter-not-runtimebuilder-di"><a class="header" href="#decision-2--pluginhostoptionssandbox_adapter-not-runtimebuilder-di">Decision 2 — <code>PluginHostOptions.sandbox_adapter</code>, not Runtime::builder DI</a></h2>
+<p><strong>Decision:</strong> the resolved <code>Arc&lt;SandboxAdapter&gt;</code> is carried on <code>PluginHostOptions</code> (along with <code>force_passthrough: bool</code> and <code>force_adapter_kind: Option&lt;SandboxAdapterKind&gt;</code> for the CLI overrides), not injected through a builder method on <code>Runtime</code>. The CLI's <code>tau-cli/src/cmd/plugin_loader.rs::load_plugins</code> is the single integration point that reads scope config, calls <code>resolve_adapter</code>, and threads results through.</p>
+<p><strong>Context:</strong> the alternative was <code>Runtime::builder().with_sandbox(adapter)</code> — closer to the <code>with_*</code> methods already on the builder. But the builder is constructed in <code>Runtime::run</code>, before scope config is loaded. Pushing sandbox resolution into the builder would have required the builder to depend on <code>tau_pkg::scope</code>, which inverts the existing dependency graph (<code>tau-pkg</code> depends on <code>tau-runtime</code> for <code>RuntimeBuilder</code> reuse).</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li><code>Runtime</code> itself is unaware of sandboxing. The kernel still calls <code>plugin_host::spawn_and_handshake</code>; the sandbox enforcement happens during <code>wrap_spawn</code>, transparent to the agent loop.</li>
+<li>The CLI's <code>plugin_loader</code> becomes the natural home for resolver + adapter wiring — it already loads scope config, lockfile, and plugin manifests.</li>
+<li>Tests that don't go through the CLI (the runtime's own integration tests) can construct <code>PluginHostOptions { sandbox_adapter: None, .. }</code> to skip sandboxing entirely. The mock adapter is still injectable via the <code>TAU_TESTING_ALLOW_MOCK_SANDBOX=1</code> env-var override (preserved from priority 12).</li>
+<li>A future "library mode" caller (Phase 2 work) sets the field directly without going through the CLI surface.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong><code>Runtime::builder().with_sandbox(adapter)</code>.</strong> Rejected: inverts dep graph; adds a builder method that's only called from one place.</li>
+<li><strong>Static config / lazy_static.</strong> Rejected: testing is harder; resolution becomes implicit.</li>
+</ul>
+<h2 id="decision-3--hard-refuse-on-resolution-failure-no-silent-fall-through"><a class="header" href="#decision-3--hard-refuse-on-resolution-failure-no-silent-fall-through">Decision 3 — Hard refuse on resolution failure (no silent fall-through)</a></h2>
+<p><strong>Decision:</strong> when <code>resolve_adapter</code> returns <code>Err(ResolutionError)</code>, the runtime exits with code 2 and a guided multi-option diagnostic. There is no fall-back to passthrough, no warning-and-continue, no degraded mode. The user must either (a) install a satisfying adapter (e.g. Docker), (b) lower <code>required_tier</code> in scope config, or (c) pass <code>--no-sandbox</code> explicitly.</p>
+<p><strong>Context:</strong> the failure mode of a security feature is what defines it. Silent demotion gives users a sandbox icon in their config and zero enforcement at runtime. Three-bucket exit codes (ADR-0007 §7) give us "configuration error" = exit 2; this is the canonical case.</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>macOS users without Docker who don't have a <code>[sandbox]</code> block and don't pass <code>--no-sandbox</code> get exit 2 on first run. The diagnostic shows: which adapters were tried, why each was rejected (platform / probe / tier / shape / plugin tier), and three remediations they can pick from. <code>tau sandbox setup</code> (Decision 5 corollary) walks them through option (b) interactively.</li>
+<li>The <code>tau resolve --check-sandbox</code> subcommand exits 2 on the same conditions, giving CI a pre-flight gate without needing to spawn plugins.</li>
+<li>The error rendering surface (<code>crates/tau-cli/src/cmd/error_render.rs</code>) gets formal multi-option output with insta snapshot tests.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Fall-soft to passthrough with a warn.</strong> Rejected: see Decision 1's discussion. The whole point of activation is that the kernel layer is real, not optional.</li>
+<li><strong>Refuse only if no <code>[sandbox]</code> block exists; permit fall-soft if the block lists alternatives.</strong> Rejected: the chain model in disguise; we already rejected chains.</li>
+</ul>
+<h2 id="decision-4--passthrough-is-a-registered-first-class-adapter-not-none"><a class="header" href="#decision-4--passthrough-is-a-registered-first-class-adapter-not-none">Decision 4 — <code>passthrough</code> is a registered first-class adapter, not "None"</a></h2>
+<p><strong>Decision:</strong> add a <code>passthrough</code> adapter (<code>crates/tau-runtime/src/sandbox/passthrough.rs</code>, ~30 LOC) that implements <code>tau_ports::Sandbox</code> directly. It probes <code>Available</code> everywhere, advertises every shape as supported, validates every plan as Ok, and <code>wrap_spawn</code> returns the command unchanged. It's registered in the adapter registry with <code>tier = None</code> and <code>priority = 0</code> (lowest). <code>SandboxAdapter</code> gains a <code>Passthrough</code> variant.</p>
+<p><strong>Context:</strong> the priority-12 design represented "no sandbox" as <code>Option&lt;SandboxAdapter&gt;::None</code>. That was always going to age badly: every consumer of <code>Option&lt;&amp;SandboxAdapter&gt;</code> gets a special case for <code>None</code>, the overrides logic (<code>--no-sandbox</code>) has to short-circuit before reaching the adapter layer, and the registry has to model "the always-available fall-back" as a separate concept from "the available adapters".</p>
+<p><strong>Decision</strong> treats "no isolation" as a real adapter with its own behavior: it satisfies <code>required_tier = none</code>, fails <code>required_tier = light</code> and stronger via the tier filter, and fails plugin tier requirements via the plugin-tier filter. The user-facing name is "passthrough", consistent across <code>tau sandbox status</code>, error messages, and <code>--sandbox passthrough</code>.</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li><code>--no-sandbox</code> is sugar for <code>--sandbox passthrough</code> (forces the adapter regardless of registry filtering).</li>
+<li><code>tau sandbox status</code> always shows passthrough as Available, with an explicit "delivers no isolation" note. Users see what they'd be getting.</li>
+<li>The registry's lowest-priority entry catches all <code>required_tier = none</code> requests when no other adapter probed Available.</li>
+<li>Plugin-tier filtering: a plugin declaring <code>required_tier = strict</code> rejects passthrough even when the project says <code>required_tier = none</code> (see Decision 6).</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Keep <code>Option&lt;SandboxAdapter&gt;::None</code>.</strong> Rejected: special cases ripple through every caller; the override logic gets increasingly fragile.</li>
+<li><strong>Name it <code>bare</code>, <code>host</code>, or <code>none</code>.</strong> Rejected: <code>none</code> collides with the tier name; <code>bare</code> is jargon; <code>host</code> is ambiguous (host vs guest namespace). <code>passthrough</code> is the established term in the network/security space for "let the bytes through unchanged".</li>
+</ul>
+<h2 id="decision-5--declarative-requirements--adapter-registry--resolver-bazel-style"><a class="header" href="#decision-5--declarative-requirements--adapter-registry--resolver-bazel-style">Decision 5 — Declarative requirements + adapter registry + resolver (Bazel-style)</a></h2>
+<p><strong>Decision:</strong> the scope config schema migrates from v2 chain (<code>[sandbox] chain = [{ kind = "native" }, { kind = "container" }, { kind = "passthrough" }]</code>) to v3 declarative (<code>[sandbox] required_tier = "strict"</code>, optional <code>required_shapes = [...]</code>). A static <code>AdapterRegistration</code> slice in <code>tau-runtime::sandbox::registry</code> enumerates the four adapters with their <code>(platforms, tiers_supported, shapes_supported, priority)</code> metadata. <code>resolve_adapter</code> filters the registry through a 5-stage pipeline (platform → probe → tier → shape → plugin tier) and picks the highest-priority remaining candidate.</p>
+<p><strong>Context:</strong> Bazel's platforms/toolchains is the closest analogue. The BUILD file declares the <em>target platform</em> (<code>cpu="arm64", os="linux"</code>); each toolchain declares which <code>target_compatible_with</code> constraints it satisfies; Bazel's resolver picks. The user writes intent ("I need to build for arm64-linux"), the toolchain author writes capability ("I support arm64-linux", with priority), and the resolver produces a concrete pick at build time.</p>
+<p>The same shape applies to sandboxing:</p>
+<ul>
+<li>The project author writes intent: <code>required_tier = "strict"</code>, optionally <code>required_shapes = ["FilesystemRead", "ProcessExec"]</code>.</li>
+<li>The adapter author registers capability: native says <code>(linux, [light, strict], [Filesystem*, Process*, Network*], priority=100)</code>; container says <code>(any, [light, strict], [Filesystem*, Process*, Network*], priority=50)</code>; remote says <code>(any, [light, strict], [Filesystem*, Process*], priority=25, probe=Unavailable)</code>; passthrough says <code>(any, [none], [all], priority=0)</code>.</li>
+<li>The resolver — invoked at every <code>Runtime::run</code> — computes the intersection and picks.</li>
+</ul>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>New adapters land additively. Adding a <code>tau-sandbox-macos</code> adapter (sub-project J) becomes one new <code>AdapterRegistration</code> entry plus the adapter crate. No changes to consumers.</li>
+<li>The error message for "nothing matches" can list every adapter that was tried and why — the resolver has all the data; it just renders it via <code>ResolutionError::NoAdapterMatches { tried: Vec&lt;(name, ResolutionRejection)&gt; }</code>.</li>
+<li>Tests can probe the resolver directly (<code>resolve_adapter(&amp;requirements, &amp;plugins).await</code>) without spawning a runtime. The 5-stage pipeline is unit-testable in isolation.</li>
+<li>Schema migration from v2 to v3 is best-effort: v2 lockfiles auto-load with a <code>tracing::warn!</code> (consistent with the lockfile v3→v4 precedent from priority 7) and the resolver picks a sensible v3 equivalent. v3 is the canonical form going forward.</li>
+<li>A new family of CLI subcommands grows naturally: <code>tau sandbox status</code> (read-only diagnostic), <code>tau sandbox setup</code> (interactive + non-interactive scope config writer). The resolver is the single source of truth that <code>status</code> queries.</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Keep the chain model.</strong> Rejected for the reasons in Context: conflates intent with mechanism, doesn't model plugin-side requirements cleanly, can't react to runtime probe data.</li>
+<li><strong>Custom scoring function instead of priority + filter pipeline.</strong> Rejected: more flexible than needed; harder to reason about; the priority sort suffices for the four adapters we have, and adding new ones doesn't require rebalancing scores.</li>
+<li><strong>Dynamic adapter loading (plugins as adapters).</strong> Rejected: out of scope; the registry is intentionally compile-time so adapters can be type-checked. Future work could add a registration ABI.</li>
+</ul>
+<h2 id="decision-6--plugin-side-tier-declarations-symmetric-to-project-requirements"><a class="header" href="#decision-6--plugin-side-tier-declarations-symmetric-to-project-requirements">Decision 6 — Plugin-side tier declarations (symmetric to project requirements)</a></h2>
+<p><strong>Decision:</strong> add <code>[sandbox]</code> to the plugin manifest (<code>PluginSandboxRequirements { required_tier: Option&lt;PluginRequiredTier&gt;, required_shapes: Vec&lt;CapabilityShape&gt; }</code>). The resolver's 5th filter stage rejects any adapter whose tier is below the maximum tier required across all plugins in the load set. <code>ResolutionError::PluginTierMismatch</code> is a separate error variant from <code>NoAdapterMatches</code> so the diagnostic can identify which plugin is asking for what.</p>
+<p><strong>Context:</strong> a plugin that processes untrusted input (e.g. a parser, a code formatter, an HTTP client) has a defensible reason to insist on Strict tier even if the project author would have been content with Light. Without a plugin-side declaration, the project's <code>[sandbox]</code> block is the only signal — and the project author may not know which plugins need stronger isolation.</p>
+<p>The symmetry mirrors <code>dependencies</code> resolution: the project declares "I want package X"; the plugin declares "I require package Y at version Z". The dep resolver intersects. The sandbox resolver does the same with tiers.</p>
+<p><strong>Consequences:</strong></p>
+<ul>
+<li>Existing plugin manifests with no <code>[sandbox]</code> block default to <code>required_tier = None</code> (no extra requirement beyond the project's). This is <code>#[serde(default)]</code> on <code>PluginSandboxRequirements</code>, so unmodified plugin manifests remain valid.</li>
+<li>The five existing plugins (anthropic, ollama, openai, fs-read, shell) ship with no <code>[sandbox]</code> block in this sub-project. Sub-project B adds explicit declarations as part of the per-plugin compatibility verification pass.</li>
+<li><code>tau resolve --check-sandbox</code> is extended to surface plugin-tier mismatches even when the project's <code>required_tier = none</code> would otherwise have skipped tier checks. (Without this, a project with <code>required_tier = none</code> would silently let a plugin's <code>required_tier = strict</code> slip through.)</li>
+<li>The diagnostic for plugin-tier mismatch names the offending plugin: "plugin <code>foo</code> requires Strict but resolved adapter <code>passthrough</code> provides None — please install Docker or run on Linux".</li>
+</ul>
+<p><strong>Alternatives considered:</strong></p>
+<ul>
+<li><strong>Plugin-side declarations only (no project-side).</strong> Rejected: the project author needs to declare "I want this whole agent to run Strict" for the case where a plugin's manifest is silent.</li>
+<li><strong>Project-side only (no plugin-side).</strong> Rejected: makes the project author responsible for knowing each plugin's needs. Doesn't scale to a real plugin ecosystem.</li>
+<li><strong><code>required_shapes</code> on plugins, no <code>required_tier</code>.</strong> Rejected: shapes are a finer-grained vocabulary that plugins use to express <em>what they need to do</em> (FilesystemRead, ProcessExec, ...). Tier is a coarser vocabulary expressing <em>how strong an isolation regime they require</em>. They're not interchangeable; both exist on the plugin side, with <code>required_shapes</code> already present from priority 12.</li>
+</ul>
+<h2 id="implementation-summary"><a class="header" href="#implementation-summary">Implementation summary</a></h2>
+<p>The 12 commits on <code>feat/sandbox-activation-spec</code> (PR #23) realize these decisions via:</p>
+<div class="table-wrapper"><table><thead><tr><th>Layer</th><th>Crate</th><th>Files</th></tr></thead><tbody>
+<tr><td>Schema migration v2 → v3</td><td><code>tau-pkg</code></td><td><code>src/scope.rs</code></td></tr>
+<tr><td>Plugin manifest schema</td><td><code>tau-domain</code></td><td><code>src/package/sandbox.rs</code></td></tr>
+<tr><td>Adapter registry</td><td><code>tau-runtime</code></td><td><code>src/sandbox/registry.rs</code></td></tr>
+<tr><td>Passthrough adapter</td><td><code>tau-runtime</code></td><td><code>src/sandbox/passthrough.rs</code></td></tr>
+<tr><td>Resolution error taxonomy</td><td><code>tau-runtime</code></td><td><code>src/sandbox/resolution_error.rs</code></td></tr>
+<tr><td>Resolver (5-stage pipeline)</td><td><code>tau-runtime</code></td><td><code>src/sandbox/resolver.rs</code></td></tr>
+<tr><td>Plugin host integration</td><td><code>tau-runtime</code></td><td><code>src/plugin_host/mod.rs</code></td></tr>
+<tr><td>CLI integration</td><td><code>tau-cli</code></td><td><code>src/cmd/plugin_loader.rs</code></td></tr>
+<tr><td>Global CLI flags</td><td><code>tau-cli</code></td><td><code>src/cli.rs</code></td></tr>
+<tr><td>Error renderer</td><td><code>tau-cli</code></td><td><code>src/cmd/error_render.rs</code></td></tr>
+<tr><td>Sandbox subcommands</td><td><code>tau-cli</code></td><td><code>src/cmd/sandbox.rs</code></td></tr>
+<tr><td><code>--check-sandbox</code> extension</td><td><code>tau-cli</code></td><td><code>src/cmd/resolve.rs</code></td></tr>
+</tbody></table>
+</div>
+<p>Test coverage: ~250 unit tests across the workspace pass on the 25-job CI matrix (Linux/macOS/Windows × stable/1.91); 24 doc tests pass. No new CI jobs were added (branch protection stays at 25 required checks, unchanged from the priority-12 baseline).</p>
+<p>The mock adapter is unchanged in <code>tau-ports/src/fixtures.rs</code>; the <code>TAU_TESTING_ALLOW_MOCK_SANDBOX=1</code> env-var injection path bypasses the registry directly. Sub-project H from the followups doc handles the eventual cleanup.</p>
+<h2 id="forward-links"><a class="header" href="#forward-links">Forward links</a></h2>
+<ul>
+<li><strong>Sub-project B</strong> (plugin compatibility verification) builds directly on this work: per-plugin <code>tau resolve --check-sandbox</code> runs, plugin manifest <code>[sandbox]</code> blocks added where appropriate, Layer 2 install-time cross-check.</li>
+<li><strong>Sub-project D</strong> (e2e CI) gains a clean activation point: e2e tests can rely on resolved adapters rather than mocking the chain.</li>
+<li><strong>Phase 2 sub-project A</strong> (<code>tau check</code> standalone) reuses <code>resolve_adapter</code> + <code>validate_plan_against_adapter</code> as the pre-flight validation surface.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0014-sandboxing.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0016-plugin-compat-verification.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0014-sandboxing.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0016-plugin-compat-verification.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
