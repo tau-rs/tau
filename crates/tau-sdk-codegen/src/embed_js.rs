@@ -95,14 +95,33 @@ bindings that `src/index.ts` imports from `./generated`.
 ```ts
 import { loadTau } from "@tau/embed-js";
 
-const tau = await loadTau(new URL("./component.wasm", import.meta.url));
-for await (const event of tau.run({ message: "hello" })) {
+const tau = await loadTau(new URL("./component.wasm", import.meta.url), {
+  // Bridges the WIT `complete` host import to a real LLM backend.
+  // `requestJson` is a serialized `tau_ports::llm::CompletionRequest`;
+  // must resolve to a serialized `CompletionResponse` JSON string.
+  complete: async (requestJson) => callYourBackend(requestJson),
+});
+for await (const event of tau.run({ prompt: "hello" })) {
   if (event.type === "text-delta") process.stdout.write(event.delta);
 }
 ```
 
+`complete` has no safe default — omit it and the guest fails with a clear
+"not configured" error the moment it calls the LLM. `nowMillis`/`nextU64`
+default to `Date.now()`/`crypto.getRandomValues`; override both for
+deterministic (e.g. conformance/cassette) runs.
+
 For a Web Worker host, use `loadTauInWorker` instead — same `TauComponent`
-surface, but the wasm component runs off the main thread.
+surface, but the wasm component runs off the main thread. Its `complete`
+cannot be bridged from the main thread (functions aren't
+structured-cloneable via `postMessage`) and always rejects until a
+dedicated RPC bridge is added.
+
+> Host-import wiring (the `instantiate` helper in `src/index.ts` and
+> `src/worker.ts`) is finalized and validated against real `jco transpile`
+> output in EPIC 5.4-c (the streaming demo). The shapes here follow jco's
+> documented async-instantiation convention but are not yet exercised
+> end-to-end.
 
 ## Package layout
 
@@ -110,7 +129,9 @@ surface, but the wasm component runs off the main thread.
   drift by `run_event_ts_coverage` (see `crates/tau-sdk-codegen`).
 - `src/normalize.ts` — maps the externally-tagged wire format (e.g.
   `{"TextDelta":{"delta":"..."}}`) to the normalized union.
-- `src/index.ts` — `loadTau` / `loadTauInWorker` + `TauComponent`.
+- `src/index.ts` — `loadTau` / `loadTauInWorker` + `TauComponent`, and the
+  `tau:host/host` (wit/tau-host.wit) host-import wiring (`complete`,
+  `nowMillis`, `nextU64`, `emitEvent`).
 - `src/worker.ts` — the Web Worker host driven by `loadTauInWorker`.
 - `src/generated/` — jco's build output (gitignored; not committed).
 "#;
@@ -350,28 +371,55 @@ export function normalize(raw: unknown): RunEvent {
 
 const INDEX_TS: &str = r#"// loadTau / loadTauInWorker (Phase 2 §5.2 "Public surface").
 //
-// Both entry points expose the same TauComponent surface: `run(input)`
-// returns an AsyncIterable<RunEvent> fed by the wasm guest's `emit-event`
-// host import, normalized via ./normalize.
+// Both entry points wire the wasm component's four `tau:host/host` imports
+// (wit/tau-host.wit: `complete`, `now-millis`, `next-u64`, `emit-event`) at
+// component instantiation time, then drive the world's single `run(prompt)`
+// export. `run(input)` returns an AsyncIterable<RunEvent> fed by the
+// `emit-event` host import, normalized via ./normalize.
+//
+// NOTE: the host-import wiring in `instantiate` below follows jco's
+// documented async-instantiation convention (an imports object keyed by WIT
+// interface name, e.g. `{ "tau:host/host": {...} }`). It has not been run
+// against real `jco transpile` output yet — that validation is EPIC
+// 5.4-c's job (the streaming demo). If the actual generated shape differs,
+// only `instantiate` needs to change; the public loadTau/loadTauInWorker/
+// RunInput/HostImports surface is stable regardless.
 
 import { normalize } from "./normalize";
 import type { RunEvent } from "./RunEvent";
 
-/** Input to a single agent run. */
+/** Input to a single agent run. The guest world (wit/tau-host.wit `runner`)
+ * exports a single-agent, prompt-only `run` — there is no per-call agent
+ * selection at this layer. */
 export interface RunInput {
-  agent?: string;
-  message: string;
+  prompt: string;
 }
+
+/** Bridges the WIT `complete` host import to a real LLM backend.
+ * `requestJson` is a serialized `tau_ports::llm::CompletionRequest`; must
+ * resolve to a serialized `CompletionResponse` JSON string. */
+export type CompleteFn = (requestJson: string) => Promise<string>;
+
+/** The four imports `tau:host/host` requires (wit/tau-host.wit). Wired once
+ * per component instantiation, not per-call — `run` itself only takes the
+ * prompt. */
+export interface HostImports {
+  complete: CompleteFn;
+  nowMillis: () => bigint;
+  nextU64: () => bigint;
+  emitEvent: (json: string) => void;
+}
+
+/** Caller-supplied overrides for `loadTau`/`loadTauInWorker`. `complete` has
+ * no safe default: omit it and the guest fails with a clear error the
+ * moment it calls the LLM. `nowMillis`/`nextU64` default to `Date.now()`
+ * and a `crypto.getRandomValues`-backed u64 — override both for
+ * deterministic (e.g. conformance/cassette) runs. */
+export type HostImportOverrides = Partial<HostImports>;
 
 /** A loaded tau wasm component, ready to drive runs. */
 export interface TauComponent {
   run(input: RunInput): AsyncIterable<RunEvent>;
-}
-
-type EmitEvent = (json: string) => void;
-
-interface GeneratedExports {
-  run(inputJson: string, hostImports: { emitEvent: EmitEvent }): Promise<void> | void;
 }
 
 interface AsyncQueue<T> extends AsyncIterable<T> {
@@ -412,32 +460,96 @@ function makeQueue<T>(): AsyncQueue<T> {
   };
 }
 
+function unconfiguredComplete(): CompleteFn {
+  return () =>
+    Promise.reject(
+      new Error(
+        "@tau/embed-js: no `complete` host import configured — pass " +
+          "{ complete } to loadTau()/loadTauInWorker() to bridge " +
+          "tau:host/host's `complete` import to an LLM backend.",
+      ),
+    );
+}
+
+/** `crypto.getRandomValues`-backed u64 source for the `next-u64` host
+ * import. Non-deterministic — override via `HostImportOverrides` for
+ * conformance/cassette runs. */
+function defaultNextU64(): () => bigint {
+  const buf = new Uint32Array(2);
+  return () => {
+    crypto.getRandomValues(buf);
+    return (BigInt(buf[0]) << 32n) | BigInt(buf[1]);
+  };
+}
+
+function resolveHostImports(
+  emitEvent: (json: string) => void,
+  overrides: HostImportOverrides,
+): HostImports {
+  return {
+    complete: overrides.complete ?? unconfiguredComplete(),
+    nowMillis: overrides.nowMillis ?? (() => BigInt(Date.now())),
+    nextU64: overrides.nextU64 ?? defaultNextU64(),
+    emitEvent: overrides.emitEvent ?? emitEvent,
+  };
+}
+
+function toFatalErrorEvent(err: unknown): RunEvent {
+  return {
+    type: "fatal-error",
+    kind: "EmbedJsHostError",
+    detail: err instanceof Error ? err.message : String(err),
+  };
+}
+
 // jco transpile output; produced by `npm run build --wasm=<path>` into
 // ./generated (gitignored). Not present at emit time, so this import is
 // resolved only after the consumer has run the build script.
-async function instantiate(wasm: BufferSource | URL): Promise<GeneratedExports> {
+interface GeneratedExports {
+  run(prompt: string): Promise<string> | string;
+}
+
+async function instantiate(
+  wasm: BufferSource | URL,
+  hostImports: HostImports,
+): Promise<GeneratedExports> {
   const mod = (await import("./generated/component.js")) as {
-    instantiate?: (wasm: BufferSource | URL) => Promise<GeneratedExports>;
+    instantiate?: (
+      wasm: BufferSource | URL,
+      imports: { "tau:host/host": HostImports },
+    ) => Promise<GeneratedExports>;
   } & GeneratedExports;
-  return mod.instantiate ? await mod.instantiate(wasm) : mod;
+  return mod.instantiate
+    ? await mod.instantiate(wasm, { "tau:host/host": hostImports })
+    : mod;
 }
 
 /** Load a tau wasm component and run it on the calling thread. */
-export async function loadTau(wasm: BufferSource | URL): Promise<TauComponent> {
-  const exports = await instantiate(wasm);
+export async function loadTau(
+  wasm: BufferSource | URL,
+  overrides: HostImportOverrides = {},
+): Promise<TauComponent> {
   return {
     run(input: RunInput): AsyncIterable<RunEvent> {
       const queue = makeQueue<RunEvent>();
-      const emitEvent: EmitEvent = (json: string) => {
-        queue.push(normalize(JSON.parse(json)));
-      };
-      Promise.resolve(exports.run(JSON.stringify(input), { emitEvent })).finally(() => queue.close());
+      const emitEvent = (json: string) => queue.push(normalize(JSON.parse(json)));
+      const hostImports = resolveHostImports(emitEvent, overrides);
+      instantiate(wasm, hostImports)
+        .then((exports) => exports.run(input.prompt))
+        .catch((err: unknown) => queue.push(toFatalErrorEvent(err)))
+        .finally(() => queue.close());
       return queue;
     },
   };
 }
 
-/** Load a tau wasm component and run it inside a dedicated Web Worker. */
+/** Load a tau wasm component and run it inside a dedicated Web Worker.
+ *
+ * Note: `complete` cannot be bridged from the main thread today —
+ * functions are not structured-cloneable via `postMessage`. The worker's
+ * `complete` always rejects with a clear "not configured" error until a
+ * MessageChannel (or similar) RPC bridge is added; single-threaded
+ * `loadTau` is the only path that supports a real `complete` today. */
 export async function loadTauInWorker(wasm: URL): Promise<TauComponent> {
   return {
     run(input: RunInput): AsyncIterable<RunEvent> {
@@ -462,31 +574,87 @@ export async function loadTauInWorker(wasm: URL): Promise<TauComponent> {
 "#;
 
 const WORKER_TS: &str = r#"// Web Worker host driven by loadTauInWorker (./index.ts). Instantiates the
-// jco-transpiled component off the main thread and forwards normalized
-// events back via postMessage.
+// jco-transpiled component off the main thread against all four
+// `tau:host/host` imports (wit/tau-host.wit), loading the wasm URL posted
+// from the main thread, then forwards normalized events back via
+// postMessage.
+//
+// See index.ts's `instantiate` for the jco-shape caveat: this glue mirrors
+// it, and both get validated against real jco output together in EPIC
+// 5.4-c.
+//
+// `complete` cannot be bridged from the main thread here (functions are not
+// structured-cloneable via postMessage), so it always rejects with a clear
+// "not configured" error — see loadTauInWorker's doc comment in index.ts.
 
 /// <reference lib="webworker" />
 
-type RunMessage = { wasm: string; input: unknown };
+import type { RunInput } from "./index";
 
-interface GeneratedExports {
-  run(inputJson: string, hostImports: { emitEvent: (json: string) => void }): Promise<void> | void;
+type RunMessage = { wasm: string; input: RunInput };
+type WorkerMessage = { kind: "event"; json: string } | { kind: "done" };
+
+interface HostImports {
+  complete: (requestJson: string) => Promise<string>;
+  nowMillis: () => bigint;
+  nextU64: () => bigint;
+  emitEvent: (json: string) => void;
 }
 
-async function instantiate(): Promise<GeneratedExports> {
+interface GeneratedExports {
+  run(prompt: string): Promise<string> | string;
+}
+
+async function instantiate(wasm: string, hostImports: HostImports): Promise<GeneratedExports> {
   const mod = (await import("./generated/component.js")) as {
-    instantiate?: () => Promise<GeneratedExports>;
+    instantiate?: (
+      wasm: string,
+      imports: { "tau:host/host": HostImports },
+    ) => Promise<GeneratedExports>;
   } & GeneratedExports;
-  return mod.instantiate ? await mod.instantiate() : mod;
+  return mod.instantiate
+    ? await mod.instantiate(wasm, { "tau:host/host": hostImports })
+    : mod;
+}
+
+function defaultNextU64(): () => bigint {
+  const buf = new Uint32Array(2);
+  return () => {
+    crypto.getRandomValues(buf);
+    return (BigInt(buf[0]) << 32n) | BigInt(buf[1]);
+  };
 }
 
 self.addEventListener("message", async (ev: MessageEvent<RunMessage>) => {
-  const { input } = ev.data;
-  const exports = await instantiate();
-  const emitEvent = (json: string) => {
-    (self as unknown as Worker).postMessage({ kind: "event", json });
+  const { input, wasm } = ev.data;
+  const post = (msg: WorkerMessage) => (self as unknown as Worker).postMessage(msg);
+  const hostImports: HostImports = {
+    complete: () =>
+      Promise.reject(
+        new Error(
+          "@tau/embed-js worker: no `complete` host import configured — " +
+            "see loadTauInWorker's doc comment in index.ts.",
+        ),
+      ),
+    nowMillis: () => BigInt(Date.now()),
+    nextU64: defaultNextU64(),
+    emitEvent: (json: string) => post({ kind: "event", json }),
   };
-  await exports.run(JSON.stringify(input), { emitEvent });
-  (self as unknown as Worker).postMessage({ kind: "done" });
+  try {
+    const exports = await instantiate(wasm, hostImports);
+    await exports.run(input.prompt);
+  } catch (err) {
+    post({
+      kind: "event",
+      json: JSON.stringify({
+        FatalError: {
+          kind: "EmbedJsHostError",
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      }),
+    });
+  } finally {
+    post({ kind: "done" });
+  }
 });
 "#;

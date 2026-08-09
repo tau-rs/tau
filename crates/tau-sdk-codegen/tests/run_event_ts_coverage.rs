@@ -45,15 +45,30 @@ fn run_event_ts_covers_every_schema_variant() {
     )
     .unwrap();
     let ts = std::fs::read_to_string(repo_root.join("sdk/embed-js/src/RunEvent.ts")).unwrap();
-    let mut missing = Vec::new();
+    let normalize_src =
+        std::fs::read_to_string(repo_root.join("sdk/embed-js/src/normalize.ts")).unwrap();
+    let mut missing_ts = Vec::new();
+    let mut missing_normalize = Vec::new();
     for key in variant_keys(&schema) {
         let tag = to_kebab(&key);
         if !ts.contains(&format!("type: \"{tag}\"")) {
-            missing.push(tag);
+            missing_ts.push(tag);
+        }
+        // normalize.ts discriminates every variant off its externally-tagged
+        // PascalCase wire key: struct variants via `"<Key>" in obj`, unit
+        // variants via a `case "<Key>":` arm. Both forms contain the quoted
+        // key, so a single substring check covers both — spec D3 Hop 2
+        // requires normalize.ts be guarded here too, not just RunEvent.ts.
+        if !normalize_src.contains(&format!("\"{key}\"")) {
+            missing_normalize.push(key);
         }
     }
     assert!(
-        missing.is_empty(),
-        "RunEvent.ts missing variants: {missing:?}"
+        missing_ts.is_empty(),
+        "RunEvent.ts missing variants: {missing_ts:?}"
+    );
+    assert!(
+        missing_normalize.is_empty(),
+        "normalize.ts missing variant handling: {missing_normalize:?}"
     );
 }

@@ -382,7 +382,7 @@
                   "description": "The final assistant message (LLM response with no tool_uses)."
                 },
                 "token_usage": {
-                  "$ref": "#/$defs/TokenUsage2",
+                  "$ref": "#/$defs/RunTokenUsage",
                   "description": "Token usage summed across the run."
                 },
                 "total_turns": {
@@ -424,7 +424,7 @@
                   "description": "Always `AgentStatus::Failed { kind, detail }`. The `kind`\ndistinguishes `PolicyDenied` (capability denial),\n`OutOfResources` (max turns reached), `BackendError`,\n`Crashed`, `InternalError`."
                 },
                 "token_usage": {
-                  "$ref": "#/$defs/TokenUsage2",
+                  "$ref": "#/$defs/RunTokenUsage",
                   "description": "Token usage summed across the run."
                 },
                 "total_turns": {
@@ -449,6 +449,37 @@
           "type": "object"
         }
       ]
+    },
+    "RunTokenUsage": {
+      "description": "Token usage reported by the LLM backend, summed across the run.\n\nSome backends report `total_tokens`; some report only input/output.\n`Default` returns all zeros (useful when no backend was called yet).\n\n# Example\n\n```\nuse tau_runtime_core::options::TokenUsage;\n\nlet usage = TokenUsage::default();\nassert_eq!(usage.input_tokens, 0);\nassert_eq!(usage.output_tokens, 0);\nassert_eq!(usage.total_tokens, None);\n```",
+      "properties": {
+        "input_tokens": {
+          "description": "Total input (prompt) tokens used across the run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "description": "Total output (completion) tokens emitted across the run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_tokens": {
+          "description": "`Some(n)` when the backend reports a unified count; `None` otherwise.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ],
+      "type": "object"
     },
     "StopReason": {
       "description": "Reason a completion stopped.\n\n`StopReason::Error` indicates the stream completed but reported an\nerror mid-flight; this is distinct from [`crate::LlmError`], which\nindicates the trait method itself failed.",
@@ -494,37 +525,6 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
-        }
-      },
-      "required": [
-        "input_tokens",
-        "output_tokens"
-      ],
-      "type": "object"
-    },
-    "TokenUsage2": {
-      "description": "Token usage reported by the LLM backend, summed across the run.\n\nSome backends report `total_tokens`; some report only input/output.\n`Default` returns all zeros (useful when no backend was called yet).\n\n# Example\n\n```\nuse tau_runtime_core::options::TokenUsage;\n\nlet usage = TokenUsage::default();\nassert_eq!(usage.input_tokens, 0);\nassert_eq!(usage.output_tokens, 0);\nassert_eq!(usage.total_tokens, None);\n```",
-      "properties": {
-        "input_tokens": {
-          "description": "Total input (prompt) tokens used across the run.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "output_tokens": {
-          "description": "Total output (completion) tokens emitted across the run.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "total_tokens": {
-          "description": "`Some(n)` when the backend reports a unified count; `None` otherwise.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
         }
       },
       "required": [
