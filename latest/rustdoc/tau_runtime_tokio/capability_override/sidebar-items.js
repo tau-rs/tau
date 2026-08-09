@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["compute_effective"],"struct":["CapabilityOverride","EffectiveCapability","OverrideExpandError"]};
