@@ -948,6 +948,10 @@ impl SuspensionStore for MockSuspensionStore {
             .get(run_id)
             .cloned())
     }
+    fn delete_suspension(&self, run_id: &RunId) -> Result<(), CheckpointError> {
+        self.by_run.lock().expect("suspension mutex").remove(run_id);
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
@@ -991,5 +995,18 @@ mod suspension_fixture_tests {
                 .step_cursor,
             5
         );
+    }
+
+    #[test]
+    fn delete_suspension_removes_entry_and_is_idempotent() {
+        let store = MockSuspensionStore::new();
+        store.persist_suspension(&susp("r", 2)).unwrap();
+        assert!(store.load_suspension(&"r".to_string()).unwrap().is_some());
+
+        store.delete_suspension(&"r".to_string()).unwrap();
+        assert!(store.load_suspension(&"r".to_string()).unwrap().is_none());
+
+        // Deleting an already-absent suspension is Ok (idempotent).
+        store.delete_suspension(&"r".to_string()).unwrap();
     }
 }

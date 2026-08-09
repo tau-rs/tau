@@ -371,6 +371,15 @@ pub trait SuspensionStore: Send + Sync {
         &self,
         run_id: &RunId,
     ) -> Result<Option<PipelineSuspension>, CheckpointError>;
+
+    /// Remove the suspension for `run_id`, if any. Idempotent: absent = `Ok(())`.
+    /// Called after a resumed run completes so a stale snapshot cannot be
+    /// re-resumed (which would re-run the post-suspend steps). Default no-op for
+    /// stores that do not need cleanup.
+    fn delete_suspension(&self, run_id: &RunId) -> Result<(), CheckpointError> {
+        let _ = run_id;
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
