@@ -9,6 +9,7 @@
 // defaults — see loadTauInWorker's doc comment in index.ts.
 
 /// <reference lib="webworker" />
+/// <reference path="./generated.d.ts" />
 
 import type { RunInput } from "./index";
 

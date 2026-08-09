@@ -49,6 +49,10 @@ pub fn render_embed_js() -> BTreeMap<PathBuf, String> {
         WORKER_TS.to_string(),
     );
     out.insert(
+        PathBuf::from("sdk/embed-js/src/generated.d.ts"),
+        GENERATED_DTS.to_string(),
+    );
+    out.insert(
         PathBuf::from("sdk/embed-js/vitest.config.ts"),
         VITEST_CONFIG_TS.to_string(),
     );
@@ -401,6 +405,8 @@ const INDEX_TS: &str = r#"// loadTau / loadTauInWorker (Phase 2 §5.2 "Public su
 // streaming RunEvents through `emit-event`. Validated end-to-end against
 // real jco output (EPIC 5.4 F1).
 
+/// <reference path="./generated.d.ts" />
+
 import { normalize } from "./normalize";
 import type { RunEvent } from "./RunEvent";
 
@@ -625,6 +631,7 @@ const WORKER_TS: &str = r#"// Web Worker host driven by loadTauInWorker (./index
 // defaults — see loadTauInWorker's doc comment in index.ts.
 
 /// <reference lib="webworker" />
+/// <reference path="./generated.d.ts" />
 
 import type { RunInput } from "./index";
 
@@ -693,6 +700,22 @@ self.addEventListener("message", async (ev: MessageEvent<RunMessage>) => {
     post({ kind: "done" });
   }
 });
+"#;
+
+const GENERATED_DTS: &str = r#"// Ambient type for jco's transpile output (src/generated/component.js) — a
+// gitignored build artifact that does not exist until `npm run build`.
+// Declaring it lets this package's .ts source (index.ts, worker.ts) and any
+// downstream consumer of the .ts entry (@tau/react, @tau/angular) typecheck
+// without the generated module present. index.ts/worker.ts cast the dynamic
+// import to their own `GeneratedModule` shape, so the loose typing here is
+// deliberate; when a real build is present, actual module resolution wins over
+// this wildcard and the cast still holds.
+declare module "*/generated/component.js" {
+  export function instantiate(
+    getCoreModule: undefined,
+    imports: { "tau:host/host": unknown },
+  ): unknown;
+}
 "#;
 
 const VITEST_CONFIG_TS: &str = r#"import { defineConfig } from "vitest/config";

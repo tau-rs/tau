@@ -14,6 +14,8 @@
 // streaming RunEvents through `emit-event`. Validated end-to-end against
 // real jco output (EPIC 5.4 F1).
 
+/// <reference path="./generated.d.ts" />
+
 import { normalize } from "./normalize";
 import type { RunEvent } from "./RunEvent";
 
