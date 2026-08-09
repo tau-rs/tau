@@ -4322,6 +4322,7 @@ dependencies = [
  "tau-ports",
  "tau-runtime-core",
  "tau-runtime-tokio",
+ "tau-sdk-codegen",
  "tau-ts-extract",
  "tau-wasm-host",
  "tau-workflow",
