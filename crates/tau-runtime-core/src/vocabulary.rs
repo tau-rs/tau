@@ -75,6 +75,10 @@ pub const EV_CAPABILITY_SATISFIES_CHECK: &str = "capability.satisfies_check";
 pub const EV_CAPABILITY_ALLOW: &str = "capability.allow";
 #[doc(hidden)]
 pub const EV_CAPABILITY_DENY: &str = "capability.deny";
+/// Event: a tool's network capability was delegated to the host/WASI
+/// egress boundary (wasm profile) instead of being checked in-guest.
+/// Emitted by the in-guest dispatch gate when `egress_host_mediated`.
+pub const EV_CAPABILITY_EGRESS_DELEGATED: &str = "capability.egress_delegated";
 
 // --- Tool events ---
 
@@ -183,6 +187,10 @@ pub const PAIRS: &[(&str, &str)] = &[
     ),
     ("EV_CAPABILITY_ALLOW", EV_CAPABILITY_ALLOW),
     ("EV_CAPABILITY_DENY", EV_CAPABILITY_DENY),
+    (
+        "EV_CAPABILITY_EGRESS_DELEGATED",
+        EV_CAPABILITY_EGRESS_DELEGATED,
+    ),
     ("EV_TOOL_INVOKE_FAILED", EV_TOOL_INVOKE_FAILED),
     ("EV_TOOL_SESSION_OPEN_FAILED", EV_TOOL_SESSION_OPEN_FAILED),
     ("EV_TOOL_SESSION_CLOSE_FAILED", EV_TOOL_SESSION_CLOSE_FAILED),
