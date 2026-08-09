@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["SkillFormat","SynthesizeError"],"fn":["detect_format","synthesize_manifest_from_skill_md"]};
