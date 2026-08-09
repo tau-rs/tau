@@ -163,6 +163,60 @@ pub fn check_capabilities_for_tool<'a>(
     }
 }
 
+/// EPIC 3.4: dispatch-site capability gate that delegates network egress
+/// to the host/WASI boundary when the shell enforces it there.
+///
+/// When `!egress_host_mediated` (native / OS-gated shells) this is exactly
+/// [`check_capabilities_for_tool`]. When `egress_host_mediated` (wasm: the
+/// host `EgressPolicy` is configured from the same allow-bounded caps and
+/// rejects at the socket), each `Capability::Network` in `required` is
+/// delegated — recorded via `capability.egress_delegated` and NOT checked
+/// in-guest — while every other capability is still checked. Returns the
+/// first missing non-delegated capability, or `None` if all are covered.
+pub fn check_capabilities_for_tool_delegating<'a>(
+    tool_name: &str,
+    granted: &[Capability],
+    required: &'a [Capability],
+    egress_host_mediated: bool,
+) -> Option<&'a Capability> {
+    use crate::vocabulary as v;
+    if !egress_host_mediated {
+        return check_capabilities_for_tool(tool_name, granted, required);
+    }
+    tracing::debug!(
+        name = v::EV_CAPABILITY_REQUIRED_LOADED,
+        required_count = required.len(),
+    );
+    tracing::debug!(
+        name = v::EV_CAPABILITY_GRANTED_LOADED,
+        granted_count = granted.len(),
+    );
+    for req in required {
+        if matches!(req, Capability::Network(_)) {
+            tracing::info!(
+                name = v::EV_CAPABILITY_EGRESS_DELEGATED,
+                tool_name = %tool_name,
+                delegated_kind = %capability_kind_str(req),
+            );
+            continue;
+        }
+        if !granted.iter().any(|g| capability_satisfies(g, req)) {
+            let kind = capability_kind_str(req);
+            tracing::warn!(
+                name = v::EV_CAPABILITY_DENY,
+                tool_name = %tool_name,
+                missing_kind = %kind,
+            );
+            return Some(req);
+        }
+    }
+    tracing::info!(
+        name = v::EV_CAPABILITY_ALLOW,
+        tool_name = %tool_name,
+    );
+    None
+}
+
 /// Top-level capability kind string used in
 /// `CapabilityDenial::required_kind` and the `capability.deny` event.
 pub fn capability_kind_str(cap: &Capability) -> String {
@@ -599,6 +653,60 @@ methods = ["GET"]
             alloc::string::ToString::to_string(&err).contains("wildcard"),
             "got: {err}"
         );
+    }
+
+    // -------------------- EPIC 3.4: host-mediated egress --------------------
+
+    #[test]
+    fn net_cap_beyond_grant_is_denied_when_not_host_mediated() {
+        let granted = [cap(r#"[cap]
+kind = "net.http"
+hosts = ["allowed.example"]
+methods = ["GET"]
+"#)];
+        let required = [cap(r#"[cap]
+kind = "net.http"
+hosts = ["blocked.invalid"]
+methods = ["GET"]
+"#)];
+        // flag off = native/OS-gated: in-guest check still enforces.
+        let missing = check_capabilities_for_tool_delegating("fetch", &granted, &required, false);
+        assert!(
+            missing.is_some(),
+            "native must still deny an out-of-grant net cap"
+        );
+    }
+
+    #[test]
+    fn net_cap_beyond_grant_is_delegated_when_host_mediated() {
+        let granted = [cap(r#"[cap]
+kind = "net.http"
+hosts = ["allowed.example"]
+methods = ["GET"]
+"#)];
+        let required = [cap(r#"[cap]
+kind = "net.http"
+hosts = ["blocked.invalid"]
+methods = ["GET"]
+"#)];
+        // flag on = wasm/host-mediated: net cap delegated, not checked in-guest.
+        let missing = check_capabilities_for_tool_delegating("fetch", &granted, &required, true);
+        assert!(
+            missing.is_none(),
+            "host-mediated egress must not deny in-guest"
+        );
+    }
+
+    #[test]
+    fn non_net_cap_beyond_grant_is_denied_even_when_host_mediated() {
+        let granted: [Capability; 0] = [];
+        let required = [cap(r#"[cap]
+kind = "fs.read"
+paths = ["/etc"]
+"#)];
+        // fs is not delegated: still checked in-guest regardless of the flag.
+        let missing = check_capabilities_for_tool_delegating("reader", &granted, &required, true);
+        assert!(missing.is_some(), "non-net caps are never delegated");
     }
 
     // -------------------- Process --------------------
