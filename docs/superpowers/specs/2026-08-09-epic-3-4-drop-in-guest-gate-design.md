@@ -200,7 +200,11 @@ Core proof is hermetic — no wasm build required.
   `capability.deny`**, the tool dispatches, and `capability.egress_delegated`
   is emitted. Flip the flag off → `capability.deny` (native-parity regression
   guard).
-- **guest:** `GuestDispatcher::egress_host_mediated()` returns `true`.
+- **guest:** `GuestDispatcher::egress_host_mediated()` returns `true`. Note:
+  `tau-wasm-guest` is wasm32-only (empty on the host target), so this is
+  compile-verified on `wasm32-wasip2`, not host-unit-tested; the flag's
+  behavioural effect is proven host-side by the runtime-core integration test
+  above. Explicit, accepted test gap for a wasm-only one-liner.
 - **vocabulary drift:** add `capability.egress_delegated` to
   `crates/tau-runtime-tokio/tests/vocabulary_drift.rs`.
 - **host enforcement unchanged:** `crates/tau-wasm-host/tests/wasi_http_enforcement.rs`
