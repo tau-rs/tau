@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["PINNED_CONTRACT_SCHEMA_VERSION"],"struct":["PinnedContract"]};

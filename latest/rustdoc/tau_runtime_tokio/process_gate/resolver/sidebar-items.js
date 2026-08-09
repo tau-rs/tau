@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["SandboxAdapter"],"fn":["instantiate_for_probe","resolve_adapter","resolve_adapter_forced","resolve_strict_for_validation"]};

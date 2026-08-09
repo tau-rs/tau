@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["SamplingContent"],"struct":["ModelHint","ModelPreferences","SamplingCreateMessageRequest","SamplingCreateMessageResponse","SamplingMessage"]};
