@@ -36,5 +36,8 @@ tau-native-tools = { path = "../tau-native-tools", default-features = false }
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+tau-ports = { workspace = true }
+
 [lints]
 workspace = true
