@@ -6,10 +6,10 @@
   "types": "src/index.ts",
   "main": "src/index.ts",
   "scripts": {
-    "build": "jco transpile $npm_config_wasm --out-dir src/generated"
+    "build": "jco transpile --instantiation async --name component --out-dir src/generated"
   },
   "devDependencies": {
-    "jco": "^1",
+    "@bytecodealliance/jco": "^1.27",
     "typescript": "^5"
   }
 }
