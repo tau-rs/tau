@@ -624,8 +624,17 @@ pub struct RunArgs {
     /// declare `[durable]`; the run rehydrates the latest checkpoint under
     /// `.tau/runs/<RUN_ID>/` and re-enters at the next turn, so already
     /// committed turns are not re-billed.
+    ///
+    /// On the pipeline path (EPIC 4.3), `--resume <RUN_ID>` combined with
+    /// `--signal <NAME>` resumes a pipeline paused at a top-level `Suspend`
+    /// step instead: the run rehydrates its `OutputStore` snapshot from
+    /// `.tau/runs/<RUN_ID>/suspend.json` and continues after the `Suspend`
+    /// step.
     #[arg(long, value_name = "RUN_ID")]
     pub resume: Option<String>,
+    /// Signal name to resume a suspended pipeline run (with `--resume`).
+    #[arg(long, value_name = "NAME")]
+    pub signal: Option<String>,
     /// Authorize running a project/bundle with no `[allow]` ceiling. On the
     /// dev path a missing `[allow]` is otherwise a hard error (GOV000); on the
     /// `--bundle` path this is required to run a bundle built `ungoverned`.

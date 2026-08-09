@@ -280,6 +280,24 @@ pub enum LowerError {
         /// The referenced step id that is missing or out of scope.
         output: String,
     },
+
+    /// A `Suspend` step appeared below the top-level pipeline slice (inside a
+    /// Branch arm, Loop body, or Parallel branch). Suspend is top-level only.
+    #[error("suspend step {step:?} is nested inside a control-flow block; suspend is only allowed at the top level of the pipeline (EPIC 4.3)")]
+    SuspendNotTopLevel {
+        /// The nested suspend step id.
+        step: String,
+    },
+
+    /// A step template references `${steps.<id>.output}` where `<id>` is a
+    /// `Suspend` step, which produces no output.
+    #[error("step {step:?} references {referenced:?}.output, but {referenced:?} is a suspend step and produces no output")]
+    SuspendHasNoOutput {
+        /// The referencing step.
+        step: String,
+        /// The suspend step id whose (nonexistent) output was referenced.
+        referenced: String,
+    },
 }
 
 #[cfg(test)]

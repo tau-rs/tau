@@ -9,6 +9,7 @@
 //! for the design and `docs/decisions/0023-multi-agent-orchestration.md`
 //! for the ADR.
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -326,6 +327,59 @@ pub trait CheckpointStore: Send + Sync {
     /// Load the latest (highest-`turn`) checkpoint for `run_id`, or `None`
     /// if the run has no committed checkpoint.
     fn load_latest(&self, run_id: &RunId) -> Result<Option<TurnCheckpoint>, CheckpointError>;
+}
+
+/// A resumable snapshot of a pipeline paused at a top-level `Suspend` step.
+///
+/// Distinct from [`TurnCheckpoint`] (agent-turn durability): this carries the
+/// pipeline `OutputStore` snapshot + the step cursor, not message history. Both
+/// share the `run_id` handle and the `.tau/runs/<run_id>/` directory. Resume is
+/// restore-and-continue: rehydrate `outputs`, jump to `step_cursor + 1`.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PipelineSuspension {
+    /// Run this suspension belongs to (the `--resume` key).
+    pub run_id: RunId,
+    /// Signal the resumer must match to continue (`--signal`).
+    pub resume_signal: String,
+    /// Index of the `Suspend` step in the top-level pipeline slice. Resume
+    /// re-enters at `step_cursor + 1`.
+    pub step_cursor: usize,
+    /// The `Suspend` step's id (for the "paused at <id>" human message).
+    pub step_id: String,
+    /// Canonical-IR SHA-256 of the module at pause time (`"sha256:" + hex`).
+    /// Resume rejects a project that changed since the pause.
+    pub ir_digest: String,
+    /// The `OutputStore` snapshot as of the pause (step id -> output value).
+    pub outputs: BTreeMap<String, serde_json::Value>,
+}
+
+/// Port: persists and loads a pipeline [`PipelineSuspension`] for HITL resume.
+///
+/// One live suspension per run (a second `Suspend` on resume overwrites it; a
+/// completed run removes it). Keyed by the same `RunId` as [`CheckpointStore`]
+/// and stored in the same run directory, so one `--resume <run_id>` handle
+/// covers both agent-turn and pipeline-step resume.
+pub trait SuspensionStore: Send + Sync {
+    /// Durably record the pause point. Overwrites any prior suspension for the
+    /// same `run_id`.
+    fn persist_suspension(&self, s: &PipelineSuspension) -> Result<(), CheckpointError>;
+
+    /// Load the current suspension for `run_id`, or `None` if the run is not
+    /// paused.
+    fn load_suspension(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Option<PipelineSuspension>, CheckpointError>;
+
+    /// Remove the suspension for `run_id`, if any. Idempotent: absent = `Ok(())`.
+    /// Called after a resumed run completes so a stale snapshot cannot be
+    /// re-resumed (which would re-run the post-suspend steps). Default no-op for
+    /// stores that do not need cleanup.
+    fn delete_suspension(&self, run_id: &RunId) -> Result<(), CheckpointError> {
+        let _ = run_id;
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]

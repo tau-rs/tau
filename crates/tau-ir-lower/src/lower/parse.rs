@@ -531,6 +531,9 @@ fn lower_step(s: &tau_pkg::project::PipelineStepConfig) -> PipelineStep {
         PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
         PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
         PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
+        PipelineRunRef::Suspend { resume_signal } => StepRun::Suspend {
+            resume_signal: resume_signal.clone(),
+        },
         PipelineRunRef::Branch {
             on,
             then,
@@ -729,6 +732,29 @@ deterministic = "parse_celsius"
             matches!(&tool.impl_, ToolImpl::Step { id } if id.0 == "normalize"),
             "expected ToolImpl::Step{{normalize}}; got {:?}",
             tool.impl_
+        );
+    }
+
+    #[test]
+    fn lowers_suspend_leaf() {
+        // EPIC 4.3: a top-level `run = "suspend:<signal>"` step lowers to
+        // `StepRun::Suspend { resume_signal }`.
+        let toml = r#"
+            [project]
+            name = "p"
+            [[pipeline.steps]]
+            id = "pause"
+            run = "suspend:go"
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
+
+        let pipeline = parsed.workflow.pipeline.expect("pipeline lowered");
+        assert_eq!(
+            pipeline.steps[0].run,
+            StepRun::Suspend {
+                resume_signal: "go".into()
+            }
         );
     }
 

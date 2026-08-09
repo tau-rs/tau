@@ -59,8 +59,9 @@ pub use llm::{
     ToolChoice, ToolSpec, ToolUse, ToolUseAccumulator,
 };
 pub use orchestration::{
-    AgentId, CheckpointError, CheckpointStore, RunBudget, RunId, RunSnapshot, RunStatus, Task,
-    TaskEvent, TaskId, TaskListFilter, TaskStatus, TraceEvent, TraceEventKind, TurnCheckpoint,
+    AgentId, CheckpointError, CheckpointStore, PipelineSuspension, RunBudget, RunId, RunSnapshot,
+    RunStatus, SuspensionStore, Task, TaskEvent, TaskId, TaskListFilter, TaskStatus, TraceEvent,
+    TraceEventKind, TurnCheckpoint,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use random::DeterministicRandom;

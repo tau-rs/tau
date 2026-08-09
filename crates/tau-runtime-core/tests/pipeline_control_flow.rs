@@ -41,6 +41,8 @@ use tau_ir::ids::{AgentId, PipelineStepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
 use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+use tau_ports::fixtures::MockSuspensionStore;
+use tau_ports::orchestration::SuspensionStore;
 use tau_ports::{
     CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError, LlmProviderMessage,
 };
@@ -48,7 +50,10 @@ use tau_ports::{
 use tau_runtime_core::builder::DynLlmBackend;
 use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::deterministic::DeterministicRegistry;
-use tau_runtime_core::interpreter::pipeline::run_pipeline;
+use tau_runtime_core::interpreter::output_store::OutputStore;
+use tau_runtime_core::interpreter::pipeline::{
+    run_pipeline, run_pipeline_suspendable, PipelineOutcome, ResumeState, SuspendConfig,
+};
 use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
 use tau_runtime_core::vocabulary::{FN_BUILTIN_EQUALS, FN_BUILTIN_MATCHES};
 
@@ -682,22 +687,285 @@ fn suspend_module() -> IrModule {
     }
 }
 
+/// `run_pipeline` (the non-suspend wrapper) has no `SuspensionStore` wired,
+/// so a `Suspend` step still surfaces as a named error rather than pausing —
+/// only `run_pipeline_suspendable` can pause.
 #[tokio::test]
-async fn suspend_returns_named_error() {
+async fn run_pipeline_errors_suspend_unsupported() {
     let module = suspend_module();
     let err = run_pipeline(Arc::new(module), "x".to_string(), dispatcher())
         .await
-        .expect_err("suspend aborts");
+        .expect_err("suspend aborts on the non-suspend wrapper");
     match err {
-        RuntimeError::SuspendNotImplemented {
+        RuntimeError::SuspendUnsupported {
             step,
             resume_signal,
         } => {
             assert_eq!(step, "pause");
             assert_eq!(resume_signal, "go");
         }
-        other => panic!("expected SuspendNotImplemented, got {other:?}"),
+        other => panic!("expected SuspendUnsupported, got {other:?}"),
     }
+}
+
+/// Build a `[agent:seed, suspend:pause]` module: `seed`'s output lands in
+/// the store, then the run pauses at `pause` (id "pause", resume_signal
+/// "go"). Proves a persisted suspension snapshot carries the pre-suspend
+/// step's output.
+fn seed_then_suspend_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("seed".into()), agent("seed"));
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("seed".into()),
+                run: StepRun::Agent(AgentId("seed".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("pause".into()),
+                run: StepRun::Suspend {
+                    resume_signal: "go".into(),
+                },
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// Suspending a pipeline persists a `PipelineSuspension` (with the
+/// pre-suspend step's output in the snapshot) and returns
+/// `PipelineOutcome::Suspended` rather than erroring.
+#[tokio::test]
+async fn suspend_persists_and_returns_suspended() {
+    let module = Arc::new(seed_then_suspend_module());
+    let store: Arc<dyn SuspensionStore> = Arc::new(MockSuspensionStore::new());
+    let outcome = run_pipeline_suspendable(
+        module.clone(),
+        "x".to_string(),
+        dispatcher(),
+        SuspendConfig {
+            run_id: "r1".into(),
+            store: store.clone(),
+        },
+        None,
+    )
+    .await
+    .expect("suspends cleanly");
+    match outcome {
+        PipelineOutcome::Suspended {
+            run_id,
+            resume_signal,
+            step_id,
+        } => {
+            assert_eq!(run_id, "r1");
+            assert_eq!(resume_signal, "go");
+            assert_eq!(step_id, "pause");
+        }
+        other => panic!("expected Suspended, got {other:?}"),
+    }
+    // The seed step's output was persisted in the snapshot.
+    let susp = store
+        .load_suspension(&"r1".to_string())
+        .unwrap()
+        .expect("suspension was persisted");
+    assert_eq!(susp.step_cursor, 1); // index of "pause"
+    assert!(susp.outputs.contains_key("seed"));
+}
+
+/// Construct an `Agent` node whose `model_ref.backend` equals `id` itself —
+/// `CountingDispatcher::llm_backend_for` counts calls keyed by its `backend`
+/// argument, so this makes the per-agent call counter queryable by agent id.
+fn counted_agent(id: &str) -> Agent {
+    let mut a = agent(id);
+    a.model_ref.backend = id.into();
+    a
+}
+
+/// Dispatcher wiring the echo backend and counting `llm_backend_for`
+/// invocations, keyed by the backend argument (which `counted_agent` sets
+/// equal to the agent id). Proves the resume path does not re-run the
+/// pre-suspend prefix: each agent step calls `llm_backend_for` exactly once
+/// per pipeline run it actually executes in.
+struct CountingDispatcher {
+    backend: Arc<dyn DynLlmBackend>,
+    calls: Mutex<BTreeMap<String, usize>>,
+}
+
+impl CountingDispatcher {
+    /// Number of times `llm_backend_for` was called with `agent_id` as the
+    /// backend argument (i.e. how many times that agent step ran).
+    fn calls(&self, agent_id: &str) -> usize {
+        self.calls
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl ToolDispatcher for CountingDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a tau_ir::ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "CountingDispatcher::invoke should never be called (no tools)".into(),
+            })
+        })
+    }
+
+    fn llm_backend_for(&self, backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        *self
+            .calls
+            .lock()
+            .unwrap()
+            .entry(backend.to_string())
+            .or_insert(0) += 1;
+        Ok(self.backend.clone())
+    }
+}
+
+fn resume_counting_dispatcher() -> Arc<CountingDispatcher> {
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    Arc::new(CountingDispatcher {
+        backend,
+        calls: Mutex::new(BTreeMap::new()),
+    })
+}
+
+/// Build a `[agent:seed, suspend:pause, agent:tail]` module: `seed` runs,
+/// the run pauses at `pause` (resume_signal "go"), and `tail` only runs
+/// once resumed. Both agents' `model_ref.backend` equal their pipeline-step
+/// id (via `counted_agent`) so `CountingDispatcher::calls` can query each
+/// step's invocation count independently.
+fn seed_suspend_tail_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("seed".into()), counted_agent("seed"));
+    agents.insert(AgentId("tail".into()), counted_agent("tail"));
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("seed".into()),
+                run: StepRun::Agent(AgentId("seed".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("pause".into()),
+                run: StepRun::Suspend {
+                    resume_signal: "go".into(),
+                },
+                input: String::new(),
+            },
+            PipelineStep {
+                id: PipelineStepId("tail".into()),
+                run: StepRun::Agent(AgentId("tail".into())),
+                input: "tail-input".into(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// Resuming a suspended pipeline restores the persisted `OutputStore`
+/// snapshot and continues at `step_cursor + 1` — the pre-suspend prefix
+/// (`seed`) must NOT re-run, and the post-suspend tail (`tail`) must run
+/// exactly once.
+#[tokio::test]
+async fn resume_continues_without_rerunning_prefix() {
+    let module = Arc::new(seed_suspend_tail_module());
+    let counting = resume_counting_dispatcher();
+    let store: Arc<dyn SuspensionStore> = Arc::new(MockSuspensionStore::new());
+
+    // Run 1: suspends after seed.
+    let _ = run_pipeline_suspendable(
+        module.clone(),
+        "x".into(),
+        counting.clone(),
+        SuspendConfig {
+            run_id: "r2".into(),
+            store: store.clone(),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let susp = store
+        .load_suspension(&"r2".to_string())
+        .unwrap()
+        .expect("suspension was persisted");
+
+    // Run 2: resume restores the store and continues at cursor+1.
+    let outcome = run_pipeline_suspendable(
+        module.clone(),
+        "x".into(),
+        counting.clone(),
+        SuspendConfig {
+            run_id: "r2".into(),
+            store: store.clone(),
+        },
+        Some(ResumeState {
+            store: OutputStore::restore(susp.outputs),
+            start_at: susp.step_cursor + 1,
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(outcome, PipelineOutcome::Completed(_)));
+    // seed ran exactly once (run 1 only); tail ran exactly once (run 2 only).
+    assert_eq!(
+        counting.calls("seed"),
+        1,
+        "prefix must NOT be re-run on resume"
+    );
+    assert_eq!(counting.calls("tail"), 1);
 }
 
 /// Build a `[agent:seed, branch:gate(inner), agent:tail]` module:

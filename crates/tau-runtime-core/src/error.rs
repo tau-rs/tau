@@ -363,13 +363,14 @@ pub enum RuntimeError {
         max_iters: u64,
     },
 
-    /// A `Suspend` block was reached. HITL checkpoint/resume lands in
-    /// EPIC 4.3; 4.2 aborts loudly rather than silently skip.
-    #[error("suspend {step} (signal {resume_signal}) is not yet implemented — lands in EPIC 4.3")]
-    SuspendNotImplemented {
+    /// A pipeline hit a `Suspend` step but the caller wired no `SuspensionStore`
+    /// (e.g. the bundle-run path in v1, or a context that cannot pause). Callers
+    /// that support HITL use `run_pipeline_suspendable`.
+    #[error("suspend {step} (signal {resume_signal}) requires a suspend-capable run path; this caller cannot pause")]
+    SuspendUnsupported {
         /// The pipeline-step id of the `Suspend` block.
         step: String,
-        /// The signal name a future 4.3 resume will wait for.
+        /// The signal name the resumer must supply.
         resume_signal: String,
     },
 }

@@ -29,6 +29,7 @@
 - [Use MCP servers](how-to/mcp-servers.md)
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Author a conditional branch](how-to/authoring-a-branch.md)
+- [Author a suspend step](how-to/authoring-suspend.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
 - [Quarantine a flaky test](how-to/quarantine-flaky-tests.md)

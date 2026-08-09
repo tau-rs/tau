@@ -33,8 +33,70 @@ use crate::vocabulary::{
 /// analogue). Bounded cooperative fork-join — see ADR-0059.
 const PARALLEL_CAP: usize = 8;
 
-/// Drive an `IrModule`'s pipeline to completion, returning all step
-/// outputs.
+/// Terminal outcome of driving a pipeline via [`run_pipeline_suspendable`].
+#[derive(Debug)]
+pub enum PipelineOutcome {
+    /// Ran to the end; carries the accumulated outputs.
+    Completed(OutputStore),
+    /// Paused at a top-level `Suspend`. State was persisted via the
+    /// `SuspensionStore` passed in `SuspendConfig` before returning.
+    Suspended {
+        /// The run id the suspension was persisted under.
+        run_id: String,
+        /// The signal name a `--resume --signal <name>` must supply.
+        resume_signal: String,
+        /// The pipeline-step id of the `Suspend` block that paused.
+        step_id: String,
+    },
+}
+
+/// How a `run_steps` slice terminated. Only the top-level slice (the one
+/// `run_pipeline_suspendable` invokes directly, with `suspend: Some(_)`) can
+/// terminate `Suspended`; nested slices (`Branch`/`Loop`/`Parallel` bodies)
+/// always pass `suspend: None` and must complete or error.
+enum StepsFlow {
+    /// The slice ran every step.
+    Completed,
+    /// The slice paused at a `Suspend` step.
+    Suspended {
+        /// The pipeline-step id of the `Suspend` block.
+        step_id: String,
+        /// The signal name the resumer must supply.
+        resume_signal: String,
+    },
+}
+
+/// Durable-suspend wiring for the top-level pipeline driver. Carries the
+/// run id (the suspension key + the `--resume` handle) and the store a
+/// `Suspend` step's snapshot is persisted to.
+pub struct SuspendConfig {
+    /// Run id used as the suspension key + `--resume` handle.
+    pub run_id: String,
+    /// Where a pause is durably persisted.
+    pub store: Arc<dyn tau_ports::orchestration::SuspensionStore>,
+}
+
+/// Rehydrated state for a resumed run: the `OutputStore` snapshot restored
+/// from the prior suspension, and the top-level step index to resume at
+/// (`step_cursor + 1`, so the `Suspend` step itself is not re-run).
+pub struct ResumeState {
+    /// The `OutputStore` snapshot restored from the suspension.
+    pub store: OutputStore,
+    /// Top-level step index to resume at (`step_cursor + 1`).
+    pub start_at: usize,
+}
+
+/// Internal: passed down to `run_steps` for the top-level slice only. A
+/// nested slice (Branch/Loop/Parallel body) receives `None`, which is how
+/// `run_steps` tells a real `Suspend` step from one that is out of place.
+struct SuspendCtx<'a> {
+    run_id: &'a str,
+    ir_digest: &'a str,
+    store: &'a dyn tau_ports::orchestration::SuspensionStore,
+}
+
+/// Drive an `IrModule`'s pipeline, pausing durably at a top-level `Suspend`
+/// step rather than erroring.
 ///
 /// The module's `workflow.pipeline` must be `Some` — callers branch on
 /// that before dispatching here (see `tau run`). Each step renders its
@@ -43,21 +105,33 @@ const PARALLEL_CAP: usize = 8;
 /// later steps can reference it via `${steps.<id>.output}`.
 ///
 /// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`],
-/// [`StepRun::Check`], [`StepRun::Branch`], [`StepRun::Loop`], and
-/// [`StepRun::Parallel`] steps are all supported. A `Check` step evaluates a
-/// postcondition (goal or deliverable) against the accumulated outputs. A
-/// `Branch` evaluates its condition and recurses into the chosen arm
-/// (`then`/`otherwise`) against the same shared store; it stores no output
-/// of its own. A `Loop` runs its `body` up to `max_iters` times, checking
-/// `until` after each pass and threading a failed verdict's rationale into
-/// the next pass as feedback; exhausting `max_iters` without `until` holding
-/// is a hard error ([`RuntimeError::LoopExhausted`]). Like `Branch`, a
-/// `Loop` stores no output of its own. A `Parallel` forks each branch over
-/// an isolated read-only snapshot of the store (branches cannot see each
-/// other's outputs), drives them with bounded concurrency
+/// [`StepRun::Check`], [`StepRun::Branch`], [`StepRun::Loop`],
+/// [`StepRun::Parallel`], and [`StepRun::Suspend`] steps are all supported. A
+/// `Check` step evaluates a postcondition (goal or deliverable) against the
+/// accumulated outputs. A `Branch` evaluates its condition and recurses into
+/// the chosen arm (`then`/`otherwise`) against the same shared store; it
+/// stores no output of its own. A `Loop` runs its `body` up to `max_iters`
+/// times, checking `until` after each pass and threading a failed verdict's
+/// rationale into the next pass as feedback; exhausting `max_iters` without
+/// `until` holding is a hard error ([`RuntimeError::LoopExhausted`]). Like
+/// `Branch`, a `Loop` stores no output of its own. A `Parallel` forks each
+/// branch over an isolated read-only snapshot of the store (branches cannot
+/// see each other's outputs), drives them with bounded concurrency
 /// (`PARALLEL_CAP` in flight at once), and merges each branch's produced
 /// outputs back into the shared store in index order once all branches
-/// complete; like `Branch` and `Loop`, it stores no output of its own.
+/// complete; like `Branch` and `Loop`, it stores no output of its own. A
+/// top-level `Suspend` step pauses the run: computes the module's
+/// canonical-IR digest once (for drift-detection on a future resume), seeds
+/// the run's `OutputStore` and start index either fresh (`resume: None`) or
+/// from a prior pause (`resume: Some(ResumeState)` — restore-and-continue:
+/// the store is rehydrated from the persisted snapshot and the walk resumes
+/// at `step_cursor + 1`, so the prefix up to and including the `Suspend`
+/// step is never re-run), and — on hitting `Suspend` — durably persists a
+/// [`tau_ports::orchestration::PipelineSuspension`] via the `SuspensionStore`
+/// in `SuspendConfig` and returns [`PipelineOutcome::Suspended`] rather than
+/// erroring. Only a top-level `Suspend` may pause; one nested inside a
+/// `Branch`/`Loop`/`Parallel` body is a build-time typecheck error (an
+/// [`RuntimeError::Internal`] here would mean that check regressed).
 ///
 /// # Failure handling: abort, or rewind-to-gate retry
 ///
@@ -74,11 +148,13 @@ const PARALLEL_CAP: usize = 8;
 /// gate + check id keeps concurrently-failing checks distinct (a pass clears
 /// only its own check's entry; a fresh failure updates only its own) and
 /// confines each check's feedback to its own gate step.
-pub async fn run_pipeline<D>(
+pub async fn run_pipeline_suspendable<D>(
     module: Arc<IrModule>,
     input: String,
     dispatcher: Arc<D>,
-) -> Result<OutputStore, RuntimeError>
+    suspend: SuspendConfig,
+    resume: Option<ResumeState>,
+) -> Result<PipelineOutcome, RuntimeError>
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
@@ -90,17 +166,100 @@ where
             message: "run_pipeline called on a module without a pipeline".to_string(),
         })?;
 
-    let mut store = OutputStore::new();
-    run_steps(
+    // Canonical-IR digest, computed once, for drift-detection on resume.
+    let ir_digest = {
+        let bytes = tau_ir::to_canonical_bytes(&module);
+        tau_ir::asset::asset_hash(&bytes)
+    };
+
+    let (mut store, start_at) = match resume {
+        Some(r) => (r.store, r.start_at),
+        None => (OutputStore::new(), 0),
+    };
+
+    let ctx = SuspendCtx {
+        run_id: &suspend.run_id,
+        ir_digest: &ir_digest,
+        store: suspend.store.as_ref(),
+    };
+    let flow = run_steps(
         &module,
         &pipeline.steps,
         &input,
         &mut store,
         &dispatcher,
         None,
+        Some(&ctx),
+        start_at,
     )
     .await?;
-    Ok(store)
+    Ok(match flow {
+        StepsFlow::Completed => PipelineOutcome::Completed(store),
+        StepsFlow::Suspended {
+            step_id,
+            resume_signal,
+        } => PipelineOutcome::Suspended {
+            run_id: suspend.run_id,
+            resume_signal,
+            step_id,
+        },
+    })
+}
+
+/// Non-suspend convenience wrapper over [`run_pipeline_suspendable`] for
+/// callers that cannot pause (e.g. the bundle-run path in v1). Wires a
+/// no-op `SuspensionStore` and runs fresh (never resumes); a pipeline that
+/// hits a `Suspend` step errors [`RuntimeError::SuspendUnsupported`] instead
+/// of pausing. Callers that support HITL suspend/resume use
+/// `run_pipeline_suspendable` directly.
+pub async fn run_pipeline<D>(
+    module: Arc<IrModule>,
+    input: String,
+    dispatcher: Arc<D>,
+) -> Result<OutputStore, RuntimeError>
+where
+    D: ToolDispatcher + Send + Sync + 'static,
+{
+    struct NoopSuspensions;
+    impl tau_ports::orchestration::SuspensionStore for NoopSuspensions {
+        fn persist_suspension(
+            &self,
+            _: &tau_ports::orchestration::PipelineSuspension,
+        ) -> Result<(), tau_ports::orchestration::CheckpointError> {
+            Ok(())
+        }
+        fn load_suspension(
+            &self,
+            _: &tau_ports::orchestration::RunId,
+        ) -> Result<
+            Option<tau_ports::orchestration::PipelineSuspension>,
+            tau_ports::orchestration::CheckpointError,
+        > {
+            Ok(None)
+        }
+    }
+    let outcome = run_pipeline_suspendable(
+        module,
+        input,
+        dispatcher,
+        SuspendConfig {
+            run_id: String::new(),
+            store: Arc::new(NoopSuspensions),
+        },
+        None,
+    )
+    .await?;
+    match outcome {
+        PipelineOutcome::Completed(store) => Ok(store),
+        PipelineOutcome::Suspended {
+            step_id,
+            resume_signal,
+            ..
+        } => Err(RuntimeError::SuspendUnsupported {
+            step: step_id,
+            resume_signal,
+        }),
+    }
 }
 
 /// Execute a slice of pipeline steps against a shared [`OutputStore`].
@@ -121,7 +280,9 @@ async fn run_steps<D>(
     store: &mut OutputStore,
     dispatcher: &Arc<D>,
     initial_feedback: Option<String>,
-) -> Result<(), RuntimeError>
+    suspend: Option<&SuspendCtx<'_>>,
+    start_at: usize,
+) -> Result<StepsFlow, RuntimeError>
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
@@ -149,8 +310,11 @@ where
         .collect();
 
     // Index loop (not `for`) so a failed retryable check can rewind `i` to a
-    // gate step. On the happy path `i` only ever advances by one.
-    let mut i = 0;
+    // gate step. On the happy path `i` only ever advances by one. `start_at`
+    // is nonzero only on a resumed top-level slice (skips the already-run
+    // prefix up to and including the prior `Suspend` step); every recursive
+    // call passes `0`.
+    let mut i = start_at;
     while i < steps.len() {
         let step = &steps[i];
 
@@ -302,7 +466,19 @@ where
                 reg.as_ref(),
             )?;
             let arm = if verdict.met { then } else { otherwise };
-            Box::pin(run_steps(module, arm, input, store, dispatcher, None)).await?;
+            match Box::pin(run_steps(
+                module, arm, input, store, dispatcher, None, None, 0,
+            ))
+            .await?
+            {
+                StepsFlow::Completed => {}
+                StepsFlow::Suspended { .. } => {
+                    return Err(RuntimeError::Internal {
+                        message: "suspend escaped a nested slice (typecheck should reject)"
+                            .to_string(),
+                    })
+                }
+            }
             i += 1;
             continue;
         }
@@ -327,15 +503,26 @@ where
             let mut loop_feedback: Option<String> = None;
             let mut converged = false;
             for _iter in 0..*max_iters {
-                Box::pin(run_steps(
+                match Box::pin(run_steps(
                     module,
                     body,
                     input,
                     store,
                     dispatcher,
                     loop_feedback.take(),
+                    None,
+                    0,
                 ))
-                .await?;
+                .await?
+                {
+                    StepsFlow::Completed => {}
+                    StepsFlow::Suspended { .. } => {
+                        return Err(RuntimeError::Internal {
+                            message: "suspend escaped a nested slice (typecheck should reject)"
+                                .to_string(),
+                        })
+                    }
+                }
                 let reg =
                     dispatcher
                         .deterministic_registry()
@@ -366,14 +553,40 @@ where
         }
 
         // `Suspend` blocks have their own early dispatch, mirroring `Branch`,
-        // `Loop`, and `Parallel` above. HITL checkpoint/resume lands in EPIC
-        // 4.3; 4.2 aborts loudly with a named error rather than silently
-        // skip the block or fall through to a generic `Internal` error.
+        // `Loop`, and `Parallel` above. Only the top-level slice carries a
+        // `SuspendCtx` (nested Branch/Loop/Parallel bodies pass `None` —
+        // typecheck rejects a `Suspend` nested inside those, so `None` here
+        // is an invariant violation, not a normal case). With a ctx: persist
+        // the pause (run id, resume signal, step cursor, IR digest, and a
+        // snapshot of the store so far) and unwind to the caller as
+        // `StepsFlow::Suspended` rather than erroring.
         if let StepRun::Suspend { resume_signal } = &step.run {
-            return Err(RuntimeError::SuspendNotImplemented {
-                step: step.id.0.clone(),
-                resume_signal: resume_signal.clone(),
-            });
+            match suspend {
+                Some(ctx) => {
+                    ctx.store
+                        .persist_suspension(&tau_ports::orchestration::PipelineSuspension {
+                            run_id: ctx.run_id.to_string(),
+                            resume_signal: resume_signal.clone(),
+                            step_cursor: i,
+                            step_id: step.id.0.clone(),
+                            ir_digest: ctx.ir_digest.to_string(),
+                            outputs: store.snapshot(),
+                        })
+                        .map_err(|e| RuntimeError::Internal {
+                            message: format!("persist suspension: {e}"),
+                        })?;
+                    return Ok(StepsFlow::Suspended {
+                        step_id: step.id.0.clone(),
+                        resume_signal: resume_signal.clone(),
+                    });
+                }
+                None => {
+                    return Err(RuntimeError::SuspendUnsupported {
+                        step: step.id.0.clone(),
+                        resume_signal: resume_signal.clone(),
+                    })
+                }
+            }
         }
 
         // `Parallel` blocks have their own early dispatch, mirroring `Branch`
@@ -394,7 +607,26 @@ where
                 let input = input.to_string();
                 let mut snap = store.clone();
                 async move {
-                    run_steps(&module, branch, &input, &mut snap, &dispatcher, None).await?;
+                    match run_steps(
+                        &module,
+                        branch,
+                        &input,
+                        &mut snap,
+                        &dispatcher,
+                        None,
+                        None,
+                        0,
+                    )
+                    .await?
+                    {
+                        StepsFlow::Completed => {}
+                        StepsFlow::Suspended { .. } => {
+                            return Err(RuntimeError::Internal {
+                                message: "suspend escaped a nested slice (typecheck should reject)"
+                                    .to_string(),
+                            })
+                        }
+                    }
                     Ok::<(usize, OutputStore), RuntimeError>((idx, snap))
                 }
             });
@@ -527,8 +759,9 @@ where
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
             // `Branch`, `Parallel`, `Loop`, and `Suspend` are all
             // early-dispatched above (each either stores no output of its
-            // own, or — for `Suspend` — aborts before reaching here), so
-            // none of these ever reach this `match`.
+            // own, or — for `Suspend` — returns `StepsFlow::Suspended`/errors
+            // before reaching here), so none of these ever reach this
+            // `match`.
             StepRun::Branch { .. }
             | StepRun::Parallel { .. }
             | StepRun::Loop { .. }
@@ -543,7 +776,7 @@ where
         i += 1;
     }
 
-    Ok(())
+    Ok(StepsFlow::Completed)
 }
 
 /// Turn a rendered template string into the `Value` a tool/deterministic

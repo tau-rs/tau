@@ -95,6 +95,46 @@ impl CheckpointStore for FileCheckpointStore {
     }
 }
 
+impl tau_ports::orchestration::SuspensionStore for FileCheckpointStore {
+    fn persist_suspension(
+        &self,
+        s: &tau_ports::orchestration::PipelineSuspension,
+    ) -> Result<(), CheckpointError> {
+        let dir = self.run_dir(&s.run_id);
+        std::fs::create_dir_all(&dir).map_err(io_err)?;
+        let json = serde_json::to_vec_pretty(s)
+            .map_err(|e| CheckpointError::Serialization(e.to_string()))?;
+        let final_path = dir.join("suspend.json");
+        let tmp_path = dir.join("suspend.json.tmp");
+        std::fs::write(&tmp_path, &json).map_err(io_err)?;
+        std::fs::rename(&tmp_path, &final_path).map_err(io_err)?;
+        Ok(())
+    }
+
+    fn load_suspension(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Option<tau_ports::orchestration::PipelineSuspension>, CheckpointError> {
+        let path = self.run_dir(run_id).join("suspend.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&path).map_err(io_err)?;
+        let s = serde_json::from_slice(&bytes)
+            .map_err(|e| CheckpointError::Serialization(e.to_string()))?;
+        Ok(Some(s))
+    }
+
+    fn delete_suspension(&self, run_id: &RunId) -> Result<(), CheckpointError> {
+        let path = self.run_dir(run_id).join("suspend.json");
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()), // idempotent
+            Err(e) => Err(io_err(e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +209,69 @@ mod tests {
                 .turn,
             1
         );
+    }
+
+    #[test]
+    fn suspension_round_trips_on_disk() {
+        use std::collections::BTreeMap;
+        use tau_ports::orchestration::{PipelineSuspension, SuspensionStore};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileCheckpointStore::new(tmp.path());
+        assert!(store
+            .load_suspension(&"run-1".to_string())
+            .unwrap()
+            .is_none());
+
+        let mut outputs = BTreeMap::new();
+        outputs.insert("seed".to_string(), serde_json::json!("GO"));
+        let s = PipelineSuspension {
+            run_id: "run-1".into(),
+            resume_signal: "approved".into(),
+            step_cursor: 1,
+            step_id: "pause".into(),
+            ir_digest: "sha256:abc".into(),
+            outputs,
+        };
+        store.persist_suspension(&s).unwrap();
+
+        let got = store
+            .load_suspension(&"run-1".to_string())
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, s);
+        assert!(tmp.path().join(".tau/runs/run-1/suspend.json").exists());
+    }
+
+    #[test]
+    fn delete_suspension_removes_file_and_is_idempotent() {
+        use std::collections::BTreeMap;
+        use tau_ports::orchestration::{PipelineSuspension, SuspensionStore};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileCheckpointStore::new(tmp.path());
+
+        // Deleting a suspension that was never persisted is Ok (idempotent).
+        store.delete_suspension(&"run-1".to_string()).unwrap();
+
+        let s = PipelineSuspension {
+            run_id: "run-1".into(),
+            resume_signal: "approved".into(),
+            step_cursor: 1,
+            step_id: "pause".into(),
+            ir_digest: "sha256:abc".into(),
+            outputs: BTreeMap::new(),
+        };
+        store.persist_suspension(&s).unwrap();
+        let path = tmp.path().join(".tau/runs/run-1/suspend.json");
+        assert!(path.exists());
+
+        store.delete_suspension(&"run-1".to_string()).unwrap();
+        assert!(!path.exists());
+        assert!(store
+            .load_suspension(&"run-1".to_string())
+            .unwrap()
+            .is_none());
+
+        // Deleting again (already gone) is still Ok.
+        store.delete_suspension(&"run-1".to_string()).unwrap();
     }
 }
