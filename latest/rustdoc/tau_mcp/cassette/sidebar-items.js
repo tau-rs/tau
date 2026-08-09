@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["message","recorder","replayer","transport"]};
