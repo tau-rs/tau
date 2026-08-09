@@ -101,6 +101,12 @@ Copy-paste template, fill in `<role>`, `<crate>`, and the actual cargo args:
 
     timeout 300 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/agent-<role> cargo test -p <crate>
 
+# ISSUE RULES — read before starting work on a GitHub issue
+
+Before starting work on a GitHub issue, run `gh pr list --search '<issue#> in:title'
+--state all` and check the issue state (`gh issue view <#>`). Two sessions duplicated
+#530 (PRs #549 and #550) on 2026-08-09 because neither checked for an existing PR.
+
 # AGENT PUSH RULES — read before running `git push`
 
 The lefthook deep gate is **opt-in**, not an automatic pre-push hook
