@@ -78,10 +78,16 @@ fn build_wasm_then_run_returns_typed_stream() {
     let component = build_trivial_component();
     let response =
         r#"{"text":"done","tool_uses":[],"stop_reason":"EndTurn","usage":null}"#.to_string();
-    let out = tau_wasm_host::run_component(&component, "hi", vec![response]).expect("runs");
+    let (_out, state) =
+        tau_wasm_host::run_component(&component, "hi", vec![response]).expect("runs");
 
-    let events: Vec<tau_runtime_core::stream::RunEvent> =
-        serde_json::from_str(&out).expect("typed stream");
+    // Events now stream via `emit-event`, one JSON-encoded RunEvent per entry,
+    // rather than being buffered into the `run` return payload.
+    let events: Vec<tau_runtime_core::stream::RunEvent> = state
+        .emitted
+        .iter()
+        .map(|e| serde_json::from_str(e).expect("each emitted entry is a RunEvent"))
+        .collect();
     assert!(
         matches!(
             events.last(),
