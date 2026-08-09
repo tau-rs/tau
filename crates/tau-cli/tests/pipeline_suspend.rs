@@ -303,6 +303,118 @@ fn run_resume_completion_clears_suspend_json_and_blocks_re_resume() {
 }
 
 #[test]
+fn resume_without_signal_is_rejected() {
+    // `--resume <id>` with no `--signal` is a CLI misuse: the resume arm in
+    // `try_run_pipeline` returns before loading any suspension, so the dummy
+    // run id never has to exist. Guards the `(Some(_), None)` match arm.
+    let dir = setup_suspend_project();
+
+    let output = run_tau(&dir, "seed input", &["--resume", "nonexistent-run-id"]);
+
+    assert!(
+        !output.status.success(),
+        "--resume without --signal must fail (non-zero exit); stdout={}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--resume requires --signal"),
+        "stderr should explain that --resume needs --signal; got: {stderr}"
+    );
+}
+
+#[test]
+fn signal_without_resume_is_rejected() {
+    // `--signal <name>` with no `--resume` is the mirror-image misuse: the
+    // `(None, Some(_))` match arm rejects it before minting a fresh run id,
+    // so no pipeline actually executes.
+    let dir = setup_suspend_project();
+
+    let output = run_tau(&dir, "seed input", &["--signal", "approved"]);
+
+    assert!(
+        !output.status.success(),
+        "--signal without --resume must fail (non-zero exit); stdout={}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--signal is only valid with --resume"),
+        "stderr should explain that --signal needs --resume; got: {stderr}"
+    );
+}
+
+#[test]
+fn resume_after_project_changed_is_rejected_by_digest_drift_guard() {
+    // Suspend a run, then edit the project's `tau.toml` so the re-lowered IR
+    // no longer matches the pause-time digest. Resuming with the CORRECT
+    // signal must still fail on the drift guard (`try_run_pipeline`
+    // ~run.rs:569-575) rather than silently resuming a stale plan.
+    let dir = setup_suspend_project();
+
+    let suspend_output = run_tau(&dir, "seed input", &[]);
+    assert_eq!(suspend_output.status.code(), Some(3));
+    let suspend_stdout = String::from_utf8(suspend_output.stdout).unwrap();
+    let run_id = outcome_line(&suspend_stdout)["run_id"]
+        .as_str()
+        .expect("run_id must be a string")
+        .to_string();
+
+    // Rewrite tau.toml: the `seed` step's input changes from `${input}` to a
+    // literal, which alters the canonical IR bytes and hence its digest. The
+    // `finish` step and every other id stay identical so the ONLY difference
+    // the guard can trip on is the drifted digest.
+    let drifted_toml = r#"[project]
+name = "suspend-demo"
+
+[models]
+default = { backend = "echo-llm", model = "claude-haiku-4-5" }
+
+[agents.seed]
+display_name = "Seed"
+package      = "echo-llm@^0.1"
+model        = "default"
+
+[agents.seed.config]
+canned_text = "SEED-OUTPUT"
+
+[pipeline]
+
+[[pipeline.steps]]
+id = "seed"
+run = "agent:seed"
+input = "drifted-after-suspend"
+
+[[pipeline.steps]]
+id = "pause"
+run = "suspend:approved"
+
+[[pipeline.steps]]
+id = "finish"
+run = "agent:seed"
+input = "${steps.seed.output}"
+"#;
+    std::fs::write(dir.path().join("tau.toml"), drifted_toml).unwrap();
+
+    let resume_output = run_tau(
+        &dir,
+        "resume input",
+        &["--resume", &run_id, "--signal", "approved"],
+    );
+
+    assert!(
+        !resume_output.status.success(),
+        "resuming after the project changed must fail (non-zero exit); stdout={}",
+        String::from_utf8_lossy(&resume_output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(
+        stderr.contains("project changed since the run was suspended"),
+        "stderr should explain the IR-digest drift; got: {stderr}"
+    );
+}
+
+#[test]
 fn run_resume_with_mismatched_signal_fails() {
     let dir = setup_suspend_project();
 

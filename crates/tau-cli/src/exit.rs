@@ -58,6 +58,12 @@ impl From<ExitCode> for std::process::ExitCode {
             ExitCode::Success => Self::SUCCESS,
             ExitCode::AgentFailed => Self::from(1),
             ExitCode::Error => Self::from(2),
+            // Code 3 is shared with spec §C.3's `BundleVerifyFailed` (routed
+            // via `bvf.code`, not this enum). The overload is unambiguous:
+            // the two never co-occur in one invocation — a `--bundle` run
+            // that hits a `Suspend` step errors out at exit 2 before any
+            // suspension is emitted, so exit 3 means "verify failed" for a
+            // `--bundle` run and "suspended" for a plain `tau run`.
             ExitCode::Suspended => Self::from(3),
         }
     }
