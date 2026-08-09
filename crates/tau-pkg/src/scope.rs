@@ -387,9 +387,10 @@ impl Scope {
     /// 1. `$TAU_HOME` if set and non-empty.
     /// 2. `$XDG_DATA_HOME/tau` if `$XDG_DATA_HOME` is set and non-empty.
     /// 3. `$HOME/.tau`.
+    /// 4. `$USERPROFILE/.tau`.
     ///
     /// Creates the directory and a default `config.toml` if they are missing.
-    /// Returns `ScopeError::HomeNotFound` if none of the three env vars are set.
+    /// Returns `ScopeError::HomeNotFound` if none of the four env vars are set.
     ///
     /// # Example
     ///
@@ -606,12 +607,15 @@ fn walk_up_for_dot_tau(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
 /// 1. `tau_home` if set and non-empty.
 /// 2. `<xdg_data_home>/tau` if `xdg_data_home` is set and non-empty.
 /// 3. `<home>/.tau`.
+/// 4. `<user_profile>/.tau` — the Windows home fallback. Windows runners
+///    leave `$HOME` unset but expose `%USERPROFILE%`. See #530.
 ///
-/// Returns [`ScopeError::HomeNotFound`] if all three are missing/empty.
+/// Returns [`ScopeError::HomeNotFound`] if all four are missing/empty.
 fn resolve_global_path_from(
     tau_home: Option<std::ffi::OsString>,
     xdg_data_home: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
 ) -> Result<PathBuf, ScopeError> {
     fn non_empty(s: Option<std::ffi::OsString>) -> Option<std::ffi::OsString> {
         s.filter(|v| !v.is_empty())
@@ -626,6 +630,9 @@ fn resolve_global_path_from(
     if let Some(home) = non_empty(home) {
         return Ok(PathBuf::from(home).join(".tau"));
     }
+    if let Some(user_profile) = non_empty(user_profile) {
+        return Ok(PathBuf::from(user_profile).join(".tau"));
+    }
     Err(ScopeError::HomeNotFound)
 }
 
@@ -635,11 +642,13 @@ fn resolve_global_path_from(
 /// 1. `$TAU_HOME`
 /// 2. `$XDG_DATA_HOME/tau`
 /// 3. `$HOME/.tau`
+/// 4. `$USERPROFILE/.tau`
 fn resolve_global_path() -> Result<PathBuf, ScopeError> {
     resolve_global_path_from(
         env::var_os("TAU_HOME"),
         env::var_os("XDG_DATA_HOME"),
         env::var_os("HOME"),
+        env::var_os("USERPROFILE"),
     )
 }
 
@@ -753,6 +762,7 @@ mod tests {
             Some(OsString::from("/x/tau-home")),
             Some(OsString::from("/x/xdg")),
             Some(OsString::from("/x/home")),
+            Some(OsString::from("/x/userprofile")),
         )
         .unwrap();
         assert_eq!(p, std::path::Path::new("/x/tau-home"));
@@ -765,6 +775,7 @@ mod tests {
             None,
             Some(OsString::from("/x/xdg")),
             Some(OsString::from("/x/home")),
+            Some(OsString::from("/x/userprofile")),
         )
         .unwrap();
         assert_eq!(p, std::path::Path::new("/x/xdg/tau"));
@@ -773,7 +784,8 @@ mod tests {
     #[test]
     fn resolve_global_path_from_falls_back_to_home() {
         use std::ffi::OsString;
-        let p = resolve_global_path_from(None, None, Some(OsString::from("/x/home"))).unwrap();
+        let p =
+            resolve_global_path_from(None, None, Some(OsString::from("/x/home")), None).unwrap();
         assert_eq!(p, std::path::Path::new("/x/home/.tau"));
     }
 
@@ -784,6 +796,7 @@ mod tests {
             Some(OsString::from("")),
             Some(OsString::from("")),
             Some(OsString::from("/x/home")),
+            Some(OsString::from("")),
         )
         .unwrap();
         assert_eq!(p, std::path::Path::new("/x/home/.tau"));
@@ -791,8 +804,30 @@ mod tests {
 
     #[test]
     fn resolve_global_path_from_returns_home_not_found_when_all_missing() {
-        let err = resolve_global_path_from(None, None, None).unwrap_err();
+        let err = resolve_global_path_from(None, None, None, None).unwrap_err();
         assert!(matches!(err, ScopeError::HomeNotFound));
+    }
+
+    #[test]
+    fn resolve_global_path_from_falls_back_to_userprofile() {
+        use std::ffi::OsString;
+        // Windows-runner shape: no TAU_HOME/XDG/HOME, only %USERPROFILE%. See #530.
+        let p = resolve_global_path_from(None, None, None, Some(OsString::from("/x/userprofile")))
+            .unwrap();
+        assert_eq!(p, std::path::Path::new("/x/userprofile/.tau"));
+    }
+
+    #[test]
+    fn resolve_global_path_from_prefers_home_over_userprofile() {
+        use std::ffi::OsString;
+        let p = resolve_global_path_from(
+            None,
+            None,
+            Some(OsString::from("/x/home")),
+            Some(OsString::from("/x/userprofile")),
+        )
+        .unwrap();
+        assert_eq!(p, std::path::Path::new("/x/home/.tau"));
     }
 
     #[test]
