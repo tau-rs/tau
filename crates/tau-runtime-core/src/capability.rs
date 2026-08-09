@@ -128,7 +128,17 @@ pub fn check_capabilities_for_tool<'a>(
         name = v::EV_CAPABILITY_GRANTED_LOADED,
         granted_count = granted.len(),
     );
-    let missing = check_capabilities(granted, required);
+    // Story 3.4: on wasm, Disposition::Wasi caps are enforced by the generated
+    // WIT world (3.2) + host WasiCtx (3.3), not in-guest — skip them here.
+    // `cfg!` (not `#[cfg]`) so native compiles to a constant `false` and the
+    // filter is a provable no-op off-wasm. The pure `check_capabilities`
+    // (root-spawn, tool-spec filtering, AttenuatedDispatcher) is intentionally
+    // NOT changed — only this dispatch-site wrapper drops the Wasi gate.
+    let is_wasm = cfg!(target_arch = "wasm32");
+    let missing = required
+        .iter()
+        .filter(|req| in_guest_gated_on(req, is_wasm))
+        .find(|req| !granted.iter().any(|g| capability_satisfies(g, req)));
     tracing::debug!(
         name = v::EV_CAPABILITY_SATISFIES_CHECK,
         satisfied = missing.is_none(),
@@ -901,6 +911,48 @@ methods = ["GET"]
         assert!(in_guest_gated_on(&spawn, false));
         assert!(in_guest_gated_on(&plan, true));
         assert!(in_guest_gated_on(&plan, false));
+    }
+
+    // -------------- check_capabilities_for_tool wasm skip (story 3.4) ---------
+
+    #[test]
+    fn for_tool_native_denies_ungranted_wasi_cap() {
+        // Native (this test binary) keeps the full gate: net.http with an EMPTY
+        // grant is denied. cfg!(wasm32) is false here.
+        let granted: Vec<Capability> = alloc::vec![];
+        let required = alloc::vec![cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.example.com\"]\nmethods = [\"GET\"]\n"
+        )];
+        assert!(check_capabilities_for_tool("http_get", &granted, &required).is_some());
+    }
+
+    #[test]
+    fn for_tool_still_denies_ungranted_in_guest_cap() {
+        // agent.spawn is InGuest → gated on every target, empty grant → denied.
+        let granted: Vec<Capability> = alloc::vec![];
+        let required = alloc::vec![cap(
+            "[cap]\nkind = \"agent.spawn\"\nallowed_kinds = [\"worker\"]\n"
+        )];
+        assert!(check_capabilities_for_tool("spawn_worker", &granted, &required).is_some());
+    }
+
+    #[test]
+    fn wasm_arm_skips_wasi_but_denies_in_guest() {
+        // Simulate the wrapper's wasm-arm scan: filter by in_guest_gated_on(_, true)
+        // then run the same unsatisfied predicate the wrapper uses. Empty grant.
+        let granted: Vec<Capability> = alloc::vec![];
+        let net = cap("[cap]\nkind = \"net.http\"\nhosts = [\"h\"]\nmethods = [\"GET\"]\n");
+        let spawn = cap("[cap]\nkind = \"agent.spawn\"\nallowed_kinds = [\"w\"]\n");
+        let required = alloc::vec![net, spawn];
+        let missing = required
+            .iter()
+            .filter(|req| in_guest_gated_on(req, true))
+            .find(|req| !granted.iter().any(|g| capability_satisfies(g, req)));
+        // net.http filtered out (ABI/host owns it); agent.spawn remains and is missing.
+        match missing {
+            Some(Capability::Agent(_)) => {}
+            other => panic!("expected agent.spawn as first missing on wasm arm, got {other:?}"),
+        }
     }
 }
 
