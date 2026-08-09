@@ -38,7 +38,7 @@ fn project_needing_process_exec_is_refused() {
 #[test]
 fn trivial_project_generates_host_only_world() {
     let world = wasm_world_for_project(&fixture("trivial")).expect("trivial world");
-    assert!(world.contains("import host;"));
+    assert!(world.contains("import tau:host/host@0.1.0;"));
     assert!(
         !world.contains("wasi:"),
         "trivial should grant no wasi surface:\n{world}"
