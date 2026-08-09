@@ -24,10 +24,6 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/e2e-handshake-only")
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
-)]
 #[test]
 fn ready_on_stderr_marker() {
     e2e_common::ensure_home_env();
@@ -46,6 +42,9 @@ fn ready_on_stderr_marker() {
     let stderr = child.stderr.take().unwrap();
     let reader = BufReader::new(stderr);
     let mut saw_ready = false;
+    // Retain the stderr lines we read so a failure shows *why* serve died
+    // (e.g. a sandbox-adapter resolution error) instead of a bare miss.
+    let mut collected: Vec<String> = Vec::new();
 
     // Read up to 50 lines from stderr — the ready signal should appear
     // very early (before any protocol traffic). Use map_while to bail
@@ -56,11 +55,14 @@ fn ready_on_stderr_marker() {
             saw_ready = true;
             break;
         }
+        collected.push(line);
     }
 
     assert!(
         saw_ready,
-        "did not observe 'tau-serve ready' on stderr within first 50 lines"
+        "did not observe 'tau-serve ready' on stderr within first 50 lines.\n\
+         --- tau serve child stderr ---\n{}\n--- end child stderr ---",
+        collected.join("\n")
     );
 
     // Close stdin → child exits cleanly (EOF triggers shutdown).
