@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["AgentIdError","PackageKindError","PackageManifestError","PackageNameError","PackageSourceError","PluginKindError","PortKindError"]};

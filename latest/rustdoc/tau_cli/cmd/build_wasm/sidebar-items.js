@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["lower_to_wasm_ir","run","wasm_governance_gate","wasm_world_for_project","world_from_module"]};
