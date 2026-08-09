@@ -4824,6 +4824,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "serde_json",
+ "tau-domain",
  "tau-ir",
  "tau-ir-lower",
  "tau-pkg",

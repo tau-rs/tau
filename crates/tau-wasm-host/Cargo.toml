@@ -11,11 +11,13 @@ authors.workspace      = true
 [dependencies]
 wasmtime   = { workspace = true }
 tau-ports  = { workspace = true, features = ["serde"] }
+tau-domain = { workspace = true }
 serde_json = { workspace = true }
 anyhow     = { workspace = true }
 thiserror  = { workspace = true }
 
 [dev-dependencies]
+tau-domain       = { workspace = true, features = ["test-fixtures"] }
 tau-ir           = { workspace = true }
 tau-ir-lower     = { workspace = true }
 tau-pkg          = { workspace = true }

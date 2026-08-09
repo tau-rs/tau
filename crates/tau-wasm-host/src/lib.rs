@@ -27,6 +27,9 @@ use tau_ports::llm::CompletionResponse;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 
+mod wasi;
+pub use wasi::{preopen_dirs, HttpHostGate};
+
 wasmtime::component::bindgen!({
     path: "../../wit/tau-host.wit",
     world: "runner",
