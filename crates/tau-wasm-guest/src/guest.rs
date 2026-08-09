@@ -10,15 +10,21 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 
 wit_bindgen::generate!({
-    world: "runner",
-    path: "../../wit",
+    world: "tau:generated/runner",
+    path: "wit-gen",
+    generate_all,
 });
 
 /// Re-export the WIT-generated host imports so sibling modules (host_ports.rs)
 /// can access them without knowing the exact generated module path.
 /// The path `tau::host::host` is what wit_bindgen generates for `import host`
 /// in the `tau:host` package's `runner` world (identical to the wasmtime host
-/// side which uses `tau::host::host`).
+/// side which uses `tau::host::host`). `wit-gen/` is assembled by `build.rs`
+/// from the vendored WASI deps, the frozen `tau:host` contract, and the
+/// capability-derived (or baseline) `tau:generated` world; `generate_all` is
+/// required once the world imports WASI interfaces (`wit_bindgen` otherwise
+/// errors with "missing `with` mapping" for interfaces reachable both
+/// directly and transitively, e.g. `wasi:io/poll`).
 pub(crate) mod wit_host {
     pub(crate) use super::tau::host::host::*;
 }

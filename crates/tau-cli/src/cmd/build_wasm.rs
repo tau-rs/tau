@@ -160,10 +160,11 @@ fn workspace_root() -> PathBuf {
 /// Shell `cargo build -p tau-wasm-guest` with the baked IR and return the
 /// produced `.wasm` bytes.
 ///
-/// The IR path is injected via `TAU_IR_BYTES` env var. A dedicated
-/// `CARGO_TARGET_DIR` (`<workspace>/target/tau-build-wasm`) ensures this
-/// build never contends with the main agent's target dir (CLAUDE.md Rule 1).
-fn build_guest_with_ir(ir_path: &Path) -> Result<Vec<u8>> {
+/// The IR path is injected via `TAU_IR_BYTES` env var and the cap-derived WIT
+/// world via `TAU_WORLD_WIT`. A dedicated `CARGO_TARGET_DIR`
+/// (`<workspace>/target/tau-build-wasm`) ensures this build never contends
+/// with the main agent's target dir (CLAUDE.md Rule 1).
+fn build_guest_with_ir(ir_path: &Path, world_path: &Path) -> Result<Vec<u8>> {
     let root = workspace_root();
     let target_dir = root.join("target/tau-build-wasm");
 
@@ -181,6 +182,7 @@ fn build_guest_with_ir(ir_path: &Path) -> Result<Vec<u8>> {
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TARGET_DIR", &target_dir)
         .env("TAU_IR_BYTES", ir_path)
+        .env("TAU_WORLD_WIT", world_path)
         .output()
         .context("failed to spawn cargo for the guest build")?;
 
@@ -253,8 +255,14 @@ pub async fn run(args: &BuildWasmArgs, output: &mut Output) -> Result<()> {
     let ir_file = tempfile::NamedTempFile::new().context("creating IR scratch file")?;
     std::fs::write(ir_file.path(), &bytes).context("writing IR scratch bytes")?;
 
-    let wasm = build_guest_with_ir(ir_file.path())?;
+    // Bake the cap-derived world into a tempfile the guest build reads via
+    // TAU_WORLD_WIT. Must also stay alive until after the cargo call returns.
+    let world_file = tempfile::NamedTempFile::new().context("creating world scratch file")?;
+    std::fs::write(world_file.path(), world.as_bytes()).context("writing world scratch bytes")?;
+
+    let wasm = build_guest_with_ir(ir_file.path(), world_file.path())?;
     drop(ir_file); // bytes are consumed; safe to remove the scratch file now.
+    drop(world_file);
 
     let out_path = args
         .output
