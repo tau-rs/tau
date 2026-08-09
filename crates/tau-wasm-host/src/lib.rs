@@ -26,6 +26,7 @@ use std::path::Path;
 
 use tau_ports::llm::CompletionResponse;
 use tau_ports::target::wasi_map::PreopenAccess;
+use tau_ports::target::{resolve_wasi_config, WasiConfiguration};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{
@@ -41,7 +42,7 @@ use wasmtime_wasi_http::p2::{
 use wasmtime_wasi_http::WasiHttpCtx;
 
 mod wasi;
-pub use wasi::{wasi_grants_from_caps, HostAccess, PreopenGrant, WasiGrants};
+pub use wasi::EgressPolicy;
 
 wasmtime::component::bindgen!({
     path: "../../wit/tau-host.wit",
@@ -76,17 +77,10 @@ pub enum WasmHostError {
     /// fails before instantiation rather than mid-run.
     #[error("invalid canned completion response JSON: {0}")]
     InvalidResponse(#[source] serde_json::Error),
-    /// A capability maps to `Disposition::Unsupported` on wasm (should have
-    /// been rejected at `tau build wasm`; belt-and-suspenders at host time).
-    #[error("capability unsupported on wasm: {reason}")]
-    UnsupportedCap { reason: String },
-    /// Building the WASI context (e.g. a preopen dir failed to open).
+    /// Building the WASI context (e.g. a preopen dir failed to open, or a
+    /// resolved preopen would escape the sandbox root).
     #[error("failed to configure WASI context: {0}")]
     WasiConfig(#[source] anyhow::Error),
-    /// An fs capability path is not absolute or contains a `..` segment, so it
-    /// could resolve outside the sandbox root. Rejected before any preopen.
-    #[error("unsafe capability path (not absolute or contains `..`): {path}")]
-    UnsafeCapPath { path: String },
 }
 
 /// Store data backing the three `tau:host/host` imports with deterministic
@@ -106,16 +100,17 @@ struct HostState {
     /// component's allow-bounded caps (EPIC 3.3).
     wasi: WasiCtx,
     /// wasi:http resource bookkeeping (EPIC 3.3); the egress *decision* lives
-    /// in `host_access`, not here.
+    /// in `egress`, not here.
     http: WasiHttpCtx,
-    /// Host-authority allow policy folded from the component's allow-bounded
-    /// caps (EPIC 3.3). Consulted by the `WasiHttpHooks::send_request`
-    /// override below before any outgoing request is sent.
-    host_access: HostAccess,
+    /// Network egress policy folded from the component's allow-bounded caps
+    /// (EPIC 3.3), sourced from the canonical `resolve_wasi_config`. Consulted
+    /// by the `WasiHttpHooks::send_request` override below before any outgoing
+    /// request is sent.
+    egress: EgressPolicy,
 }
 
 impl HostState {
-    fn new(responses: Vec<String>, wasi: WasiCtx, host_access: HostAccess) -> Self {
+    fn new(responses: Vec<String>, wasi: WasiCtx, egress: EgressPolicy) -> Self {
         Self {
             responses: responses.into(),
             clock_millis: 0,
@@ -123,7 +118,7 @@ impl HostState {
             table: ResourceTable::new(),
             wasi,
             http: WasiHttpCtx::new(),
-            host_access,
+            egress,
         }
     }
 }
@@ -166,19 +161,19 @@ impl WasiHttpView for HostState {
         WasiHttpCtxView {
             ctx: &mut self.http,
             table: &mut self.table,
-            // `host_access` doubles as the `WasiHttpHooks` impl (below) that
-            // gates every outgoing request; disjoint field borrow from
-            // `http`/`table` above so no aliasing conflict.
-            hooks: &mut self.host_access,
+            // `egress` doubles as the `WasiHttpHooks` impl (below) that gates
+            // every outgoing request; disjoint field borrow from `http`/`table`
+            // above so no aliasing conflict.
+            hooks: &mut self.egress,
         }
     }
 }
 
 /// The egress gate: every `wasi:http` outgoing request is routed through
 /// `WasiHttpHooks::send_request` before wasmtime opens a socket. An authority
-/// that the allow-bounded caps didn't authorize is rejected here — the guest
-/// never gets a connection to it.
-impl WasiHttpHooks for HostAccess {
+/// or HTTP method that the allow-bounded caps didn't authorize is rejected
+/// here — the guest never gets a connection to it.
+impl WasiHttpHooks for EgressPolicy {
     fn send_request(
         &mut self,
         request: hyper::Request<HyperOutgoingBody>,
@@ -189,28 +184,44 @@ impl WasiHttpHooks for HostAccess {
             .authority()
             .map(|a| a.as_str().to_string())
             .unwrap_or_default();
-        if !self.permits(&authority) {
+        let method = request.method().as_str();
+        if !self.permits(&authority, method) {
             return Err(WasiHttpErrorCode::HttpRequestDenied.into());
         }
         Ok(default_send_request(request, config))
     }
 }
 
-/// Build a `WasiCtx` that grants exactly `grants.preopens` and denies all
-/// network egress by default (network is gated separately by the wasi-http
-/// filter in a later task; raw `wasi:sockets` stays default-deny).
-fn wasi_ctx_from_grants(grants: &WasiGrants) -> Result<WasiCtx, WasmHostError> {
+/// Build a `WasiCtx` that preopens exactly `cfg.preopens` (each resolved
+/// under `sandbox_root`) and denies all network egress by default (wasi:http
+/// egress is gated separately by the [`EgressPolicy`] filter; raw
+/// `wasi:sockets` stays default-deny).
+///
+/// `resolve_wasi_config` already dropped any non-G2 / `..`-bearing path, so
+/// every `host_dir` is absolute and escape-free; the `starts_with` check is
+/// defense-in-depth against a future resolver regression.
+fn wasi_ctx_from_config(
+    cfg: &WasiConfiguration,
+    sandbox_root: &Path,
+) -> Result<WasiCtx, WasmHostError> {
     let mut builder = WasiCtxBuilder::new();
-    for p in &grants.preopens {
-        // Ensure the host dir exists so preopen succeeds; the caller's
-        // sandbox_root scopes it.
-        std::fs::create_dir_all(&p.host_path).map_err(|e| WasmHostError::WasiConfig(e.into()))?;
+    for p in &cfg.preopens {
+        // Map the guest-visible absolute `host_dir` under the sandbox root.
+        let host_path = sandbox_root.join(p.host_dir.trim_start_matches('/'));
+        if !host_path.starts_with(sandbox_root) {
+            return Err(WasmHostError::WasiConfig(anyhow::anyhow!(
+                "resolved preopen escapes sandbox root: {}",
+                p.host_dir
+            )));
+        }
+        // Ensure the host dir exists so preopen succeeds.
+        std::fs::create_dir_all(&host_path).map_err(|e| WasmHostError::WasiConfig(e.into()))?;
         let (dir_perms, file_perms) = match p.access {
             PreopenAccess::ReadOnly => (DirPerms::READ, FilePerms::READ),
             PreopenAccess::ReadWrite => (DirPerms::all(), FilePerms::all()),
         };
         builder
-            .preopened_dir(&p.host_path, &p.guest_path, dir_perms, file_perms)
+            .preopened_dir(&host_path, &p.host_dir, dir_perms, file_perms)
             .map_err(|e| WasmHostError::WasiConfig(e.into()))?;
     }
     Ok(builder.build())
@@ -251,9 +262,11 @@ pub fn run_component_with_caps(
         serde_json::from_str::<CompletionResponse>(resp).map_err(WasmHostError::InvalidResponse)?;
     }
 
-    let grants = wasi_grants_from_caps(caps, sandbox_root)?;
-    let wasi = wasi_ctx_from_grants(&grants)?;
-    let host_access = grants.hosts.clone();
+    // Consume the canonical no_std cap→config fold (tau-ports, PR #533); the
+    // host only translates its output into a wasmtime `WasiCtx` + egress gate.
+    let cfg = resolve_wasi_config(caps);
+    let wasi = wasi_ctx_from_config(&cfg, sandbox_root)?;
+    let egress = EgressPolicy::from_config(&cfg);
 
     let config = determinism_config().map_err(|e| WasmHostError::Instantiate(e.into()))?;
     let engine = Engine::new(&config).map_err(|e| WasmHostError::Instantiate(e.into()))?;
@@ -267,7 +280,7 @@ pub fn run_component_with_caps(
     Runner::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |state| state)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
-    let mut store = Store::new(&engine, HostState::new(llm_responses, wasi, host_access));
+    let mut store = Store::new(&engine, HostState::new(llm_responses, wasi, egress));
     let runner = Runner::instantiate(&mut store, &component, &linker)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
@@ -302,9 +315,16 @@ mod tests {
         WasiCtxBuilder::new().build()
     }
 
+    /// The deny-all egress policy the no-caps path produces (empty cap set →
+    /// `resolve_wasi_config` yields `Exact({})` = deny all egress).
+    fn empty_egress() -> EgressPolicy {
+        let no_caps: [tau_domain::Capability; 0] = [];
+        EgressPolicy::from_config(&resolve_wasi_config(&no_caps))
+    }
+
     #[test]
     fn clock_advances_by_fixed_step() {
-        let mut state = HostState::new(vec![], empty_wasi_ctx(), HostAccess::DenyAll);
+        let mut state = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
         assert_eq!(state.now_millis(), 0);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS * 2);
@@ -312,8 +332,8 @@ mod tests {
 
     #[test]
     fn prng_is_deterministic_and_seeded() {
-        let mut a = HostState::new(vec![], empty_wasi_ctx(), HostAccess::DenyAll);
-        let mut b = HostState::new(vec![], empty_wasi_ctx(), HostAccess::DenyAll);
+        let mut a = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
+        let mut b = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
         let seq_a: Vec<u64> = (0..4).map(|_| a.next_u64()).collect();
         let seq_b: Vec<u64> = (0..4).map(|_| b.next_u64()).collect();
         assert_eq!(seq_a, seq_b, "same seed must yield same sequence");
@@ -325,7 +345,7 @@ mod tests {
         let mut state = HostState::new(
             vec!["first".to_string(), "second".to_string()],
             empty_wasi_ctx(),
-            HostAccess::DenyAll,
+            empty_egress(),
         );
         assert_eq!(state.complete(String::new()), Ok("first".to_string()));
         assert_eq!(state.complete(String::new()), Ok("second".to_string()));
@@ -353,7 +373,7 @@ mod tests {
     fn run_component_with_caps_no_caps_matches_run_component() {
         // Wiring smoke test: an empty caps slice must reach the same
         // validation-then-load failure as the no-caps `run_component`
-        // wrapper — proves `wasi_grants_from_caps` + `wasi_ctx_from_grants`
+        // wrapper — proves `resolve_wasi_config` + `wasi_ctx_from_config`
         // build a clean, no-preopen `WasiCtx` and don't blow up on an empty
         // sandbox_root.
         let dir = tempfile::tempdir().expect("tempdir");
