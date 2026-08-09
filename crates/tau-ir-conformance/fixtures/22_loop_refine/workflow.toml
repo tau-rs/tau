@@ -1,0 +1,31 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-22"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.drafter]
+display_name = "Drafter"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+# A bounded loop-with-feedback: run `drafter` each pass, then check the exit
+# condition `until` (a deterministic predicate over the body output). The first
+# pass emits a draft that does NOT match `APPROVED` (until fails, feedback
+# threads into the next pass); the second pass emits `APPROVED` and the loop
+# converges — well inside the mandatory `max_iters` bound. Proves the full
+# author→lower→typecheck→interpret path for a Loop, including multi-pass
+# convergence and the mandatory iteration cap.
+[[pipeline.steps]]
+id        = "refine"
+until     = { evaluates = "steps.drafter.output", check = "matches", pattern = "APPROVED" }
+max_iters = 5
+
+  [[pipeline.steps.body]]
+  id    = "drafter"
+  run   = "agent:drafter"
+  input = "${input}"

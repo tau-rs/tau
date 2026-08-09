@@ -123,6 +123,11 @@ fn install_version_from_multi_repo(
 ///   - stdout contains "Updated update-latest-tool: 1.0.0 → 1.1.0".
 ///   - new active version = 1.1.0 (verified via `tau list --global`).
 ///   - old v1.0.0 directory still present (no --prune).
+// Real install → Strict sandbox adapter, absent on Windows (Phase-2 stub).
+#[cfg_attr(
+    windows,
+    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
+)]
 #[test]
 fn cmd_update_to_latest_tag() {
     if !git_available() {
@@ -166,6 +171,10 @@ fn cmd_update_to_latest_tag() {
 ///   - exit 0.
 ///   - stdout contains "Updated update-pinned-tool".
 ///   - new active version = 1.2.0.
+#[cfg_attr(
+    windows,
+    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
+)]
 #[test]
 fn cmd_update_to_specific_version() {
     if !git_available() {
@@ -200,6 +209,10 @@ fn cmd_update_to_specific_version() {
 ///   - stdout contains "Pruned: 1.0.0".
 ///   - old v1.0.0 directory is gone.
 ///   - lockfile no longer contains v1.0.0 installed_versions entry.
+#[cfg_attr(
+    windows,
+    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
+)]
 #[test]
 fn cmd_update_with_prune_removes_old() {
     if !git_available() {
@@ -248,6 +261,10 @@ fn cmd_update_with_prune_removes_old() {
 /// Assert:
 ///   - exit 2 (UpdateError from library maps to ExitCode::Error).
 ///   - stderr contains an error mentioning the version or "not found" / "resolv".
+#[cfg_attr(
+    windows,
+    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
+)]
 #[test]
 fn cmd_update_unreachable_version_exits_2() {
     if !git_available() {

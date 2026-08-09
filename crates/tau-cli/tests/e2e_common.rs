@@ -24,3 +24,29 @@ pub fn ensure_home_env() {
         std::env::set_var("TAU_HOME", dir);
     });
 }
+
+/// Kill the serve child and drain whatever it wrote to stderr, formatted for
+/// a panic message.
+///
+/// When `tau serve` dies during startup (e.g. it can't resolve a sandbox
+/// adapter), the parent test otherwise only sees a missing ready-marker or an
+/// empty stdout line — the child's actual error is discarded. This surfaces
+/// that error so CI shows *why* serve failed instead of a bare assertion.
+///
+/// Reads `child.stderr` if it is still owned by the `Child` (the smoke /
+/// streaming tests take only `stdout` into a reader, leaving `stderr`
+/// available here). Tests that consume `stderr` themselves collect their own
+/// lines instead and pass them to a panic directly.
+pub fn drain_child_stderr(child: &mut std::process::Child) -> String {
+    use std::io::Read;
+    let _ = child.kill();
+    let mut err = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = e.read_to_string(&mut err);
+    }
+    if err.trim().is_empty() {
+        "\n--- tau serve child stderr: (empty or already consumed) ---".to_string()
+    } else {
+        format!("\n--- tau serve child stderr ---\n{err}\n--- end child stderr ---")
+    }
+}

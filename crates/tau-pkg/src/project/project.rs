@@ -302,15 +302,84 @@ pub struct UncheckedPipeline {
 }
 
 /// Raw `[[pipeline.steps]]` entry (pre-validation).
+///
+/// A step is exactly one of four **forms**, enforced by `validate_pipeline`:
+/// - **leaf**: `run = "<kind>:<id>"`.
+/// - **branch**: `branch = { <condition> }` + nested `then`/`otherwise` arrays.
+/// - **parallel**: `[[…branches]]` wrapper tables, each a nested `steps` list.
+/// - **loop**: `until = { <condition> }` + `max_iters` + a nested `body` array.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncheckedPipelineStep {
     /// Step handle.
     pub id: String,
-    /// `"agent:<id>"` | `"tool:<id>"` | `"deterministic:<id>"`.
-    pub run: String,
+    /// Leaf form: `"agent:<id>"` | `"tool:<id>"` | `"deterministic:<id>"` | `"check:<id>"`.
+    #[serde(default)]
+    pub run: Option<String>,
     /// Input template; defaults to `"${input}"` when omitted.
     pub input: Option<String>,
+    /// Branch form: the condition (mirrors the `[goals.*]` field-set).
+    #[serde(default)]
+    pub branch: Option<UncheckedCondition>,
+    /// Branch form: steps run when the condition holds (recursive).
+    #[serde(default)]
+    pub then: Vec<UncheckedPipelineStep>,
+    /// Branch form: steps run when it does not hold (recursive; may be empty).
+    #[serde(default)]
+    pub otherwise: Vec<UncheckedPipelineStep>,
+    /// Parallel form: independent step sequences run concurrently, then joined.
+    #[serde(default)]
+    pub branches: Vec<UncheckedParallelBranch>,
+    /// Loop form: exit condition, checked after each `body` pass (mirrors the
+    /// `[goals.*]` field-set, same as `branch`).
+    #[serde(default)]
+    pub until: Option<UncheckedCondition>,
+    /// Loop form: mandatory iteration bound (must be present and `> 0`).
+    #[serde(default)]
+    pub max_iters: Option<u64>,
+    /// Loop form: steps run each iteration (recursive).
+    #[serde(default)]
+    pub body: Vec<UncheckedPipelineStep>,
+}
+
+/// Raw parallel branch (pre-validation) — one independent step sequence.
+///
+/// A wrapper table (rather than a bare array-of-arrays) so branches nest
+/// arbitrarily: a branch step may itself be a branch/parallel/loop. Mirrors
+/// the `[[pipeline.steps.then]]` recursive-table idiom.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedParallelBranch {
+    /// The steps in this branch (recursive; must be non-empty).
+    #[serde(default)]
+    pub steps: Vec<UncheckedPipelineStep>,
+}
+
+/// Raw branch condition — the exact field-set of `[goals.*]` minus the
+/// table-key id. Reuses the goal predicate menu verbatim (no new grammar).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedCondition {
+    /// Read locus: a filesystem path or `steps.<id>.output`.
+    pub evaluates: String,
+    /// Menu predicate name (mutually exclusive with `fn`).
+    #[serde(default)]
+    pub check: Option<String>,
+    /// Regex for `check = "matches"`.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Expected value for `check = "equals"`.
+    #[serde(default)]
+    pub equals: Option<String>,
+    /// Threshold for `check = "min_count"`.
+    #[serde(default)]
+    pub min_count: Option<u64>,
+    /// JSON schema for `check = "schema_valid"`.
+    #[serde(default)]
+    pub schema: Option<serde_json::Value>,
+    /// Native-fn escape hatch (`<crate>::<path>`), mutually exclusive with `check`.
+    #[serde(default, rename = "fn")]
+    pub r#fn: Option<String>,
 }
 
 /// Validated pipeline.
@@ -344,6 +413,38 @@ pub enum PipelineRunRef {
     Deterministic(String),
     /// `check:<id>` — explicitly position a postcondition check.
     Check(String),
+    /// A conditional branch: run `then` if `on` holds, else `otherwise`.
+    Branch {
+        /// Branch condition (locus + predicate).
+        on: ConditionConfig,
+        /// Steps run when `on` holds.
+        then: Vec<PipelineStepConfig>,
+        /// Steps run when `on` does not hold (may be empty).
+        otherwise: Vec<PipelineStepConfig>,
+    },
+    /// A parallel fan-out/join: run each branch concurrently, then join.
+    Parallel {
+        /// Independent step sequences run in parallel (each non-empty).
+        branches: Vec<Vec<PipelineStepConfig>>,
+    },
+    /// A bounded loop: run `body` until `until` holds or `max_iters` is hit.
+    Loop {
+        /// Steps run each iteration.
+        body: Vec<PipelineStepConfig>,
+        /// Exit condition, checked after each `body` pass.
+        until: ConditionConfig,
+        /// Mandatory iteration cap (`> 0`).
+        max_iters: u64,
+    },
+}
+
+/// A validated branch condition — mirrors `tau_ir::check::Condition`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConditionConfig {
+    /// Read locus.
+    pub evaluates: LocusConfig,
+    /// Predicate applied to the locus.
+    pub predicate: GoalPredicateConfig,
 }
 
 // ----- IR lowering structs (β.2.2) -----
@@ -1849,28 +1950,169 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
                 message: format!("step id {:?} declared more than once", s.id),
             });
         }
-        let run = match s.run.split_once(':') {
+        steps.push(validate_pipeline_step(s)?);
+    }
+    Ok(PipelineConfig { steps })
+}
+
+/// Validate one step — exactly one of four forms (leaf/branch/parallel/loop).
+/// Nested arm/branch/body steps recurse through this same function. Tree-wide
+/// id uniqueness and output-scope integrity are enforced later by the IR
+/// typecheck (`check_pipeline` / `validate_step_run`), which already walks
+/// nested blocks.
+fn validate_pipeline_step(
+    s: &UncheckedPipelineStep,
+) -> Result<PipelineStepConfig, ProjectConfigError> {
+    let has_run = s.run.is_some();
+    let has_branch = s.branch.is_some();
+    let has_parallel = !s.branches.is_empty();
+    let has_loop = s.until.is_some() || s.max_iters.is_some() || !s.body.is_empty();
+    let has_arms = !s.then.is_empty() || !s.otherwise.is_empty();
+
+    let form_count = [has_run, has_branch, has_parallel, has_loop]
+        .iter()
+        .filter(|active| **active)
+        .count();
+    let bad = |message: String| ProjectConfigError::PipelineValidation {
+        id: s.id.clone(),
+        message,
+    };
+    if form_count == 0 {
+        return Err(bad(
+            "a step must set exactly one of `run`, `branch`, `branches`, or a loop \
+             (`until`/`max_iters`/`body`)"
+                .into(),
+        ));
+    }
+    if form_count > 1 {
+        return Err(bad(
+            "a step sets more than one form; exactly one of `run`, `branch`, `branches`, \
+             or a loop is allowed"
+                .into(),
+        ));
+    }
+    // `then`/`otherwise` belong only to a branch; reject them on any other form.
+    if has_arms && !has_branch {
+        return Err(bad(
+            "`then`/`otherwise` are only valid on a `branch` step".into()
+        ));
+    }
+
+    let run = if has_run {
+        let run_str = s.run.as_deref().unwrap();
+        match run_str.split_once(':') {
             Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
             Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
             Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
             Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
             _ => {
-                return Err(ProjectConfigError::PipelineValidation {
-                    id: s.id.clone(),
-                    message: format!(
-                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {:?}",
-                    s.run
-                ),
-                })
+                return Err(bad(format!(
+                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {run_str:?}"
+                )))
             }
-        };
-        steps.push(PipelineStepConfig {
-            id: s.id.clone(),
-            run,
-            input: s.input.clone().unwrap_or_else(|| "${input}".to_string()),
-        });
-    }
-    Ok(PipelineConfig { steps })
+        }
+    } else if has_branch {
+        let on = validate_condition(&s.id, "branch", s.branch.as_ref().unwrap())?;
+        let then = s
+            .then
+            .iter()
+            .map(validate_pipeline_step)
+            .collect::<Result<Vec<_>, _>>()?;
+        let otherwise = s
+            .otherwise
+            .iter()
+            .map(validate_pipeline_step)
+            .collect::<Result<Vec<_>, _>>()?;
+        PipelineRunRef::Branch {
+            on,
+            then,
+            otherwise,
+        }
+    } else if has_parallel {
+        let branches = s
+            .branches
+            .iter()
+            .map(|b| {
+                if b.steps.is_empty() {
+                    return Err(bad(
+                        "a parallel branch must declare at least one step".into()
+                    ));
+                }
+                b.steps
+                    .iter()
+                    .map(validate_pipeline_step)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        PipelineRunRef::Parallel { branches }
+    } else {
+        // Loop form. Enforce the mandatory bound and exit condition at author
+        // time (typecheck also rejects `max_iters == 0`, defense in depth).
+        let until_cond = s
+            .until
+            .as_ref()
+            .ok_or_else(|| bad("a loop step must set `until = { … }`".into()))?;
+        let until = validate_condition(&s.id, "loop `until`", until_cond)?;
+        let max_iters = s
+            .max_iters
+            .ok_or_else(|| bad("a loop step must set `max_iters` (a positive bound)".into()))?;
+        if max_iters == 0 {
+            return Err(bad(
+                "a loop step's `max_iters` must be greater than 0".into()
+            ));
+        }
+        if s.body.is_empty() {
+            return Err(bad(
+                "a loop step must declare at least one `body` step".into()
+            ));
+        }
+        let body = s
+            .body
+            .iter()
+            .map(validate_pipeline_step)
+            .collect::<Result<Vec<_>, _>>()?;
+        PipelineRunRef::Loop {
+            body,
+            until,
+            max_iters,
+        }
+    };
+
+    Ok(PipelineStepConfig {
+        id: s.id.clone(),
+        run,
+        input: s.input.clone().unwrap_or_else(|| "${input}".to_string()),
+    })
+}
+
+/// Validate an [`UncheckedCondition`] (branch `branch` / loop `until`) into a
+/// [`ConditionConfig`], reusing the `[goals.*]` predicate/locus grammar. `role`
+/// names the field in diagnostics (e.g. `"branch"`, `"loop \`until\`"`).
+fn validate_condition(
+    step_id: &str,
+    role: &str,
+    cond: &UncheckedCondition,
+) -> Result<ConditionConfig, ProjectConfigError> {
+    let predicate = parse_predicate(
+        cond.check.as_deref(),
+        cond.pattern.clone(),
+        cond.equals.clone(),
+        cond.min_count,
+        cond.schema.clone(),
+        cond.r#fn.clone(),
+    )
+    .map_err(|e| ProjectConfigError::PipelineValidation {
+        id: step_id.to_string(),
+        message: match e {
+            PredicateParseError::BadRegex(m) | PredicateParseError::Invalid(m) => {
+                format!("{role} condition: {m}")
+            }
+        },
+    })?;
+    Ok(ConditionConfig {
+        evaluates: parse_locus(&cond.evaluates),
+        predicate,
+    })
 }
 
 /// Parse a locus string into a [`LocusConfig`].
@@ -1889,90 +2131,111 @@ pub fn parse_locus(s: &str) -> LocusConfig {
     LocusConfig::Path(s.to_string())
 }
 
-fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectConfigError> {
-    let evaluates = parse_locus(&raw.evaluates);
+/// Error from parsing a predicate menu shared by `[goals.*]` and branch
+/// conditions. Callers map these onto their own `ProjectConfigError` variant.
+pub(crate) enum PredicateParseError {
+    /// Structural problem (bad/missing selector or companion field).
+    Invalid(String),
+    /// `check = "matches"` pattern failed to compile.
+    BadRegex(String),
+}
 
-    // fn and check are mutually exclusive
-    match (&raw.r#fn, &raw.check) {
+/// Parse the predicate menu (`check`/`pattern`/`equals`/`min_count`/`schema`)
+/// or the `fn` escape hatch into a [`GoalPredicateConfig`]. `check` and `fn`
+/// are mutually exclusive and exactly one must be present. Shared by goals
+/// and branch conditions so the vocabulary can never drift between them.
+pub(crate) fn parse_predicate(
+    check: Option<&str>,
+    pattern: Option<String>,
+    equals: Option<String>,
+    min_count: Option<u64>,
+    schema: Option<serde_json::Value>,
+    r#fn: Option<String>,
+) -> Result<GoalPredicateConfig, PredicateParseError> {
+    match (r#fn, check) {
         (Some(_), Some(_)) => {
-            return Err(ProjectConfigError::GoalValidation {
-                id,
-                message: "only one of `fn` or `check` may be set".into(),
-            });
+            return Err(PredicateParseError::Invalid(
+                "only one of `fn` or `check` may be set".into(),
+            ))
         }
         (None, None) => {
-            return Err(ProjectConfigError::GoalValidation {
-                id,
-                message: "one of `fn` or `check` must be set".into(),
-            });
+            return Err(PredicateParseError::Invalid(
+                "one of `fn` or `check` must be set".into(),
+            ))
         }
-        (Some(fn_name), None) => {
-            return Ok(GoalEntry {
-                id,
-                evaluates,
-                predicate: GoalPredicateConfig::NativeFn(fn_name.clone()),
-            });
-        }
-        (None, Some(_)) => {} // fall through to check dispatch below
+        (Some(fn_name), None) => return Ok(GoalPredicateConfig::NativeFn(fn_name)),
+        (None, Some(_)) => {}
     }
-
-    let check = raw.check.as_deref().unwrap();
-    let predicate = match check {
+    let predicate = match check.unwrap() {
         "exists" => GoalPredicateConfig::Exists,
         "non_empty" => GoalPredicateConfig::NonEmpty,
-        "equals" => match raw.equals {
+        "equals" => match equals {
             Some(v) => GoalPredicateConfig::Equals(v),
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"equals\" requires the `equals` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"equals\" requires the `equals` field".into(),
+                ))
             }
         },
-        "matches" => match raw.pattern {
+        "matches" => match pattern {
             Some(p) => {
                 // Validate the regex compiles at build time.
                 if let Err(e) = regex::Regex::new(&p) {
-                    return Err(ProjectConfigError::BadGoalRegex {
-                        id,
-                        message: e.to_string(),
-                    });
+                    return Err(PredicateParseError::BadRegex(e.to_string()));
                 }
                 GoalPredicateConfig::Matches(p)
             }
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"matches\" requires the `pattern` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"matches\" requires the `pattern` field".into(),
+                ))
             }
         },
-        "min_count" => match raw.min_count {
+        "min_count" => match min_count {
             Some(n) => GoalPredicateConfig::MinCount(n),
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"min_count\" requires the `min_count` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"min_count\" requires the `min_count` field".into(),
+                ))
             }
         },
-        "schema_valid" => match raw.schema {
+        "schema_valid" => match schema {
             Some(s) => GoalPredicateConfig::SchemaValid(s),
             None => {
-                return Err(ProjectConfigError::GoalValidation {
-                    id,
-                    message: "check = \"schema_valid\" requires the `schema` field".into(),
-                });
+                return Err(PredicateParseError::Invalid(
+                    "check = \"schema_valid\" requires the `schema` field".into(),
+                ))
             }
         },
         other => {
-            return Err(ProjectConfigError::GoalValidation {
-                id,
-                message: format!("unknown check {other:?}; valid values: exists, non_empty, equals, matches, min_count, schema_valid"),
-            });
+            return Err(PredicateParseError::Invalid(format!(
+                "unknown check {other:?}; valid values: exists, non_empty, equals, matches, min_count, schema_valid"
+            )))
         }
     };
+    Ok(predicate)
+}
 
+fn validate_goal(id: String, raw: UncheckedGoal) -> Result<GoalEntry, ProjectConfigError> {
+    let evaluates = parse_locus(&raw.evaluates);
+    let predicate = parse_predicate(
+        raw.check.as_deref(),
+        raw.pattern,
+        raw.equals,
+        raw.min_count,
+        raw.schema,
+        raw.r#fn,
+    )
+    .map_err(|e| match e {
+        PredicateParseError::BadRegex(message) => ProjectConfigError::BadGoalRegex {
+            id: id.clone(),
+            message,
+        },
+        PredicateParseError::Invalid(message) => ProjectConfigError::GoalValidation {
+            id: id.clone(),
+            message,
+        },
+    })?;
     Ok(GoalEntry {
         id,
         evaluates,
@@ -3730,6 +3993,247 @@ mod tests {
         let cfg = ProjectConfig::parse_str(toml).expect("parses");
         let pipe = cfg.pipeline.expect("pipeline present");
         assert_eq!(pipe.steps[0].run, PipelineRunRef::Check("report".into()));
+    }
+
+    #[test]
+    fn parses_branch_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "triage"
+            run = "agent:triage"
+            input = "${input}"
+            [[pipeline.steps]]
+            id = "route"
+            branch = { evaluates = "steps.triage.output", check = "matches", pattern = "(?i)urgent" }
+            [[pipeline.steps.then]]
+            id = "escalate"
+            run = "agent:oncall"
+            input = "${steps.triage.output}"
+            [[pipeline.steps.otherwise]]
+            id = "ack"
+            run = "agent:writer"
+            input = "${steps.triage.output}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps.len(), 2);
+        match &pipe.steps[1].run {
+            PipelineRunRef::Branch {
+                on,
+                then,
+                otherwise,
+            } => {
+                assert_eq!(on.evaluates, LocusConfig::Output("triage".into()));
+                assert_eq!(
+                    on.predicate,
+                    GoalPredicateConfig::Matches("(?i)urgent".into())
+                );
+                assert_eq!(then.len(), 1);
+                assert_eq!(then[0].run, PipelineRunRef::Agent("oncall".into()));
+                assert_eq!(otherwise.len(), 1);
+                assert_eq!(otherwise[0].run, PipelineRunRef::Agent("writer".into()));
+            }
+            other => panic!("expected Branch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_one_armed_branch_defaults_otherwise_empty() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "route"
+            branch = { evaluates = "steps.x.output", check = "non_empty" }
+            [[pipeline.steps.then]]
+            id = "go"
+            run = "agent:go"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Branch { otherwise, .. } => assert!(otherwise.is_empty()),
+            other => panic!("expected Branch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_step_with_both_run_and_branch() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "bad"
+            run = "agent:x"
+            branch = { evaluates = "steps.x.output", check = "exists" }
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_then_without_branch() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "leaf"
+            run = "agent:x"
+            [[pipeline.steps.then]]
+            id = "orphan"
+            run = "agent:y"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn parses_parallel_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "fanout"
+            [[pipeline.steps.branches]]
+            [[pipeline.steps.branches.steps]]
+            id = "weather"
+            run = "agent:weather"
+            [[pipeline.steps.branches]]
+            [[pipeline.steps.branches.steps]]
+            id = "news"
+            run = "agent:news"
+            [[pipeline.steps.branches.steps]]
+            id = "digest"
+            run = "agent:summarize"
+            input = "${steps.news.output}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps.len(), 1);
+        match &pipe.steps[0].run {
+            PipelineRunRef::Parallel { branches } => {
+                assert_eq!(branches.len(), 2);
+                assert_eq!(branches[0].len(), 1);
+                assert_eq!(branches[0][0].run, PipelineRunRef::Agent("weather".into()));
+                assert_eq!(branches[1].len(), 2);
+                assert_eq!(
+                    branches[1][1].run,
+                    PipelineRunRef::Agent("summarize".into())
+                );
+                assert_eq!(branches[1][1].input, "${steps.news.output}");
+            }
+            other => panic!("expected Parallel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_parallel_branch_with_no_steps() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "fanout"
+            [[pipeline.steps.branches]]
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn parses_loop_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            until = { evaluates = "steps.draft.output", check = "matches", pattern = "APPROVED" }
+            max_iters = 5
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+            input = "${input}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Loop {
+                body,
+                until,
+                max_iters,
+            } => {
+                assert_eq!(*max_iters, 5);
+                assert_eq!(until.evaluates, LocusConfig::Output("draft".into()));
+                assert_eq!(
+                    until.predicate,
+                    GoalPredicateConfig::Matches("APPROVED".into())
+                );
+                assert_eq!(body.len(), 1);
+                assert_eq!(body[0].run, PipelineRunRef::Agent("writer".into()));
+            }
+            other => panic!("expected Loop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_loop_without_max_iters() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            until = { evaluates = "steps.draft.output", check = "non_empty" }
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_loop_with_zero_max_iters() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            until = { evaluates = "steps.draft.output", check = "non_empty" }
+            max_iters = 0
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_loop_without_until() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            max_iters = 3
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_step_with_multiple_forms() {
+        // `run` + a loop form on the same step is ambiguous.
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "bad"
+            run = "agent:x"
+            max_iters = 2
+            [[pipeline.steps.body]]
+            id = "inner"
+            run = "agent:y"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
     }
 
     #[test]

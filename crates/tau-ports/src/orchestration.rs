@@ -137,6 +137,8 @@ pub enum TraceEventKind {
         turn_index: u32,
         /// Duration of the turn in milliseconds.
         duration_ms: u64,
+        /// Total tokens (input + output) consumed by this turn.
+        tokens: u64,
     },
     /// An agent called a tool.
     ToolCall {

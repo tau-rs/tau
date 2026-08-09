@@ -1,0 +1,49 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-21"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.weather]
+display_name = "Weather"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.news]
+display_name = "News"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+[agents.digest]
+display_name = "Digest"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+# A parallel fan-out/join: the `weather` and `news` branches run concurrently
+# (read-isolated — neither sees the other's output), then join. The second
+# branch chains `news → digest` to prove a branch is an ordered sub-sequence,
+# and that a later step may read an earlier same-branch output.
+[[pipeline.steps]]
+id = "fanout"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id    = "weather"
+    run   = "agent:weather"
+    input = "${input}"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id    = "news"
+    run   = "agent:news"
+    input = "${input}"
+    [[pipeline.steps.branches.steps]]
+    id    = "digest"
+    run   = "agent:digest"
+    input = "${steps.news.output}"

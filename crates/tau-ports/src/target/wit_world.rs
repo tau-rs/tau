@@ -7,11 +7,16 @@
 //! `tau:host` `runner` world's superset with the cap-derived WASI imports
 //! added. An `Unsupported` capability (fs.exec, process.spawn) is a hard error.
 //!
-//! Output is a deterministic ABI *manifest*: without vendored WASI `.wit`
-//! packages it is not standalone-resolvable WIT (that is 3.3+). Determinism is
-//! the contract 3.5's `verify --bundle` byte-compare relies on.
+//! Output is a deterministic ABI manifest. A follow-on
+//! (`docs/superpowers/specs/2026-08-08-epic-3-2-load-bearing-wit-world-design.md`)
+//! vendors the WASI `.wit` packages this world imports and assembles them
+//! alongside the frozen `tau:host` contract into the guest's `wit-gen/`
+//! resolution root, making the world standalone-resolvable *and*
+//! load-bearing: `tau-wasm-guest` is compiled against exactly this generated
+//! world. Determinism is the contract 3.5's `verify --bundle` byte-compare
+//! relies on.
 //!
-//! See `docs/superpowers/specs/2026-07-24-epic-3-2-wit-world-gen-design.md`.
+//! See `docs/superpowers/specs/2026-08-08-epic-3-2-load-bearing-wit-world-design.md`.
 
 use alloc::collections::BTreeSet;
 use alloc::format;
@@ -120,9 +125,21 @@ pub fn generate_world(caps: &[Capability]) -> Result<String, WitWorldError> {
         }
     }
 
-    // 3. Render. `import host;` mirrors the frozen `wit/tau-host.wit` style.
+    // 3. Render. The generated world lives in its own package
+    //    (`tau:generated`), distinct from the frozen host contract's package
+    //    (`tau:host`, `wit/tau-host.wit`) so wit-parser can resolve them as
+    //    two separate packages in one directory (Task 4's `wit-gen/`
+    //    assembly). Cross-package imports must be fully qualified AND
+    //    version-pinned (`tau:host/host@0.1.0`, not bare `tau:host/host`) —
+    //    wit-parser's dependency toposort keys foreign deps by the exact
+    //    `PackageName` (namespace+name+version); an unversioned import
+    //    doesn't match the versioned `package tau:host@0.1.0;` declaration,
+    //    so the dep is silently left out of topological order and the
+    //    import fails to resolve (`package 'tau:host' not found`).
     let mut out = String::new();
-    out.push_str("package tau:generated@0.1.0;\n\nworld runner {\n    import host;\n");
+    out.push_str(
+        "package tau:generated@0.1.0;\n\nworld runner {\n    import tau:host/host@0.1.0;\n",
+    );
     for id in &imports {
         out.push_str("    import ");
         out.push_str(id);
@@ -145,7 +162,7 @@ mod tests {
             "package tau:generated@0.1.0;\n\
              \n\
              world runner {\n\
-             \x20   import host;\n\
+             \x20   import tau:host/host@0.1.0;\n\
              \n\
              \x20   export run: func(prompt: string) -> result<string, string>;\n\
              }\n"
@@ -156,7 +173,7 @@ mod tests {
     fn net_only_imports_http_plus_transitive() {
         let world = generate_world(&[cap_net_http(&["api.anthropic.com"], &["POST"])]).unwrap();
         for want in [
-            "import host;",
+            "import tau:host/host@0.1.0;",
             "import wasi:http/types@0.2.3;",
             "import wasi:http/outgoing-handler@0.2.3;",
             "import wasi:io/streams@0.2.3;",
@@ -215,7 +232,7 @@ mod tests {
             !world.contains("wasi:"),
             "in-guest cap leaked a wasi import:\n{world}"
         );
-        assert!(world.contains("import host;"));
+        assert!(world.contains("import tau:host/host@0.1.0;"));
     }
 
     #[test]

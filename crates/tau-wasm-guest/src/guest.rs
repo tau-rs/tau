@@ -10,15 +10,21 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 
 wit_bindgen::generate!({
-    world: "runner",
-    path: "../../wit",
+    world: "tau:generated/runner",
+    path: "wit-gen",
+    generate_all,
 });
 
 /// Re-export the WIT-generated host imports so sibling modules (host_ports.rs)
 /// can access them without knowing the exact generated module path.
 /// The path `tau::host::host` is what wit_bindgen generates for `import host`
 /// in the `tau:host` package's `runner` world (identical to the wasmtime host
-/// side which uses `tau::host::host`).
+/// side which uses `tau::host::host`). `wit-gen/` is assembled by `build.rs`
+/// from the vendored WASI deps, the frozen `tau:host` contract, and the
+/// capability-derived (or baseline) `tau:generated` world; `generate_all` is
+/// required once the world imports WASI interfaces (`wit_bindgen` otherwise
+/// errors with "missing `with` mapping" for interfaces reachable both
+/// directly and transitively, e.g. `wasi:io/poll`).
 pub(crate) mod wit_host {
     pub(crate) use super::tau::host::host::*;
 }
@@ -102,6 +108,17 @@ impl Guest for Component {
             return Err("tau-wasm-guest: no baked IR".to_string());
         }
         let module = tau_ir::from_canonical_bytes(bytes).map_err(|e| e.to_string())?;
+
+        // The guest drives a single entry agent (run_ir_streaming below), not
+        // the pipeline executor (run_pipeline). Reject any pipeline-bearing IR
+        // — Branch/Parallel/Loop and linear pipelines alike — at load rather
+        // than silently running only the entry agent and skipping the pipeline.
+        // Driving run_pipeline in-wasm is a follow-up slice.
+        if module.workflow.pipeline.is_some() {
+            return Err(
+                "tau-wasm-guest: pipelines (incl. Branch) are not yet executed in-wasm".to_string(),
+            );
+        }
 
         // E2 scope: exactly one agent; it is the entry.
         if module.workflow.agents.len() != 1 {

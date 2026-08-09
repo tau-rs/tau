@@ -300,7 +300,7 @@ impl DeterministicRegistry for MapBackedDeterministicRegistry {
 /// deterministic-step fns and built-in goal-predicate fns, since the
 /// interpreter resolves both through `DeterministicRegistry::invoke`.
 pub fn fixture_deterministic_registry() -> Arc<MapBackedDeterministicRegistry> {
-    use tau_runtime_core::vocabulary::FN_BUILTIN_NON_EMPTY;
+    use tau_runtime_core::vocabulary::{FN_BUILTIN_MATCHES, FN_BUILTIN_NON_EMPTY};
 
     Arc::new(
         MapBackedDeterministicRegistry::default()
@@ -322,6 +322,23 @@ pub fn fixture_deterministic_registry() -> Arc<MapBackedDeterministicRegistry> {
                 let present = args["present"].as_bool().unwrap_or(false);
                 let content = args["content"].as_str().unwrap_or("");
                 Ok(serde_json::json!(present && !content.trim().is_empty()))
+            })
+            .with(FN_BUILTIN_MATCHES, |args: &serde_json::Value| {
+                // `matches`: present content matches the `pattern` regex. The
+                // interpreter injects `present`/`content`; `predicate_call`
+                // injects `pattern` (see evaluate_goal). Mirrors production
+                // `GoalPredicate::Matches` semantics with a real regex engine.
+                let present = args["present"].as_bool().unwrap_or(false);
+                let content = args["content"].as_str().unwrap_or("");
+                let pattern = args["pattern"]
+                    .as_str()
+                    .ok_or_else(|| RuntimeError::Internal {
+                        message: "matches: `pattern` must be a string".into(),
+                    })?;
+                let re = regex::Regex::new(pattern).map_err(|e| RuntimeError::Internal {
+                    message: format!("matches: invalid regex {pattern:?}: {e}"),
+                })?;
+                Ok(serde_json::json!(present && re.is_match(content)))
             }),
     )
 }

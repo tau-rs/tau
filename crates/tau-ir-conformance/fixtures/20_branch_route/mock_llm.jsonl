@@ -1,0 +1,2 @@
+{"turn": 0, "response": {"text": "urgent: reactor overheating", "stop_reason": "end_turn"}}
+{"turn": 1, "response": {"text": "escalated to oncall", "stop_reason": "end_turn"}}
