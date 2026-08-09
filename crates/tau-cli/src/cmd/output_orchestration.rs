@@ -78,9 +78,9 @@ pub async fn run_printer(
                 agent_id,
                 turn_index,
                 duration_ms,
-                ..
+                tokens,
             } => format!(
-                "        Turn {agent_id}: {} ({:.1}s)",
+                "        Turn {agent_id}: {} ({:.1}s \u{00b7} {tokens} tok)",
                 turn_index + 1,
                 *duration_ms as f64 / 1000.0
             ),
@@ -320,6 +320,26 @@ mod tests {
         assert!(
             !s.trim_start().starts_with('{'),
             "human mode must not emit JSON: {s:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn printer_human_mode_turn_line_includes_tokens() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(evt(TraceEventKind::Turn {
+            agent_id: "orchestrator".into(),
+            turn_index: 1,
+            duration_ms: 300,
+            tokens: 20,
+        }))
+        .unwrap();
+        drop(tx);
+        let (mut out, stdout) = test_output(false);
+        run_printer(rx, &mut out).await;
+        let s = stdout.snapshot();
+        assert!(
+            s.contains("\u{00b7} 20 tok"),
+            "turn line missing token count: {s:?}"
         );
     }
 
