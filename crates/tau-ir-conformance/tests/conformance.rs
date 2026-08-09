@@ -16,8 +16,10 @@
 //! `17_durable_per_tool_call` (per-tool-call checkpoint granularity),
 //! `18_durable_intent` (EPIC 6.1 intent-form durable knob), and
 //! `19_subflow_attenuation_denied` (runtime subflow cap_subset denial —
-//! contrast fixture 04's proper-narrowing allow), and
-//! `20_branch_route` (EPIC 4.2a authored conditional `Branch`).
+//! contrast fixture 04's proper-narrowing allow),
+//! `20_branch_route` (EPIC 4.2a authored conditional `Branch`),
+//! `21_parallel_fanout` (EPIC 4.2b authored `Parallel` fan-out/join), and
+//! `22_loop_refine` (EPIC 4.2c authored bounded `Loop` with feedback).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -446,6 +448,94 @@ async fn fixture_20_dev_mode_runs_branch() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_20_cross_mode_conformance() {
     let dir = fixture_dir("20_branch_route");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 21 — parallel fan-out/join (EPIC 4.2b)
+// ---------------------------------------------------------------------------
+
+/// Fixture 21: an authored `Parallel` step. Two branches (`weather` and
+/// `news → digest`) run concurrently and join; the run reaches `Completed`.
+/// Proves the full author→lower→typecheck→interpret path for a `Parallel`
+/// fan-out, including a multi-step branch whose later step reads an earlier
+/// same-branch output. The report is order-insensitive (outcome + no tool
+/// calls), so the bounded-concurrency merge order does not matter.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_21_dev_mode_runs_parallel() {
+    let dir = fixture_dir("21_parallel_fanout");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed parallel run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed after the join, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 21 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 21: DevMode and BundleMode both drive
+/// the same `run_pipeline` over the `Parallel` IR. BundleMode round-trips
+/// through `to_canonical_bytes` → `from_canonical_bytes`, so equal reports
+/// prove the `Parallel` block survives serialization and the load gate.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_21_cross_mode_conformance() {
+    let dir = fixture_dir("21_parallel_fanout");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 22 — bounded loop with feedback (EPIC 4.2c)
+// ---------------------------------------------------------------------------
+
+/// Fixture 22: an authored `Loop`. The `drafter` body runs each pass; the
+/// deterministic `until` (`matches "APPROVED"`) fails on the first pass's
+/// output and holds on the second, so the loop converges at iteration 2 —
+/// inside the mandatory `max_iters = 5` bound — and the run reaches
+/// `Completed`. Proves the full author→lower→typecheck→interpret path for a
+/// `Loop`, including multi-pass convergence driven by changing body output.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_22_dev_mode_runs_loop() {
+    let dir = fixture_dir("22_loop_refine");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed loop run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed after the loop converged, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 22 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 22: DevMode and BundleMode both drive
+/// the same `run_pipeline` over the `Loop` IR (with its `max_iters` bound and
+/// `until` condition). Equal reports prove the `Loop` block survives the
+/// canonical-bytes round-trip and the load gate.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_22_cross_mode_conformance() {
+    let dir = fixture_dir("22_loop_refine");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

@@ -26,6 +26,7 @@ pub mod check;
 pub mod context;
 pub mod durable;
 pub mod error;
+pub mod features;
 pub mod hash;
 pub mod ids;
 pub mod message;
@@ -51,6 +52,7 @@ pub use check::{Check, CheckVerify, Condition, GoalPredicate, JudgeRef, Locus, O
 pub use context::ContextConfig;
 pub use durable::{CheckpointGranularity, Durability, DurableStore};
 pub use error::IrError;
+pub use features::{features_in_pipeline, features_used};
 pub use hash::compute_hash;
 pub use ids::{AgentId, CheckId, PipelineStepId, StepId, SubflowId, ToolId};
 pub use message::{Message, MessagePayload};
