@@ -142,21 +142,18 @@ fn end_turn_response() -> String {
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
 fn events_stream_via_emit_event_not_the_run_payload() {
     let component = build_guest_component(Some(&trivial_ir_bytes()));
-    let (out, state) =
+    let (out, emitted) =
         run_component(&component, "hi", vec![end_turn_response()]).expect("runs with cassette");
 
     // `run`'s own payload is now an empty sentinel — events flow via
     // `emit-event` instead (design D2).
     assert_eq!(out, "", "run payload must be the empty sentinel");
 
-    assert!(
-        !state.emitted.is_empty(),
-        "no events streamed via emit-event"
-    );
+    assert!(!emitted.is_empty(), "no events streamed via emit-event");
 
     // Every entry must deserialize as a RunEvent (well-formed JSON, one
     // event per emit-event call rather than one buffered blob).
-    for entry in &state.emitted {
+    for entry in &emitted {
         let _: tau_runtime_core::stream::RunEvent =
             serde_json::from_str(entry).unwrap_or_else(|e| {
                 panic!("emitted entry is not a valid RunEvent: {e}\nentry: {entry}")
@@ -165,12 +162,12 @@ fn events_stream_via_emit_event_not_the_run_payload() {
 
     // RunStarted is a bare externally-tagged unit variant → serializes as
     // the plain JSON string "RunStarted".
-    let first: serde_json::Value = serde_json::from_str(&state.emitted[0]).unwrap();
+    let first: serde_json::Value = serde_json::from_str(&emitted[0]).unwrap();
     assert_eq!(first, serde_json::json!("RunStarted"));
 
     assert!(
-        state.emitted.last().unwrap().contains("RunCompleted"),
+        emitted.last().unwrap().contains("RunCompleted"),
         "last streamed event must be RunCompleted; got {:?}",
-        state.emitted.last()
+        emitted.last()
     );
 }

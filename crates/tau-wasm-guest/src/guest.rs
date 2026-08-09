@@ -136,6 +136,12 @@ impl Guest for Component {
         .map_err(|e| e.to_string())?;
 
         crate::executor::for_each_stream(stream, |event| {
+            // `RunEvent` is a plain derive(Serialize) enum over primitives/
+            // strings/nested plain structs — no maps with non-string keys,
+            // no floats that could be NaN/Inf, nothing serde_json rejects.
+            // Serialization is effectively infallible here, so a hypothetical
+            // error silently drops the event rather than aborting the whole
+            // run over a should-never-happen encoding failure.
             if let Ok(json) = serde_json::to_string(&event) {
                 crate::wit_host::emit_event(&json);
             }

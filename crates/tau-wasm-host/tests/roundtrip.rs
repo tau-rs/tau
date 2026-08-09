@@ -150,14 +150,13 @@ fn guest_decodes_baked_ir_and_starts_run() {
     // The guest now drives `run_ir_streaming`. Feed one end-turn response so the
     // agent loop completes rather than hanging waiting for an LLM call.
     let component = build_guest_component(Some(&trivial_ir_bytes()));
-    let (_out, state) =
+    let (_out, emitted) =
         run_component(&component, "hi", vec![end_turn_response()]).expect("runs with cassette");
     // Events now stream via `emit-event`; the presence of "RunStarted" in the
     // buffer proves the IR was decoded and the interpreter was entered.
     assert!(
-        state.emitted.iter().any(|e| e.contains("RunStarted")),
-        "guest should stream a RunEvent stream via emit-event; got: {:?}",
-        state.emitted
+        emitted.iter().any(|e| e.contains("RunStarted")),
+        "guest should stream a RunEvent stream via emit-event; got: {emitted:?}"
     );
 }
 
@@ -171,12 +170,11 @@ fn end_turn_response() -> String {
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
 fn guest_drives_ir_and_returns_typed_stream() {
     let component = build_guest_component(Some(&trivial_ir_bytes()));
-    let (_out, state) = tau_wasm_host::run_component(&component, "hi", vec![end_turn_response()])
+    let (_out, emitted) = tau_wasm_host::run_component(&component, "hi", vec![end_turn_response()])
         .expect("guest runs the baked IR");
 
     // Events now stream via `emit-event`, one JSON-encoded RunEvent per entry.
-    let events: Vec<tau_runtime_core::stream::RunEvent> = state
-        .emitted
+    let events: Vec<tau_runtime_core::stream::RunEvent> = emitted
         .iter()
         .map(|e| serde_json::from_str(e).expect("each emitted entry is a RunEvent"))
         .collect();
@@ -205,16 +203,16 @@ fn host_guest_roundtrip_is_deterministic() {
     let ir = trivial_ir_bytes();
     let wasm = build_guest_component(Some(&ir));
     // Provide one cassette response so both runs complete without hanging.
-    let (first_out, first_state) =
+    let (first_out, first_emitted) =
         run_component(&wasm, "hello", vec![end_turn_response()]).expect("first run");
-    let (second_out, second_state) =
+    let (second_out, second_emitted) =
         run_component(&wasm, "hello", vec![end_turn_response()]).expect("second run");
     assert_eq!(
         first_out, second_out,
         "same inputs must yield byte-identical output payload"
     );
     assert_eq!(
-        first_state.emitted, second_state.emitted,
+        first_emitted, second_emitted,
         "same inputs must yield byte-identical streamed events"
     );
 }

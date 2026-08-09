@@ -64,7 +64,7 @@ fn package_is_tau_host_0_1_0() {
 }
 
 #[test]
-fn host_interface_is_frozen_to_the_three_functions() {
+fn host_interface_is_frozen_to_the_four_functions() {
     let resolve = load();
     let host = resolve
         .interfaces

@@ -10,7 +10,7 @@
 //! - `now-millis() -> u64` — wall clock.
 //! - `next-u64() -> u64` — randomness.
 //! - `emit-event(event-json: string)` — streams one `RunEvent` at a time
-//!   (fire-and-forget; see [`HostState::emitted`]).
+//!   (fire-and-forget; see [`run_component`]'s return value).
 //!
 //! This crate satisfies those imports with **deterministic** stubs so the
 //! same `(component, prompt, llm_responses)` triple always yields the same
@@ -21,8 +21,8 @@
 //!
 //! [`run_component`] is the whole public surface: feed it the guest bytes
 //! and it instantiates, drives `run`, and hands back the guest's payload
-//! (an empty sentinel — events flow via `emit-event`) plus the [`HostState`]
-//! carrying the streamed `RunEvent` JSON strings.
+//! (an empty sentinel — events flow via `emit-event`) plus the `RunEvent`
+//! JSON strings streamed via `emit-event`, in order.
 
 use std::collections::VecDeque;
 
@@ -66,11 +66,12 @@ pub enum WasmHostError {
 }
 
 /// Store data backing the `tau:host/host` imports with deterministic
-/// behaviour. One instance per [`run_component`] call. Returned alongside
-/// the guest's payload so callers can inspect the events streamed via
-/// `emit-event` (see [`HostState::emitted`]).
+/// behaviour. One instance per [`run_component`] call. Not part of the
+/// public API — `run_component` extracts and returns only the `emitted`
+/// buffer (as a plain `Vec<String>`) rather than leaking this whole struct
+/// (cassette queue, clock, prng) to callers.
 #[derive(Debug)]
-pub struct HostState {
+struct HostState {
     /// Queue of canned `CompletionResponse` JSON strings, popped front-first
     /// on each `complete` call. Empty queue → `complete` returns its error
     /// arm so a guest that over-calls fails loudly rather than hangs.
@@ -80,7 +81,7 @@ pub struct HostState {
     /// SplitMix64 state, seeded from [`PRNG_SEED`].
     prng_state: u64,
     /// RunEvents streamed from the guest during `call_run`, in order.
-    pub emitted: Vec<String>,
+    emitted: Vec<String>,
 }
 
 impl HostState {
@@ -132,16 +133,16 @@ fn determinism_config() -> wasmtime::Result<Config> {
     Ok(config)
 }
 
-/// Load `wasm_bytes` as a component, satisfy the three `tau:host/host` imports
+/// Load `wasm_bytes` as a component, satisfy the four `tau:host/host` imports
 /// with deterministic stubs, instantiate it under a determinism `Config`,
 /// and drive the exported `run(prompt)`.
 ///
 /// `llm_responses` is the cassette: each `complete` call pops the next entry
-/// (validated as `CompletionResponse` JSON up-front). Returns the JSON string
-/// the guest's `run` produced on its `ok` arm, alongside the [`HostState`]
-/// so callers can inspect `RunEvent`s streamed via `emit-event`
-/// ([`HostState::emitted`]) — `run`'s own payload is an empty sentinel now
-/// that events flow through that side channel (design D2).
+/// (validated as `CompletionResponse` JSON up-front). Returns a
+/// `(payload, emitted)` pair: `payload` is the JSON string the guest's `run`
+/// produced on its `ok` arm — an empty sentinel now that events flow through
+/// `emit-event` instead (design D2) — and `emitted` is every `RunEvent` JSON
+/// string streamed via `emit-event`, in order.
 ///
 /// Determinism contract: for fixed inputs the returned bytes are identical
 /// across calls and hosts — the property `WasmProfile` conformance relies on.
@@ -149,7 +150,7 @@ pub fn run_component(
     wasm_bytes: &[u8],
     prompt: &str,
     llm_responses: Vec<String>,
-) -> Result<(String, HostState), WasmHostError> {
+) -> Result<(String, Vec<String>), WasmHostError> {
     // Fail fast on a malformed cassette before touching wasmtime.
     for resp in &llm_responses {
         serde_json::from_str::<CompletionResponse>(resp).map_err(WasmHostError::InvalidResponse)?;
@@ -170,7 +171,7 @@ pub fn run_component(
 
     let result = runner.call_run(&mut store, prompt);
     match result {
-        Ok(Ok(payload)) => Ok((payload, store.into_data())),
+        Ok(Ok(payload)) => Ok((payload, store.into_data().emitted)),
         Ok(Err(guest_err)) => Err(WasmHostError::Guest(guest_err)),
         Err(trap) => Err(WasmHostError::Trap(trap.into())),
     }
