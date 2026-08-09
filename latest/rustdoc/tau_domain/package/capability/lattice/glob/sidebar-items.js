@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Segment"],"fn":["expand","glob_canon","glob_meet","glob_subset","glob_subset_set","pattern_intersect","pattern_subset","render"],"struct":["Pattern"]};
