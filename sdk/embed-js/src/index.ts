@@ -17,6 +17,20 @@
 import { normalize } from "./normalize";
 import type { RunEvent } from "./RunEvent";
 
+// Re-export the public event types. `TauComponent.run` yields `RunEvent`, so
+// these are part of this package's public surface; re-exporting them lets
+// consumers (e.g. @tau/react, @tau/angular) name what a run emits without a
+// deep `@tau/embed-js/src/RunEvent` import.
+export type {
+  RunEvent,
+  RunOutcome,
+  RunOutcomeCompleted,
+  RunOutcomeFailed,
+  StopReason,
+  TokenUsage,
+  ToolResult,
+} from "./RunEvent";
+
 /** Input to a single agent run. The guest world (wit/tau-host.wit `runner`)
  * exports a single-agent, prompt-only `run` — there is no per-call agent
  * selection at this layer. */
