@@ -31,12 +31,18 @@ impl EgressPolicy {
     /// True iff a request to `authority` with HTTP `method` (verb string) is
     /// allowed by this policy.
     pub fn permits(&self, authority: &str, method: &str) -> bool {
+        // Cap hosts are lowercased by `HostName::parse`, but the runtime
+        // `authority` off `request.uri().authority()` preserves the wire case.
+        // Lowercase it before the exact-host compare so `A.com` matches a cap
+        // for `a.com` (ports are numeric, so lowercasing the whole authority
+        // is safe).
+        let authority = authority.to_ascii_lowercase();
         let host_ok = self.allowed_hosts.is_any()
             || self
                 .allowed_hosts
                 .exact_hosts()
                 .iter()
-                .any(|h| h == authority);
+                .any(|h| h == &authority);
         let method_ok = match &self.methods {
             None => true,
             Some(set) => set.iter().any(|m| m.as_str().eq_ignore_ascii_case(method)),
@@ -67,6 +73,19 @@ mod tests {
         assert!(policy.permits("a.com", "GET"));
         assert!(!policy.permits("a.com", "POST"), "method must be enforced");
         assert!(!policy.permits("b.com", "GET"), "host must be enforced");
+    }
+
+    #[test]
+    fn exact_host_match_is_case_insensitive() {
+        // Caps lowercase hosts at parse time; a request whose authority arrives
+        // in mixed case must still match. `&[]` methods = all methods allowed.
+        let caps = [cap_net_http(&["a.com"], &[])];
+        let cfg = resolve_wasi_config(&caps);
+        let policy = EgressPolicy::from_config(&cfg);
+        assert!(
+            policy.permits("A.com", "GET"),
+            "host match must be case-insensitive"
+        );
     }
 
     #[test]
