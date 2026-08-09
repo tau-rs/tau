@@ -1,11 +1,26 @@
-//! EPIC 3.2 DoD: an ungranted capability's WASI interface is absent from the
-//! world the guest component is compiled against. Builds the wasm guest, so it
-//! is #[ignore]d like the other guest-build tests (run with --run-ignored).
+//! EPIC 3.2 DoD: the wasm guest is compiled against a capability-EXACT WIT
+//! world — an ungranted capability's WASI interface is absent from the world
+//! *text* fed to (and accepted by) the guest's `wit_bindgen::generate!`, not
+//! just declared but unused. Builds the wasm guest, so it is #[ignore]d like
+//! the other guest-build tests (run with --run-ignored).
 //!
 //! Two fixtures, built sequentially in one test (not two parallel tests) since
 //! the guest build shares `target/tau-build-wasm`:
-//!   - `net-http`: grants `net.http` only → `wasi:http` present, `wasi:filesystem` ABSENT.
-//!   - `trivial`:  host-only, no caps    → zero `wasi:*` imports.
+//!   - `net-http`: grants `net.http` only → world text has `wasi:http`, no `wasi:filesystem`.
+//!   - `trivial`:  host-only, no caps    → world text has no `wasi:` at all.
+//!
+//! The primary assertions are on the cap-derived WORLD TEXT
+//! (`wasm_world_for_project`'s output, the same bytes written to
+//! `TAU_WORLD_WIT` and consumed by `wit_bindgen::generate!` in the guest) —
+//! that is the layer EPIC 3.2's guarantee (A3) actually lives at, and tying
+//! the assertion to a `guest build succeeded` fact (not just a unit test of
+//! the generator in isolation) proves the world is both capability-exact AND
+//! a compile-valid no_std bindgen world. The secondary `wit_component::decode`
+//! checks on the *compiled component's* actual imports are kept as a 3.4
+//! regression guard (see the comment in the test body below) — today
+//! they're vacuous (wasm-ld DCE drops every WASI import, granted or not,
+//! because no guest source calls WASI directly yet), but they'll become
+//! meaningful once 3.4 wires the guest to call granted WASI interfaces.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -18,9 +33,12 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Build the guest for a fixture and return the component's imported interface
-/// package-ids (e.g. "wasi:http/types@0.2.3"), decoded from the wasm.
-fn imported_interfaces(fixture_name: &str) -> Vec<String> {
+/// Build the guest for a fixture and return `(world_text, imported_interfaces)`:
+/// the cap-derived WIT world text fed to `TAU_WORLD_WIT` (successfully
+/// compiled against, since this only returns after `out.status.success()`),
+/// and the component's imported interface package-ids (e.g.
+/// "wasi:http/types@0.2.3") as actually decoded from the built wasm.
+fn build_and_decode(fixture_name: &str) -> (String, Vec<String>) {
     let (_module, bytes) = lower_to_wasm_ir(&fixture(fixture_name)).unwrap();
     let world = wasm_world_for_project(&fixture(fixture_name)).unwrap();
     let ir = tempfile::NamedTempFile::new().unwrap();
@@ -82,44 +100,58 @@ fn imported_interfaces(fixture_name: &str) -> Vec<String> {
         wit_component::DecodedWasm::Component(resolve, world) => (resolve, world),
         _ => panic!("expected a component, got a wit package"),
     };
-    resolve.worlds[world_id]
+    let imports: Vec<String> = resolve.worlds[world_id]
         .imports
         .keys()
         .filter_map(|k| match k {
             wit_parser::WorldKey::Interface(id) => resolve.id_of(*id),
             _ => None,
         })
-        .collect()
+        .collect();
+    (world, imports)
 }
 
 #[test]
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
-fn dod_ungranted_wasi_is_absent_from_component_world() {
+fn dod_guest_compiles_against_cap_exact_world() {
     // net-http grants net.http only.
-    let net = imported_interfaces("net-http");
-    // NOTE: the positive "wasi:http present" assertion is deliberately NOT
-    // checked here. All host interaction in the current guest routes through
-    // the single `tau:host/host` import (see `host_ports.rs`); no guest
-    // source calls a `wasi:http`/`wasi:filesystem` function directly, so
-    // wasm-ld's unreachable-import elimination drops every unused WASI
-    // import from the final component, granted or not — the built world's
-    // *declared* WIT text does contain `import wasi:http/types@0.2.3;`
-    // (see `wasm_world_for_project`), but the compiled artifact only
-    // materializes imports the guest actually calls. This is expected at
-    // this stage of EPIC 3.2 (WIT-world generation) and is not a DoD
-    // regression: the DoD is the ABSENCE assertion below, which DCE cannot
-    // produce a false pass for (an interface either was never referenced —
-    // true here for both http and fs — or, once call-through wiring lands,
-    // would be referenced only when granted).
+    let (net_world, net_imports) = build_and_decode("net-http");
+    // Primary DoD (A3): the world text fed to and accepted by the guest's
+    // `wit_bindgen::generate!` is capability-exact, proven against a
+    // successful no_std guest compile.
     assert!(
-        !net.iter().any(|i| i.starts_with("wasi:filesystem/")),
-        "fs UNGRANTED → wasi:filesystem must be absent (DoD): {net:?}"
+        net_world.contains("import wasi:http/outgoing-handler@0.2.3;"),
+        "net granted → wasi:http in the compiled-against world:\n{net_world}"
+    );
+    assert!(
+        !net_world.contains("wasi:filesystem"),
+        "fs UNGRANTED → absent from the world the guest is compiled against (DoD):\n{net_world}"
     );
 
-    // trivial grants nothing → no wasi at all.
-    let triv = imported_interfaces("trivial");
+    // trivial grants nothing → no wasi in the world text at all.
+    let (triv_world, triv_imports) = build_and_decode("trivial");
     assert!(
-        !triv.iter().any(|i| i.starts_with("wasi:")),
-        "no caps → no wasi imports: {triv:?}"
+        !triv_world.contains("wasi:"),
+        "no caps → no wasi in the compiled-against world:\n{triv_world}"
+    );
+
+    // Secondary, 3.4-forward regression guard: today these are vacuous
+    // (wasm-ld's unreachable-import elimination drops every WASI import from
+    // the compiled component, granted or not, because no guest source calls
+    // a `wasi:http`/`wasi:filesystem` function directly yet — all host
+    // interaction routes through the single `tau:host/host` import, see
+    // `host_ports.rs`). Once 3.4 wires the guest to actually call granted
+    // WASI interfaces, these start distinguishing "absent because ungranted"
+    // from "absent because unused", so they're kept (not deleted) as a
+    // forward-looking tripwire.
+    assert!(
+        !net_imports.iter().any(|i| i.starts_with("wasi:filesystem/")),
+        "fs UNGRANTED → wasi:filesystem must be absent from the compiled component's \
+         actual imports (3.4-forward regression guard): {net_imports:?}"
+    );
+    assert!(
+        !triv_imports.iter().any(|i| i.starts_with("wasi:")),
+        "no caps → no wasi imports in the compiled component (3.4-forward regression \
+         guard): {triv_imports:?}"
     );
 }
