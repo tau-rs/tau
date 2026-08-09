@@ -27,6 +27,7 @@ tau-ir-lower        = { workspace = true }
 tau-mcp             = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio       = { workspace = true }
 tau-ts-extract      = { path = "../tau-ts-extract" }
+tau-sdk-codegen     = { workspace = true }
 futures-core        = { workspace = true }
 base64             = { workspace = true }
 humantime          = "2"

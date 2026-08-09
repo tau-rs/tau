@@ -446,6 +446,43 @@ mod uuid_id_serde {
     }
 }
 
+// `AgentInstanceId`/`MessageId` hand-roll `Serialize`/`Deserialize` as the
+// inner `uuid::Uuid` (see `uuid_id_serde` above), which serializes as a
+// hyphenated UUID string. `uuid::Uuid` is foreign, so we can't derive
+// `JsonSchema` on it here (orphan rule) — mirror the wire format by hand
+// instead of deriving on the newtype (which would need `uuid::Uuid:
+// JsonSchema` anyway).
+#[cfg(feature = "schema")]
+mod uuid_id_schema {
+    use super::{AgentInstanceId, MessageId};
+
+    impl schemars::JsonSchema for AgentInstanceId {
+        fn schema_name() -> alloc::borrow::Cow<'static, str> {
+            "AgentInstanceId".into()
+        }
+
+        fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+            schemars::json_schema!({
+                "type": "string",
+                "format": "uuid"
+            })
+        }
+    }
+
+    impl schemars::JsonSchema for MessageId {
+        fn schema_name() -> alloc::borrow::Cow<'static, str> {
+            "MessageId".into()
+        }
+
+        fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+            schemars::json_schema!({
+                "type": "string",
+                "format": "uuid"
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod uuid_id_tests {
     use super::*;

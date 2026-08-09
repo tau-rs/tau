@@ -76,9 +76,9 @@ fn build_http_probe() -> Vec<u8> {
 /// transport failure (e.g. a regression that let the request through and it
 /// then failed to connect offline) would carry a *different* code, and must
 /// fail this assertion instead of masquerading as a successful denial.
-fn assert_policy_denied(result: Result<String, WasmHostError>, what: &str) {
+fn assert_policy_denied(result: Result<(String, Vec<String>), WasmHostError>, what: &str) {
     match result {
-        Ok(payload) => panic!("{what} should have been denied, but succeeded: {payload}"),
+        Ok((payload, _)) => panic!("{what} should have been denied, but succeeded: {payload}"),
         Err(WasmHostError::Guest(msg)) => {
             assert!(
                 msg.contains("HttpRequestDenied"),

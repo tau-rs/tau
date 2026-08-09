@@ -4,7 +4,6 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::pin;
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
@@ -36,16 +35,15 @@ pub fn block_on<F: Future>(fut: F) -> F::Output {
     }
 }
 
-/// Drain a stream to completion, collecting every item.
-pub fn collect_stream<S: Stream>(stream: S) -> Vec<S::Item> {
+/// Drain a stream to completion, invoking `f` on each item as it arrives.
+pub fn for_each_stream<S: Stream, F: FnMut(S::Item)>(stream: S, mut f: F) {
     let mut stream = pin!(stream);
     let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
-    let mut out = Vec::new();
     loop {
         match stream.as_mut().poll_next(&mut cx) {
-            Poll::Ready(Some(item)) => out.push(item),
-            Poll::Ready(None) => return out,
+            Poll::Ready(Some(item)) => f(item),
+            Poll::Ready(None) => return,
             Poll::Pending => core::hint::spin_loop(),
         }
     }

@@ -3,12 +3,14 @@
 //!
 //! The guest (built for `wasm32-wasip2`, see the `tau-wasm-guest` crate)
 //! exports `run(prompt) -> result<string, string>` from the `tau:host/runner`
-//! world and imports three host ports it cannot satisfy in-wasm:
+//! world and imports four host ports it cannot satisfy in-wasm:
 //!
 //! - `complete(request-json) -> result<string, string>` — delegated
 //!   inference (credentials live host-side, β.5).
 //! - `now-millis() -> u64` — wall clock.
 //! - `next-u64() -> u64` — randomness.
+//! - `emit-event(event-json: string)` — streams one `RunEvent` at a time
+//!   (fire-and-forget; see [`run_component`]'s return value).
 //!
 //! This crate satisfies those imports with **deterministic** stubs so the
 //! same `(component, prompt, llm_responses)` triple always yields the same
@@ -18,8 +20,9 @@
 //! JSON strings (cassette-style).
 //!
 //! [`run_component`] is the whole public surface: feed it the guest bytes
-//! and it instantiates, drives `run`, and hands back the JSON string the
-//! guest returned.
+//! and it instantiates, drives `run`, and hands back the guest's payload
+//! (an empty sentinel — events flow via `emit-event`) plus the `RunEvent`
+//! JSON strings streamed via `emit-event`, in order.
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -83,8 +86,14 @@ pub enum WasmHostError {
     WasiConfig(#[source] anyhow::Error),
 }
 
-/// Store data backing the three `tau:host/host` imports with deterministic
-/// behaviour. One instance per [`run_component`] call.
+/// Store data backing the `tau:host/host` imports with deterministic
+/// behaviour. One instance per [`run_component`] call. Not part of the
+/// public API — `run_component` extracts and returns only the `emitted`
+/// buffer (as a plain `Vec<String>`) rather than leaking this whole struct
+/// (cassette queue, clock, prng) to callers.
+///
+/// No `#[derive(Debug)]`: the WASI fields (`WasiCtx`/`WasiHttpCtx`, EPIC 3.3)
+/// are not `Debug`, and this struct is never formatted.
 struct HostState {
     /// Queue of canned `CompletionResponse` JSON strings, popped front-first
     /// on each `complete` call. Empty queue → `complete` returns its error
@@ -94,6 +103,8 @@ struct HostState {
     clock_millis: u64,
     /// SplitMix64 state, seeded from [`PRNG_SEED`].
     prng_state: u64,
+    /// RunEvents streamed from the guest during `call_run`, in order.
+    emitted: Vec<String>,
     /// WASI 0.2 resource table (EPIC 3.3).
     table: ResourceTable,
     /// WASI 0.2 host context: exactly the preopens/network derived from the
@@ -115,6 +126,7 @@ impl HostState {
             responses: responses.into(),
             clock_millis: 0,
             prng_state: PRNG_SEED,
+            emitted: Vec::new(),
             table: ResourceTable::new(),
             wasi,
             http: WasiHttpCtx::new(),
@@ -144,6 +156,10 @@ impl host::Host for HostState {
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
+    }
+
+    fn emit_event(&mut self, event_json: String) {
+        self.emitted.push(event_json);
     }
 }
 
@@ -243,13 +259,16 @@ fn determinism_config() -> wasmtime::Result<Config> {
     Ok(config)
 }
 
-/// Load `wasm_bytes` as a component, satisfy the three `tau:host/host` imports
+/// Load `wasm_bytes` as a component, satisfy the four `tau:host/host` imports
 /// with deterministic stubs, instantiate it under a determinism `Config`,
 /// and drive the exported `run(prompt)`.
 ///
 /// `llm_responses` is the cassette: each `complete` call pops the next entry
-/// (validated as `CompletionResponse` JSON up-front). Returns the JSON string
-/// the guest's `run` produced on its `ok` arm.
+/// (validated as `CompletionResponse` JSON up-front). Returns a
+/// `(payload, emitted)` pair: `payload` is the JSON string the guest's `run`
+/// produced on its `ok` arm — an empty sentinel now that events flow through
+/// `emit-event` instead (design D2) — and `emitted` is every `RunEvent` JSON
+/// string streamed via `emit-event`, in order.
 ///
 /// Determinism contract: for fixed inputs the returned bytes are identical
 /// across calls and hosts — the property `WasmProfile` conformance relies on.
@@ -262,7 +281,7 @@ pub fn run_component_with_caps(
     llm_responses: Vec<String>,
     caps: &[tau_domain::Capability],
     sandbox_root: &Path,
-) -> Result<String, WasmHostError> {
+) -> Result<(String, Vec<String>), WasmHostError> {
     // Fail fast on a malformed cassette before touching wasmtime.
     for resp in &llm_responses {
         serde_json::from_str::<CompletionResponse>(resp).map_err(WasmHostError::InvalidResponse)?;
@@ -290,19 +309,21 @@ pub fn run_component_with_caps(
     let runner = Runner::instantiate(&mut store, &component, &linker)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
-    match runner.call_run(&mut store, prompt) {
-        Ok(Ok(payload)) => Ok(payload),
+    let result = runner.call_run(&mut store, prompt);
+    match result {
+        Ok(Ok(payload)) => Ok((payload, store.into_data().emitted)),
         Ok(Err(guest_err)) => Err(WasmHostError::Guest(guest_err)),
         Err(trap) => Err(WasmHostError::Trap(trap.into())),
     }
 }
 
 /// Determinism-conformance entry: no capabilities, so no WASI grants.
+/// Returns the same `(payload, emitted)` pair as [`run_component_with_caps`].
 pub fn run_component(
     wasm_bytes: &[u8],
     prompt: &str,
     llm_responses: Vec<String>,
-) -> Result<String, WasmHostError> {
+) -> Result<(String, Vec<String>), WasmHostError> {
     run_component_with_caps(wasm_bytes, prompt, llm_responses, &[], Path::new("."))
 }
 

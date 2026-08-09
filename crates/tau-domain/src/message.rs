@@ -32,6 +32,7 @@ use crate::value::Value;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Address {
     /// A specific agent instance.
     Agent(AgentInstanceId),
@@ -71,6 +72,7 @@ pub enum Address {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum MessagePayload {
     /// Human- or agent-authored text. The envelope's `sender` field
     /// distinguishes origin.
@@ -129,6 +131,7 @@ pub enum MessagePayload {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Message {
     /// Globally unique message identifier.
     pub id: MessageId,
@@ -141,6 +144,13 @@ pub struct Message {
     /// When the message was created (UTC). Supplied by the caller's
     /// `Clock` port in the no_std kernel; the std `Message::new`
     /// convenience stamps `Utc::now()`.
+    ///
+    /// `chrono::DateTime<Utc>` is foreign to this crate, so it cannot
+    /// carry its own `#[cfg_attr(schema, derive(JsonSchema))]` (orphan
+    /// rule). Its serde representation is an RFC3339 string (chrono's
+    /// default `Serialize`), so `schemars(with = "String")` describes
+    /// the actual wire shape without touching serde.
+    #[cfg_attr(feature = "schema", schemars(with = "alloc::string::String"))]
     pub created_at: DateTime<Utc>,
     /// Free-form headers. `BTreeMap` for stable iteration order.
     pub headers: BTreeMap<String, String>,
