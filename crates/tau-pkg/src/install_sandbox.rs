@@ -279,10 +279,6 @@ pub(crate) mod tests {
         );
     }
 
-    #[cfg_attr(
-        windows,
-        ignore = "path-separator assumption (\\ vs /) not portable to Windows; see #530"
-    )]
     #[test]
     fn build_envelope_grants_target_write_and_registry_net() {
         let dir = tempfile::tempdir().unwrap();
@@ -292,9 +288,15 @@ pub(crate) mod tests {
         )
         .unwrap();
         let plan = build_envelope(dir.path());
+        // Normalize `\` → `/` on both sides so the assertion is path-separator
+        // agnostic. In serialized JSON a Windows backslash appears escaped
+        // (`\\`), so we collapse both the escaped-pair and any lone backslash
+        // to `/` before comparing. See #530.
         let json = serde_json::to_value(&plan.capabilities)
             .unwrap()
-            .to_string();
+            .to_string()
+            .replace("\\\\", "/")
+            .replace('\\', "/");
         assert!(
             json.contains("index.crates.io"),
             "registry host present: {json}"
@@ -302,7 +304,13 @@ pub(crate) mod tests {
         assert!(json.contains("static.crates.io"));
         assert!(json.contains("net.http"));
         assert!(json.contains("fs.write"));
-        assert!(json.contains(&dir.path().join("target").display().to_string()));
+        let target = dir
+            .path()
+            .join("target")
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        assert!(json.contains(&target), "target write path present: {json}");
     }
 
     #[test]

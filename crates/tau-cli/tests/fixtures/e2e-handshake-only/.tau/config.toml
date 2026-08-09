@@ -1,0 +1,15 @@
+schema_version = 3
+kind = "project"
+created_at = "2026-05-04T00:00:00Z"
+created_by_tau_version = "0.0.0"
+
+# This handshake-only e2e fixture spawns zero plugins, so it needs no
+# sandbox isolation. Declaring `required_tier = "none"` lets `tau serve`
+# resolve the Passthrough adapter and start on every platform — including
+# Windows, where no Strict-tier adapter exists (Native is Linux/macOS-only
+# and the container runtime is absent on CI). Without this, serve's eager
+# `resolve_adapter` call returns NoAdapterMatches under the default
+# `required_tier = "strict"` and the child dies before printing its ready
+# marker, which is exactly what gated these tests on Windows (see #530).
+[sandbox]
+required_tier = "none"

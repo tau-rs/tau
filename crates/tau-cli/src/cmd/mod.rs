@@ -11,6 +11,7 @@ pub(crate) mod builtin_registry;
 pub mod chat;
 pub mod check;
 pub mod dev;
+pub mod embed;
 pub mod error_render;
 pub mod init;
 pub mod install;

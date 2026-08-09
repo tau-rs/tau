@@ -14,7 +14,7 @@ thiserror    = { workspace = true }
 futures-core = { workspace = true }
 uuid         = { workspace = true }
 serde        = { workspace = true, optional = true }
-schemars     = { workspace = true, optional = true }
+schemars     = { workspace = true, optional = true, features = ["derive"] }
 chrono = { workspace = true, default-features = false, features = ["alloc", "serde"] }
 zeroize = { workspace = true }
 tempfile     = { workspace = true, optional = true }
@@ -34,7 +34,7 @@ default       = ["process"]
 # default build fails unless some other crate happens to pull `serde/std`.
 process       = ["serde?/std"]
 serde         = ["dep:serde", "tau-domain/serde", "uuid/serde"]
-schema        = ["dep:schemars"]
+schema        = ["dep:schemars", "tau-domain/schema"]
 test-fixtures = ["dep:tempfile"]
 
 [dev-dependencies]

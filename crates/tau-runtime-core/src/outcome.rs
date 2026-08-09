@@ -46,6 +46,7 @@ use crate::options::TokenUsage;
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RunOutcome {
     /// Agent completed and produced a final response.
     Completed {

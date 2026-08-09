@@ -196,6 +196,8 @@ pub enum Command {
     /// editing `tau.toml` triggers a `:reload` hint that preserves
     /// conversation history.
     Dev(DevArgs),
+    /// Emit host-embedding glue for a target language (Phase 2 §5.2).
+    Embed(EmbedArgs),
 }
 
 /// Top-level arguments for `tau build [wasm] [...]`.
@@ -697,6 +699,18 @@ pub struct DevArgs {
     /// Disable ANSI coloring of output.
     #[arg(long)]
     pub no_color: bool,
+}
+
+/// Arguments for `tau embed`.
+#[derive(clap::Args, Debug)]
+pub struct EmbedArgs {
+    /// Host language for the generated glue. Only `js` is supported today.
+    #[arg(long, value_name = "HOST")]
+    pub host: String,
+    /// Output directory (default: current directory; files land under
+    /// `<dir>/sdk/embed-js/`).
+    #[arg(long, short = 'o', value_name = "DIR")]
+    pub output: Option<PathBuf>,
 }
 
 /// Resource kinds accepted by `tau list`.

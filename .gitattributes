@@ -4,3 +4,8 @@
 *.md text eol=lf
 *.yml text eol=lf
 *.txt text eol=lf
+# Generated SDK sources (tau-sdk-codegen) are byte-compared against a fresh
+# LF render by tests/drift.rs; pin them to LF so a Windows checkout with
+# core.autocrlf=true does not introduce CRLF drift. See #530.
+*.py text eol=lf
+*.ts text eol=lf

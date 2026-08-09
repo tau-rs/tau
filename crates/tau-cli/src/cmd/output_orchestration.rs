@@ -78,9 +78,9 @@ pub async fn run_printer(
                 agent_id,
                 turn_index,
                 duration_ms,
-                ..
+                tokens,
             } => format!(
-                "        Turn {agent_id}: {} ({:.1}s)",
+                "        Turn {agent_id}: {} ({:.1}s \u{00b7} {tokens} tok)",
                 turn_index + 1,
                 *duration_ms as f64 / 1000.0
             ),
@@ -185,10 +185,20 @@ pub fn print_summary(
         snapshot.tokens_used, snapshot.elapsed_secs
     ));
     let _ = output.human("");
-    let _ = output.human("      agent             turns    duration    tokens");
+    let id_w = stats
+        .keys()
+        .map(String::len)
+        .max()
+        .unwrap_or(0)
+        .max("agent".len())
+        .max(16);
+    let _ = output.human(&format!(
+        "      {:<id_w$}  turns    duration    tokens",
+        "agent"
+    ));
     for (agent_id, s) in stats {
         let _ = output.human(&format!(
-            "      {:<16}  {:>5}   {:>7.1}s   {:>7}",
+            "      {:<id_w$}  {:>5}   {:>7.1}s   {:>7}",
             agent_id,
             s.turns,
             s.duration_ms as f64 / 1000.0,
@@ -314,6 +324,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn printer_human_mode_turn_line_includes_tokens() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(evt(TraceEventKind::Turn {
+            agent_id: "orchestrator".into(),
+            turn_index: 1,
+            duration_ms: 300,
+            tokens: 20,
+        }))
+        .unwrap();
+        drop(tx);
+        let (mut out, stdout) = test_output(false);
+        run_printer(rx, &mut out).await;
+        let s = stdout.snapshot();
+        assert!(
+            s.contains("\u{00b7} 20 tok"),
+            "turn line missing token count: {s:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn printer_json_mode_emits_json_lines_not_human() {
         let (tx, rx) = mpsc::unbounded_channel();
         tx.send(evt(TraceEventKind::Spawn {
@@ -374,6 +404,44 @@ mod tests {
         let s = stdout.snapshot();
         assert!(s.contains("Summary"), "summary header missing: {s:?}");
         assert!(s.contains("run_id: run_1"), "run_id line missing: {s:?}");
+    }
+
+    #[test]
+    fn summary_human_mode_aligns_columns_for_long_agent_ids() {
+        let (mut out, stdout) = test_output(false);
+        let mut stats: BTreeMap<String, AgentStats> = BTreeMap::new();
+        // Short id (12 chars) and a spawned-child id (21 chars) that
+        // overflows the historical 16-char pad.
+        stats.insert(
+            "orchestrator".into(),
+            AgentStats {
+                turns: 2,
+                duration_ms: 0,
+                tokens: 40,
+            },
+        );
+        stats.insert(
+            "orchestrator-01kzjwjg".into(),
+            AgentStats {
+                turns: 1,
+                duration_ms: 0,
+                tokens: 20,
+            },
+        );
+        print_summary(&snapshot_fixture(), &stats, &mut out);
+        let s = stdout.snapshot();
+        let rows: Vec<&str> = s
+            .lines()
+            .filter(|l| l.trim_start().starts_with("orchestrator"))
+            .collect();
+        assert_eq!(rows.len(), 2, "expected two agent rows: {s:?}");
+        // Every field is fixed-width once the id column absorbs the widest
+        // id, so aligned rows have identical rendered length.
+        assert_eq!(
+            rows[0].chars().count(),
+            rows[1].chars().count(),
+            "agent rows misaligned when an id exceeds the pad: {rows:?}"
+        );
     }
 
     #[test]
