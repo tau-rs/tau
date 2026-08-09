@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SKILL_DIR_VAR"],"enum":["SkillContentError"],"fn":["parse_skill_md"],"struct":["SkillContent","SkillFrontmatter","SkillManifest"]};
