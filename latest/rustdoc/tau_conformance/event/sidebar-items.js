@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CONFORMANCE_EVENT_VERSION"],"enum":["ConformanceEvent","ToolOutcome"]};
