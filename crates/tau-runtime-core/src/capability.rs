@@ -171,8 +171,15 @@ pub fn check_capabilities_for_tool<'a>(
 /// host `EgressPolicy` is configured from the same allow-bounded caps and
 /// rejects at the socket), each `Capability::Network` in `required` is
 /// delegated — recorded via `capability.egress_delegated` and NOT checked
-/// in-guest — while every other capability is still checked. Returns the
-/// first missing non-delegated capability, or `None` if all are covered.
+/// in-guest — while every other capability is still checked. The flag-on
+/// path emits the same `capability.check` span and lifecycle events
+/// (`capability.required_loaded`, `capability.granted_loaded`,
+/// `capability.satisfies_check`, and `capability.allow`/`capability.deny`)
+/// as [`check_capabilities_for_tool`], so wasm/host-mediated runs stay
+/// observably on par with native runs; the only difference is that net
+/// caps are recorded via `capability.egress_delegated` instead of being
+/// satisfies-checked. Returns the first missing non-delegated capability,
+/// or `None` if all are covered.
 pub fn check_capabilities_for_tool_delegating<'a>(
     tool_name: &str,
     granted: &[Capability],
@@ -183,38 +190,49 @@ pub fn check_capabilities_for_tool_delegating<'a>(
     if !egress_host_mediated {
         return check_capabilities_for_tool(tool_name, granted, required);
     }
-    tracing::debug!(
-        name = v::EV_CAPABILITY_REQUIRED_LOADED,
-        required_count = required.len(),
-    );
-    tracing::debug!(
-        name = v::EV_CAPABILITY_GRANTED_LOADED,
-        granted_count = granted.len(),
-    );
-    for req in required {
-        if matches!(req, Capability::Network(_)) {
-            tracing::info!(
-                name = v::EV_CAPABILITY_EGRESS_DELEGATED,
-                tool_name = %tool_name,
-                delegated_kind = %capability_kind_str(req),
-            );
-            continue;
+    let span = tracing::info_span!("capability.check", tool_name = %tool_name);
+    span.in_scope(|| {
+        tracing::debug!(
+            name = v::EV_CAPABILITY_REQUIRED_LOADED,
+            required_count = required.len(),
+        );
+        tracing::debug!(
+            name = v::EV_CAPABILITY_GRANTED_LOADED,
+            granted_count = granted.len(),
+        );
+        let mut missing: Option<&'a Capability> = None;
+        for req in required {
+            if matches!(req, Capability::Network(_)) {
+                tracing::info!(
+                    name = v::EV_CAPABILITY_EGRESS_DELEGATED,
+                    tool_name = %tool_name,
+                    delegated_kind = %capability_kind_str(req),
+                );
+                continue;
+            }
+            if missing.is_none() && !granted.iter().any(|g| capability_satisfies(g, req)) {
+                missing = Some(req);
+            }
         }
-        if !granted.iter().any(|g| capability_satisfies(g, req)) {
-            let kind = capability_kind_str(req);
-            tracing::warn!(
-                name = v::EV_CAPABILITY_DENY,
-                tool_name = %tool_name,
-                missing_kind = %kind,
-            );
-            return Some(req);
+        tracing::debug!(
+            name = v::EV_CAPABILITY_SATISFIES_CHECK,
+            satisfied = missing.is_none(),
+        );
+        match missing {
+            None => {
+                tracing::info!(name = v::EV_CAPABILITY_ALLOW, tool_name = %tool_name);
+                None
+            }
+            Some(cap) => {
+                tracing::warn!(
+                    name = v::EV_CAPABILITY_DENY,
+                    tool_name = %tool_name,
+                    missing_kind = %capability_kind_str(cap),
+                );
+                Some(cap)
+            }
         }
-    }
-    tracing::info!(
-        name = v::EV_CAPABILITY_ALLOW,
-        tool_name = %tool_name,
-    );
-    None
+    })
 }
 
 /// Top-level capability kind string used in
