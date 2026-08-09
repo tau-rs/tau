@@ -44,11 +44,13 @@ pub async fn run_printer(
             TraceEventKind::Turn {
                 agent_id,
                 duration_ms,
+                tokens,
                 ..
             } => {
                 let entry = stats.entry(agent_id.clone()).or_default();
                 entry.turns += 1;
                 entry.duration_ms += *duration_ms;
+                entry.tokens += *tokens;
             }
             TraceEventKind::Completion { agent_id, .. } => {
                 stats.entry(agent_id.clone()).or_default();
@@ -76,6 +78,7 @@ pub async fn run_printer(
                 agent_id,
                 turn_index,
                 duration_ms,
+                ..
             } => format!(
                 "        Turn {agent_id}: {} ({:.1}s)",
                 turn_index + 1,
@@ -343,6 +346,7 @@ mod tests {
             agent_id: "a".into(),
             turn_index: 0,
             duration_ms: 1500,
+            tokens: 42,
         }))
         .unwrap();
         drop(tx);
@@ -351,6 +355,7 @@ mod tests {
         let a = stats.get("a").expect("stats aggregated in json mode");
         assert_eq!(a.turns, 1);
         assert_eq!(a.duration_ms, 1500);
+        assert_eq!(a.tokens, 42);
     }
 
     #[test]

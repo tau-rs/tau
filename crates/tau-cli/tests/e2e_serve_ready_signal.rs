@@ -24,6 +24,10 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/e2e-handshake-only")
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
+)]
 #[test]
 fn ready_on_stderr_marker() {
     e2e_common::ensure_home_env();

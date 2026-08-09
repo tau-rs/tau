@@ -31,7 +31,8 @@
 
 mod common;
 
-use std::sync::Arc;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
 use tau_ports::RunBudget;
 use tau_runtime_tokio::Runtime;
@@ -729,5 +730,288 @@ async fn run_note_write_flow() {
         snapshot.plan.contains("checked: hypothesis holds"),
         "plan must contain the second note; got {:?}",
         snapshot.plan
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Live trace renders during a multi-agent run (production wiring, issue #469)
+// ---------------------------------------------------------------------------
+//
+// The pattern tests above call `spawn_root_agent_with_scope`, and the unit
+// tests in `output_orchestration.rs` feed synthetic `TraceEvent`s into a
+// channel by hand. Neither exercises the *production* path: the exact join
+// `run.rs` performs — `drive_with_live_trace` (a real mock-LLM multi-agent
+// run) subscribed by `run_printer`, then `print_summary`.
+//
+// What these tests guard, twofold:
+//
+// 1. Live wiring: the trace stream is actually drained and rendered by
+//    `run_printer` before `print_summary` runs. #528's regression shape was
+//    `run.rs` skipping the printer entirely and handing `print_summary` an
+//    empty map, so no live line ever rendered — asserting live
+//    "spawned"/"kind":"spawn" lines appear (and, in human mode, precede the
+//    summary) catches exactly that.
+//
+// 2. Per-agent aggregation: the `AgentStats` map is NON-EMPTY, with one
+//    entry per agent and real per-agent turn counts. `run_printer`
+//    aggregates stats from `Turn`/`Completion` trace events, which
+//    `run_with_history` (tau-runtime-core/src/run.rs) emits by translating
+//    the pump's per-turn `RunEvent::TurnCompleted` + terminal `RunCompleted`
+//    for every agent (root, children, interpreter alike). For the fixture
+//    below — orchestrator spawns one researcher — that means TWO agents:
+//    the root orchestrator (2 turns: the spawn tool-call turn + the closing
+//    text turn) and the spawned child (1 turn). The child's agent id is a
+//    generated ULID-suffixed string, so we assert on turn counts / entry
+//    count, not the exact child key.
+
+/// Shared writer that captures bytes and is `Send + Write`, so an `Output`
+/// built via `Output::with_writers` can be inspected after the run.
+#[derive(Clone, Default)]
+struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedBuf {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl SharedBuf {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+/// Drive the real production wiring in human mode and assert the live
+/// `TraceEvent` stream was consumed and rendered before the summary.
+///
+/// Liveness caveat: the mock LLM completes near-instantly, so this proves
+/// "events were consumed + rendered before the summary", NOT wall-clock
+/// interleaving during a slow run.
+#[tokio::test]
+async fn live_trace_renders_during_multi_agent_run() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    // Same mock script as pattern_a: orchestrator spawns one researcher.
+    let backend = common::MockLlmBackend::new("test-llm")
+        .add_tool_call_json(
+            "agent.researcher.spawn",
+            serde_json::json!({ "message": "research the topic", "grant": [] }),
+        )
+        .add_text("orchestration complete")
+        .add_text("research findings");
+
+    let runtime = Arc::new(
+        Runtime::builder()
+            .with_llm_backend(backend)
+            .build()
+            .expect("build runtime"),
+    );
+
+    let manifest = manifest_with_agent_spawn(r#""researcher""#);
+    let agent_def = common::agent_def(
+        "orchestrator",
+        "Orchestrator",
+        "orchestrator@0.1.0",
+        "test-llm",
+    );
+    let initial = common::user_message("start the research pipeline");
+
+    // Production seam: the live-trace driver + its receiver.
+    let (rx, run_fut) = tau_runtime_tokio::drive_with_live_trace(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    );
+
+    let stdout = SharedBuf::default();
+    let mut out = tau_cli::Output::with_writers(
+        Box::new(stdout.clone()),
+        Box::new(SharedBuf::default()),
+        false, // json
+        false, // quiet
+        tau_cli::ColorChoice::Never,
+    );
+
+    // Exactly the run.rs join: drive the run while the printer drains its trace.
+    let (snap_res, stats) = tokio::join!(
+        run_fut,
+        tau_cli::cmd::output_orchestration::run_printer(rx, &mut out),
+    );
+    let snapshot = snap_res.expect("multi-agent run must succeed");
+    assert_eq!(
+        snapshot.status,
+        tau_ports::RunStatus::Completed,
+        "run must complete; got {:?}",
+        snapshot.status
+    );
+    tau_cli::cmd::output_orchestration::print_summary(&snapshot, &stats, &mut out);
+
+    // (1) Per-agent aggregation: the printer built real stats from the live
+    //     `Turn`/`Completion` trace events — the exact regression #528 left
+    //     (an always-empty map). Two agents: root orchestrator (2 turns) +
+    //     the spawned child (1 turn).
+    assert_eq!(
+        stats.len(),
+        2,
+        "expected root + one child in stats; got {:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        stats.get("orchestrator").map(|s| s.turns),
+        Some(2),
+        "root orchestrator must aggregate its 2 turns; stats={:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
+    // Per-turn tokens are real, not 0: the mock reports make_token_usage(10, 10)
+    // = 20 tokens/turn, so the 2-turn orchestrator aggregates to 40.
+    assert_eq!(
+        stats.get("orchestrator").map(|s| s.tokens),
+        Some(40),
+        "root orchestrator must aggregate 2 turns x 20 tokens; stats={:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
+    let child_turns: Vec<u32> = stats
+        .iter()
+        .filter(|(id, _)| id.as_str() != "orchestrator")
+        .map(|(_, s)| s.turns)
+        .collect();
+    assert_eq!(
+        child_turns,
+        vec![1],
+        "the one spawned child must aggregate its single turn; stats={:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
+    let child_tokens: Vec<u64> = stats
+        .iter()
+        .filter(|(id, _)| id.as_str() != "orchestrator")
+        .map(|(_, s)| s.tokens)
+        .collect();
+    assert_eq!(
+        child_tokens,
+        vec![20],
+        "the one spawned child must aggregate its single turn x 20 tokens; stats={:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
+
+    // (2) Live wiring: the stream was drained and rendered before the
+    //     summary. In the regression the printer was skipped, so no live
+    //     "spawned" line rendered at all.
+    let s = stdout.text();
+    let spawn_i = s
+        .find("spawned")
+        .unwrap_or_else(|| panic!("live spawn line must render; got:\n{s}"));
+    let sum_i = s
+        .find("Summary")
+        .unwrap_or_else(|| panic!("summary block must render; got:\n{s}"));
+    assert!(
+        spawn_i < sum_i,
+        "live events must render before the summary:\n{s}"
+    );
+}
+
+/// Same production wiring in `--json` mode: the live stream is emitted as
+/// one JSON object per event and the summary as a single `{"event":"summary"}`
+/// object — with NO human-mode "spawned"/"Summary" text.
+#[tokio::test]
+async fn live_trace_renders_json_during_multi_agent_run() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let backend = common::MockLlmBackend::new("test-llm")
+        .add_tool_call_json(
+            "agent.researcher.spawn",
+            serde_json::json!({ "message": "research the topic", "grant": [] }),
+        )
+        .add_text("orchestration complete")
+        .add_text("research findings");
+
+    let runtime = Arc::new(
+        Runtime::builder()
+            .with_llm_backend(backend)
+            .build()
+            .expect("build runtime"),
+    );
+
+    let manifest = manifest_with_agent_spawn(r#""researcher""#);
+    let agent_def = common::agent_def(
+        "orchestrator",
+        "Orchestrator",
+        "orchestrator@0.1.0",
+        "test-llm",
+    );
+    let initial = common::user_message("start the research pipeline");
+
+    let (rx, run_fut) = tau_runtime_tokio::drive_with_live_trace(
+        runtime,
+        agent_def,
+        manifest,
+        initial,
+        RunBudget::default(),
+        tmp.path().to_path_buf(),
+    );
+
+    let stdout = SharedBuf::default();
+    let mut out = tau_cli::Output::with_writers(
+        Box::new(stdout.clone()),
+        Box::new(SharedBuf::default()),
+        true,  // json
+        false, // quiet
+        tau_cli::ColorChoice::Never,
+    );
+
+    let (snap_res, stats) = tokio::join!(
+        run_fut,
+        tau_cli::cmd::output_orchestration::run_printer(rx, &mut out),
+    );
+    let snapshot = snap_res.expect("multi-agent run must succeed");
+    tau_cli::cmd::output_orchestration::print_summary(&snapshot, &stats, &mut out);
+
+    // Stats aggregate under --json too (the human table is suppressed, but
+    // the per-agent map still populates from the live trace events).
+    assert_eq!(
+        stats.len(),
+        2,
+        "expected root + one child in stats; got {:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
+
+    let s = stdout.text();
+    // Raw TraceEvent JSON: the live stream is emitted as one internally
+    // tagged JSON object per event — spawn, per-turn, and completion.
+    assert!(
+        s.contains("\"kind\":\"spawn\""),
+        "json spawn event missing:\n{s}"
+    );
+    assert!(
+        s.contains("\"kind\":\"turn\""),
+        "json per-turn event missing:\n{s}"
+    );
+    assert!(
+        s.contains("\"kind\":\"completion\""),
+        "json completion event missing:\n{s}"
+    );
+    // The summary is a single tagged JSON object, not the human table.
+    assert!(
+        s.contains("\"event\":\"summary\""),
+        "json summary object missing:\n{s}"
+    );
+    // No human-mode rendering leaked through. Note we can't just look for
+    // "spawned" — the JSON summary object carries an `"agents_spawned"` field.
+    // The human spawn line is distinguished by its `\u{25c6}` bullet marker,
+    // and the human summary header by the capitalized word "Summary" (the
+    // JSON tag is lowercase `"event":"summary"`).
+    assert!(
+        !s.contains('\u{25c6}'),
+        "json mode must not emit the human spawn line:\n{s}"
+    );
+    assert!(
+        !s.contains("Summary"),
+        "json mode must not emit the human summary block:\n{s}"
     );
 }

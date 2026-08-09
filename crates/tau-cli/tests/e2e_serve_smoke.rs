@@ -57,6 +57,10 @@ fn recv_line(reader: &mut BufReader<std::process::ChildStdout>) -> Value {
 }
 
 /// `meta.ping` works before the handshake.
+#[cfg_attr(
+    windows,
+    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
+)]
 #[test]
 fn ping_before_handshake() {
     e2e_common::ensure_home_env();
@@ -79,6 +83,10 @@ fn ping_before_handshake() {
 }
 
 /// Full `meta.handshake` roundtrip: request → response with matching protocol_version.
+#[cfg_attr(
+    windows,
+    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
+)]
 #[test]
 fn handshake_response_over_real_pipe() {
     e2e_common::ensure_home_env();
@@ -110,6 +118,10 @@ fn handshake_response_over_real_pipe() {
 }
 
 /// After a successful handshake, `meta.ping` still works.
+#[cfg_attr(
+    windows,
+    ignore = "tau serve child can't resolve scope on Windows (no home fallback); see #530"
+)]
 #[test]
 fn ping_after_handshake() {
     e2e_common::ensure_home_env();

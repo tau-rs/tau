@@ -9,17 +9,25 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-wasmtime   = { workspace = true }
-tau-ports  = { workspace = true, features = ["serde"] }
-serde_json = { workspace = true }
-anyhow     = { workspace = true }
-thiserror  = { workspace = true }
+wasmtime           = { workspace = true }
+wasmtime-wasi      = "47"
+wasmtime-wasi-http = "47"
+# Only needed to name the `hyper::Request<HyperOutgoingBody>` type in the
+# `WasiHttpHooks::send_request` override signature (EPIC 3.3); no client
+# features required.
+hyper              = { version = "1", default-features = false }
+tau-ports     = { workspace = true, features = ["serde"] }
+tau-domain    = { workspace = true }
+serde_json    = { workspace = true }
+anyhow        = { workspace = true }
+thiserror     = { workspace = true }
 
 [dev-dependencies]
 tau-ir           = { workspace = true }
 tau-ir-lower     = { workspace = true }
 tau-pkg          = { workspace = true }
 tau-runtime-core = { workspace = true, features = ["std"] }
+tau-domain       = { workspace = true, features = ["test-fixtures"] }
 tempfile         = { workspace = true }
 wit-parser       = { workspace = true }
 

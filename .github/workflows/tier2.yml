@@ -115,7 +115,14 @@ jobs:
           shared-key: macos-latest-stable
           with-nextest: true
           with-sccache: true
-      - run: cargo nextest run --profile ci --workspace --all-targets
+      # --no-fail-fast: nightly is a comprehensive regression sweep — surface
+      # EVERY failing test in one run rather than stopping at the first, so a
+      # single cron (and its auto-bisect) sees the whole picture.
+      # --retries 2: the shared macOS/Windows runners are loaded and several
+      # e2e tests are timing-sensitive; retries absorb transient flakes while a
+      # genuine break still fails all 3 attempts. (Tier 0 stays retries=0 for
+      # hard signal on the fast lane.)
+      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
 
   nextest-windows:
     name: nextest / windows
@@ -129,7 +136,8 @@ jobs:
           toolchain: stable
           shared-key: windows-latest-stable
           with-nextest: true
-      - run: cargo nextest run --profile ci --workspace --all-targets
+      # --no-fail-fast + --retries 2: see nextest-macos above.
+      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
 
   coverage:
     name: cargo llvm-cov nextest
@@ -541,7 +549,7 @@ jobs:
         run: |
           # Find an existing open issue with the nightly-regression label.
           EXISTING=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
-          BODY="Nightly Tier 2 cron failed on commit \`$SHA\`.\n\nRun: $RUN_URL\n\nSee failing jobs in the run page; auto-bisect will post the offending commit when available."
+          BODY="Nightly Tier 2 cron failed on commit \`$SHA\`.\n\nRun: $RUN_URL\n\nSee failing jobs in the run page; a regression-range report (last green nightly → this commit) will follow."
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"
           else
@@ -552,12 +560,19 @@ jobs:
               --body "$BODY"
           fi
 
-  auto-bisect:
-    # Runs after nightly-regression-handler on cron failure. Bisects
-    # main between yesterday's passing SHA and today's failing SHA.
-    # Posts the offending commit to the rolling regression issue.
-    # Cap 7 days back; if no green ancestor found, file note without bisect.
-    name: auto-bisect
+  regression-range:
+    # Runs after nightly-regression-handler on cron failure. Posts the
+    # commit range (last green nightly → failing HEAD) to the rolling
+    # regression issue so a human can bisect.
+    #
+    # Automated cross-platform bisect is DEFERRED (was a v0 placeholder that
+    # never posted anything). The nightly reds live in platform/config-
+    # specific jobs — Windows-only tests, `--locked` msrv, `cargo test -p
+    # tau-ir` — that a generic ubuntu `--workspace` nextest bisect cannot
+    # reproduce: it marks every commit "good" and posts a wrong culprit or
+    # nothing. Until a bisect can run the *offending* job on the *offending*
+    # runner, report the range and let a human drive.
+    name: regression-range
     needs: nightly-regression-handler
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -565,47 +580,54 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-mold: true
-      - name: Find yesterday's last green SHA
+      - name: Find last green nightly SHA
         id: green
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Look back 7 days of nightly cron runs for the most recent success.
+          # Most recent successful nightly cron. No date cap: the old
+          # `--created '>=7 days ago'` filter went silent once main had been
+          # red for >7 days — exactly when this report is most needed.
           PREV=$(gh run list --workflow=tier2.yml --event=schedule --status success \
-            --limit 20 --json databaseId,headSha --created '>=7 days ago' \
-            --jq '.[0] // empty')
+            --limit 100 --json headSha,createdAt --jq '.[0] // empty')
           if [ -z "$PREV" ]; then
-            echo "No green ancestor in 7 days; cannot bisect."
             echo "sha=" >> "$GITHUB_OUTPUT"
+            echo "green_date=" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=$(echo "$PREV" | jq -r '.headSha')" >> "$GITHUB_OUTPUT"
+            echo "green_date=$(echo "$PREV" | jq -r '.createdAt')" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Post regression range to the rolling issue
+        # ALWAYS post — the previous version exited silently when no green
+        # was found in the window, which is why no culprit ever appeared.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GREEN_SHA: ${{ steps.green.outputs.sha }}
+          GREEN_DATE: ${{ steps.green.outputs.green_date }}
+          BAD_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ISSUE=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
+          if [ -z "$ISSUE" ]; then
+            echo "No open nightly-regression issue to comment on; nothing to post."
             exit 0
           fi
-          echo "sha=$(echo "$PREV" | jq -r '.headSha')" >> "$GITHUB_OUTPUT"
-      - name: Bisect
-        if: steps.green.outputs.sha != ''
-        env:
-          GREEN_SHA: ${{ steps.green.outputs.sha }}
-          BAD_SHA: ${{ github.sha }}
-        run: |
-          # The exact test command must reproduce the failure.
-          # For v0, use a placeholder that runs the same workspace nextest
-          # as Tier 2's nextest-macos / windows. Real bisect against
-          # platform-specific jobs would need an macOS runner — defer
-          # cross-platform bisect to a follow-up.
-          git bisect start
-          git bisect bad "$BAD_SHA"
-          git bisect good "$GREEN_SHA"
-          BISECT_OUT=$(git bisect run cargo nextest run --profile ci --workspace --all-targets 2>&1 | tail -40)
-          OFFENDING=$(echo "$BISECT_OUT" | grep -E 'first bad commit' | awk '{print $1}')
-          if [ -n "$OFFENDING" ]; then
-            COMMIT=$(echo "$BISECT_OUT" | grep -oE '[0-9a-f]{40}' | head -1)
-            AUTHOR=$(git show -s --format='%an <%ae>' "$COMMIT")
-            ISSUE=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
-            if [ -n "$ISSUE" ]; then
-              gh issue comment "$ISSUE" --body "Auto-bisect found offending commit: \`$COMMIT\` by $AUTHOR."
+          {
+            printf 'Regression-range report — automated cross-platform bisect is deferred (see job comment for why).\n\n'
+            printf -- '- Failing HEAD: `%s`\n' "$BAD_SHA"
+            printf -- '- Run: %s\n' "$RUN_URL"
+            if [ -n "$GREEN_SHA" ]; then
+              printf -- '- Last green nightly: `%s` (%s)\n' "$GREEN_SHA" "$GREEN_DATE"
+              printf -- '- Compare: %s/%s/compare/%s...%s\n\n' "$SERVER_URL" "$REPO" "$GREEN_SHA" "$BAD_SHA"
+              printf 'Commits in range (oldest → newest, capped at 50):\n\n'
+              git log --reverse --oneline --no-decorate "$GREEN_SHA..$BAD_SHA" 2>/dev/null \
+                | head -50 | sed 's/^/    /' \
+                || printf '    (unable to compute local range — see the Compare link)\n'
+            else
+              printf -- '- Last green nightly: none in the last 100 nightly runs. main has been red for an extended period; bisect from a known-good release tag instead.\n'
             fi
-          fi
+          } > "$RUNNER_TEMP/range-comment.md"
+          gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/range-comment.md"

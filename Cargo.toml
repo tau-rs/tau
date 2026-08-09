@@ -87,7 +87,7 @@ dlmalloc    = { version = "0.2", features = ["global"] }
 # β.7.5 wasm host (std embedder; host targets only)
 wasmtime    = "47"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
-tau-ports           = { path = "crates/tau-ports",  version = "0.1.0", default-features = false }
+tau-ports           = { path = "crates/tau-ports",  version = "0.3.0", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }

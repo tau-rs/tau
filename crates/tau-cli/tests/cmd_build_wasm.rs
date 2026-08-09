@@ -36,6 +36,18 @@ fn project_needing_process_exec_is_refused() {
 }
 
 #[test]
+fn project_using_control_flow_is_refused() {
+    // A `Parallel` pipeline is control-flow; wasm guests drive run_ir_streaming,
+    // not run_pipeline, so `tau build wasm` must refuse it (feature-fit, EPIC 4.2).
+    let err = lower_to_wasm_ir(&fixture("needs-control-flow")).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("feature-fit") && msg.contains("control-flow") && msg.contains("Parallel"),
+        "expected a feature-fit control-flow refusal naming Parallel, got: {msg}"
+    );
+}
+
+#[test]
 fn trivial_project_generates_host_only_world() {
     let world = wasm_world_for_project(&fixture("trivial")).expect("trivial world");
     assert!(world.contains("import tau:host/host@0.1.0;"));
@@ -65,6 +77,10 @@ fn emitted_world_is_deterministic_and_matches_generator() {
     assert!(!a.contains("wasi:filesystem"), "net-only must not grant fs:\n{a}");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "no Windows home/scope resolution for governance eval; see #530"
+)]
 #[tokio::test]
 async fn ungoverned_project_is_refused_on_wasm_path() {
     // `trivial` declares no `[allow]` ceiling → GOV000 unless opted out.
@@ -74,6 +90,10 @@ async fn ungoverned_project_is_refused_on_wasm_path() {
     assert!(err.contains("GOV000"), "expected GOV000, got: {err}");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "no Windows home/scope resolution for governance eval; see #530"
+)]
 #[tokio::test]
 async fn allow_ungoverned_flag_lets_it_proceed() {
     let flags = GovernanceFlags {
@@ -85,6 +105,10 @@ async fn allow_ungoverned_flag_lets_it_proceed() {
         .expect("--allow-ungoverned proceeds");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "no Windows home/scope resolution for governance eval; see #530"
+)]
 #[tokio::test]
 async fn over_reaching_project_is_refused_on_wasm_path() {
     // `over-reach` declares a `[allow]` ceiling of `net.http` scoped to

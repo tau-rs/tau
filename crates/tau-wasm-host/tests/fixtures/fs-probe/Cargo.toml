@@ -1,0 +1,16 @@
+[package]
+name = "tau-wasm-fs-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+# Intentionally NOT a workspace member: a std wasm32-wasip2 component built on
+# demand by the enforcement test. Empty [workspace] makes cargo treat this as
+# its own root so it doesn't attach to the outer workspace.
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
+
+[workspace]
