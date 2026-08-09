@@ -968,6 +968,7 @@ mod suspension_fixture_tests {
             step_id: "pause".into(),
             ir_digest: "sha256:deadbeef".into(),
             outputs: BTreeMap::new(),
+            attempts: BTreeMap::new(),
         }
     }
 
