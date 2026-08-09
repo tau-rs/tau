@@ -80,7 +80,7 @@ fn granted_path_is_readable_ungranted_path_is_not() {
     // GRANTED: reading /data/ok.txt succeeds.
     let ok = run_component_with_caps(&component, "/data/ok.txt", vec![], &caps, sandbox.path());
     assert!(
-        matches!(&ok, Ok(msg) if msg.contains("read 5 bytes")),
+        matches!(&ok, Ok((msg, _)) if msg.contains("read 5 bytes")),
         "granted path should read, got: {ok:?}"
     );
 
@@ -98,7 +98,7 @@ fn granted_path_is_readable_ungranted_path_is_not() {
         sandbox.path(),
     );
     match sibling {
-        Ok(payload) => {
+        Ok((payload, _)) => {
             panic!("un-granted sibling file was reachable (preopen scope too broad): {payload}")
         }
         Err(WasmHostError::Guest(msg)) => assert!(msg.contains("denied"), "got: {msg}"),
@@ -109,7 +109,7 @@ fn granted_path_is_readable_ungranted_path_is_not() {
     // UN-GRANTED: /etc/secret has no preopen — the guest cannot reach it.
     let denied = run_component_with_caps(&component, "/etc/secret", vec![], &caps, sandbox.path());
     match denied {
-        Ok(payload) => panic!("un-granted path was reachable: {payload}"),
+        Ok((payload, _)) => panic!("un-granted path was reachable: {payload}"),
         // The guest's `run` returned its Err arm ("denied: ...") — WASI gave
         // the guest no descriptor for a non-preopened path.
         Err(WasmHostError::Guest(msg)) => assert!(msg.contains("denied"), "got: {msg}"),

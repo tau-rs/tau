@@ -338,6 +338,7 @@ pub struct ToolSpec {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum StopReason {
     /// Model finished naturally.
     EndTurn,
@@ -356,6 +357,7 @@ pub enum StopReason {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TokenUsage {
     /// Tokens consumed from the input (system + messages + tools).
     pub input_tokens: u32,

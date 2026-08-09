@@ -77,10 +77,31 @@ impl SkillResolver for TauPkgSkillResolver {
 mod tests {
     use super::*;
 
-    #[cfg_attr(
-        windows,
-        ignore = "no Windows home/scope resolution (Scope::resolve fails, not NotFound); see #530"
-    )]
+    /// Point `$TAU_HOME` at a process-local tempdir so the global-scope
+    /// fallback resolves.
+    ///
+    /// `Scope::resolve` walks up for `.tau/`, finds none, and falls back to
+    /// `Scope::global()`, which reads `$TAU_HOME`/`$XDG_DATA_HOME`/`$HOME`. On
+    /// Windows CI none are set, so resolution fails with `HomeNotFound`
+    /// (surfacing as `SkillResolveError::Invalid`) instead of the intended
+    /// `NotFound`. A dedicated tempdir with `config.toml` pre-created, set once,
+    /// gives it a real home without racing on the write. Mirrors
+    /// `e2e_common::ensure_home_env` (added in #545). See #530.
+    fn ensure_home_env() {
+        use std::sync::OnceLock;
+        static TAU_HOME_INIT: OnceLock<()> = OnceLock::new();
+        TAU_HOME_INIT.get_or_init(|| {
+            let dir = std::env::temp_dir()
+                .join(format!("tau-skill-resolver-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("create tau_home tempdir");
+            let cfg = dir.join("config.toml");
+            if !cfg.exists() {
+                let _ = std::fs::write(&cfg, "");
+            }
+            std::env::set_var("TAU_HOME", dir);
+        });
+    }
+
     #[test]
     fn no_lockfile_scope_returns_not_found() {
         // A tempdir with no `.tau/` anywhere up the tree resolves to a
@@ -88,6 +109,7 @@ mod tests {
         // `find_installed_skill` returns `Ok(None)` → `NotFound`.
         // This exercises the real `Scope::resolve` + lookup path
         // without requiring an installed skill.
+        ensure_home_env();
         let dir = tempfile::tempdir().expect("tempdir");
         let resolver = TauPkgSkillResolver::new(dir.path().to_path_buf());
         let err = resolver.resolve("definitely-not-installed").unwrap_err();

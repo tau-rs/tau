@@ -1,8 +1,20 @@
 # ADR-0059: IR control-flow interpreter semantics
 
-**Status:** Accepted
+**Status:** Accepted (Decision 4 superseded in part — see note below)
 **Date:** 2026-07-18
 **Deciders:** tau core
+
+> **Update (2026-08-09, EPIC 4.3):** Decision 4's "loud named error" behavior
+> for `Suspend` has been superseded. The interpreter now checkpoints the
+> pipeline's outputs and step position and pauses, returning
+> `PipelineOutcome::Suspended { run_id, resume_signal, step_id }` instead of
+> erroring; `tau run --resume <id> --signal <name>` restores the checkpoint
+> and continues past the pause. `RuntimeError::SuspendNotImplemented` is
+> retired; the remaining error case (a caller that runs a pipeline without
+> wiring a `SuspensionStore`, e.g. the bundle-run path) returns
+> `RuntimeError::SuspendUnsupported` instead. See
+> [Author a suspend step](../how-to/authoring-suspend.md) for the shipped
+> authoring/resume surface.
 
 ## Context
 

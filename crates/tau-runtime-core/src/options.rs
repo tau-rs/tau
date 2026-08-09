@@ -27,6 +27,8 @@ use core::cell::RefCell;
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "RunTokenUsage"))]
 pub struct TokenUsage {
     /// Total input (prompt) tokens used across the run.
     pub input_tokens: u64,

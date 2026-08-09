@@ -80,6 +80,29 @@ pub(crate) fn run_outcome_kind(outcome: &Option<RunOutcome>) -> &'static str {
     }
 }
 
+/// Summary of a pipeline paused at a top-level `Suspend` step (EPIC 4.3).
+///
+/// Captures the observable shape of a [`tau_ports::orchestration::PipelineSuspension`]
+/// persisted by `run_pipeline_suspendable`, trimmed to the fields that must
+/// agree across DevMode and BundleMode: the signal a `--resume --signal`
+/// must supply, the top-level step index paused at, and a deterministic
+/// snapshot of the accumulated pipeline outputs at pause time.
+///
+/// `outputs_canonical` is `serde_json::to_vec` of the persisted
+/// `BTreeMap<String, serde_json::Value>` — `BTreeMap`'s iteration order is
+/// sorted by key, so the encoding is deterministic and comparable
+/// byte-for-byte across modes without a separate canonicalization step.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuspendedSummary {
+    /// The signal name a `--resume --signal <name>` must supply to continue.
+    pub resume_signal: String,
+    /// Index of the `Suspend` step in the top-level pipeline slice.
+    pub step_cursor: usize,
+    /// Deterministic `serde_json::to_vec` encoding of the persisted
+    /// `PipelineSuspension.outputs` snapshot (sorted-key `BTreeMap`).
+    pub outputs_canonical: Vec<u8>,
+}
+
 /// Side-effect summary produced by a single execution.
 ///
 /// Used by [`assert_conform`] to compare dev-mode and bundle-mode runs
@@ -112,6 +135,16 @@ pub struct ConformanceReport {
     /// field is `Some`, the multiset fields are empty placeholders and
     /// [`assert_conform`] compares only the build-refused strings.
     pub build_refused: Option<String>,
+    /// Suspended-at-pause marker (EPIC 4.3).
+    ///
+    /// `None` ⇒ the run either completed/failed normally or was build-
+    /// refused. `Some(summary)` ⇒ the pipeline paused at a top-level
+    /// `Suspend` step; `run_outcome` is `None` and `build_refused` is
+    /// `None` in that case (a suspension is a third terminal state,
+    /// distinct from both). [`assert_conform`] treats this as a first-class
+    /// terminal state: both modes must agree on whether a fixture suspends,
+    /// and if so, on the persisted [`SuspendedSummary`].
+    pub suspended: Option<SuspendedSummary>,
 }
 
 impl ConformanceReport {
@@ -122,6 +155,7 @@ impl ConformanceReport {
             tool_calls: BTreeMap::new(),
             message_added: BTreeMap::new(),
             build_refused: None,
+            suspended: None,
         }
     }
 
@@ -134,6 +168,23 @@ impl ConformanceReport {
             tool_calls: BTreeMap::new(),
             message_added: BTreeMap::new(),
             build_refused: Some(diagnostic.into()),
+            suspended: None,
+        }
+    }
+
+    /// Construct a suspended report. Use this when `run_pipeline_suspendable`
+    /// returns `PipelineOutcome::Suspended` — the pipeline paused at a
+    /// top-level `Suspend` step rather than completing or failing.
+    /// `tool_calls`/`message_added` still get populated by the caller via
+    /// [`ConformanceReport::record_tool_call`] / [`ConformanceReport::record_message`]
+    /// for whatever side effects occurred before the pause.
+    pub fn suspended(summary: SuspendedSummary) -> Self {
+        Self {
+            run_outcome: None,
+            tool_calls: BTreeMap::new(),
+            message_added: BTreeMap::new(),
+            build_refused: None,
+            suspended: Some(summary),
         }
     }
 
@@ -162,8 +213,15 @@ impl ConformanceReport {
 ///   `IrError::Display` (or equivalent bundle-build error message),
 ///   matching the D-3b "refusal symmetry" rule — both surfaces must
 ///   refuse the same fixture for the same reason.
-/// - When NEITHER carries `build_refused`: compares `run_outcome`,
-///   `tool_calls`, and `message_added` byte-for-byte.
+/// - When NEITHER carries `build_refused`: a suspended run (EPIC 4.3) is a
+///   third terminal state, checked before falling back to `run_outcome`:
+///   - BOTH suspended: compares the two [`SuspendedSummary`]s for equality,
+///     plus the `tool_calls`/`message_added` multisets (any side effects
+///     recorded before the pause).
+///   - ONE suspended, the other not: panics — the two surfaces disagree
+///     about whether the fixture pauses, which is a conformance bug.
+///   - NEITHER suspended: compares `run_outcome`, `tool_calls`, and
+///     `message_added` byte-for-byte (the pre-EPIC-4.3 behavior).
 /// - When ONE carries `build_refused` and the other does not: panics
 ///   immediately — the two surfaces disagree about whether the fixture
 ///   is buildable, which is a conformance bug.
@@ -189,29 +247,62 @@ pub fn assert_conform(dev: &ConformanceReport, bundle: &ConformanceReport) {
                 dev.run_outcome
             );
         }
-        (None, None) => {
-            // Compare RunOutcome by *discriminant* only — variant
-            // payloads embed per-run nondeterministic message UUIDs
-            // and SystemTime::now() values that would never compare
-            // equal across two runs. D-7a's side-effect equivalence is
-            // captured by `tool_calls` and `message_added` (which key
-            // off canonical message bytes that strip those nondeterminisms).
-            assert_eq!(
-                run_outcome_kind(&dev.run_outcome),
-                run_outcome_kind(&bundle.run_outcome),
-                "RunOutcome kind mismatch: dev={:?}, bundle={:?}",
-                dev.run_outcome,
-                bundle.run_outcome,
-            );
-            assert_eq!(
-                dev.tool_calls, bundle.tool_calls,
-                "tool-call multiset mismatch"
-            );
-            assert_eq!(
-                dev.message_added, bundle.message_added,
-                "message-added multiset mismatch"
-            );
-        }
+        // Neither surface refused the build — a suspended pause point
+        // (EPIC 4.3) is checked next, ahead of `run_outcome`, since a
+        // suspended report always carries `run_outcome: None`.
+        (None, None) => match (&dev.suspended, &bundle.suspended) {
+            (Some(ds), Some(bs)) => {
+                assert_eq!(
+                    ds, bs,
+                    "suspended-summary mismatch: dev suspended with {ds:?}, bundle suspended with {bs:?}"
+                );
+                assert_eq!(
+                    dev.tool_calls, bundle.tool_calls,
+                    "tool-call multiset mismatch (suspended run)"
+                );
+                assert_eq!(
+                    dev.message_added, bundle.message_added,
+                    "message-added multiset mismatch (suspended run)"
+                );
+            }
+            (Some(ds), None) => {
+                panic!(
+                    "suspend asymmetry: dev suspended ({ds:?}) but bundle did not suspend \
+                     (bundle outcome: {:?})",
+                    bundle.run_outcome
+                );
+            }
+            (None, Some(bs)) => {
+                panic!(
+                    "suspend asymmetry: bundle suspended ({bs:?}) but dev did not suspend \
+                     (dev outcome: {:?})",
+                    dev.run_outcome
+                );
+            }
+            (None, None) => {
+                // Compare RunOutcome by *discriminant* only — variant
+                // payloads embed per-run nondeterministic message UUIDs
+                // and SystemTime::now() values that would never compare
+                // equal across two runs. D-7a's side-effect equivalence is
+                // captured by `tool_calls` and `message_added` (which key
+                // off canonical message bytes that strip those nondeterminisms).
+                assert_eq!(
+                    run_outcome_kind(&dev.run_outcome),
+                    run_outcome_kind(&bundle.run_outcome),
+                    "RunOutcome kind mismatch: dev={:?}, bundle={:?}",
+                    dev.run_outcome,
+                    bundle.run_outcome,
+                );
+                assert_eq!(
+                    dev.tool_calls, bundle.tool_calls,
+                    "tool-call multiset mismatch"
+                );
+                assert_eq!(
+                    dev.message_added, bundle.message_added,
+                    "message-added multiset mismatch"
+                );
+            }
+        },
     }
 }
 

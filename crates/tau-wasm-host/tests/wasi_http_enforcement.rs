@@ -66,15 +66,23 @@ fn build_http_probe() -> Vec<u8> {
     std::fs::read(&wasm_path).expect("read http-probe component")
 }
 
-/// Assert that `run(input)` was denied by the egress gate: the guest reports
-/// its `denied` arm, which the host surfaces as `WasmHostError::Guest`.
-fn assert_denied(result: Result<String, WasmHostError>, what: &str) {
+/// Assert that `run(input)` was denied by the egress *policy*: the guest
+/// reports its `denied` arm carrying `HttpRequestDenied`, which the host
+/// surfaces as `WasmHostError::Guest`.
+///
+/// Requiring the exact `HttpRequestDenied` code — not just the substring
+/// "denied" — is what makes this an enforcement test. The `EgressPolicy`
+/// returns that code from `send_request` before any socket opens; a generic
+/// transport failure (e.g. a regression that let the request through and it
+/// then failed to connect offline) would carry a *different* code, and must
+/// fail this assertion instead of masquerading as a successful denial.
+fn assert_policy_denied(result: Result<(String, Vec<String>), WasmHostError>, what: &str) {
     match result {
-        Ok(payload) => panic!("{what} should have been denied, but succeeded: {payload}"),
+        Ok((payload, _)) => panic!("{what} should have been denied, but succeeded: {payload}"),
         Err(WasmHostError::Guest(msg)) => {
             assert!(
-                msg.contains("denied"),
-                "{what}: expected denial, got: {msg}"
+                msg.contains("HttpRequestDenied"),
+                "{what}: expected a policy denial (HttpRequestDenied), got: {msg}"
             )
         }
         Err(other) => panic!("{what}: expected a guest denial, got host error: {other:?}"),
@@ -100,7 +108,7 @@ fn egress_is_denied_for_unauthorized_host_and_method() {
         &caps,
         sandbox.path(),
     );
-    assert_denied(blocked_host, "request to unauthorized host");
+    assert_policy_denied(blocked_host, "request to unauthorized host");
 
     // METHOD MISMATCH: POST to the authorized host is still denied — the cap
     // only granted GET. Again rejected before a socket opens.
@@ -111,5 +119,5 @@ fn egress_is_denied_for_unauthorized_host_and_method() {
         &caps,
         sandbox.path(),
     );
-    assert_denied(blocked_method, "request with unauthorized method");
+    assert_policy_denied(blocked_method, "request with unauthorized method");
 }

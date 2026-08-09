@@ -127,6 +127,7 @@ fn random_ref(opts: &RunOptions) -> &Arc<dyn RandomSource> {
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RunEvent {
     /// Run started. Emitted once, before the first turn. Typed
     /// counterpart of the `runtime.run_started` tracing event (β.7.5:
@@ -244,6 +245,9 @@ pub enum RunEvent {
         tool_error_variant: Option<String>,
     },
 }
+
+/// Frozen schema version for `RunEvent` (see schemas/run-event/).
+pub const RUN_EVENT_SCHEMA_VERSION: &str = "v1";
 
 /// Build the stream of `RunEvent`s for a single agent run.
 ///

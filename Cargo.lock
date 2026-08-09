@@ -4455,6 +4455,7 @@ dependencies = [
  "tau-ports",
  "tau-runtime-core",
  "tau-runtime-tokio",
+ "tau-sdk-codegen",
  "tau-ts-extract",
  "tau-wasm-host",
  "tau-workflow",
@@ -4744,7 +4745,7 @@ dependencies = [
 
 [[package]]
 name = "tau-ports"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "futures",
@@ -4776,6 +4777,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "num-traits",
  "proptest",
+ "schemars",
  "serde",
  "serde_json",
  "tau-domain",

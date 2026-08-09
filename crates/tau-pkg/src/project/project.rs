@@ -413,6 +413,12 @@ pub enum PipelineRunRef {
     Deterministic(String),
     /// `check:<id>` — explicitly position a postcondition check.
     Check(String),
+    /// `suspend:<signal>` — pause the pipeline until resumed with a matching
+    /// signal. Top-level only (enforced at typecheck). Produces no output.
+    Suspend {
+        /// The signal a resumer must match to continue.
+        resume_signal: String,
+    },
     /// A conditional branch: run `then` if `on` holds, else `otherwise`.
     Branch {
         /// Branch condition (locus + predicate).
@@ -2005,9 +2011,12 @@ fn validate_pipeline_step(
             Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
             Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
             Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
+            Some(("suspend", sig)) if !sig.is_empty() => PipelineRunRef::Suspend {
+                resume_signal: sig.to_string(),
+            },
             _ => {
                 return Err(bad(format!(
-                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {run_str:?}"
+                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\" | \"suspend:<signal>\", got {run_str:?}"
                 )))
             }
         }
@@ -3993,6 +4002,37 @@ mod tests {
         let cfg = ProjectConfig::parse_str(toml).expect("parses");
         let pipe = cfg.pipeline.expect("pipeline present");
         assert_eq!(pipe.steps[0].run, PipelineRunRef::Check("report".into()));
+    }
+
+    #[test]
+    fn parses_suspend_leaf_step() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [[pipeline.steps]]
+            id = "await-approval"
+            run = "suspend:approved"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("valid");
+        let pipe = cfg.pipeline.as_ref().expect("pipeline");
+        assert_eq!(
+            pipe.steps[0].run,
+            PipelineRunRef::Suspend {
+                resume_signal: "approved".into()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_suspend_with_empty_signal() {
+        let toml = r#"
+            [project]
+            name = "p"
+            [[pipeline.steps]]
+            id = "await"
+            run = "suspend:"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
     }
 
     #[test]
