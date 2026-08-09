@@ -595,13 +595,30 @@ impl Scope {
 /// `home_dirs` is the global scope by convention (`~/.tau`) and is skipped —
 /// it is never a project root. See #530.
 fn walk_up_for_dot_tau(cwd: &Path, home_dirs: &[PathBuf]) -> Option<(PathBuf, PathBuf)> {
+    // Canonicalize the home dirs once. On Windows a temp path can use an 8.3
+    // short name (`RUNNER~1`) while `%USERPROFILE%` is the long name
+    // (`runneradmin`) for the *same* directory; plain `PathBuf` equality would
+    // miss the match and treat `~/.tau` as a project root. Canonicalizing both
+    // sides resolves short names, symlinks, and prefix/separator differences.
+    // See #530. Non-existent home dirs drop out (nothing to exclude).
+    let canon_homes: Vec<PathBuf> = home_dirs
+        .iter()
+        .filter_map(|h| fs::canonicalize(h).ok())
+        .collect();
     for ancestor in cwd.ancestors() {
         let candidate = ancestor.join(".tau");
         if fs::metadata(&candidate)
             .map(|m| m.is_dir())
             .unwrap_or(false)
         {
-            if home_dirs.iter().any(|h| h == ancestor) {
+            // A `.tau` directly in a home dir is the global scope, not a
+            // project. Only canonicalize the ancestor when there is a home to
+            // compare against (keeps the common no-home path IO-free).
+            let is_home_scope = !canon_homes.is_empty()
+                && fs::canonicalize(ancestor)
+                    .map(|a| canon_homes.contains(&a))
+                    .unwrap_or(false);
+            if is_home_scope {
                 continue;
             }
             return Some((ancestor.to_path_buf(), candidate));
@@ -730,14 +747,19 @@ mod tests {
         let home = tmp.path().join("home");
         fs::create_dir_all(home.join(".tau")).unwrap();
 
-        // A `.tau` directly in a home dir is the global scope, not a project.
-        assert_eq!(
-            walk_up_for_dot_tau(&home, std::slice::from_ref(&home)),
-            None,
+        // With `home` excluded, its own `.tau` must NOT be returned as a
+        // project root. On Windows the tempdir lives under %USERPROFILE%, which
+        // may carry its own `~/.tau`; walking past `home` could surface that, so
+        // we assert specifically that home's `.tau` is skipped rather than
+        // asserting `None`.
+        let excluded = walk_up_for_dot_tau(&home, std::slice::from_ref(&home));
+        assert_ne!(
+            excluded,
+            Some((home.clone(), home.join(".tau"))),
             "home-dir .tau must not be discovered as a project root"
         );
 
-        // With no home dirs excluded, the same `.tau` IS a project root.
+        // With no home dirs excluded, the same `.tau` IS the first (project) hit.
         let (root, state) = walk_up_for_dot_tau(&home, &[]).expect("project hit");
         assert_eq!(root, home);
         assert_eq!(state, home.join(".tau"));

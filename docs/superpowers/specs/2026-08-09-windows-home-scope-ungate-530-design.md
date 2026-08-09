@@ -123,10 +123,21 @@ falls through to `Global`.
 
 **Why safe cross-platform:** `ancestor == home` matches only the literal
 `~/.tau`. Project `.tau` dirs created *inside* a tempdir sit deeper than the
-home dir, so `ancestor` is never the home there. Comparison is plain
-`PathBuf` equality against the same env-sourced values `ancestors()` walks
-through — no canonicalization needed (both sides originate from the same
-process env / path walk).
+home dir, so `ancestor` is never the home there.
+
+**Comparison must canonicalize (corrected after the first Windows CI run).**
+An earlier draft compared `ancestor` and the home dir by plain `PathBuf`
+equality, assuming both originate from the same process env / path walk. That
+is false on Windows: `TempDir` paths come from `GetTempPath()` using an 8.3
+short name (`C:\Users\RUNNER~1\...`) while `%USERPROFILE%` is the long name
+(`C:\Users\runneradmin`) for the *same* directory, so plain equality misses
+the match and the polluting `%USERPROFILE%\.tau` is treated as a project root
+— exactly the #537 regression, reproduced on CI. `walk_up_for_dot_tau`
+therefore compares `fs::canonicalize(ancestor)` against the canonicalized home
+dirs (canonicalize resolves 8.3 short names, symlinks, and prefix/separator
+differences). The ancestor is only canonicalized when a `.tau` candidate is
+found *and* there is a home dir to compare against, keeping the common
+no-home walk-up path IO-free.
 
 ## Behavior walk-through (post-change)
 

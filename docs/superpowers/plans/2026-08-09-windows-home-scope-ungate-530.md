@@ -13,7 +13,7 @@
 - **Every cargo command:** `timeout <N> env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/<role> cargo <cmd> -p <crate>`. Main agent role dir = `target/main`; subagents = `target/agent-<role>`. Timeouts: test 300s, build/check 180s, clippy 240s, fmt 30s. Prefer `cargo nextest run` for tests; `cargo test --doc` for doctests.
 - **`forbid(unsafe_code)`** is in force in `tau-pkg`. No `std::env::set_var` in tests (it is `unsafe` on edition 2024). All new unit tests must be hermetic — pass paths/home-dir slices explicitly, never mutate process env.
 - **Precedence (Change 1):** `TAU_HOME → XDG_DATA_HOME/tau → HOME/.tau → USERPROFILE/.tau`. `HOME` keeps priority over `USERPROFILE`.
-- **Exclusion key (Change 2):** home *convention* dirs `{HOME, USERPROFILE}` (set, non-empty), compared by plain `PathBuf` equality — no canonicalization.
+- **Exclusion key (Change 2):** home *convention* dirs `{HOME, USERPROFILE}` (set, non-empty), compared via `fs::canonicalize` on both sides (required — Windows 8.3 short names like `RUNNER~1` vs long-name `%USERPROFILE%` defeat plain equality; caught by the first Windows CI run).
 - **`fmt`/`clippy` clean** before any push (rustfmt is a separate required CI gate; `cargo fmt --check` before push).
 
 ## File Structure
