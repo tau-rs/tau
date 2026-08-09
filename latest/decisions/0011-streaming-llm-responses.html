@@ -1,0 +1,558 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0011 — Streaming LLM responses - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0011-streaming-llm-responses.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0011-streaming-llm-responses"><a class="header" href="#adr-0011-streaming-llm-responses">ADR-0011: Streaming LLM responses</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-04-30
+<strong>Deciders:</strong> Titouan Lebocq
+<strong>Supersedes:</strong> —
+<strong>Closes:</strong> <a href="0006-tau-runtime.html">ADR-0006</a> §5 — streaming was a v0.1
+deferral: <code>LlmBackend::stream</code> existed and every shipped backend
+implemented it, but no kernel-level consumer drove it.
+<strong>Amends:</strong> —
+<strong>Refines:</strong> <a href="0006-tau-runtime.html">ADR-0006</a> §9 (outcome/error
+dichotomy — this ADR refines the streaming-path classification of
+fatal errors via a new <code>RunEvent::FatalError</code> terminal event that
+preserves byte-identical batch-API error semantics).</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>Three of the LLM backends shipped in priorities 2a-2c
+(Anthropic/Ollama/OpenAI) implement <code>LlmBackend::stream</code>, returning a
+<code>CompletionStream</code> (<code>Pin&lt;Box&lt;dyn Stream&lt;Item = Result&lt;CompletionChunk, LlmError&gt;&gt; + Send&gt;&gt;</code>). The trait has been there since priority 1, and
+the protocol's <code>llm.stream</code> IPC wire method exists per ADR-0008. Yet
+<code>Runtime::run_with_history</code> calls <code>LlmBackend::complete</code> exclusively —
+the entire response materializes before the agent loop sees it.</p>
+<p>The cost:</p>
+<ol>
+<li><strong><code>tau chat</code> REPL feels dead</strong> during long completions. The user
+types a question, sees nothing for 5-30 seconds, then the full
+response renders at once.</li>
+<li><strong><code>tau run</code> cannot drive token-aware UIs.</strong> Scripts piping
+<code>tau run --json</code> get one final blob; they can't react to text as it
+arrives.</li>
+<li><strong>Two distinct codepaths</strong> would emerge if streaming consumers kept
+calling <code>LlmBackend::stream</code> directly while batch consumers kept
+calling <code>complete</code>. ADR-0006 §16's "single source of truth for the
+agent loop" invariant would break.</li>
+</ol>
+<p>ADR-0006 §5 reserved this work explicitly:</p>
+<blockquote>
+<p>Streaming is deferred to a future ADR. v0.1 ships
+<code>LlmBackend::stream</code> as a contract for backends but no
+kernel-level consumer; <code>Runtime::run_with_history</code> is the
+non-streaming entry point.</p>
+</blockquote>
+<p>This ADR closes that reservation.</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<p>Five inter-locking commitments:</p>
+<h3 id="1-api-surface-streamitem--runevent"><a class="header" href="#1-api-surface-streamitem--runevent">1. API surface: <code>Stream&lt;Item = RunEvent&gt;</code></a></h3>
+<p><code>Runtime::run_streaming</code> and <code>run_streaming_with_history</code> are public
+async methods on <code>impl Runtime</code> that return <code>Result&lt;impl Stream&lt;Item = RunEvent&gt; + 'static, RuntimeError&gt;</code>. The caller drives
+consumption via <code>.next().await</code> or equivalent stream adapters.</p>
+<p>Rationale: <code>Stream&lt;Item = RunEvent&gt;</code> is the idiomatic Rust async
+iterator. It composes naturally with <code>tokio_stream</code>, <code>futures-util</code>,
+and any future SSE / WebSocket / long-poll surface. Callbacks and
+mpsc channels were considered:</p>
+<ul>
+<li><strong>Callback</strong> (<code>run_streaming(req, on_event: impl FnMut(...))</code>) puts
+the kernel in charge of pacing. Caller can't pause / await between
+events; <code>async</code>-flavored callbacks force the trait to be <code>async fn</code>
+in trait, which needs <code>async_trait</code> or fights the compiler.</li>
+<li><strong>mpsc channel</strong> adds a hidden buffer and a second runtime task; the
+consumer has to learn the channel's bounded/unbounded semantics
+separately. Pull-based <code>Stream</code> is the simpler primitive.</li>
+</ul>
+<p>The lifetime is <code>'static</code>, NOT <code>'_</code>. The stream owns all the data it
+needs (<code>Arc&lt;dyn DynLlmBackend&gt;</code>, owned <code>HashMap&lt;String, Arc&lt;dyn DynTool&gt;&gt;</code>, owned <code>Vec&lt;Capability&gt;</code>, etc.) so it doesn't borrow from
+the runtime registry. After construction the stream is independent of
+<code>&amp;self</code>. The plan-erratum's draft signature
+<code>+ Send + '_</code> was wrong on both points: the stream owns its data
+(<code>'static</code>), and it cannot be <code>Send</code> because <code>DynLlmBackend::stream</code>
+returns a non-<code>Send</code> <code>BoxFuture</code> per the design at
+<code>crates/tau-runtime/src/builder.rs:45-50</code>.</p>
+<p>Trigger to revisit: A <code>Send</code>-bounded variant of <code>DynLlmBackend</code> (and
+sibling traits) is needed before streaming consumers can use
+<code>tokio::spawn</code> (rather than running on the same task). At that point
+the public signature gains <code>+ Send</code>.</p>
+<h3 id="2-event-vocabulary-kernel-translated-runevent"><a class="header" href="#2-event-vocabulary-kernel-translated-runevent">2. Event vocabulary: kernel-translated <code>RunEvent</code></a></h3>
+<p>The stream yields <strong>kernel-translated</strong> events, not the raw
+<code>CompletionChunk</code>s from <code>LlmBackend::stream</code>. The <code>RunEvent</code> enum has
+six variants:</p>
+<div class="table-wrapper"><table><thead><tr><th>Variant</th><th>Carries</th><th>Fires when</th></tr></thead><tbody>
+<tr><td><code>TextDelta { delta: String }</code></td><td>one text fragment</td><td>LLM emits <code>CompletionChunk::Text</code></td></tr>
+<tr><td><code>ToolCallStarted { id, name, args }</code></td><td>the tool the LLM wants to call</td><td>LLM emits <code>CompletionChunk::ToolUse</code> (display intent BEFORE dispatch — see decision 3)</td></tr>
+<tr><td><code>ToolCallCompleted { id, name, result: Result&lt;ToolResult, String&gt; }</code></td><td>dispatch outcome</td><td><code>Tool::invoke</code> returns OR validation fails (BadArgs is recoverable; <code>result: Err(reason)</code> and the loop continues)</td></tr>
+<tr><td><code>TurnCompleted { stop_reason, usage, turn }</code></td><td>per-turn summary</td><td>LLM <code>Finish</code> chunk arrives AND all tool dispatches resolved</td></tr>
+<tr><td><code>RunCompleted { outcome }</code></td><td>final <code>RunOutcome</code></td><td>the run completes (success or agent-level failure: <code>Completed</code>, <code>Failed{PolicyDenied}</code>, <code>Failed{OutOfResources}</code>)</td></tr>
+<tr><td><code>FatalError { kind, detail, context_json, tool_error_variant }</code></td><td>structured kernel-error payload</td><td>the streaming pump hits an error that the <strong>batch API</strong> must surface as <code>Err(RuntimeError::*)</code> (LLM, Tool::*, ToolNotRegistered)</td></tr>
+</tbody></table>
+</div>
+<p><code>RunEvent</code> is <code>#[non_exhaustive]</code> + <code>#[derive(Debug, Clone)]</code>. Future
+variants are additive.</p>
+<p>Rationale: streaming consumers (REPL UIs, JSON event readers) shouldn't
+have to learn LLM-protocol semantics (raw chunk types, partial-tool-use
+accumulation, provider-specific finish reasons). The kernel handles
+the protocol gymnastics; UIs see a clean state machine. The
+<code>ToolCallStarted</code> / <code>ToolCallCompleted</code> pair is the equivalent
+abstraction for tool dispatch — the consumer doesn't need to track
+chunk-by-chunk tool_use accumulation.</p>
+<p>The <code>FatalError</code> variant is the major <strong>plan-erratum revision</strong> vs.
+the spec's original 5-variant design. The original "no new error
+variants" rule (spec §5) was wrong: <code>Runtime::run_with_history</code>'s
+public batch API returns <code>Result&lt;RunOutcome, RuntimeError&gt;</code> where
+<code>RuntimeError::Tool(ToolError::BadArgs { reason })</code>,
+<code>RuntimeError::ToolNotRegistered { ... }</code>, and
+<code>RuntimeError::Llm(...)</code> are all <strong>kernel-error</strong> failures, distinct
+from agent-level <code>RunOutcome::Failed { kind: PolicyDenied }</code>. To
+preserve byte-identical batch behavior under Task 7's refactor (where
+the batch path becomes a thin stream-drainer), the streaming pump
+needed a way to communicate kernel errors back to the drainer for
+typed reconstruction. <code>FatalError</code>'s <code>kind: String</code> (e.g. "Tool",
+"Llm", "ToolNotRegistered") + <code>tool_error_variant: Option&lt;String&gt;</code>
+fields together let the drainer reconstruct the precise typed
+<code>RuntimeError::*</code> variant the test suite asserts on. Without this
+variant, either (a) the batch API's typed error variants would have to
+change (forbidden by spec §4.4's byte-identical requirement) or (b)
+all errors would collapse into agent-level failures (a UX regression
+in <code>tau run</code>, where exit code 1 / 2 distinguish agent failure /
+kernel error).</p>
+<p>Trigger to revisit: a third-party streaming consumer that wants
+provider-specific raw chunks (e.g., for a custom debugging UI). At
+that point an opt-in raw-chunk channel can be added without
+disturbing the kernel-translated events.</p>
+<h3 id="3-toolcallstarted-fires-on-llm-emission-not-after-dispatch"><a class="header" href="#3-toolcallstarted-fires-on-llm-emission-not-after-dispatch">3. <code>ToolCallStarted</code> fires on LLM emission, not after dispatch</a></h3>
+<p>When the LLM streams a <code>CompletionChunk::ToolUse(tu)</code>, the kernel pump
+yields <code>RunEvent::ToolCallStarted { id, name, args }</code> <strong>immediately</strong>
+— before any capability check, schema validation, session open, or
+<code>Tool::invoke</code> call. The matching <code>ToolCallCompleted</code> fires after
+dispatch resolves.</p>
+<p>Rationale: REPL UIs need to display intent — "the agent wants to call
+fs-read with path=foo.txt" — before the dispatch itself begins. If
+<code>ToolCallStarted</code> fired only after dispatch, slow tools (network
+calls, long shell commands) would freeze the UI for the dispatch
+duration with no visible activity. The spec's Q3-A locked this in
+based on the user-experience requirement.</p>
+<p>The pump invariant becomes: <strong>every <code>ToolCallStarted</code> is paired with
+a <code>ToolCallCompleted</code> (same id) before the next <code>TurnCompleted</code>, OR
+followed by a terminal <code>RunCompleted { Failed }</code> / <code>FatalError</code></strong>.</p>
+<p>The "OR" is the documented exception:</p>
+<ul>
+<li>A capability denial mid-turn yields <code>RunCompleted { Failed { PolicyDenied } }</code> and terminates the run; the offending tool's
+<code>ToolCallStarted</code> fired but its <code>ToolCallCompleted</code> does NOT.</li>
+<li>A real plugin invocation crash yields <code>FatalError { kind: "Tool", ... }</code> and terminates the run; same exception.</li>
+</ul>
+<p>Trigger to revisit: a UI that requires every Started to have a
+matching Completed (e.g., a progress bar). At that point a sentinel
+<code>Aborted</code> ToolCallCompleted variant can be added.</p>
+<h3 id="4-pure-runevent-items-not-resultrunevent-"><a class="header" href="#4-pure-runevent-items-not-resultrunevent-">4. Pure <code>RunEvent</code> items, not <code>Result&lt;RunEvent, ...&gt;</code></a></h3>
+<p>The stream's item type is <code>RunEvent</code>, not <code>Result&lt;RunEvent, StreamError&gt;</code>. There is no separate "stream error" variant; instead,
+errors surface through:</p>
+<ul>
+<li><strong>Construction-time failures</strong> (capability override invalid, LLM
+backend not registered, tool not registered at build): the
+<code>Result&lt;impl Stream, RuntimeError&gt;</code> returned from
+<code>run_streaming(...)</code> is <code>Err(RuntimeError::*)</code> BEFORE the stream
+materializes.</li>
+<li><strong>Mid-stream agent-level failures</strong> (<code>PolicyDenied</code>,
+<code>OutOfResources</code>): yielded as <code>RunEvent::RunCompleted { outcome: RunOutcome::Failed { kind, .. } }</code>. The agent-loop terminated
+cleanly; the agent itself failed.</li>
+<li><strong>Mid-stream kernel-level failures</strong> (<code>LlmError</code>, <code>ToolError::*</code>,
+<code>ToolNotRegistered</code>): yielded as <code>RunEvent::FatalError { kind, detail, context_json, tool_error_variant }</code>. The kernel hit an
+error the batch API surfaces as <code>Err(RuntimeError::*)</code>.</li>
+</ul>
+<p>Rationale: a single error path is simpler than a stream-item Result.
+Construction errors are caught synchronously; mid-stream errors are
+events the consumer renders alongside text. CLIs map kernel-level
+fatal errors to exit code 2 (kernel error); agent-level failures map
+to exit code 1 (<code>AgentFailed</code> marker error).</p>
+<p>Trigger to revisit: a streaming consumer that wants per-chunk
+recoverable errors (e.g., a partial-text-render path for OpenAI's
+"content moderation" mid-stream rejections). At that point a
+<code>RunEvent::Warning</code> or similar non-terminal event variant can be
+added without changing the terminal event semantics.</p>
+<h3 id="5-full-cli-scope-kernel--tau-chat--tau-run---stream"><a class="header" href="#5-full-cli-scope-kernel--tau-chat--tau-run---stream">5. Full CLI scope: kernel + <code>tau chat</code> + <code>tau run --stream</code></a></h3>
+<p>Ship streaming-aware UI in both <code>tau chat</code> and <code>tau run</code> in the same
+sub-project (not deferred to a follow-up):</p>
+<ul>
+<li><strong><code>tau chat</code></strong> streams by default. The new <code>--no-stream</code> flag
+(<code>ChatArgs.no_stream: bool</code>, default <code>false</code>) opts out for users
+who prefer the batch render UX. Two-pass rendering: during the
+stream, raw <code>print!("{delta}")</code> + flush gives a typewriter UX; on
+<code>RunCompleted</code>, the existing <code>render_final_message</code> helper
+re-renders the assistant text via termimad (markdown) — the user
+sees text twice (rough draft → final formatting). Tool annotations
+go to stderr (<code>→ calling X...</code> / <code>✓ X completed</code>) so stdout stays
+the agent's text.</li>
+<li><strong><code>tau run</code></strong> gains a <code>--stream</code> flag (<code>RunArgs.stream: bool</code>,
+default <code>false</code>) for opt-in streaming. Polarity asymmetry is
+intentional: <code>tau run</code> is script-friendly by default (one final
+blob is easier to pipe); <code>tau chat</code> is interactive by default
+(typewriter UX is the win). Human mode emits text deltas to stdout
+<ul>
+<li>tool annotations to stderr; JSON mode emits one canonical event
+per stdout line:</li>
+</ul>
+</li>
+</ul>
+<pre><code class="language-json">{"event":"text_delta","delta":"..."}
+{"event":"tool_call_started","id":"...","name":"...","args":...}
+{"event":"tool_call_completed","id":"...","name":"...","result":{"ok":true}}
+{"event":"turn_completed","stop_reason":"...","usage":{...},"turn":N}
+{"event":"run_completed","outcome":{...}}
+</code></pre>
+<p>Rationale: bundling the UX surfaces with the kernel API in one
+sub-project means the kernel pump is exercised end-to-end (CLI →
+runtime → backend) before the sub-project closes. A future ADR
+revising the event shape would touch all three layers consistently.
+Splitting into kernel-only-now + UI-later would risk landing a
+kernel API that doesn't fit any actual UI's needs.</p>
+<p>Trigger to revisit: a third user-facing surface (TUI, web SSE,
+JSON-RPC over stdio for <code>tau serve</code>). Each surface gets its own ADR
+section reusing the canonical event shape from this ADR.</p>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<h3 id="negative--new-cost"><a class="header" href="#negative--new-cost">Negative / new cost</a></h3>
+<ul>
+<li><code>tau-runtime</code> gains a transitive dep on <code>async-stream = "0.3"</code>
+(~50KB compiled). Negligible vs. the existing <code>tokio</code> /
+<code>futures-core</code> footprint.</li>
+<li><code>tau-runtime</code> gains a <code>RunEvent</code> enum (6 variants, ~200 LOC) and a
+<code>run_streaming_inner</code> async generator (~250 LOC). The generator
+uses <code>async_stream::stream! { ... }</code> macro syntax; future
+contributors need familiarity. (<code>async-stream</code> is widely used; not
+a high adoption cost.)</li>
+<li><code>tau-runtime</code>'s <code>run.rs</code> agent-loop body (~400 LOC at run.rs:111-510
+pre-refactor) MOVED into <code>stream.rs</code>'s <code>run_streaming_inner</code>. The
+batch path (<code>run_with_history</code>) is now a ~50-line stream-drainer
+with a typed-error reconstruction match for FatalError. Two
+codepaths collapsed into one source of truth.</li>
+<li><code>RunEvent::FatalError</code>'s <code>tool_error_variant: Option&lt;String&gt;</code> is a
+string-tagged-variant pattern that's slightly less type-safe than
+carrying the original <code>ToolError</code> directly. Trade-off: passing
+<code>ToolError</code> through a <code>Clone</code>-required event variant would force
+<code>LlmError</code> and <code>ToolError</code> to derive <code>Clone</code>, expanding the public
+API surface area. The string-tag approach is additive and
+reversible.</li>
+<li><code>RunEvent</code> is <code>Clone</code>, which forces every variant to carry only
+<code>Clone</code> types. This rules out future variants carrying <code>dyn</code> trait
+objects directly (they'd need to be <code>Arc&lt;dyn ...&gt;</code> or owned
+payloads).</li>
+</ul>
+<h3 id="positive"><a class="header" href="#positive">Positive</a></h3>
+<ul>
+<li>The streaming pump is <strong>the single source of truth</strong> for the agent
+loop. <code>run_with_history</code> is a thin drainer that returns the
+terminal <code>RunCompleted.outcome</code> (or reconstructs <code>RuntimeError::*</code>
+from <code>FatalError</code>). The 100+ existing run-loop tests continue to
+pass unchanged — they're the regression net.</li>
+<li>LLM-backend plugins' existing <code>stream()</code> impls (priority 2a-2c) are
+now exercised by every batch-mode <code>tau run</code> and <code>tau chat</code> call,
+not just opt-in streaming. The 5 test-fixture LLMs that previously
+panicked on <code>stream()</code> were updated to delegate via
+<code>tau_ports::batch_to_stream(self.complete(req).await?)</code>.</li>
+<li><code>tau chat</code> typewriter UX dramatically improves perceived latency
+on long completions.</li>
+<li><code>tau run --stream --json</code> enables token-aware downstream tooling
+(progress bars, partial-render UIs, telemetry pipelines).</li>
+</ul>
+<h3 id="neutral--new-obligations"><a class="header" href="#neutral--new-obligations">Neutral / new obligations</a></h3>
+<ul>
+<li>Future tau-runtime API additions involving streaming (cancellation
+via <code>Drop</code>, parallel tool dispatch, per-event token usage) require
+their own ADRs (QG18). The MANDATORY-rule template at the schema-
+validation boundary (ADR-0010) now also fires inside the streaming
+pump's tool-dispatch flow; the rule is unchanged.</li>
+<li>The <code>async-stream = "0.3"</code> crate version is pinned to the major in
+<code>[workspace.dependencies]</code>; major upgrades verify the public API
+surface.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<h3 id="a-callback-based-api-runtimerun_streamingreq-on_event-impl-fnmut"><a class="header" href="#a-callback-based-api-runtimerun_streamingreq-on_event-impl-fnmut">A. Callback-based API (<code>Runtime::run_streaming(req, on_event: impl FnMut(...))</code>)</a></h3>
+<p>Rejected. Caller can't pause / await between events; the closure
+runs synchronously inside the kernel pump's task. To support
+<code>async fn</code>-flavored callbacks, the trait would need <code>async_trait</code>
+desugaring. <code>Stream</code> is the more flexible, more idiomatic primitive.</p>
+<h3 id="b-mpsc-channel-api-runtimerun_streamingreq---mpscreceiverrunevent"><a class="header" href="#b-mpsc-channel-api-runtimerun_streamingreq---mpscreceiverrunevent">B. mpsc channel API (<code>Runtime::run_streaming(req) -&gt; mpsc::Receiver&lt;RunEvent&gt;</code>)</a></h3>
+<p>Rejected. mpsc adds a buffer and a second runtime task; the consumer
+has to learn the bounded/unbounded semantics. Pull-based <code>Stream</code> is
+the simpler primitive — the consumer paces by awaiting <code>.next()</code>.</p>
+<h3 id="c-pass-through-streamingevent-raw-llm-events"><a class="header" href="#c-pass-through-streamingevent-raw-llm-events">C. Pass-through <code>StreamingEvent</code> (raw LLM events)</a></h3>
+<p>Rejected. Forwarding raw <code>CompletionChunk</code>s would force every
+streaming consumer to learn:</p>
+<ul>
+<li>Per-provider tool_use chunk accumulation (Anthropic deltas vs. OpenAI
+function_call deltas vs. Ollama's whole-message tool_calls).</li>
+<li>The kernel's tool-dispatch state machine (which tool_calls the
+kernel approved, which it denied, which crashed).</li>
+<li><code>StopReason</code> mapping per provider.</li>
+</ul>
+<p>The kernel's job is exactly to translate this into a clean state
+machine. Punting that to consumers would multiply UI complexity
+across every consumer and make UI testing harder.</p>
+<h3 id="d-end-of-turn-only-tool-dispatch-no-toolcallstarted-mid-stream"><a class="header" href="#d-end-of-turn-only-tool-dispatch-no-toolcallstarted-mid-stream">D. End-of-turn-only tool dispatch (no <code>ToolCallStarted</code> mid-stream)</a></h3>
+<p>Rejected. UI would freeze during long tool calls with no visible
+activity. <code>ToolCallStarted</code> fires immediately on LLM emission so
+REPLs can show "→ calling fs-read..." while dispatch proceeds.</p>
+<h3 id="e-no-streaming-ux-kernel-only-api-defer-cli-ux-to-a-follow-up"><a class="header" href="#e-no-streaming-ux-kernel-only-api-defer-cli-ux-to-a-follow-up">E. No streaming UX (kernel-only API, defer CLI UX to a follow-up)</a></h3>
+<p>Rejected. See decision 5. Bundling the kernel API with at least one
+real UI consumer ensures the API actually fits a UI's needs. A
+kernel-only API would risk landing a shape that doesn't compose with
+the eventual UI work.</p>
+<h3 id="f-drop-the-byte-identical-batch-api-requirement-collapse-all-errors-into-runoutcomefailed"><a class="header" href="#f-drop-the-byte-identical-batch-api-requirement-collapse-all-errors-into-runoutcomefailed">F. Drop the byte-identical batch-API requirement; collapse all errors into <code>RunOutcome::Failed</code></a></h3>
+<p>Rejected. <code>tau run</code>'s exit-code semantics distinguish agent failure
+(exit 1, <code>AgentFailed</code> marker) from kernel error (exit 2). Collapsing
+them would make scripts that depend on this distinction silently
+misbehave. The <code>FatalError</code> variant preserves the distinction.</p>
+<h2 id="references"><a class="header" href="#references">References</a></h2>
+<ul>
+<li>Spec: <code>docs/superpowers/specs/2026-04-30-streaming-design.md</code></li>
+<li>Plan: <code>docs/superpowers/plans/2026-04-30-streaming.md</code></li>
+<li>ADR-0006 §5 — the deferral this ADR closes.</li>
+<li>ADR-0006 §16 — the "single source of truth for the agent loop"
+invariant this refactor preserves.</li>
+<li>ADR-0008 — <code>llm.stream</code> IPC wire method.</li>
+<li>ADR-0009 — typed-error policy; new error variants follow this.</li>
+<li>ADR-0010 — schema validation; the streaming pump preserves the
+MANDATORY-rule template at the validator boundary.</li>
+<li><code>crates/tau-runtime/src/stream.rs</code> — the streaming module.</li>
+<li><code>crates/tau-runtime/src/run.rs:111-196</code> — the post-refactor batch
+drainer (replaces the original ~400 LOC agent-loop body).</li>
+<li><code>crates/tau-runtime/src/builder.rs::Runtime::run_streaming</code> — the
+public entry point.</li>
+<li><code>crates/tau-runtime/tests/run_streaming_e2e.rs</code> — 5 e2e scenarios.</li>
+<li><code>crates/tau-cli/src/cmd/chat.rs</code> — <code>tau chat</code> two-pass rendering.</li>
+<li><code>crates/tau-cli/src/cmd/run.rs::run_streaming_path</code> — <code>tau run --stream</code> human + JSON modes.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0010-tool-args-schema-validation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0012-tau-lifecycle-commands.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0010-tool-args-schema-validation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0012-tau-lifecycle-commands.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
