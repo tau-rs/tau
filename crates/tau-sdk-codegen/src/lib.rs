@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 pub mod authoring;
+pub mod embed_js;
 pub mod emit;
 pub mod emit_python;
 pub mod emit_ts;

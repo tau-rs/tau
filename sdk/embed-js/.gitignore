@@ -1,0 +1,2 @@
+# jco transpile build output (produced by `npm run build --wasm=...`).
+src/generated/

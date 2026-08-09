@@ -50,7 +50,7 @@ fn project_using_control_flow_is_refused() {
 #[test]
 fn trivial_project_generates_host_only_world() {
     let world = wasm_world_for_project(&fixture("trivial")).expect("trivial world");
-    assert!(world.contains("import host;"));
+    assert!(world.contains("import tau:host/host@0.1.0;"));
     assert!(
         !world.contains("wasi:"),
         "trivial should grant no wasi surface:\n{world}"
@@ -65,6 +65,22 @@ fn net_http_project_generates_http_world() {
         "{world}"
     );
     assert!(world.contains("import wasi:io/streams@0.2.3;"), "{world}");
+}
+
+#[test]
+fn emitted_world_is_deterministic_and_matches_generator() {
+    let a = wasm_world_for_project(&fixture("net-http")).unwrap();
+    let b = wasm_world_for_project(&fixture("net-http")).unwrap();
+    assert_eq!(a, b, "world generation must be byte-deterministic");
+    // The net-http fixture grants net → the world imports wasi:http, not wasi:filesystem.
+    assert!(
+        a.contains("import wasi:http/outgoing-handler@0.2.3;"),
+        "{a}"
+    );
+    assert!(
+        !a.contains("wasi:filesystem"),
+        "net-only must not grant fs:\n{a}"
+    );
 }
 
 #[tokio::test]

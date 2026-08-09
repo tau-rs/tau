@@ -1,0 +1,22 @@
+[package]
+name = "tau-wasm-http-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+# Intentionally NOT a workspace member: a wasm32-wasip2 component built on
+# demand by the egress-enforcement test. Empty [workspace] makes cargo treat
+# this as its own root so it doesn't attach to the outer workspace.
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `runner` world bindings (host imports + the `run` export). No `realloc`
+# feature: the `wasi` crate below owns the canonical-ABI `cabi_realloc`, so
+# emitting a second one here would be a duplicate-symbol link error.
+wit-bindgen = { version = "0.58", default-features = false, features = ["macros"] }
+# Pre-generated wasi:http/0.2 bindings — std has no HTTP client, so the probe
+# issues its outgoing request through these.
+wasi = "0.14"
+
+[workspace]

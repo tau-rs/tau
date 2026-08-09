@@ -1,6 +1,5 @@
 ---
 source: crates/tau-cli/tests/help_snapshots.rs
-assertion_line: 28
 expression: s
 ---
 tau runtime CLI
@@ -28,6 +27,7 @@ Commands:
   build      Build a deployment bundle from this project (Phase 2 §C.2), or compile a workflow to WebAssembly (`tau build wasm <project>`)
   mcp        Manage Model Context Protocol (MCP) server contracts
   dev        Hot-reload REPL driving the post-β.3 IR runtime
+  embed      Emit host-embedding glue for a target language (Phase 2 §5.2)
   help       Print this message or the help of the given subcommand(s)
 
 Options:

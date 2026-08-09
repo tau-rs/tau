@@ -10,15 +10,21 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 
 wit_bindgen::generate!({
-    world: "runner",
-    path: "../../wit",
+    world: "tau:generated/runner",
+    path: "wit-gen",
+    generate_all,
 });
 
 /// Re-export the WIT-generated host imports so sibling modules (host_ports.rs)
 /// can access them without knowing the exact generated module path.
 /// The path `tau::host::host` is what wit_bindgen generates for `import host`
 /// in the `tau:host` package's `runner` world (identical to the wasmtime host
-/// side which uses `tau::host::host`).
+/// side which uses `tau::host::host`). `wit-gen/` is assembled by `build.rs`
+/// from the vendored WASI deps, the frozen `tau:host` contract, and the
+/// capability-derived (or baseline) `tau:generated` world; `generate_all` is
+/// required once the world imports WASI interfaces (`wit_bindgen` otherwise
+/// errors with "missing `with` mapping" for interfaces reachable both
+/// directly and transitively, e.g. `wasi:io/poll`).
 pub(crate) mod wit_host {
     pub(crate) use super::tau::host::host::*;
 }
@@ -146,8 +152,18 @@ impl Guest for Component {
         ))
         .map_err(|e| e.to_string())?;
 
-        let events = crate::executor::collect_stream(stream);
-        serde_json::to_string(&events).map_err(|e| e.to_string())
+        crate::executor::for_each_stream(stream, |event| {
+            // `RunEvent` is a plain derive(Serialize) enum over primitives/
+            // strings/nested plain structs — no maps with non-string keys,
+            // no floats that could be NaN/Inf, nothing serde_json rejects.
+            // Serialization is effectively infallible here, so a hypothetical
+            // error silently drops the event rather than aborting the whole
+            // run over a should-never-happen encoding failure.
+            if let Ok(json) = serde_json::to_string(&event) {
+                crate::wit_host::emit_event(&json);
+            }
+        });
+        Ok(String::new())
     }
 }
 

@@ -4455,6 +4455,7 @@ dependencies = [
  "tau-ports",
  "tau-runtime-core",
  "tau-runtime-tokio",
+ "tau-sdk-codegen",
  "tau-ts-extract",
  "tau-wasm-host",
  "tau-workflow",
@@ -4469,6 +4470,8 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "wit-component",
+ "wit-parser 0.251.0",
 ]
 
 [[package]]
@@ -4774,6 +4777,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "num-traits",
  "proptest",
+ "schemars",
  "serde",
  "serde_json",
  "tau-domain",

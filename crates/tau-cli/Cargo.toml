@@ -27,6 +27,7 @@ tau-ir-lower        = { workspace = true }
 tau-mcp             = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio       = { workspace = true }
 tau-ts-extract      = { path = "../tau-ts-extract" }
+tau-sdk-codegen     = { workspace = true }
 futures-core        = { workspace = true }
 base64             = { workspace = true }
 humantime          = "2"
@@ -83,6 +84,12 @@ tau-ports        = { workspace = true, features = ["test-fixtures", "serde"] }
 tau-runtime-tokio = { workspace = true, features = ["mock-sandbox"] }
 # Task 4: e2e tau build wasm → wasmtime → typed RunEvent stream (β.7.5 PR-E2).
 tau-wasm-host    = { path = "../tau-wasm-host" }
+# Task 6 (EPIC 3.2 DoD): decode the built component's world to assert an
+# ungranted capability's WASI interface is absent. Pinned to match the
+# workspace's wit-parser 0.251 pin (see Cargo.lock: wit-component 0.251.0
+# depends on wit-parser 0.251.0 exactly).
+wit-component    = "0.251"
+wit-parser       = { workspace = true }
 
 [features]
 # Production `tau` binary ships with OTLP support enabled out of the box.

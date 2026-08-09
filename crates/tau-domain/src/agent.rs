@@ -39,6 +39,7 @@ use crate::value::Value;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum AgentStatus {
     /// Manifest seen, package not yet installed.
     Declared,
@@ -93,6 +94,7 @@ impl AgentStatus {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FailureKind {
     /// Agent process crashed unexpectedly (panic, signal, abort).
     Crashed,
