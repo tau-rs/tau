@@ -124,6 +124,15 @@ impl tau_ports::orchestration::SuspensionStore for FileCheckpointStore {
             .map_err(|e| CheckpointError::Serialization(e.to_string()))?;
         Ok(Some(s))
     }
+
+    fn delete_suspension(&self, run_id: &RunId) -> Result<(), CheckpointError> {
+        let path = self.run_dir(run_id).join("suspend.json");
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()), // idempotent
+            Err(e) => Err(io_err(e)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -231,5 +240,38 @@ mod tests {
             .unwrap();
         assert_eq!(got, s);
         assert!(tmp.path().join(".tau/runs/run-1/suspend.json").exists());
+    }
+
+    #[test]
+    fn delete_suspension_removes_file_and_is_idempotent() {
+        use std::collections::BTreeMap;
+        use tau_ports::orchestration::{PipelineSuspension, SuspensionStore};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileCheckpointStore::new(tmp.path());
+
+        // Deleting a suspension that was never persisted is Ok (idempotent).
+        store.delete_suspension(&"run-1".to_string()).unwrap();
+
+        let s = PipelineSuspension {
+            run_id: "run-1".into(),
+            resume_signal: "approved".into(),
+            step_cursor: 1,
+            step_id: "pause".into(),
+            ir_digest: "sha256:abc".into(),
+            outputs: BTreeMap::new(),
+        };
+        store.persist_suspension(&s).unwrap();
+        let path = tmp.path().join(".tau/runs/run-1/suspend.json");
+        assert!(path.exists());
+
+        store.delete_suspension(&"run-1".to_string()).unwrap();
+        assert!(!path.exists());
+        assert!(store
+            .load_suspension(&"run-1".to_string())
+            .unwrap()
+            .is_none());
+
+        // Deleting again (already gone) is still Ok.
+        store.delete_suspension(&"run-1".to_string()).unwrap();
     }
 }
