@@ -243,6 +243,66 @@ fn run_resume_with_matching_signal_completes_the_pipeline() {
 }
 
 #[test]
+fn run_resume_completion_clears_suspend_json_and_blocks_re_resume() {
+    let dir = setup_suspend_project();
+
+    let suspend_output = run_tau(&dir, "seed input", &[]);
+    assert_eq!(suspend_output.status.code(), Some(3));
+    let suspend_stdout = String::from_utf8(suspend_output.stdout).unwrap();
+    let run_id = outcome_line(&suspend_stdout)["run_id"]
+        .as_str()
+        .expect("run_id must be a string")
+        .to_string();
+
+    let suspend_json = dir
+        .path()
+        .join(".tau")
+        .join("runs")
+        .join(&run_id)
+        .join("suspend.json");
+    assert!(
+        suspend_json.exists(),
+        "expected suspend.json at {suspend_json:?} after a suspended run"
+    );
+
+    let resume_output = run_tau(
+        &dir,
+        "resume input",
+        &["--resume", &run_id, "--signal", "approved"],
+    );
+    assert!(
+        resume_output.status.success(),
+        "resuming with the matching signal must exit 0; stderr={}\nstdout={}",
+        String::from_utf8_lossy(&resume_output.stderr),
+        String::from_utf8_lossy(&resume_output.stdout),
+    );
+
+    // A completed resume must clear its own suspend.json — otherwise a
+    // second `--resume ... --signal ...` would reload the stale snapshot
+    // and re-run the post-suspend steps (re-billing LLM agent steps).
+    assert!(
+        !suspend_json.exists(),
+        "suspend.json must be removed after the resumed run completes: {suspend_json:?}"
+    );
+
+    let re_resume_output = run_tau(
+        &dir,
+        "resume input again",
+        &["--resume", &run_id, "--signal", "approved"],
+    );
+    assert!(
+        !re_resume_output.status.success(),
+        "re-resuming an already-completed run must fail (non-zero exit); stdout={}",
+        String::from_utf8_lossy(&re_resume_output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&re_resume_output.stderr);
+    assert!(
+        stderr.contains("no suspended run"),
+        "stderr should explain there is no suspended run to resume; got: {stderr}"
+    );
+}
+
+#[test]
 fn run_resume_with_mismatched_signal_fails() {
     let dir = setup_suspend_project();
 

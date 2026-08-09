@@ -505,12 +505,12 @@ async fn try_run_pipeline(
     // An empty `steps` vec cannot reach here (project validation rejects an
     // empty pipeline with `ProjectConfigError::EmptyPipeline`); a pipeline of
     // ONLY check steps returns `None` to fall back to the single-agent path.
-    let last_step_id = match pipeline
-        .steps
-        .iter()
-        .rev()
-        .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
-    {
+    let last_step_id = match pipeline.steps.iter().rev().find(|s| {
+        !matches!(
+            s.run,
+            tau_ir::pipeline::StepRun::Check(_) | tau_ir::pipeline::StepRun::Suspend { .. }
+        )
+    }) {
         Some(s) => s.id.0.clone(),
         None => return None,
     };
@@ -599,7 +599,7 @@ async fn try_run_pipeline(
         dispatcher,
         tau_runtime_core::interpreter::pipeline::SuspendConfig {
             run_id: run_id.clone(),
-            store: suspensions,
+            store: suspensions.clone(),
         },
         resume,
     )
@@ -608,6 +608,19 @@ async fn try_run_pipeline(
         Ok(o) => o,
         Err(e) => return Some(Err(anyhow::Error::new(e).context("running pipeline"))),
     };
+
+    // Clear any stale suspend.json once the run reaches a terminal
+    // `Completed` outcome (whether this was a fresh run that never
+    // suspended, or a resumed run that just finished): otherwise a second
+    // `--resume <run_id> --signal <sig>` would reload the stale snapshot
+    // and re-run the post-suspend steps (re-billing LLM agent steps).
+    // Best-effort — a delete failure must not fail an otherwise-successful
+    // run.
+    if let tau_runtime_core::interpreter::pipeline::PipelineOutcome::Completed(_) = &outcome {
+        if let Err(e) = suspensions.delete_suspension(&run_id) {
+            tracing::warn!("failed to clear suspend.json for completed run {run_id:?}: {e}");
+        }
+    }
 
     Some(render_pipeline_outcome(outcome, &last_step_id, output))
 }
