@@ -104,6 +104,17 @@ pub async fn run_main() -> std::process::ExitCode {
                 std::process::ExitCode::from(bvf.code as u8)
             } else if err.downcast_ref::<crate::cmd::run::AgentFailed>().is_some() {
                 ExitCode::AgentFailed.into()
+            } else if err
+                .downcast_ref::<crate::cmd::run::SuspendedRun>()
+                .is_some()
+            {
+                // A pipeline paused at a `Suspend` step (HITL, EPIC 4.3). Not
+                // a failure: `render_pipeline_outcome` already rendered the
+                // structured `{"outcome":"suspended", ...}` payload (or the
+                // human "Resume with: tau run --resume ..." message), so —
+                // like AgentFailed — skip the generic "error:" prefix and map
+                // straight to the dedicated exit code.
+                ExitCode::Suspended.into()
             } else {
                 if debug {
                     eprintln!("error: {err:?}");

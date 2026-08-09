@@ -44,6 +44,20 @@ use crate::output::Output;
 #[error("agent failed (exit code 1)")]
 pub(crate) struct AgentFailed;
 
+/// Marker error: a pipeline paused at a top-level `Suspend` step (HITL).
+///
+/// Threaded through the existing `anyhow::Result<()>` dispatch — like
+/// [`AgentFailed`] — so `lib::run_main` can downcast it and map to
+/// [`crate::ExitCode::Suspended`] (exit code 3) instead of the generic
+/// [`crate::ExitCode::Error`] (2). A suspension is NOT a failure: by the
+/// time this error is returned, `render_pipeline_outcome` has already
+/// emitted the structured `{"outcome":"suspended", ...}` payload (or the
+/// human "Resume with: ..." message) to stdout, so `run_main` must skip
+/// its usual "error:" prefix for this variant.
+#[derive(Debug, thiserror::Error)]
+#[error("pipeline suspended")]
+pub(crate) struct SuspendedRun;
+
 /// Marker error: `tau run --bundle` verification failed.
 ///
 /// Carries the structured-renderer output and the spec §C.3 exit code so
@@ -283,7 +297,16 @@ pub async fn run(
     // pipeline is declared (the overwhelming majority of projects), this
     // returns `None` and the single-agent path below runs BYTE-FOR-BYTE
     // unchanged.
-    if let Some(result) = try_run_pipeline(&project, &runtime, prompt_text, output).await {
+    if let Some(result) = try_run_pipeline(
+        &project,
+        &runtime,
+        prompt_text,
+        args.resume.clone(),
+        args.signal.clone(),
+        output,
+    )
+    .await
+    {
         drop(runtime);
         plugin_loader::flush_recorders().await;
         return result;
@@ -432,6 +455,8 @@ async fn try_run_pipeline(
     project: &tau_pkg::project::ProjectConfig,
     runtime: &tau_runtime_tokio::Runtime,
     prompt_text: String,
+    resume_id: Option<String>,
+    signal: Option<String>,
     output: &mut Output,
 ) -> Option<anyhow::Result<()>> {
     // Lower the cwd project to an IR module so we can inspect its
@@ -516,19 +541,75 @@ async fn try_run_pipeline(
     );
 
     // Drive the pipeline, reusing the SAME input (`prompt_text`) and the
-    // SAME dispatcher.
-    let store = match tau_runtime_core::interpreter::pipeline::run_pipeline(
-        std::sync::Arc::new(module),
+    // SAME dispatcher. `run_pipeline_suspendable` durably persists a pause
+    // point via `SuspensionStore` and returns `PipelineOutcome::Suspended`
+    // rather than erroring when the run hits a top-level `Suspend` step
+    // (EPIC 4.3); `render_pipeline_outcome` renders both terminal shapes.
+    let suspensions: std::sync::Arc<dyn tau_ports::orchestration::SuspensionStore> =
+        std::sync::Arc::new(tau_runtime_tokio::FileCheckpointStore::new(
+            project_root.clone(),
+        ));
+
+    let module_arc = std::sync::Arc::new(module);
+    let (run_id, resume) = match (&resume_id, &signal) {
+        (Some(rid), Some(sig)) => {
+            let susp = match suspensions.load_suspension(rid) {
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    return Some(Err(anyhow::anyhow!("no suspended run {rid:?} to resume")))
+                }
+                Err(e) => return Some(Err(anyhow::Error::new(e).context("loading suspension"))),
+            };
+            if &susp.resume_signal != sig {
+                return Some(Err(anyhow::anyhow!(
+                    "signal {sig:?} does not match the suspended run's signal {:?}",
+                    susp.resume_signal
+                )));
+            }
+            // Drift guard: the re-lowered module must match the pause-time IR.
+            let digest = tau_ir::asset::asset_hash(&tau_ir::to_canonical_bytes(&module_arc));
+            if digest != susp.ir_digest {
+                return Some(Err(anyhow::anyhow!(
+                    "project changed since the run was suspended; cannot resume {rid:?}"
+                )));
+            }
+            let start_at = susp.step_cursor + 1;
+            (
+                rid.clone(),
+                Some(tau_runtime_core::interpreter::pipeline::ResumeState {
+                    store: tau_runtime_core::interpreter::output_store::OutputStore::restore(
+                        susp.outputs,
+                    ),
+                    start_at,
+                }),
+            )
+        }
+        (Some(_), None) => return Some(Err(anyhow::anyhow!("--resume requires --signal <NAME>"))),
+        (None, Some(_)) => {
+            return Some(Err(anyhow::anyhow!(
+                "--signal is only valid with --resume <RUN_ID>"
+            )))
+        }
+        (None, None) => (mint_run_id(), None),
+    };
+
+    let outcome = match tau_runtime_core::interpreter::pipeline::run_pipeline_suspendable(
+        module_arc,
         prompt_text,
         dispatcher,
+        tau_runtime_core::interpreter::pipeline::SuspendConfig {
+            run_id: run_id.clone(),
+            store: suspensions,
+        },
+        resume,
     )
     .await
     {
-        Ok(s) => s,
+        Ok(o) => o,
         Err(e) => return Some(Err(anyhow::Error::new(e).context("running pipeline"))),
     };
 
-    Some(render_pipeline_result(&store, &last_step_id, output))
+    Some(render_pipeline_outcome(outcome, &last_step_id, output))
 }
 
 /// Render the LAST NON-CHECK pipeline step's output as the run result,
@@ -576,6 +657,49 @@ pub(super) fn render_pipeline_result(
         output.human(&text)?;
     }
     Ok(())
+}
+
+/// Render a [`tau_runtime_core::interpreter::pipeline::PipelineOutcome`]:
+/// the `Completed` arm delegates to [`render_pipeline_result`] unchanged; the
+/// `Suspended` arm (EPIC 4.3) emits the `{"outcome":"suspended", ...}` JSON
+/// shape / the human "paused, resume with ..." message and returns
+/// `Err(SuspendedRun.into())` so `run_main` maps the process exit to
+/// [`crate::ExitCode::Suspended`] (3) instead of the generic error bucket.
+///
+/// `pub(super)` for the same reason as `render_pipeline_result`: the bundle
+/// run path renders a bundled pipeline's outcome identically to the cwd path
+/// (deferred — the bundle path does not yet thread `SuspendConfig`).
+pub(super) fn render_pipeline_outcome(
+    outcome: tau_runtime_core::interpreter::pipeline::PipelineOutcome,
+    last_step_id: &str,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    use tau_runtime_core::interpreter::pipeline::PipelineOutcome;
+    match outcome {
+        PipelineOutcome::Completed(store) => render_pipeline_result(&store, last_step_id, output),
+        PipelineOutcome::Suspended {
+            run_id,
+            resume_signal,
+            step_id,
+        } => {
+            if output.is_json() {
+                output.json(&serde_json::json!({
+                    "outcome": "suspended",
+                    "run_id": run_id,
+                    "resume_signal": resume_signal,
+                    "step_id": step_id,
+                }))?;
+            } else {
+                output.human(&format!(
+                    "Paused at step '{step_id}' (signal: {resume_signal}).\n\
+                     Resume with:  tau run --resume {run_id} --signal {resume_signal}"
+                ))?;
+            }
+            // Signal the suspended exit code (3) to run_main via downcast;
+            // NOT a failure — see SuspendedRun's docstring.
+            Err(SuspendedRun.into())
+        }
+    }
 }
 
 /// Render a [`RunOutcome`] from the batch (non-streaming) path.
