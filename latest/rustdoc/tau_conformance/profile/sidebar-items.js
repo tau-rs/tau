@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["dev","wasm"],"struct":["ProfileError"],"trait":["Profile"]};

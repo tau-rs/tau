@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CheckVerify","GoalPredicate","JudgeRef","Locus","OnFail"],"struct":["Check","Condition","RetryPolicy"]};
