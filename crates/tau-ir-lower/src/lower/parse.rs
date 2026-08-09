@@ -540,6 +540,21 @@ fn lower_step(s: &tau_pkg::project::PipelineStepConfig) -> PipelineStep {
             then: then.iter().map(lower_step).collect(),
             otherwise: otherwise.iter().map(lower_step).collect(),
         },
+        PipelineRunRef::Parallel { branches } => StepRun::Parallel {
+            branches: branches
+                .iter()
+                .map(|b| b.iter().map(lower_step).collect())
+                .collect(),
+        },
+        PipelineRunRef::Loop {
+            body,
+            until,
+            max_iters,
+        } => StepRun::Loop {
+            body: body.iter().map(lower_step).collect(),
+            until: lower_condition(until),
+            max_iters: *max_iters,
+        },
     };
     PipelineStep {
         id: PipelineStepId(s.id.clone()),
@@ -783,6 +798,85 @@ input = "${steps.a.output}"
         assert_eq!(pipe.steps.len(), 2);
         assert_eq!(pipe.steps[0].id.0, "a");
         assert_eq!(pipe.steps[1].input, "${steps.a.output}");
+    }
+
+    #[test]
+    fn lowers_parallel_step_to_nested_branches() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "fanout"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "weather"
+    run = "agent:weather"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "news"
+    run = "agent:news"
+    [[pipeline.steps.branches.steps]]
+    id = "digest"
+    run = "agent:digest"
+    input = "${steps.news.output}"
+"#;
+        let config = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = parse(&config, &no_prompt_files).expect("parses");
+        let pipe = parsed.workflow.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            StepRun::Parallel { branches } => {
+                assert_eq!(branches.len(), 2);
+                assert_eq!(branches[0].len(), 1);
+                assert_eq!(
+                    branches[0][0].run,
+                    StepRun::Agent(AgentId("weather".into()))
+                );
+                assert_eq!(branches[1].len(), 2);
+                assert_eq!(branches[1][1].input, "${steps.news.output}");
+            }
+            other => panic!("expected StepRun::Parallel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lowers_loop_step_with_until_and_bound() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "refine"
+until = { evaluates = "steps.draft.output", check = "matches", pattern = "APPROVED" }
+max_iters = 4
+
+  [[pipeline.steps.body]]
+  id = "draft"
+  run = "agent:writer"
+  input = "${input}"
+"#;
+        let config = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = parse(&config, &no_prompt_files).expect("parses");
+        let pipe = parsed.workflow.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            StepRun::Loop {
+                body,
+                until,
+                max_iters,
+            } => {
+                assert_eq!(*max_iters, 4);
+                assert_eq!(
+                    until.evaluates,
+                    Locus::Output(PipelineStepId("draft".into()))
+                );
+                assert_eq!(until.predicate, GoalPredicate::Matches("APPROVED".into()));
+                assert_eq!(body.len(), 1);
+                assert_eq!(body[0].run, StepRun::Agent(AgentId("writer".into())));
+            }
+            other => panic!("expected StepRun::Loop, got {other:?}"),
+        }
     }
 
     #[test]

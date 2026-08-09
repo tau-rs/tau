@@ -3,10 +3,11 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use tau_domain::CapabilityShape;
+use tau_domain::{CapabilityShape, IrFeature};
 use thiserror::Error;
 
 use tau_ir::ids::{AgentId, StepId, SubflowId, ToolId};
+use tau_ports::target::TargetTriple;
 
 /// IR-level error type.
 #[derive(Debug, Error)]
@@ -47,6 +48,18 @@ pub enum LowerError {
         missing: Vec<CapabilityShape>,
         /// Diagnostic: which tools required them.
         tools: Vec<ToolId>,
+    },
+
+    /// Feature-fit failure (EPIC 4.2). The workflow uses one or more IR
+    /// execution features the build target cannot run — e.g. any control-flow
+    /// (`Branch`/`Parallel`/`Loop`) for a wasm target, whose guest drives
+    /// `run_ir_streaming` and has no `run_pipeline` control-flow path.
+    #[error("workflow uses IR feature(s) unsupported by target {target}: {missing:?}")]
+    FeatureUnsupported {
+        /// The features the target does not support.
+        missing: Vec<IrFeature>,
+        /// The target that lacks them.
+        target: TargetTriple,
     },
 
     /// A Deterministic step references a function name that the lowering

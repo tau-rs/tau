@@ -51,6 +51,7 @@ use tau_runtime_core::orchestration::trace::TraceSubscriber;
 ///         agent_id: "a".into(),
 ///         turn_index: 0,
 ///         duration_ms: 1,
+///         tokens: 0,
 ///     },
 /// });
 ///
@@ -105,6 +106,7 @@ mod tests {
                 agent_id: "a".into(),
                 turn_index: 0,
                 duration_ms: 1,
+                tokens: 0,
             },
         }
     }

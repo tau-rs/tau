@@ -4537,6 +4537,7 @@ name = "tau-ir-conformance"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -4741,7 +4742,7 @@ dependencies = [
 
 [[package]]
 name = "tau-ports"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",

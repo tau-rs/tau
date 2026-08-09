@@ -869,6 +869,14 @@ async fn live_trace_renders_during_multi_agent_run() {
         "root orchestrator must aggregate its 2 turns; stats={:?}",
         stats.keys().collect::<Vec<_>>()
     );
+    // Per-turn tokens are real, not 0: the mock reports make_token_usage(10, 10)
+    // = 20 tokens/turn, so the 2-turn orchestrator aggregates to 40.
+    assert_eq!(
+        stats.get("orchestrator").map(|s| s.tokens),
+        Some(40),
+        "root orchestrator must aggregate 2 turns x 20 tokens; stats={:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
     let child_turns: Vec<u32> = stats
         .iter()
         .filter(|(id, _)| id.as_str() != "orchestrator")
@@ -878,6 +886,17 @@ async fn live_trace_renders_during_multi_agent_run() {
         child_turns,
         vec![1],
         "the one spawned child must aggregate its single turn; stats={:?}",
+        stats.keys().collect::<Vec<_>>()
+    );
+    let child_tokens: Vec<u64> = stats
+        .iter()
+        .filter(|(id, _)| id.as_str() != "orchestrator")
+        .map(|(_, s)| s.tokens)
+        .collect();
+    assert_eq!(
+        child_tokens,
+        vec![20],
+        "the one spawned child must aggregate its single turn x 20 tokens; stats={:?}",
         stats.keys().collect::<Vec<_>>()
     );
 

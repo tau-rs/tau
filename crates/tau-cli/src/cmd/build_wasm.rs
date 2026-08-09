@@ -70,6 +70,12 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
                  Remove or replace tools that require ProcessExec or AgentSpawn \
                  before building for wasm.",
             ),
+            LowerError::FeatureUnsupported { ref missing, .. } => anyhow::anyhow!(
+                "feature-fit refused for {WASM_TARGET}: wasm guests cannot execute \
+                 control-flow pipeline steps {missing:?} — the guest drives run_ir_streaming, \
+                 which has no run_pipeline path. Flatten the pipeline (remove \
+                 Branch/Parallel/Loop steps) before building for wasm.",
+            ),
             other => anyhow::anyhow!("lowering for {WASM_TARGET} failed: {other}"),
         })?;
     // NOTE(D6-B PR3): embedding the content-addressed asset store into the

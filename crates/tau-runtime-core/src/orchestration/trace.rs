@@ -52,6 +52,7 @@ pub trait TraceSubscriber: Send + Sync {
 ///         agent_id: "a".into(),
 ///         turn_index: 0,
 ///         duration_ms: 1,
+///         tokens: 0,
 ///     },
 /// });
 /// // No panic — NoopTraceSubscriber silently discards.
@@ -143,6 +144,7 @@ impl TraceStream {
     ///         agent_id: "agent-1".into(),
     ///         turn_index: 0,
     ///         duration_ms: 50,
+    ///         tokens: 0,
     ///     },
     /// };
     /// stream.emit(event);
@@ -193,6 +195,7 @@ mod tests {
                 agent_id: "agent_01".into(),
                 turn_index: 0,
                 duration_ms: 100,
+                tokens: 0,
             },
         }
     }

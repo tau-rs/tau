@@ -303,9 +303,11 @@ pub struct UncheckedPipeline {
 
 /// Raw `[[pipeline.steps]]` entry (pre-validation).
 ///
-/// A step is either a **leaf** (`run = "<kind>:<id>"`) or a **branch**
-/// (`branch = { <condition> }` + nested `then`/`otherwise` step arrays).
-/// The two forms are mutually exclusive; `validate_pipeline` enforces this.
+/// A step is exactly one of four **forms**, enforced by `validate_pipeline`:
+/// - **leaf**: `run = "<kind>:<id>"`.
+/// - **branch**: `branch = { <condition> }` + nested `then`/`otherwise` arrays.
+/// - **parallel**: `[[…branches]]` wrapper tables, each a nested `steps` list.
+/// - **loop**: `until = { <condition> }` + `max_iters` + a nested `body` array.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncheckedPipelineStep {
@@ -325,6 +327,32 @@ pub struct UncheckedPipelineStep {
     /// Branch form: steps run when it does not hold (recursive; may be empty).
     #[serde(default)]
     pub otherwise: Vec<UncheckedPipelineStep>,
+    /// Parallel form: independent step sequences run concurrently, then joined.
+    #[serde(default)]
+    pub branches: Vec<UncheckedParallelBranch>,
+    /// Loop form: exit condition, checked after each `body` pass (mirrors the
+    /// `[goals.*]` field-set, same as `branch`).
+    #[serde(default)]
+    pub until: Option<UncheckedCondition>,
+    /// Loop form: mandatory iteration bound (must be present and `> 0`).
+    #[serde(default)]
+    pub max_iters: Option<u64>,
+    /// Loop form: steps run each iteration (recursive).
+    #[serde(default)]
+    pub body: Vec<UncheckedPipelineStep>,
+}
+
+/// Raw parallel branch (pre-validation) — one independent step sequence.
+///
+/// A wrapper table (rather than a bare array-of-arrays) so branches nest
+/// arbitrarily: a branch step may itself be a branch/parallel/loop. Mirrors
+/// the `[[pipeline.steps.then]]` recursive-table idiom.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedParallelBranch {
+    /// The steps in this branch (recursive; must be non-empty).
+    #[serde(default)]
+    pub steps: Vec<UncheckedPipelineStep>,
 }
 
 /// Raw branch condition — the exact field-set of `[goals.*]` minus the
@@ -393,6 +421,20 @@ pub enum PipelineRunRef {
         then: Vec<PipelineStepConfig>,
         /// Steps run when `on` does not hold (may be empty).
         otherwise: Vec<PipelineStepConfig>,
+    },
+    /// A parallel fan-out/join: run each branch concurrently, then join.
+    Parallel {
+        /// Independent step sequences run in parallel (each non-empty).
+        branches: Vec<Vec<PipelineStepConfig>>,
+    },
+    /// A bounded loop: run `body` until `until` holds or `max_iters` is hit.
+    Loop {
+        /// Steps run each iteration.
+        body: Vec<PipelineStepConfig>,
+        /// Exit condition, checked after each `body` pass.
+        until: ConditionConfig,
+        /// Mandatory iteration cap (`> 0`).
+        max_iters: u64,
     },
 }
 
@@ -1913,89 +1955,126 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
     Ok(PipelineConfig { steps })
 }
 
-/// Validate one step — a leaf (`run`) or a branch (`branch` + arms). Nested
-/// arm steps recurse through this same function. Tree-wide id uniqueness and
-/// output-scope integrity are enforced later by the IR typecheck
-/// (`check_pipeline` / `validate_step_run`), which already walks nested blocks.
+/// Validate one step — exactly one of four forms (leaf/branch/parallel/loop).
+/// Nested arm/branch/body steps recurse through this same function. Tree-wide
+/// id uniqueness and output-scope integrity are enforced later by the IR
+/// typecheck (`check_pipeline` / `validate_step_run`), which already walks
+/// nested blocks.
 fn validate_pipeline_step(
     s: &UncheckedPipelineStep,
 ) -> Result<PipelineStepConfig, ProjectConfigError> {
-    let has_branch = s.branch.is_some();
     let has_run = s.run.is_some();
+    let has_branch = s.branch.is_some();
+    let has_parallel = !s.branches.is_empty();
+    let has_loop = s.until.is_some() || s.max_iters.is_some() || !s.body.is_empty();
     let has_arms = !s.then.is_empty() || !s.otherwise.is_empty();
 
-    let run = match (has_run, has_branch) {
-        (true, true) => {
-            return Err(ProjectConfigError::PipelineValidation {
-                id: s.id.clone(),
-                message: "a step has both `run` and `branch`; exactly one is allowed".into(),
-            })
-        }
-        (false, false) => {
-            return Err(ProjectConfigError::PipelineValidation {
-                id: s.id.clone(),
-                message: "a step must set either `run` or `branch`".into(),
-            })
-        }
-        (true, false) => {
-            if has_arms {
-                return Err(ProjectConfigError::PipelineValidation {
-                    id: s.id.clone(),
-                    message: "`then`/`otherwise` are only valid on a `branch` step".into(),
-                });
+    let form_count = [has_run, has_branch, has_parallel, has_loop]
+        .iter()
+        .filter(|active| **active)
+        .count();
+    let bad = |message: String| ProjectConfigError::PipelineValidation {
+        id: s.id.clone(),
+        message,
+    };
+    if form_count == 0 {
+        return Err(bad(
+            "a step must set exactly one of `run`, `branch`, `branches`, or a loop \
+             (`until`/`max_iters`/`body`)"
+                .into(),
+        ));
+    }
+    if form_count > 1 {
+        return Err(bad(
+            "a step sets more than one form; exactly one of `run`, `branch`, `branches`, \
+             or a loop is allowed"
+                .into(),
+        ));
+    }
+    // `then`/`otherwise` belong only to a branch; reject them on any other form.
+    if has_arms && !has_branch {
+        return Err(bad(
+            "`then`/`otherwise` are only valid on a `branch` step".into()
+        ));
+    }
+
+    let run = if has_run {
+        let run_str = s.run.as_deref().unwrap();
+        match run_str.split_once(':') {
+            Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
+            Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
+            Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
+            Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
+            _ => {
+                return Err(bad(format!(
+                    "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {run_str:?}"
+                )))
             }
-            let run_str = s.run.as_deref().unwrap();
-            match run_str.split_once(':') {
-                Some(("agent", id)) => PipelineRunRef::Agent(id.to_string()),
-                Some(("tool", id)) => PipelineRunRef::Tool(id.to_string()),
-                Some(("deterministic", id)) => PipelineRunRef::Deterministic(id.to_string()),
-                Some(("check", id)) => PipelineRunRef::Check(id.to_string()),
-                _ => {
-                    return Err(ProjectConfigError::PipelineValidation {
-                        id: s.id.clone(),
-                        message: format!(
-                            "run must be \"agent:<id>\" | \"tool:<id>\" | \"deterministic:<id>\" | \"check:<id>\", got {run_str:?}"
-                        ),
-                    })
+        }
+    } else if has_branch {
+        let on = validate_condition(&s.id, "branch", s.branch.as_ref().unwrap())?;
+        let then = s
+            .then
+            .iter()
+            .map(validate_pipeline_step)
+            .collect::<Result<Vec<_>, _>>()?;
+        let otherwise = s
+            .otherwise
+            .iter()
+            .map(validate_pipeline_step)
+            .collect::<Result<Vec<_>, _>>()?;
+        PipelineRunRef::Branch {
+            on,
+            then,
+            otherwise,
+        }
+    } else if has_parallel {
+        let branches = s
+            .branches
+            .iter()
+            .map(|b| {
+                if b.steps.is_empty() {
+                    return Err(bad(
+                        "a parallel branch must declare at least one step".into()
+                    ));
                 }
-            }
+                b.steps
+                    .iter()
+                    .map(validate_pipeline_step)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        PipelineRunRef::Parallel { branches }
+    } else {
+        // Loop form. Enforce the mandatory bound and exit condition at author
+        // time (typecheck also rejects `max_iters == 0`, defense in depth).
+        let until_cond = s
+            .until
+            .as_ref()
+            .ok_or_else(|| bad("a loop step must set `until = { … }`".into()))?;
+        let until = validate_condition(&s.id, "loop `until`", until_cond)?;
+        let max_iters = s
+            .max_iters
+            .ok_or_else(|| bad("a loop step must set `max_iters` (a positive bound)".into()))?;
+        if max_iters == 0 {
+            return Err(bad(
+                "a loop step's `max_iters` must be greater than 0".into()
+            ));
         }
-        (false, true) => {
-            let cond = s.branch.as_ref().unwrap();
-            let predicate = parse_predicate(
-                cond.check.as_deref(),
-                cond.pattern.clone(),
-                cond.equals.clone(),
-                cond.min_count,
-                cond.schema.clone(),
-                cond.r#fn.clone(),
-            )
-            .map_err(|e| ProjectConfigError::PipelineValidation {
-                id: s.id.clone(),
-                message: match e {
-                    PredicateParseError::BadRegex(m) => format!("branch condition: {m}"),
-                    PredicateParseError::Invalid(m) => format!("branch condition: {m}"),
-                },
-            })?;
-            let on = ConditionConfig {
-                evaluates: parse_locus(&cond.evaluates),
-                predicate,
-            };
-            let then = s
-                .then
-                .iter()
-                .map(validate_pipeline_step)
-                .collect::<Result<Vec<_>, _>>()?;
-            let otherwise = s
-                .otherwise
-                .iter()
-                .map(validate_pipeline_step)
-                .collect::<Result<Vec<_>, _>>()?;
-            PipelineRunRef::Branch {
-                on,
-                then,
-                otherwise,
-            }
+        if s.body.is_empty() {
+            return Err(bad(
+                "a loop step must declare at least one `body` step".into()
+            ));
+        }
+        let body = s
+            .body
+            .iter()
+            .map(validate_pipeline_step)
+            .collect::<Result<Vec<_>, _>>()?;
+        PipelineRunRef::Loop {
+            body,
+            until,
+            max_iters,
         }
     };
 
@@ -2003,6 +2082,36 @@ fn validate_pipeline_step(
         id: s.id.clone(),
         run,
         input: s.input.clone().unwrap_or_else(|| "${input}".to_string()),
+    })
+}
+
+/// Validate an [`UncheckedCondition`] (branch `branch` / loop `until`) into a
+/// [`ConditionConfig`], reusing the `[goals.*]` predicate/locus grammar. `role`
+/// names the field in diagnostics (e.g. `"branch"`, `"loop \`until\`"`).
+fn validate_condition(
+    step_id: &str,
+    role: &str,
+    cond: &UncheckedCondition,
+) -> Result<ConditionConfig, ProjectConfigError> {
+    let predicate = parse_predicate(
+        cond.check.as_deref(),
+        cond.pattern.clone(),
+        cond.equals.clone(),
+        cond.min_count,
+        cond.schema.clone(),
+        cond.r#fn.clone(),
+    )
+    .map_err(|e| ProjectConfigError::PipelineValidation {
+        id: step_id.to_string(),
+        message: match e {
+            PredicateParseError::BadRegex(m) | PredicateParseError::Invalid(m) => {
+                format!("{role} condition: {m}")
+            }
+        },
+    })?;
+    Ok(ConditionConfig {
+        evaluates: parse_locus(&cond.evaluates),
+        predicate,
     })
 }
 
@@ -3973,6 +4082,155 @@ mod tests {
             run = "agent:x"
             [[pipeline.steps.then]]
             id = "orphan"
+            run = "agent:y"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn parses_parallel_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "fanout"
+            [[pipeline.steps.branches]]
+            [[pipeline.steps.branches.steps]]
+            id = "weather"
+            run = "agent:weather"
+            [[pipeline.steps.branches]]
+            [[pipeline.steps.branches.steps]]
+            id = "news"
+            run = "agent:news"
+            [[pipeline.steps.branches.steps]]
+            id = "digest"
+            run = "agent:summarize"
+            input = "${steps.news.output}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        assert_eq!(pipe.steps.len(), 1);
+        match &pipe.steps[0].run {
+            PipelineRunRef::Parallel { branches } => {
+                assert_eq!(branches.len(), 2);
+                assert_eq!(branches[0].len(), 1);
+                assert_eq!(branches[0][0].run, PipelineRunRef::Agent("weather".into()));
+                assert_eq!(branches[1].len(), 2);
+                assert_eq!(
+                    branches[1][1].run,
+                    PipelineRunRef::Agent("summarize".into())
+                );
+                assert_eq!(branches[1][1].input, "${steps.news.output}");
+            }
+            other => panic!("expected Parallel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_parallel_branch_with_no_steps() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "fanout"
+            [[pipeline.steps.branches]]
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn parses_loop_pipeline_step() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            until = { evaluates = "steps.draft.output", check = "matches", pattern = "APPROVED" }
+            max_iters = 5
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+            input = "${input}"
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Loop {
+                body,
+                until,
+                max_iters,
+            } => {
+                assert_eq!(*max_iters, 5);
+                assert_eq!(until.evaluates, LocusConfig::Output("draft".into()));
+                assert_eq!(
+                    until.predicate,
+                    GoalPredicateConfig::Matches("APPROVED".into())
+                );
+                assert_eq!(body.len(), 1);
+                assert_eq!(body[0].run, PipelineRunRef::Agent("writer".into()));
+            }
+            other => panic!("expected Loop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_loop_without_max_iters() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            until = { evaluates = "steps.draft.output", check = "non_empty" }
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_loop_with_zero_max_iters() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            until = { evaluates = "steps.draft.output", check = "non_empty" }
+            max_iters = 0
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_loop_without_until() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "refine"
+            max_iters = 3
+            [[pipeline.steps.body]]
+            id = "draft"
+            run = "agent:writer"
+        "#;
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_step_with_multiple_forms() {
+        // `run` + a loop form on the same step is ambiguous.
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "bad"
+            run = "agent:x"
+            max_iters = 2
+            [[pipeline.steps.body]]
+            id = "inner"
             run = "agent:y"
         "#;
         assert!(ProjectConfig::parse_str(toml).is_err());
