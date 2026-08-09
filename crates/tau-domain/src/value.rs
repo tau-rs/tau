@@ -309,6 +309,27 @@ mod value_serde {
     }
 }
 
+// `Value` has a hand-rolled `Serialize`/`Deserialize` (see `value_serde`
+// above) that encodes it as a plain JSON scalar/array/object — NOT as an
+// externally-tagged Rust enum. A derived `JsonSchema` would describe the
+// wrong wire shape (a `oneOf` of variant-tag objects), so this mirrors
+// schemars' own `impl JsonSchema for serde_json::Value`: an "anything"
+// schema (`true`), inlined at every use site instead of `$ref`'d.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Value {
+    fn schema_name() -> alloc::borrow::Cow<'static, str> {
+        "TauValue".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        true.into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

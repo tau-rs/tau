@@ -36,6 +36,7 @@ async-stream = { workspace = true }
 # narrowing). std-only (aho-corasick/regex) → optional, gated behind
 # `host-fs` (the feature its only caller `resolve_skill_for_spawn` needs).
 globset      = { workspace = true, optional = true }
+schemars     = { workspace = true, optional = true, features = ["derive"] }
 [features]
 # `process` makes ProcessCapabilityGate wire-up available; pulled in via
 # tau-ports' `process` feature. Host shells (tau-runtime-tokio) keep this on.
@@ -62,6 +63,10 @@ tool-validation    = ["wasm-interpreter"]
 # this std came incidentally via `tool-validation -> tau-domain/std`, removed
 # in PR-0b.)
 host-fs            = ["dep:globset", "tau-domain/std"]
+# `schema` exposes JsonSchema derives on RunEvent/RunOutcome (and their
+# transitive leaf types) for the frozen schemas/run-event/ export. See
+# crates/tau-runtime-core/tests/run_event_schema.rs.
+schema             = ["dep:schemars", "tau-ports/schema", "tau-domain/schema"]
 
 # Host/std bundle — the full former default surface. Host consumers opt in via
 # `features = ["std"]` now that the `tau-runtime-core` workspace alias sets

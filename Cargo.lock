@@ -4640,6 +4640,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "num-traits",
  "proptest",
+ "schemars",
  "serde",
  "serde_json",
  "tau-domain",

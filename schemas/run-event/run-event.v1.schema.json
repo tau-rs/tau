@@ -1,0 +1,882 @@
+{
+  "$defs": {
+    "Address": {
+      "description": "Sender or recipient of a [`Message`].\n\n# Example\n\n```\nuse tau_domain::{Address, AgentInstanceId};\n\n// A specific agent instance:\nlet agent_addr = Address::Agent(AgentInstanceId::new());\nassert!(matches!(agent_addr, Address::Agent(_)));\n\n// Well-known static addresses:\nassert!(matches!(Address::User, Address::User));\nassert!(matches!(Address::System, Address::System));\n\n// Tool address:\nlet tool_addr = Address::Tool(\"fs-read.read\".into());\nassert!(matches!(tool_addr, Address::Tool(_)));\n```",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A specific agent instance.",
+          "properties": {
+            "Agent": {
+              "$ref": "#/$defs/AgentInstanceId"
+            }
+          },
+          "required": [
+            "Agent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A named tool. The runtime resolves name → plugin via its\nregistration table.",
+          "properties": {
+            "Tool": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Tool"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "User",
+          "description": "A human user (e.g. the operator at the CLI).",
+          "type": "string"
+        },
+        {
+          "const": "System",
+          "description": "The runtime / observer.",
+          "type": "string"
+        }
+      ]
+    },
+    "AgentInstanceId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "AgentStatus": {
+      "description": "Agent lifecycle status. Carries diagnostic data only on `Failed`;\ntransition rules live in tau-runtime.\n\nState graph (informational; not enforced here):\n`Declared → Installed → Ready → Running ↔ Stopped`,\nwith `Failed` reachable from any non-terminal state.\n\n# Example\n\n```\nuse tau_domain::{AgentStatus, FailureKind};\n\n// The `Failed` variant is variant-level `#[non_exhaustive]`, so\n// external callers use [`AgentStatus::failed`] instead of\n// struct-literal construction.\nlet s = AgentStatus::failed(\n    FailureKind::BackendError,\n    Some(\"connection refused: api.openai.com\".into()),\n);\nmatch s {\n    AgentStatus::Failed { kind: FailureKind::BackendError, .. } => {\n        // retry with backoff\n    }\n    _ => panic!(),\n}\n```",
+      "oneOf": [
+        {
+          "const": "Declared",
+          "description": "Manifest seen, package not yet installed.",
+          "type": "string"
+        },
+        {
+          "const": "Installed",
+          "description": "Package installed on disk, ready to instantiate.",
+          "type": "string"
+        },
+        {
+          "const": "Ready",
+          "description": "Instance created, idle.",
+          "type": "string"
+        },
+        {
+          "const": "Running",
+          "description": "Actively processing a message.",
+          "type": "string"
+        },
+        {
+          "const": "Stopped",
+          "description": "Intentionally halted.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The agent failed. `kind` enables typed retry/restart logic;\n`detail` carries human-readable specifics.",
+          "properties": {
+            "Failed": {
+              "properties": {
+                "detail": {
+                  "description": "Human-readable detail (e.g. `\"panic at src/foo.rs:42\"`).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "$ref": "#/$defs/FailureKind",
+                  "description": "Typed failure category for restart logic."
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Failed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FailureKind": {
+      "description": "Categorical failure kinds. New typed kinds are added additively;\n`InternalError` is the catch-all escape hatch.\n\nSee: [escape-hatches.md#failurekind-internalerror](../docs/explanation/escape-hatches.md#failurekind-internalerror).",
+      "oneOf": [
+        {
+          "const": "Crashed",
+          "description": "Agent process crashed unexpectedly (panic, signal, abort).",
+          "type": "string"
+        },
+        {
+          "const": "BackendError",
+          "description": "Configured LLM backend returned an error or was unreachable.",
+          "type": "string"
+        },
+        {
+          "const": "PolicyDenied",
+          "description": "A capability check denied an operation the agent attempted.",
+          "type": "string"
+        },
+        {
+          "const": "OutOfResources",
+          "description": "Agent exceeded a resource limit (memory, message rate, timeout).",
+          "type": "string"
+        },
+        {
+          "const": "InternalError",
+          "description": "Catch-all for failures that don't match the named kinds.\nSee: [escape-hatches.md#failurekind-internalerror](../docs/explanation/escape-hatches.md#failurekind-internalerror).",
+          "type": "string"
+        }
+      ]
+    },
+    "Message": {
+      "description": "A message envelope (G5).\n\n# Example\n\n```\nuse tau_domain::{Address, Message, MessagePayload};\n\n// `Message` is `#[non_exhaustive]`; use `Message::new` to construct.\nlet m = Message::new(\n    Address::User,\n    Address::System,\n    MessagePayload::Text { content: \"hello\".into() },\n);\nassert!(matches!(m.payload, MessagePayload::Text { .. }));\nassert!(m.parent_id.is_none());\n```",
+      "properties": {
+        "created_at": {
+          "description": "When the message was created (UTC). Supplied by the caller's\n`Clock` port in the no_std kernel; the std `Message::new`\nconvenience stamps `Utc::now()`.\n\n`chrono::DateTime<Utc>` is foreign to this crate, so it cannot\ncarry its own `#[cfg_attr(schema, derive(JsonSchema))]` (orphan\nrule). Its serde representation is an RFC3339 string (chrono's\ndefault `Serialize`), so `schemars(with = \"String\")` describes\nthe actual wire shape without touching serde.",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Free-form headers. `BTreeMap` for stable iteration order.",
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/MessageId",
+          "description": "Globally unique message identifier."
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional pointer to the message this one replies to."
+        },
+        "payload": {
+          "$ref": "#/$defs/MessagePayload",
+          "description": "Message body."
+        },
+        "recipient": {
+          "$ref": "#/$defs/Address",
+          "description": "Destination."
+        },
+        "sender": {
+          "$ref": "#/$defs/Address",
+          "description": "Originator."
+        }
+      },
+      "required": [
+        "id",
+        "sender",
+        "recipient",
+        "created_at",
+        "headers",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "MessageId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "MessagePayload": {
+      "description": "Message body. Typed variants for known shapes; `Custom` for\nplugin-specific.\n\n# Example\n\n```\nuse tau_domain::{MessagePayload, Value};\n\n// Text payload (most common):\nlet text = MessagePayload::Text { content: \"Hello!\".into() };\nassert!(matches!(text, MessagePayload::Text { .. }));\n\n// Tool call payload:\nlet call = MessagePayload::ToolCall { args: Value::Null };\nassert!(matches!(call, MessagePayload::ToolCall { .. }));\n\n// Tool error payload:\nlet err = MessagePayload::ToolError {\n    kind: \"not_found\".into(),\n    message: \"file not found\".into(),\n    details: None,\n};\nassert!(matches!(err, MessagePayload::ToolError { ref kind, .. } if kind == \"not_found\"));\n```",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Human- or agent-authored text. The envelope's `sender` field\ndistinguishes origin.",
+          "properties": {
+            "Text": {
+              "properties": {
+                "content": {
+                  "description": "Message text.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool invocation. The envelope's `recipient: Address::Tool(...)`\nnames the tool; this carries the arguments.",
+          "properties": {
+            "ToolCall": {
+              "properties": {
+                "args": {
+                  "description": "Arguments to pass to the tool."
+                }
+              },
+              "required": [
+                "args"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ToolCall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Successful tool result.",
+          "properties": {
+            "ToolResult": {
+              "properties": {
+                "body": {
+                  "description": "Tool's response body."
+                }
+              },
+              "required": [
+                "body"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ToolResult"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Tool returned an error.",
+          "properties": {
+            "ToolError": {
+              "properties": {
+                "details": {
+                  "description": "Optional structured detail."
+                },
+                "kind": {
+                  "description": "Error kind (free-form string convention).",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "Human-readable error message.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ToolError"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Lifecycle event broadcast (System → observers).",
+          "properties": {
+            "Lifecycle": {
+              "$ref": "#/$defs/AgentStatus"
+            }
+          },
+          "required": [
+            "Lifecycle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Plugin-specific message kind.\nSee: [escape-hatches.md#messagepayload-custom](../docs/explanation/escape-hatches.md#messagepayload-custom).",
+          "properties": {
+            "Custom": {
+              "properties": {
+                "body": {
+                  "description": "Plugin-specific body bytes.",
+                  "items": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "description": "Plugin-specific kind tag (e.g. `\"mcp.resource.request\"`).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "body"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Custom"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Result_of_ToolResult_or_string": {
+      "oneOf": [
+        {
+          "properties": {
+            "Ok": {
+              "$ref": "#/$defs/ToolResult"
+            }
+          },
+          "required": [
+            "Ok"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "Err": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Err"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RunOutcome": {
+      "description": "Outcome of a `Runtime::run` call (added in Task 10).\n\n- [`RunOutcome::Completed`]: agent finished successfully and produced\n  a final response message.\n- [`RunOutcome::Failed`]: agent ran but failed via a typed\n  [`AgentStatus::Failed { kind, detail }`]. Partial conversation\n  preserved in `all_messages` for inspection.\n\nKernel-level operational failures (plugin errors, dispatch errors)\nare reported via `Err(RuntimeError)`, NOT this enum.\n\n# Example\n\n```\nuse tau_runtime_core::outcome::RunOutcome;\n\n// `RunOutcome` is `#[non_exhaustive]` and is constructed by\n// `Runtime::run`; from outside the crate the type appears only\n// as a function-parameter shape. The doctest below verifies the\n// pattern-matching surface compiles, including the `_ => {}`\n// catch-all that `#[non_exhaustive]` requires.\nfn handle(outcome: RunOutcome) {\n    match outcome {\n        RunOutcome::Completed { final_message: _, total_turns, .. } => {\n            let _ = total_turns;\n        }\n        RunOutcome::Failed { status, .. } => {\n            let _ = status;\n        }\n        _ => {}\n    }\n}\n# let _ = handle;\n```",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Agent completed and produced a final response.",
+          "properties": {
+            "Completed": {
+              "properties": {
+                "all_messages": {
+                  "description": "Full conversation history: initial message + every LLM\nresponse + every tool_use / tool_result.",
+                  "items": {
+                    "$ref": "#/$defs/Message"
+                  },
+                  "type": "array"
+                },
+                "final_message": {
+                  "$ref": "#/$defs/Message",
+                  "description": "The final assistant message (LLM response with no tool_uses)."
+                },
+                "token_usage": {
+                  "$ref": "#/$defs/TokenUsage2",
+                  "description": "Token usage summed across the run."
+                },
+                "total_turns": {
+                  "description": "Number of agent loop iterations performed.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "final_message",
+                "all_messages",
+                "total_turns",
+                "token_usage"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Completed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Agent ran but failed via a typed `FailureKind`. Partial\nconversation preserved.",
+          "properties": {
+            "Failed": {
+              "properties": {
+                "all_messages": {
+                  "description": "Full conversation history up to the failure point.",
+                  "items": {
+                    "$ref": "#/$defs/Message"
+                  },
+                  "type": "array"
+                },
+                "status": {
+                  "$ref": "#/$defs/AgentStatus",
+                  "description": "Always `AgentStatus::Failed { kind, detail }`. The `kind`\ndistinguishes `PolicyDenied` (capability denial),\n`OutOfResources` (max turns reached), `BackendError`,\n`Crashed`, `InternalError`."
+                },
+                "token_usage": {
+                  "$ref": "#/$defs/TokenUsage2",
+                  "description": "Token usage summed across the run."
+                },
+                "total_turns": {
+                  "description": "Number of agent loop iterations performed.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "status",
+                "all_messages",
+                "total_turns",
+                "token_usage"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Failed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StopReason": {
+      "description": "Reason a completion stopped.\n\n`StopReason::Error` indicates the stream completed but reported an\nerror mid-flight; this is distinct from [`crate::LlmError`], which\nindicates the trait method itself failed.",
+      "oneOf": [
+        {
+          "const": "EndTurn",
+          "description": "Model finished naturally.",
+          "type": "string"
+        },
+        {
+          "const": "MaxTokens",
+          "description": "Hit the `max_tokens` cap.",
+          "type": "string"
+        },
+        {
+          "const": "StopSequence",
+          "description": "Matched one of the configured stop sequences.",
+          "type": "string"
+        },
+        {
+          "const": "ToolUse",
+          "description": "Model emitted a tool-use block and is awaiting its result.",
+          "type": "string"
+        },
+        {
+          "const": "Error",
+          "description": "Stream completed but reported an error mid-flight (distinct\nfrom [`crate::LlmError`], which is a trait-method failure).",
+          "type": "string"
+        }
+      ]
+    },
+    "TokenUsage": {
+      "description": "Token-usage report for a completion.",
+      "properties": {
+        "input_tokens": {
+          "description": "Tokens consumed from the input (system + messages + tools).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "description": "Tokens generated in the response.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ],
+      "type": "object"
+    },
+    "TokenUsage2": {
+      "description": "Token usage reported by the LLM backend, summed across the run.\n\nSome backends report `total_tokens`; some report only input/output.\n`Default` returns all zeros (useful when no backend was called yet).\n\n# Example\n\n```\nuse tau_runtime_core::options::TokenUsage;\n\nlet usage = TokenUsage::default();\nassert_eq!(usage.input_tokens, 0);\nassert_eq!(usage.output_tokens, 0);\nassert_eq!(usage.total_tokens, None);\n```",
+      "properties": {
+        "input_tokens": {
+          "description": "Total input (prompt) tokens used across the run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "description": "Total output (completion) tokens emitted across the run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_tokens": {
+          "description": "`Some(n)` when the backend reports a unified count; `None` otherwise.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ],
+      "type": "object"
+    },
+    "ToolContent": {
+      "description": "One content block within a [`ToolResult`].\n\nv0.1 admits [`ToolContent::Text`] and [`ToolContent::Json`] only.\nThe enum is `#[non_exhaustive]` to admit additive variants for\nimage, audio, and resource references without a major bump.\n\n# Example\n\n```\nuse tau_domain::Value;\nuse tau_ports::tool::ToolContent;\n\nlet blocks = vec![\n    ToolContent::Text { text: \"hello\".into() },\n    ToolContent::Json { data: Value::String(\"world\".into()) },\n];\n# let _ = blocks;\n```",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Plain-text content.",
+          "properties": {
+            "Text": {
+              "properties": {
+                "text": {
+                  "description": "The text payload.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Structured JSON content, carried as a `tau_domain::Value`.",
+          "properties": {
+            "Json": {
+              "properties": {
+                "data": {
+                  "description": "The structured payload."
+                }
+              },
+              "required": [
+                "data"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Json"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolResult": {
+      "description": "Result of a single [`Tool::invoke`] call.\n\nMirrors the MCP tool-result shape: a list of typed content blocks\nplus an `is_error` flag. The flag distinguishes \"the tool ran but\nreports an error to the LLM\" (e.g. file-not-found, HTTP 500) from\n[`crate::ToolError`], which signals \"the tool itself failed to run\"\n(session unhealthy, contract violation, internal bug). The runtime\nsurfaces semantic errors to the agent's LLM via the\n`MessagePayload::ToolError` envelope; trait-method errors may\ntrigger retry or agent-stop.\n\n`ToolResult` is `#[non_exhaustive]`: external callers cannot\nconstruct it via struct-literal syntax.\n\n# Example\n\n```\nuse tau_ports::tool::{ToolContent, ToolResult};\n\n// External callers cannot use struct-literal syntax because `ToolResult`\n// is `#[non_exhaustive]` — use `ToolResult::new`.\nlet ok = ToolResult::new(\n    vec![ToolContent::Text { text: \"done\".into() }],\n    false,\n);\n# let _ = ok;\n```",
+      "properties": {
+        "content": {
+          "description": "Multi-block content describing the tool's output.",
+          "items": {
+            "$ref": "#/$defs/ToolContent"
+          },
+          "type": "array"
+        },
+        "is_error": {
+          "description": "Whether the tool ran but reports a semantic error to the LLM.\nDistinct from [`crate::ToolError`], which signals a trait-method\nfailure.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "content",
+        "is_error"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://lebocqtitouan.github.io/tau/schemas/run-event/v1/run-event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Streaming event from `Runtime::run_streaming`.\n\nAlways terminates with exactly one `RunCompleted`; intermediate\nevents are unbounded per agent run. See spec §4.2 for the full\npump invariants.\n\nPer ADR-0011:\n- Every `ToolCallStarted` is followed by either a matching\n  `ToolCallCompleted` (same `id`) before the next `TurnCompleted`,\n  OR a terminal `RunCompleted { outcome: Failed }` if dispatch\n  crashed mid-flight.\n- `TurnCompleted` arrives only after the turn's LLM `Finish` AND\n  all that turn's tool dispatches resolved.\n- Stream order preserves LLM source order; the kernel never\n  reorders events.\n\n# Example\n\n```\nuse tau_runtime_core::stream::RunEvent;\nuse tau_domain::Value;\n\n// Classify events by variant.\nfn describe(event: &RunEvent) -> &'static str {\n    match event {\n        RunEvent::TextDelta { .. } => \"text\",\n        RunEvent::ToolCallStarted { .. } => \"tool-started\",\n        RunEvent::ToolCallCompleted { .. } => \"tool-completed\",\n        RunEvent::TurnCompleted { .. } => \"turn-completed\",\n        RunEvent::RunCompleted { .. } => \"run-completed\",\n        RunEvent::FatalError { .. } => \"fatal\",\n        _ => \"other\",\n    }\n}\n\nlet text_ev = RunEvent::TextDelta { delta: \"hello\".into() };\nassert_eq!(describe(&text_ev), \"text\");\n\nlet tool_ev = RunEvent::ToolCallStarted {\n    id: \"call-1\".into(),\n    name: \"echo\".into(),\n    args: Value::Object(Default::default()),\n};\nassert_eq!(describe(&tool_ev), \"tool-started\");\n```",
+  "oneOf": [
+    {
+      "const": "RunStarted",
+      "description": "Run started. Emitted once, before the first turn. Typed\ncounterpart of the `runtime.run_started` tracing event (β.7.5:\npromoted to a typed variant so a no_std wasm guest can produce the\nβ.6 conformance observable over a single channel — see ADR-0049).",
+      "type": "string"
+    },
+    {
+      "additionalProperties": false,
+      "description": "A β.4 context-pipeline transform ran. Emitted once per transform\nper turn, carrying the step name and the pre/post token estimates.\nTyped counterpart of the `runtime.context_step_ran` tracing event.",
+      "properties": {
+        "ContextStepRan": {
+          "properties": {
+            "step": {
+              "description": "Transform name (e.g. `\"trim_old\"`, `\"fit_budget\"`).",
+              "type": "string"
+            },
+            "tokens_in": {
+              "description": "Token estimate of the view entering this transform.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tokens_out": {
+              "description": "Token estimate of the view leaving this transform.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "step",
+            "tokens_in",
+            "tokens_out"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "ContextStepRan"
+      ],
+      "type": "object"
+    },
+    {
+      "const": "InferenceCallStarted",
+      "description": "The per-turn LLM request was built and is about to be sent. Typed\ncounterpart of the `llm.request_built` tracing event.",
+      "type": "string"
+    },
+    {
+      "additionalProperties": false,
+      "description": "The per-turn LLM response finished streaming. Typed counterpart of\n`llm.response_received` folded with `llm.token_usage`: carries the\nturn's `StopReason` and token usage (zero when the provider did not\nreport usage).",
+      "properties": {
+        "InferenceCallCompleted": {
+          "properties": {
+            "stop_reason": {
+              "$ref": "#/$defs/StopReason",
+              "description": "Why the turn's inference stopped."
+            },
+            "tokens_in": {
+              "description": "Input tokens reported for this turn (`0` if unreported).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tokens_out": {
+              "description": "Output tokens reported for this turn (`0` if unreported).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "stop_reason",
+            "tokens_in",
+            "tokens_out"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "InferenceCallCompleted"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "LLM emitted a text fragment. Concatenate with previous deltas\nfor the running assistant message text.",
+      "properties": {
+        "TextDelta": {
+          "properties": {
+            "delta": {
+              "description": "Text fragment to append.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "TextDelta"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "LLM emitted a complete `tool_use` block. Fires immediately\nwhen the kernel sees `CompletionChunk::ToolUse` — BEFORE the\ntool is dispatched. Display intent: \"agent wants to call X\nwith args Y\". The matching `ToolCallCompleted` fires after\ndispatch finishes.",
+      "properties": {
+        "ToolCallStarted": {
+          "properties": {
+            "args": {
+              "description": "Args the LLM emitted."
+            },
+            "id": {
+              "description": "Provider-supplied tool-use id; correlates with\n`ToolCallCompleted.id`.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Tool name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "args"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "ToolCallStarted"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Tool dispatch finished. Fires after `Tool::invoke` returns,\nregardless of success/failure. Carries the tool result OR a\nvalidation/dispatch error message.",
+      "properties": {
+        "ToolCallCompleted": {
+          "properties": {
+            "id": {
+              "description": "Matches the `id` from `ToolCallStarted`.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Tool name.",
+              "type": "string"
+            },
+            "result": {
+              "$ref": "#/$defs/Result_of_ToolResult_or_string",
+              "description": "`Ok(ToolResult)` on success; `Err(reason)` for validation\nfailures or other recoverable errors. Plugin-crash-class\nerrors don't surface here — they terminate the run via\n`RunCompleted`."
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "result"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "ToolCallCompleted"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "One turn of the agent loop completed. The LLM's `Finish`\nchunk arrived AND any tool calls within the turn finished\ndispatching.",
+      "properties": {
+        "TurnCompleted": {
+          "properties": {
+            "stop_reason": {
+              "$ref": "#/$defs/StopReason",
+              "description": "Why the turn ended (per LLM-reported `StopReason`)."
+            },
+            "turn": {
+              "description": "Turn number (1-indexed) within the run.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TokenUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Token usage for this turn. `None` if the provider did\nnot report."
+            }
+          },
+          "required": [
+            "stop_reason",
+            "turn"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "TurnCompleted"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Terminal event. Always exactly one per stream. After this\nfires, the stream returns `None`.",
+      "properties": {
+        "RunCompleted": {
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/RunOutcome",
+              "description": "Final outcome — same shape as `Runtime::run` returns."
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "RunCompleted"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Kernel-level fatal error (ADR-0006 § error dichotomy). In the\nbatch path (`run_with_history` / `run`), the drainer converts\nthis to `Err(RuntimeError)`. Streaming callers should treat\nthis as an unrecoverable run abort.\n\nDistinct from `RunCompleted { Failed { BackendError } }` which\nsignals an agent-level failure the caller can handle gracefully.",
+      "properties": {
+        "FatalError": {
+          "properties": {
+            "context_json": {
+              "description": "Optional extra context (e.g. `tool_name`, `registered` list).\nEncoded as a JSON string for simplicity across crate boundaries.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "detail": {
+              "description": "Human-readable detail / primary error message.",
+              "type": "string"
+            },
+            "kind": {
+              "description": "`RuntimeError` variant name for structured dispatch.\nOne of: `\"ToolNotRegistered\"`, `\"Llm\"`, `\"Tool\"`, `\"Internal\"`.",
+              "type": "string"
+            },
+            "tool_error_variant": {
+              "description": "When `kind == \"Tool\"`, the inner `ToolError` variant name\n(`\"BadArgs\"`, `\"Internal\"`, `\"SessionDead\"`, `\"DeadlineExceeded\"`,\n`\"CapabilityDenied\"`, `\"Llm\"`, `\"Storage\"`). `None` for all\nother `kind` values. Used by the batch drainer to reconstruct\nthe typed `ToolError` variant losslessly (Approach A fix).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "FatalError"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "tau RunEvent (v1)"
+}

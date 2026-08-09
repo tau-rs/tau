@@ -202,6 +202,7 @@ impl DenyEntry {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolResult {
     /// Multi-block content describing the tool's output.
     pub content: Vec<ToolContent>,
@@ -242,6 +243,7 @@ impl ToolResult {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolContent {
     /// Plain-text content.
     Text {
