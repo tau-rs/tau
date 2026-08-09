@@ -371,7 +371,8 @@ impl Scope {
     /// assert_eq!(scope.kind(), ScopeKind::Project);
     /// ```
     pub fn resolve(cwd: &Path) -> Result<Self, ScopeError> {
-        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd) {
+        let home_dirs = home_scope_dirs();
+        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd, &home_dirs) {
             return Ok(Self {
                 path,
                 state_path,
@@ -423,7 +424,8 @@ impl Scope {
         cwd: &Path,
         fallback_home: PathBuf,
     ) -> Result<Self, ScopeError> {
-        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd) {
+        let home_dirs = home_scope_dirs();
+        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd, &home_dirs) {
             return Ok(Self {
                 path,
                 state_path,
@@ -587,18 +589,38 @@ impl Scope {
 }
 
 /// Walk up from `cwd` looking for a `.tau/` directory.
-/// Returns `Some((scope_root, state_path))` on the first hit or `None` if no `.tau/` is found.
-fn walk_up_for_dot_tau(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
+///
+/// Returns `Some((scope_root, state_path))` on the first hit, or `None` if
+/// no `.tau/` is found. A `.tau/` located *directly* inside a directory in
+/// `home_dirs` is the global scope by convention (`~/.tau`) and is skipped —
+/// it is never a project root. See #530.
+fn walk_up_for_dot_tau(cwd: &Path, home_dirs: &[PathBuf]) -> Option<(PathBuf, PathBuf)> {
     for ancestor in cwd.ancestors() {
         let candidate = ancestor.join(".tau");
         if fs::metadata(&candidate)
             .map(|m| m.is_dir())
             .unwrap_or(false)
         {
+            if home_dirs.iter().any(|h| h == ancestor) {
+                continue;
+            }
             return Some((ancestor.to_path_buf(), candidate));
         }
     }
     None
+}
+
+/// The user-home directories that host the global scope by convention
+/// (`$HOME`, `%USERPROFILE%`). A `.tau/` located directly in one of these is
+/// the global scope, not a project root, so `walk_up_for_dot_tau` skips it.
+/// See #530.
+fn home_scope_dirs() -> Vec<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .filter_map(env::var_os)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// Resolve the global scope path from explicit env values (testable).
@@ -700,6 +722,25 @@ mod tests {
         let project = parent.join("my-project");
         fs::create_dir_all(project.join(".tau")).unwrap();
         project
+    }
+
+    #[test]
+    fn walk_up_excludes_dot_tau_in_home_dir() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".tau")).unwrap();
+
+        // A `.tau` directly in a home dir is the global scope, not a project.
+        assert_eq!(
+            walk_up_for_dot_tau(&home, std::slice::from_ref(&home)),
+            None,
+            "home-dir .tau must not be discovered as a project root"
+        );
+
+        // With no home dirs excluded, the same `.tau` IS a project root.
+        let (root, state) = walk_up_for_dot_tau(&home, &[]).expect("project hit");
+        assert_eq!(root, home);
+        assert_eq!(state, home.join(".tau"));
     }
 
     #[test]
