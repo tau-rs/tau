@@ -67,10 +67,6 @@ fn net_http_project_generates_http_world() {
     assert!(world.contains("import wasi:io/streams@0.2.3;"), "{world}");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "no Windows home/scope resolution for governance eval; see #530"
-)]
 #[tokio::test]
 async fn ungoverned_project_is_refused_on_wasm_path() {
     // `trivial` declares no `[allow]` ceiling → GOV000 unless opted out.
@@ -80,10 +76,6 @@ async fn ungoverned_project_is_refused_on_wasm_path() {
     assert!(err.contains("GOV000"), "expected GOV000, got: {err}");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "no Windows home/scope resolution for governance eval; see #530"
-)]
 #[tokio::test]
 async fn allow_ungoverned_flag_lets_it_proceed() {
     let flags = GovernanceFlags {
@@ -95,10 +87,6 @@ async fn allow_ungoverned_flag_lets_it_proceed() {
         .expect("--allow-ungoverned proceeds");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "no Windows home/scope resolution for governance eval; see #530"
-)]
 #[tokio::test]
 async fn over_reaching_project_is_refused_on_wasm_path() {
     // `over-reach` declares a `[allow]` ceiling of `net.http` scoped to
