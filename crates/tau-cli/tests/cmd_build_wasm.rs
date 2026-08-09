@@ -15,6 +15,30 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Point `$TAU_HOME` at a process-local tempdir so the governance gate can
+/// resolve a global scope.
+///
+/// The wasm-build fixtures carry no `.tau/`, so `CheckCtx::load` walks up,
+/// finds none, and falls back to `Scope::global()`, which reads
+/// `$TAU_HOME`/`$XDG_DATA_HOME`/`$HOME`. On Windows CI none of those are set,
+/// so the gate fails with `HomeNotFound` instead of the expected governance
+/// verdict. We give it a dedicated tempdir initialized once, with
+/// `config.toml` pre-created so parallel tests don't race writing it. Mirrors
+/// `e2e_common::ensure_home_env` (added in #545). See #530.
+fn ensure_home_env() {
+    use std::sync::OnceLock;
+    static TAU_HOME_INIT: OnceLock<()> = OnceLock::new();
+    TAU_HOME_INIT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("tau-wasm-build-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create tau_home tempdir");
+        let cfg = dir.join("config.toml");
+        if !cfg.exists() {
+            let _ = std::fs::write(&cfg, "");
+        }
+        std::env::set_var("TAU_HOME", dir);
+    });
+}
+
 #[test]
 fn trivial_project_lowers_to_wasm_ir() {
     let (module, bytes) = lower_to_wasm_ir(&fixture("trivial")).expect("trivial lowers");
@@ -83,12 +107,9 @@ fn emitted_world_is_deterministic_and_matches_generator() {
     );
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "no Windows home/scope resolution for governance eval; see #530"
-)]
 #[tokio::test]
 async fn ungoverned_project_is_refused_on_wasm_path() {
+    ensure_home_env();
     // `trivial` declares no `[allow]` ceiling → GOV000 unless opted out.
     let err = wasm_governance_gate(&fixture("trivial"), GovernanceFlags::default())
         .await
@@ -96,12 +117,9 @@ async fn ungoverned_project_is_refused_on_wasm_path() {
     assert!(err.contains("GOV000"), "expected GOV000, got: {err}");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "no Windows home/scope resolution for governance eval; see #530"
-)]
 #[tokio::test]
 async fn allow_ungoverned_flag_lets_it_proceed() {
+    ensure_home_env();
     let flags = GovernanceFlags {
         allow_ungoverned: true,
         no_governance: false,
@@ -111,12 +129,9 @@ async fn allow_ungoverned_flag_lets_it_proceed() {
         .expect("--allow-ungoverned proceeds");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "no Windows home/scope resolution for governance eval; see #530"
-)]
 #[tokio::test]
 async fn over_reaching_project_is_refused_on_wasm_path() {
+    ensure_home_env();
     // `over-reach` declares a `[allow]` ceiling of `net.http` scoped to
     // `example.com`, but its `fetch` tool actually requires
     // `api.anthropic.com` — a ceiling violation (`tau.governance.over_reach`),
