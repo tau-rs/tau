@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["any_agent_definition","any_agent_id","any_message","any_package_manifest","any_package_name","any_package_source","any_unchecked_manifest","cap_agent_spawn","cap_custom","cap_custom_with_params","cap_fs_exec","cap_fs_read","cap_fs_write","cap_net_http","cap_process_spawn"]};
