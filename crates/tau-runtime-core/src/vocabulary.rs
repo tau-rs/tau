@@ -78,6 +78,7 @@ pub const EV_CAPABILITY_DENY: &str = "capability.deny";
 /// Event: a tool's network capability was delegated to the host/WASI
 /// egress boundary (wasm profile) instead of being checked in-guest.
 /// Emitted by the in-guest dispatch gate when `egress_host_mediated`.
+#[doc(hidden)]
 pub const EV_CAPABILITY_EGRESS_DELEGATED: &str = "capability.egress_delegated";
 
 // --- Tool events ---
