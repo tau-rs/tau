@@ -1,0 +1,3 @@
+# npm install output (this is a library package; the lockfile is not pinned).
+node_modules/
+package-lock.json
