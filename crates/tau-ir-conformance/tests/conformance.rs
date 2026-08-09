@@ -18,8 +18,10 @@
 //! `19_subflow_attenuation_denied` (runtime subflow cap_subset denial —
 //! contrast fixture 04's proper-narrowing allow),
 //! `20_branch_route` (EPIC 4.2a authored conditional `Branch`),
-//! `21_parallel_fanout` (EPIC 4.2b authored `Parallel` fan-out/join), and
-//! `22_loop_refine` (EPIC 4.2c authored bounded `Loop` with feedback).
+//! `21_parallel_fanout` (EPIC 4.2b authored `Parallel` fan-out/join),
+//! `22_loop_refine` (EPIC 4.2c authored bounded `Loop` with feedback), and
+//! `23_suspend_pause` (EPIC 4.3 HITL `Suspend` pause point — dev-mode vs
+//! bundle-mode agreement on the persisted `SuspendedSummary`).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -538,6 +540,78 @@ async fn fixture_22_cross_mode_conformance() {
     let dir = fixture_dir("22_loop_refine");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 23 — suspend pause point (EPIC 4.3)
+// ---------------------------------------------------------------------------
+
+/// Fixture 23: `agent:seed -> suspend:approved(pause)`. The `seed` agent's
+/// single scripted turn produces the text `"20"`, which the pipeline
+/// executor stores as `steps.seed.output`; the top-level `pause` step then
+/// hits `StepRun::Suspend { resume_signal: "approved" }` and
+/// `drive_pipeline` drives it via `run_pipeline_suspendable` — durably
+/// persisting a `PipelineSuspension` (carrying `step_cursor = 1`, the index
+/// of `pause`, and an `outputs` snapshot containing `seed`'s output) to a
+/// fresh `MockSuspensionStore` rather than erroring.
+///
+/// Expected: `report.suspended` is `Some`, `run_outcome` and `build_refused`
+/// are both `None` (a suspension is a third terminal state, not a
+/// completion or a build refusal), `resume_signal == "approved"`,
+/// `step_cursor == 1`, and `outputs_canonical` is non-empty (it carries the
+/// `seed` step's persisted output).
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_23_dev_mode_suspends() {
+    let dir = fixture_dir("23_suspend_pause");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed (suspended) run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        report.run_outcome.is_none(),
+        "a suspended report must not also carry a run_outcome, got: {:?}",
+        report.run_outcome
+    );
+    let summary = report
+        .suspended
+        .as_ref()
+        .expect("expected the pipeline to suspend at the `pause` step");
+    assert_eq!(summary.resume_signal, "approved");
+    assert_eq!(
+        summary.step_cursor, 1,
+        "`pause` is the second (index-1) top-level pipeline step"
+    );
+    assert!(
+        !summary.outputs_canonical.is_empty(),
+        "expected the persisted outputs snapshot to carry the seed step's output"
+    );
+    let outputs_json = std::str::from_utf8(&summary.outputs_canonical)
+        .expect("outputs_canonical must be valid UTF-8 JSON");
+    assert!(
+        outputs_json.contains("seed") && outputs_json.contains('2') && outputs_json.contains('0'),
+        "expected the seed step's output (\"20\") in the persisted snapshot; got: {outputs_json}"
+    );
+}
+
+/// Cross-mode conformance for fixture 23: DevMode and BundleMode both drive
+/// `run_pipeline_suspendable` over the same suspend-capable pipeline, so both
+/// must pause at the same step with the same persisted `SuspendedSummary` —
+/// proving dev-mode and bundle-mode agree at a pipeline's HITL pause point.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_23_cross_mode_conformance() {
+    let dir = fixture_dir("23_suspend_pause");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert!(
+        dev.suspended.is_some() && bundle.suspended.is_some(),
+        "expected both modes to suspend: dev={:?}, bundle={:?}",
+        dev.suspended,
+        bundle.suspended
+    );
     assert_conform(&dev, &bundle);
 }
 
