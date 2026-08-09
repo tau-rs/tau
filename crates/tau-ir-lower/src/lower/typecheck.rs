@@ -176,6 +176,12 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
         }
     }
 
+    // Suspend steps produce no output (EPIC 4.3): collect their ids
+    // tree-wide so the ref-validation loop below can reject
+    // `${steps.<suspend-id>.output}`.
+    let mut suspend_ids: BTreeSet<&str> = BTreeSet::new();
+    collect_suspend_ids(&pipeline.steps, &mut suspend_ids);
+
     let mut seen_ids: BTreeSet<&str> = BTreeSet::new();
     // Nested descendants of PRIOR top-level steps are also visible to a
     // later top-level step's template refs (EPIC 4.2 Decision 1: the store
@@ -203,7 +209,8 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
         }
 
         // Validate this step's run target and recurse into any nested steps.
-        validate_step_run(&step.run, wf, sid, &all_ids, &seen_ids)?;
+        // `nested = false`: this is a top-level pipeline step.
+        validate_step_run(&step.run, wf, sid, &all_ids, &seen_ids, false)?;
 
         // For Check steps, validate the check's locus integrity:
         // if the check has a Locus::Output referencing a step, that step must
@@ -247,6 +254,14 @@ fn check_pipeline(wf: &tau_ir::module::Workflow) -> Result<(), LowerError> {
                 // namespace as top-level steps), not just among top-level ids.
                 if !all_ids.contains(ref_id.as_str()) {
                     return Err(LowerError::UnknownOutputRef {
+                        step: sid.into(),
+                        referenced: ref_id,
+                    });
+                }
+                // A Suspend step produces no output (EPIC 4.3) — reject any
+                // reference to it regardless of visibility/ordering.
+                if suspend_ids.contains(ref_id.as_str()) {
+                    return Err(LowerError::SuspendHasNoOutput {
                         step: sid.into(),
                         referenced: ref_id,
                     });
@@ -311,6 +326,37 @@ fn collect_all_ids<'a>(
     }
 }
 
+/// Collect every `Suspend` step's id in the tree (top-level + nested inside
+/// Branch/Parallel/Loop). A `Suspend` step produces no output (EPIC 4.3), so
+/// `check_pipeline`'s ref-validation loop rejects
+/// `${steps.<id>.output}` for any id in this set.
+fn collect_suspend_ids<'a>(
+    steps: &'a [tau_ir::pipeline::PipelineStep],
+    out: &mut alloc::collections::BTreeSet<&'a str>,
+) {
+    use tau_ir::pipeline::StepRun;
+    for step in steps {
+        match &step.run {
+            StepRun::Suspend { .. } => {
+                out.insert(step.id.0.as_str());
+            }
+            StepRun::Branch {
+                then, otherwise, ..
+            } => {
+                collect_suspend_ids(then, out);
+                collect_suspend_ids(otherwise, out);
+            }
+            StepRun::Parallel { branches } => {
+                for b in branches {
+                    collect_suspend_ids(b, out);
+                }
+            }
+            StepRun::Loop { body, .. } => collect_suspend_ids(body, out),
+            _ => {}
+        }
+    }
+}
+
 /// Ref-check one nested step's `input` template against the scope in force
 /// at its execution site. Mirrors the top-level template loop in
 /// `check_pipeline`: `StepOutput(ref_id)` must exist somewhere in the tree
@@ -350,8 +396,11 @@ fn check_nested_template_refs(
 
 /// Validate a [`StepRun`]`s referenced nodes and recurse into nested steps.
 ///
-/// `outer_step_id` is the id of the top-level pipeline step that owns this
-/// run (used in error messages). `all_ids` is the flat global namespace of
+/// `outer_step_id` is the id of the step that owns this run — the top-level
+/// pipeline step for the initial call, or the immediate nested step's own id
+/// when recursing into a Branch arm/Loop body/Parallel branch (used in error
+/// messages, so a nested-step error names the offending step, not its
+/// container). `all_ids` is the flat global namespace of
 /// every `PipelineStepId` in the tree (top-level + nested), used to
 /// distinguish "unknown anywhere" from "known but out of scope" when
 /// ref-checking nested `input` templates. `seen_ids` is the set of step ids
@@ -369,12 +418,18 @@ fn check_nested_template_refs(
 /// - `Loop` body steps see the outer scope plus their own prior siblings.
 /// - Each `Parallel` branch sees the outer scope plus its own prior steps
 ///   only — never a sibling branch's ids (no ordering between branches).
+///
+/// `nested` is `true` when this call is validating a step that lives inside
+/// a Branch arm, Loop body, or Parallel branch (i.e. not a top-level pipeline
+/// step) — used to reject `StepRun::Suspend` below the top level (EPIC 4.3:
+/// Suspend is top-level only).
 fn validate_step_run(
     run: &tau_ir::pipeline::StepRun,
     wf: &tau_ir::module::Workflow,
     outer_step_id: &str,
     all_ids: &alloc::collections::BTreeSet<&str>,
     seen_ids: &alloc::collections::BTreeSet<&str>,
+    nested: bool,
 ) -> Result<(), LowerError> {
     use tau_ir::check::Locus;
     use tau_ir::pipeline::StepRun;
@@ -437,7 +492,17 @@ fn validate_step_run(
             for arm in [then, otherwise] {
                 let mut arm_scope = seen_ids.clone();
                 for nested in arm {
-                    validate_step_run(&nested.run, wf, outer_step_id, all_ids, &arm_scope)?;
+                    // Pass the nested step's OWN id (not the outer branch's)
+                    // so errors about its own run — e.g. a nested Suspend
+                    // rejection — name the offending step, not its container.
+                    validate_step_run(
+                        &nested.run,
+                        wf,
+                        nested.id.0.as_str(),
+                        all_ids,
+                        &arm_scope,
+                        true,
+                    )?;
                     check_nested_template_refs(
                         nested.id.0.as_str(),
                         &nested.input,
@@ -454,7 +519,16 @@ fn validate_step_run(
             for branch in branches {
                 let mut branch_scope = seen_ids.clone();
                 for nested in branch {
-                    validate_step_run(&nested.run, wf, outer_step_id, all_ids, &branch_scope)?;
+                    // See the Branch-arm comment above: use the nested
+                    // step's own id, not the outer Parallel step's.
+                    validate_step_run(
+                        &nested.run,
+                        wf,
+                        nested.id.0.as_str(),
+                        all_ids,
+                        &branch_scope,
+                        true,
+                    )?;
                     check_nested_template_refs(
                         nested.id.0.as_str(),
                         &nested.input,
@@ -495,7 +569,16 @@ fn validate_step_run(
             // Body steps see the outer scope plus their own prior siblings.
             let mut body_scope = seen_ids.clone();
             for nested in body {
-                validate_step_run(&nested.run, wf, outer_step_id, all_ids, &body_scope)?;
+                // See the Branch-arm comment above: use the nested step's
+                // own id, not the outer Loop step's.
+                validate_step_run(
+                    &nested.run,
+                    wf,
+                    nested.id.0.as_str(),
+                    all_ids,
+                    &body_scope,
+                    true,
+                )?;
                 check_nested_template_refs(
                     nested.id.0.as_str(),
                     &nested.input,
@@ -506,7 +589,14 @@ fn validate_step_run(
             }
         }
         StepRun::Suspend { .. } => {
-            // No refs to validate.
+            // Suspend is top-level only (EPIC 4.3): reject if this run lives
+            // inside a Branch arm, Loop body, or Parallel branch. No refs to
+            // validate otherwise — a suspend step produces no output.
+            if nested {
+                return Err(LowerError::SuspendNotTopLevel {
+                    step: outer_step_id.into(),
+                });
+            }
         }
     }
     Ok(())
@@ -1550,6 +1640,113 @@ mod tests {
             matches!(err, LowerError::UnknownStepToolTarget { ref tool, ref step }
                 if tool.0 == "normalize" && step.0 == "missing-step"),
             "expected UnknownStepToolTarget; got {err:?}"
+        );
+    }
+
+    // ── EPIC 4.3 Suspend typecheck tests ─────────────────────────────────────
+
+    use tau_ir::ids::PipelineStepId;
+    use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+    /// Build a top-level-only `StepRun::Suspend` leaf step.
+    fn suspend_step(id: &str, resume_signal: &str) -> PipelineStep {
+        PipelineStep {
+            id: PipelineStepId(id.to_string()),
+            run: StepRun::Suspend {
+                resume_signal: resume_signal.to_string(),
+            },
+            input: "${input}".to_string(),
+        }
+    }
+
+    /// Build a `StepRun::Branch` step with an always-benign condition, so
+    /// tests can focus on the `then`/`otherwise` arm contents.
+    fn branch_step(
+        id: &str,
+        then: alloc::vec::Vec<PipelineStep>,
+        otherwise: alloc::vec::Vec<PipelineStep>,
+    ) -> PipelineStep {
+        use tau_ir::check::{Condition, GoalPredicate, Locus};
+        PipelineStep {
+            id: PipelineStepId(id.to_string()),
+            run: StepRun::Branch {
+                on: Condition {
+                    evaluates: Locus::Path("/flag".to_string()),
+                    predicate: GoalPredicate::Exists,
+                },
+                then,
+                otherwise,
+            },
+            input: "${input}".to_string(),
+        }
+    }
+
+    /// Build a `StepRun::Agent(agent)` step with an explicit `input` template.
+    fn agent_step_with_input(id: &str, agent: &str, input: &str) -> PipelineStep {
+        PipelineStep {
+            id: PipelineStepId(id.to_string()),
+            run: StepRun::Agent(AgentId(agent.to_string())),
+            input: input.to_string(),
+        }
+    }
+
+    /// Typecheck a bare pipeline (top-level `steps`) against a workflow that
+    /// declares a single `echo` agent — enough for tests that route an
+    /// `Agent("echo")` step through `validate_step_run`'s existence check
+    /// before reaching the ref-validation logic under test.
+    fn typecheck_pipeline(steps: alloc::vec::Vec<PipelineStep>) -> Result<(), LowerError> {
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("echo".to_string()),
+            agent_with_tool_refs("echo", &[]),
+        );
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline { steps }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        typecheck(&parsed)
+    }
+
+    #[test]
+    fn typecheck_rejects_suspend_inside_branch() {
+        // Top-level Branch whose `then` contains StepRun::Suspend → SuspendNotTopLevel.
+        let err = typecheck_pipeline(vec![branch_step(
+            "gate",
+            vec![suspend_step("pause", "go")], // then
+            vec![],                            // otherwise
+        )])
+        .expect_err("nested suspend rejected");
+        assert!(
+            matches!(err, LowerError::SuspendNotTopLevel { ref step } if step == "pause"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn typecheck_allows_top_level_suspend() {
+        typecheck_pipeline(vec![suspend_step("pause", "go")]).expect("top-level suspend ok");
+    }
+
+    #[test]
+    fn typecheck_rejects_ref_to_suspend_output() {
+        // agent step whose input is "${steps.pause.output}" after a suspend `pause`.
+        let err = typecheck_pipeline(vec![
+            suspend_step("pause", "go"),
+            agent_step_with_input("tail", "echo", "${steps.pause.output}"),
+        ])
+        .expect_err("ref to suspend output rejected");
+        assert!(
+            matches!(err, LowerError::SuspendHasNoOutput { ref referenced, .. } if referenced == "pause"),
+            "got {err:?}"
         );
     }
 }
