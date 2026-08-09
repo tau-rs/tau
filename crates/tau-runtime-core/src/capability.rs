@@ -78,6 +78,28 @@ pub fn check_capabilities<'a>(
         .find(|req| !granted.iter().any(|g| capability_satisfies(g, req)))
 }
 
+/// Whether a *required* capability is enforced by the in-guest runtime gate on
+/// the given target.
+///
+/// On wasm, `Disposition::Wasi` capabilities (net.http, fs.read/write) are
+/// enforced by the generated WIT world (EPIC 3.2 — an ungranted interface is
+/// absent from the world, hence un-importable) and the host `WasiCtx`
+/// (EPIC 3.3 — preopens + egress allow-list), so the in-guest software check
+/// for them is redundant and — against the guest's empty stub grant — wrong.
+/// Story 3.4 drops it for exactly those. Every other disposition (`InGuest`,
+/// `HostMediated`, unknown future variant) has no ABI/host realization and
+/// stays in-guest gated. On native (`is_wasm == false`) the OS sandbox is the
+/// enforcement path and the in-guest check stays for ALL dispositions
+/// (defense in depth).
+///
+/// `is_wasm` is threaded in (rather than read from `cfg!` here) so both target
+/// behaviors are unit-testable from a single native `cargo test`. `Disposition`
+/// (EPIC 3.1) is the single source of truth — do not hand-enumerate cap kinds.
+fn in_guest_gated_on(required: &Capability, is_wasm: bool) -> bool {
+    use tau_ports::target::wasi_map::{map_capability, Disposition};
+    !(is_wasm && matches!(map_capability(required).disposition, Disposition::Wasi))
+}
+
 /// Tool-dispatch wrapper around [`check_capabilities`] that owns the
 /// ADR-0006 §3.9 `capability.check` span and the five capability
 /// lifecycle events.
@@ -850,6 +872,35 @@ methods = ["GET"]
 "#),
         ];
         assert!(check_capabilities(&granted, &required).is_none());
+    }
+
+    // -------------------- in_guest_gated_on (story 3.4) --------------------
+
+    #[test]
+    fn wasi_caps_are_not_in_guest_gated_on_wasm() {
+        let net =
+            cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.example.com\"]\nmethods = [\"GET\"]\n");
+        let fs_r = cap("[cap]\nkind = \"fs.read\"\npaths = [\"/tmp/**\"]\n");
+        let fs_w = cap("[cap]\nkind = \"fs.write\"\npaths = [\"/tmp/**\"]\n");
+        // On wasm the ABI (3.2) + host WasiCtx (3.3) own these → not in-guest gated.
+        assert!(!in_guest_gated_on(&net, true));
+        assert!(!in_guest_gated_on(&fs_r, true));
+        assert!(!in_guest_gated_on(&fs_w, true));
+        // On native the in-guest check stays for all dispositions.
+        assert!(in_guest_gated_on(&net, false));
+        assert!(in_guest_gated_on(&fs_r, false));
+        assert!(in_guest_gated_on(&fs_w, false));
+    }
+
+    #[test]
+    fn in_guest_caps_stay_gated_on_every_target() {
+        let spawn = cap("[cap]\nkind = \"agent.spawn\"\nallowed_kinds = [\"worker\"]\n");
+        let plan = cap("[cap]\nkind = \"plan\"\nmode = \"write\"\n");
+        // InGuest disposition has no ABI/host realization → gated on wasm AND native.
+        assert!(in_guest_gated_on(&spawn, true));
+        assert!(in_guest_gated_on(&spawn, false));
+        assert!(in_guest_gated_on(&plan, true));
+        assert!(in_guest_gated_on(&plan, false));
     }
 }
 
