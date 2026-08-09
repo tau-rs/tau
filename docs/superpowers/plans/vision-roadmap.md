@@ -100,8 +100,21 @@ public ABIs, and the source for generated SDKs.
 - **3.2** Generate the WIT world from used+bounded caps at `tau build wasm`.
 - **3.3** Configure host `WasiCtx` from the same caps (allowed-hosts, preopens).
 - **3.4** Drop the in-guest gate on wasm; OS gate stays for host/native.
+  Drops the in-guest runtime check **only for `Disposition::Wasi` caps** (the
+  ABI + host `WasiCtx` own them); the in-guest gate for `Disposition::InGuest`
+  caps (agent/skill.spawn, tasklist, plan) stays. See
+  `docs/superpowers/specs/2026-08-09-epic-3-4-drop-in-guest-wasm-gate-design.md`.
 - **3.5** `verify --bundle`: generated WIT reproducible from declared caps.
+- **3.6** **Guest effect ABI** — route the guest's net/fs effects through
+  `wasi:http`/`wasi:filesystem` so granted imports survive wasm-ld DCE and the
+  host `WasiCtx` (3.3) becomes the *live* runtime enforcement path. Closes the
+  epic's **binary-observable** DoD (until effects route through WASI, DCE strips
+  all WASI imports — 3.2/3.4 meet the DoD at the world-text + host-boundary layer
+  only). **Prereq: 3.4** (its `Wasi`-cap gate-drop is what lets rerouted effects
+  reach the host instead of being denied by the guest's empty-stub grant).
 **Epic DoD:** an ungranted cap is un-importable at the ABI; wasm caps == `[allow]`-bounded set.
+(*Binary*-observable half of "un-importable at the ABI" lands with **3.6**;
+3.2/3.4 establish it at the world-text + host-`WasiCtx` layer.)
 
 ## EPIC 4 — IR control flow: structured blocks + dynamic regions  [needs 2]
 **Goal:** Branch/Parallel/Loop/Suspend + capability-bounded dynamic regions; IR ≥ v2.3.0.
