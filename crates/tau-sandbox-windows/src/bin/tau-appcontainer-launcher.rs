@@ -1,6 +1,7 @@
 //! AppContainer launcher: runs a target program inside a named AppContainer
-//! via CreateProcessAsUserW, inheriting stdio, holding a KILL_ON_JOB_CLOSE
-//! job so the child dies with the launcher. See the Phase-2 spec.
+//! via CreateProcessW + PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+//! inheriting stdio, holding a KILL_ON_JOB_CLOSE job so the child dies with
+//! the launcher. See the Phase-2 spec.
 //!
 //! This bin is a separate crate root, so `tau_sandbox_windows`'s lib-level
 //! lints don't reach it. The Windows path below is inherently unsafe FFI
@@ -40,7 +41,7 @@ mod win {
     use std::os::windows::ffi::OsStrExt;
     use tau_sandbox_windows::launcher_args::LauncherArgs;
     use windows::core::{PCWSTR, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows::Win32::Foundation::{CloseHandle, LocalFree, HLOCAL, WAIT_OBJECT_0};
     use windows::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
     use windows::Win32::Security::{PSID, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
     use windows::Win32::System::Console::{
@@ -52,10 +53,10 @@ mod win {
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows::Win32::System::Threading::{
-        CreateProcessAsUserW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-        InitializeProcThreadAttributeList, ResumeThread, UpdateProcThreadAttribute,
-        WaitForSingleObject, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
-        LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+        CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
+        InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
+        UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
+        EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
 
@@ -123,10 +124,14 @@ mod win {
             // 5. Build the command line: "program" arg1 arg2 (quote per Win32 rules).
             let mut cmdline: Vec<u16> = build_command_line(&a);
 
-            // 6. Create suspended, assign to a KILL_ON_JOB_CLOSE job, resume.
+            // 6. Create suspended. No token is passed: CreateProcessAsUserW
+            //    requires a *valid* primary token and NULL is not a
+            //    documented-valid value for it, so the AppContainer is
+            //    applied purely via the PROC_THREAD_ATTRIBUTE_SECURITY_
+            //    CAPABILITIES attribute on the plain CreateProcessW path
+            //    (same parameter list minus the leading hToken).
             let mut pi = PROCESS_INFORMATION::default();
-            CreateProcessAsUserW(
-                HANDLE::default(), // hToken = NULL -> caller's token, AppContainer applied via attrs
+            CreateProcessW(
                 PCWSTR::null(),
                 PWSTR(cmdline.as_mut_ptr()),
                 None,
@@ -138,37 +143,61 @@ mod win {
                 &si.StartupInfo,
                 &mut pi,
             )
-            .map_err(|e| format!("CreateProcessAsUserW: {e}"))?;
+            .map_err(|e| format!("CreateProcessW: {e}"))?;
 
-            let job = CreateJobObjectW(None, PCWSTR::null())
-                .map_err(|e| format!("CreateJobObject: {e}"))?;
-            let mut jinfo = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-            jinfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                &jinfo as *const _ as *const core::ffi::c_void,
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-            .map_err(|e| format!("SetInformationJobObject: {e}"))?;
-            AssignProcessToJobObject(job, pi.hProcess)
-                .map_err(|e| format!("AssignProcessToJobObject: {e}"))?;
-            let _ = ResumeThread(pi.hThread);
+            // The derived SID's memory only needs to stay alive through the
+            // CreateProcessW call above (the OS reads SECURITY_CAPABILITIES,
+            // including AppContainerSid, while building the child's
+            // AppContainer token during process creation). Free it now per
+            // MSDN (DeriveAppContainerSidFromAppContainerName's PSID must be
+            // released with LocalFree).
+            let _ = LocalFree(HLOCAL(sid.0));
 
-            // 7. Wait, propagate exit code.
-            if WaitForSingleObject(pi.hProcess, INFINITE) != WAIT_OBJECT_0 {
-                return Err("WaitForSingleObject failed".into());
+            // From here on the child exists (suspended). Any failure in this
+            // block must not leak a suspended zombie process: terminate +
+            // close both handles before propagating the error.
+            let result: Result<i32, String> = (|| {
+                let job = CreateJobObjectW(None, PCWSTR::null())
+                    .map_err(|e| format!("CreateJobObject: {e}"))?;
+                let mut jinfo = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                jinfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &jinfo as *const _ as *const core::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+                .map_err(|e| format!("SetInformationJobObject: {e}"))?;
+                AssignProcessToJobObject(job, pi.hProcess)
+                    .map_err(|e| format!("AssignProcessToJobObject: {e}"))?;
+                // ResumeThread returns the previous suspend count, or
+                // u32::MAX on failure -- it does not return a Result.
+                if ResumeThread(pi.hThread) == u32::MAX {
+                    return Err("ResumeThread failed".to_string());
+                }
+
+                // 7. Wait, propagate exit code.
+                if WaitForSingleObject(pi.hProcess, INFINITE) != WAIT_OBJECT_0 {
+                    return Err("WaitForSingleObject failed".into());
+                }
+                let mut code: u32 = 0;
+                GetExitCodeProcess(pi.hProcess, &mut code).map_err(|e| e.to_string())?;
+                // NB: intentionally keep `job` alive until here; dropping/
+                // closing it would kill the child. Leaking it at process
+                // exit is fine (launcher exits immediately after).
+                Ok(code as i32)
+            })();
+
+            if result.is_err() {
+                // Best-effort: the child may already be gone (e.g. the wait
+                // failed for a reason other than the process itself), so
+                // ignore TerminateProcess's own error.
+                let _ = TerminateProcess(pi.hProcess, 1);
             }
-            let mut code: u32 = 0;
-            GetExitCodeProcess(pi.hProcess, &mut code).map_err(|e| e.to_string())?;
-
             DeleteProcThreadAttributeList(attr_list);
             let _ = CloseHandle(pi.hThread);
             let _ = CloseHandle(pi.hProcess);
-            // NB: intentionally keep `job` alive until here; dropping/closing it
-            // would kill the child. Leaking it at process exit is fine (launcher
-            // exits immediately after).
-            Ok(code as i32)
+            result
         }
     }
 
