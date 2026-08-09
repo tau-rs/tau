@@ -9,3 +9,12 @@
 # core.autocrlf=true does not introduce CRLF drift. See #530.
 *.py text eol=lf
 *.ts text eol=lf
+# Committed golden files byte-compared against LF-rendered output on the
+# Windows Tier-2 job (surfaced by the #550 full-matrix run):
+#   - crates/tau-wasm-guest/wit-baseline/runner.wit vs generate_world(&[])
+#     (tau-wasm-guest tests/wit_world.rs::baseline_equals_empty_generate_world)
+#   - sdk/embed-js/.gitignore vs render_embed_js() (the only embed-js scaffold
+#     file whose extension was not already pinned above)
+#     (tau-sdk-codegen tests/embed_js_drift.rs::committed_embed_js_matches_fresh_render)
+*.wit text eol=lf
+.gitignore text eol=lf
