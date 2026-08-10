@@ -101,9 +101,11 @@ pub(crate) fn create_appcontainer_profile(name: &str) -> std::io::Result<AppCont
 
 /// Delete the AppContainer profile named `name`.
 ///
-/// Calls the real `DeleteAppContainerProfile`. Failure (e.g. the profile
-/// doesn't exist, or is still in use by a running process) is surfaced
-/// as an `io::Error`; callers that treat deletion as best-effort cleanup
+/// Calls the real `DeleteAppContainerProfile`. Deleting a profile that
+/// does not exist is a no-op success (the API is idempotent for a
+/// valid-but-absent name), so only genuine failures (e.g. an invalid name,
+/// or the profile still in use by a running process) surface as an
+/// `io::Error`; callers that treat deletion as best-effort cleanup
 /// (e.g. `CapabilityHandle` drop) already discard the result.
 pub(crate) fn delete_appcontainer_profile(name: &str) -> std::io::Result<()> {
     let n = wide(name);
@@ -163,14 +165,13 @@ mod tests {
     }
 
     #[test]
-    fn delete_nonexistent_profile_errors() {
+    fn delete_nonexistent_profile_is_noop() {
+        // DeleteAppContainerProfile is idempotent for a valid-but-absent
+        // name: deleting a profile that was never created succeeds. This
+        // is what makes best-effort cleanup on `CapabilityHandle` drop safe.
         let name = unique_profile("nonexistent");
-        let err = delete_appcontainer_profile(&name)
-            .expect_err("deleting a profile that was never created must fail");
-        assert!(
-            err.to_string().contains("DeleteAppContainerProfile"),
-            "unexpected error: {err}"
-        );
+        delete_appcontainer_profile(&name)
+            .expect("deleting a never-created profile should be a no-op success");
     }
 
     #[test]
