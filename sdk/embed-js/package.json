@@ -6,10 +6,12 @@
   "types": "src/index.ts",
   "main": "src/index.ts",
   "scripts": {
-    "build": "jco transpile --instantiation async --name component --out-dir src/generated"
+    "build": "jco transpile --instantiation async --name component --out-dir src/generated",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.27",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3"
   }
 }

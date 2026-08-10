@@ -14,8 +14,24 @@
 // streaming RunEvents through `emit-event`. Validated end-to-end against
 // real jco output (EPIC 5.4 F1).
 
+/// <reference path="./generated.d.ts" />
+
 import { normalize } from "./normalize";
 import type { RunEvent } from "./RunEvent";
+
+// Re-export the public event types. `TauComponent.run` yields `RunEvent`, so
+// these are part of this package's public surface; re-exporting them lets
+// consumers (e.g. @tau/react, @tau/angular) name what a run emits without a
+// deep `@tau/embed-js/src/RunEvent` import.
+export type {
+  RunEvent,
+  RunOutcome,
+  RunOutcomeCompleted,
+  RunOutcomeFailed,
+  StopReason,
+  TokenUsage,
+  ToolResult,
+} from "./RunEvent";
 
 /** Input to a single agent run. The guest world (wit/tau-host.wit `runner`)
  * exports a single-agent, prompt-only `run` — there is no per-call agent
