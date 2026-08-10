@@ -114,6 +114,15 @@ struct DispatcherTool<D> {
     dispatcher: Arc<D>,
 }
 
+// `Tool::capabilities()` is intentionally NOT overridden (issue #581): the
+// dispatch-site gate compares a tool's required caps against the running
+// agent's grant, and the IR has no per-agent grant — the interpreter's
+// synthesised manifest grants `[]`, so forwarding the IR tool node's
+// declared caps here would policy-deny every capability-bearing tool on
+// every bundle run. IR-declared caps are enforced at build time (governance
+// ceiling + D-3b capability-fit), at the host boundary (OS sandbox / wasm
+// WIT world + WasiCtx), and at subflow frames (`AttenuatedDispatcher`).
+// Contract pinned by `tests/ir_dispatch_gate_inert.rs`.
 impl<D> tau_ports::tool::Tool for DispatcherTool<D>
 where
     D: ToolDispatcher + Send + Sync + 'static,
