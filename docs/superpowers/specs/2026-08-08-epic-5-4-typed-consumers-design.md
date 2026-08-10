@@ -247,6 +247,11 @@ The work spans two roadmap epics; suggested PR slices (finalized in the plan):
 
 ## References
 
+- **Living implementation tree (keep current):**
+  `docs/superpowers/implementation-trees/tau-sdk-consumers.md` — the running map
+  of the JS/TS consumer surface (transport → `@tau/embed-js` → consumers → demo →
+  next slices). It is a **living document**: every PR that touches this surface
+  must fold its status changes and discoveries back into the tree.
 - Roadmap: `docs/superpowers/plans/vision-roadmap.md` EPIC 5.
 - 5.3 pattern to mirror: `docs/superpowers/specs/2026-07-23-epic-5-3-sdk-codegen-design.md`,
   `docs/superpowers/plans/2026-07-23-epic-5-3-sdk-codegen.md`, `crates/tau-sdk-codegen/`.
