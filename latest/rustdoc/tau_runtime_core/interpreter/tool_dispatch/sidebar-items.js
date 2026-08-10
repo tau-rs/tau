@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["DurableHandles","ToolInvocationResult"],"trait":["ToolDispatcher"]};

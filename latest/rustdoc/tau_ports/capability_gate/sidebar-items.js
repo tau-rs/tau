@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CapabilityProbe","CapabilityTier"],"mod":["dyn_process","passthrough","process"],"struct":["CapabilityHandle","CapabilityPlan","ResourceLimits","WorkingContext"],"trait":["CapabilityGate"]};
