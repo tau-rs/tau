@@ -84,6 +84,10 @@ pub struct ResumeState {
     pub store: OutputStore,
     /// Top-level step index to resume at (`step_cursor + 1`).
     pub start_at: usize,
+    /// Per-check attempt counts restored from the prior suspension, so a
+    /// check's `max_attempts` budget accumulates across resume boundaries
+    /// instead of resetting each resume. Fresh runs pass an empty map.
+    pub attempts: BTreeMap<String, u32>,
 }
 
 /// Internal: passed down to `run_steps` for the top-level slice only. A
@@ -172,9 +176,9 @@ where
         tau_ir::asset::asset_hash(&bytes)
     };
 
-    let (mut store, start_at) = match resume {
-        Some(r) => (r.store, r.start_at),
-        None => (OutputStore::new(), 0),
+    let (mut store, start_at, initial_attempts) = match resume {
+        Some(r) => (r.store, r.start_at, r.attempts),
+        None => (OutputStore::new(), 0, BTreeMap::new()),
     };
 
     let ctx = SuspendCtx {
@@ -191,6 +195,7 @@ where
         None,
         Some(&ctx),
         start_at,
+        initial_attempts,
     )
     .await?;
     Ok(match flow {
@@ -282,12 +287,16 @@ async fn run_steps<D>(
     initial_feedback: Option<String>,
     suspend: Option<&SuspendCtx<'_>>,
     start_at: usize,
+    initial_attempts: BTreeMap<String, u32>,
 ) -> Result<StepsFlow, RuntimeError>
 where
     D: ToolDispatcher + Send + Sync + 'static,
 {
     // Per-check attempt counter (1-based on first eval), keyed by check id.
-    let mut attempts: BTreeMap<String, u32> = BTreeMap::new();
+    // Seeded from `initial_attempts` on a resumed top-level slice so a check's
+    // `max_attempts` budget accumulates across resume boundaries; every
+    // nested slice (Branch/Loop/Parallel body) passes an empty map.
+    let mut attempts: BTreeMap<String, u32> = initial_attempts;
     // Rejection rationales of failed checks that triggered a rewind, keyed by
     // the gate step they rewind to, then by check id (issue #471). Injecting
     // only the entries whose key matches the current step id scopes each
@@ -467,7 +476,15 @@ where
             )?;
             let arm = if verdict.met { then } else { otherwise };
             match Box::pin(run_steps(
-                module, arm, input, store, dispatcher, None, None, 0,
+                module,
+                arm,
+                input,
+                store,
+                dispatcher,
+                None,
+                None,
+                0,
+                BTreeMap::new(),
             ))
             .await?
             {
@@ -512,6 +529,7 @@ where
                     loop_feedback.take(),
                     None,
                     0,
+                    BTreeMap::new(),
                 ))
                 .await?
                 {
@@ -571,6 +589,7 @@ where
                             step_id: step.id.0.clone(),
                             ir_digest: ctx.ir_digest.to_string(),
                             outputs: store.snapshot(),
+                            attempts: attempts.clone(),
                         })
                         .map_err(|e| RuntimeError::Internal {
                             message: format!("persist suspension: {e}"),
@@ -616,6 +635,7 @@ where
                         None,
                         None,
                         0,
+                        BTreeMap::new(),
                     )
                     .await?
                     {
