@@ -371,7 +371,8 @@ impl Scope {
     /// assert_eq!(scope.kind(), ScopeKind::Project);
     /// ```
     pub fn resolve(cwd: &Path) -> Result<Self, ScopeError> {
-        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd) {
+        let home_dirs = home_scope_dirs();
+        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd, &home_dirs) {
             return Ok(Self {
                 path,
                 state_path,
@@ -387,9 +388,10 @@ impl Scope {
     /// 1. `$TAU_HOME` if set and non-empty.
     /// 2. `$XDG_DATA_HOME/tau` if `$XDG_DATA_HOME` is set and non-empty.
     /// 3. `$HOME/.tau`.
+    /// 4. `$USERPROFILE/.tau`.
     ///
     /// Creates the directory and a default `config.toml` if they are missing.
-    /// Returns `ScopeError::HomeNotFound` if none of the three env vars are set.
+    /// Returns `ScopeError::HomeNotFound` if none of the four env vars are set.
     ///
     /// # Example
     ///
@@ -422,7 +424,8 @@ impl Scope {
         cwd: &Path,
         fallback_home: PathBuf,
     ) -> Result<Self, ScopeError> {
-        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd) {
+        let home_dirs = home_scope_dirs();
+        if let Some((path, state_path)) = walk_up_for_dot_tau(cwd, &home_dirs) {
             return Ok(Self {
                 path,
                 state_path,
@@ -586,18 +589,55 @@ impl Scope {
 }
 
 /// Walk up from `cwd` looking for a `.tau/` directory.
-/// Returns `Some((scope_root, state_path))` on the first hit or `None` if no `.tau/` is found.
-fn walk_up_for_dot_tau(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
+///
+/// Returns `Some((scope_root, state_path))` on the first hit, or `None` if
+/// no `.tau/` is found. A `.tau/` located *directly* inside a directory in
+/// `home_dirs` is the global scope by convention (`~/.tau`) and is skipped —
+/// it is never a project root. See #530.
+fn walk_up_for_dot_tau(cwd: &Path, home_dirs: &[PathBuf]) -> Option<(PathBuf, PathBuf)> {
+    // Canonicalize the home dirs once. On Windows a temp path can use an 8.3
+    // short name (`RUNNER~1`) while `%USERPROFILE%` is the long name
+    // (`runneradmin`) for the *same* directory; plain `PathBuf` equality would
+    // miss the match and treat `~/.tau` as a project root. Canonicalizing both
+    // sides resolves short names, symlinks, and prefix/separator differences.
+    // See #530. Non-existent home dirs drop out (nothing to exclude).
+    let canon_homes: Vec<PathBuf> = home_dirs
+        .iter()
+        .filter_map(|h| fs::canonicalize(h).ok())
+        .collect();
     for ancestor in cwd.ancestors() {
         let candidate = ancestor.join(".tau");
         if fs::metadata(&candidate)
             .map(|m| m.is_dir())
             .unwrap_or(false)
         {
+            // A `.tau` directly in a home dir is the global scope, not a
+            // project. Only canonicalize the ancestor when there is a home to
+            // compare against (keeps the common no-home path IO-free).
+            let is_home_scope = !canon_homes.is_empty()
+                && fs::canonicalize(ancestor)
+                    .map(|a| canon_homes.contains(&a))
+                    .unwrap_or(false);
+            if is_home_scope {
+                continue;
+            }
             return Some((ancestor.to_path_buf(), candidate));
         }
     }
     None
+}
+
+/// The user-home directories that host the global scope by convention
+/// (`$HOME`, `%USERPROFILE%`). A `.tau/` located directly in one of these is
+/// the global scope, not a project root, so `walk_up_for_dot_tau` skips it.
+/// See #530.
+fn home_scope_dirs() -> Vec<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .filter_map(env::var_os)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// Resolve the global scope path from explicit env values (testable).
@@ -606,12 +646,15 @@ fn walk_up_for_dot_tau(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
 /// 1. `tau_home` if set and non-empty.
 /// 2. `<xdg_data_home>/tau` if `xdg_data_home` is set and non-empty.
 /// 3. `<home>/.tau`.
+/// 4. `<user_profile>/.tau` — the Windows home fallback. Windows runners
+///    leave `$HOME` unset but expose `%USERPROFILE%`. See #530.
 ///
-/// Returns [`ScopeError::HomeNotFound`] if all three are missing/empty.
+/// Returns [`ScopeError::HomeNotFound`] if all four are missing/empty.
 fn resolve_global_path_from(
     tau_home: Option<std::ffi::OsString>,
     xdg_data_home: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
 ) -> Result<PathBuf, ScopeError> {
     fn non_empty(s: Option<std::ffi::OsString>) -> Option<std::ffi::OsString> {
         s.filter(|v| !v.is_empty())
@@ -626,6 +669,9 @@ fn resolve_global_path_from(
     if let Some(home) = non_empty(home) {
         return Ok(PathBuf::from(home).join(".tau"));
     }
+    if let Some(user_profile) = non_empty(user_profile) {
+        return Ok(PathBuf::from(user_profile).join(".tau"));
+    }
     Err(ScopeError::HomeNotFound)
 }
 
@@ -635,11 +681,13 @@ fn resolve_global_path_from(
 /// 1. `$TAU_HOME`
 /// 2. `$XDG_DATA_HOME/tau`
 /// 3. `$HOME/.tau`
+/// 4. `$USERPROFILE/.tau`
 fn resolve_global_path() -> Result<PathBuf, ScopeError> {
     resolve_global_path_from(
         env::var_os("TAU_HOME"),
         env::var_os("XDG_DATA_HOME"),
         env::var_os("HOME"),
+        env::var_os("USERPROFILE"),
     )
 }
 
@@ -691,6 +739,30 @@ mod tests {
         let project = parent.join("my-project");
         fs::create_dir_all(project.join(".tau")).unwrap();
         project
+    }
+
+    #[test]
+    fn walk_up_excludes_dot_tau_in_home_dir() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".tau")).unwrap();
+
+        // With `home` excluded, its own `.tau` must NOT be returned as a
+        // project root. On Windows the tempdir lives under %USERPROFILE%, which
+        // may carry its own `~/.tau`; walking past `home` could surface that, so
+        // we assert specifically that home's `.tau` is skipped rather than
+        // asserting `None`.
+        let excluded = walk_up_for_dot_tau(&home, std::slice::from_ref(&home));
+        assert_ne!(
+            excluded,
+            Some((home.clone(), home.join(".tau"))),
+            "home-dir .tau must not be discovered as a project root"
+        );
+
+        // With no home dirs excluded, the same `.tau` IS the first (project) hit.
+        let (root, state) = walk_up_for_dot_tau(&home, &[]).expect("project hit");
+        assert_eq!(root, home);
+        assert_eq!(state, home.join(".tau"));
     }
 
     #[test]
@@ -753,6 +825,7 @@ mod tests {
             Some(OsString::from("/x/tau-home")),
             Some(OsString::from("/x/xdg")),
             Some(OsString::from("/x/home")),
+            Some(OsString::from("/x/userprofile")),
         )
         .unwrap();
         assert_eq!(p, std::path::Path::new("/x/tau-home"));
@@ -765,6 +838,7 @@ mod tests {
             None,
             Some(OsString::from("/x/xdg")),
             Some(OsString::from("/x/home")),
+            Some(OsString::from("/x/userprofile")),
         )
         .unwrap();
         assert_eq!(p, std::path::Path::new("/x/xdg/tau"));
@@ -773,7 +847,8 @@ mod tests {
     #[test]
     fn resolve_global_path_from_falls_back_to_home() {
         use std::ffi::OsString;
-        let p = resolve_global_path_from(None, None, Some(OsString::from("/x/home"))).unwrap();
+        let p =
+            resolve_global_path_from(None, None, Some(OsString::from("/x/home")), None).unwrap();
         assert_eq!(p, std::path::Path::new("/x/home/.tau"));
     }
 
@@ -784,6 +859,7 @@ mod tests {
             Some(OsString::from("")),
             Some(OsString::from("")),
             Some(OsString::from("/x/home")),
+            Some(OsString::from("")),
         )
         .unwrap();
         assert_eq!(p, std::path::Path::new("/x/home/.tau"));
@@ -791,8 +867,30 @@ mod tests {
 
     #[test]
     fn resolve_global_path_from_returns_home_not_found_when_all_missing() {
-        let err = resolve_global_path_from(None, None, None).unwrap_err();
+        let err = resolve_global_path_from(None, None, None, None).unwrap_err();
         assert!(matches!(err, ScopeError::HomeNotFound));
+    }
+
+    #[test]
+    fn resolve_global_path_from_falls_back_to_userprofile() {
+        use std::ffi::OsString;
+        // Windows-runner shape: no TAU_HOME/XDG/HOME, only %USERPROFILE%. See #530.
+        let p = resolve_global_path_from(None, None, None, Some(OsString::from("/x/userprofile")))
+            .unwrap();
+        assert_eq!(p, std::path::Path::new("/x/userprofile/.tau"));
+    }
+
+    #[test]
+    fn resolve_global_path_from_prefers_home_over_userprofile() {
+        use std::ffi::OsString;
+        let p = resolve_global_path_from(
+            None,
+            None,
+            Some(OsString::from("/x/home")),
+            Some(OsString::from("/x/userprofile")),
+        )
+        .unwrap();
+        assert_eq!(p, std::path::Path::new("/x/home/.tau"));
     }
 
     #[test]
