@@ -291,9 +291,14 @@ impl DevSession {
         if lockfile_path.exists() {
             let lockfile = tau_pkg::lockfile::LockFile::load(&lockfile_path)
                 .with_context(|| format!("loading lockfile at {}", lockfile_path.display()))?;
-            let mcp_setup = setup_mcp_runtime(&self.project, &lockfile, llm_backend.clone())
-                .await
-                .map_err(|e| anyhow!("MCP setup failed: {e}"))?;
+            let mcp_setup = setup_mcp_runtime(
+                &self.project,
+                &lockfile,
+                llm_backend.clone(),
+                loaded.sandbox_adapter.clone(),
+            )
+            .await
+            .map_err(|e| anyhow!("MCP setup failed: {e}"))?;
             for (id, tool) in mcp_setup.tools {
                 tools_by_id.insert(id, tool);
             }

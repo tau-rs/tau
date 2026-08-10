@@ -35,6 +35,11 @@ pub(crate) struct LoadedPlugins {
     /// Builder pre-populated with the LLM backend and any tool plugins.
     /// The caller is expected to call [`RuntimeBuilder::build`] on it.
     pub(crate) builder: RuntimeBuilder,
+    /// The resolved sandbox adapter (project `[sandbox]` requirements +
+    /// plugin tier floors + `--no-sandbox`/`--sandbox` overrides). Exposed
+    /// so the MCP runtime can gate its stdio server spawns with the same
+    /// adapter instead of re-resolving (or falling through to passthrough).
+    pub(crate) sandbox_adapter: Arc<tau_runtime_tokio::process_gate::SandboxAdapter>,
 }
 
 /// Process-global slot for the `PluginRecordingLayer` (Sub-project D
@@ -247,7 +252,7 @@ pub(crate) async fn load_plugins(
             }
         }
     };
-    host_options.sandbox_adapter = Some(adapter);
+    host_options.sandbox_adapter = Some(adapter.clone());
 
     // ---- LLM backend ----
     let llm_plugin = resolve_plugin(
@@ -313,7 +318,10 @@ pub(crate) async fn load_plugins(
         builder = builder.with_dyn_tool(loaded_tool);
     }
 
-    Ok(LoadedPlugins { builder })
+    Ok(LoadedPlugins {
+        builder,
+        sandbox_adapter: adapter,
+    })
 }
 
 /// Read the `[sandbox]` requirements from a plugin's on-disk `tau.toml`.
