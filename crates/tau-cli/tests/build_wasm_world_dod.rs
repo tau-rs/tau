@@ -156,4 +156,15 @@ fn dod_guest_compiles_against_cap_exact_world() {
         "no caps → no wasi imports in the compiled component (3.4-forward regression \
          guard): {triv_imports:?}"
     );
+
+    // 3.6 binary-observable DoD: net.http granted AND routed through wasi:http
+    // (GuestDispatcher's cfg-gated `Fetch` arm) → the compiled component's
+    // ACTUAL imports now include wasi:http. This is the assertion that was
+    // vacuous before 3.6 (DCE stripped every WASI import); it is now the live
+    // proof that a granted cap is importable at the ABI.
+    assert!(
+        net_imports.iter().any(|i| i.starts_with("wasi:http/")),
+        "net granted AND routed → wasi:http MUST be present in the compiled \
+         component's actual imports (3.6 binary-observable DoD): {net_imports:?}"
+    );
 }

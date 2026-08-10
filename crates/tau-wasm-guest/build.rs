@@ -76,7 +76,20 @@ fn main() {
             std::fs::read(&base).expect("reading wit-baseline/runner.wit")
         }
     };
-    std::fs::write(wit_gen.join("runner.wit"), world).expect("writing wit-gen/runner.wit");
+    std::fs::write(wit_gen.join("runner.wit"), &world).expect("writing wit-gen/runner.wit");
+
+    // 3.6: the guest's net-effect arm (dispatcher.rs) is cfg-gated on whether
+    // the capability-derived world grants wasi:http. When it does, the arm is
+    // compiled and statically reachable from `run`, so the wasi:http import
+    // survives wasm-ld DCE (binary-observable). When it doesn't, the arm is
+    // absent and no wasi:http binding is referenced (the world has no wasi:http
+    // to generate bindings from anyway). The check-cfg is unconditional so the
+    // guest compiles cleanly on every target/world without an `unexpected cfg`
+    // warning (workspace lints are -D warnings).
+    println!("cargo:rustc-check-cfg=cfg(tau_cap_net_http)");
+    if String::from_utf8_lossy(&world).contains("wasi:http") {
+        println!("cargo:rustc-cfg=tau_cap_net_http");
+    }
 }
 
 /// Recursively copy the contents of `src` into `dst` (both assumed to
