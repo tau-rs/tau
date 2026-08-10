@@ -37,6 +37,16 @@ pub async fn run(args: &VerifyArgs, output: &mut Output) -> anyhow::Result<()> {
         return run_reproducibility_check(&bundle_path, output);
     }
 
+    // 0b. Wasm WIT-world reproducibility branch (EPIC 3.5). `--wit` is
+    //     required-by `--wasm` at the clap layer, so it is Some here.
+    if let Some(project) = args.wasm.clone() {
+        let wit = args
+            .wit
+            .clone()
+            .expect("clap `requires` guarantees --wit is present with --wasm");
+        return run_wasm_wit_check(&project, &wit, output);
+    }
+
     // 1. Resolve scope.
     let scope = if args.global {
         Scope::global()?
@@ -425,6 +435,115 @@ fn run_reproducibility_check(
     } else {
         std::process::exit(2);
     }
+}
+
+/// `tau verify --wasm <project> --wit <path>` — re-derive the guest WIT world
+/// from the project's declared caps and byte-compare against the shipped
+/// `.wit`. Exit 0 reproducible / 2 drift / 1 operational error.
+fn run_wasm_wit_check(
+    project: &std::path::Path,
+    wit_path: &std::path::Path,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    use crate::cmd::verify_wasm::compare_wit;
+
+    // Read the shipped sidecar. A missing/unreadable file is an operational
+    // error (exit 1), never a drift verdict.
+    let shipped = match std::fs::read_to_string(wit_path) {
+        Ok(s) => s,
+        Err(e) => {
+            output.error(format!(
+                "cannot read --wit file {}: {e}",
+                wit_path.display()
+            ))?;
+            std::process::exit(1);
+        }
+    };
+
+    // Re-derive the world by re-lowering the source. `wasm_world_for_project`
+    // enforces capability-fit; a non-wasm-buildable project (process-exec /
+    // agent-spawn) surfaces as Err → exit 1 (operational), not exit 2 (drift).
+    let rederived = match crate::cmd::build_wasm::wasm_world_for_project(project) {
+        Ok(w) => w,
+        Err(e) => {
+            output.error(format!(
+                "cannot re-derive WIT world from {}: {e}",
+                project.display()
+            ))?;
+            std::process::exit(1);
+        }
+    };
+
+    let report = compare_wit(&shipped, &rederived);
+
+    if output.is_json() {
+        render_wasm_wit_json(&report, output)?;
+    } else {
+        render_wasm_wit_human(&report, output)?;
+    }
+
+    if report.reproducible {
+        Ok(())
+    } else {
+        std::process::exit(2);
+    }
+}
+
+/// Human-readable wasm WIT reproducibility report.
+fn render_wasm_wit_human(
+    report: &crate::cmd::verify_wasm::WitReproReport,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    if report.reproducible {
+        output.human(&format!(
+            "\u{2713} WIT world reproducible (sha256 {})",
+            abbrev(&report.shipped_sha256)
+        ))?;
+    } else {
+        output.error("\u{2717} WIT world NOT reproducible")?;
+        output.error(format!(
+            "  shipped:   sha256 {}",
+            abbrev(&report.shipped_sha256)
+        ))?;
+        output.error(format!(
+            "  rederived: sha256 {}",
+            abbrev(&report.rederived_sha256)
+        ))?;
+        if let Some(d) = &report.first_diff {
+            output.error(format!("  first diff at line {}:", d.line))?;
+            output.error(format!(
+                "    shipped:   {}",
+                d.shipped.as_deref().unwrap_or("<none>")
+            ))?;
+            output.error(format!(
+                "    rederived: {}",
+                d.rederived.as_deref().unwrap_or("<none>")
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+/// JSON wasm WIT reproducibility report (single object).
+fn render_wasm_wit_json(
+    report: &crate::cmd::verify_wasm::WitReproReport,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    let first_diff = report.first_diff.as_ref().map(|d| {
+        serde_json::json!({
+            "line": d.line,
+            "shipped": d.shipped,
+            "rederived": d.rederived,
+        })
+    });
+    output.json(&serde_json::json!({
+        "event": "verify_wasm_wit",
+        "reproducible": report.reproducible,
+        "shipped_sha256": report.shipped_sha256,
+        "rederived_sha256": report.rederived_sha256,
+        "first_diff": first_diff,
+    }))?;
+    Ok(())
 }
 
 /// Map a [`ReproError`] to a CLI exit code.

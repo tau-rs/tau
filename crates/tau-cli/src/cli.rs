@@ -557,6 +557,15 @@ pub struct VerifyArgs {
     /// (Phase 2 §E).
     #[arg(long, value_name = "PATH", conflicts_with = "package")]
     pub bundle: Option<std::path::PathBuf>,
+    /// Reproducibility check for a wasm build: re-derive the guest WIT world
+    /// from this project's declared capabilities and byte-compare it against
+    /// the shipped `.wit` (`--wit`). Exit 0 reproducible / 2 drift / 1 error.
+    /// Mutually exclusive with the package positional and `--bundle`.
+    #[arg(long, value_name = "PROJECT", conflicts_with_all = ["package", "bundle"])]
+    pub wasm: Option<std::path::PathBuf>,
+    /// The shipped `.wit` sidecar to compare against (requires `--wasm`).
+    #[arg(long, value_name = "PATH", requires = "wasm")]
+    pub wit: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `tau update`.

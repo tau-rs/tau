@@ -11,6 +11,8 @@
 
 mod common;
 
+use std::path::PathBuf;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -481,4 +483,130 @@ fn cmd_verify_json_mode_emits_one_event_per_line() {
         line_count >= 3,
         "expected at least 3 JSON lines (started + package + completed), got {line_count}\nstdout: {stdout}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// `tau verify --wasm <project> --wit <path>` (EPIC 3.5)
+// ---------------------------------------------------------------------------
+
+/// Absolute path to a committed wasm-build fixture project.
+fn wasm_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/wasm-build")
+        .join(name)
+}
+
+/// Test W1: a `.wit` produced by re-deriving the project's own world verifies
+/// reproducible and exits 0.
+#[test]
+fn verify_wasm_matching_wit_exits_0() {
+    let project = wasm_fixture("net-http");
+    let world = tau_cli::cmd::build_wasm::wasm_world_for_project(&project).unwrap();
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), &world).unwrap();
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "verify",
+            "--wasm",
+            project.to_str().unwrap(),
+            "--wit",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reproducible"));
+}
+
+/// Test W2: a tampered `.wit` (extra import line injected) exits 2 and names
+/// the differing line.
+#[test]
+fn verify_wasm_tampered_wit_exits_2() {
+    let project = wasm_fixture("net-http");
+    let world = tau_cli::cmd::build_wasm::wasm_world_for_project(&project).unwrap();
+    let tampered = world.replace(
+        "world runner {",
+        "world runner {\n    import wasi:sockets/instance-network@0.2.3;",
+    );
+    assert_ne!(tampered, world, "tamper must change the world text");
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), &tampered).unwrap();
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "verify",
+            "--wasm",
+            project.to_str().unwrap(),
+            "--wit",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("wasi:sockets"));
+}
+
+/// Test W3: empty-cap invariant — a host-only project re-derives to a world
+/// byte-equal to the committed `wit-baseline/runner.wit`, so verifying against
+/// that baseline exits 0. Guards the frozen baseline against generator drift.
+#[test]
+fn verify_wasm_host_only_matches_committed_baseline() {
+    let project = wasm_fixture("trivial");
+    let baseline = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tau-wasm-guest/wit-baseline/runner.wit");
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "verify",
+            "--wasm",
+            project.to_str().unwrap(),
+            "--wit",
+            baseline.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+}
+
+/// Test W4: a project that cannot target wasm (declares a process-exec tool)
+/// exits 1 (operational error), NOT 2 (drift).
+#[test]
+fn verify_wasm_not_buildable_exits_1_not_2() {
+    let project = wasm_fixture("needs-exec");
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), "irrelevant\n").unwrap();
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "verify",
+            "--wasm",
+            project.to_str().unwrap(),
+            "--wit",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1);
+}
+
+/// Test W5: a missing `--wit` file exits 1 with a clear read error.
+#[test]
+fn verify_wasm_missing_wit_exits_1() {
+    let project = wasm_fixture("trivial");
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "verify",
+            "--wasm",
+            project.to_str().unwrap(),
+            "--wit",
+            "/nonexistent/does-not-exist.wit",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("does-not-exist.wit"));
 }
