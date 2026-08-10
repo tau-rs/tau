@@ -17,10 +17,24 @@ tracing             = { workspace = true }
 tokio               = { workspace = true }
 thiserror           = { workspace = true }
 
-# Phase 2 will pull in Microsoft's `windows` crate for the real Win32
-# AppContainer + ACL calls. Phase 1 (this PR) ships stubs so the crate
-# builds without Win32 deps; the stubs document the API shape that
-# Phase 2 will fill in.
+[[bin]]
+name = "tau-appcontainer-launcher"
+path = "src/bin/tau-appcontainer-launcher.rs"
+
+# Real Win32 AppContainer + ACL + process-creation calls. Target-gated so
+# the crate still builds on Linux/macOS (pure-logic modules only).
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Console",
+    "Win32_System_Memory",
+]
 
 [dev-dependencies]
 serde_json = "1"
