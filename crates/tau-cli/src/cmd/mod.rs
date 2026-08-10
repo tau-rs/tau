@@ -34,4 +34,5 @@ pub mod target;
 pub mod uninstall;
 pub mod update;
 pub mod verify;
+pub mod verify_wasm;
 pub mod workflow;
