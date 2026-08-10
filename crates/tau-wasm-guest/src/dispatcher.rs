@@ -113,7 +113,7 @@ impl ToolDispatcher for GuestDispatcher {
 fn fetch_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
     use crate::wit_wasi::http::outgoing_handler;
     use crate::wit_wasi::http::types::{Fields, Method, OutgoingRequest, Scheme};
-    use alloc::string::{String, ToString};
+    use alloc::string::String;
     use alloc::vec::Vec;
 
     let url = args
@@ -178,11 +178,9 @@ fn fetch_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
         .stream()
         .map_err(|()| "Fetch: body stream".to_string())?;
     let mut buf: Vec<u8> = Vec::new();
-    loop {
-        match stream.blocking_read(8192) {
-            Ok(chunk) => buf.extend_from_slice(&chunk),
-            Err(_) => break, // Closed / stream error → end of body
-        }
+    // Closed / stream error → end of body.
+    while let Ok(chunk) = stream.blocking_read(8192) {
+        buf.extend_from_slice(&chunk);
     }
     let body_str = String::from_utf8_lossy(&buf).into_owned();
 
