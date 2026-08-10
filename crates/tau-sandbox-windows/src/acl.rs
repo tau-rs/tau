@@ -21,14 +21,15 @@
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{LocalFree, ERROR_ALREADY_EXISTS, HLOCAL};
 use windows::Win32::Security::Authorization::{
-    SetEntriesInAclW, SetNamedSecurityInfoW, ACCESS_MODE, EXPLICIT_ACCESS_W, GRANT_ACCESS,
-    REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_GROUP, TRUSTEE_IS_SID, TRUSTEE_W,
+    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, ACCESS_MODE, EXPLICIT_ACCESS_W,
+    GRANT_ACCESS, REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_GROUP, TRUSTEE_IS_SID, TRUSTEE_W,
 };
 use windows::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
 };
 use windows::Win32::Security::{
-    FreeSid, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, PSID,
+    FreeSid, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
+    PSECURITY_DESCRIPTOR, PSID,
 };
 use windows::Win32::Storage::FileSystem::{
     FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -140,19 +141,30 @@ fn access_mask(kind: AccessKind) -> u32 {
 }
 
 /// Build an `EXPLICIT_ACCESS_W` entry for `sid` with access mode `mode`
-/// and permission bitmask `mask`, then apply it to `path`'s DACL via
-/// `SetEntriesInAclW` + `SetNamedSecurityInfoW`.
+/// and permission bitmask `mask`, then merge it into `path`'s existing
+/// DACL via a `GetNamedSecurityInfoW` read + `SetEntriesInAclW` merge +
+/// `SetNamedSecurityInfoW` write-back.
 ///
-/// # Concern: replaces rather than merges the on-disk DACL
+/// # Fix round 1: read-modify-write, not replace
 ///
-/// `SetEntriesInAclW`'s `OldAcl` parameter is `None` below, so the ACL it
-/// builds contains *only* this one entry — the existing DACL on `path` is
-/// never read (that would require a prior `GetNamedSecurityInfoW` call).
-/// `SetNamedSecurityInfoW` then writes that single-entry ACL as `path`'s
-/// entire DACL, which **replaces** any pre-existing access entries on the
-/// path rather than merging into them. This follows the task brief's
-/// specified call sequence as-is; flagged here for reviewer attention —
-/// see the task report for the full writeup.
+/// An earlier version of this function passed `OldAcl = None` to
+/// `SetEntriesInAclW`, which builds an ACL containing *only* the new
+/// entry; `SetNamedSecurityInfoW` then writes that as `path`'s **entire**
+/// DACL. That was a critical bug on both call paths:
+/// - `grant_access` would strip every other DACL entry (owner, SYSTEM,
+///   Everyone, …) from `path`, denying everyone but the AppContainer SID.
+/// - `revoke_access` — called on every `CapabilityHandle` drop — would
+///   build a `REVOKE_ACCESS` entry against an empty base ACL (nothing to
+///   revoke from), so `SetEntriesInAclW` returns a valid but **empty**
+///   (0-ACE) DACL, and `SetNamedSecurityInfoW` writes that as an
+///   effective deny-all DACL — permanently locking the path after every
+///   cleanup.
+///
+/// This version reads `path`'s current DACL first via
+/// `GetNamedSecurityInfoW` and passes it as `SetEntriesInAclW`'s `OldAcl`
+/// so the new entry merges into the existing DACL instead of replacing
+/// it; `revoke_access` now removes only the AppContainer SID's own ACE,
+/// leaving every other entry on the path untouched.
 fn set_entry(sid: PSID, path: &str, mode: ACCESS_MODE, mask: u32) -> std::io::Result<()> {
     let path_w = wide(path);
     unsafe {
@@ -167,11 +179,43 @@ fn set_entry(sid: PSID, path: &str, mode: ACCESS_MODE, mask: u32) -> std::io::Re
                 ..Default::default()
             },
         };
-        let mut new_dacl: *mut ACL = std::ptr::null_mut();
-        let rc = SetEntriesInAclW(Some(&[ea]), None, &mut new_dacl);
+
+        // Read the existing DACL. `old_dacl` points *inside* the `sd`
+        // security-descriptor buffer Win32 allocates here — it stays
+        // valid only as long as `sd` is alive, so `sd` must not be freed
+        // until after the `SetEntriesInAclW` call below has consumed it.
+        let mut old_dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        let rc = GetNamedSecurityInfoW(
+            PCWSTR(path_w.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(&mut old_dacl),
+            None,
+            &mut sd,
+        );
         if rc.is_err() {
+            return Err(std::io::Error::other(format!(
+                "GetNamedSecurityInfoW({path}): {rc:?}"
+            )));
+        }
+
+        let mut new_dacl: *mut ACL = std::ptr::null_mut();
+        let rc = SetEntriesInAclW(Some(&[ea]), Some(old_dacl as *const ACL), &mut new_dacl);
+        if !sd.0.is_null() {
+            LocalFree(HLOCAL(sd.0));
+        }
+        if rc.is_err() {
+            // MSDN: on failure, *newAcl is undefined — only free it if
+            // the call happened to leave a non-null value behind.
+            if !new_dacl.is_null() {
+                LocalFree(HLOCAL(new_dacl as *mut _));
+            }
             return Err(std::io::Error::other(format!("SetEntriesInAclW: {rc:?}")));
         }
+
         let rc = SetNamedSecurityInfoW(
             PCWSTR(path_w.as_ptr()),
             SE_FILE_OBJECT,
@@ -280,6 +324,12 @@ mod tests {
         grant_access(&sid, path, AccessKind::Read).expect("grant");
         revoke_access(&sid, path, AccessKind::Read).expect("revoke");
         delete_appcontainer_profile(&name).expect("cleanup profile");
-        let _ = std::fs::remove_dir_all(&dir);
+
+        // Regression guard for the replace-vs-merge DACL bug: if
+        // revoke_access ever again writes an empty (deny-all) DACL
+        // instead of merging the revoke into the existing one, this
+        // directory becomes inaccessible and removal fails here instead
+        // of silently leaking a permanently locked temp dir.
+        std::fs::remove_dir_all(&dir).expect("temp dir still removable after revoke");
     }
 }
