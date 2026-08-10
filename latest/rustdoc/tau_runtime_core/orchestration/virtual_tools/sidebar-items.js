@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["check_capability_subset","dispatch","is_virtual","required_capability","validate_agent_spawn","validate_skill_spawn"],"struct":["AgentSpawnRequest"]};
