@@ -561,7 +561,7 @@ pub struct VerifyArgs {
     /// from this project's declared capabilities and byte-compare it against
     /// the shipped `.wit` (`--wit`). Exit 0 reproducible / 2 drift / 1 error.
     /// Mutually exclusive with the package positional and `--bundle`.
-    #[arg(long, value_name = "PROJECT", conflicts_with_all = ["package", "bundle"])]
+    #[arg(long, value_name = "PROJECT", conflicts_with_all = ["package", "bundle"], requires = "wit")]
     pub wasm: Option<std::path::PathBuf>,
     /// The shipped `.wit` sidecar to compare against (requires `--wasm`).
     #[arg(long, value_name = "PATH", requires = "wasm")]

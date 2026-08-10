@@ -571,10 +571,10 @@ fn verify_wasm_host_only_matches_committed_baseline() {
         .success();
 }
 
-/// Test W4: a project that cannot target wasm (declares a process-exec tool)
-/// exits 1 (operational error), NOT 2 (drift).
+/// Test W4: a project that cannot yield a wasm world (fails to load, or
+/// fails capability-fit) exits 1 (operational), not 2 (drift).
 #[test]
-fn verify_wasm_not_buildable_exits_1_not_2() {
+fn verify_wasm_underivable_project_exits_1_not_2() {
     let project = wasm_fixture("needs-exec");
     let tmp = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(tmp.path(), "irrelevant\n").unwrap();
@@ -609,4 +609,17 @@ fn verify_wasm_missing_wit_exits_1() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("does-not-exist.wit"));
+}
+
+/// Test W6: `--wasm` without `--wit` is a graceful clap usage error (exit 2),
+/// not a panic (exit 101). Regression guard for the one-directional `requires`.
+#[test]
+fn verify_wasm_missing_wit_flag_is_graceful() {
+    let project = wasm_fixture("trivial");
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["verify", "--wasm", project.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--wit"));
 }
