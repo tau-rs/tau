@@ -220,6 +220,21 @@ be a bug — but importantly, both layers are necessary: an
 in-process gate can be evaded by a misbehaving plugin binary; the
 kernel layer can be evaded by a kernel bug. Defence in depth (G12).
 
+### wasm profile: WASI-dispositioned capabilities are enforced at the host
+
+On the wasm target the dispatch-site wire check does **not** re-gate
+capabilities whose `Disposition` is `Wasi` (EPIC 3.1) — that is,
+`net.http` and `fs.read`/`fs.write`. On wasm these are enforced by the
+generated WIT world (EPIC 3.2) plus the embedder's host `WasiCtx` /
+`EgressPolicy` (EPIC 3.3), built from the same allow-bounded capability
+set: an unauthorized host, method, or path is rejected at the `wasi:http`
+/ `wasi:filesystem` boundary before any syscall. The in-guest dispatch
+gate skips exactly those caps at compile time (`cfg!(target_arch =
+"wasm32")`, so native builds keep the in-guest gate as a provable no-op
+off-wasm) — the host is the sole gate for WASI-dispositioned effects.
+Every other capability (agent spawn, task-list, plan, skill, and any
+`Custom` shape) is still checked in-guest on every target. (EPIC 3.4)
+
 ## CapabilityShape: the resolver's vocabulary
 
 When the resolver picks a sandbox adapter (ADR-0015 Decision 4), it

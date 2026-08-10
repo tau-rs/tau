@@ -138,6 +138,12 @@ jobs:
           with-nextest: true
       # --no-fail-fast + --retries 2: see nextest-macos above.
       - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
+      # Windows AppContainer adapter integration tests (launcher + strict
+      # enforcement) are gated behind `integration-tests` and only run on a
+      # real windows-latest runner. Scoped to the crate so it cannot
+      # destabilize other crates' suites on the Windows job.
+      - name: Test tau-sandbox-windows AppContainer (integration)
+        run: cargo nextest run --profile ci -p tau-sandbox-windows --features integration-tests --tests --no-fail-fast --retries 2
 
   coverage:
     name: cargo llvm-cov nextest

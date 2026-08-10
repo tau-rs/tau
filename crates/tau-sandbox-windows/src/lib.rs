@@ -33,6 +33,29 @@ mod spawn;
 
 pub use profile::{build_appcontainer_caps, AppContainerCaps};
 
+pub mod launcher_args;
+
+/// Windows-only test helpers, gated behind the `integration-tests`
+/// feature so they never ship in a release build. Exposes just enough
+/// of the (otherwise private) `acl` module for
+/// `tests/launcher_integration.rs` to create and delete a real
+/// AppContainer profile without exposing the whole `acl` module.
+#[cfg(all(target_os = "windows", feature = "integration-tests"))]
+pub mod test_support {
+    /// Create a real AppContainer profile named `name` (idempotent: an
+    /// already-existing profile with the same name is treated as
+    /// success). See [`crate::acl::create_appcontainer_profile`].
+    pub fn create_profile(name: &str) -> std::io::Result<()> {
+        crate::acl::create_appcontainer_profile(name).map(|_| ())
+    }
+
+    /// Delete the AppContainer profile named `name`. See
+    /// [`crate::acl::delete_appcontainer_profile`].
+    pub fn delete_profile(name: &str) -> std::io::Result<()> {
+        crate::acl::delete_appcontainer_profile(name)
+    }
+}
+
 use std::process::Command;
 use std::sync::Arc;
 

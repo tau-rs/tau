@@ -953,6 +953,7 @@ async fn resume_continues_without_rerunning_prefix() {
         Some(ResumeState {
             store: OutputStore::restore(susp.outputs),
             start_at: susp.step_cursor + 1,
+            attempts: susp.attempts,
         }),
     )
     .await
@@ -1045,4 +1046,233 @@ async fn downstream_reads_block_output_by_bare_id() {
         .await
         .expect("runs");
     assert_eq!(store.get("tail").unwrap(), &serde_json::json!("inner-out"));
+}
+
+// ---------------------------------------------------------------------------
+// Check-retry attempts persist across a suspend/resume boundary (EPIC 4.3
+// follow-up). A `Check` whose `retry.gate` sits BEFORE the `Suspend` step
+// rewinds past the suspend on every failure, so each resume re-hits the
+// suspend and re-pauses. Because the per-check attempt counter is seeded from
+// the restored suspension (rather than reset per invocation), `max_attempts`
+// accumulates across resumes and eventually aborts — instead of looping
+// resume→rewind→re-suspend forever.
+// ---------------------------------------------------------------------------
+
+/// `DeterministicRegistry` answering `FN_BUILTIN_NON_EMPTY` (mirrors
+/// `pipeline_check.rs`'s `NonEmptyRegistry`): a `Goal { NonEmpty }` passes iff
+/// the evaluated output is present and non-empty.
+struct NonEmptyRegistry;
+
+impl DeterministicRegistry for NonEmptyRegistry {
+    fn invoke(&self, fn_name: &str, args: &Value) -> Result<Value, RuntimeError> {
+        if fn_name == tau_runtime_core::vocabulary::FN_BUILTIN_NON_EMPTY {
+            let present = args["present"].as_bool().unwrap_or(false);
+            let content = args["content"].as_str().unwrap_or("");
+            Ok(json!(present && !content.is_empty()))
+        } else {
+            Err(RuntimeError::Internal {
+                message: format!("NonEmptyRegistry: unknown fn {fn_name}"),
+            })
+        }
+    }
+}
+
+/// Dispatcher wiring the echo backend + a `NonEmptyRegistry`. No tools, no
+/// artifact reader (a `Goal` over an `Output` locus needs neither).
+struct RetryResumeDispatcher {
+    backend: Arc<dyn DynLlmBackend>,
+    registry: Arc<NonEmptyRegistry>,
+}
+
+impl ToolDispatcher for RetryResumeDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a tau_ir::ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "RetryResumeDispatcher::invoke should never be called (no tools)".into(),
+            })
+        })
+    }
+
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
+    }
+
+    fn deterministic_registry(&self) -> Option<Arc<dyn DeterministicRegistry>> {
+        Some(self.registry.clone())
+    }
+}
+
+fn retry_resume_dispatcher() -> Arc<RetryResumeDispatcher> {
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    Arc::new(RetryResumeDispatcher {
+        backend,
+        registry: Arc::new(NonEmptyRegistry),
+    })
+}
+
+/// Build a `[agent:writer, suspend:pause, check:g]` module. Run with an empty
+/// input, `writer` echoes `""`, so the `NonEmpty` goal `g` can never pass. Its
+/// `retry.gate` points at `writer` — the step BEFORE the suspend — so a
+/// retryable failure rewinds past the suspend. `max_attempts` bounds how many
+/// times the check may fire across the whole run (including across resumes).
+fn writer_suspend_check_module(max_attempts: u32) -> IrModule {
+    use tau_ir::check::{Check, CheckVerify, OnFail, RetryPolicy};
+    use tau_ir::ids::CheckId;
+
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("writer".into()), agent("writer"));
+
+    let mut checks = BTreeMap::new();
+    checks.insert(
+        CheckId("g".into()),
+        Check {
+            id: CheckId("g".into()),
+            verify: CheckVerify::Goal {
+                evaluates: Locus::Output(PipelineStepId("writer".into())),
+                predicate: GoalPredicate::NonEmpty,
+            },
+            retry: RetryPolicy {
+                on_fail: OnFail::Retry,
+                max_attempts,
+                gate: PipelineStepId("writer".into()),
+            },
+        },
+    );
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("writer".into()),
+                run: StepRun::Agent(AgentId("writer".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("pause".into()),
+                run: StepRun::Suspend {
+                    resume_signal: "go".into(),
+                },
+                input: String::new(),
+            },
+            PipelineStep {
+                id: PipelineStepId("g".into()),
+                run: StepRun::Check(CheckId("g".into())),
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks,
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// A check whose gate sits before the suspend must have its `max_attempts`
+/// budget accumulate across resume boundaries. With `max_attempts = 2` the run
+/// aborts on the SECOND resume; if the attempt counter reset each resume it
+/// would rewind→re-suspend forever.
+#[tokio::test]
+async fn check_attempts_accumulate_across_resume_boundary() {
+    let module = Arc::new(writer_suspend_check_module(2));
+    let dispatcher = retry_resume_dispatcher();
+    let store: Arc<dyn SuspensionStore> = Arc::new(MockSuspensionStore::new());
+    let run_id = "attempts-run".to_string();
+
+    // Run 1 (fresh): pauses at the suspend step; the check has not run yet.
+    let out1 = run_pipeline_suspendable(
+        module.clone(),
+        String::new(),
+        dispatcher.clone(),
+        SuspendConfig {
+            run_id: run_id.clone(),
+            store: store.clone(),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out1, PipelineOutcome::Suspended { .. }));
+    let s1 = store.load_suspension(&run_id).unwrap().unwrap();
+    assert!(
+        s1.attempts.is_empty(),
+        "no check has evaluated at the first pause"
+    );
+
+    // Resume 1: check g fails (attempt 1 < max 2) -> rewind to writer (before
+    // the suspend) -> re-suspend. The persisted attempts must now record g=1.
+    let out2 = run_pipeline_suspendable(
+        module.clone(),
+        String::new(),
+        dispatcher.clone(),
+        SuspendConfig {
+            run_id: run_id.clone(),
+            store: store.clone(),
+        },
+        Some(ResumeState {
+            store: OutputStore::restore(s1.outputs),
+            start_at: s1.step_cursor + 1,
+            attempts: s1.attempts,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(out2, PipelineOutcome::Suspended { .. }),
+        "a retryable failure whose gate precedes the suspend re-suspends"
+    );
+    let s2 = store.load_suspension(&run_id).unwrap().unwrap();
+    assert_eq!(
+        s2.attempts.get("g").copied(),
+        Some(1),
+        "the attempt count must survive the first resume"
+    );
+
+    // Resume 2: restored attempt is 1, so this eval is attempt 2 == max_attempts
+    // -> abort with CheckFailed rather than looping forever.
+    let err = run_pipeline_suspendable(
+        module.clone(),
+        String::new(),
+        dispatcher.clone(),
+        SuspendConfig {
+            run_id: run_id.clone(),
+            store: store.clone(),
+        },
+        Some(ResumeState {
+            store: OutputStore::restore(s2.outputs),
+            start_at: s2.step_cursor + 1,
+            attempts: s2.attempts,
+        }),
+    )
+    .await
+    .expect_err("exhausting max_attempts across resumes must abort, not re-suspend");
+    match err {
+        RuntimeError::CheckFailed { id, attempt, .. } => {
+            assert_eq!(id, "g");
+            assert_eq!(
+                attempt, 2,
+                "the accumulated attempt count reached max_attempts"
+            );
+        }
+        other => panic!("expected RuntimeError::CheckFailed, got: {other:?}"),
+    }
 }

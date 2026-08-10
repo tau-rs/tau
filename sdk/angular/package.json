@@ -1,0 +1,25 @@
+{
+  "name": "@tau/angular",
+  "version": "0.0.0",
+  "description": "Angular service (TauRunService) for streaming a tau wasm component's RunEvents.",
+  "type": "module",
+  "types": "src/index.ts",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@angular/core": ">=17",
+    "rxjs": ">=7"
+  },
+  "dependencies": {
+    "@tau/embed-js": "file:../embed-js"
+  },
+  "devDependencies": {
+    "@angular/core": "^17",
+    "rxjs": "^7",
+    "typescript": "^5",
+    "vitest": "^3"
+  }
+}
