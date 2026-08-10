@@ -54,7 +54,25 @@ pub fn compare_wit(shipped: &str, rederived: &str) -> WitReproReport {
             let (sl, rl) = (s.next(), r.next());
             match (sl, rl) {
                 (Some(a), Some(b)) if a == b => continue,
-                (None, None) => break None, // trailing-newline-only difference
+                (None, None) => {
+                    // Every line matched but the strings are unequal (we are in the
+                    // mismatch branch) ⇒ they differ only in trailing newline count,
+                    // which `.lines()` hides. Surface it rather than a null diff.
+                    fn trailing_newlines(s: &str) -> usize {
+                        s.bytes().rev().take_while(|&b| b == b'\n').count()
+                    }
+                    break Some(WitLineDiff {
+                        line,
+                        shipped: Some(format!(
+                            "<{} trailing newline(s)>",
+                            trailing_newlines(shipped)
+                        )),
+                        rederived: Some(format!(
+                            "<{} trailing newline(s)>",
+                            trailing_newlines(rederived)
+                        )),
+                    });
+                }
                 (a, b) => {
                     break Some(WitLineDiff {
                         line,
@@ -111,5 +129,29 @@ mod tests {
         assert_eq!(d.line, 3);
         assert_eq!(d.shipped.as_deref(), Some("extra"));
         assert_eq!(d.rederived, None);
+    }
+
+    #[test]
+    fn trailing_newline_only_difference_reports_a_diff() {
+        let shipped = "line-a\nline-b\n";
+        let rederived = "line-a\nline-b";
+        let r = compare_wit(shipped, rederived);
+        assert!(!r.reproducible);
+        let d = r.first_diff.expect("mismatch must carry a diff");
+        assert_eq!(d.line, 3);
+        assert_eq!(d.shipped.as_deref(), Some("<1 trailing newline(s)>"));
+        assert_eq!(d.rederived.as_deref(), Some("<0 trailing newline(s)>"));
+    }
+
+    #[test]
+    fn rederived_has_extra_trailing_line() {
+        let shipped = "line-a\nline-b\n";
+        let rederived = "line-a\nline-b\nextra\n";
+        let r = compare_wit(shipped, rederived);
+        assert!(!r.reproducible);
+        let d = r.first_diff.expect("diff present");
+        assert_eq!(d.line, 3);
+        assert_eq!(d.shipped, None);
+        assert_eq!(d.rederived.as_deref(), Some("extra"));
     }
 }
