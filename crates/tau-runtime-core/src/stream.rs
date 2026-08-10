@@ -769,11 +769,10 @@ pub fn run_streaming_inner(
                         );
                         let required_slice = core::slice::from_ref(&required_cap);
                         let missing = dispatch_span.in_scope(|| {
-                            crate::capability::check_capabilities_for_tool_delegating(
+                            crate::capability::check_capabilities_for_tool(
                                 &tool_use.name,
                                 &granted_capabilities,
                                 required_slice,
-                                options.egress_host_mediated,
                             )
                         });
                         if let Some(cap) = missing {
@@ -1470,11 +1469,10 @@ pub fn run_streaming_inner(
                 // is never `.enter()`'d.
                 let required: &[Capability] = tool.capabilities();
                 let missing = dispatch_span.in_scope(|| {
-                    crate::capability::check_capabilities_for_tool_delegating(
+                    crate::capability::check_capabilities_for_tool(
                         &tool_use.name,
                         &granted_capabilities,
                         required,
-                        options.egress_host_mediated,
                     )
                 });
                 if let Some(cap) = missing {
@@ -2556,207 +2554,6 @@ paths = ["/etc/**"]
             let s = format!("{status:?}");
             assert!(s.contains("PolicyDenied"), "expected PolicyDenied in {s}");
         }
-    }
-
-    /// A `net.http`-requiring tool whose grant does NOT cover it. Shared by
-    /// the two EPIC 3.4 dispatch-site tests below.
-    struct NetRequiringTool {
-        inner: tau_ports::fixtures::MockTool,
-        required: Vec<tau_domain::Capability>,
-    }
-
-    impl tau_ports::Tool for NetRequiringTool {
-        type Session = ();
-
-        fn name(&self) -> &str {
-            tau_ports::Tool::name(&self.inner)
-        }
-
-        fn schema(&self) -> tau_ports::ToolSpec {
-            tau_ports::Tool::schema(&self.inner)
-        }
-
-        fn capabilities(&self) -> &[tau_domain::Capability] {
-            &self.required
-        }
-
-        async fn init(
-            &self,
-            ctx: tau_ports::SessionContext,
-        ) -> Result<Self::Session, tau_ports::ToolError> {
-            tau_ports::Tool::init(&self.inner, ctx).await
-        }
-
-        async fn invoke(
-            &self,
-            session: &mut Self::Session,
-            args: tau_domain::Value,
-        ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
-            tau_ports::Tool::invoke(&self.inner, session, args).await
-        }
-
-        async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
-            tau_ports::Tool::teardown(&self.inner, session).await
-        }
-    }
-
-    /// Build a `net.http` capability (GET on `host`) via the canonical TOML
-    /// deserialization path (variant-level `#[non_exhaustive]` blocks struct
-    /// construction from outside `tau-domain`).
-    fn net_http_cap(host: &str) -> tau_domain::Capability {
-        #[derive(serde::Deserialize)]
-        struct CapWrapper {
-            cap: tau_domain::Capability,
-        }
-        toml::from_str::<CapWrapper>(&format!(
-            r#"[cap]
-kind = "net.http"
-hosts = ["{host}"]
-methods = ["GET"]
-"#
-        ))
-        .expect("net.http capability TOML must parse")
-        .cap
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn net_tool_entry() -> (
-        HashMap<String, Arc<dyn DynTool>>,
-        HashMap<String, ToolArgsValidator>,
-        Vec<ToolSpec>,
-    ) {
-        use tau_ports::fixtures::{make_tool_spec, MockTool};
-        let spec = make_tool_spec("fetch".into(), "needs net.http".into(), Value::Null);
-        let tool = NetRequiringTool {
-            inner: MockTool::new("fetch", spec),
-            required: vec![net_http_cap("blocked.invalid")],
-        };
-        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
-        make_tool_entry("fetch", tool_arc)
-    }
-
-    /// EPIC 3.4 (parity guard): with `egress_host_mediated == false` (native /
-    /// OS-gated shells, the default), a tool requiring a `net.http` capability
-    /// beyond the grant is still policy-denied in-guest — exactly as before.
-    /// This is the SILENT-RED guard: if the dispatch site ever stopped calling
-    /// the gate for net caps regardless of the flag, this would go green with
-    /// a Completed outcome and reveal the regression.
-    #[tokio::test]
-    async fn net_cap_beyond_grant_is_denied_when_not_host_mediated() {
-        let (tools, validators, tool_specs_list) = net_tool_entry();
-
-        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::new(vec![
-            Ok(CompletionChunk::ToolUse(
-                tau_ports::fixtures::make_tool_use("call_1".into(), "fetch".into(), Value::Null),
-            )),
-            Ok(CompletionChunk::Finish {
-                stop_reason: PortsStopReason::ToolUse,
-                usage: None,
-            }),
-        ]));
-
-        // Default options: egress_host_mediated == false.
-        let opts = test_run_options();
-        assert!(!opts.egress_host_mediated, "default must be false");
-
-        let stream = run_streaming_inner(
-            llm,
-            agent_def(),
-            manifest_with_no_capabilities(),
-            vec![],
-            user_msg("hi"),
-            opts,
-            tools,
-            validators,
-            vec![], // no granted capabilities → in-guest denial
-            tool_specs_list,
-            vec![],
-            vec![],
-        );
-        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
-
-        let RunEvent::RunCompleted { outcome } = events.last().expect("at least one event") else {
-            panic!("expected RunCompleted last, got {:?}", events.last())
-        };
-        let RunOutcome::Failed { status, .. } = outcome else {
-            panic!("expected Failed outcome (net cap denied in-guest), got {outcome:?}")
-        };
-        let s = format!("{status:?}");
-        assert!(s.contains("PolicyDenied"), "expected PolicyDenied in {s}");
-    }
-
-    /// EPIC 3.4 (delegation): with `egress_host_mediated == true` (wasm: the
-    /// host `EgressPolicy` on `wasi:http` is the sole net gate), the same
-    /// out-of-grant `net.http` tool is NOT denied in-guest — the dispatch gate
-    /// delegates the net capability and the tool is invoked. (The host would
-    /// reject an unauthorized host at the socket; that is proven separately by
-    /// `tau-wasm-host`'s `wasi_http_enforcement` test.)
-    #[tokio::test]
-    async fn net_cap_beyond_grant_is_delegated_when_host_mediated() {
-        let (tools, validators, tool_specs_list) = net_tool_entry();
-
-        // Turn 1: ToolUse (fetch); Turn 2: Text + EndTurn (tool succeeded).
-        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
-            vec![
-                Ok(CompletionChunk::ToolUse(
-                    tau_ports::fixtures::make_tool_use(
-                        "call_1".into(),
-                        "fetch".into(),
-                        Value::Null,
-                    ),
-                )),
-                Ok(CompletionChunk::Finish {
-                    stop_reason: PortsStopReason::ToolUse,
-                    usage: None,
-                }),
-            ],
-            vec![
-                Ok(CompletionChunk::Text {
-                    delta: "fetched".into(),
-                }),
-                Ok(CompletionChunk::Finish {
-                    stop_reason: PortsStopReason::EndTurn,
-                    usage: None,
-                }),
-            ],
-        ]));
-
-        let mut opts = test_run_options();
-        opts.egress_host_mediated = true;
-
-        let stream = run_streaming_inner(
-            llm,
-            agent_def(),
-            manifest_with_no_capabilities(),
-            vec![],
-            user_msg("hi"),
-            opts,
-            tools,
-            validators,
-            vec![], // still no granted net cap — but delegated, so not denied
-            tool_specs_list,
-            vec![],
-            vec![],
-        );
-        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
-
-        // The tool was invoked (delegated, not denied): a ToolCallCompleted
-        // with an Ok result must appear, and the run must Complete (not Fail).
-        let invoked_ok = events.iter().any(|e| {
-            matches!(e, RunEvent::ToolCallCompleted { name, result, .. }
-                if name == "fetch" && result.is_ok())
-        });
-        assert!(
-            invoked_ok,
-            "delegated net tool must be invoked (Ok result); got {events:#?}"
-        );
-        let RunEvent::RunCompleted { outcome } = events.last().expect("at least one event") else {
-            panic!("expected RunCompleted last, got {:?}", events.last())
-        };
-        assert!(
-            matches!(outcome, RunOutcome::Completed { .. }),
-            "host-mediated egress must not policy-deny in-guest; got {outcome:?}"
-        );
     }
 
     #[tokio::test]

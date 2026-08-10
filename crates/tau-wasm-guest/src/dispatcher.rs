@@ -70,13 +70,4 @@ impl ToolDispatcher for GuestDispatcher {
     fn random(&self) -> Option<Arc<dyn RandomSource>> {
         Some(self.random.clone())
     }
-
-    fn egress_host_mediated(&self) -> bool {
-        // EPIC 3.4: on wasm, network egress goes through `wasi:http`, gated
-        // host-side by the embedder's `EgressPolicy` (EPIC 3.3, built from the
-        // same allow-bounded caps). The in-guest per-tool net check is then
-        // redundant and diverges from the host authority, so it is skipped —
-        // the host is the sole net-egress gate.
-        true
-    }
 }
