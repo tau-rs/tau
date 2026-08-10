@@ -1,0 +1,27 @@
+{
+  "name": "streaming-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "EPIC 5.4-c acceptance: a Vite + React app rendering a tau wasm component's streaming text live via @tau/react's useTauRun.",
+  "scripts": {
+    "build:component": "npm --prefix ../../sdk/embed-js run build -- ../../examples/streaming-demo/src/component.wasm",
+    "dev": "npm run build:component && vite",
+    "build": "npm run build:component && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tau/embed-js": "file:../../sdk/embed-js",
+    "@tau/react": "file:../../sdk/react",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@vitejs/plugin-react": "^4",
+    "typescript": "^5",
+    "vite": "^5"
+  }
+}

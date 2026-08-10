@@ -1,0 +1,8 @@
+# npm install + Vite build output.
+node_modules/
+package-lock.json
+dist/
+
+# `tau build wasm` sidecar (the demo only needs component.wasm, which IS
+# committed; the .wit world is regenerated alongside it).
+src/component.wit
