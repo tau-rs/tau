@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["build_sbpl_profile"],"struct":["DarwinSandbox"]};
