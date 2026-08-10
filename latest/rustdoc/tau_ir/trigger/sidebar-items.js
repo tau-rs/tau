@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["BackoffStrategy","TriggerKind"],"fn":["cron_to_oncalendar","emit_k8s","emit_systemd"],"struct":["Backoff","RetryPolicy","TriggerBinding"]};

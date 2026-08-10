@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["CASSETTE_VERSION"],"enum":["Direction","MessageKind"],"struct":["CassetteHeader","CassetteMessage"]};
