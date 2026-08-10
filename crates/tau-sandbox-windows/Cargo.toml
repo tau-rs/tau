@@ -41,6 +41,7 @@ features = [
 serde_json = "1"
 tau-domain = { workspace = true, features = ["serde"] }
 tau-ports  = { workspace = true, features = ["serde"] }
+tempfile   = "3"
 
 [features]
 default = []
