@@ -168,6 +168,13 @@ pub struct RunOptions {
     /// The declaring agent's checkpoint granularity, when durable. Gates the
     /// mid-turn (per-tool) checkpoint + resume path (ADR-0053 follow-up).
     pub durable_granularity: Option<tau_ir::durable::CheckpointGranularity>,
+
+    /// EPIC 3.4: true when the host shell enforces network egress at the
+    /// WASI/host boundary (wasm: `wasi:http` + `EgressPolicy`, built from the
+    /// same allow-bounded caps). The in-guest per-tool net check is then
+    /// redundant and is skipped, leaving the host as the sole net-egress
+    /// gate. Native/OS-gated shells leave this false. Default: false.
+    pub egress_host_mediated: bool,
 }
 
 impl core::fmt::Debug for RunOptions {
@@ -213,6 +220,7 @@ impl core::fmt::Debug for RunOptions {
             .field("run_id", &self.run_id)
             .field("resume_from", &self.resume_from.as_ref().map(|c| c.turn))
             .field("durable_granularity", &self.durable_granularity)
+            .field("egress_host_mediated", &self.egress_host_mediated)
             .finish()
     }
 }
@@ -236,6 +244,7 @@ impl Default for RunOptions {
             run_id: None,
             resume_from: None,
             durable_granularity: None,
+            egress_host_mediated: false,
         }
     }
 }

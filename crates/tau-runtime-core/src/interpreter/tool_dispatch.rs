@@ -109,6 +109,13 @@ pub trait ToolDispatcher {
         None
     }
 
+    /// EPIC 3.4: true when this shell enforces network egress at the host
+    /// boundary (wasm: `wasi:http` + `EgressPolicy`), so the in-guest per-tool
+    /// net check is skipped. Default false (native / OS-gated shells).
+    fn egress_host_mediated(&self) -> bool {
+        false
+    }
+
     /// Optional reader for produced artifacts (checks). Default: none.
     ///
     /// Returning `None` means "this dispatcher does not support artifact

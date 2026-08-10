@@ -68,6 +68,9 @@ pub const EV_CAPABILITY_SATISFIES_CHECK: &str = "capability.satisfies_check";
 pub const EV_CAPABILITY_ALLOW: &str = "capability.allow";
 /// Emitted on the deny branch of the capability check.
 pub const EV_CAPABILITY_DENY: &str = "capability.deny";
+/// Event: a tool's network capability was delegated to the host/WASI
+/// egress boundary (wasm profile) instead of being checked in-guest.
+pub const EV_CAPABILITY_EGRESS_DELEGATED: &str = "capability.egress_delegated";
 
 // --- Tool events ---
 
@@ -157,6 +160,10 @@ mod tests {
         assert_eq!(EV_CAPABILITY_SATISFIES_CHECK, "capability.satisfies_check");
         assert_eq!(EV_CAPABILITY_ALLOW, "capability.allow");
         assert_eq!(EV_CAPABILITY_DENY, "capability.deny");
+        assert_eq!(
+            EV_CAPABILITY_EGRESS_DELEGATED,
+            "capability.egress_delegated"
+        );
     }
 
     #[test]
