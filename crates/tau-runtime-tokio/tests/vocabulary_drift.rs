@@ -36,7 +36,7 @@ const OBSERVE_ONLY: &[&str] = &[
 /// addition lands AND the corresponding mirror or OBSERVE_ONLY entry is
 /// updated in the same change. Bumping just this number to silence the
 /// test is the failure mode this guard exists to prevent.
-const OBSERVE_TOTAL_EXPECTED: usize = 39;
+const OBSERVE_TOTAL_EXPECTED: usize = 38;
 
 #[test]
 fn kernel_mirror_values_match_observe() {
@@ -128,7 +128,6 @@ fn lookup_observe(ident: &str) -> Option<&'static str> {
         "EV_CAPABILITY_SATISFIES_CHECK" => o::EV_CAPABILITY_SATISFIES_CHECK,
         "EV_CAPABILITY_ALLOW" => o::EV_CAPABILITY_ALLOW,
         "EV_CAPABILITY_DENY" => o::EV_CAPABILITY_DENY,
-        "EV_CAPABILITY_EGRESS_DELEGATED" => o::EV_CAPABILITY_EGRESS_DELEGATED,
         "EV_TOOL_ARGS_RECEIVED" => o::EV_TOOL_ARGS_RECEIVED,
         "EV_TOOL_RESULT_RECEIVED" => o::EV_TOOL_RESULT_RECEIVED,
         "EV_TOOL_INVOKE_FAILED" => o::EV_TOOL_INVOKE_FAILED,
@@ -180,7 +179,6 @@ fn observe_constant_count() -> usize {
         "EV_CAPABILITY_SATISFIES_CHECK",
         "EV_CAPABILITY_ALLOW",
         "EV_CAPABILITY_DENY",
-        "EV_CAPABILITY_EGRESS_DELEGATED",
         "EV_TOOL_ARGS_RECEIVED",
         "EV_TOOL_RESULT_RECEIVED",
         "EV_TOOL_INVOKE_FAILED",
