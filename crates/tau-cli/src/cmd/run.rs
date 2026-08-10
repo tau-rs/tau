@@ -581,6 +581,7 @@ async fn try_run_pipeline(
                         susp.outputs,
                     ),
                     start_at,
+                    attempts: susp.attempts,
                 }),
             )
         }

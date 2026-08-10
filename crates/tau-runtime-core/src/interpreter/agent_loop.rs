@@ -574,6 +574,9 @@ where
     if run_options.random.is_none() {
         run_options.random = dispatcher.random();
     }
+    // EPIC 3.4: propagate the shell's egress-enforcement disposition so the
+    // in-guest dispatch gate can delegate net egress to the host boundary.
+    run_options.egress_host_mediated = dispatcher.egress_host_mediated();
     // Inject test-fixture clock/random when neither the host shell nor the
     // dispatcher provided them (e.g. tau-ir-conformance drives run_ir
     // directly without the tokio shell drive entry). The test-fixtures
@@ -1153,5 +1156,111 @@ mod tests {
             tau_ports::tool::ToolContent::Text { text } => assert_eq!(text, "boom"),
             other => panic!("expected Text content, got {other:?}"),
         }
+    }
+
+    // ---------------- EPIC 3.4: egress-host-mediated propagation ------------
+
+    /// Dispatcher that reports `egress_host_mediated() == true`, standing in
+    /// for the wasm `GuestDispatcher`. Verifies that `prepare_agent_run`
+    /// copies the shell's disposition into `RunOptions`.
+    struct HostMediatedDispatcher {
+        backend: Arc<dyn DynLlmBackend>,
+    }
+
+    impl ToolDispatcher for HostMediatedDispatcher {
+        fn invoke<'a>(
+            &'a self,
+            _tool_id: &'a ToolId,
+            _args: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                Ok(ToolInvocationResult {
+                    body: None,
+                    error: None,
+                })
+            })
+        }
+
+        fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+            Ok(self.backend.clone())
+        }
+
+        fn egress_host_mediated(&self) -> bool {
+            true
+        }
+    }
+
+    /// Minimal single-agent, no-tools `IrModule` + its entry `Agent`, for
+    /// driving `prepare_agent_run` directly.
+    fn single_agent_module() -> (Arc<IrModule>, Agent) {
+        let agent = Agent {
+            id: tau_ir::ids::AgentId("a".into()),
+            prompt: tau_ir::prompt::PromptSource::inline(""),
+            model_ref: tau_ir::ModelRef {
+                backend: "mock-llm".into(),
+                model_id: "mock-model".into(),
+            },
+            tool_refs: Vec::new(),
+            context: None,
+            budget: tau_ir::budget::AgentBudget::default(),
+            produces: Vec::new(),
+            output_schema: None,
+            durable: None,
+        };
+        let mut agents = alloc::collections::BTreeMap::new();
+        agents.insert(agent.id.clone(), agent.clone());
+        let module = alloc::sync::Arc::new(IrModule {
+            ir_format: tau_ir::IrFormatVersion::current(),
+            tau_version: env!("CARGO_PKG_VERSION").into(),
+            target: tau_ports::target::registry::list_available()
+                .next()
+                .expect("at least one target")
+                .triple,
+            workflow: tau_ir::Workflow {
+                agents,
+                tools: alloc::collections::BTreeMap::new(),
+                steps: alloc::collections::BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: tau_ir::CapabilityTable(alloc::collections::BTreeMap::new()),
+                pipeline: None,
+                checks: alloc::collections::BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        });
+        (module, agent)
+    }
+
+    #[test]
+    fn prepare_agent_run_propagates_host_mediated_egress_true() {
+        let (module, agent) = single_agent_module();
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let dispatcher = Arc::new(HostMediatedDispatcher { backend });
+        let (_rt, _agent_def, _manifest, _history, _initial, run_options) =
+            prepare_agent_run(module, &agent, dispatcher, Vec::new())
+                .expect("prepare_agent_run must succeed");
+        assert!(
+            run_options.egress_host_mediated,
+            "dispatcher.egress_host_mediated() == true must reach RunOptions"
+        );
+    }
+
+    #[test]
+    fn prepare_agent_run_defaults_host_mediated_egress_false() {
+        let (module, agent) = single_agent_module();
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        // FixedDispatcher does NOT override egress_host_mediated (trait default false).
+        let dispatcher = Arc::new(FixedDispatcher {
+            backend,
+            body: None,
+            error: None,
+        });
+        let (_rt, _agent_def, _manifest, _history, _initial, run_options) =
+            prepare_agent_run(module, &agent, dispatcher, Vec::new())
+                .expect("prepare_agent_run must succeed");
+        assert!(
+            !run_options.egress_host_mediated,
+            "native / OS-gated dispatcher must leave egress_host_mediated false"
+        );
     }
 }

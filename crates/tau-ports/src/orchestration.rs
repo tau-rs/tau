@@ -352,6 +352,14 @@ pub struct PipelineSuspension {
     pub ir_digest: String,
     /// The `OutputStore` snapshot as of the pause (step id -> output value).
     pub outputs: BTreeMap<String, serde_json::Value>,
+    /// Per-check retry-attempt counts accumulated up to the pause (check id ->
+    /// count). Carried across resume so a `Check` whose `retry.gate` sits
+    /// *before* the `Suspend` step cannot reset its attempt budget on every
+    /// resume (which would let it rewind→re-suspend forever without
+    /// `max_attempts` ever tripping). Absent in pre-followup snapshots, so it
+    /// defaults to empty on deserialize.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub attempts: BTreeMap<String, u32>,
 }
 
 /// Port: persists and loads a pipeline [`PipelineSuspension`] for HITL resume.

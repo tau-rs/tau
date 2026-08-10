@@ -231,6 +231,7 @@ mod tests {
             step_id: "pause".into(),
             ir_digest: "sha256:abc".into(),
             outputs,
+            attempts: BTreeMap::new(),
         };
         store.persist_suspension(&s).unwrap();
 
@@ -259,6 +260,7 @@ mod tests {
             step_id: "pause".into(),
             ir_digest: "sha256:abc".into(),
             outputs: BTreeMap::new(),
+            attempts: BTreeMap::new(),
         };
         store.persist_suspension(&s).unwrap();
         let path = tmp.path().join(".tau/runs/run-1/suspend.json");

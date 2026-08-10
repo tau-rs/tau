@@ -220,6 +220,24 @@ be a bug — but importantly, both layers are necessary: an
 in-process gate can be evaded by a misbehaving plugin binary; the
 kernel layer can be evaded by a kernel bug. Defence in depth (G12).
 
+### wasm profile: net egress is enforced at the host boundary
+
+On the wasm target the runtime does **not** re-check network egress
+in-guest. A tool's `net.http` capability is enforced by the host: the
+embedder's `EgressPolicy` (built from the same allow-bounded capability
+set) rejects an unauthorized host or method on the `wasi:http` path,
+before any socket opens. Here the "Process" layer above *is* the host —
+so the redundant in-guest wire check for `net.http` would only
+duplicate, and risk diverging from, that single host authority.
+
+The in-guest dispatch gate records this handoff with a
+`capability.egress_delegated` trace event and defers — the host is the
+sole net-egress gate. Non-network capabilities (filesystem, process,
+agent spawn, task-list, plan, skill) are still checked in-guest on every
+target. The wasm `GuestDispatcher` opts in by reporting
+`egress_host_mediated() == true`; native / OS-gated shells leave it
+false and keep the in-guest `net.http` check. (EPIC 3.4)
+
 ## CapabilityShape: the resolver's vocabulary
 
 When the resolver picks a sandbox adapter (ADR-0015 Decision 4), it
