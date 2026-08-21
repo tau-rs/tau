@@ -81,6 +81,30 @@ jobs:
           with-mold: true
           with-just: true
       - run: just lint
+      # Lint the guest's cfg(tau_cap_net_http) effect arm (#597). `just lint`
+      # above builds tau-wasm-guest against the empty-cap BASELINE world, so the
+      # #[cfg(tau_cap_net_http)] `Fetch` arm in dispatcher.rs compiles out and is
+      # never linted — the gap that hid a real clippy::redundant_import +
+      # clippy::while_let_loop in #585. Feed build.rs a net.http-granting world
+      # (byte-pinned to wasm_world_for_project by the
+      # `committed_net_http_world_matches_generator` test) so the cfg fires and
+      # the arm is compiled + linted under -D warnings. Extends to
+      # tau_cap_fs_* once #596 (3.6-b) lands.
+      - name: clippy guest cfg(tau_cap_net_http) effect arm (-D warnings)
+        env:
+          # ABSOLUTE path: build.rs runs with CWD = the crate dir, so a relative
+          # TAU_WORLD_WIT would resolve wrong.
+          TAU_WORLD_WIT: ${{ github.workspace }}/crates/tau-wasm-guest/wit-cfg/net-http.wit
+        run: |
+          set -euo pipefail
+          # Refuse to run blind: if the world ever stops granting wasi:http,
+          # build.rs would leave the cfg off and this job would pass vacuously.
+          grep -q 'wasi:http' "$TAU_WORLD_WIT" || {
+            echo "::error::$TAU_WORLD_WIT does not grant wasi:http; cfg(tau_cap_net_http) would be off and this lint would be blind (#597)" >&2
+            exit 1
+          }
+          rustup target add wasm32-wasip2
+          just lint-wasm-guest-net
 
   cargo-deny:
     name: cargo-deny / linux
@@ -107,7 +131,18 @@ jobs:
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
             | tar -xz -C /usr/local/bin gitleaks
       - name: Run gitleaks
-        run: gitleaks detect --source . --log-opts "--all" --no-banner --config .gitleaks.toml
+        # Scan ONLY the commits this PR/queue-candidate adds on top of main
+        # (`HEAD --not origin/main`) — never the whole object store. With
+        # `fetch-depth: 0` the runner fetches every remote branch; both
+        # `--log-opts "--all"` AND an unscoped `gitleaks detect` (its default
+        # walks all reachable refs) then scanned unrelated, unmerged branches'
+        # history. A secret in ONE of them failed this job on every
+        # push/PR/merge_group and froze the merge queue repo-wide (2026-08-21).
+        # main's history is the trusted base (validated by its own runs); this
+        # gate checks what the change introduces. On push-to-main the range is
+        # empty (HEAD is in origin/main) and the scan is a no-op, which is fine
+        # — PRs are the gate. `origin/main` is present thanks to fetch-depth:0.
+        run: gitleaks detect --source . --log-opts "HEAD --not origin/main" --no-banner --config .gitleaks.toml
 
   cargo-check-macos:
     name: cargo-check / macos
@@ -232,6 +267,27 @@ jobs:
         # means a missing mem-intrinsic. Both are hard regressions of the
         # β.7.5 no_std foundation — do not paper over with --allow-undefined.
         run: cargo build -p tau-wasm-guest --target wasm32-wasip2 --release
+      # EPIC 5.6 — publish the wasm-guest bundle size + gate on a budget.
+      # The guest component was just built above (default ./target). This
+      # reports the shipped-component size (wasm-tools, which — unlike Binaryen,
+      # binaryen#6728 — understands components) plus the wasm-metadce tree-shaken
+      # code floor (Binaryen, pinned to version_132 so the number is
+      # reproducible), writes them to the run summary, and fails if the shipped
+      # size exceeds TAU_WASM_SIZE_BUDGET. See docs/reference/browser-capabilities.md.
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f  # v2.86.4
+        with:
+          tool: wasm-tools
+      - name: Install Binaryen version_132 (pinned) for wasm-metadce / wasm-opt
+        run: |
+          set -euo pipefail
+          ver=version_132
+          tarball="binaryen-${ver}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${ver}/${tarball}" -o "$tarball"
+          echo "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" -C /tmp
+          echo "/tmp/binaryen-${ver}/bin" >> "$GITHUB_PATH"
+      - name: wasm-guest bundle size (EPIC 5.6 — published number + budget)
+        run: env CARGO_TARGET_DIR=target scripts/wasm-guest-size.sh --github-summary
       - name: no forbidden executor imports in tau-runtime-core/src
         run: |
           # tau-runtime-core must be executor-agnostic. Top-level (column-0)
@@ -276,9 +332,12 @@ jobs:
           with-mold: true
       - name: Install nightly (rustdoc JSON for cargo-semver-checks)
         run: rustup toolchain install nightly --profile minimal
-      - uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-semver-checks
+      # Pin cargo-semver-checks >=0.49 so it can parse rustdoc JSON format v60+
+      # emitted by current nightly; the old install-action snapshot defaulted to
+      # 0.48.0 (v57 max) and failed with "unsupported rustdoc format v60".
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f  # v2.86.4
         with:
-          tool: cargo-semver-checks
+          tool: cargo-semver-checks@0.50.0
       - name: tau-ports ABI must not break without a version bump
         run: cargo semver-checks --baseline-rev origin/main --package tau-ports
 

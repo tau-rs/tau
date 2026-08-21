@@ -24,6 +24,26 @@ fmt:
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
 
+# Lint the guest's cfg(tau_cap_net_http) effect arm (#597) — mirrors the
+# `clippy` CI job's wasm-guest-net step. The workspace `just lint` above always
+# builds the guest against the empty-cap BASELINE world, so the effect arm
+# compiles out and is never linted (it hid a real clippy::redundant_import +
+# clippy::while_let_loop in #585). The CALLER must set `TAU_WORLD_WIT` to an
+# ABSOLUTE path of a net.http-granting world (build.rs runs with CWD = the crate
+# dir, so a relative path resolves wrong) — e.g.
+#   TAU_WORLD_WIT="$PWD/crates/tau-wasm-guest/wit-cfg/net-http.wit" just lint-wasm-guest-net
+# so build.rs fires cfg(tau_cap_net_http) and the arm is compiled + linted.
+lint-wasm-guest-net:
+    cargo clippy -p tau-wasm-guest --target wasm32-wasip2 --release -- -D warnings
+
+# Measure + gate the wasm-guest bundle size (EPIC 5.6) — mirrors the CI step in
+# the `runtime-core-no-std` job. Reports the shipped-component size (wasm-tools)
+# + the wasm-metadce tree-shaken floor (Binaryen, optional), and fails if the
+# shipped size exceeds TAU_WASM_SIZE_BUDGET. The CALLER supplies CARGO_TARGET_DIR
+# per the CARGO RULES. See docs/reference/browser-capabilities.md.
+wasm-guest-size:
+    scripts/wasm-guest-size.sh
+
 # Extra args are forwarded to nextest so callers can append flags — lefthook
 # appends `--target-dir target/lefthook/test` for its per-command isolation.
 

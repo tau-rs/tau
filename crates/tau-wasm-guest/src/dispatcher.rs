@@ -177,10 +177,23 @@ fn fetch_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
     let stream = body
         .stream()
         .map_err(|()| "Fetch: body stream".to_string())?;
+    use crate::wit_wasi::io::streams::StreamError;
     let mut buf: Vec<u8> = Vec::new();
-    // Closed / stream error → end of body.
-    while let Ok(chunk) = stream.blocking_read(8192) {
-        buf.extend_from_slice(&chunk);
+    loop {
+        match stream.blocking_read(8192) {
+            Ok(chunk) => buf.extend_from_slice(&chunk),
+            // Normal EOF: the peer signalled end-of-body. Return the
+            // accumulated bytes as a complete response.
+            Err(StreamError::Closed) => break,
+            // A real mid-transfer transport failure — surface it instead of
+            // silently returning a truncated body with the response status.
+            Err(StreamError::LastOperationFailed(err)) => {
+                return Err(format!(
+                    "Fetch: body read failed: {}",
+                    err.to_debug_string()
+                ));
+            }
+        }
     }
     let body_str = String::from_utf8_lossy(&buf).into_owned();
 

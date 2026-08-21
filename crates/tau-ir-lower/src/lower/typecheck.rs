@@ -641,6 +641,30 @@ fn validate_step_run(
                 });
             }
         }
+        StepRun::Dynamic {
+            max_spawns,
+            max_concurrency,
+            ..
+        } => {
+            // Bounds are validated at author time (tau-pkg) and kind
+            // resolution happens at lowering (UnknownAgentKind); the region
+            // produces an output and nests no pipeline steps, so no
+            // reference/scope check is needed here. But mirror Loop's
+            // defense-in-depth: hand-constructed IR that bypasses tau-pkg
+            // must still be rejected rather than silently accepted.
+            if *max_spawns == 0 {
+                return Err(LowerError::DynamicMaxSpawnsZero {
+                    step: outer_step_id.into(),
+                });
+            }
+            if *max_concurrency == 0 || *max_concurrency > *max_spawns {
+                return Err(LowerError::DynamicConcurrencyInvalid {
+                    step: outer_step_id.into(),
+                    max_spawns: *max_spawns,
+                    max_concurrency: *max_concurrency,
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -1149,6 +1173,90 @@ mod tests {
             matches!(err, LowerError::LoopMaxItersZero { ref step }
                 if step == "loop-step"),
             "expected LoopMaxItersZero; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_max_spawns_zero_fails_typecheck() {
+        // StepRun::Dynamic { max_spawns: 0, .. } → typecheck must reject.
+        // Defense-in-depth: tau-pkg validates this at author time, but
+        // hand-constructed IR (bypassing tau-pkg) must still be rejected.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![],
+                            max_spawns: 0, // invalid
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject max_spawns == 0");
+        assert!(
+            matches!(err, LowerError::DynamicMaxSpawnsZero { ref step }
+                if step == "fanout-step"),
+            "expected DynamicMaxSpawnsZero; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_concurrency_exceeding_max_spawns_fails_typecheck() {
+        // StepRun::Dynamic { max_concurrency > max_spawns, .. } → typecheck
+        // must reject (the 1..=max_spawns rule).
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(),
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![],
+                            max_spawns: 2,
+                            max_concurrency: 5, // invalid: > max_spawns
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject max_concurrency > max_spawns");
+        assert!(
+            matches!(err, LowerError::DynamicConcurrencyInvalid {
+                ref step,
+                max_spawns: 2,
+                max_concurrency: 5,
+            } if step == "fanout-step"),
+            "expected DynamicConcurrencyInvalid; got {err:?}"
         );
     }
 

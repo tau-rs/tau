@@ -262,9 +262,11 @@ pub struct BuildArgs {
     /// Defaults to the current working directory.
     #[arg(value_name = "PROJECT")]
     pub project: Option<std::path::PathBuf>,
-    /// Target triple to build for (default: host). Must be an
-    /// Available triple in the ADR-0034 registry.
-    #[arg(long, value_name = "TRIPLE")]
+    /// What to build: an artifact kind (`wasm-guest`, `rust-lib`) or an
+    /// Available hardware triple (default: host → `.tau` bundle). `wasm-guest`
+    /// emits the fully-linked wasm component; `rust-lib` emits a generated
+    /// no_std Rust embedding crate (EPIC 5.1).
+    #[arg(long, value_name = "KIND|TRIPLE")]
     pub target: Option<String>,
     /// Output path (default: `<project>/<name>-<version>.tau`).
     #[arg(long, short = 'o', value_name = "PATH")]
