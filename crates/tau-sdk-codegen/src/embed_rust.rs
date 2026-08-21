@@ -138,7 +138,8 @@ mod tests {
             crate_name: "trivial_host",
             lib_crate_name: "trivial",
             ir_hash: "abc123",
-            wit: "package tau:generated@0.1.0;\nworld runner {\n    import tau:host/host@0.1.0;\n}\n",
+            wit:
+                "package tau:generated@0.1.0;\nworld runner {\n    import tau:host/host@0.1.0;\n}\n",
             tau_version: "0.0.0",
         });
 
@@ -152,13 +153,22 @@ mod tests {
         let main = &out[&PathBuf::from("embed-rust/src/main.rs")];
         // Links the 5.1 rust-lib crate and drives run_ir with a stub dispatcher.
         assert!(main.contains("use trivial::{run_ir, TAU_IR}"), "{main}");
-        assert!(main.contains("impl ToolDispatcher for StubDispatcher"), "{main}");
-        assert!(main.contains("todo!("), "port bodies must be todo!() stubs: {main}");
+        assert!(
+            main.contains("impl ToolDispatcher for StubDispatcher"),
+            "{main}"
+        );
+        assert!(
+            main.contains("todo!("),
+            "port bodies must be todo!() stubs: {main}"
+        );
         assert!(main.contains("run_ir("), "{main}");
 
         let cargo = &out[&PathBuf::from("embed-rust/Cargo.toml")];
         assert!(cargo.contains(r#"trivial = { path = ".." }"#), "{cargo}");
-        assert!(cargo.contains(r#"tau-runtime-core = { version = "0.0.0""#), "{cargo}");
+        assert!(
+            cargo.contains(r#"tau-runtime-core = { version = "0.0.0""#),
+            "{cargo}"
+        );
 
         assert_eq!(
             out[&PathBuf::from("embed-rust/tau.wit")],

@@ -30,7 +30,11 @@ pub fn render_embed_c(input: EmbedCInput) -> BTreeMap<PathBuf, String> {
         input
             .base_name
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+            .map(|c| if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            })
             .collect::<String>()
     );
 
@@ -151,16 +155,28 @@ mod tests {
         let wit = "package tau:generated@0.1.0;\n\nworld runner {\n    \
             import tau:host/host@0.1.0;\n    export run: func(prompt: string) \
             -> result<string, string>;\n}\n";
-        let out = render_embed_c(EmbedCInput { base_name: "trivial", ir_hash: "abc123", wit });
+        let out = render_embed_c(EmbedCInput {
+            base_name: "trivial",
+            ir_hash: "abc123",
+            wit,
+        });
 
         for f in ["tau_embed.h", "tau_embed.c", "tau.wit", "README.md"] {
-            assert!(out.contains_key(&PathBuf::from(format!("embed-c/{f}"))), "missing {f}");
+            assert!(
+                out.contains_key(&PathBuf::from(format!("embed-c/{f}"))),
+                "missing {f}"
+            );
         }
 
         let h = &out[&PathBuf::from("embed-c/tau_embed.h")];
         // Include guard from base_name; the four frozen tau:host/host imports.
         assert!(h.contains("#ifndef TAU_EMBED_TRIVIAL_H"), "{h}");
-        for sym in ["tau_host_complete", "tau_host_now_millis", "tau_host_next_u64", "tau_host_emit_event"] {
+        for sym in [
+            "tau_host_complete",
+            "tau_host_now_millis",
+            "tau_host_next_u64",
+            "tau_host_emit_event",
+        ] {
             assert!(h.contains(sym), "header missing {sym}");
         }
         assert!(h.contains("tau_embed_run"), "{h}");
@@ -168,7 +184,10 @@ mod tests {
         let c = &out[&PathBuf::from("embed-c/tau_embed.c")];
         assert!(c.contains("#include \"tau_embed.h\""), "{c}");
         assert!(c.contains("wasmtime"), "must use the wasmtime C API: {c}");
-        assert!(c.contains("/* TODO(EPIC 7.1)"), "port bodies must be TODO stubs: {c}");
+        assert!(
+            c.contains("/* TODO(EPIC 7.1)"),
+            "port bodies must be TODO stubs: {c}"
+        );
 
         assert_eq!(out[&PathBuf::from("embed-c/tau.wit")], wit);
         assert!(out[&PathBuf::from("embed-c/README.md")].contains("wit-bindgen"));

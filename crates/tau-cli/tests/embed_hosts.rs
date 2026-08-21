@@ -14,7 +14,11 @@ fn embed_host_rust_writes_native_host_crate() {
     let art = tau_cli::cmd::embed::emit_host_to("rust", &fixture("trivial"), out.path()).unwrap();
     assert_eq!(art.kind, "embed-rust");
     assert!(art.ir_hash.is_some());
-    for f in ["embed-rust/Cargo.toml", "embed-rust/src/main.rs", "embed-rust/tau.wit"] {
+    for f in [
+        "embed-rust/Cargo.toml",
+        "embed-rust/src/main.rs",
+        "embed-rust/tau.wit",
+    ] {
         assert!(out.path().join(f).exists(), "missing {f}");
     }
     let main = std::fs::read_to_string(out.path().join("embed-rust/src/main.rs")).unwrap();
