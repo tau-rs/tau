@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["AgentResolutionError","ProjectConfigError","PromptEntry"],"fn":["build_agent_definition","run_main"],"mod":["cli","cmd","config","exit","output","tracing"],"struct":["AgentEntry","ProjectConfig","RequiresEntry"]};
