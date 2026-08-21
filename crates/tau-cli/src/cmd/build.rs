@@ -985,8 +985,7 @@ mod tests {
         // but is not in the registry at all — exercises the lookup-None
         // branch of the Available check (no registered Reserved triples
         // remain post-Phase-2, so this is the only "not Available" case).
-        let err =
-            resolve_target(&args_with_target(Some("darwin-container-strict"))).unwrap_err();
+        let err = resolve_target(&args_with_target(Some("darwin-container-strict"))).unwrap_err();
         assert!(err.contains("not an Available"), "got {err}");
     }
 
