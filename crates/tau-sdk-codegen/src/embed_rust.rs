@@ -44,6 +44,7 @@ publish = false
 {lib} = {{ path = ".." }}
 tau-runtime-core = {{ version = "{ver}" }}
 tau-ir = {{ version = "{ver}" }}
+serde_json = {{ version = "1" }}
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 "#,
             name = input.crate_name,
@@ -169,6 +170,7 @@ mod tests {
             cargo.contains(r#"tau-runtime-core = { version = "0.0.0""#),
             "{cargo}"
         );
+        assert!(cargo.contains("serde_json"), "emitted Cargo.toml must depend on serde_json (main.rs uses serde_json::Value): {cargo}");
 
         assert_eq!(
             out[&PathBuf::from("embed-rust/tau.wit")],
