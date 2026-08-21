@@ -4932,6 +4932,7 @@ name = "tau-trace"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "serde_json",
  "tau-ports",
  "thiserror 2.0.20",
 ]

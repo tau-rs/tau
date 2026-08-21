@@ -9,9 +9,10 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-tau-ports = { workspace = true, features = ["serde"] }
-chrono    = { workspace = true }
-thiserror = { workspace = true }
+tau-ports  = { workspace = true, features = ["serde"] }
+chrono     = { workspace = true }
+thiserror  = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
