@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["FindSkillError"],"fn":["find_installed_skill"],"struct":["InstalledSkill"]};
