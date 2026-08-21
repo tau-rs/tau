@@ -72,8 +72,12 @@ pub struct Tool {
     pub id: ToolId,
     /// How the tool's behavior is provided.
     pub impl_: ToolImpl,
-    /// Declared capabilities. Used by the capability-fit check (D-3b)
-    /// and by the runtime gate.
+    /// Declared capabilities. Used by the capability-fit check (D-3b),
+    /// the governance ceiling check, and — at runtime — the subflow
+    /// attenuation gate (`AttenuatedDispatcher`). NOT consulted by the
+    /// kernel's per-tool dispatch-site gate: `DispatcherTool` deliberately
+    /// reports no required caps because the IR carries no per-agent grant
+    /// to check them against (issue #581).
     pub capabilities: CapabilityRequirements,
     /// Tool specification (name, description, input schema) used by the
     /// LLM to decide when to call the tool.

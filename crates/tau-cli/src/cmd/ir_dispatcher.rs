@@ -204,9 +204,14 @@ pub(crate) async fn run_via_ir(
                 scope.lockfile_path().display()
             )
         })?;
-    let mcp_setup = setup_mcp_runtime(&project, &lockfile, mcp_backend.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("MCP setup: {e}"))?;
+    let mcp_setup = setup_mcp_runtime(
+        &project,
+        &lockfile,
+        mcp_backend.clone(),
+        loaded.sandbox_adapter.clone(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("MCP setup: {e}"))?;
     for (id, tool) in mcp_setup.tools {
         tools_by_id.insert(id, tool);
     }
@@ -870,8 +875,9 @@ pub(crate) fn verify_lockfile_against_live(
 
 use tau_mcp_tokio::bridge::McpBackedTool;
 use tau_mcp_tokio::host_lifecycle::{open as mcp_open, InboundDispatchHandle, McpClientOptions};
+use tau_pkg::project::allow::AllowConfig;
 use tau_ports::CapabilityPlan;
-use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
+use tau_runtime_tokio::process_gate::DynProcessCapabilityGate;
 
 /// Outcome of `setup_mcp_runtime` — the `tools` extension vec for
 /// `ForwardingDispatcher` + handles whose `Drop` aborts the inbound pumps.
@@ -882,8 +888,62 @@ pub(crate) struct McpRuntimeSetup {
     pub inbound_handles: Vec<InboundDispatchHandle>,
 }
 
+/// Build the sandbox [`CapabilityPlan`] for one MCP server entry.
+///
+/// The base grant is the author's `[tools.<entry>]` capability envelope:
+/// `tau build` already refuses an envelope that does not cover every
+/// server-tool's declared caps (`McpBuildError::EnvelopeCoversContract`),
+/// so the envelope is the widest capability set the pinned contract can
+/// exercise. The runtime drift check right after the handshake rejects a
+/// server whose live contract no longer matches that pin.
+///
+/// Governed projects clamp the envelope against the `[allow.mcp.<entry>]`
+/// host ceiling: `net.http` caps are met (lattice intersection) with the
+/// ceiling hosts, so a net cap with no allowed host is dropped rather than
+/// granted (fail-closed). Non-network caps pass through — the `[allow.mcp]`
+/// registry carries only a host ceiling; fs/process grants are bounded by
+/// the root `[allow]` ceiling at build time.
+///
+/// A governed project whose entry is missing from `[allow.mcp]` is a
+/// build/run skew (`tau build` + `tau check` both refuse it) and fails
+/// here rather than running the server unlisted.
+fn mcp_capability_plan(
+    entry: &str,
+    envelope: &[tau_domain::Capability],
+    allow: Option<&AllowConfig>,
+) -> Result<CapabilityPlan, String> {
+    let Some(allow) = allow else {
+        // Ungoverned project (`--allow-ungoverned` / no `[allow]`): the
+        // envelope alone is the grant.
+        return Ok(CapabilityPlan::new(envelope.to_vec(), None, None));
+    };
+    let Some(mcp_allow) = allow.mcp.get(entry) else {
+        return Err(format!(
+            "governed project has no [allow.mcp.{entry}] registration — \
+             build/check refuse this, so the lockfile and tau.toml have skewed"
+        ));
+    };
+    // Ceiling shape: net.http over the registered hosts, any method.
+    // Capability variants are only constructable via the unified parser.
+    let ceiling: tau_domain::Capability = serde_json::from_value(serde_json::json!({
+        "kind": "net.http",
+        "hosts": mcp_allow.hosts,
+    }))
+    .map_err(|e| format!("[allow.mcp.{entry}].hosts is not a valid net.http ceiling: {e}"))?;
+    let (net, mut caps): (Vec<tau_domain::Capability>, Vec<tau_domain::Capability>) = envelope
+        .iter()
+        .cloned()
+        .partition(|c| matches!(c, tau_domain::Capability::Network(_)));
+    caps.extend(tau_domain::meet(&net, &[ceiling]));
+    Ok(CapabilityPlan::new(caps, None, None))
+}
+
 /// Boot the MCP runtime: per-entry handshake + drift check +
 /// `WiredHostHandlers` + inbound dispatch + `McpBackedTool` registration.
+///
+/// Each stdio server is spawned under `gate` (the resolved sandbox
+/// adapter) with the per-entry [`CapabilityPlan`] from
+/// [`mcp_capability_plan`] enforced at the OS boundary.
 ///
 /// Errors out before `ForwardingDispatcher` is constructed if any entry
 /// fails (drift, network, parse). Returns an empty setup struct when
@@ -892,6 +952,7 @@ pub(crate) async fn setup_mcp_runtime(
     config: &crate::config::ProjectConfig,
     lockfile: &LockFile,
     backend: Arc<dyn DynLlmBackend>,
+    gate: Arc<dyn DynProcessCapabilityGate>,
 ) -> Result<McpRuntimeSetup, RuntimeError> {
     let mut tools: Vec<(tau_ir::ids::ToolId, Arc<dyn DynTool>)> = Vec::new();
     let mut inbound_handles: Vec<InboundDispatchHandle> = Vec::new();
@@ -927,21 +988,24 @@ pub(crate) async fn setup_mcp_runtime(
             .unwrap_or_default();
         let roots = tool_entry.roots.clone();
 
-        // Open the MCP server (handshake). Use PassthroughSandbox for v0;
-        // PR-5.1 will plumb the real sandbox per-entry CapabilityPlan.
-        let gate: Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> =
-            Arc::new(PassthroughSandbox::new());
-        let client = mcp_open(
-            &url,
-            &CapabilityPlan::new(Vec::new(), None, None),
-            gate,
-            McpClientOptions::default(),
+        // Open the MCP server (handshake) under the resolved sandbox
+        // adapter, with the per-entry plan enforced at the OS boundary
+        // (stdio servers; HTTP/cassette transports spawn no process).
+        let plan = mcp_capability_plan(
+            &locked.entry,
+            &tool_entry.capabilities,
+            config.allow.as_ref(),
         )
-        .await
-        .map_err(|e| RuntimeError::McpSetupFailed {
+        .map_err(|reason| RuntimeError::McpSetupFailed {
             entry: locked.entry.clone(),
-            reason: format!("open failed: {e}"),
+            reason,
         })?;
+        let client = mcp_open(&url, &plan, gate.clone(), McpClientOptions::default())
+            .await
+            .map_err(|e| RuntimeError::McpSetupFailed {
+                entry: locked.entry.clone(),
+                reason: format!("open failed: {e}"),
+            })?;
 
         // Drift check: live contract hash must match lockfile-recorded hash.
         verify_lockfile_against_live(locked, &client)?;
@@ -1036,6 +1100,218 @@ mod drift_tests {
             }
             other => panic!("expected McpContractDriftAtBoot, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod sandbox_plan_tests {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use tau_domain::Capability;
+    use tau_pkg::project::allow::{AllowConfig, McpAllowEntry};
+    use tau_pkg::project::ProjectConfig;
+    use tau_ports::fixtures::MockLlmBackend;
+    use tau_ports::{
+        CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
+        CapabilityShapeSet, CapabilityTier, ProcessCapabilityGate,
+    };
+
+    use std::sync::Arc;
+
+    use super::{
+        mcp_capability_plan, setup_mcp_runtime, DynLlmBackend, LockFile, LockedMcpEntry,
+        RuntimeError,
+    };
+
+    fn cap(json: serde_json::Value) -> Capability {
+        serde_json::from_value(json).expect("test capability JSON must be valid")
+    }
+
+    fn allow_with_hosts(entry: &str, hosts: &[&str]) -> AllowConfig {
+        AllowConfig {
+            ceiling: Vec::new(),
+            models: BTreeMap::new(),
+            mcp: BTreeMap::from([(
+                entry.to_string(),
+                McpAllowEntry {
+                    url: "stdio:server".to_string(),
+                    hosts: hosts.iter().map(|h| h.to_string()).collect(),
+                },
+            )]),
+            tools: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn ungoverned_project_grants_envelope_unchanged() {
+        let envelope = vec![
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})),
+            cap(serde_json::json!({"kind": "net.http", "hosts": ["api.weather.com"]})),
+        ];
+        let plan = mcp_capability_plan("weather", &envelope, None).expect("plan");
+        assert_eq!(plan.capabilities, envelope);
+    }
+
+    #[test]
+    fn governed_clamps_net_hosts_to_allow_mcp_ceiling() {
+        let envelope = vec![
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})),
+            cap(serde_json::json!({
+                "kind": "net.http",
+                "hosts": ["api.weather.com", "evil.example"],
+            })),
+        ];
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let nets: Vec<&Capability> = plan
+            .capabilities
+            .iter()
+            .filter(|c| matches!(c, Capability::Network(_)))
+            .collect();
+        assert_eq!(
+            nets.len(),
+            1,
+            "one clamped net cap: {:?}",
+            plan.capabilities
+        );
+        let net_json = serde_json::to_value(nets[0]).expect("serialize");
+        assert_eq!(
+            net_json["hosts"],
+            serde_json::json!(["api.weather.com"]),
+            "hosts clamped to the [allow.mcp] ceiling"
+        );
+        // The non-network cap passes through untouched.
+        assert!(plan.capabilities.contains(&envelope[0]));
+        assert_eq!(plan.capabilities.len(), 2);
+    }
+
+    #[test]
+    fn governed_drops_net_cap_with_no_allowed_host() {
+        let envelope = vec![
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})),
+            cap(serde_json::json!({"kind": "net.http", "hosts": ["evil.example"]})),
+        ];
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        assert!(
+            !plan
+                .capabilities
+                .iter()
+                .any(|c| matches!(c, Capability::Network(_))),
+            "disjoint net cap must be dropped, not granted: {:?}",
+            plan.capabilities
+        );
+        assert_eq!(plan.capabilities, vec![envelope[0].clone()]);
+    }
+
+    #[test]
+    fn governed_unregistered_entry_is_refused() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let err = mcp_capability_plan("other-server", &[], Some(&allow))
+            .expect_err("unregistered entry must fail closed");
+        assert!(err.contains("[allow.mcp.other-server]"), "got: {err}");
+    }
+
+    /// A gate that records every plan it is asked to wrap, then refuses —
+    /// proving `setup_mcp_runtime` hands the clamped per-entry plan to the
+    /// sandbox without needing a live MCP server binary.
+    struct RecordingRefusalGate {
+        plans: Arc<Mutex<Vec<CapabilityPlan>>>,
+    }
+
+    impl CapabilityGate for RecordingRefusalGate {
+        fn name(&self) -> &str {
+            "recording-refusal"
+        }
+
+        async fn probe(&self) -> CapabilityProbe {
+            CapabilityProbe::Available {
+                tier: CapabilityTier::None,
+                details: "test gate".into(),
+            }
+        }
+
+        fn supported_shapes(&self) -> CapabilityShapeSet {
+            CapabilityShapeSet::default()
+        }
+
+        fn validate_plan(&self, _plan: &CapabilityPlan) -> Result<(), CapabilityError> {
+            Ok(())
+        }
+    }
+
+    impl ProcessCapabilityGate for RecordingRefusalGate {
+        async fn wrap_spawn(
+            &self,
+            plan: &CapabilityPlan,
+            _cmd: &mut std::process::Command,
+        ) -> Result<CapabilityHandle, CapabilityError> {
+            self.plans.lock().unwrap().push(plan.clone());
+            Err(CapabilityError::WrapFailed {
+                message: "recorded, then refused".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_mcp_runtime_gates_stdio_spawn_with_clamped_plan() {
+        let config = ProjectConfig::parse_str(
+            r#"
+[project]
+name = "sandbox-plan-test"
+
+[tools.weather]
+mcp = "stdio:/bin/false"
+capabilities = [
+    { kind = "net.http", hosts = ["api.weather.com", "evil.example"] },
+    { kind = "fs.read", paths = ["/tmp/**"] },
+]
+
+[allow.mcp.weather]
+url = "stdio:/bin/false"
+hosts = ["api.weather.com"]
+"#,
+        )
+        .expect("valid project config");
+
+        let mut lockfile = LockFile::default();
+        lockfile.mcp_entries.push(LockedMcpEntry::new(
+            "weather".to_string(),
+            "stdio:/bin/false".to_string(),
+            "0".repeat(64),
+            None,
+            vec![],
+        ));
+
+        let plans = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new(RecordingRefusalGate {
+            plans: plans.clone(),
+        });
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("stub-backend"));
+
+        let err = match setup_mcp_runtime(&config, &lockfile, backend, gate).await {
+            Ok(_) => panic!("the refusing gate must abort setup"),
+            Err(e) => e,
+        };
+        match err {
+            RuntimeError::McpSetupFailed { entry, reason } => {
+                assert_eq!(entry, "weather");
+                assert!(reason.contains("open failed"), "got: {reason}");
+            }
+            other => panic!("expected McpSetupFailed, got {other:?}"),
+        }
+
+        let recorded = plans.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "gate saw exactly one spawn attempt");
+        let caps = &recorded[0].capabilities;
+        assert_eq!(caps.len(), 2, "fs.read + clamped net.http: {caps:?}");
+        let net = caps
+            .iter()
+            .find(|c| matches!(c, Capability::Network(_)))
+            .expect("net cap present");
+        let net_json = serde_json::to_value(net).expect("serialize");
+        assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
     }
 }
 

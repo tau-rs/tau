@@ -29,6 +29,16 @@ pub(crate) mod wit_host {
     pub(crate) use super::tau::host::host::*;
 }
 
+/// Re-export the `generate_all`-generated WASI bindings so sibling modules
+/// (dispatcher.rs) can reach them without knowing the exact wit-bindgen path.
+/// Only present when the capability-derived world granted wasi:http — the
+/// `tau_cap_net_http` cfg (set by build.rs) gates both this re-export and the
+/// effect arm that uses it, so the two are compiled in lockstep.
+#[cfg(tau_cap_net_http)]
+pub(crate) mod wit_wasi {
+    pub(crate) use super::wasi::*;
+}
+
 /// dlmalloc is a portable no_std allocator; the guest has no std heap.
 #[global_allocator]
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
@@ -139,11 +149,14 @@ impl Guest for Component {
             Arc::new(crate::host_ports::HostLlmBackend);
         let clock: Arc<dyn tau_ports::Clock> = Arc::new(crate::host_ports::HostClock);
         let random: Arc<dyn tau_ports::RandomSource> = Arc::new(crate::host_ports::HostRandom);
+        let module = Arc::new(module);
         let dispatcher = Arc::new(crate::dispatcher::GuestDispatcher::new(
-            backend, clock, random,
+            backend,
+            clock,
+            random,
+            module.clone(),
         ));
 
-        let module = Arc::new(module);
         let stream = crate::executor::block_on(tau_runtime_core::interpreter::run_ir_streaming(
             module,
             &entry,
