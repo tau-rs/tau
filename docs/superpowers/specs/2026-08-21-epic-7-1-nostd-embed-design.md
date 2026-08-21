@@ -60,6 +60,15 @@ enforces exactly-one-agent at load (`guest.rs:157`); it is refactored to use
 the helper so the contract has one home. The embed-rust template replaces
 `agents.keys().next()` with `module.entry_agent()?`.
 
+### 1b. `CompletionResponse::new` (tau-ports)
+
+`CompletionResponse` is `#[non_exhaustive]` and its only constructor
+(`fixtures::make_completion_response`) is gated behind the std-only
+`test-fixtures` feature — an external product cannot construct an LLM
+response at all. Add a public inherent constructor
+`CompletionResponse::new(text, tool_uses, stop_reason, usage)` (additive,
+non-breaking; the fixtures helper delegates to it).
+
 ### 2. Curated embedding prelude (tau-runtime-core, public surface only)
 
 `pub mod embed` (gated on `wasm-interpreter`, like `interpreter`/`stream`):
