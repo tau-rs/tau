@@ -1,0 +1,343 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0065 — Unknown-input policy: strict authoring surfaces, versioned interchange - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0065-unknown-input-policy.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0065-unknown-input-policy--strict-authoring-surfaces-versioned-interchange"><a class="header" href="#adr-0065-unknown-input-policy--strict-authoring-surfaces-versioned-interchange">ADR-0065: Unknown-input policy — strict authoring surfaces, versioned interchange</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-07-19
+<strong>Deciders:</strong> tau core</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>An audit of the frontend (D7-B, audit B2) found <strong>five inconsistent behaviors</strong>
+for unknown or malformed input across tau's deserialization surfaces:</p>
+<ol>
+<li>A typo'd capability kind silently became <code>Capability::Custom</code> in package
+manifests, but was rejected in <code>[allow]</code>.</li>
+<li>A wrong field on a known capability kind was silently dropped
+(<code>unwrap_or_default</code> conflation).</li>
+<li><code>#[serde(deny_unknown_fields)]</code> was present on some leaf structs but absent
+on the top-level authoring structs (<code>UncheckedProjectConfig</code>,
+<code>UncheckedAgent</code>, <code>UncheckedManifest</code>, …), so unknown top-level keys were
+silently ignored.</li>
+<li>Lowering mapped an unknown <code>PromptEntry</code> to an <strong>empty prompt</strong> and an
+unknown determinism string to <code>Pure</code> — the most permissive class.</li>
+<li><code>[allow]</code> maintained its own capability-kind whitelist, free to drift from
+the manifest parser.</li>
+</ol>
+<p>These are all instances of the same anti-pattern: <strong>silently accepting input
+tau does not understand</strong>, which contradicts tau's build-time-enforcement
+philosophy (a check that <em>can</em> run at build time <em>must</em>).</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<p><strong>One rule, split by who writes the input.</strong></p>
+<ul>
+<li><strong>AUTHORING</strong> (humans: <code>tau.toml</code>, root <code>[allow]</code>, package manifests) →
+unknown input is an <strong>error</strong>.</li>
+<li><strong>INTERCHANGE</strong> (machines: lockfile, bundle, IR) → <strong>version-gated
+acceptance</strong>. Within an accepted format version, unknown fields are still
+rejected (canonical, hashed formats have no slack); a <em>newer</em> declared
+version is an explicit upgrade error, never silent dropping.</li>
+</ul>
+<p>This ADR is written whole, but implemented in halves:</p>
+<ul>
+<li><strong>Authoring half</strong> — implemented across D7-B PR1–PR3 (this work).</li>
+<li><strong>Interchange half</strong> — the version-gate-at-load for lockfile/bundle/IR — is
+<strong>D8's</strong> handoff. It is <em>not</em> implemented here; this ADR states the rule so
+D8 has a single reference.</li>
+</ul>
+<h3 id="authoring-half--what-shipped-d7-b"><a class="header" href="#authoring-half--what-shipped-d7-b">Authoring half — what shipped (D7-B)</a></h3>
+<p><strong>Struct strictness (PR1).</strong> <code>#[serde(deny_unknown_fields)]</code> on every
+non-<code>flatten</code> authoring struct. Structs that use <code>#[serde(flatten)]</code>
+(<code>UncheckedAllow</code>, <code>UncheckedToolAllow</code>) cannot use <code>deny_unknown_fields</code>;
+their strictness stays in <code>validate_allow</code>.</p>
+<p><strong>Field-shape strictness (PR1).</strong> The hand-written <code>Capability</code> deserializer no
+longer conflates fields: each kind requires exactly its fields and rejects
+foreign or unknown fields, naming the offender and the expected shape.
+<code>net.http</code> requires <code>hosts</code> — either a non-empty list, or the any-host escape
+hatch <code>hosts = "any"</code> (typed <code>NetHosts { Any, List }</code>); the bare
+<code>{ kind = "net.http" }</code> form, which previously meant deny-all, is now an error.</p>
+<p><strong>Kind strictness + explicit <code>custom.</code> (PR2).</strong> An unrecognized capability kind
+is an error with a Levenshtein did-you-mean and a pointer to the escape-hatch
+docs. A plugin-defined capability must opt in <em>explicitly</em> via a <code>custom.</code>
+kind prefix → <a href="../explanation/escape-hatches.html#capability-custom"><code>Capability::Custom</code></a>.
+<code>[allow]</code> and package manifests share the <strong>single</strong> capability parser
+(Decision 4-A): typo/did-you-mean/field-shape live in one place, and <code>[allow]</code>'s
+deliberately narrower ceiling kind-set is a <em>post-parse</em> semantic gate — "one
+parser" ≠ "same accepted kinds".</p>
+<p><strong>Forward-vocabulary opt-in (PR2).</strong> A package manifest may declare a top-level
+<code>vocab_version</code> (a monotonic <code>u32</code> generation). Only when it is <em>newer</em> than
+this build's <code>KNOWN_VOCAB</code> do unrecognized (non-<code>custom.</code>) kinds parse — as a
+distinct, fail-closed <a href="../explanation/escape-hatches.html#capability-forward"><code>Capability::Forward</code></a>
+variant (subsumes nothing, subsumed by nothing but an exact match / an
+<code>Any</code> ceiling), surfaced by <code>tau check</code> as an info finding. An undeclared
+<code>vocab_version</code> means the current vocabulary, strict. This preserves the
+Phase-2 §D forward-compatibility path: an older tau can inspect/install a
+newer-vocab plugin fail-closed instead of hard-failing. Package manifests are
+the only authored artifact that travels between tau versions, so they alone get
+this opt-in; the root <code>tau.toml</code>/<code>[allow]</code> stay strict-current with no escape.</p>
+<p><strong>Lowering arms (PR3).</strong> The two silent lowering defaults become structured
+errors (<code>LowerError::UnsupportedPromptKind</code>, <code>LowerError::UnknownDeterminism</code>),
+mirrored into the drifting <code>tau-ir</code> <code>IrError</code> copy (D11 consolidation debt).</p>
+<h3 id="interchange-half--d8-not-implemented-here"><a class="header" href="#interchange-half--d8-not-implemented-here">Interchange half — D8 (not implemented here)</a></h3>
+<p>The lockfile/bundle/IR readers gain a <strong>version gate at load</strong>: a known format
+version parses strictly (unknown fields rejected); a newer format version is an
+explicit "upgrade tau" error. See D8's handoff.</p>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<ul>
+<li><strong>Positive:</strong> every unknown input on an authoring surface now fails loudly at
+build time with an actionable message; <code>[allow]</code> and manifests can no longer
+diverge on kind handling; forward-compat is explicit and fail-closed;
+any-host egress is a typed, honest declaration rather than a magic empty list.</li>
+<li><strong>Negative / migration:</strong> existing manifests/fixtures using the bare
+<code>net.http</code> form, an unprefixed custom kind, or an unknown top-level key now
+fail to parse and were migrated. The <code>NetHosts</code> change rippled through every
+sandbox adapter (each now folds capabilities into a proxy <code>HostPolicy</code> where
+<code>Any</code> = unrestricted egress).</li>
+<li>The former non-namespaced-<code>Custom</code> <em>warning</em> is obsolete — a <code>Custom</code>
+capability is namespaced by construction (<code>custom.</code> prefix), enforced at parse.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<ul>
+<li><strong>Keep the permissive Custom fallback for unknown kinds.</strong> Rejected: it is the
+exact silent-drop the audit flagged, and it let typos reach downstream
+governance errors instead of failing at the typo.</li>
+<li><strong>Represent any-host with a <code>["*"]</code> sentinel</strong> rather than a typed <code>NetHosts</code>.
+Rejected: the three enforcement layers disagreed on <code>"*"</code>, and a sentinel
+breaks the lattice's own subset check; a typed <code>Any</code> is correct-by-construction.</li>
+<li><strong>Fully collapse <code>[allow]</code> into the manifest parser.</strong> Rejected: it would
+widen <code>[allow]</code> to accept <code>agent.spawn</code>/<code>task_list</code>/<code>custom.*</code> as ceilings,
+a semantic expansion with no defined meaning; the post-parse gate preserves
+<code>[allow]</code>'s scope.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0064-one-host-semantic-exact-typed-any.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../retrospectives/phase-0.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0064-one-host-semantic-exact-typed-any.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../retrospectives/phase-0.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

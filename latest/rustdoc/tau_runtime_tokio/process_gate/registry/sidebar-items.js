@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PlatformSet","RegistryKind"],"fn":["detect_platform"],"static":["REGISTRY"],"struct":["AdapterRegistration"]};
