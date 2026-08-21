@@ -153,21 +153,21 @@ impl ProcessCapabilityGate for WindowsSandbox {
 /// Probe for AppContainer availability. Cached per `WindowsSandbox`
 /// instance via `OnceCell`.
 ///
-/// **Phase 1:** returns `Unavailable` everywhere — the Win32 ACL calls
-/// in `acl.rs` are stubs (no-ops). Returning `Unavailable` keeps the
-/// resolver from picking this adapter for real work and instead falling
-/// back to the next candidate (typically `PassthroughSandbox`). When
-/// Phase 2 lands the real Win32 implementation, this returns
-/// `Available { tier: Strict }` on Windows.
+/// **Phase 2:** the real Win32 AppContainer implementation has landed
+/// (`acl.rs` grant/revoke, `wrap_spawn` via the launcher exec-wrapper), so
+/// this returns `Available { tier: Strict }` on Windows — filesystem and
+/// process isolation are enforced. Network egress remains deferred and
+/// fail-closed (`NetworkHttp` is not in `supported_shapes`) until the
+/// egress follow-on lands.
 async fn run_probe() -> CapabilityProbe {
     if !cfg!(target_os = "windows") {
         return CapabilityProbe::Unavailable {
             reason: "not running on Windows".to_string(),
         };
     }
-    CapabilityProbe::Unavailable {
-        reason: "tau-sandbox-windows Phase 1 ships scaffold only; \
-                 Win32 AppContainer calls land in Phase 2"
+    CapabilityProbe::Available {
+        tier: tau_ports::CapabilityTier::Strict,
+        details: "AppContainer (FS + process isolation); network egress deferred (fail-closed)"
             .to_string(),
     }
 }
