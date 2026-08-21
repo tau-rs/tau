@@ -19,11 +19,13 @@
 //! Note: the root `[allow]` ceiling structurally cannot admit
 //! `agent.spawn` as a raw ceiling key (`agent.spawn` "flows through the
 //! lattice's spawn link, not a raw ceiling entry" — see
-//! `tau-pkg/src/project/allow.rs`'s `agent_spawn_key_rejected`), so this
-//! fixture also collaterally trips L1 (`package_exceeds_allow`) for the
-//! same package. That's expected and harmless: this test only asserts
-//! `spawn_exceeds_agent` is *present* among the findings, not that it is
-//! the sole one.
+//! `tau-pkg/src/project/allow.rs`'s `agent_spawn_key_rejected`). L1 in
+//! `governance.rs` therefore *excludes* spawn caps from its raw-ceiling
+//! subset check (governing them via the spawn link, L3, instead), so a
+//! spawn-capable manifest no longer collaterally trips
+//! `package_exceeds_allow`. `clean_positive_agent_spawn_passes` below
+//! asserts that clean path; the over-reach fixtures here only assert their
+//! spawn-link finding is *present*, which the exclusion leaves intact.
 
 #[path = "check_common.rs"]
 mod check_common;
@@ -190,5 +192,146 @@ model = "fast"
     assert!(
         found,
         "expected a tau.governance.unknown_spawn_kind finding in JSON output, got:\n{stdout}"
+    );
+}
+
+/// Positive case (the point of the L1 spawn-cap exemption): a package whose
+/// manifest declares `agent.spawn` alongside a real `fs.read` grant, with a
+/// fitting `[agent.kinds.worker]`, must pass `tau check governance` CLEANLY.
+///
+/// Before the exemption this was impossible — the manifest's `agent.spawn`
+/// cap has no matching key in root `[allow]` (it structurally can't;
+/// `ALLOW_CEILING_KINDS` excludes it), so L1's raw-ceiling subset check
+/// tripped `package_exceeds_allow` for *every* spawn-capable agent. L1 now
+/// excludes spawn caps (they're governed by the spawn link, L3), so the
+/// non-spawn cap (`fs.read ⊆ root`) passes L1 and the spawn kind
+/// (`fs.read ⊆ agent.effective`) passes L3 → no findings.
+#[test]
+fn clean_positive_agent_spawn_passes() {
+    check_common::ensure_tau_home();
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    setup(
+        root,
+        r#"[{ kind = "fs.read", paths = ["/proj/**"] }, { kind = "agent.spawn", allowed_kinds = ["worker"] }]"#,
+        r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agent.kinds.worker]
+capabilities = { "fs.read" = { paths = ["/proj/**"] } }
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+"#,
+    );
+
+    let output = Command::cargo_bin("tau")
+        .unwrap()
+        .args(["check", "governance", "--json"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(
+        output.status.success(),
+        "a spawn-capable agent with a fitting kind must pass tau check cleanly\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Neither the L1 collateral trip nor any spawn-link violation may appear.
+    for line in stdout.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v["type"] != "check_finished" {
+            continue;
+        }
+        for f in v["findings"].as_array().into_iter().flatten() {
+            let rule = f["rule_id"].as_str().unwrap_or("");
+            assert!(
+                rule != "tau.governance.package_exceeds_allow"
+                    && rule != "tau.governance.spawn_exceeds_agent"
+                    && rule != "tau.governance.unknown_spawn_kind",
+                "unexpected governance finding '{rule}' in clean positive case:\n{stdout}"
+            );
+        }
+    }
+}
+
+/// The spawn-cap exemption is surgical: an `agent.spawn` cap must NOT mask a
+/// real *non-spawn* over-reach. Here the manifest declares `agent.spawn`
+/// (exempt from L1) plus an `fs.read` outside the root ceiling — the latter
+/// must still trip `package_exceeds_allow` at L1.
+#[test]
+fn agent_spawn_does_not_mask_nonspawn_overreach() {
+    check_common::ensure_tau_home();
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    setup(
+        root,
+        r#"[{ kind = "fs.read", paths = ["/etc/**"] }, { kind = "agent.spawn", allowed_kinds = ["worker"] }]"#,
+        r#"
+packages = ["demo"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agent.kinds.worker]
+capabilities = { "fs.read" = { paths = ["/proj/**"] } }
+
+[agents.solo]
+display_name = "Solo"
+package = "demo@^0.1"
+model = "fast"
+"#,
+    );
+
+    let output = Command::cargo_bin("tau")
+        .unwrap()
+        .args(["check", "governance", "--json"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "a non-spawn cap outside the root ceiling must still fail L1\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let found = stdout.lines().any(|line| {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            return false;
+        };
+        v["type"] == "check_finished"
+            && v["findings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|f| f["rule_id"] == "tau.governance.package_exceeds_allow")
+    });
+    assert!(
+        found,
+        "expected tau.governance.package_exceeds_allow for the fs.read over-reach, got:\n{stdout}"
     );
 }

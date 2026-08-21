@@ -17,7 +17,9 @@ use crate::cmd::check::result::{
     CheckCategory, CheckFinding, CheckResult, CheckStatus, FindingLocation, Severity,
 };
 use crate::cmd::check::runner::CheckCtx;
-use tau_domain::{Capability, FsCapability, NetCapability, ProcessCapability};
+use tau_domain::{
+    AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
+};
 use tau_pkg::capability_override::{capability_set_subset, CeilingViolation};
 use tau_pkg::project::allow::AllowConfig;
 use tau_pkg::project::{ProjectConfig, ToolBinding};
@@ -287,8 +289,23 @@ fn lattice(
                         });
                     }
                 }
-                // L1: package manifest ⊆ root.
-                if let Err(v) = capability_set_subset(&manifest, &allow.ceiling) {
+                // L1: package manifest ⊆ root. Spawn caps
+                // (`agent.spawn` / `skill.spawn`) are exempt from the raw
+                // ceiling: root `[allow]` structurally cannot list them
+                // (`ALLOW_CEILING_KINDS` excludes them — they "flow through
+                // the lattice's spawn link, not a raw ceiling entry"). They
+                // are bounded instead by the spawn link (L3 below): each
+                // spawnable kind's caps ⊆ agent effective, and the agent's
+                // non-spawn effective caps ⊆ root here — so spawn stays
+                // transitively bounded by root. Filtering them out lets a
+                // clean positive `agent ⊇ spawn` config pass. Custom/Forward
+                // are NOT spawn caps and stay subject to L1 (deny-by-default).
+                let l1_caps: Vec<Capability> = manifest
+                    .iter()
+                    .filter(|c| !is_spawn_cap(c))
+                    .cloned()
+                    .collect();
+                if let Err(v) = capability_set_subset(&l1_caps, &allow.ceiling) {
                     out.push(lattice_error(
                         "package_exceeds_allow",
                         "tau.governance.package_exceeds_allow",
@@ -493,6 +510,19 @@ fn lattice_error(
         remediation: Some("narrow the capability or widen the ceiling".to_string()),
         structured: json!({ "check": check }),
     }
+}
+
+/// A spawn-link capability (`agent.spawn` / `skill.spawn`). These are exempt
+/// from the L1 raw-ceiling subset check — root `[allow]` cannot name them
+/// (`ALLOW_CEILING_KINDS` in `tau-pkg`), and they are governed by the spawn
+/// link (L3) instead. Deliberately narrow: `Custom`/`Forward` are not spawn
+/// caps and stay subject to L1's deny-by-default ceiling.
+fn is_spawn_cap(cap: &Capability) -> bool {
+    matches!(
+        cap,
+        Capability::Agent(AgentCapability::Spawn { .. })
+            | Capability::Skill(SkillCapability::Spawn { .. })
+    )
 }
 
 fn synth_cap(kind: &str, allow: &[String]) -> Option<Capability> {

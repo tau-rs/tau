@@ -161,6 +161,23 @@ contract without re-litigating the model. Enforcement scope is staged:
 | agent ⊇ dyn-region envelope | `StepRun::Dynamic` not built | **build** (envelope ⊆ agent) | declared here; enforced **EPIC 4** (4.4) |
 | dyn-region actual ⊇ spawn / tool | not built | **runtime** (membership + bounds counters) | declared here; enforced **EPIC 4** (4.5) |
 
+**Clarification (spawn caps are ceiling-exempt).** The `agent ⊇ spawn`
+link governs *spawn permission* (`agent.spawn` / `skill.spawn`) — but a
+spawn cap is deliberately **not** a raw `[allow]` ceiling entry. Root
+`[allow]` cannot list `agent.spawn`; it "flows through the lattice's
+spawn link, not a raw ceiling entry" (`ALLOW_CEILING_KINDS` in
+`tau-pkg`). Consequently the `root ⊇ agent` link (`agent.effective ⊆
+root`, checked as "package manifest ⊆ root") **excludes** spawn caps
+from its subset check rather than demanding a matching ceiling key that
+by construction can never exist. Soundness is preserved by the inward
+link: the spawn link requires every spawned kind's caps ⊆ the agent's
+effective grant, and the agent's *non-spawn* effective grant is ⊆ root
+via `root ⊇ agent` — so a spawned kind stays transitively bounded by
+root. `Custom`/`Forward` caps are not spawn caps and remain subject to
+the raw ceiling (deny-by-default). `skill.spawn` shares the L1
+exemption; a dedicated build-time skill-spawn link (analogous to L3 for
+`agent.spawn`) is deferred until a `[skill.kinds.*]` surface exists.
+
 ### 5. Backward compatibility: governed by default, with explicit opt-out
 
 This ADR originally framed governance as *opt-in* (an absent `[allow]` block
