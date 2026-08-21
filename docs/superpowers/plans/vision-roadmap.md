@@ -105,7 +105,7 @@ public ABIs, and the source for generated SDKs.
   caps (agent/skill.spawn, tasklist, plan) stays. See
   `docs/superpowers/specs/2026-08-09-epic-3-4-drop-in-guest-wasm-gate-design.md`.
 - **3.5** `verify --bundle`: generated WIT reproducible from declared caps.
-- **3.6** ✅ *(net shipped; fs → 3.6-b)* **Guest effect ABI** — route the guest's net/fs effects through
+- **3.6** ✅ *(net + fs shipped)* **Guest effect ABI** — route the guest's net/fs effects through
   `wasi:http`/`wasi:filesystem` so granted imports survive wasm-ld DCE and the
   host `WasiCtx` (3.3) becomes the *live* runtime enforcement path. Closes the
   epic's **binary-observable** DoD (until effects route through WASI, DCE strips
