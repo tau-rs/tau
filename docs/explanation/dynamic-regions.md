@@ -41,6 +41,18 @@ the tools it can reach. Each link narrows or stays equal — it never
 widens moving outward to inward. A region with no named owning agent
 (`agent` omitted) is owned directly by the root `[allow]` ceiling.
 
+The spawn *permission* itself — an agent's `agent.spawn { allowed_kinds
+}` (or `skill.spawn`) capability — is **ceiling-exempt**. Root `[allow]`
+structurally cannot list `agent.spawn` as a ceiling entry (it "flows
+through the lattice's spawn link, not a raw ceiling entry"), so the L1
+check (package manifest ⊆ root) *excludes* spawn caps rather than
+demanding a matching ceiling key that can never exist. Bounding happens
+one link inward instead: the spawn link (L3) requires each spawned
+kind's capabilities ⊆ the agent's effective grant, and the agent's
+*non-spawn* effective grant is already ⊆ root via L1 — so a spawned kind
+stays transitively bounded by root. `Custom`/`Forward` caps are not
+spawn caps and remain subject to L1's deny-by-default ceiling.
+
 ## Per-kind agent definitions
 
 A dynamic region doesn't spawn `[agents.<id>]` entries (those are
