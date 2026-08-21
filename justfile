@@ -36,6 +36,14 @@ lint:
 lint-wasm-guest-net:
     cargo clippy -p tau-wasm-guest --target wasm32-wasip2 --release -- -D warnings
 
+# Measure + gate the wasm-guest bundle size (EPIC 5.6) — mirrors the CI step in
+# the `runtime-core-no-std` job. Reports the shipped-component size (wasm-tools)
+# + the wasm-metadce tree-shaken floor (Binaryen, optional), and fails if the
+# shipped size exceeds TAU_WASM_SIZE_BUDGET. The CALLER supplies CARGO_TARGET_DIR
+# per the CARGO RULES. See docs/reference/browser-capabilities.md.
+wasm-guest-size:
+    scripts/wasm-guest-size.sh
+
 # Extra args are forwarded to nextest so callers can append flags — lefthook
 # appends `--target-dir target/lefthook/test` for its per-command isolation.
 

@@ -267,6 +267,27 @@ jobs:
         # means a missing mem-intrinsic. Both are hard regressions of the
         # β.7.5 no_std foundation — do not paper over with --allow-undefined.
         run: cargo build -p tau-wasm-guest --target wasm32-wasip2 --release
+      # EPIC 5.6 — publish the wasm-guest bundle size + gate on a budget.
+      # The guest component was just built above (default ./target). This
+      # reports the shipped-component size (wasm-tools, which — unlike Binaryen,
+      # binaryen#6728 — understands components) plus the wasm-metadce tree-shaken
+      # code floor (Binaryen, pinned to version_132 so the number is
+      # reproducible), writes them to the run summary, and fails if the shipped
+      # size exceeds TAU_WASM_SIZE_BUDGET. See docs/reference/browser-capabilities.md.
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f  # v2.86.4
+        with:
+          tool: wasm-tools
+      - name: Install Binaryen version_132 (pinned) for wasm-metadce / wasm-opt
+        run: |
+          set -euo pipefail
+          ver=version_132
+          tarball="binaryen-${ver}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${ver}/${tarball}" -o "$tarball"
+          echo "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" -C /tmp
+          echo "/tmp/binaryen-${ver}/bin" >> "$GITHUB_PATH"
+      - name: wasm-guest bundle size (EPIC 5.6 — published number + budget)
+        run: env CARGO_TARGET_DIR=target scripts/wasm-guest-size.sh --github-summary
       - name: no forbidden executor imports in tau-runtime-core/src
         run: |
           # tau-runtime-core must be executor-agnostic. Top-level (column-0)
