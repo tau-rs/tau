@@ -166,7 +166,7 @@ landlock     = "0.4"
 libc         = "0.2"
 nix          = { version = "0.31", default-features = false, features = ["sched", "user", "process", "fs"] }
 seccompiler  = "0.5"
-ulid         = { version = "1", default-features = false }
+ulid         = { version = "3", default-features = false }
 
 # Vendored no_std fork of async-stream (upstream 0.3.6 is std-only via
 # `thread_local!` + `use std::`). Required so the β.7.5 wasm guest can link
