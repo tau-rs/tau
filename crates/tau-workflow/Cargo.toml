@@ -22,7 +22,7 @@ thiserror   = { workspace = true }
 tracing     = { workspace = true }
 tokio       = { workspace = true, features = ["fs", "io-util", "time", "macros", "rt"] }
 chrono      = { workspace = true, features = ["serde"] }
-ulid        = "1"
+ulid        = "3"
 
 [dev-dependencies]
 tempfile    = { workspace = true }
