@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ContextError","DeterminismClass"],"mod":["build","estimator","transformers"],"struct":["CapabilityNeed","TransformCx"],"trait":["ContextTransformer"],"type":["ContextFuture"]};

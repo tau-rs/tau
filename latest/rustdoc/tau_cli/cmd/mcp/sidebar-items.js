@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["OutputFormat"],"fn":["dispatch","render_sarif"],"mod":["diff","ls","pin","refresh","show"]};
