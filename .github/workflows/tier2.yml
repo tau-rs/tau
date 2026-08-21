@@ -521,6 +521,36 @@ jobs:
       - name: WIT host world drift + freeze test
         run: cargo test -p tau-wasm-host --test wit_host_drift
 
+  wasm-lane:
+    # The tau-wasm-host wasm lane: `#[ignore]`d tests that shell
+    # `cargo build --target wasm32-wasip2` for the guest + fs/http probe
+    # fixtures, then load them in the host and assert runtime enforcement
+    # (roundtrip determinism, WASI fs preopen scope, wasi:http egress policy).
+    # Too heavy for the Tier 0 PR gate (nested wasm builds run several
+    # minutes even warm), so it lives here — nightly is the gate that keeps
+    # the lane from silently rotting (issue #548).
+    name: wasm lane (guest + fs/http enforcement)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # Cold local wall-clock ~48 min (three nested wasm32-wasip2 fixture builds
+    # + host wasmtime stack); CI's shared-key sccache warms the host build, but
+    # give generous headroom.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+          with-nextest: true
+      - name: Add wasm32-wasip2 target (guest + probe fixtures)
+        run: rustup target add wasm32-wasip2
+      - name: wasm lane — roundtrip + fs/http enforcement (runs #[ignore]d tests)
+        run: cargo nextest run -p tau-wasm-host --run-ignored all
+
   nightly-regression-handler:
     # Opens or updates a rolling issue on cron failure. Skips for PR-
     # labeled runs (those report via PR comment from a separate workflow).
@@ -543,6 +573,7 @@ jobs:
       - build-checks-linux
       - schema-conformance
       - wit-host-drift
+      - wasm-lane
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:

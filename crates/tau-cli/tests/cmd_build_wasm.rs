@@ -107,6 +107,53 @@ fn emitted_world_is_deterministic_and_matches_generator() {
     );
 }
 
+/// Locate the committed net.http-granting world the CI clippy job feeds to
+/// `TAU_WORLD_WIT` (see `.github/workflows/ci.yml`, the `clippy` job's
+/// wasm-guest-net step). It lives beside the guest's `wit-baseline/` so both
+/// worlds the guest is compiled against sit together.
+fn committed_net_http_world() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tau-wasm-guest/wit-cfg/net-http.wit")
+}
+
+/// The committed net.http-granting world (#597) MUST stay byte-identical to
+/// `wasm_world_for_project` on the `net-http` fixture — the same generator the
+/// manual #585 verification used. CI feeds this file to `TAU_WORLD_WIT` so
+/// `build.rs` fires `cfg(tau_cap_net_http)` and clippy lints the guest's effect
+/// arm under `-D warnings`. If it drifts (world text or generator change), the
+/// clippy job would feed a stale world; re-bless with `BLESS_WASM_WORLD=1`.
+#[test]
+fn committed_net_http_world_matches_generator() {
+    let generated = wasm_world_for_project(&fixture("net-http")).expect("net-http world");
+
+    // Guard against a green-but-blind CI job: the world MUST grant wasi:http, or
+    // `build.rs` never sets `cfg(tau_cap_net_http)` and the effect arm compiles
+    // out (the exact bug #597 fixes).
+    assert!(
+        generated.contains("wasi:http"),
+        "net-http world must grant wasi:http so cfg(tau_cap_net_http) fires:\n{generated}"
+    );
+
+    let golden = committed_net_http_world();
+    if std::env::var_os("BLESS_WASM_WORLD").is_some() {
+        std::fs::create_dir_all(golden.parent().unwrap()).unwrap();
+        std::fs::write(&golden, generated.as_bytes()).unwrap();
+    }
+    let committed = std::fs::read_to_string(&golden).unwrap_or_else(|e| {
+        panic!(
+            "committed net.http world missing at {} ({e}); \
+             regenerate with BLESS_WASM_WORLD=1",
+            golden.display()
+        )
+    });
+    assert_eq!(
+        committed,
+        generated,
+        "committed {} drifted from wasm_world_for_project(net-http); \
+         re-bless with BLESS_WASM_WORLD=1",
+        golden.display()
+    );
+}
+
 #[tokio::test]
 async fn ungoverned_project_is_refused_on_wasm_path() {
     ensure_home_env();

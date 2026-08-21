@@ -92,8 +92,19 @@ unsafe extern "C" fn cabi_realloc(
 /// `compiler_builtins` provides `memcpy`/`memset`/`memmove` on this target but
 /// not `memcmp`, so the guest fills just this one. Byte-wise (no slice ops, to
 /// avoid lowering back into an intrinsic call).
+///
+/// The parameters are `*const c_void` (not `*const u8`) to match libc's
+/// canonical `memcmp` ABI exactly — Rust 1.98's `suspicious_runtime_symbol_
+/// definitions` lint rejects a mismatched signature for a well-known runtime
+/// symbol. The pointer types are ABI-identical; we cast to `*const u8` inside.
 #[no_mangle]
-unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+unsafe extern "C" fn memcmp(
+    a: *const core::ffi::c_void,
+    b: *const core::ffi::c_void,
+    n: usize,
+) -> i32 {
+    let a = a as *const u8;
+    let b = b as *const u8;
     let mut i = 0;
     while i < n {
         let x = *a.add(i);
