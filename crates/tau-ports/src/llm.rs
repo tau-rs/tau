@@ -175,6 +175,26 @@ impl ToolUse {
     }
 }
 
+impl CompletionResponse {
+    /// Construct a [`CompletionResponse`]. Provided so `LlmBackend`
+    /// plugins — including out-of-repo adapters — can build their return
+    /// value without struct-literal syntax (the type is
+    /// `#[non_exhaustive]`). Mirrors [`ToolUse::new`] / [`TokenUsage::new`].
+    pub fn new(
+        text: String,
+        tool_uses: Vec<ToolUse>,
+        stop_reason: StopReason,
+        usage: Option<TokenUsage>,
+    ) -> Self {
+        Self {
+            text,
+            tool_uses,
+            stop_reason,
+            usage,
+        }
+    }
+}
+
 impl TokenUsage {
     /// Construct a [`TokenUsage`] from the (input, output) totals
     /// reported by an LLM backend.
