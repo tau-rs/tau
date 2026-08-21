@@ -373,6 +373,15 @@ pub enum RuntimeError {
         /// The signal name the resumer must supply.
         resume_signal: String,
     },
+
+    /// Hit a `StepRun::Dynamic` region, whose runtime gate (membership,
+    /// attenuation, bounds counters) lands in EPIC 4.5. Build-time envelope
+    /// verification already ran at `tau check`; execution is not yet wired.
+    #[error("dynamic region '{step_id}' requires the EPIC 4.5 runtime gate (not yet implemented)")]
+    DynamicRegionRequiresRuntimeGate {
+        /// The pipeline-step id of the dynamic region.
+        step_id: String,
+    },
 }
 
 /// Specific reason a plugin handshake (`meta.handshake` exchange)
