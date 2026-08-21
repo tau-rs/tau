@@ -7,7 +7,7 @@ use tau_ir::module::{IrFormatVersion, IrModule};
 
 fn schema_path() -> PathBuf {
     // CARGO_MANIFEST_DIR = crates/tau-ir ; the repo root is two levels up.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas/ir/tau-ir.v2.5.0.schema.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas/ir/tau-ir.v2.6.0.schema.json")
 }
 
 /// Single source of the schema bytes — used by both the writer and the drift check.
