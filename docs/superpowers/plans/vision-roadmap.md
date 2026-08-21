@@ -158,11 +158,14 @@ today."**
   + seed-and-skip resume) merges in. Interpreter currently aborts Suspend with a named error
   (deferred from #454). *Delta:* a user can newly suspend a run for a human/external signal and
   resume it.
-- **4.4** **Dynamic regions** (`StepRun::Dynamic` + ceiling + bounds; build-time envelope verify,
-  tier 2) — scope unchanged, **and** now the tracking home for the **agent⊇spawn lattice check**
-  (deferred from 1.5 "to EPIC 4" but absent from every story). Give it a named sub-story here
-  with its prerequisite **per-kind agent definitions** called out (origin ADR-0024). *Delta:* a
-  user can newly declare a bounded dynamic region whose spawns are lattice-checked at build.
+- **4.4** ✅ SHIPPED 2026-08-21 **Dynamic regions** (`StepRun::Dynamic` + ceiling + bounds;
+  build-time envelope verify, tier 2) — scope unchanged, **and** now the tracking home for the
+  **agent⊇spawn lattice check** (deferred from 1.5 "to EPIC 4" but absent from every story).
+  Named sub-story landed with its prerequisite **per-kind agent definitions**
+  (`[agent.kinds.*]`, origin ADR-0024). *Delta:* a user can newly declare a bounded dynamic
+  region whose spawns are lattice-checked at build (`spawn_exceeds_agent`,
+  `unknown_spawn_kind`, `region_exceeds_ceiling`, `spawn_exceeds_region`) — see
+  [Dynamic regions](../../explanation/dynamic-regions.md). Runtime execution deferred to 4.5.
 - **4.5** **Runtime gate for dynamic regions** (membership + attenuation + bounds counters).
   **MANDATORY cross-reference task before either 3.4 or 4.5 starts:** resolve the 3.4↔4.5
   collision — 3.4 *removes* the in-guest wasm gate while 4.5 *adds* a runtime gate; on wasm

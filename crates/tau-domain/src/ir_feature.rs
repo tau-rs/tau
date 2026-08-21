@@ -31,6 +31,9 @@ pub enum IrFeature {
     Loop,
     /// Human-in-the-loop `Suspend { resume_signal }` (EPIC 4.1 / 4.3).
     Suspend,
+    /// Bounded dynamic region `Dynamic { envelope, spawns, max_spawns,
+    /// max_concurrency }` (EPIC 4.4; runtime gate 4.5).
+    Dynamic,
 }
 
 impl IrFeature {
@@ -42,5 +45,19 @@ impl IrFeature {
         IrFeature::Parallel,
         IrFeature::Loop,
         IrFeature::Suspend,
+        IrFeature::Dynamic,
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IrFeature;
+
+    #[test]
+    fn all_contains_every_variant_including_dynamic() {
+        // ALL must list Dynamic so native/host targets can execute it and a
+        // new variant is compile-forced into this list.
+        assert!(IrFeature::ALL.contains(&IrFeature::Dynamic));
+        assert_eq!(IrFeature::ALL.len(), 5);
+    }
 }

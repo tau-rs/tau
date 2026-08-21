@@ -110,7 +110,10 @@ struct SuspendCtx<'a> {
 ///
 /// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`],
 /// [`StepRun::Check`], [`StepRun::Branch`], [`StepRun::Loop`],
-/// [`StepRun::Parallel`], and [`StepRun::Suspend`] steps are all supported. A
+/// [`StepRun::Parallel`], and [`StepRun::Suspend`] steps are all supported.
+/// [`StepRun::Dynamic`] is recognized but not yet executed: it errors
+/// [`RuntimeError::DynamicRegionRequiresRuntimeGate`] pending the EPIC 4.5
+/// runtime gate (membership, attenuation, bounds counters). A
 /// `Check` step evaluates a postcondition (goal or deliverable) against the
 /// accumulated outputs. A `Branch` evaluates its condition and recurses into
 /// the chosen arm (`then`/`otherwise`) against the same shared store; it
@@ -608,6 +611,17 @@ where
             }
         }
 
+        // `Dynamic` regions have their own early dispatch, mirroring
+        // `Branch`/`Loop`/`Suspend` above. Real execution (membership,
+        // attenuation, bounds counters) lands in EPIC 4.5; until then the
+        // interpreter meets a `Dynamic` region with a named error rather
+        // than executing or silently skipping it.
+        if let StepRun::Dynamic { .. } = &step.run {
+            return Err(RuntimeError::DynamicRegionRequiresRuntimeGate {
+                step_id: step.id.0.clone(),
+            });
+        }
+
         // `Parallel` blocks have their own early dispatch, mirroring `Branch`
         // and `Loop` above: they store no output of their own. Each branch
         // forks a read-only snapshot of `store` (branches are read-isolated
@@ -777,15 +791,16 @@ where
             // `Check` steps are dispatched at the top of the loop and never
             // reach this `match` (they store no output of their own).
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
-            // `Branch`, `Parallel`, `Loop`, and `Suspend` are all
+            // `Branch`, `Parallel`, `Loop`, `Suspend`, and `Dynamic` are all
             // early-dispatched above (each either stores no output of its
-            // own, or — for `Suspend` — returns `StepsFlow::Suspended`/errors
-            // before reaching here), so none of these ever reach this
-            // `match`.
+            // own, or — for `Suspend`/`Dynamic` — returns
+            // `StepsFlow::Suspended`/errors before reaching here), so none of
+            // these ever reach this `match`.
             StepRun::Branch { .. }
             | StepRun::Parallel { .. }
             | StepRun::Loop { .. }
-            | StepRun::Suspend { .. } => {
+            | StepRun::Suspend { .. }
+            | StepRun::Dynamic { .. } => {
                 unreachable!("control-flow blocks are early-dispatched")
             }
         };

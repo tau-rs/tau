@@ -270,9 +270,21 @@ pub(super) fn parse(
     }
 
     // --- Pipeline ---------------------------------------------------------
-    let mut pipeline = config.pipeline.as_ref().map(|p| Pipeline {
-        steps: p.steps.iter().map(lower_step).collect(),
-    });
+    let kinds: BTreeMap<alloc::string::String, alloc::vec::Vec<tau_domain::Capability>> = config
+        .agent_kinds
+        .iter()
+        .map(|(name, kind)| (name.clone(), kind.capabilities.clone()))
+        .collect();
+    let mut pipeline = match &config.pipeline {
+        None => None,
+        Some(p) => Some(Pipeline {
+            steps: p
+                .steps
+                .iter()
+                .map(|s| lower_step(s, &kinds))
+                .collect::<Result<_, _>>()?,
+        }),
+    };
 
     // --- Checks (goals + deliverables) -----------------------------------
     let checks = lower_checks(config, &mut pipeline)?;
@@ -523,9 +535,15 @@ fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable
 }
 
 /// Lower one validated pipeline step to an IR [`PipelineStep`], recursing
-/// into `Branch` arms. Reference/scope integrity is validated separately by
-/// the IR typecheck (`check_pipeline`), so this mapping stays infallible.
-fn lower_step(s: &tau_pkg::project::PipelineStepConfig) -> PipelineStep {
+/// into `Branch`/`Parallel`/`Loop` arms. Reference/scope integrity is
+/// validated separately by the IR typecheck (`check_pipeline`). `Dynamic`
+/// regions resolve their `spawns` kind names against `kinds` here (EPIC
+/// 4.4), which is the one way this mapping can fail — an unknown kind
+/// yields `LowerError::UnknownAgentKind`.
+fn lower_step(
+    s: &tau_pkg::project::PipelineStepConfig,
+    kinds: &BTreeMap<alloc::string::String, alloc::vec::Vec<tau_domain::Capability>>,
+) -> Result<PipelineStep, LowerError> {
     let run = match &s.run {
         PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
         PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
@@ -540,30 +558,70 @@ fn lower_step(s: &tau_pkg::project::PipelineStepConfig) -> PipelineStep {
             otherwise,
         } => StepRun::Branch {
             on: lower_condition(on),
-            then: then.iter().map(lower_step).collect(),
-            otherwise: otherwise.iter().map(lower_step).collect(),
+            then: then
+                .iter()
+                .map(|st| lower_step(st, kinds))
+                .collect::<Result<_, _>>()?,
+            otherwise: otherwise
+                .iter()
+                .map(|st| lower_step(st, kinds))
+                .collect::<Result<_, _>>()?,
         },
         PipelineRunRef::Parallel { branches } => StepRun::Parallel {
             branches: branches
                 .iter()
-                .map(|b| b.iter().map(lower_step).collect())
-                .collect(),
+                .map(|b| b.iter().map(|st| lower_step(st, kinds)).collect())
+                .collect::<Result<_, _>>()?,
         },
         PipelineRunRef::Loop {
             body,
             until,
             max_iters,
         } => StepRun::Loop {
-            body: body.iter().map(lower_step).collect(),
+            body: body
+                .iter()
+                .map(|st| lower_step(st, kinds))
+                .collect::<Result<_, _>>()?,
             until: lower_condition(until),
             max_iters: *max_iters,
         },
+        PipelineRunRef::Dynamic {
+            spawns,
+            ceiling,
+            max_spawns,
+            max_concurrency,
+            agent: _,
+        } => {
+            let mut resolved = alloc::vec::Vec::with_capacity(spawns.len());
+            for kind in spawns {
+                let caps = kinds
+                    .get(kind)
+                    .ok_or_else(|| LowerError::UnknownAgentKind {
+                        kind: kind.clone(),
+                        step: s.id.clone(),
+                    })?;
+                resolved.push(tau_ir::pipeline::DynamicSpawn {
+                    kind: kind.clone(),
+                    capabilities: CapabilityRequirements {
+                        declared: caps.clone(),
+                    },
+                });
+            }
+            StepRun::Dynamic {
+                envelope: CapabilityRequirements {
+                    declared: ceiling.clone(),
+                },
+                spawns: resolved,
+                max_spawns: *max_spawns,
+                max_concurrency: *max_concurrency,
+            }
+        }
     };
-    PipelineStep {
+    Ok(PipelineStep {
         id: PipelineStepId(s.id.clone()),
         run,
         input: s.input.clone(),
-    }
+    })
 }
 
 /// Lower a tau-pkg [`ConditionConfig`](tau_pkg::project::ConditionConfig) to an
@@ -756,6 +814,82 @@ deterministic = "parse_celsius"
                 resume_signal: "go".into()
             }
         );
+    }
+
+    #[test]
+    fn dynamic_region_lowers_with_resolved_kind_caps() {
+        // EPIC 4.4: a dynamic region's `spawns` kind names resolve, at
+        // lowering, against `[agent.kinds.<name>]` to embed each kind's
+        // capability grant directly in the emitted `DynamicSpawn`.
+        let toml = r#"
+            [project]
+            name = "p"
+
+            [agent.kinds.researcher]
+            capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["researcher"]
+            ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+            max_spawns = 8
+            max_concurrency = 4
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let researcher_caps = config
+            .agent_kinds
+            .get("researcher")
+            .expect("researcher kind present")
+            .capabilities
+            .clone();
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
+
+        let pipeline = parsed.workflow.pipeline.expect("pipeline lowered");
+        match &pipeline.steps[0].run {
+            StepRun::Dynamic {
+                envelope,
+                spawns,
+                max_spawns,
+                max_concurrency,
+            } => {
+                assert_eq!(spawns.len(), 1);
+                assert_eq!(spawns[0].kind, "researcher");
+                assert_eq!(spawns[0].capabilities.declared, researcher_caps);
+                assert_eq!(envelope.declared.len(), 1);
+                assert_eq!(*max_spawns, 8);
+                assert_eq!(*max_concurrency, 4);
+            }
+            other => panic!("expected StepRun::Dynamic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_region_unknown_kind_is_lower_error() {
+        // A dynamic region spawning a kind with no `[agent.kinds.<name>]`
+        // definition must fail lowering with `UnknownAgentKind`, not
+        // silently drop the spawn or panic.
+        let toml = r#"
+            [project]
+            name = "p"
+
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["ghost"]
+            ceiling = {}
+            max_spawns = 1
+            max_concurrency = 1
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let err = parse(&config, &no_prompt_files).expect_err("unknown kind rejected");
+        match err {
+            LowerError::UnknownAgentKind { kind, step } => {
+                assert_eq!(kind, "ghost");
+                assert_eq!(step, "fanout");
+            }
+            other => panic!("expected UnknownAgentKind, got {other:?}"),
+        }
     }
 
     #[test]
