@@ -35,12 +35,12 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use tau_ir::budget::AgentBudget;
-use tau_ir::capability::CapabilityTable;
+use tau_ir::capability::{CapabilityRequirements, CapabilityTable};
 use tau_ir::check::{Condition, GoalPredicate, Locus};
 use tau_ir::ids::{AgentId, PipelineStepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
-use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+use tau_ir::pipeline::{DynamicSpawn, Pipeline, PipelineStep, StepRun};
 use tau_ports::fixtures::MockSuspensionStore;
 use tau_ports::orchestration::SuspensionStore;
 use tau_ports::{
@@ -705,6 +705,70 @@ async fn run_pipeline_errors_suspend_unsupported() {
             assert_eq!(resume_signal, "go");
         }
         other => panic!("expected SuspendUnsupported, got {other:?}"),
+    }
+}
+
+// -----------------------------------------------------------------------
+// `StepRun::Dynamic` — loud abort pending EPIC 4.5 (EPIC 4.4, Task 7). The
+// interpreter does not yet execute dynamic regions (membership,
+// attenuation, bounds counters land in 4.5); it meets one with a named
+// error rather than silently skipping or panicking.
+// -----------------------------------------------------------------------
+
+/// Build a `[dynamic:spawn-region]` module: a single `Dynamic` step, id
+/// "spawn-region", with one `researcher` `DynamicSpawn` and minimal bounds.
+fn dynamic_module() -> IrModule {
+    let pipeline = Pipeline {
+        steps: vec![PipelineStep {
+            id: PipelineStepId("spawn-region".into()),
+            run: StepRun::Dynamic {
+                envelope: CapabilityRequirements::default(),
+                spawns: vec![DynamicSpawn {
+                    kind: "researcher".into(),
+                    capabilities: CapabilityRequirements::default(),
+                }],
+                max_spawns: 1,
+                max_concurrency: 1,
+            },
+            input: String::new(),
+        }],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents: BTreeMap::new(),
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// A `Dynamic` step errors with a named runtime-gate-deferral error rather
+/// than executing (real execution is EPIC 4.5).
+#[tokio::test]
+async fn dynamic_region_errors_pending_runtime_gate() {
+    let module = dynamic_module();
+    let err = run_pipeline(Arc::new(module), "x".to_string(), dispatcher())
+        .await
+        .expect_err("dynamic region aborts pending the EPIC 4.5 runtime gate");
+    match err {
+        RuntimeError::DynamicRegionRequiresRuntimeGate { step_id } => {
+            assert_eq!(step_id, "spawn-region");
+        }
+        other => panic!("expected DynamicRegionRequiresRuntimeGate, got {other:?}"),
     }
 }
 
