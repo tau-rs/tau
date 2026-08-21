@@ -217,10 +217,17 @@ fn host_guest_roundtrip_is_deterministic() {
     );
 }
 
-/// Lower a branch fixture to canonical IR bytes (`then` arm always taken).
-/// The condition `non_empty` on `triage`'s reply is always true, so the
-/// `then` arm (`arm`) runs — a deterministic parity scenario.
-fn branch_ir_bytes() -> Vec<u8> {
+/// A Branch pipeline is rejected at **lowering** for `any-wasi-strict`, not at
+/// guest load. The wasm guest drives `run_ir_streaming` and has no control-flow
+/// path, so #535's `IrFeature` feature-fit gate refuses the build up front
+/// (`FeatureUnsupported { missing: [Branch], .. }`) rather than deferring the
+/// rejection to guest load. Native `tau run` still executes the branch fully;
+/// driving `run_pipeline` in-wasm is a follow-up slice.
+///
+/// This test is **not** `#[ignore]`d: asserting the lowering `Err` needs no
+/// wasm build, so it runs on the default unit-test lane and can't silently rot.
+#[test]
+fn authored_branch_rejected_at_lowering() {
     let toml = r#"
 packages = ["anthropic"]
 
@@ -268,24 +275,13 @@ branch = { evaluates = "steps.triage.output", check = "non_empty" }
         skill: &|_| None,
         prompt_file: &|_| Ok(Vec::new()),
     };
-    let module = tau_ir_lower::lower_project(&config, &target, &caches)
-        .expect("lowers")
-        .module;
-    tau_ir::to_canonical_bytes(&module)
-}
 
-#[test]
-#[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
-fn guest_rejects_authored_branch_at_load() {
-    // The guest drives a single entry agent (run_ir_streaming), not the
-    // pipeline executor, so it rejects any pipeline-bearing IR (Branch
-    // included) at load rather than silently running only the entry agent.
-    // Native `tau run` executes the branch fully; driving run_pipeline
-    // in-wasm is a follow-up slice.
-    let component = build_guest_component(Some(&branch_ir_bytes()));
-    let err = run_component(&component, "hi", vec![]).unwrap_err();
-    assert!(
-        matches!(&err, tau_wasm_host::WasmHostError::Guest(m) if m.contains("pipelines")),
-        "expected an explicit pipeline reject from the guest, got {err:?}"
-    );
+    match tau_ir_lower::lower_project(&config, &target, &caches) {
+        Err(tau_ir_lower::LowerError::FeatureUnsupported { missing, .. }) => assert!(
+            missing.contains(&tau_domain::IrFeature::Branch),
+            "expected Branch among the unsupported features, got {missing:?}"
+        ),
+        Err(other) => panic!("expected FeatureUnsupported, got {other:?}"),
+        Ok(_) => panic!("wasm-strict must reject a Branch pipeline at lowering"),
+    }
 }

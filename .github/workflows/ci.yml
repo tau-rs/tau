@@ -81,6 +81,30 @@ jobs:
           with-mold: true
           with-just: true
       - run: just lint
+      # Lint the guest's cfg(tau_cap_net_http) effect arm (#597). `just lint`
+      # above builds tau-wasm-guest against the empty-cap BASELINE world, so the
+      # #[cfg(tau_cap_net_http)] `Fetch` arm in dispatcher.rs compiles out and is
+      # never linted — the gap that hid a real clippy::redundant_import +
+      # clippy::while_let_loop in #585. Feed build.rs a net.http-granting world
+      # (byte-pinned to wasm_world_for_project by the
+      # `committed_net_http_world_matches_generator` test) so the cfg fires and
+      # the arm is compiled + linted under -D warnings. Extends to
+      # tau_cap_fs_* once #596 (3.6-b) lands.
+      - name: clippy guest cfg(tau_cap_net_http) effect arm (-D warnings)
+        env:
+          # ABSOLUTE path: build.rs runs with CWD = the crate dir, so a relative
+          # TAU_WORLD_WIT would resolve wrong.
+          TAU_WORLD_WIT: ${{ github.workspace }}/crates/tau-wasm-guest/wit-cfg/net-http.wit
+        run: |
+          set -euo pipefail
+          # Refuse to run blind: if the world ever stops granting wasi:http,
+          # build.rs would leave the cfg off and this job would pass vacuously.
+          grep -q 'wasi:http' "$TAU_WORLD_WIT" || {
+            echo "::error::$TAU_WORLD_WIT does not grant wasi:http; cfg(tau_cap_net_http) would be off and this lint would be blind (#597)" >&2
+            exit 1
+          }
+          rustup target add wasm32-wasip2
+          just lint-wasm-guest-net
 
   cargo-deny:
     name: cargo-deny / linux
@@ -276,9 +300,12 @@ jobs:
           with-mold: true
       - name: Install nightly (rustdoc JSON for cargo-semver-checks)
         run: rustup toolchain install nightly --profile minimal
-      - uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-semver-checks
+      # Pin cargo-semver-checks >=0.49 so it can parse rustdoc JSON format v60+
+      # emitted by current nightly; the old install-action snapshot defaulted to
+      # 0.48.0 (v57 max) and failed with "unsupported rustdoc format v60".
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f  # v2.86.4
         with:
-          tool: cargo-semver-checks
+          tool: cargo-semver-checks@0.50.0
       - name: tau-ports ABI must not break without a version bump
         run: cargo semver-checks --baseline-rev origin/main --package tau-ports
 

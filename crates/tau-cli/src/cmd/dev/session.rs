@@ -287,8 +287,8 @@ impl DevSession {
         // 5. Boot MCP servers (from lockfile + project config) when a lockfile exists.
         //    Non-MCP projects (or projects not yet locked) skip this step safely.
         let lockfile_path = scope.lockfile_path();
-        let _mcp_lifetime; // keep inbound-dispatch handles alive for the full turn
-        if lockfile_path.exists() {
+        // keep inbound-dispatch handles alive for the full turn
+        let _mcp_lifetime = if lockfile_path.exists() {
             let lockfile = tau_pkg::lockfile::LockFile::load(&lockfile_path)
                 .with_context(|| format!("loading lockfile at {}", lockfile_path.display()))?;
             let mcp_setup = setup_mcp_runtime(
@@ -302,10 +302,10 @@ impl DevSession {
             for (id, tool) in mcp_setup.tools {
                 tools_by_id.insert(id, tool);
             }
-            _mcp_lifetime = mcp_setup.inbound_handles;
+            mcp_setup.inbound_handles
         } else {
-            _mcp_lifetime = Vec::new();
-        }
+            Vec::new()
+        };
 
         // 6. Build dispatcher and append the user turn to history. The
         //    dispatcher supplies `TokioClock`/`OsRandom`, so `run_agent`'s
