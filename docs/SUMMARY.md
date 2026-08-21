@@ -51,6 +51,7 @@
 - [WIT host world](reference/wit-host-world.md)
 - [tau mcp](reference/tau-mcp.md)
 - [Target triple reference](reference/target-triples.md)
+- [Browser capabilities profile](reference/browser-capabilities.md)
 
 # Explanation
 
