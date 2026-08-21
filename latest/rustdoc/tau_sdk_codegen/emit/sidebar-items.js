@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["generate","generate_into","render_all"]};
