@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["LinkError"],"fn":["link"],"struct":["LinkOutcome","LinkRecord","LinkedPlugin","LinkedSkill"]};
