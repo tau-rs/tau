@@ -15,8 +15,8 @@ Arguments:
           Path to the project to build. May be a directory (containing `tau.toml`) or a `.ts` file (β.8 TypeScript-authoring surface). Defaults to the current working directory
 
 Options:
-      --target <TRIPLE>
-          Target triple to build for (default: host). Must be an Available triple in the ADR-0034 registry
+      --target <KIND|TRIPLE>
+          What to build: an artifact kind (`wasm-guest`, `rust-lib`) or an Available hardware triple (default: host → `.tau` bundle). `wasm-guest` emits the fully-linked wasm component; `rust-lib` emits a generated no_std Rust embedding crate (EPIC 5.1)
 
   -o, --output <PATH>
           Output path (default: `<project>/<name>-<version>.tau`)
