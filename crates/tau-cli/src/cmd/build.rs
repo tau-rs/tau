@@ -717,7 +717,7 @@ pub struct RustLibArtifact {
 }
 
 /// Lowercase, replace non-alphanumeric with `_`, so the stem is a valid crate name.
-fn sanitize_crate_name(stem: &str) -> String {
+pub(crate) fn sanitize_crate_name(stem: &str) -> String {
     let name: String = stem
         .chars()
         .map(|c| {
