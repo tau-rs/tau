@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use tau_domain::Capability;
+use tau_domain::{AgentKind, Capability};
 
 /// Unchecked deserialization shape — fields are typed but no semantic
 /// validation has run. Use [`UncheckedProjectConfig::validate`] to
@@ -50,6 +50,9 @@ pub struct UncheckedProjectConfig {
     /// constitution declared (opt-in governance).
     #[serde(default)]
     pub allow: Option<crate::project::allow::UncheckedAllow>,
+    /// `[agent.kinds.*]` per-kind agent definitions (EPIC 4.4).
+    #[serde(default)]
+    pub agent: UncheckedAgentContainer,
 }
 
 /// `[project]` table.
@@ -126,6 +129,24 @@ pub struct UncheckedAgent {
     /// by the IR lowering pass and a later judge-compat build-time check.
     #[serde(default)]
     pub output_schema: Option<serde_json::Value>,
+}
+
+/// Raw `[agent.kinds.<name>]` per-kind agent definition (pre-validation).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedAgentKind {
+    /// The kind's capability grant (kind-as-key raw caps, same shape as `[allow]`).
+    #[serde(default)]
+    pub capabilities: BTreeMap<String, toml::Value>,
+}
+
+/// Raw `[agent]` container holding the `kinds` sub-table.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedAgentContainer {
+    /// `[agent.kinds.<name>]` per-kind agent definitions.
+    #[serde(default)]
+    pub kinds: BTreeMap<String, UncheckedAgentKind>,
 }
 
 /// `[[agents.<id>.credentials]]` entry — unchecked deserialization.
@@ -872,6 +893,8 @@ pub struct ProjectConfig {
     /// Validated root `[allow]` constitution (ADR-0057). `None` = no
     /// constitution declared (opt-in governance).
     pub allow: Option<crate::project::allow::AllowConfig>,
+    /// Map of kind name → validated per-kind agent definition (EPIC 4.4).
+    pub agent_kinds: BTreeMap<String, AgentKind>,
 }
 
 /// Validated context-pipeline step.
@@ -1470,6 +1493,16 @@ impl UncheckedProjectConfig {
             None => None,
         };
 
+        let agent_kinds = self
+            .agent
+            .kinds
+            .into_iter()
+            .map(|(name, k)| {
+                let capabilities = crate::project::allow::bridge_caps_any(&k.capabilities)?;
+                Ok((name.clone(), AgentKind::new(name, capabilities)))
+            })
+            .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
+
         let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -1483,6 +1516,7 @@ impl UncheckedProjectConfig {
             models,
             packages: self.packages,
             allow,
+            agent_kinds,
         };
 
         validate_postconditions(&mut result)?;
@@ -2905,6 +2939,24 @@ mod tests {
         let cfg = parse(toml).unwrap();
         assert_eq!(cfg.models["haiku"].backend, "anthropic");
         assert_eq!(cfg.models["haiku"].model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn agent_kinds_table_parses_with_capabilities() {
+        let toml = r#"
+[project]
+name = "p"
+
+[agent.kinds.researcher]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+"#;
+        let cfg = parse(toml).expect("agent.kinds parses");
+        let k = cfg
+            .agent_kinds
+            .get("researcher")
+            .expect("researcher kind present");
+        assert_eq!(k.name, "researcher");
+        assert_eq!(k.capabilities.len(), 1);
     }
 
     #[test]
@@ -5555,6 +5607,7 @@ mod proptests {
                 models: models_map,
                 packages: Vec::new(),
                 allow: None,
+                agent: UncheckedAgentContainer::default(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();
