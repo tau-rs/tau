@@ -13,11 +13,6 @@ use predicates::prelude::*;
 /// Test 1: uninstalling a package with no `--version` flag removes all versions,
 /// removes the package directory, clears the lockfile entry, and prints the
 /// remediation hint pointing users at `[[agents.<id>.requires.tools]]`.
-// Real install → Strict sandbox adapter, absent on Windows (Phase-2 stub).
-#[cfg_attr(
-    windows,
-    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
-)]
 #[test]
 fn cmd_uninstall_removes_all_versions() {
     let (fixture, url, _bare) = common::setup_local_package_fixture("remove-me-tool", "1.0.0");
@@ -73,10 +68,6 @@ fn cmd_uninstall_removes_all_versions() {
 
 /// Test 2: uninstalling a specific version leaves other versions intact and
 /// promotes a new active version.
-#[cfg_attr(
-    windows,
-    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
-)]
 #[test]
 fn cmd_uninstall_with_version_keeps_other_versions() {
     // Set up two separate git fixtures for the same package at two versions.

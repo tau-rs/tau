@@ -21,16 +21,6 @@ mod common;
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-// A real (non-dry-run) install resolves a Strict-tier sandbox adapter
-// (`install.rs` uses `SandboxRequirements::default()`). Windows only ships a
-// stub adapter (probe → Unavailable; Phase-2 deferred), so `resolve_adapter`
-// fails with "no sandbox adapter satisfies project requirements". Gate the
-// tests that perform an actual install until the Windows sandbox lands; the
-// dry-run / URL-validation tests below still run on Windows.
-#[cfg_attr(
-    windows,
-    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
-)]
 #[test]
 fn install_local_file_url_writes_to_global_scope() {
     let (fixture, url, _bare) = common::setup_local_package_fixture("hello-tool", "0.1.0");
@@ -111,10 +101,6 @@ fn install_bad_url_fails_with_exit_2() {
         .code(2);
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "tau install needs a Strict sandbox adapter; Windows adapter is a Phase-2 stub"
-)]
 #[test]
 fn install_json_output_includes_name_version_scope_path() {
     let (fixture, url, _bare) = common::setup_local_package_fixture("hello-tool", "0.1.0");

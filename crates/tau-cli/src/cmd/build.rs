@@ -931,14 +931,24 @@ mod tests {
 
     #[test]
     fn resolve_target_accepts_available_triple() {
-        // Use `passthrough` — Available on every host. Don't use
-        // `host()`: on Windows `host()` is `windows-native-strict`,
-        // which the registry marks Reserved (scaffold-only), so it
-        // would (correctly) be rejected by the Available gate.
+        // `passthrough` is Available on every host, including Windows.
         let available = TargetTriple::PASSTHROUGH;
         assert!(matches!(
             resolve_target(&args_with_target(Some(&available.to_string()))).unwrap(),
             BuildTarget::Bundle(t) if t == available
+        ));
+    }
+
+    #[test]
+    fn resolve_target_accepts_windows_native_strict_now_available() {
+        // Phase 2 graduated `windows-native-strict` Reserved -> Available,
+        // closing the `host()` divergence gap: on Windows, `host()` returns
+        // this exact triple, and it must now resolve successfully (it no
+        // longer hits the Reserved rejection branch).
+        let t: TargetTriple = "windows-native-strict".parse().unwrap();
+        assert!(matches!(
+            resolve_target(&args_with_target(Some(&t.to_string()))).unwrap(),
+            BuildTarget::Bundle(bt) if bt == t
         ));
     }
 
@@ -970,11 +980,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_target_rejects_reserved_or_unknown() {
-        // "windows-native-strict" parses the platform-adapter-tier grammar
-        // and IS in the registry, but with status Reserved (not Available)
-        // — exercises the lookup-Some(Reserved) branch of the Available check.
-        let err = resolve_target(&args_with_target(Some("windows-native-strict"))).unwrap_err();
+    fn resolve_target_rejects_unregistered_triple() {
+        // "darwin-container-strict" parses the platform-adapter-tier grammar
+        // but is not in the registry at all — exercises the lookup-None
+        // branch of the Available check (no registered Reserved triples
+        // remain post-Phase-2, so this is the only "not Available" case).
+        let err = resolve_target(&args_with_target(Some("darwin-container-strict"))).unwrap_err();
         assert!(err.contains("not an Available"), "got {err}");
     }
 
