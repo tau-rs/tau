@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["authoring","embed_js","emit","emit_python","emit_rust_lib","emit_ts","error","schema"]};

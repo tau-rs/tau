@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CompletionChunk","ContentBlock","LlmProviderMessage","StopReason","ToolChoice"],"fn":["batch_to_stream","stream_to_batch"],"struct":["CompletionRequest","CompletionResponse","TokenUsage","ToolSpec","ToolUse","ToolUseAccumulator"],"trait":["LlmBackend"],"type":["CompletionStream"]};
