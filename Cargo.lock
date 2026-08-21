@@ -4928,6 +4928,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tau-trace"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "tau-ports",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "tau-ts-extract"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,17 @@
+[package]
+name = "tau-trace"
+description = "Pure, headless render model for tau execution traces — turns a stream of tau_ports::TraceEvent into a renderable TraceModel (span tree + time-axis). No runtime deps, no TUI deps."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+tau-ports = { workspace = true, features = ["serde"] }
+chrono    = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

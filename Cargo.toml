@@ -5,6 +5,7 @@ members = [
     "crates/tau-ports",
     "crates/tau-ir",
     "crates/tau-ir-lower",
+    "crates/tau-trace",
     "crates/tau-app",
     "crates/tau-pkg",
     "crates/tau-mcp",
