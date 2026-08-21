@@ -28,6 +28,7 @@
 - [Install a skill](how-to/install-a-skill.md)
 - [Use MCP servers](how-to/mcp-servers.md)
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
+- [Build embedding artifacts](how-to/build-embedding-artifacts.md)
 - [Author a conditional branch](how-to/authoring-a-branch.md)
 - [Author a suspend step](how-to/authoring-suspend.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
