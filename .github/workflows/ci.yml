@@ -81,6 +81,30 @@ jobs:
           with-mold: true
           with-just: true
       - run: just lint
+      # Lint the guest's cfg(tau_cap_net_http) effect arm (#597). `just lint`
+      # above builds tau-wasm-guest against the empty-cap BASELINE world, so the
+      # #[cfg(tau_cap_net_http)] `Fetch` arm in dispatcher.rs compiles out and is
+      # never linted — the gap that hid a real clippy::redundant_import +
+      # clippy::while_let_loop in #585. Feed build.rs a net.http-granting world
+      # (byte-pinned to wasm_world_for_project by the
+      # `committed_net_http_world_matches_generator` test) so the cfg fires and
+      # the arm is compiled + linted under -D warnings. Extends to
+      # tau_cap_fs_* once #596 (3.6-b) lands.
+      - name: clippy guest cfg(tau_cap_net_http) effect arm (-D warnings)
+        env:
+          # ABSOLUTE path: build.rs runs with CWD = the crate dir, so a relative
+          # TAU_WORLD_WIT would resolve wrong.
+          TAU_WORLD_WIT: ${{ github.workspace }}/crates/tau-wasm-guest/wit-cfg/net-http.wit
+        run: |
+          set -euo pipefail
+          # Refuse to run blind: if the world ever stops granting wasi:http,
+          # build.rs would leave the cfg off and this job would pass vacuously.
+          grep -q 'wasi:http' "$TAU_WORLD_WIT" || {
+            echo "::error::$TAU_WORLD_WIT does not grant wasi:http; cfg(tau_cap_net_http) would be off and this lint would be blind (#597)" >&2
+            exit 1
+          }
+          rustup target add wasm32-wasip2
+          just lint-wasm-guest-net
 
   cargo-deny:
     name: cargo-deny / linux
