@@ -1,0 +1,9 @@
+(function() {
+    const implementors = Object.fromEntries([["anthropic_plugin_lib",[["impl Configure for <a class=\"struct\" href=\"anthropic_plugin_lib/plugin/struct.AnthropicPlugin.html\" title=\"struct anthropic_plugin_lib::plugin::AnthropicPlugin\">AnthropicPlugin</a>",0]]],["echo_llm",[["impl Configure for <a class=\"struct\" href=\"echo_llm/struct.EchoLlm.html\" title=\"struct echo_llm::EchoLlm\">EchoLlm</a>",0]]],["echo_tool",[["impl Configure for <a class=\"struct\" href=\"echo_tool/struct.EchoTool.html\" title=\"struct echo_tool::EchoTool\">EchoTool</a>",0]]],["fs_read_plugin_lib",[["impl Configure for <a class=\"struct\" href=\"fs_read_plugin_lib/plugin/struct.FsReadPlugin.html\" title=\"struct fs_read_plugin_lib::plugin::FsReadPlugin\">FsReadPlugin</a>",0]]],["fs_write_plugin_lib",[["impl Configure for <a class=\"struct\" href=\"fs_write_plugin_lib/plugin/struct.FsWritePlugin.html\" title=\"struct fs_write_plugin_lib::plugin::FsWritePlugin\">FsWritePlugin</a>",0]]],["ollama_plugin_lib",[["impl Configure for <a class=\"struct\" href=\"ollama_plugin_lib/plugin/struct.OllamaPlugin.html\" title=\"struct ollama_plugin_lib::plugin::OllamaPlugin\">OllamaPlugin</a>",0]]],["openai_plugin_lib",[["impl Configure for <a class=\"struct\" href=\"openai_plugin_lib/plugin/struct.OpenAIPlugin.html\" title=\"struct openai_plugin_lib::plugin::OpenAIPlugin\">OpenAIPlugin</a>",0]]],["shell_plugin_lib",[["impl Configure for <a class=\"struct\" href=\"shell_plugin_lib/plugin/struct.ShellPlugin.html\" title=\"struct shell_plugin_lib::plugin::ShellPlugin\">ShellPlugin</a>",0]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":59,"fragment_lengths":[219,145,151,205,211,202,202,196]}

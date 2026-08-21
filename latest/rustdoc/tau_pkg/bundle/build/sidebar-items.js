@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build","read_prompt_file"],"struct":["BuildOptions","BundleArtifact"]};
