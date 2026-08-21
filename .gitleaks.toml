@@ -14,11 +14,15 @@ regexes = ['''cargo-fuzz-bin-v\d+''']
 paths = ['''.github/workflows/fuzz-nightly\.yml''']
 
 [[allowlists]]
-description = "False positive: intentionally-fake API keys in Debug-redaction unit tests"
-# The anthropic/openai plugin config tests assert the key is NOT leaked in Debug
-# output (`!debug.contains(...)`), so the fixtures are deliberately fake values,
-# not real secrets. They live on `main` (PR #319) and, because the gitleaks CI
-# job scans all branch history via `--log-opts "--all"`, trip the OpenAI/Anthropic
-# key rules on every PR until allowlisted.
-regexes = ['''sk(-ant)?-(supersecret-leaked-value|fromjson)''']
-paths = ['''crates/tau-plugins/(anthropic|openai)/src/config\.rs''']
+description = "False positive: generic-api-key rule matches the phrase 'parent/child' in trace-TUI design docs"
+# The generic-api-key rule keys off the nearby word "token" ("...token counts,
+# parent/child nesting...") and flags the literal phrase `parent/child` as a
+# secret. These are authored design/plan prose (no secrets), and because the
+# gitleaks CI job scans all branch history via `--log-opts "--all"`, rewording
+# the current file cannot clear the historical commits — so this must be
+# allowlisted by path.
+regexes = ['''^parent/child$''']
+paths = [
+    '''docs/superpowers/specs/2026-08-21-execution-trace-tui-design\.md''',
+    '''docs/superpowers/plans/2026-08-21-execution-trace-tui-m1\.md''',
+]
