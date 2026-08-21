@@ -20,7 +20,10 @@ mod guest;
 /// exact wit-bindgen generated path inside `guest.rs`.
 #[cfg(target_arch = "wasm32")]
 pub(crate) use guest::wit_host;
-#[cfg(all(target_arch = "wasm32", tau_cap_net_http))]
+#[cfg(all(
+    target_arch = "wasm32",
+    any(tau_cap_net_http, tau_cap_fs_read, tau_cap_fs_write)
+))]
 pub(crate) use guest::wit_wasi;
 #[cfg(target_arch = "wasm32")]
 mod dispatcher;
