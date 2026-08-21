@@ -72,6 +72,23 @@ fn project_using_control_flow_is_refused() {
 }
 
 #[test]
+fn project_using_dynamic_region_is_refused() {
+    // EPIC 4.4: a `StepRun::Dynamic` region is control-flow the wasm guest's
+    // `run_ir_streaming` path cannot execute, same as Branch/Parallel/Loop/
+    // Suspend — `tau build wasm` must refuse it (feature-fit, Task 8
+    // conformance Fixture C). Unit-level coverage of the same refusal
+    // already lives in `tau-ir-lower`'s `feature_fit::wasm_target_rejects_
+    // dynamic_region`; this test exercises the CLI-facing `lower_to_wasm_ir`
+    // entry point, mirroring `project_using_control_flow_is_refused` above.
+    let err = lower_to_wasm_ir(&fixture("needs-dynamic-region")).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("feature-fit") && msg.contains("Dynamic"),
+        "expected a feature-fit refusal naming Dynamic, got: {msg}"
+    );
+}
+
+#[test]
 fn trivial_project_generates_host_only_world() {
     let world = wasm_world_for_project(&fixture("trivial")).expect("trivial world");
     assert!(world.contains("import tau:host/host@0.1.0;"));

@@ -40,7 +40,8 @@ impl IrFormatVersion {
     // MINOR v2.5.0: Agent.prompt String -> PromptSource (untagged: Inline | Asset)
     // for the content-addressed asset store (D6-B). `Inline` serializes as a bare
     // string, so pre-2.5 modules parse and re-serialize byte-identically.
-    pub const CURRENT: &'static str = "v2.5.0";
+    // MINOR v2.6.0: StepRun gains Dynamic (bounded dynamic region; additive; EPIC 4.4).
+    pub const CURRENT: &'static str = "v2.6.0";
 
     /// Major component of `CURRENT`. Kept as a literal (const string
     /// parsing is awkward) and pinned to `CURRENT` by
@@ -145,9 +146,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_5_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.5.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.5.0");
+    fn ir_format_version_is_v2_6_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.6.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.6.0");
     }
 
     #[test]

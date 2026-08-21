@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use tau_domain::Capability;
+use tau_domain::{AgentKind, Capability};
 
 /// Unchecked deserialization shape — fields are typed but no semantic
 /// validation has run. Use [`UncheckedProjectConfig::validate`] to
@@ -50,6 +50,9 @@ pub struct UncheckedProjectConfig {
     /// constitution declared (opt-in governance).
     #[serde(default)]
     pub allow: Option<crate::project::allow::UncheckedAllow>,
+    /// `[agent.kinds.*]` per-kind agent definitions (EPIC 4.4).
+    #[serde(default)]
+    pub agent: UncheckedAgentContainer,
 }
 
 /// `[project]` table.
@@ -126,6 +129,24 @@ pub struct UncheckedAgent {
     /// by the IR lowering pass and a later judge-compat build-time check.
     #[serde(default)]
     pub output_schema: Option<serde_json::Value>,
+}
+
+/// Raw `[agent.kinds.<name>]` per-kind agent definition (pre-validation).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedAgentKind {
+    /// The kind's capability grant (kind-as-key raw caps, same shape as `[allow]`).
+    #[serde(default)]
+    pub capabilities: BTreeMap<String, toml::Value>,
+}
+
+/// Raw `[agent]` container holding the `kinds` sub-table.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedAgentContainer {
+    /// `[agent.kinds.<name>]` per-kind agent definitions.
+    #[serde(default)]
+    pub kinds: BTreeMap<String, UncheckedAgentKind>,
 }
 
 /// `[[agents.<id>.credentials]]` entry — unchecked deserialization.
@@ -340,6 +361,28 @@ pub struct UncheckedPipelineStep {
     /// Loop form: steps run each iteration (recursive).
     #[serde(default)]
     pub body: Vec<UncheckedPipelineStep>,
+    /// Dynamic-region form (EPIC 4.4): `[pipeline.steps.dynamic]`.
+    #[serde(default)]
+    pub dynamic: Option<UncheckedDynamic>,
+}
+
+/// Dynamic-region form (EPIC 4.4): a bounded fan-out over spawnable kinds.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedDynamic {
+    /// Kinds this region may spawn (each must be an `[agent.kinds.<name>]`).
+    #[serde(default)]
+    pub spawns: Vec<String>,
+    /// Region capability envelope (kind-as-key raw caps).
+    #[serde(default)]
+    pub ceiling: BTreeMap<String, toml::Value>,
+    /// Hard cap on total spawns (must be `> 0`).
+    pub max_spawns: u64,
+    /// Hard cap on concurrent spawns (`0 < n <= max_spawns`).
+    pub max_concurrency: u64,
+    /// Optional owning agent id; inserts the `agent ⊇ region` lattice link.
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 /// Raw parallel branch (pre-validation) — one independent step sequence.
@@ -441,6 +484,21 @@ pub enum PipelineRunRef {
         until: ConditionConfig,
         /// Mandatory iteration cap (`> 0`).
         max_iters: u64,
+    },
+    /// Dynamic region (EPIC 4.4). `spawns` are kind names resolved to caps
+    /// during lowering; `ceiling` is the region envelope; `agent` is the
+    /// optional owner for the `agent ⊇ region` link.
+    Dynamic {
+        /// Spawnable kind names (`[agent.kinds.<name>]`).
+        spawns: Vec<String>,
+        /// Region capability envelope.
+        ceiling: Vec<Capability>,
+        /// Hard total-spawn cap (`> 0`).
+        max_spawns: u64,
+        /// Hard concurrency cap (`0 < n <= max_spawns`).
+        max_concurrency: u64,
+        /// Optional owning agent id.
+        agent: Option<String>,
     },
 }
 
@@ -872,6 +930,8 @@ pub struct ProjectConfig {
     /// Validated root `[allow]` constitution (ADR-0057). `None` = no
     /// constitution declared (opt-in governance).
     pub allow: Option<crate::project::allow::AllowConfig>,
+    /// Map of kind name → validated per-kind agent definition (EPIC 4.4).
+    pub agent_kinds: BTreeMap<String, AgentKind>,
 }
 
 /// Validated context-pipeline step.
@@ -1470,6 +1530,16 @@ impl UncheckedProjectConfig {
             None => None,
         };
 
+        let agent_kinds = self
+            .agent
+            .kinds
+            .into_iter()
+            .map(|(name, k)| {
+                let capabilities = crate::project::allow::bridge_caps_any(&k.capabilities)?;
+                Ok((name.clone(), AgentKind::new(name, capabilities)))
+            })
+            .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
+
         let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -1483,6 +1553,7 @@ impl UncheckedProjectConfig {
             models,
             packages: self.packages,
             allow,
+            agent_kinds,
         };
 
         validate_postconditions(&mut result)?;
@@ -1973,9 +2044,10 @@ fn validate_pipeline_step(
     let has_branch = s.branch.is_some();
     let has_parallel = !s.branches.is_empty();
     let has_loop = s.until.is_some() || s.max_iters.is_some() || !s.body.is_empty();
+    let has_dynamic = s.dynamic.is_some();
     let has_arms = !s.then.is_empty() || !s.otherwise.is_empty();
 
-    let form_count = [has_run, has_branch, has_parallel, has_loop]
+    let form_count = [has_run, has_branch, has_parallel, has_loop, has_dynamic]
         .iter()
         .filter(|active| **active)
         .count();
@@ -1985,15 +2057,15 @@ fn validate_pipeline_step(
     };
     if form_count == 0 {
         return Err(bad(
-            "a step must set exactly one of `run`, `branch`, `branches`, or a loop \
-             (`until`/`max_iters`/`body`)"
+            "a step must set exactly one of `run`, `branch`, `branches`, a loop \
+             (`until`/`max_iters`/`body`), or `dynamic`"
                 .into(),
         ));
     }
     if form_count > 1 {
         return Err(bad(
             "a step sets more than one form; exactly one of `run`, `branch`, `branches`, \
-             or a loop is allowed"
+             a loop, or `dynamic` is allowed"
                 .into(),
         ));
     }
@@ -2054,6 +2126,32 @@ fn validate_pipeline_step(
             })
             .collect::<Result<Vec<_>, _>>()?;
         PipelineRunRef::Parallel { branches }
+    } else if has_dynamic {
+        let d = s.dynamic.as_ref().unwrap();
+        if d.spawns.is_empty() {
+            return Err(bad(
+                "a dynamic region must list at least one `spawns` kind".into()
+            ));
+        }
+        if d.max_spawns == 0 {
+            return Err(bad(
+                "a dynamic region's `max_spawns` must be greater than 0".into(),
+            ));
+        }
+        if d.max_concurrency == 0 || d.max_concurrency > d.max_spawns {
+            return Err(bad(
+                "a dynamic region's `max_concurrency` must be in 1..=max_spawns".into(),
+            ));
+        }
+        let ceiling = crate::project::allow::bridge_caps_any(&d.ceiling)
+            .map_err(|e| bad(format!("dynamic region `ceiling`: {e}")))?;
+        PipelineRunRef::Dynamic {
+            spawns: d.spawns.clone(),
+            ceiling,
+            max_spawns: d.max_spawns,
+            max_concurrency: d.max_concurrency,
+            agent: d.agent.clone(),
+        }
     } else {
         // Loop form. Enforce the mandatory bound and exit condition at author
         // time (typecheck also rejects `max_iters == 0`, defense in depth).
@@ -2905,6 +3003,24 @@ mod tests {
         let cfg = parse(toml).unwrap();
         assert_eq!(cfg.models["haiku"].backend, "anthropic");
         assert_eq!(cfg.models["haiku"].model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn agent_kinds_table_parses_with_capabilities() {
+        let toml = r#"
+[project]
+name = "p"
+
+[agent.kinds.researcher]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+"#;
+        let cfg = parse(toml).expect("agent.kinds parses");
+        let k = cfg
+            .agent_kinds
+            .get("researcher")
+            .expect("researcher kind present");
+        assert_eq!(k.name, "researcher");
+        assert_eq!(k.capabilities.len(), 1);
     }
 
     #[test]
@@ -4260,6 +4376,56 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_region_form_parses() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["researcher"]
+            ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+            max_spawns = 8
+            max_concurrency = 4
+        "#;
+        let cfg = ProjectConfig::parse_str(toml).expect("dynamic region parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Dynamic {
+                spawns,
+                ceiling,
+                max_spawns,
+                max_concurrency,
+                agent,
+            } => {
+                assert_eq!(spawns, &vec!["researcher".to_string()]);
+                assert_eq!(ceiling.len(), 1);
+                assert_eq!(*max_spawns, 8);
+                assert_eq!(*max_concurrency, 4);
+                assert!(agent.is_none());
+            }
+            other => panic!("expected Dynamic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_region_rejects_zero_max_spawns() {
+        let toml = r#"
+            [project]
+            name = "demo"
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["researcher"]
+            ceiling = {}
+            max_spawns = 0
+            max_concurrency = 1
+        "#;
+        let err = ProjectConfig::parse_str(toml).expect_err("zero max_spawns rejected");
+        assert!(format!("{err}").contains("max_spawns"));
+    }
+
+    #[test]
     fn rejects_step_with_multiple_forms() {
         // `run` + a loop form on the same step is ambiguous.
         let toml = r#"
@@ -5555,6 +5721,7 @@ mod proptests {
                 models: models_map,
                 packages: Vec::new(),
                 allow: None,
+                agent: UncheckedAgentContainer::default(),
             };
 
             let toml_str = toml::to_string(&original).unwrap();
