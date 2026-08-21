@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["SynthesizeError"],"fn":["synthesize_anthropic_skill"]};
