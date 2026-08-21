@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["print_summary","run_printer"],"struct":["AgentStats"]};
