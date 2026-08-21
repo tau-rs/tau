@@ -1,0 +1,476 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Serve mode protocol - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./reference/serve-mode-protocol.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="serve-mode-protocol"><a class="header" href="#serve-mode-protocol">Serve mode protocol</a></h1>
+<p>Wire-level reference for the JSON-RPC 2.0 + NDJSON protocol tau
+serve mode speaks. For the model and rationale, read
+<a href="../explanation/serve-mode.html">Serve mode</a>. The protocol is
+formally pinned by <a href="../decisions/0033-tau-serve-mode.html">ADR-0033</a>;
+this page reflects v1 of the protocol.</p>
+<p>The protocol is one of tau's <strong>two public surfaces</strong> (G6). It
+follows SemVer (QG11): additive method namespaces land via ADR
+amendment without bumping the major; breaking changes don't ship
+within a minor version.</p>
+<p>The authoritative source is <code>crates/tau-app/src/serve/</code>. Every
+constant on this page is sourced from
+<code>crates/tau-app/src/serve/{protocol,error_codes,methods}.rs</code>.</p>
+<h2 id="transport"><a class="header" href="#transport">Transport</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Property</th><th>Value</th></tr></thead><tbody>
+<tr><td>Wire</td><td>NDJSON over the subprocess's stdin / stdout</td></tr>
+<tr><td>Framing</td><td>One JSON value per line, terminated by <code>\n</code></td></tr>
+<tr><td>Encoding</td><td>UTF-8</td></tr>
+<tr><td>Direction</td><td>Bidirectional — server emits notifications interleaved with responses</td></tr>
+<tr><td>Side channel</td><td>stderr is for human-readable diagnostics only; never carries protocol payload</td></tr>
+</tbody></table>
+</div>
+<p>The server reads exactly one JSON value per line of stdin and
+writes exactly one JSON value per line of stdout. Multi-line JSON
+is not supported; pretty-printed input is rejected at the parser.</p>
+<h2 id="server-lifecycle"><a class="header" href="#server-lifecycle">Server lifecycle</a></h2>
+<pre class="mermaid">sequenceDiagram
+    Client-&gt;&gt;Server: spawn (--project ...)
+    Server--&gt;&gt;Client: &quot;tau-serve ready&quot; on stderr (if --ready-on-stderr)
+    Client-&gt;&gt;Server: { &quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 1, &quot;method&quot;: &quot;meta.handshake&quot;, &quot;params&quot;: { &quot;protocol_version&quot;: 1 } }
+    Server--&gt;&gt;Client: { &quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 1, &quot;result&quot;: { &quot;server_name&quot;: &quot;tau&quot;, ... } }
+    Client-&gt;&gt;Server: { &quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 2, &quot;method&quot;: &quot;runtime.run&quot;, ... }
+    Server--&gt;&gt;Client: { &quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 2, &quot;result&quot;: ... }
+    Client-&gt;&gt;Server: close stdin
+    Server--&gt;&gt;Client: drain in-flight, exit 0
+</pre>
+<p>The client speaks first. The handshake establishes
+<code>protocol_version</code> (must be <code>1</code> in v1). Subsequent calls without a
+prior handshake return <code>-32002 HANDSHAKE_REQUIRED</code>. A second
+handshake returns <code>-32003 ALREADY_HANDSHAKEN</code>. Pre-handshake
+<code>meta.ping</code> is allowed (so a client can liveness-check before
+committing to a protocol version).</p>
+<h2 id="server-start-up-flags"><a class="header" href="#server-start-up-flags">Server start-up flags</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Flag</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>--project &lt;path&gt;</code></td><td>cwd</td><td>absolute path to the tau project directory</td></tr>
+<tr><td><code>--max-concurrent &lt;N&gt;</code></td><td>8</td><td>max in-flight requests; excess returns <code>-32004</code></td></tr>
+<tr><td><code>--idle-timeout &lt;duration&gt;</code></td><td>none</td><td>graceful shutdown after no activity for this duration</td></tr>
+<tr><td><code>--ready-on-stderr</code></td><td>off</td><td>write <code>"tau-serve ready\n"</code> to stderr after boot completes</td></tr>
+<tr><td><code>--shutdown-grace &lt;duration&gt;</code></td><td>5s</td><td>how long to wait for in-flight requests to drain on shutdown</td></tr>
+</tbody></table>
+</div>
+<p>These match the <code>ServeOptions</code> struct in
+<code>crates/tau-app/src/serve/options.rs</code>.</p>
+<h2 id="message-envelopes"><a class="header" href="#message-envelopes">Message envelopes</a></h2>
+<p>All messages are JSON-RPC 2.0 — i.e. carry <code>"jsonrpc": "2.0"</code>.</p>
+<h3 id="request-client--server"><a class="header" href="#request-client--server">Request (client → server)</a></h3>
+<pre><code class="language-json">{
+  "jsonrpc": "2.0",
+  "id":      &lt;RequestId&gt;,
+  "method":  "&lt;method-name&gt;",
+  "params":  &lt;object&gt;
+}
+</code></pre>
+<p><code>id</code> may be a string or number (server preserves the exact value
+in the response). <code>params</code> is required for every v1 method,
+including <code>meta.handshake</code> and <code>meta.ping</code> (which accept <code>{}</code>).</p>
+<h3 id="response-server--client-success"><a class="header" href="#response-server--client-success">Response (server → client, success)</a></h3>
+<pre><code class="language-json">{
+  "jsonrpc": "2.0",
+  "id":      &lt;matches request&gt;,
+  "result":  &lt;object&gt;
+}
+</code></pre>
+<h3 id="response-server--client-error"><a class="header" href="#response-server--client-error">Response (server → client, error)</a></h3>
+<pre><code class="language-json">{
+  "jsonrpc": "2.0",
+  "id":      &lt;matches request, or null on parse error&gt;,
+  "error": {
+    "code":    &lt;integer&gt;,
+    "message": "&lt;string&gt;",
+    "data":    &lt;object | null&gt;
+  }
+}
+</code></pre>
+<h3 id="notification-server--client"><a class="header" href="#notification-server--client">Notification (server → client)</a></h3>
+<pre><code class="language-json">{
+  "jsonrpc": "2.0",
+  "method":  "runtime.event",
+  "params":  &lt;object&gt;
+}
+</code></pre>
+<p>Notifications have <strong>no <code>id</code></strong> (JSON-RPC 2.0 §6). The server only
+emits the one notification method <code>runtime.event</code> in v1.</p>
+<h2 id="method-surface"><a class="header" href="#method-surface">Method surface</a></h2>
+<h3 id="metahandshake"><a class="header" href="#metahandshake"><code>meta.handshake</code></a></h3>
+<p>Required first call (with one exception, <code>meta.ping</code>, which is
+allowed pre-handshake).</p>
+<p><strong>Params:</strong></p>
+<pre><code class="language-json">{ "protocol_version": 1 }
+</code></pre>
+<p><strong>Result:</strong></p>
+<pre><code class="language-json">{
+  "server_name":     "tau",
+  "server_version":  "&lt;semver, e.g. 0.6.0&gt;",
+  "protocol_version": 1,
+  "project_path":    "&lt;absolute path&gt;",
+  "agents":          ["&lt;agent-id&gt;", ...]
+}
+</code></pre>
+<p>Errors:</p>
+<ul>
+<li><code>-32000 HANDSHAKE_MISMATCH</code> — <code>protocol_version != 1</code>. Error
+data: <code>{"supported_versions": [1]}</code>.</li>
+<li><code>-32003 ALREADY_HANDSHAKEN</code> — second <code>meta.handshake</code> call.</li>
+</ul>
+<h3 id="metaping"><a class="header" href="#metaping"><code>meta.ping</code></a></h3>
+<p>Liveness check. Allowed pre-handshake (no protocol-version
+dependency).</p>
+<p><strong>Params:</strong> <code>{}</code> (no fields required).</p>
+<p><strong>Result:</strong> <code>{ "ok": true }</code>.</p>
+<h3 id="runtimerun"><a class="header" href="#runtimerun"><code>runtime.run</code></a></h3>
+<p>Batch agent run. Returns a single <code>RunOutcome</code> after the agent
+completes.</p>
+<p><strong>Params:</strong></p>
+<pre><code class="language-json">{
+  "agent_id":         "&lt;string, must match an entry from handshake's `agents`&gt;",
+  "message":          { ... },
+  "history":          [ ... ],
+  "session_id":       "&lt;optional&gt;",
+  "max_tokens":       &lt;optional int&gt;,
+  "max_turns":        &lt;optional int&gt;
+}
+</code></pre>
+<p><code>message</code> and <code>history</code> use <code>tau-domain::Message</code>'s canonical
+shape.</p>
+<p><strong>Result:</strong> a <code>RunOutcome</code> — either <code>{ "kind": "Completed", ... }</code>
+or <code>{ "kind": "Failed", "reason": "&lt;typed&gt;" }</code>. The <code>RunOutcome</code>
+shape is defined in <code>tau-runtime::RunOutcome</code>.</p>
+<p>Errors:</p>
+<ul>
+<li><code>-32010 UNKNOWN_AGENT</code> — <code>agent_id</code> not in the project.</li>
+<li><code>-32007 CAPABILITY_DENIED</code> — agent attempted a tool call its
+grant doesn't cover.</li>
+<li><code>-32008 TOOL_ERROR</code> — tool plugin returned an error.</li>
+<li><code>-32009 LLM_ERROR</code> — LLM backend returned an error.</li>
+<li><code>-32006 RUNTIME_ERROR</code> — operational error inside the runtime.</li>
+</ul>
+<h3 id="runtimerun_streaming"><a class="header" href="#runtimerun_streaming"><code>runtime.run_streaming</code></a></h3>
+<p>Streaming agent run. Emits zero or more <code>runtime.event</code>
+notifications correlated by the request id, then a final response
+(success or error).</p>
+<p><strong>Params:</strong> same as <code>runtime.run</code>.</p>
+<p><strong>Result:</strong> same <code>RunOutcome</code> as <code>runtime.run</code>, sent only after
+the stream completes.</p>
+<p><strong>Notifications:</strong> <code>runtime.event</code> (see below).</p>
+<h3 id="runtimecancel"><a class="header" href="#runtimecancel"><code>runtime.cancel</code></a></h3>
+<p>Cooperative cancel. The server signals the target request's task
+to wind down; the request completes with a <code>-32001 CANCELLED</code>
+error and partial state in <code>error.data</code> where available.</p>
+<p><strong>Params:</strong></p>
+<pre><code class="language-json">{ "id": &lt;RequestId of an in-flight call&gt; }
+</code></pre>
+<p><strong>Result:</strong> <code>{ "cancelled": true }</code>. The cancelled request itself
+emits <code>-32001 CANCELLED</code> separately.</p>
+<h3 id="runtimeevent-server--client-notification"><a class="header" href="#runtimeevent-server--client-notification"><code>runtime.event</code> (server → client notification)</a></h3>
+<p>Emitted during a <code>runtime.run_streaming</code> call.</p>
+<p><strong>Params:</strong></p>
+<pre><code class="language-json">{
+  "id":   &lt;RequestId of the streaming call this event belongs to&gt;,
+  "kind": "&lt;RunEvent variant&gt;",
+  "data": { ... }
+}
+</code></pre>
+<p><code>kind</code> is one of (from ADR-0011's <code>RunEvent</code>):</p>
+<div class="table-wrapper"><table><thead><tr><th><code>kind</code></th><th>When</th></tr></thead><tbody>
+<tr><td><code>TextDelta</code></td><td>New tokens from the LLM. <code>data</code> includes the delta string.</td></tr>
+<tr><td><code>ToolCallStarted</code></td><td>The agent invoked a tool.</td></tr>
+<tr><td><code>ToolCallCompleted</code></td><td>Tool returned.</td></tr>
+<tr><td><code>TurnCompleted</code></td><td>One LLM round-trip finished.</td></tr>
+<tr><td><code>RunCompleted</code></td><td>All turns done; the final response is next.</td></tr>
+<tr><td><code>FatalError</code></td><td>An error terminating the run.</td></tr>
+</tbody></table>
+</div>
+<p>The notification stream ends with a regular response carrying the
+<code>RunOutcome</code>. A client that loses the response (e.g. crashes
+mid-stream) sees an orphaned event stream from the server's point
+of view; the server eventually shuts down on stdin EOF.</p>
+<h2 id="error-codes"><a class="header" href="#error-codes">Error codes</a></h2>
+<p>Tau claims <code>-32000..-32099</code> of the JSON-RPC 2.0 server-defined
+error range. v1 implements <code>-32000..-32010</code>; <code>-32011..-32099</code> are
+reserved for future ADR amendments.</p>
+<div class="table-wrapper"><table><thead><tr><th>Code</th><th>Constant</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>-32000</code></td><td><code>HANDSHAKE_MISMATCH</code></td><td>Client requested an unsupported <code>protocol_version</code>. Data: <code>{"supported_versions": [...]}</code>.</td></tr>
+<tr><td><code>-32001</code></td><td><code>CANCELLED</code></td><td>Request was cancelled via <code>runtime.cancel</code>.</td></tr>
+<tr><td><code>-32002</code></td><td><code>HANDSHAKE_REQUIRED</code></td><td>Non-meta call before <code>meta.handshake</code>.</td></tr>
+<tr><td><code>-32003</code></td><td><code>ALREADY_HANDSHAKEN</code></td><td>Second <code>meta.handshake</code> call.</td></tr>
+<tr><td><code>-32004</code></td><td><code>SERVER_BUSY</code></td><td><code>max_concurrent</code> exceeded.</td></tr>
+<tr><td><code>-32005</code></td><td><code>PROJECT_ERROR</code></td><td>Project config / manifest error.</td></tr>
+<tr><td><code>-32006</code></td><td><code>RUNTIME_ERROR</code></td><td>Operational error inside the runtime.</td></tr>
+<tr><td><code>-32007</code></td><td><code>CAPABILITY_DENIED</code></td><td>Tool call refused by the capability check.</td></tr>
+<tr><td><code>-32008</code></td><td><code>TOOL_ERROR</code></td><td>Tool plugin returned an error.</td></tr>
+<tr><td><code>-32009</code></td><td><code>LLM_ERROR</code></td><td>LLM backend returned an error.</td></tr>
+<tr><td><code>-32010</code></td><td><code>UNKNOWN_AGENT</code></td><td><code>agent_id</code> is not declared in the project.</td></tr>
+<tr><td><code>-32011..-32099</code></td><td><em>reserved</em></td><td>Reserved for future ADR amendments.</td></tr>
+</tbody></table>
+</div>
+<p>JSON-RPC 2.0's own reserved codes (<code>-32700</code> parse error, <code>-32600</code>
+invalid request, <code>-32601</code> method not found, <code>-32602</code> invalid
+params, <code>-32603</code> internal error) are still in use; the tau range
+adds to them.</p>
+<h2 id="stability-and-versioning"><a class="header" href="#stability-and-versioning">Stability and versioning</a></h2>
+<p>Per QG11 and ADR-0033:</p>
+<ul>
+<li><strong>Adding a method</strong> (e.g. a future <code>session.list</code>) is a
+non-breaking, additive change. Lands via ADR amendment within a
+minor version.</li>
+<li><strong>Adding an error code</strong> in <code>-32011..-32099</code> is non-breaking.</li>
+<li><strong>Changing the shape of an existing method's params or result</strong>
+is breaking; never ships in a minor version pre-1.0 patch.</li>
+<li><strong>Bumping <code>protocol_version</code></strong> is breaking. Both sides negotiate
+via <code>meta.handshake</code>; an unsupported version returns
+<code>-32000 HANDSHAKE_MISMATCH</code> with the <code>supported_versions</code> list.</li>
+</ul>
+<p>Clients should treat unknown notification kinds in
+<code>runtime.event.params.kind</code> as informational and continue; the
+server may add new <code>RunEvent</code> variants (additive) before the
+client knows them.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="../explanation/serve-mode.html">Serve mode</a> — the model, the
+rationale, what serve mode is <em>not</em>.</li>
+<li><a href="../decisions/0033-tau-serve-mode.html">ADR-0033</a> — full design.</li>
+<li><a href="../decisions/0011-streaming-llm-responses.html">ADR-0011</a> —
+<code>RunEvent</code> canonical shape.</li>
+<li><a href="glossary.html">Glossary</a> — quick definitions of <em>serve mode</em>,
+<em>protocol version</em>, <em>RunOutcome</em>.</li>
+<li><code>crates/tau-app/src/serve/</code> — the implementation.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../reference/sandbox-platform-support.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../reference/skill-manifest-schema.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../reference/sandbox-platform-support.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../reference/skill-manifest-schema.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

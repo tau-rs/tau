@@ -1,0 +1,469 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0010 — Tool-args schema validation - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0010-tool-args-schema-validation.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0010-tool-args-schema-validation-policy"><a class="header" href="#adr-0010-tool-args-schema-validation-policy">ADR-0010: Tool-args schema validation policy</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-04-30
+<strong>Deciders:</strong> Titouan Lebocq
+<strong>Supersedes:</strong> —
+<strong>Closes:</strong> <a href="0006-tau-runtime.html">ADR-0006</a> §3 + Consequences (lines
+376-380) — <code>RuntimeError::PluginContractViolation</code> was "wired but not
+yet trigger-pathed"; <code>deserialize_tool_args</code> was a v0.1 passthrough.
+<strong>Amends:</strong> —
+<strong>Refines:</strong> <a href="0006-tau-runtime.html">ADR-0006</a> §9 (outcome/error
+dichotomy — this ADR explicitly classifies validation failure modes
+across the build-time / invoke-time boundary).</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>Tools today declare an <code>input_schema: tau_domain::Value</code> (a JSON
+Schema object) via <code>Tool::schema().input_schema</code>, but the runtime
+never validates the LLM's tool-call args against it before invoking
+<code>Tool::invoke</code>. Each plugin guards its own arg shape via ad-hoc
+deserialization (e.g. fs-read's <code>parse_path_arg</code> returning <code>BadArgs</code>
+if <code>path</code> is missing). The cost of this:</p>
+<ol>
+<li>Plugins reimplement the same checks. Drift between schemas and
+guards is inevitable; the schema becomes documentation, not
+enforcement.</li>
+<li>Error message format varies per plugin. When the LLM produces a
+bad tool call, the recovery message it sees is whatever the
+plugin author wrote — sometimes precise, sometimes "missing
+field".</li>
+<li>The schema isn't validated at registration time. A typo in
+<code>"type": "objectt"</code> silently ships in <code>tau install</code>, and only
+blows up when the LLM happens to emit a call that exercises the
+broken constraint — <em>after</em> tokens have been spent.</li>
+</ol>
+<p>ADR-0006 §3 / Consequences (lines 376-380) reserved this work
+explicitly:</p>
+<blockquote>
+<p><code>RuntimeError::PluginContractViolation</code> is wired (Task 10) but the
+v0.1 implementation does not have a trigger path:
+<code>deserialize_tool_args</code> is a passthrough today. Phase-1+ schema
+validation will populate this variant; until then the variant is
+dead code on every observed run.</p>
+</blockquote>
+<p>This ADR closes that reservation by hoisting validation to the
+kernel.</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<p>Five inter-locking commitments:</p>
+<h3 id="1-dialect-json-schema-draft-7"><a class="header" href="#1-dialect-json-schema-draft-7">1. Dialect: JSON Schema Draft 7</a></h3>
+<p>Plugin authors write Draft-7-flavored schemas via
+<code>serde_json::json!{...}</code> literals (or equivalent). The runtime uses
+the <a href="https://crates.io/crates/jsonschema"><code>jsonschema</code></a> crate
+configured <code>Draft::Draft7</code>.</p>
+<p>Rationale: Draft 7 is what every shipped tau plugin's
+<code>Tool::schema()</code> already uses — <code>type</code>, <code>properties</code>, <code>required</code>,
+<code>items</code>, <code>minimum</code>, <code>maximum</code>, <code>description</code>, <code>default</code>. It matches
+the <a href="https://modelcontextprotocol.io/">MCP</a> spec's tool-input format
+and Anthropic's tool-use API. Migration to Draft 2020-12 is deferred
+to a future ADR if the ecosystem moves.</p>
+<p>Trigger to revisit: ecosystem-wide adoption of Draft 2020-12 in
+LLM tool-use APIs.</p>
+<h3 id="2-validation-location-tau-runtime-kernel"><a class="header" href="#2-validation-location-tau-runtime-kernel">2. Validation location: tau-runtime kernel</a></h3>
+<p>Validation runs at <code>tau-runtime::tool_args::validate_tool_args</code>,
+called from <code>run.rs</code> immediately before <code>Tool::invoke</code>. This
+replaces the v0.1 <code>deserialize_tool_args</code> passthrough.</p>
+<p>Rationale: the hook was already in place at <code>run.rs:417</code> with the
+right signature (post-capability-check, pre-invoke). One enforcement
+point eliminates plugin/runtime drift. Routing failures through
+typed error variants (<code>BuildError::ToolSchemaInvalid</code> at build,
+<code>ToolError::BadArgs</code> at invoke) integrates naturally with the
+existing <code>RuntimeBuilder::build()</code> / <code>Runtime::run</code> flows.</p>
+<p>Alternative considered: SDK-side enforcement
+(<code>tau-plugin-sdk::run_tool_with_io</code>). Rejected at v0.1 because
+in-process tools (the in-tree path used by every test) wouldn't
+exercise SDK-side validation, and out-of-process plugins still pay
+the IPC round-trip before validation fires.</p>
+<p>Trigger to revisit: an out-of-process plugin lying about its schema
+in the handshake response (responding with one schema then
+<code>Tool::invoke</code>-ing under a different one). At that point the
+runtime gains a parallel SDK-side enforcement path — see decision 5.</p>
+<h3 id="3-compilation-timing-at-runtimebuilderbuild"><a class="header" href="#3-compilation-timing-at-runtimebuilderbuild">3. Compilation timing: at <code>RuntimeBuilder::build()</code></a></h3>
+<p>Each registered tool's <code>input_schema</code> is compiled <strong>once</strong> via
+<code>ToolArgsValidator::compile(&amp;input_schema)</code>. The compiled validator
+is stored in <code>Runtime.tool_validators: HashMap&lt;String, ToolArgsValidator&gt;</code>,
+a parallel field next to <code>Runtime.tools</code>. Per-invoke validation
+just runs the compiled matcher (~10–50µs).</p>
+<p>Failure to compile (malformed schema) returns
+<code>SchemaCompileError</code>, which the builder maps to
+<code>BuildError::ToolSchemaInvalid { tool_name, detail }</code> — the build
+fails before any <code>Runtime::run</code> is called and before any LLM
+round-trip. This catches plugin-author bugs at the earliest
+possible point in the lifecycle.</p>
+<p>Empty schemas (<code>Value::Null</code> or <code>Value::Object(empty)</code>) opt out
+cleanly — <code>compile</code> returns a validator with <code>compiled: None</code> and
+<code>validate</code> is a no-op. Tools that genuinely accept arbitrary input
+declare an empty schema.</p>
+<p>Rationale: build-once-validate-many is the standard jsonschema
+pattern. The cost of compilation is non-trivial (regex precompile,
+type-coercion graph); paying it per-invoke is wasteful for an
+agent loop that may issue dozens of tool calls.</p>
+<p>Trigger to revisit: dynamic tool registration mid-run (currently
+impossible — <code>Runtime</code> is immutable after <code>build()</code>).</p>
+<h3 id="4-error-semantics-split-by-failure-mode"><a class="header" href="#4-error-semantics-split-by-failure-mode">4. Error semantics: split by failure mode</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Failure mode</th><th>Trigger path</th><th>Outcome</th><th>LLM sees</th></tr></thead><tbody>
+<tr><td>Schema malformed</td><td>Build time, in <code>compile()</code></td><td><code>BuildError::ToolSchemaInvalid</code> (build aborts)</td><td>Nothing — build fails before LLM is called</td></tr>
+<tr><td>Args mismatch</td><td>Invoke time, in <code>validate()</code></td><td><code>ToolError::BadArgs</code> (recoverable)</td><td>Structured error in conversation; loop continues; LLM self-corrects on next turn</td></tr>
+</tbody></table>
+</div>
+<p>The two failure modes have <strong>genuinely different recoverability
+profiles</strong>. A malformed schema is a plugin-author bug; the user
+needs to fix it, and continuing the run wastes tokens. An args
+mismatch is most likely an LLM hallucination; terminating the run
+on every hallucinated arg would be hostile to the dominant case.</p>
+<p><strong>MANDATORY rule (locked at validator boundary):</strong> every
+<code>ToolError::BadArgs.reason</code> produced by <code>ToolArgsValidator::validate</code>
+MUST contain three blocks:</p>
+<ol>
+<li><code>"You sent: {args_json}"</code> — the args the LLM actually emitted.</li>
+<li><code>"Expected (input_schema):\n{schema_json}"</code> — the full declared
+schema the args are failing against.</li>
+<li><code>"Specific issue(s):\n{validation_errors}"</code> — the per-field
+diagnostic from jsonschema's <code>iter_errors</code>.</li>
+</ol>
+<p>The rule is enforced at <code>ToolArgsValidator::validate</code>'s only return
+path, so callers cannot short-circuit it. Tests assert the literal
+substrings <code>"You sent:"</code>, <code>"Expected (input_schema):"</code>, and
+<code>"Specific issue"</code> are present in every failure-case error.</p>
+<p>Rationale: the LLM that emitted the bad call is also the one that
+needs to recover. Without the schema in the error message, the LLM
+may re-emit the same bad call because it doesn't know what shape is
+expected. With it, the error is <strong>self-instructive</strong>: the model
+sees <code>(what-I-sent, what-was-expected, why-it-failed)</code> in one
+round-trip and can correct.</p>
+<p>Trigger to revisit: real-world data showing the LLM doesn't
+recover even with the schema in the error — at which point error
+formatting becomes a tuning problem rather than a structural one.</p>
+<h3 id="5-runtimeerrorplugincontractviolation-stays-reserved"><a class="header" href="#5-runtimeerrorplugincontractviolation-stays-reserved">5. <code>RuntimeError::PluginContractViolation</code> stays reserved</a></h3>
+<p>The existing <code>RuntimeError::PluginContractViolation { plugin, detail }</code>
+variant remains documented and wired but <strong>does not gain a trigger
+path in this sub-project</strong>. ADR-0006 documented it as
+"wired but not yet trigger-pathed"; v0.1 of this work narrows the
+trigger paths to <strong>build-time <code>ToolSchemaInvalid</code></strong> and
+<strong>invoke-time <code>BadArgs</code></strong>. The reserved variant becomes the home
+for a future runtime check: out-of-process plugin lies about its
+schema in the handshake response, then later violates the declared
+contract during invoke.</p>
+<p>Rationale: opening that path requires SDK-side enforcement
+infrastructure (decision 2's "alternative considered"). Building
+it speculatively before a real motivating case lands would over-
+engineer the v0.1 surface.</p>
+<p>Trigger to revisit: a third-party tool plugin shipped via tau's
+plugin protocol whose handshake-declared schema diverges from its
+actual <code>Tool::invoke</code> behavior — at which point a runtime
+validation path lights up the variant.</p>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<h3 id="negative--new-cost"><a class="header" href="#negative--new-cost">Negative / new cost</a></h3>
+<ul>
+<li><code>tau-runtime</code> gains a transitive dep on <code>jsonschema = "0.46"</code>
+(~1MB compiled, brings <code>regex_syntax</code>, <code>fancy-regex</code>, <code>email_address</code>,
+<code>ahash</code> into the dep tree). Negligible vs. the existing reqwest /
+tokio / semver footprint.</li>
+<li><code>RuntimeBuilder::build()</code> is now O(tools × schema_size) at
+compile time. For typical agent configs (&lt;10 tools, schemas in
+the hundreds of bytes) this is well under 1ms. Plugins with
+pathologically large schemas — e.g., a <code>enum</code> with 10000 entries
+— could push this; future perf work can address.</li>
+<li><code>Runtime</code> gains a parallel <code>tool_validators</code> field, increasing the
+struct size by a HashMap. Memory cost for typical configs is in
+the noise.</li>
+</ul>
+<h3 id="positive"><a class="header" href="#positive">Positive</a></h3>
+<ul>
+<li>Plugin authors stop reimplementing argument shape checks. The
+<code>parse_*_arg</code> patterns in shipped plugins (e.g., fs-read,
+shell) become redundant once Phase-2 cleanup lands; for v0.1
+they coexist defensively.</li>
+<li>Plugin-author bugs (schema typos) catch at <code>tau install</code> /
+<code>tau run</code> startup before any LLM is called. Zero tokens
+wasted.</li>
+<li>LLMs get <strong>uniform</strong> structured error feedback across all tools,
+with the schema embedded for self-correction.</li>
+</ul>
+<h3 id="neutral--new-obligations"><a class="header" href="#neutral--new-obligations">Neutral / new obligations</a></h3>
+<ul>
+<li>Future tau-runtime API additions involving validation require
+their own ADRs (QG18). The MANDATORY-rule template is locked at
+this ADR; any softening (e.g., subschema-only error slicing)
+needs a new ADR.</li>
+<li>The <code>jsonschema</code> crate version is pinned to the major (<code>"0.46"</code>)
+in <code>[workspace.dependencies]</code>; major upgrades (e.g., 0.47) need
+to verify the public API surface — past versions of jsonschema
+have renamed types between minors.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<h3 id="a-hand-roll-a-minimal-draft-7-subset"><a class="header" href="#a-hand-roll-a-minimal-draft-7-subset">A. Hand-roll a minimal Draft 7 subset</a></h3>
+<p>Rejected. Validate only the keywords actually used by shipped plugins
+(<code>type</code>, <code>properties</code>, <code>required</code>, <code>items</code>, <code>minimum</code>, <code>maximum</code>).
+~150 LOC + tests. Zero deps.</p>
+<p>Cons: any plugin author using <code>enum</code>, <code>pattern</code>, <code>format</code>,
+<code>oneOf</code> would silently have those keywords ignored — no compile-time
+warning, no runtime error, just silently permissive validation.
+For a system that will accept third-party plugins, this is a footgun.</p>
+<h3 id="b-schema-engine-valico-instead-of-jsonschema"><a class="header" href="#b-schema-engine-valico-instead-of-jsonschema">B. Schema engine: <code>valico</code> instead of <code>jsonschema</code></a></h3>
+<p>Rejected. Lighter (~200KB) but Draft-4-only and "lightly maintained"
+since 2023. Bus-factor risk if we hit a bug, and Draft 4's
+constraint vocabulary differs from what shipped plugins use
+(e.g., <code>required</code> was an object property in Draft 4, became a
+top-level array in Draft 6+).</p>
+<h3 id="c-validation-location-sdk-runner-only-in-plugin-enforcement"><a class="header" href="#c-validation-location-sdk-runner-only-in-plugin-enforcement">C. Validation location: SDK runner only (in-plugin enforcement)</a></h3>
+<p>Rejected. See decision 2's "alternative considered". The runtime
+boundary is the right enforcement point at v0.1; SDK-side adds
+coverage gaps for out-of-process plugins that bypass the SDK.</p>
+<h3 id="d-per-invoke-compilation-no-caching"><a class="header" href="#d-per-invoke-compilation-no-caching">D. Per-invoke compilation (no caching)</a></h3>
+<p>Rejected. See decision 3. Order-of-magnitude slower for busy agent
+loops; loses the registration-time well-formedness check that's
+load-bearing for decision 4's "schema malformed" build-fatal path.</p>
+<h3 id="e-treat-all-validation-failures-as-kernel-fatal"><a class="header" href="#e-treat-all-validation-failures-as-kernel-fatal">E. Treat all validation failures as kernel-fatal</a></h3>
+<p>(via <code>RuntimeError::PluginContractViolation</code>)</p>
+<p>Rejected. See decision 4. Args mismatch is dominantly an LLM
+hallucination (recoverable); terminating the run on every
+hallucinated arg is hostile to the dominant case. The
+build-fatal/invoke-recoverable split matches the actual
+recoverability profile.</p>
+<h2 id="references"><a class="header" href="#references">References</a></h2>
+<ul>
+<li>Spec: <code>docs/superpowers/specs/2026-04-30-tool-args-schema-design.md</code></li>
+<li>Plan: <code>docs/superpowers/plans/2026-04-30-tool-args-schema.md</code></li>
+<li>ADR-0006 §3 + Consequences — the deferral this ADR closes.</li>
+<li>ADR-0009 (typed-error policy) — new variants follow this policy.</li>
+<li><code>crates/tau-runtime/src/tool_args.rs</code> — the validator module.</li>
+<li><code>crates/tau-runtime/src/run.rs:417</code>-area — the call-site integration.</li>
+<li><code>crates/tau-runtime/src/builder.rs::collect_tools_by_name</code> — the
+build-time compilation step.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0009-llm-error-typing-and-conformance.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0011-streaming-llm-responses.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0009-llm-error-typing-and-conformance.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0011-streaming-llm-responses.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
