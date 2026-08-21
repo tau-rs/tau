@@ -86,7 +86,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # beta
+      - uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79  # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Pin the model explicitly. This action's pinned default
@@ -151,7 +151,7 @@ jobs:
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "Previous tag/commit: $previous"
 
-      - uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # beta
+      - uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79  # beta
         env:
           CURRENT_TAG: ${{ github.event.release.tag_name }}
           PREV_REF: ${{ steps.prev.outputs.previous }}

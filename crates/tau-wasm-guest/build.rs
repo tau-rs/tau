@@ -90,6 +90,20 @@ fn main() {
     if String::from_utf8_lossy(&world).contains("wasi:http") {
         println!("cargo:rustc-cfg=tau_cap_net_http");
     }
+
+    // 3.6-b: the guest's fs-effect arms (dispatcher.rs) are cfg-gated on whether
+    // the capability-derived world grants wasi:filesystem. fs.read and fs.write
+    // map to the SAME two interfaces (types + preopens), so the world text can't
+    // distinguish them — both cfgs are set together whenever wasi:filesystem is
+    // present. Read-vs-write is enforced at RUNTIME by the host preopen perms
+    // (DirPerms READ vs all()), not the cfg. check-cfg is unconditional so the
+    // guest compiles cleanly on every world (workspace lints are -D warnings).
+    println!("cargo:rustc-check-cfg=cfg(tau_cap_fs_read)");
+    println!("cargo:rustc-check-cfg=cfg(tau_cap_fs_write)");
+    if String::from_utf8_lossy(&world).contains("wasi:filesystem") {
+        println!("cargo:rustc-cfg=tau_cap_fs_read");
+        println!("cargo:rustc-cfg=tau_cap_fs_write");
+    }
 }
 
 /// Recursively copy the contents of `src` into `dst` (both assumed to

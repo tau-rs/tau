@@ -34,12 +34,14 @@ features = [
     "Win32_System_JobObjects",
     "Win32_System_Console",
     "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
 ]
 
 [dev-dependencies]
 serde_json = "1"
 tau-domain = { workspace = true, features = ["serde"] }
 tau-ports  = { workspace = true, features = ["serde"] }
+tempfile   = "3"
 
 [features]
 default = []

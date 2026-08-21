@@ -149,6 +149,7 @@
 - [ADR-0063 — CI tiering: thin pre-merge gate, nightly authority](decisions/0063-ci-tiering-nightly-authority.md)
 - [ADR-0064 — One host semantic: exact hostnames + a typed `any`](decisions/0064-one-host-semantic-exact-typed-any.md)
 - [ADR-0065 — Unknown-input policy: strict authoring surfaces, versioned interchange](decisions/0065-unknown-input-policy.md)
+- [ADR-0066 — Guest fs-effect descriptor resolution: preopen plumbing, dual cfg, absence-denial](decisions/0066-guest-fs-effect-descriptor-resolution.md)
 
 # Retrospectives
 
