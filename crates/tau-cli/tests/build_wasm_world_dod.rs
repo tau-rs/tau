@@ -157,6 +157,27 @@ fn dod_guest_compiles_against_cap_exact_world() {
          guard): {triv_imports:?}"
     );
 
+    // fs-read grants fs.read only → world text has wasi:filesystem, no wasi:http.
+    let (fs_world, fs_imports) = build_and_decode("fs-read");
+    assert!(
+        fs_world.contains("import wasi:filesystem/types@0.2.3;"),
+        "fs granted → wasi:filesystem in the compiled-against world:\n{fs_world}"
+    );
+    assert!(
+        !fs_world.contains("wasi:http"),
+        "net UNGRANTED → wasi:http absent from the fs world:\n{fs_world}"
+    );
+
+    // 3.6-b binary-observable DoD: fs.read granted AND routed through
+    // wasi:filesystem (GuestDispatcher's cfg-gated Read arm) → the compiled
+    // component's ACTUAL imports now include wasi:filesystem. Vacuous before
+    // 3.6-b (DCE stripped every WASI import); now the live proof.
+    assert!(
+        fs_imports.iter().any(|i| i.starts_with("wasi:filesystem/")),
+        "fs granted AND routed → wasi:filesystem MUST be present in the compiled \
+         component's actual imports (3.6-b binary-observable DoD): {fs_imports:?}"
+    );
+
     // 3.6 binary-observable DoD: net.http granted AND routed through wasi:http
     // (GuestDispatcher's cfg-gated `Fetch` arm) → the compiled component's
     // ACTUAL imports now include wasi:http. This is the assertion that was
