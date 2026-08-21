@@ -274,12 +274,23 @@ jobs:
           shared-key: linux-stable
           with-sccache: true
           with-mold: true
-      - name: Install nightly (rustdoc JSON for cargo-semver-checks)
-        run: rustup toolchain install nightly --profile minimal
+      - name: Install pinned nightly (rustdoc JSON for cargo-semver-checks)
+        # cargo-semver-checks reads rustdoc's unstable JSON, which is nightly-
+        # only. The newest nightly emits a format version (v60 as of 2026-08)
+        # that outruns cargo-semver-checks' support (v56/v57) — rustdoc JSON is
+        # unstable and cargo-semver-checks lags each new format by days-to-weeks.
+        # Pin nightly to a date whose format cargo-semver-checks accepts; bump
+        # this (and re-verify against the error's "supported formats" line) when
+        # cargo-semver-checks ships support for a newer format.
+        run: rustup toolchain install nightly-2026-05-15 --profile minimal
       - uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-semver-checks
         with:
           tool: cargo-semver-checks
       - name: tau-ports ABI must not break without a version bump
+        env:
+          # Generate rustdoc JSON with the pinned nightly (overrides
+          # rust-toolchain.toml's stable channel for this step only).
+          RUSTUP_TOOLCHAIN: nightly-2026-05-15
         run: cargo semver-checks --baseline-rev origin/main --package tau-ports
 
   mcp-tokio-decoupled:
