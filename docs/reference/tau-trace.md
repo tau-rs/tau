@@ -41,7 +41,7 @@ in-process at `tau run` time.
 |---|---|
 | `↓` | Select the next span. Also re-arms follow mode (auto-scroll to the newest span) once you catch back up to the newest visible row. |
 | `↑` | Select the previous span. Disarms follow mode — the view stops auto-scrolling while you browse history. |
-| `Enter` | Toggle the detail/expand view for the selected span. |
+| `Enter` | Toggle the selected span's expanded-detail state. Reserved: not yet reflected in the rendered view — a later milestone consumes it. |
 | `/` | Enter search mode: subsequent characters filter spans by label substring. `Backspace` deletes; `Enter` or `Esc` exits search mode (without quitting). |
 | `f` | Cycle the row filter: `All` → `Errors` → `Tools` → `Reasoning` → `All`. |
 | `q` / `Esc` | Quit (outside search mode). |
