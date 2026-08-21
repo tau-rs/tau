@@ -1,0 +1,123 @@
+# The cross-epic north-star demo (issue #461, slicing-policy rule 5):
+# ONE [allow]-governed workflow using Branch + Loop, capability-bounded,
+# runnable in dev (`tau run`) and as a built artifact (`tau run --bundle`).
+# `tau build --target wasm-guest` refuses it at feature-fit (ADR-0059):
+# control-flow is not yet executable in the wasm guest — that leg extends
+# this same fixture when guest control-flow lands.
+#
+# Exercised by crates/tau-cli/tests/north_star_demo.rs, which supplies the
+# echo-llm plugin scaffold (.tau/config.toml, package manifest, lockfile).
+
+[project]
+name = "north-star"
+version = "0.1.0"
+
+# The constitution: nothing in this project may exceed these ceilings.
+[allow]
+"fs.read" = { paths = ["${PROJECT}/sensors/**"] }
+
+[allow.models.default]
+backend = "echo-llm"
+model = "claude-haiku-4-5"
+
+[allow.tools.read_temp]
+native = "ReadTemp"
+
+[agents.triage]
+display_name = "Triage"
+package      = "echo-llm@^0.1"
+model        = "default"
+tool_refs    = ["read_temp"]
+
+[agents.triage.prompt]
+system = "Classify the incoming incident report."
+
+# The echo-llm plugin replays this text as every agent's output (one
+# backend instance, configured from the entry agent). It deliberately
+# carries BOTH markers: "URGENT" drives the branch's then-arm, "APPROVED"
+# satisfies the loop's until-predicate on the first iteration.
+[agents.triage.config]
+canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+
+[agents.oncall]
+display_name = "On-call"
+package      = "echo-llm@^0.1"
+model        = "default"
+
+[agents.oncall.prompt]
+system = "Escalate the incident to the on-call rotation."
+
+[agents.scribe]
+display_name = "Scribe"
+package      = "echo-llm@^0.1"
+model        = "default"
+
+[agents.scribe.prompt]
+system = "Acknowledge the routine report."
+
+[agents.reviewer]
+display_name = "Reviewer"
+package      = "echo-llm@^0.1"
+model        = "default"
+
+[agents.reviewer.prompt]
+system = "Draft the incident summary; revise until approved."
+
+[agents.reporter]
+display_name = "Reporter"
+package      = "echo-llm@^0.1"
+model        = "default"
+
+[agents.reporter.prompt]
+system = "Publish the final incident report."
+
+# Capability-bounded native tool: its declared caps sit inside the [allow]
+# fs.read ceiling above. The over-reach twin breaks exactly this contract.
+[tools.read_temp]
+native      = "ReadTemp"
+description = "Read the incident sensor temperature."
+capabilities = [{ kind = "fs.read", paths = ["${PROJECT}/sensors/**"] }]
+
+[pipeline]
+
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+
+# Branch: urgent incidents escalate; routine ones get acknowledged.
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "matches", pattern = "(?i)urgent" }
+
+  [[pipeline.steps.then]]
+  id = "escalate"
+  run = "agent:oncall"
+  input = "${steps.triage.output}"
+
+  [[pipeline.steps.otherwise]]
+  id = "ack"
+  run = "agent:scribe"
+  input = "${steps.triage.output}"
+
+# Bounded Loop: redraft until the reviewer approves, at most 3 times.
+# `until` exhaustion is a hard error, so the run only completes because
+# the draft output satisfies the predicate within the bound.
+[[pipeline.steps]]
+id = "review"
+until = { evaluates = "steps.draft.output", check = "matches", pattern = "APPROVED" }
+max_iters = 3
+
+  [[pipeline.steps.body]]
+  id = "draft"
+  run = "agent:reviewer"
+  input = "${steps.escalate.output}"
+
+# Leaf final step (Branch/Loop store no output; the pipeline renderer
+# renders the LAST leaf step). Template resolution hard-errors on
+# unresolved refs, so reading ${steps.draft.output} proves the loop body
+# ran, and `draft`'s ${steps.escalate.output} proves the then-arm ran.
+[[pipeline.steps]]
+id = "report"
+run = "agent:reporter"
+input = "${steps.draft.output}"
