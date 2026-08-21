@@ -31,10 +31,11 @@ pub(crate) mod wit_host {
 
 /// Re-export the `generate_all`-generated WASI bindings so sibling modules
 /// (dispatcher.rs) can reach them without knowing the exact wit-bindgen path.
-/// Only present when the capability-derived world granted wasi:http — the
-/// `tau_cap_net_http` cfg (set by build.rs) gates both this re-export and the
-/// effect arm that uses it, so the two are compiled in lockstep.
-#[cfg(tau_cap_net_http)]
+/// Only present when the capability-derived world granted wasi:http OR
+/// wasi:filesystem — the `tau_cap_net_http`/`tau_cap_fs_read`/`tau_cap_fs_write`
+/// cfgs (set by build.rs) gate both this re-export and the effect arms that
+/// use it, so they are compiled in lockstep.
+#[cfg(any(tau_cap_net_http, tau_cap_fs_read, tau_cap_fs_write))]
 pub(crate) mod wit_wasi {
     pub(crate) use super::wasi::*;
 }

@@ -78,6 +78,36 @@ impl ToolDispatcher for GuestDispatcher {
                     }),
                 };
             }
+            // 3.6-b fs effects: a tool declared `native = "Read"`/`"Write"`
+            // routes through wasi:filesystem when fs.* was granted (the cfg
+            // gate). Enforcement is the HOST preopen set + open-at error-codes
+            // (3.3/3.4) — NOT an in-guest gate.
+            #[cfg(tau_cap_fs_read)]
+            if native.as_deref() == Some("Read") {
+                return match fs_read_via_wasi(&args_owned) {
+                    Ok(body) => Ok(ToolInvocationResult {
+                        body: Some(body),
+                        error: None,
+                    }),
+                    Err(msg) => Ok(ToolInvocationResult {
+                        body: None,
+                        error: Some(msg),
+                    }),
+                };
+            }
+            #[cfg(tau_cap_fs_write)]
+            if native.as_deref() == Some("Write") {
+                return match fs_write_via_wasi(&args_owned) {
+                    Ok(body) => Ok(ToolInvocationResult {
+                        body: Some(body),
+                        error: None,
+                    }),
+                    Err(msg) => Ok(ToolInvocationResult {
+                        body: None,
+                        error: Some(msg),
+                    }),
+                };
+            }
             let _ = &native; // silence unused when the cfg arm is compiled out
 
             match tau_native_tools::invoke(&name, &args_owned) {
@@ -185,4 +215,117 @@ fn fetch_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
     let body_str = String::from_utf8_lossy(&buf).into_owned();
 
     Ok(serde_json::json!({ "status": status, "body": body_str }))
+}
+
+/// Resolve `path` against the host's preopen set (`get-directories`) and return
+/// the `(preopen-descriptor, relative-path)` to `open-at` from. Pure descriptor
+/// plumbing over HOST-provided state — NOT a capability check. `None` means the
+/// host granted no preopen containing `path` (absence of capability); the caller
+/// surfaces `FsAccessDenied`. Does not touch `..` — the host `open-at` rejects
+/// escapes.
+#[cfg(any(tau_cap_fs_read, tau_cap_fs_write))]
+fn resolve_preopen(
+    path: &str,
+) -> Option<(
+    crate::wit_wasi::filesystem::types::Descriptor,
+    alloc::string::String,
+)> {
+    use crate::wit_wasi::filesystem::preopens::get_directories;
+    for (desc, guest_path) in get_directories() {
+        // Segment-aware prefix match: `/data` matches `/data` and `/data/x`,
+        // but NOT `/dataX`.
+        let rel = if path == guest_path {
+            "" // the preopen dir itself
+        } else if let Some(stripped) = path.strip_prefix(&guest_path) {
+            if stripped.starts_with('/') {
+                stripped.trim_start_matches('/')
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        };
+        return Some((desc, rel.to_string()));
+    }
+    None
+}
+
+/// `Read`: `{path} → {content, bytes}`. A no-preopen path → `FsAccessDenied`
+/// (host granted no descriptor). A host `open-at`/stream failure → `Err(code)`.
+/// Never panics.
+#[cfg(tau_cap_fs_read)]
+fn fs_read_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
+    use crate::wit_wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Read: missing string arg `path`".to_string())?;
+
+    let (dir, rel) =
+        resolve_preopen(path).ok_or_else(|| format!("FsAccessDenied: no preopen grants {path}"))?;
+
+    let file = dir
+        .open_at(
+            PathFlags::SYMLINK_FOLLOW,
+            &rel,
+            OpenFlags::empty(),
+            DescriptorFlags::READ,
+        )
+        .map_err(|code| format!("{code:?}"))?;
+    let stream = file
+        .read_via_stream(0)
+        .map_err(|code| format!("{code:?}"))?;
+    let mut buf: Vec<u8> = Vec::new();
+    // Closed / stream error → end of file.
+    while let Ok(chunk) = stream.blocking_read(4096) {
+        if chunk.is_empty() {
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let content = String::from_utf8_lossy(&buf).into_owned();
+    Ok(serde_json::json!({ "bytes": buf.len(), "content": content }))
+}
+
+/// `Write`: `{path, content} → {bytes}`. Requires an fs.write-granted (RW)
+/// preopen; a write to a read-only preopen fails at the host `open-at`. Never
+/// panics.
+#[cfg(tau_cap_fs_write)]
+fn fs_write_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
+    use crate::wit_wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Write: missing string arg `path`".to_string())?;
+    let content = args
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Write: missing string arg `content`".to_string())?;
+
+    let (dir, rel) =
+        resolve_preopen(path).ok_or_else(|| format!("FsAccessDenied: no preopen grants {path}"))?;
+
+    let file = dir
+        .open_at(
+            PathFlags::SYMLINK_FOLLOW,
+            &rel,
+            OpenFlags::CREATE,
+            DescriptorFlags::WRITE,
+        )
+        .map_err(|code| format!("{code:?}"))?;
+    let stream = file
+        .write_via_stream(0)
+        .map_err(|code| format!("{code:?}"))?;
+    // blocking-write-and-flush permits ≤4096 bytes per call; chunk defensively.
+    let bytes = content.as_bytes();
+    for chunk in bytes.chunks(4096) {
+        stream
+            .blocking_write_and_flush(chunk)
+            .map_err(|e| format!("Write: {e:?}"))?;
+    }
+    Ok(serde_json::json!({ "bytes": bytes.len() }))
 }
