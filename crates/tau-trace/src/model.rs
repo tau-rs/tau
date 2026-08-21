@@ -72,10 +72,17 @@ pub struct Span {
 #[derive(Debug, Default)]
 pub struct TraceModel {
     spans: Vec<Span>,
-    /// Each agent's own representative span (the first `Turn` span emitted
-    /// for that agent id), used to resolve `parent` for children and for
-    /// tool calls emitted on that agent's behalf.
-    agent_span: HashMap<AgentId, usize>,
+    /// Owning agent for each span, index-aligned with `spans`. `None` for
+    /// spans with no known owner (e.g. a `ToolCall` whose top-level
+    /// `TraceEvent.agent_id` was `None`). Used, together with
+    /// `agent_parent`, to (re)compute `Span::parent` in a full pass after
+    /// every `apply` — see `resolve_parents`. Real emission order (traced
+    /// against `tau-runtime-core`) has a `Spawn` arrive before the child's
+    /// own `Turn`s, and mid-turn `ToolCall`s arrive before the `Turn` event
+    /// that summarizes them, so parent resolution cannot be a one-shot
+    /// lookup at push time — it must be re-derivable from whatever has
+    /// arrived so far, regardless of order.
+    owners: Vec<Option<AgentId>>,
     /// child agent id -> parent agent id, populated by `Spawn` events.
     agent_parent: HashMap<AgentId, AgentId>,
     /// Max `ts` seen across every applied event (not just span bounds) —
@@ -104,19 +111,20 @@ impl TraceModel {
                 ..
             } => {
                 let start = event.ts - Duration::milliseconds(*duration_ms as i64);
-                let parent = self.parent_for_agent(agent_id);
-                let idx = self.push_span(Span {
-                    id: 0,
-                    kind: SpanKind::Agent,
-                    label: agent_id.clone(),
-                    start,
-                    end: Some(event.ts),
-                    tokens: Some(*tokens),
-                    capability: None,
-                    parent,
-                    status: SpanStatus::Ok,
-                });
-                self.agent_span.entry(agent_id.clone()).or_insert(idx);
+                self.push_span(
+                    Span {
+                        id: 0,
+                        kind: SpanKind::Agent,
+                        label: agent_id.clone(),
+                        start,
+                        end: Some(event.ts),
+                        tokens: Some(*tokens),
+                        capability: None,
+                        parent: None, // filled in by resolve_parents below
+                        status: SpanStatus::Ok,
+                    },
+                    Some(agent_id.clone()),
+                );
             }
             TraceEventKind::ToolCall {
                 tool_name,
@@ -125,21 +133,20 @@ impl TraceModel {
                 capability,
             } => {
                 let start = event.ts - Duration::milliseconds(*duration_ms as i64);
-                let parent = event
-                    .agent_id
-                    .as_ref()
-                    .and_then(|aid| self.agent_span.get(aid).copied());
-                self.push_span(Span {
-                    id: 0,
-                    kind: SpanKind::Tool,
-                    label: tool_name.clone(),
-                    start,
-                    end: Some(event.ts),
-                    tokens: None,
-                    capability: capability.clone(),
-                    parent,
-                    status: status_from_str(status),
-                });
+                self.push_span(
+                    Span {
+                        id: 0,
+                        kind: SpanKind::Tool,
+                        label: tool_name.clone(),
+                        start,
+                        end: Some(event.ts),
+                        tokens: None,
+                        capability: capability.clone(),
+                        parent: None, // filled in by resolve_parents below
+                        status: status_from_str(status),
+                    },
+                    event.agent_id.clone(),
+                );
             }
             TraceEventKind::Spawn { child_id, .. } => {
                 if let Some(parent_id) = &event.agent_id {
@@ -148,7 +155,7 @@ impl TraceModel {
                 }
             }
             TraceEventKind::Completion { agent_id, status } => {
-                if let Some(&idx) = self.agent_span.get(agent_id) {
+                if let Some(&idx) = self.agent_anchors().get(agent_id.as_str()) {
                     self.spans[idx].status = status_from_str(status);
                 }
             }
@@ -161,6 +168,14 @@ impl TraceModel {
             | TraceEventKind::BudgetExceeded { .. }
             | TraceEventKind::OrphanedTasksAtTermination { .. } => {}
         }
+
+        // Re-derive every span's parent from the full current state rather
+        // than pinning it once at push time. Real trace order can deliver a
+        // `Spawn` before the parent's own `Turn`, or a `ToolCall` before the
+        // `Turn` that summarizes it — a one-shot lookup at push time leaves
+        // those permanently un-parented. O(n) per event is fine at
+        // TUI-sized trace volumes.
+        self.resolve_parents();
     }
 
     /// All spans in emission order; index == [`Span::id`].
@@ -212,17 +227,54 @@ impl TraceModel {
         (offset as u16, len as u16)
     }
 
-    /// Resolve the parent span index for `agent_id`: the representative
-    /// span of whichever agent spawned it, if known.
-    fn parent_for_agent(&self, agent_id: &str) -> Option<usize> {
-        let parent_agent = self.agent_parent.get(agent_id)?;
-        self.agent_span.get(parent_agent).copied()
+    /// Each agent's representative span — the earliest `Agent`-kind span
+    /// owned by that agent id — used as the nesting anchor both for that
+    /// agent's own `Spawn`ed children and for its `Tool` spans. Recomputed
+    /// on demand (not cached) so it always reflects whatever spans exist
+    /// so far, independent of arrival order.
+    fn agent_anchors(&self) -> HashMap<&str, usize> {
+        let mut anchors: HashMap<&str, usize> = HashMap::new();
+        for (i, owner) in self.owners.iter().enumerate() {
+            if self.spans[i].kind != SpanKind::Agent {
+                continue;
+            }
+            if let Some(owner) = owner {
+                anchors.entry(owner.as_str()).or_insert(i);
+            }
+        }
+        anchors
     }
 
-    fn push_span(&mut self, mut span: Span) -> usize {
+    /// Recompute `Span::parent` for every span from the current
+    /// `owners`/`agent_parent`/anchor state. A `Tool` span's parent is its
+    /// owning agent's anchor span; an `Agent` span's parent is the anchor
+    /// span of whichever agent spawned it (per `agent_parent`), if known.
+    fn resolve_parents(&mut self) {
+        let anchors = self.agent_anchors();
+        let mut parents = vec![None; self.spans.len()];
+        for (i, owner) in self.owners.iter().enumerate() {
+            let Some(owner) = owner else { continue };
+            let parent = match self.spans[i].kind {
+                SpanKind::Tool => anchors.get(owner.as_str()).copied(),
+                SpanKind::Agent => self
+                    .agent_parent
+                    .get(owner)
+                    .and_then(|p| anchors.get(p.as_str()).copied()),
+                _ => None,
+            };
+            // Guard against a self-loop (e.g. malformed/self-spawned data).
+            parents[i] = parent.filter(|&p| p != i);
+        }
+        for (span, parent) in self.spans.iter_mut().zip(parents) {
+            span.parent = parent;
+        }
+    }
+
+    fn push_span(&mut self, mut span: Span, owner: Option<AgentId>) -> usize {
         let idx = self.spans.len();
         span.id = idx;
         self.spans.push(span);
+        self.owners.push(owner);
         idx
     }
 }
@@ -323,5 +375,67 @@ mod tests {
         let last = m.spans()[1].clone();
         let (off, _len) = m.bar(&last, 100);
         assert_eq!(off, 100); // t=110 is the right edge of a 100-col window [100,110]
+    }
+
+    #[test]
+    fn spawn_before_parent_turn_still_nests_child_under_parent() {
+        let mut m = TraceModel::new();
+        let mut spawn_ev = ev(
+            100,
+            TraceEventKind::Spawn {
+                child_id: "child".into(),
+                agent_kind: "worker".into(),
+                grant_size: 0,
+            },
+        );
+        spawn_ev.agent_id = Some("parent".into());
+        m.apply(&spawn_ev);
+        m.apply(&ev(
+            101,
+            TraceEventKind::Turn {
+                agent_id: "child".into(),
+                turn_index: 0,
+                duration_ms: 1,
+                tokens: 5,
+            },
+        ));
+        m.apply(&ev(
+            105,
+            TraceEventKind::Turn {
+                agent_id: "parent".into(),
+                turn_index: 0,
+                duration_ms: 5,
+                tokens: 20,
+            },
+        ));
+        let child_span = &m.spans()[0];
+        assert_eq!(child_span.parent, Some(1)); // parent's span index; currently None
+    }
+
+    #[test]
+    fn tool_call_before_its_turn_still_nests_under_that_turn() {
+        let mut m = TraceModel::new();
+        let mut call_ev = ev(
+            100,
+            TraceEventKind::ToolCall {
+                tool_name: "t".into(),
+                duration_ms: 10,
+                status: "ok".into(),
+                capability: None,
+            },
+        );
+        call_ev.agent_id = Some("a".into());
+        m.apply(&call_ev);
+        m.apply(&ev(
+            105,
+            TraceEventKind::Turn {
+                agent_id: "a".into(),
+                turn_index: 0,
+                duration_ms: 5,
+                tokens: 3,
+            },
+        ));
+        let tool_span = &m.spans()[0];
+        assert_eq!(tool_span.parent, Some(1)); // the turn span; mid-turn tool calls precede it
     }
 }
