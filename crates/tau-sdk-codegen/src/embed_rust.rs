@@ -65,7 +65,8 @@ tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 
 use std::sync::Arc;
 
-use tau_ir::{{from_canonical_bytes, ToolId, Value}};
+use tau_ir::{{from_canonical_bytes, ToolId}};
+use serde_json::Value;
 use tau_runtime_core::builder::DynLlmBackend;
 use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::tool_dispatch::{{ToolDispatcher, ToolInvocationResult}};
@@ -95,7 +96,7 @@ impl ToolDispatcher for StubDispatcher {{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {{
     let module = Arc::new(from_canonical_bytes(TAU_IR)?);
-    let entry = module.workflow.entry_agent().clone();
+    let entry = module.workflow.agents.keys().next().expect("IR module has at least one agent").clone();
     let outcome = run_ir(module, &entry, Arc::new(StubDispatcher), Vec::new()).await?;
     println!("{{outcome:?}}");
     Ok(())
