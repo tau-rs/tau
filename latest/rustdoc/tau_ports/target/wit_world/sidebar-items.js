@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["WitWorldError"],"fn":["generate_world"]};

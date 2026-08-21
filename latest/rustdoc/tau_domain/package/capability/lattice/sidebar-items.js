@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["canon_caps","capability_subset","meet"],"mod":["glob","host"],"struct":["CeilingViolation"]};
