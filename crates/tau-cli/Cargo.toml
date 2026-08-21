@@ -28,6 +28,9 @@ tau-mcp             = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio       = { workspace = true }
 tau-ts-extract      = { path = "../tau-ts-extract" }
 tau-sdk-codegen     = { workspace = true }
+tau-trace           = { workspace = true }
+ratatui             = { workspace = true }
+crossterm           = { workspace = true }
 futures-core        = { workspace = true }
 base64             = { workspace = true }
 humantime          = "2"
@@ -36,7 +39,7 @@ rmp-serde          = { workspace = true }
 rmpv               = { workspace = true }
 semver             = { workspace = true }
 clap               = { version = "4", features = ["derive", "env"] }
-tokio              = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tokio              = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tracing            = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 serde              = { workspace = true }

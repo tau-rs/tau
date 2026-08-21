@@ -198,6 +198,9 @@ pub enum Command {
     Dev(DevArgs),
     /// Emit host-embedding glue for a target language (Phase 2 §5.2).
     Embed(EmbedArgs),
+    /// Open the execution-trace waterfall TUI (M1) on a run's
+    /// `.tau/runs/<id>.jsonl` file.
+    Trace(TraceArgs),
 }
 
 /// Top-level arguments for `tau build [wasm] [...]`.
@@ -655,6 +658,16 @@ pub struct RunArgs {
     /// No effect on `--bundle` runs (the bundle's verdict is already sealed).
     #[arg(long)]
     pub no_governance: bool,
+    /// Render the run live in the execution-trace waterfall TUI (M1)
+    /// instead of the scrolling-line printer. Requires an interactive
+    /// terminal on stdout (checked at dispatch time — the TUI takes over
+    /// the terminal). Mutually exclusive with `--json`: pipe the JSONL
+    /// trace instead of `--tui` when scripting. Currently only wired for
+    /// multi-agent runs (the ones that build a live `TraceEvent` stream
+    /// via `drive_with_live_trace`); `tau trace --last` re-opens any
+    /// finished run's `.tau/runs/<id>.jsonl` afterwards.
+    #[arg(long, conflicts_with = "json")]
+    pub tui: bool,
 }
 
 /// Arguments for `tau chat`.
@@ -710,6 +723,24 @@ pub struct DevArgs {
     /// Disable ANSI coloring of output.
     #[arg(long)]
     pub no_color: bool,
+}
+
+/// Arguments for `tau trace`.
+///
+/// Opens the execution-trace waterfall TUI on a run's JSONL trace file
+/// under `./.tau/runs/`. Exactly one of `run_id` / `--last` must resolve
+/// to an existing file; `cmd::trace::resolve_run` renders a friendly
+/// error (listing available run ids) otherwise.
+#[derive(Args, Debug)]
+pub struct TraceArgs {
+    /// Run id to open (matches `.tau/runs/<RUN_ID>.jsonl`). Omit and pass
+    /// `--last` to open the most recently modified run file instead.
+    #[arg(value_name = "RUN_ID", conflicts_with = "last")]
+    pub run_id: Option<String>,
+    /// Open the most recently modified run file under `.tau/runs`
+    /// instead of an explicit run id.
+    #[arg(long)]
+    pub last: bool,
 }
 
 /// Arguments for `tau embed`.
@@ -1369,6 +1400,64 @@ mod tests {
             wasm_args.project.as_deref(),
             Some(std::path::Path::new("examples/fan-monitor")),
         );
+    }
+
+    /// Local parse helper mirroring the task-7 brief's `try_parse`
+    /// pseudocode: a plain `Cli::try_parse_from` wrapped in `anyhow`, since
+    /// `--tui` (`RunArgs`) and `--json` (global, on `Cli`) are rejected by
+    /// clap's own `conflicts_with` — global args are propagated into every
+    /// subcommand's arg set, so `conflicts_with = "json"` on `tui` resolves
+    /// against the global flag with no extra glue code.
+    fn try_parse(argv: &[&str]) -> anyhow::Result<Cli> {
+        Ok(Cli::try_parse_from(argv)?)
+    }
+
+    #[test]
+    fn tui_conflicts_with_json() {
+        let err = try_parse(&["tau", "run", "agent-x", "--tui", "--json"]).unwrap_err();
+        assert!(err.to_string().contains("--tui"), "got: {err}");
+        assert!(err.to_string().contains("--json"), "got: {err}");
+    }
+
+    #[test]
+    fn tui_flag_defaults_off_and_parses_on() {
+        let cli = Cli::parse_from(["tau", "run", "agent-x"]);
+        let Command::Run(args) = cli.command else {
+            panic!()
+        };
+        assert!(!args.tui);
+
+        let cli = Cli::parse_from(["tau", "run", "agent-x", "--tui"]);
+        let Command::Run(args) = cli.command else {
+            panic!()
+        };
+        assert!(args.tui);
+    }
+
+    #[test]
+    fn parses_trace_with_run_id() {
+        let cli = Cli::parse_from(["tau", "trace", "01ABC"]);
+        let Command::Trace(args) = cli.command else {
+            panic!("expected Trace: {:?}", cli.command)
+        };
+        assert_eq!(args.run_id.as_deref(), Some("01ABC"));
+        assert!(!args.last);
+    }
+
+    #[test]
+    fn parses_trace_with_last() {
+        let cli = Cli::parse_from(["tau", "trace", "--last"]);
+        let Command::Trace(args) = cli.command else {
+            panic!("expected Trace: {:?}", cli.command)
+        };
+        assert_eq!(args.run_id, None);
+        assert!(args.last);
+    }
+
+    #[test]
+    fn trace_run_id_and_last_are_mutually_exclusive() {
+        let result = Cli::try_parse_from(["tau", "trace", "01ABC", "--last"]);
+        assert!(result.is_err(), "expected mutual exclusion error");
     }
 
     #[test]

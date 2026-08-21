@@ -216,10 +216,19 @@ not every possible pattern.
   `Runtime::run_with_history`, unblocking supervisor/critic and
   hierarchical. All five patterns now compose.
 
-Live trace rendering during a run is still CLI-summary-only; the
-JSONL log under `<scope>/.tau/runs/<run-id>.jsonl` is the
-replay-and-inspect source of truth. Wiring streaming output is
-tracked as a follow-up.
+## Observing a run live
+
+`tau run --tui` (M1) renders the run live in the execution-trace waterfall
+TUI instead of the scrolling-line printer, folding each `TraceEvent` into
+the same view as it's emitted. It requires an interactive terminal on
+stdout (the TUI takes over the terminal) and is mutually exclusive with
+`--json` — pipe the JSONL trace instead of `--tui` when scripting.
+Currently it is only wired for multi-agent runs, i.e. runs that build a
+live `TraceEvent` stream; `tau trace --last` (or `tau trace <run_id>`)
+re-opens the same view on any run's `<scope>/.tau/runs/<run-id>.jsonl`
+afterwards, tailing it live if the run is still in progress. See
+[`tau trace`](../reference/tau-trace.md) for the keybindings and both
+subcommands' resolution rules.
 
 ## See also
 

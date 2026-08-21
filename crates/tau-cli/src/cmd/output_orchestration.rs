@@ -88,6 +88,7 @@ pub async fn run_printer(
                 tool_name,
                 duration_ms,
                 status,
+                capability: _,
             } => {
                 let marker = if status == "ok" { "  " } else { "\u{2717} " };
                 format!(

@@ -31,6 +31,7 @@ pub mod serve;
 pub mod session;
 pub mod skill;
 pub mod target;
+pub mod trace;
 pub mod uninstall;
 pub mod update;
 pub mod verify;

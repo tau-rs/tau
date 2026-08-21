@@ -53,6 +53,9 @@ Options:
       --no-governance
           Dev-run a project that HAS an `[allow]` ceiling without enforcing it. No effect on `--bundle` runs (the bundle's verdict is already sealed)
 
+      --tui
+          Render the run live in the execution-trace waterfall TUI (M1) instead of the scrolling-line printer. Requires an interactive terminal on stdout (checked at dispatch time — the TUI takes over the terminal). Mutually exclusive with `--json`: pipe the JSONL trace instead of `--tui` when scripting. Currently only wired for multi-agent runs (the ones that build a live `TraceEvent` stream via `drive_with_live_trace`); `tau trace --last` re-opens any finished run's `.tau/runs/<id>.jsonl` afterwards
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 
