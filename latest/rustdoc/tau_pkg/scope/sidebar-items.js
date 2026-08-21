@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_SUPPORTED_SCOPE_CONFIG_SCHEMA_VERSION"],"enum":["SandboxRequiredTier","ScopeKind"],"struct":["SandboxRequirements","Scope","ScopeConfig"]};
