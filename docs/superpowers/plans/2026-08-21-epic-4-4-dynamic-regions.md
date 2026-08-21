@@ -300,7 +300,7 @@ git -c user.name="Titouan Lebocq" -c user.email="lebocq.tit@gmail.com" commit -m
     fn agent_kinds_table_parses_with_capabilities() {
         let toml = r#"
 [agent.kinds.researcher]
-capabilities = [ { "net.http" = { hosts = ["api.crawler.test"] } } ]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
 "#;
         let cfg = parse_project(toml).expect("agent.kinds parses");
         let k = cfg.agent_kinds.get("researcher").expect("researcher kind present");
@@ -387,20 +387,14 @@ Add the field to the top-level unchecked config struct (grep for `pub agents:` i
     pub agent: UncheckedAgentContainer,
 ```
 
-Validated (near `AgentEntry`, ~line 925):
+Validated: **reuse `tau_domain::AgentKind`** directly — do NOT define a
+tau-pkg-local `AgentKindEntry` (ruling: avoids a dead/duplicate type and wires
+the handoff-mandated domain type). Add `agent_kinds: BTreeMap<String, tau_domain::AgentKind>`
+to `ProjectConfig` (near `agents:` ~line 854). `AgentKind { name, capabilities }`
+is constructed via `AgentKind::new(name, caps)`.
 
-```rust
-/// A validated per-kind agent definition.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentKindEntry {
-    /// The kind name (the `[agent.kinds.<name>]` key).
-    pub name: String,
-    /// The kind's capability grant.
-    pub capabilities: Vec<crate::domain_reexport::Capability>, // use the crate's existing Capability path
-}
-```
-
-> Executor note: use the same `Capability` import path the rest of `project.rs` uses (grep `use tau_domain::` in the file). Add `agent_kinds: BTreeMap<String, AgentKindEntry>` to `ProjectConfig` (near `agents:` ~line 854).
+> Executor note: use the same `tau_domain` import path the rest of `project.rs`
+> uses (grep `use tau_domain::` in the file); add `AgentKind` to it.
 
 - [ ] **Step 5: Validate agent kinds** — in the top-level `validate_*` that builds `ProjectConfig` (grep `agents:` assignment in the constructor), add:
 
@@ -411,7 +405,7 @@ pub struct AgentKindEntry {
         .into_iter()
         .map(|(name, k)| {
             let capabilities = crate::project::allow::bridge_caps_any(&k.capabilities)?;
-            Ok((name.clone(), AgentKindEntry { name, capabilities }))
+            Ok((name.clone(), tau_domain::AgentKind::new(name, capabilities)))
         })
         .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
 ```
@@ -452,7 +446,7 @@ git -c user.name="Titouan Lebocq" -c user.email="lebocq.tit@gmail.com" commit -m
 id = "fanout"
 [pipeline.steps.dynamic]
 spawns = ["researcher"]
-ceiling = [ { "net.http" = { hosts = ["api.crawler.test"] } } ]
+ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
 max_spawns = 8
 max_concurrency = 4
 "#;
@@ -477,7 +471,7 @@ max_concurrency = 4
 id = "fanout"
 [pipeline.steps.dynamic]
 spawns = ["researcher"]
-ceiling = []
+ceiling = {}
 max_spawns = 0
 max_concurrency = 1
 "#;

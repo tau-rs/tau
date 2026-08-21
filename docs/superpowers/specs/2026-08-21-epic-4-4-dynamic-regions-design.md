@@ -39,8 +39,12 @@ Note to a hard **Error**, then adds the region-envelope links.
 
 ```toml
 [agent.kinds.researcher]
-capabilities = [ { "net.http" = { hosts = ["api.crawler.test"] } } ]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
 ```
+
+Capabilities use the **inline-table map** shape (kind-as-key), identical to the
+`[allow]` ceiling's `BTreeMap<String, toml::Value>` grammar — one grammar across
+`[allow]`, `[agent.kinds.*]`, and a region's `ceiling`.
 
 - A **named spawnable kind** carrying its own capability set. This is the static kind→caps map
   whose absence deferred build-time `agent ⊇ spawn` in story 1.5 ("no static kind→agent map").
@@ -57,7 +61,7 @@ capabilities = [ { "net.http" = { hosts = ["api.crawler.test"] } } ]
 id = "research-fanout"
 [pipeline.steps.dynamic]
 spawns          = ["researcher"]     # references [agent.kinds.*]
-ceiling         = [ { "net.http" = { hosts = ["api.crawler.test"] } } ]  # region envelope
+ceiling         = { "net.http" = { hosts = ["api.crawler.test"] } }  # region envelope (inline-table map)
 max_spawns      = 8                  # bounds (must be > 0)
 max_concurrency = 4                  # bounds (must be > 0, <= max_spawns)
 # agent = "orchestrator"             # OPTIONAL owner — inserts the agent ⊇ region middle link
