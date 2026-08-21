@@ -715,11 +715,16 @@ pub struct DevArgs {
 /// Arguments for `tau embed`.
 #[derive(clap::Args, Debug)]
 pub struct EmbedArgs {
-    /// Host language for the generated glue. Only `js` is supported today.
+    /// Host language for the generated glue: `js` (shipped), `rust`, or `c`.
     #[arg(long, value_name = "HOST")]
     pub host: String,
-    /// Output directory (default: current directory; files land under
-    /// `<dir>/sdk/embed-js/`).
+    /// Project to derive IR + WIT from (directory with `tau.toml`, or a
+    /// `.ts` file). Required for `--host rust|c`; ignored for `--host js`
+    /// (that scaffold is project-independent). Defaults to the CWD.
+    #[arg(value_name = "PROJECT")]
+    pub project: Option<PathBuf>,
+    /// Output directory (default: current directory). Files land under
+    /// `<dir>/embed-{rust,c}/` or `<dir>/sdk/embed-js/`.
     #[arg(long, short = 'o', value_name = "DIR")]
     pub output: Option<PathBuf>,
 }
