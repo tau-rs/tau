@@ -28,6 +28,9 @@ tau-mcp             = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio       = { workspace = true }
 tau-ts-extract      = { path = "../tau-ts-extract" }
 tau-sdk-codegen     = { workspace = true }
+tau-trace           = { workspace = true }
+ratatui             = { workspace = true }
+crossterm           = { workspace = true }
 futures-core        = { workspace = true }
 base64             = { workspace = true }
 humantime          = "2"

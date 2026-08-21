@@ -13,6 +13,7 @@ pub mod exit;
 pub mod output;
 pub(crate) mod session;
 pub mod tracing;
+pub mod tui;
 
 pub use config::{
     build_agent_definition, AgentEntry, AgentResolutionError, ProjectConfig, ProjectConfigError,
