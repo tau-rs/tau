@@ -90,6 +90,22 @@ run = "agent:a"
 input = "${input}"
 "#;
 
+    const DYNAMIC_TOML: &str = r#"
+[project]
+name = "demo"
+
+[agent.kinds.researcher]
+capabilities = {}
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = {}
+max_spawns = 1
+max_concurrency = 1
+"#;
+
     fn parsed(toml: &str) -> Parsed {
         let config = ProjectConfig::parse_str(toml).expect("toml parses");
         parse::parse(&config, &no_prompt_files).expect("parse stage")
@@ -118,5 +134,21 @@ input = "${input}"
     fn wasm_target_accepts_leaf_only_pipeline() {
         let t: TargetTriple = "any-wasi-strict".parse().unwrap();
         assert!(check(&parsed(LEAF_TOML), &t).is_ok());
+    }
+
+    #[test]
+    fn wasm_target_rejects_dynamic_region() {
+        // EPIC 4.4: a `StepRun::Dynamic` region is control-flow the wasm
+        // guest's `run_ir_streaming` path cannot execute, same as
+        // Branch/Parallel/Loop/Suspend — refuse the build.
+        let t: TargetTriple = "any-wasi-strict".parse().unwrap();
+        let err = check(&parsed(DYNAMIC_TOML), &t).expect_err("wasm must refuse dynamic regions");
+        match err {
+            LowerError::FeatureUnsupported { missing, target } => {
+                assert_eq!(missing, alloc::vec![IrFeature::Dynamic]);
+                assert_eq!(target, t);
+            }
+            other => panic!("expected FeatureUnsupported, got {other:?}"),
+        }
     }
 }

@@ -241,6 +241,39 @@ pub enum LowerError {
         step: String,
     },
 
+    /// A dynamic region references an agent kind with no `[agent.kinds.<name>]`
+    /// definition (EPIC 4.4).
+    #[error("dynamic region in step '{step}' spawns unknown agent kind '{kind}' — declare [agent.kinds.{kind}]")]
+    UnknownAgentKind {
+        /// The undefined kind name.
+        kind: String,
+        /// The pipeline-step id of the region.
+        step: String,
+    },
+
+    /// A `StepRun::Dynamic` has `max_spawns == 0`, which would never spawn a
+    /// region member. The bound must be at least 1. Defense-in-depth: mirrors
+    /// `LoopMaxItersZero` — tau-pkg validates this at author time, but
+    /// hand-constructed IR that bypasses tau-pkg must still be rejected.
+    #[error("pipeline step '{step}': Dynamic.max_spawns must be > 0")]
+    DynamicMaxSpawnsZero {
+        /// The pipeline step id containing the offending Dynamic region.
+        step: String,
+    },
+
+    /// A `StepRun::Dynamic` has `max_concurrency` outside `1..=max_spawns`
+    /// (either zero, or greater than the total-spawn cap). Defense-in-depth:
+    /// mirrors `LoopMaxItersZero` for the Dynamic region's own bounds.
+    #[error("pipeline step '{step}': Dynamic.max_concurrency must be in 1..={max_spawns} (got {max_concurrency})")]
+    DynamicConcurrencyInvalid {
+        /// The pipeline step id containing the offending Dynamic region.
+        step: String,
+        /// The region's configured total-spawn cap.
+        max_spawns: u64,
+        /// The offending concurrency value.
+        max_concurrency: u64,
+    },
+
     /// A context step declares a determinism class string that lowering does
     /// not recognize (D7-B / ADR-0065). Replaces the former silent
     /// `_ => DeterminismClass::Pure` default, which downgraded an unknown

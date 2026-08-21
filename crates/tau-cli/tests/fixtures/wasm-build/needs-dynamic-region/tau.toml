@@ -1,0 +1,21 @@
+[project]
+name = "needs-dynamic-region-wasm"
+version = "0.1.0"
+
+[allow]
+"net.http" = { hosts = ["api.crawler.test"] }
+
+[agent.kinds.researcher]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+
+# A bounded dynamic region (EPIC 4.4) — control-flow the wasm guest cannot
+# execute (run_ir_streaming has no run_pipeline path), so `tau build wasm`
+# must refuse it, same as Branch/Parallel/Loop/Suspend.
+[[pipeline.steps]]
+id = "fanout"
+
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+max_spawns = 4
+max_concurrency = 2

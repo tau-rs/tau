@@ -126,14 +126,14 @@ fn err(message: impl Into<String>) -> ProjectConfigError {
     }
 }
 
-/// Bridge one kind-as-key raw cap (`"fs.read" => { paths = [...] }`) into a
-/// canonical `Capability`. The kind-as-key shape is re-emitted as
-/// `{ kind, ... }` and parsed through the **single** domain capability
-/// deserializer (Decision 4-A) — so `[allow]` and package manifests share one
-/// unknown-kind / typo / did-you-mean / field-shape path and cannot diverge.
-/// A distinct post-parse gate then rejects kinds that parse fine but aren't
-/// narrowable `[allow]` ceilings.
-fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConfigError> {
+/// Parse one kind-as-key raw cap into a `Capability` through the single
+/// domain deserializer (typo/unknown-kind/field-shape errors surface here).
+/// No `[allow]` ceiling-kind gate — callers that accept any narrowable cap
+/// (agent-kind grants, dynamic-region envelopes) use this directly.
+pub(crate) fn bridge_cap_any(
+    kind: &str,
+    value: &toml::Value,
+) -> Result<Capability, ProjectConfigError> {
     // toml::Value → serde_json::Value, then inject `kind`.
     let json: JsonValue = serde_json::to_value(value)
         .map_err(|e| err(format!("raw-cap {kind:?}: not serializable: {e}")))?;
@@ -143,8 +143,24 @@ fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConf
     obj.insert("kind".to_string(), JsonValue::String(kind.to_string()));
     // Unified parse: typos, unknown kinds, and field-shape errors surface here
     // (with a did-you-mean), exactly as they do for a package manifest.
-    let cap = serde_json::from_value::<Capability>(JsonValue::Object(obj))
-        .map_err(|e| err(format!("[allow] {e}")))?;
+    serde_json::from_value::<Capability>(JsonValue::Object(obj))
+        .map_err(|e| err(format!("capability {e}")))
+}
+
+/// Bridge a kind-as-key cap map into a `Vec<Capability>` with no ceiling gate.
+pub(crate) fn bridge_caps_any(
+    caps: &BTreeMap<String, toml::Value>,
+) -> Result<Vec<Capability>, ProjectConfigError> {
+    // BTreeMap iteration is sorted by key, giving deterministic order.
+    caps.iter().map(|(k, v)| bridge_cap_any(k, v)).collect()
+}
+
+/// Bridge one kind-as-key raw cap into a `Capability`, gated to the
+/// narrowable `[allow]` ceiling kinds. Delegates parsing to
+/// [`bridge_cap_any`] so `[allow]` and package manifests share one
+/// unknown-kind / typo / did-you-mean / field-shape path and cannot diverge.
+fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConfigError> {
+    let cap = bridge_cap_any(kind, value)?;
     // Semantic gate: the kind parses, but is it a narrowable ceiling?
     if !ALLOW_CEILING_KINDS.contains(&kind) {
         return Err(err(format!(

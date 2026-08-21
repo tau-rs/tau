@@ -59,6 +59,9 @@ fn collect_step(step: &PipelineStep, found: &mut BTreeSet<IrFeature>) {
         StepRun::Suspend { .. } => {
             found.insert(IrFeature::Suspend);
         }
+        StepRun::Dynamic { .. } => {
+            found.insert(IrFeature::Dynamic);
+        }
     }
 }
 
@@ -139,5 +142,29 @@ mod tests {
             evaluates: crate::check::Locus::Output(PipelineStepId("t".into())),
             predicate: crate::check::GoalPredicate::NonEmpty,
         }
+    }
+
+    #[test]
+    fn dynamic_region_collects_dynamic_feature() {
+        use crate::capability::CapabilityRequirements;
+        use crate::ids::PipelineStepId;
+        use crate::pipeline::{DynamicSpawn, PipelineStep, StepRun};
+
+        let step = PipelineStep {
+            id: PipelineStepId("fanout".into()),
+            run: StepRun::Dynamic {
+                envelope: CapabilityRequirements::default(),
+                spawns: alloc::vec![DynamicSpawn {
+                    kind: "researcher".into(),
+                    capabilities: CapabilityRequirements::default(),
+                }],
+                max_spawns: 8,
+                max_concurrency: 4,
+            },
+            input: "${input}".into(),
+        };
+        let feats = features_used(&module_with(alloc::vec![step]));
+        assert!(feats.contains(&IrFeature::Dynamic));
+        assert_eq!(feats.len(), 1);
     }
 }
