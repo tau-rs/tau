@@ -51,6 +51,7 @@
 - [IR JSON Schema](reference/ir-json-schema.md)
 - [WIT host world](reference/wit-host-world.md)
 - [tau mcp](reference/tau-mcp.md)
+- [tau trace](reference/tau-trace.md)
 - [Target triple reference](reference/target-triples.md)
 - [Browser capabilities profile](reference/browser-capabilities.md)
 

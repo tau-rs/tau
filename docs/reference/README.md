@@ -41,6 +41,9 @@ Reference content split:
   NDJSON wire format for tau running as a long-lived subprocess.
   Every method, parameter, error code, and stability rule. One of
   tau's two public surfaces (G6).
+- [tau trace](tau-trace.md) — the execution-trace waterfall TUI:
+  `<RUN_ID>` / `--last` resolution, live-attach to an in-progress run,
+  and keybindings.
 
 ## Generated rustdoc
 

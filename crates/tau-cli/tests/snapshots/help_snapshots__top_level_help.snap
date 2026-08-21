@@ -1,5 +1,6 @@
 ---
 source: crates/tau-cli/tests/help_snapshots.rs
+assertion_line: 28
 expression: s
 ---
 tau runtime CLI
@@ -28,6 +29,7 @@ Commands:
   mcp        Manage Model Context Protocol (MCP) server contracts
   dev        Hot-reload REPL driving the post-β.3 IR runtime
   embed      Emit host-embedding glue for a target language (Phase 2 §5.2)
+  trace      Open the execution-trace waterfall TUI (M1) on a run's `.tau/runs/<id>.jsonl` file
   help       Print this message or the help of the given subcommand(s)
 
 Options:
