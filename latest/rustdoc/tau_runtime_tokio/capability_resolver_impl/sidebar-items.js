@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["resolver_from_overrides"],"struct":["TauPkgCapabilityResolver"]};
