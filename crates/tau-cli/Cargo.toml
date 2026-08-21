@@ -88,7 +88,7 @@ tau-wasm-host    = { path = "../tau-wasm-host" }
 # ungranted capability's WASI interface is absent. Pinned to match the
 # workspace's wit-parser 0.251 pin (see Cargo.lock: wit-component 0.251.0
 # depends on wit-parser 0.251.0 exactly).
-wit-component    = "0.251"
+wit-component    = "0.256"
 wit-parser       = { workspace = true }
 
 [features]
