@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["full","full_json","preview","preview_json"]};

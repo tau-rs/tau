@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["agent_satisfies","capability_kind_str","capability_satisfies","check_capabilities","check_capabilities_for_tool","custom_params_satisfy","fs_satisfies","net_satisfies","plan_satisfies","process_satisfies","skill_satisfies","task_list_satisfies"]};
