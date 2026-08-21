@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Node"],"struct":["Agent","Deterministic","Tool","ToolSpec"],"type":["Subflow"]};
