@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["TemplateError","TemplateRef"],"fn":["extract_refs","resolve"]};
