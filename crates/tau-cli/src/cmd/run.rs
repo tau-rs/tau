@@ -24,6 +24,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use is_terminal::IsTerminal;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_runtime_tokio::{RunOptions, RunOutcome};
@@ -99,6 +100,8 @@ pub async fn run(
     force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
+    validate_tui_flag(args, output)?;
+
     let cwd = std::env::current_dir()?;
 
     // §C.3: when --bundle is set, verify the cwd matches the sealed
@@ -354,14 +357,46 @@ pub async fn run(
             budget,
             scope_root,
         );
-        let (snapshot_res, stats) = tokio::join!(run_fut, run_printer(rx, output));
-        let snapshot = snapshot_res
-            .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
+
+        let snapshot = if args.tui {
+            // Task 7: `run_tui` (crate::tui::app) is SYNC/blocking — it owns
+            // a raw-mode read loop polling both keyboard input and `rx` on a
+            // fixed interval. Calling it directly on this async task would
+            // block the tokio worker thread it landed on, stalling the
+            // reactor (and therefore `run_fut`, which needs to keep
+            // executing on some worker to make progress) for the TUI's
+            // entire lifetime. `spawn_blocking` moves it to the blocking
+            // thread pool so `run_fut` keeps driving concurrently on the
+            // async runtime, exactly like the `run_printer` arm below.
+            //
+            // `rx` is `tokio::sync::mpsc::UnboundedReceiver<tau_ports::TraceEvent>`
+            // — precisely `tui::TraceSource::Live`'s payload type, so no
+            // adapter is needed at this seam.
+            let tui_task = tokio::task::spawn_blocking(move || {
+                crate::tui::run_tui(crate::tui::TraceSource::Live(rx))
+            });
+            let (snapshot_res, tui_res) = tokio::join!(run_fut, tui_task);
+            match tui_res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e.context("execution-trace TUI")),
+                Err(join_err) => {
+                    return Err(anyhow::anyhow!(
+                        "execution-trace TUI task panicked: {join_err}"
+                    ))
+                }
+            }
+            snapshot_res
+                .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?
+        } else {
+            let (snapshot_res, stats) = tokio::join!(run_fut, run_printer(rx, output));
+            let snapshot = snapshot_res
+                .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
+            print_summary(&snapshot, &stats, output);
+            snapshot
+        };
 
         drop(runtime_arc);
         plugin_loader::flush_recorders().await;
-
-        print_summary(&snapshot, &stats, output);
 
         return if matches!(snapshot.status, tau_ports::RunStatus::Completed) {
             Ok(())
@@ -371,6 +406,19 @@ pub async fn run(
                 snapshot.status
             ))
         };
+    }
+
+    if args.tui {
+        // Every path above that could build a live `TraceEvent` stream
+        // (`drive_with_live_trace`, gated on `is_multi_agent`) has already
+        // returned. Fail closed with a clear hint instead of silently
+        // falling through to the batch/streaming printer path below, which
+        // would make `--tui` a silent no-op.
+        anyhow::bail!(
+            "--tui currently requires a multi-agent run (an agent declaring Agent::Spawn or \
+             TaskList capabilities) — this agent doesn't drive a live trace stream. Drop \
+             --tui, or inspect the finished run afterwards with `tau trace --last`."
+        );
     }
 
     if args.stream {
@@ -393,6 +441,37 @@ pub async fn run(
 
         render_outcome(outcome, output)
     }
+}
+
+/// Reject `--tui` up front, before any project/plugin work, when it can't
+/// do anything useful.
+///
+/// `--tui` + `--json` is already rejected at parse time by
+/// `RunArgs::tui`'s `conflicts_with = "json"` (clap propagates the global
+/// `--json` flag into every subcommand's arg set, so the conflict is
+/// caught before `run` is ever called); this is defense-in-depth for
+/// callers that build a `RunArgs` programmatically (e.g. tests) rather
+/// than through `Cli::parse`. The TTY check has no parse-time equivalent
+/// — clap can't see the runtime terminal — so it always runs here.
+fn validate_tui_flag(args: &RunArgs, output: &Output) -> anyhow::Result<()> {
+    if !args.tui {
+        return Ok(());
+    }
+    if output.is_json() {
+        anyhow::bail!(
+            "--tui cannot be combined with --json: the TUI takes over the terminal, so \
+             there's no output stream left to serialize. Drop --tui to get the \
+             JSONL/line-per-event stream instead."
+        );
+    }
+    if !std::io::stdout().is_terminal() {
+        anyhow::bail!(
+            "--tui requires an interactive terminal on stdout (none detected). Drop --tui \
+             to use the scrolling-line printer, or inspect a finished run afterwards with \
+             `tau trace --last`."
+        );
+    }
+    Ok(())
 }
 
 /// Run the governed-by-default gate (ADR-0057 / D2) for the dev (non-bundle)
