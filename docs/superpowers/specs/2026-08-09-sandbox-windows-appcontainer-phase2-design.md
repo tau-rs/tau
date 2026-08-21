@@ -279,3 +279,8 @@ nightly/`full-matrix` lane. `windows-latest` supports AppContainer creation + AC
 - **Windows local dev environment** (UTM + Windows 11 ARM VM) — separate sub-project.
 - **Per-syscall filtering** — no seccomp equivalent on Windows (AppContainer is the
   Strict envelope from the plugin's perspective).
+- **Functional positive FS-path grants** — an AppContainer needs FILE_TRAVERSE on every
+  ancestor directory to reach a nested granted path; the Phase-2 adapter ACLs only the
+  leaf, so grants isolate correctly (deny-by-default) but don't yet make arbitrary
+  granted paths readable. Ancestor-traverse grants are deferred to the Windows sandbox
+  network-egress follow-on, where real cargo builds first exercise positive FS reads.

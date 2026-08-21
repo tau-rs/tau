@@ -89,7 +89,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2  # stable
         if: steps.precheck.outputs.skip != 'true'
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
         if: steps.precheck.outputs.skip != 'true'
         with:
           shared-key: linux-stable

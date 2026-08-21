@@ -19,7 +19,7 @@
 //!
 //! This crate cannot be exercised on macOS or Linux. The pure-logic
 //! parts (`profile`) compile and unit-test on any platform; the Win32
-//! parts (`acl`, `spawn`, the runtime path of `lib`) are
+//! parts (`acl`, the launcher command rebuild in `lib`) are
 //! `cfg(target_os = "windows")`-gated. Windows CI runners are the only
 //! place runtime behavior is verified.
 
@@ -28,8 +28,6 @@
 #[cfg(target_os = "windows")]
 mod acl;
 mod profile;
-#[cfg(target_os = "windows")]
-mod spawn;
 
 pub use profile::{build_appcontainer_caps, AppContainerCaps};
 
@@ -101,7 +99,6 @@ impl CapabilityGate for WindowsSandbox {
         set.insert(tau_domain::CapabilityShape::FilesystemRead);
         set.insert(tau_domain::CapabilityShape::FilesystemWrite);
         set.insert(tau_domain::CapabilityShape::ProcessExec);
-        set.insert(tau_domain::CapabilityShape::NetworkHttp);
         set
     }
 
@@ -213,45 +210,52 @@ async fn wrap_spawn_windows(
         granted_paths.push((path.clone(), acl::AccessKind::Write));
     }
 
-    // Phase 2: spawn the host-side proxy task if the plan needs HTTP.
-    //
-    // `tau_sandbox_proxy::spawn_proxy` is currently `cfg(unix)`-gated
-    // because it builds on `tokio::net::UnixListener`. Making it work on
-    // Windows requires either:
-    //   - switching the proxy's IPC from Unix-domain sockets to TCP
-    //     loopback (simpler; reuses Linux's existing port 8443
-    //     convention; works on Windows 10+ since UDS support is
-    //     incomplete), or
-    //   - using Windows named pipes via `tokio::net::windows::named_pipe`.
-    //
-    // Phase 1 (this PR) skips the proxy spawn entirely. HTTP plans are
-    // refused at probe time (probe returns Unavailable). The proxy
-    // wiring lands in Phase 2 alongside the actual `CreateProcessAsUserW`
-    // integration.
+    // Fail closed on network — egress is a deferred follow-on EPIC.
+    // (Phase 2 spawns no host-side proxy task; `tau_sandbox_proxy::spawn_proxy`
+    // is currently `cfg(unix)`-gated because it builds on
+    // `tokio::net::UnixListener`. Windows egress requires either TCP-loopback
+    // IPC or named pipes — deferred.)
     if caps.has_http {
-        return Err(CapabilityError::Unavailable {
-            reason: "tau-sandbox-windows Phase 1 does not support Network(Http) plans; \
-                     proxy support requires Phase 2 (UDS->TCP conversion in tau-sandbox-proxy)"
+        return Err(CapabilityError::Unsupported {
+            what: "Network(Http) on Windows: egress not yet supported (deferred follow-on)"
                 .to_string(),
         });
     }
-    let proxy_handle: Option<()> = None;
 
-    // Configure the command for AppContainer-wrapped spawn. The actual
-    // CreateProcessAsUserW call happens when the caller spawns `cmd`;
-    // we attach the AppContainer security attributes via env vars that
-    // `spawn::pre_exec_appcontainer` reads at spawn time. Because
-    // std::process::Command on Windows doesn't expose pre_exec hooks, we
-    // record the SID + caps via a thread-local and override the spawn
-    // path through a `pre_exec`-style wrapper at spawn time. See spawn.rs
-    // for the implementation.
-    spawn::register_appcontainer_for_command(cmd, &app_sid, &caps);
+    // Rebuild the command to run the target THROUGH the launcher, which
+    // does CreateProcessAsUserW inside the AppContainer. Mirrors the
+    // darwin sandbox-exec rebuild (`*cmd = Command::new(...)`).
+    let launcher = std::env::var_os("TAU_APPCONTAINER_LAUNCHER_PATH")
+        .unwrap_or_else(|| std::ffi::OsString::from("tau-appcontainer-launcher"));
+    let orig_program = cmd.get_program().to_os_string();
+    let orig_args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_os_string()).collect();
+    let orig_envs: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = cmd
+        .get_envs()
+        .map(|(k, v)| (k.to_os_string(), v.map(|x| x.to_os_string())))
+        .collect();
+    let orig_cwd = cmd.get_current_dir().map(|p| p.to_path_buf());
+
+    *cmd = Command::new(launcher);
+    cmd.arg("--profile").arg(&profile_name);
+    // caps.capability_sids would be added here once net lands; empty in Phase 2.
+    cmd.arg("--").arg(orig_program).args(orig_args);
+    for (k, v) in orig_envs {
+        match v {
+            Some(val) => {
+                cmd.env(k, val);
+            }
+            None => {
+                cmd.env_remove(k);
+            }
+        }
+    }
+    if let Some(dir) = orig_cwd {
+        cmd.current_dir(dir);
+    }
 
     // Build the CapabilityHandle. On drop:
     // 1. revoke ACL grants in reverse order
     // 2. delete the AppContainer profile
-    // 3. (Phase 2) drop the proxy guard via nest_handle
-    let _ = proxy_handle; // currently always None; placeholder for Phase 2
     let cleanup_sid = app_sid.clone();
     let cleanup_profile = profile_name.clone();
     let cleanup_paths = granted_paths;
@@ -277,13 +281,16 @@ mod tests {
     }
 
     #[test]
-    fn supported_shapes_includes_all() {
+    fn supported_shapes_is_fs_and_exec() {
         let s = WindowsSandbox::new("windows");
         let supported = s.supported_shapes();
         assert!(supported.contains(&tau_domain::CapabilityShape::FilesystemRead));
         assert!(supported.contains(&tau_domain::CapabilityShape::FilesystemWrite));
         assert!(supported.contains(&tau_domain::CapabilityShape::ProcessExec));
-        assert!(supported.contains(&tau_domain::CapabilityShape::NetworkHttp));
+        assert!(
+            !supported.contains(&tau_domain::CapabilityShape::NetworkHttp),
+            "network is deferred (fail-closed) in Phase 2"
+        );
     }
 
     #[test]
@@ -310,8 +317,7 @@ mod tests {
         let plan_json = json!({
             "capabilities": [
                 { "kind": "fs.read",  "paths": ["/etc"] },
-                { "kind": "fs.write", "paths": ["/tmp"] },
-                { "kind": "net.http", "hosts": ["example.com"], "methods": ["GET"] }
+                { "kind": "fs.write", "paths": ["/tmp"] }
             ],
             "context": null,
             "limits": null,
