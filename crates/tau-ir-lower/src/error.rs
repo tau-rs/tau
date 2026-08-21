@@ -241,6 +241,16 @@ pub enum LowerError {
         step: String,
     },
 
+    /// A dynamic region references an agent kind with no `[agent.kinds.<name>]`
+    /// definition (EPIC 4.4).
+    #[error("dynamic region in step '{step}' spawns unknown agent kind '{kind}' — declare [agent.kinds.{kind}]")]
+    UnknownAgentKind {
+        /// The undefined kind name.
+        kind: String,
+        /// The pipeline-step id of the region.
+        step: String,
+    },
+
     /// A context step declares a determinism class string that lowering does
     /// not recognize (D7-B / ADR-0065). Replaces the former silent
     /// `_ => DeterminismClass::Pure` default, which downgraded an unknown

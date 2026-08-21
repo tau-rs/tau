@@ -641,6 +641,11 @@ fn validate_step_run(
                 });
             }
         }
+        StepRun::Dynamic { .. } => {
+            // Bounds validated at author time (tau-pkg) and kind resolution
+            // at lowering (UnknownAgentKind); the region produces an output
+            // and nests no pipeline steps, so no reference/scope check here.
+        }
     }
     Ok(())
 }
