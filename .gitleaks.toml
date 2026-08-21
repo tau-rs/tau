@@ -12,3 +12,13 @@ description = "False positive: cargo cache key strings matched by generic-api-ke
 # `cargo-fuzz-bin-v1` in fuzz-nightly.yml is a GitHub Actions cache key, not a secret.
 regexes = ['''cargo-fuzz-bin-v\d+''']
 paths = ['''.github/workflows/fuzz-nightly\.yml''']
+
+[[allowlists]]
+description = "False positive: intentionally-fake API keys in Debug-redaction unit tests"
+# The anthropic/openai plugin config tests assert the key is NOT leaked in Debug
+# output (`!debug.contains(...)`), so the fixtures are deliberately fake values,
+# not real secrets. They live on `main` (PR #319) and, because the gitleaks CI
+# job scans all branch history via `--log-opts "--all"`, trip the OpenAI/Anthropic
+# key rules on every PR until allowlisted.
+regexes = ['''sk(-ant)?-(supersecret-leaked-value|fromjson)''']
+paths = ['''crates/tau-plugins/(anthropic|openai)/src/config\.rs''']
