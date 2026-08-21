@@ -1,0 +1,407 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0064 — One host semantic: exact hostnames + a typed any - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0064-one-host-semantic-exact-typed-any.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0064-one-host-semantic--exact-hostnames--a-typed-any-no-derived-hosts"><a class="header" href="#adr-0064-one-host-semantic--exact-hostnames--a-typed-any-no-derived-hosts">ADR-0064: One host semantic — exact hostnames + a typed <code>any</code>; no derived hosts</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-07-18
+<strong>Deciders:</strong> tau core</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>The <code>net.http</code> capability's <code>hosts</code> field had three divergent semantics live at
+once:</p>
+<ol>
+<li><strong>Docs</strong> claimed hosts are "exact match or glob"
+(<code>crates/tau-domain/src/package/capability.rs:137</code>, pre-change).</li>
+<li><strong>The lattice</strong> did exact string equality — <code>hosts=["*"]</code> was treated as the
+literal host <code>"*"</code> rather than a wildcard
+(<code>crates/tau-pkg/src/capability_override/subset.rs</code>, <code>string_set_subset</code>).</li>
+<li><strong>The runtime proxy</strong> rejected any <code>*</code> at spawn time
+(<code>crates/tau-sandbox-proxy/src/validate.rs</code>, invoked from the native
+<code>strict.rs</code> and the darwin / container / windows sandbox adapters).</li>
+</ol>
+<p>The practical consequence: a manifest authored with <code>hosts = ["*"]</code> parsed
+successfully, passed the capability lattice, passed <code>tau check</code>, and passed
+<code>tau build</code> — then <strong>deterministically failed at <code>tau run</code></strong> when the proxy
+rejected the wildcard. Build-accepts-but-run-rejects is exactly the
+false-security divergence tau's build-time enforcement principle exists to
+prevent.</p>
+<p>Two secondary defects compounded this:</p>
+<ul>
+<li><strong>No case folding.</strong> <code>API.COM</code> and <code>api.com</code> were distinct strings through
+the entire stack (parse, lattice, proxy), so a ceiling authored in one case
+did not subsume a grant authored in another.</li>
+<li><strong>Hand-rolled <code>derive_host</code></strong> (<code>crates/tau-pkg/src/project/allow.rs</code>) parsed
+<code>[allow.mcp.&lt;name&gt;].url</code> into a host ceiling using ad hoc string surgery —
+<code>https://user@evil.com/</code> derived to host <code>user@evil.com</code>, and IPv6 URLs
+derived to <code>"["</code>.</li>
+</ul>
+<p>Separately, the lattice's <code>methods</code> field was ignored entirely
+(<code>subset.rs</code>): a child capability could declare <code>methods = ["POST"]</code> against
+a parent that only granted <code>methods = ["GET"]</code> and the subset check would
+pass, because method inclusion was never checked.</p>
+<p>Full analysis: <code>docs/superpowers/specs/2026-07-18-hostset-exact-plus-typed-any-design.md</code>.</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<p>Hosts are <strong>bare lowercase hostnames</strong> or a <strong>typed any-sentinel</strong> — one
+semantic enforced identically from parse through the capability lattice
+through the runtime proxy.</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>/// A validated bare hostname with optional port. Never a URL, glob, or scheme.
+pub struct HostName(String);
+
+pub enum HostSet {
+    Any,                        // authored as  hosts = "any"
+    Exact(BTreeSet&lt;HostName&gt;),  // authored as  hosts = ["a.com", "b.io:8080"]
+}
+
+impl HostSet {
+    /// Any ⊇ everything; Exact(p) ⊇ Exact(c) ⟺ c ⊆ p; Exact ⊉ Any.
+    pub fn subsumes(&amp;self, child: &amp;HostSet) -&gt; bool;
+}
+<span class="boring">}</span></code></pre></pre>
+<p><code>HostName::parse</code> case-folds (<code>A.COM</code> → <code>a.com</code>, accept-and-fold, never
+reject on case) and rejects anything that is not a bare hostname: <code>*</code> (with a
+<code>help: write hosts = "any"</code> hint), suffix globs like <code>*.a.com</code>, URLs
+(<code>https://...</code>), userinfo (<code>user@a.com</code>), paths, and IPv6 literals
+(<code>[::1]:8080</code>). <code>BTreeSet</code> gives deterministic, sorted serialization.</p>
+<p><code>methods</code> becomes a typed, checked field:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub enum HttpMethod { Get, Head, Post, Put, Delete, Connect, Options, Trace, Patch }
+
+Http {
+    hosts: HostSet,
+    methods: Option&lt;BTreeSet&lt;HttpMethod&gt;&gt;,  // None = all methods
+}
+<span class="boring">}</span></code></pre></pre>
+<p><strong>Absent vs. empty is load-bearing and never conflated:</strong> <code>methods</code> absent →
+<code>None</code> → <em>all methods</em>; <code>methods = []</code> → <code>Some(∅)</code> → <em>deny all methods</em>. The
+old lattice code collapsed this distinction via <code>unwrap_or_default</code>, which is
+the same bug shape as the audit-B2 finding this ADR closes for methods.</p>
+<p>Three resolutions from the design brainstorm:</p>
+<ul>
+<li><strong><code>derive_host</code> is deleted.</strong> It backed only <code>[allow.mcp.&lt;name&gt;]</code>'s host
+ceiling (the <code>net.http</code> capability bridge never used it). No URL→host
+derivation exists anywhere in the capability stack after this change.
+<code>[allow.mcp.&lt;name&gt;].hosts</code> is now <strong>required</strong>; an MCP entry with no
+explicit <code>hosts</code> is a validation error.</li>
+<li><strong>One PR, ordered commits.</strong> The <code>Http</code> variant's field type change is
+atomic across the workspace — a types-only first commit does not compile
+standalone — so domain → consumers → docs land as one PR with
+logically-ordered commits, compiling green only at the end.</li>
+<li><strong>Typed <code>HttpMethod</code> + absent-vs-empty</strong>, as above.</li>
+</ul>
+<h3 id="consumers-updated-to-the-one-semantic"><a class="header" href="#consumers-updated-to-the-one-semantic">Consumers updated to the one semantic</a></h3>
+<ul>
+<li><strong>Lattice</strong> (<code>subset.rs</code>): the <code>Http</code> arm now calls <code>HostSet::subsumes</code> and
+a real methods-inclusion check; the old <code>gather_hosts</code> / string-set-subset
+path for hosts is gone.</li>
+<li><strong><code>[allow]</code> bridge</strong> (<code>allow.rs</code>): <code>derive_host</code> deleted;
+<code>[allow.mcp.&lt;name&gt;].hosts</code> required, empty/absent is an error.</li>
+<li><strong>Proxy</strong> (<code>tau-sandbox-proxy</code>): a typed <code>HostAllow { Any, Exact(Vec&lt;String&gt;) }</code>
+policy, with pass-all mode reachable only from <code>HostSet::Any</code>. Runtime
+CONNECT host matching case-folds. <code>validate_hosts</code> still rejects <code>*</code> and
+non-loopback IPs as defense in depth on the <code>Exact</code> path.</li>
+<li><strong>Sandbox adapters</strong> (native <code>strict.rs</code>, darwin, container, windows): map
+<code>HostSet::Exact</code> → <code>HostAllow::Exact</code> (case-folded) and <code>HostSet::Any</code> →
+<code>HostAllow::Any</code> before calling <code>spawn_proxy</code>.</li>
+</ul>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<p><strong>Positive:</strong></p>
+<ul>
+<li><strong>Build-accepts ⟺ run-enforces</strong>, both directions. <code>hosts = "any"</code> passes
+parse, <code>tau check</code>, <code>tau build</code>, and reaches the proxy in pass-all mode
+with no spawn-time rejection. <code>hosts = ["*"]</code> now fails at <strong>parse</strong> —
+it never reaches build, closing the divergence this ADR exists to fix.</li>
+<li>Case folding is uniform: a ceiling authored <code>API.COM</code> and a grant authored
+<code>api.com</code> are recognized as the same host everywhere.</li>
+<li><code>methods</code> inclusion is a real, checked lattice rule instead of a silently
+ignored field; the <code>_method_diff_ignored</code> test class flips to actually
+checking method subsumption.</li>
+<li><code>[allow.mcp.&lt;name&gt;].hosts</code> being required removes a whole class of
+URL-parsing edge cases (<code>derive_host</code>'s userinfo/IPv6 mishandling) by
+deleting the code path rather than hardening it.</li>
+</ul>
+<p><strong>Negative / obligations:</strong></p>
+<ul>
+<li><code>[allow.mcp.&lt;name&gt;]</code> entries that previously relied on <code>derive_host</code> (no
+explicit <code>hosts</code>) now fail validation and must be updated with an explicit
+<code>hosts = [...]</code> list. No such fixtures existed in-tree at time of writing;
+documentation examples were swept for the same pattern.</li>
+<li>Manifests that previously omitted <code>methods</code> and round-tripped through
+<code>unwrap_or_default</code> into a serialized <code>"methods": []</code> now correctly
+serialize with the key omitted — a byte-stability change for that specific
+(pre-existing bug) shape. Already-lowercase, sorted <code>Exact</code> host lists and
+manifests with real <code>methods</code> sets are unaffected; a golden test asserts
+this.</li>
+<li>EPIC 1.6's coarse-ceiling lint must target the typed <code>HostSet::Any</code>
+variant, not a string match on <code>"*"</code> — noted on that branch
+(<code>feat/epic-1.6-coarse-lint</code>), not implemented here.</li>
+</ul>
+<h2 id="explicitly-deferred-additive-later-not-part-of-this-adr"><a class="header" href="#explicitly-deferred-additive-later-not-part-of-this-adr">Explicitly deferred (additive later, not part of this ADR)</a></h2>
+<ul>
+<li><strong>Suffix wildcards</strong> (<code>*.x.com</code>). Would require per-label glob matching in
+both the lattice and the proxy's CONNECT-host check; deferred until there
+is a concrete need.</li>
+<li><strong>IPv6 literal hosts</strong> (<code>[::1]:8080</code>). <code>HostName::parse</code> rejects <code>[</code> today;
+adding IPv6 support is additive and does not require revisiting the
+<code>HostSet</code>/<code>HostName</code> shape.</li>
+<li><strong>Runtime method enforcement.</strong> The proxy filters by host, not method;
+<code>methods</code> is enforced only in the build-time lattice (now <em>checked</em>,
+previously ignored — see Decision). This leaves methods
+build-checked-but-not-run-enforced, a narrower residual than the host
+divergence this ADR closes. Tracked as a follow-up, not part of this
+change.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<p><strong>A. Keep hosts as a raw <code>Vec&lt;String&gt;</code> and special-case <code>"*"</code> at each
+consumer.</strong> Rejected. This is exactly the status quo that produced the
+three-way divergence — each consumer (lattice, proxy) would need its own
+special-case logic and case-folding, with no shared invariant. A typed
+<code>HostSet</code> makes "what counts as a host" and "what counts as any" a single,
+testable definition.</p>
+<p><strong>B. Support suffix wildcards now, alongside exact + any.</strong> Rejected for this
+ADR. Wildcards require resolution-time or match-time glob logic in the
+proxy's CONNECT-host check, which is materially more code and a larger
+attack surface for host-matching bugs. Exact + typed-any closes the
+build/run divergence completely without it; wildcards are additive later.</p>
+<p><strong>C. Keep <code>derive_host</code> and harden it against the userinfo/IPv6 bugs
+instead of deleting it.</strong> Rejected. <code>derive_host</code> is not used by the
+<code>net.http</code> capability bridge at all — it exists solely to backfill
+<code>[allow.mcp.&lt;name&gt;].hosts</code> from a URL. Requiring explicit <code>hosts</code> removes an
+entire parsing surface rather than patching it, and matches the
+governance principle that ceilings should be explicit, not inferred.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0063-ci-tiering-nightly-authority.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0065-unknown-input-policy.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0063-ci-tiering-nightly-authority.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0065-unknown-input-policy.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

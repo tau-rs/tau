@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["render_embed_rust"],"struct":["EmbedRustInput"]};

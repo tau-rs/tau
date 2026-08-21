@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CredentialsConfigError","ProviderConfig"],"struct":["CredentialsChainConfig","UncheckedCredentialsConfig","UncheckedProvider"]};
