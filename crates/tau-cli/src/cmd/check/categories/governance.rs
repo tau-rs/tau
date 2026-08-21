@@ -383,29 +383,52 @@ fn check_dynamic_regions(
                 agent,
                 ..
             } => {
-                // L4a: region ceiling ⊆ owner.
-                let (owner_caps, owner_desc): (Vec<Capability>, String) = match agent {
-                    Some(a) => match project.agents.get(a).map(|ag| resolve_agent_caps(ag, ctx)) {
-                        Some(AgentCaps::Resolved { effective, .. }) => {
-                            (effective, format!("agent '{a}' effective grant"))
+                // L4a: region ceiling ⊆ owner. `agent = Some(a)` where `a` is
+                // not defined in [agents.*] at all (a typo) is a dedicated
+                // error rather than a silent widen to the root [allow]
+                // ceiling — that would defeat owner-narrowing with no
+                // diagnostic. An agent that IS defined but unresolved
+                // (NotInstalled etc.) is separately flagged by the per-agent
+                // loop above; falling back to [allow] for L4a in that case
+                // is acceptable and preserved below.
+                let owner: Option<(Vec<Capability>, String)> = match agent {
+                    Some(a) => match project.agents.get(a) {
+                        None => {
+                            out.push(lattice_error(
+                                "unknown_owner_agent",
+                                "tau.governance.unknown_owner_agent",
+                                &format!(
+                                    "dynamic region '{}': owner agent '{a}' is not defined in [agents.*]",
+                                    step.id
+                                ),
+                                &tau_toml,
+                            ));
+                            None
                         }
-                        _ => (
-                            allow.ceiling.clone(),
-                            format!("agent '{a}' (unresolved; falling back to [allow])"),
-                        ),
+                        Some(ag) => match resolve_agent_caps(ag, ctx) {
+                            AgentCaps::Resolved { effective, .. } => {
+                                Some((effective, format!("agent '{a}' effective grant")))
+                            }
+                            _ => Some((
+                                allow.ceiling.clone(),
+                                format!("agent '{a}' (unresolved; falling back to [allow])"),
+                            )),
+                        },
                     },
-                    None => (allow.ceiling.clone(), "[allow] ceiling".to_string()),
+                    None => Some((allow.ceiling.clone(), "[allow] ceiling".to_string())),
                 };
-                if let Err(v) = capability_set_subset(ceiling, &owner_caps) {
-                    out.push(lattice_error(
-                        "region_exceeds_ceiling",
-                        "tau.governance.region_exceeds_ceiling",
-                        &format!(
-                            "dynamic region '{}': envelope capability {} \"{}\" exceeds {} ({})",
-                            step.id, v.kind, v.offender, owner_desc, v.reason
-                        ),
-                        &tau_toml,
-                    ));
+                if let Some((owner_caps, owner_desc)) = owner {
+                    if let Err(v) = capability_set_subset(ceiling, &owner_caps) {
+                        out.push(lattice_error(
+                            "region_exceeds_ceiling",
+                            "tau.governance.region_exceeds_ceiling",
+                            &format!(
+                                "dynamic region '{}': envelope capability {} \"{}\" exceeds {} ({})",
+                                step.id, v.kind, v.offender, owner_desc, v.reason
+                            ),
+                            &tau_toml,
+                        ));
+                    }
                 }
                 // L4b: each spawn kind ⊆ region ceiling.
                 for kind in spawns {
@@ -1162,6 +1185,46 @@ capabilities = [{ kind = "fs.read", allow_paths = ["/etc/**"] }]
             f.iter().any(|x| x.rule_id == "tau.governance.over_reach"
                 && x.summary.contains("/etc/**")
                 && x.summary.contains("solo")),
+            "got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn unknown_owner_agent_in_region_flagged() {
+        // The region names an owner agent that is not defined anywhere in
+        // [agents.*] (e.g. a typo). Falling back to the root [allow] ceiling
+        // would silently defeat owner-narrowing (L4a), so this must be a
+        // dedicated diagnostic rather than a silent widen.
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["api.crawler.test"] }
+
+[agent.kinds.researcher]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+max_spawns = 4
+max_concurrency = 2
+agent = "typo"
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.unknown_owner_agent"
+                    && x.severity == Severity::Error
+                    && x.summary.contains("fanout")
+                    && x.summary.contains("typo")),
             "got: {}",
             summaries(&f)
         );

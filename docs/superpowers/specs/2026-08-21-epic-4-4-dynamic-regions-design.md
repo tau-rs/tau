@@ -99,7 +99,7 @@ pub enum StepRun {
     // …Agent | Tool | Deterministic | Check | Branch | Parallel | Loop | Suspend…
     Dynamic {
         /// Region capability envelope (ceiling). Every spawn ⊆ this.
-        envelope: Vec<tau_domain::Capability>,
+        envelope: CapabilityRequirements, // wraps Vec<Capability> (IR convention)
         /// Per-kind agent defs this region may spawn, resolved with their caps
         /// so the 4.5 runtime gate is self-contained.
         spawns: Vec<DynamicSpawn>,
@@ -112,7 +112,7 @@ pub enum StepRun {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DynamicSpawn {
     pub kind: String,
-    pub capabilities: Vec<tau_domain::Capability>,
+    pub capabilities: CapabilityRequirements, // wraps Vec<Capability> (IR convention)
 }
 ```
 
