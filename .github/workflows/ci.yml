@@ -302,7 +302,14 @@ jobs:
         run: rustup toolchain install nightly --profile minimal
       - uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-semver-checks
         with:
-          tool: cargo-semver-checks
+          # Pin the version: this action's manifest (pinned SHA) caps at
+          # cargo-semver-checks 0.48.0, which only understands rustdoc JSON up
+          # to v57. The `nightly` rustdoc that generates the baseline now emits
+          # v60/v61, so an unpinned install fails with "unsupported rustdoc
+          # format v60". 0.50.0 supports v60 + v61. Bump this when nightly's
+          # rustdoc format outruns it again (or bump the action SHA so its
+          # manifest tracks latest).
+          tool: cargo-semver-checks@0.50.0
       - name: tau-ports ABI must not break without a version bump
         run: cargo semver-checks --baseline-rev origin/main --package tau-ports
 
