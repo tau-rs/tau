@@ -12,3 +12,8 @@ description = "False positive: cargo cache key strings matched by generic-api-ke
 # `cargo-fuzz-bin-v1` in fuzz-nightly.yml is a GitHub Actions cache key, not a secret.
 regexes = ['''cargo-fuzz-bin-v\d+''']
 paths = ['''.github/workflows/fuzz-nightly\.yml''']
+
+[[allowlists]]
+description = "False positive: generic-api-key matches the prose 'token counts, parent/child nesting' in an execution-trace design spec (the word 'token' beside a slashed string). Not a secret; scoped to the one spec file."
+regexes = ['''parent/child''']
+paths = ['''docs/superpowers/specs/2026-08-21-execution-trace-tui-design\.md''']
