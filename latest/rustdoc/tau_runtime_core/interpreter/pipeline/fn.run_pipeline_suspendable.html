@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Drive an `IrModule`’s pipeline, pausing durably at a top-level `Suspend` step rather than erroring."><title>run_pipeline_suspendable in tau_runtime_core::interpreter::pipeline - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="tau_runtime_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">run_pipeline_suspendable</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../tau_runtime_core/index.html">tau_<wbr>runtime_<wbr>core</a><span class="version">0.0.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">run_<wbr>pipeline_<wbr>suspendable</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#failure-handling-abort-or-rewind-to-gate-retry" title="Failure handling: abort, or rewind-to-gate retry">Failure handling: abort, or rewind-to-gate retry</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In tau_<wbr>runtime_<wbr>core::<wbr>interpreter::<wbr>pipeline</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">tau_runtime_core</a>::<wbr><a href="../index.html">interpreter</a>::<wbr><a href="index.html">pipeline</a></div><h1>Function <span class="fn">run_<wbr>pipeline_<wbr>suspendable</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/tau_runtime_core/interpreter/pipeline.rs.html#158-215">Source</a> </span></div><pre class="rust item-decl"><code>pub async fn run_pipeline_suspendable&lt;D&gt;(
+    module: <a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;IrModule&gt;,
+    input: <a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>,
+    dispatcher: <a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;D&gt;,
+    suspend: <a class="struct" href="struct.SuspendConfig.html" title="struct tau_runtime_core::interpreter::pipeline::SuspendConfig">SuspendConfig</a>,
+    resume: <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="struct.ResumeState.html" title="struct tau_runtime_core::interpreter::pipeline::ResumeState">ResumeState</a>&gt;,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="enum.PipelineOutcome.html" title="enum tau_runtime_core::interpreter::pipeline::PipelineOutcome">PipelineOutcome</a>, <a class="enum" href="../../error/enum.RuntimeError.html" title="enum tau_runtime_core::error::RuntimeError">RuntimeError</a>&gt;<div class="where">where
+    D: <a class="trait" href="../tool_dispatch/trait.ToolDispatcher.html" title="trait tau_runtime_core::interpreter::tool_dispatch::ToolDispatcher">ToolDispatcher</a> + <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="https://doc.rust-lang.org/1.98.0/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> + 'static,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Drive an <code>IrModule</code>’s pipeline, pausing durably at a top-level <code>Suspend</code>
+step rather than erroring.</p>
+<p>The module’s <code>workflow.pipeline</code> must be <code>Some</code> — callers branch on
+that before dispatching here (see <code>tau run</code>). Each step renders its
+<code>input</code> template against the run <code>input</code> and prior outputs, runs the
+step, and records the step’s output keyed by its pipeline-step id so
+later steps can reference it via <code>${steps.&lt;id&gt;.output}</code>.</p>
+<p>[<code>StepRun::Agent</code>], [<code>StepRun::Tool</code>], [<code>StepRun::Deterministic</code>],
+[<code>StepRun::Check</code>], [<code>StepRun::Branch</code>], [<code>StepRun::Loop</code>],
+[<code>StepRun::Parallel</code>], and [<code>StepRun::Suspend</code>] steps are all supported.
+[<code>StepRun::Dynamic</code>] is recognized but not yet executed: it errors
+<a href="../../error/enum.RuntimeError.html#variant.DynamicRegionRequiresRuntimeGate" title="variant tau_runtime_core::error::RuntimeError::DynamicRegionRequiresRuntimeGate"><code>RuntimeError::DynamicRegionRequiresRuntimeGate</code></a> pending the EPIC 4.5
+runtime gate (membership, attenuation, bounds counters). A
+<code>Check</code> step evaluates a postcondition (goal or deliverable) against the
+accumulated outputs. A <code>Branch</code> evaluates its condition and recurses into
+the chosen arm (<code>then</code>/<code>otherwise</code>) against the same shared store; it
+stores no output of its own. A <code>Loop</code> runs its <code>body</code> up to <code>max_iters</code>
+times, checking <code>until</code> after each pass and threading a failed verdict’s
+rationale into the next pass as feedback; exhausting <code>max_iters</code> without
+<code>until</code> holding is a hard error (<a href="../../error/enum.RuntimeError.html#variant.LoopExhausted" title="variant tau_runtime_core::error::RuntimeError::LoopExhausted"><code>RuntimeError::LoopExhausted</code></a>). Like
+<code>Branch</code>, a <code>Loop</code> stores no output of its own. A <code>Parallel</code> forks each
+branch over an isolated read-only snapshot of the store (branches cannot
+see each other’s outputs), drives them with bounded concurrency
+(<code>PARALLEL_CAP</code> in flight at once), and merges each branch’s produced
+outputs back into the shared store in index order once all branches
+complete; like <code>Branch</code> and <code>Loop</code>, it stores no output of its own. A
+top-level <code>Suspend</code> step pauses the run: computes the module’s
+canonical-IR digest once (for drift-detection on a future resume), seeds
+the run’s <code>OutputStore</code> and start index either fresh (<code>resume: None</code>) or
+from a prior pause (<code>resume: Some(ResumeState)</code> — restore-and-continue:
+the store is rehydrated from the persisted snapshot and the walk resumes
+at <code>step_cursor + 1</code>, so the prefix up to and including the <code>Suspend</code>
+step is never re-run), and — on hitting <code>Suspend</code> — durably persists a
+[<code>tau_ports::orchestration::PipelineSuspension</code>] via the <code>SuspensionStore</code>
+in <code>SuspendConfig</code> and returns <a href="enum.PipelineOutcome.html#variant.Suspended" title="variant tau_runtime_core::interpreter::pipeline::PipelineOutcome::Suspended"><code>PipelineOutcome::Suspended</code></a> rather than
+erroring. Only a top-level <code>Suspend</code> may pause; one nested inside a
+<code>Branch</code>/<code>Loop</code>/<code>Parallel</code> body is a build-time typecheck error (an
+<a href="../../error/enum.RuntimeError.html#variant.Internal" title="variant tau_runtime_core::error::RuntimeError::Internal"><code>RuntimeError::Internal</code></a> here would mean that check regressed).</p>
+<h2 id="failure-handling-abort-or-rewind-to-gate-retry"><a class="doc-anchor" href="#failure-handling-abort-or-rewind-to-gate-retry">§</a>Failure handling: abort, or rewind-to-gate retry</h2>
+<p>On a failed check the <a href="tau_ir::check::RetryPolicy"><code>RetryPolicy</code></a>
+decides what happens. If <code>on_fail == Abort</code>, or the attempt count has
+reached <code>max_attempts</code>, the pipeline aborts with
+<a href="../../error/enum.RuntimeError.html#variant.CheckFailed" title="variant tau_runtime_core::error::RuntimeError::CheckFailed"><code>RuntimeError::CheckFailed</code></a>. Otherwise the loop emits
+[<code>EV_CHECK_RETRY</code>], stashes the judge’s rationale as <code>feedback</code> keyed by
+the check’s <code>gate</code> step and the check’s id, and rewinds the loop index to
+that <code>gate</code> step so the forward slice re-runs. On the next pass through the
+gate’s agent step every outstanding rationale registered for <em>that</em> gate is
+injected as a labelled prior turn (<code>"Previous attempt rejected: (check '&lt;id&gt;') &lt;rationale&gt;"</code>) so the agent sees <em>why</em> it was rejected. Keying by
+gate + check id keeps concurrently-failing checks distinct (a pass clears
+only its own check’s entry; a fresh failure updates only its own) and
+confines each check’s feedback to its own gate step.</p>
+</div></details></section></div></main></body></html>
