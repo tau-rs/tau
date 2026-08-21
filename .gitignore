@@ -34,3 +34,6 @@ crates/tau-wasm-host/tests/fixtures/fs-probe/Cargo.lock
 
 # Python bytecode cache (scripts/verify-sync-config.py and other helper scripts).
 __pycache__/
+
+# Superpowers brainstorming visual companion (local only)
+.superpowers/
