@@ -946,10 +946,10 @@ mod tests {
         // this exact triple, and it must now resolve successfully (it no
         // longer hits the Reserved rejection branch).
         let t: TargetTriple = "windows-native-strict".parse().unwrap();
-        assert_eq!(
+        assert!(matches!(
             resolve_target(&args_with_target(Some(&t.to_string()))).unwrap(),
-            t,
-        );
+            BuildTarget::Bundle(bt) if bt == t
+        ));
     }
 
     #[test]
