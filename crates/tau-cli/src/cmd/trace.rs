@@ -54,6 +54,11 @@ pub(crate) fn resolve_run(
 ) -> anyhow::Result<PathBuf> {
     match (run_id, last) {
         (Some(id), _) => {
+            if id.contains('/') || id.contains('\\') || id.contains("..") {
+                return Err(anyhow::anyhow!(
+                    "invalid run id {id:?}: must not contain path separators or \"..\""
+                ));
+            }
             let path = runs_dir.join(format!("{id}.jsonl"));
             if path.is_file() {
                 Ok(path)
@@ -205,6 +210,18 @@ mod tests {
             err.to_string().contains("requires a run id or --last"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn traversal_shaped_run_id_is_rejected() {
+        let dir = tempdir_with_runs(&["01A.jsonl"]);
+        for id in ["../../etc/passwd", "..\\..\\secrets", "sub/dir", "sub\\dir"] {
+            let err = resolve_run(dir.path(), Some(id), false).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid run id"),
+                "id {id:?} should be rejected as invalid, got: {err}"
+            );
+        }
     }
 
     #[test]

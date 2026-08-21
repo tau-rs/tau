@@ -35,16 +35,6 @@ pub enum Filter {
 }
 
 impl Filter {
-    /// Whether `span` passes this filter.
-    fn matches(self, span: &TraceSpan) -> bool {
-        match self {
-            Filter::All => true,
-            Filter::Errors => matches!(span.status, SpanStatus::Failed),
-            Filter::Tools => matches!(span.kind, SpanKind::Tool),
-            Filter::Reasoning => matches!(span.kind, SpanKind::Reasoning),
-        }
-    }
-
     /// Short label rendered as this filter's toolbar chip.
     fn label(self) -> &'static str {
         match self {
@@ -54,6 +44,23 @@ impl Filter {
             Filter::Reasoning => "Reasoning",
         }
     }
+}
+
+/// Whether `span` is visible under `filter` + a `search` substring match
+/// over `span.label`.
+///
+/// The single shared predicate for span visibility — `draw`'s table/detail
+/// filtering and `app::App`'s `visible_len`/selection-clamp both call this
+/// so the two can never drift out of sync (they used to be two hand-kept
+/// copies of the same match arms; see the M1 final-review fix wave).
+pub(crate) fn span_matches(filter: Filter, span: &TraceSpan, search: &str) -> bool {
+    let filter_matches = match filter {
+        Filter::All => true,
+        Filter::Errors => matches!(span.status, SpanStatus::Failed),
+        Filter::Tools => matches!(span.kind, SpanKind::Tool),
+        Filter::Reasoning => matches!(span.kind, SpanKind::Reasoning),
+    };
+    filter_matches && (search.is_empty() || span.label.contains(search))
 }
 
 /// Interactive state that [`draw`] renders. Owned and mutated by the
@@ -95,8 +102,7 @@ pub fn draw(frame: &mut Frame, model: &TraceModel, ui: &UiState) {
     let visible: Vec<&TraceSpan> = model
         .spans()
         .iter()
-        .filter(|s| ui.filter.matches(s))
-        .filter(|s| ui.search.is_empty() || s.label.contains(&ui.search))
+        .filter(|s| span_matches(ui.filter, s, &ui.search))
         .collect();
 
     draw_table(frame, chunks[1], model, &visible, ui);

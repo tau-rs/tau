@@ -17,8 +17,9 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use tau_ports::TraceEvent;
-use tau_trace::{Span as TraceSpan, SpanKind, SpanStatus, TraceModel};
+use tau_trace::TraceModel;
 
+use super::render::span_matches;
 use super::{draw, Filter, UiState};
 
 /// Result of feeding one key to [`App::apply_key`].
@@ -183,15 +184,13 @@ impl App {
     }
 
     /// Number of spans currently visible under `ui.filter` + `ui.search`.
-    /// Mirrors the filter predicate `draw` applies (kept as a separate,
-    /// small duplication rather than exported from `render` — Task 5's
-    /// renderer is treated as frozen for M1, see the module doc).
+    /// Uses the same [`span_matches`] predicate `draw` filters with, so the
+    /// two can never drift out of sync.
     fn visible_len(&self) -> usize {
         self.model
             .spans()
             .iter()
-            .filter(|s| matches_filter(self.ui.filter, s))
-            .filter(|s| self.ui.search.is_empty() || s.label.contains(&self.ui.search))
+            .filter(|s| span_matches(self.ui.filter, s, &self.ui.search))
             .count()
     }
 
@@ -205,16 +204,6 @@ impl App {
         } else {
             self.ui.selected.min(len - 1)
         };
-    }
-}
-
-/// Same predicate `tau_cli::tui::draw` applies per [`Filter`] variant.
-fn matches_filter(filter: Filter, span: &TraceSpan) -> bool {
-    match filter {
-        Filter::All => true,
-        Filter::Errors => matches!(span.status, SpanStatus::Failed),
-        Filter::Tools => matches!(span.kind, SpanKind::Tool),
-        Filter::Reasoning => matches!(span.kind, SpanKind::Reasoning),
     }
 }
 

@@ -376,17 +376,34 @@ pub async fn run(
                 crate::tui::run_tui(crate::tui::TraceSource::Live(rx))
             });
             let (snapshot_res, tui_res) = tokio::join!(run_fut, tui_task);
-            match tui_res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(e.context("execution-trace TUI")),
-                Err(join_err) => {
+            // When both the run and the TUI task fail, the run/agent error
+            // is the one the operator needs to act on — surface it first,
+            // noting the TUI failure as extra context rather than letting
+            // it eclipse the more useful error (final-review fix wave,
+            // M1 execution-trace TUI).
+            match (snapshot_res, tui_res) {
+                (Err(run_err), tui_res) => {
+                    let err = anyhow::Error::new(run_err)
+                        .context(format!("multi-agent run for agent {:?}", args.agent_id));
+                    let err = match tui_res {
+                        Ok(Ok(())) => err,
+                        Ok(Err(tui_err)) => {
+                            err.context(format!("execution-trace TUI also errored: {tui_err}"))
+                        }
+                        Err(join_err) => err.context(format!(
+                            "execution-trace TUI task also panicked: {join_err}"
+                        )),
+                    };
+                    return Err(err);
+                }
+                (Ok(_), Ok(Err(e))) => return Err(e.context("execution-trace TUI")),
+                (Ok(_), Err(join_err)) => {
                     return Err(anyhow::anyhow!(
                         "execution-trace TUI task panicked: {join_err}"
                     ))
                 }
+                (Ok(snapshot), Ok(Ok(()))) => snapshot,
             }
-            snapshot_res
-                .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?
         } else {
             let (snapshot_res, stats) = tokio::join!(run_fut, run_printer(rx, output));
             let snapshot = snapshot_res

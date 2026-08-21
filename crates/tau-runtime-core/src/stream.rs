@@ -1611,6 +1611,41 @@ pub fn run_streaming_inner(
                                 role = ?validation_err_msg.sender,
                             );
                             messages.push(validation_err_msg);
+
+                            // M1 execution-trace TUI: a schema-invalid tool
+                            // call still deserves a waterfall row (status
+                            // "error") — mirrors the success-path emit
+                            // below, just without an invoke/teardown
+                            // duration beyond dispatch_start_ms. See the
+                            // success-path comment for why `capability` is
+                            // `None` only when `required` is empty: the
+                            // capability check above already passed (a
+                            // denial returns before dispatch entirely), so
+                            // a non-empty requirement is always `Allow`
+                            // here too.
+                            if let Some(state_arc) = options.orchestration_state.as_ref() {
+                                let duration_ms = (clock_ref(&options).now() - dispatch_start_ms)
+                                    .max(0) as u64;
+                                let capability = if required.is_empty() {
+                                    None
+                                } else {
+                                    Some(tau_ports::CapabilityVerdict::Allow)
+                                };
+                                let s = state_arc.borrow();
+                                s.trace.emit(tau_ports::TraceEvent {
+                                    id: crate::ids::ulid(clock_ref(&options), random_ref(&options)),
+                                    ts: crate::ids::now_utc(clock_ref(&options)),
+                                    run_id: s.run_id.clone(),
+                                    agent_id: Some(agent_def.id.to_string()),
+                                    kind: tau_ports::TraceEventKind::ToolCall {
+                                        tool_name: tool_use.name.clone(),
+                                        duration_ms,
+                                        status: "error".into(),
+                                        capability,
+                                    },
+                                });
+                            }
+
                             yield RunEvent::ToolCallCompleted {
                                 id: tool_use.id.clone(),
                                 name: tool_use.name.clone(),
@@ -3989,6 +4024,144 @@ paths = ["/etc/**"]
             matches!(tool_call.3, Some(tau_ports::CapabilityVerdict::Allow)),
             "expected Allow verdict for a satisfied grant, got {:?}",
             tool_call.3
+        );
+    }
+
+    /// FIX 1 (final-review fix wave, M1 execution-trace TUI): a tool call
+    /// whose args fail schema validation must still get a waterfall row.
+    /// Combines `dispatch_emits_toolcall_trace_event_with_verdict`'s
+    /// orchestration_state + collecting-subscriber harness with
+    /// `tool_dispatch_schema_validation_failure_yields_tool_call_completed_with_err`'s
+    /// strict-schema bad-args scenario.
+    #[tokio::test]
+    async fn dispatch_emits_toolcall_trace_event_with_error_status_on_validation_failure() {
+        use crate::orchestration::run_state::RunState;
+        use core::cell::RefCell;
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+
+        let strict_schema = {
+            use tau_domain::Value;
+            let j = serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "required": ["x"],
+                "additionalProperties": false
+            });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let spec = make_tool_spec(
+            "strict-tool".into(),
+            "strict args".into(),
+            strict_schema.clone(),
+        );
+        let mock_tool = MockTool::new("strict-tool", spec);
+        let tool_arc: Arc<dyn DynTool> = Arc::new(mock_tool);
+
+        let mut tools: HashMap<String, Arc<dyn DynTool>> = HashMap::new();
+        let mut validators: HashMap<String, ToolArgsValidator> = HashMap::new();
+        let tool_specs_list = vec![tool_arc.schema()];
+        tools.insert("strict-tool".to_string(), tool_arc);
+        validators.insert(
+            "strict-tool".to_string(),
+            crate::tool_args::ToolArgsValidator::compile(&strict_schema)
+                .expect("strict schema must compile"),
+        );
+
+        // Wire an orchestration_state with a collecting trace subscriber so
+        // we can inspect emitted TraceEvents after the run.
+        let state = RunState::new(
+            "run-toolcall-trace-badargs".into(),
+            "test-agent".into(),
+            tau_ports::RunBudget::default(),
+            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
+        );
+        #[allow(clippy::arc_with_non_send_sync)]
+        let state_arc = Arc::new(RefCell::new(state));
+        let collector = Arc::new(CollectingTraceSubscriber(std::sync::Mutex::new(Vec::new())));
+        state_arc.borrow_mut().trace.add_subscriber(
+            Arc::clone(&collector) as Arc<dyn crate::orchestration::TraceSubscriber>
+        );
+
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // LLM sends invalid args (missing required "x" field), then
+        // self-corrects with plain text.
+        let bad_args = {
+            let j = serde_json::json!({ "y": 42 });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use(
+                        "call_1".into(),
+                        "strict-tool".into(),
+                        bad_args,
+                    ),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: None,
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Corrected".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: None,
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![],
+            tool_specs_list,
+            vec![],
+            vec![],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call = trace_events
+            .iter()
+            .find_map(|e| match &e.kind {
+                tau_ports::TraceEventKind::ToolCall {
+                    tool_name,
+                    duration_ms,
+                    status,
+                    capability,
+                } => Some((
+                    tool_name.clone(),
+                    *duration_ms,
+                    status.clone(),
+                    capability.clone(),
+                )),
+                _ => None,
+            })
+            .expect("a ToolCall trace event must be emitted for a validation-failed call");
+
+        assert_eq!(tool_call.0, "strict-tool");
+        assert_eq!(
+            tool_call.2, "error",
+            "validation-failed call must report status \"error\""
         );
     }
 }
