@@ -276,9 +276,12 @@ jobs:
           with-mold: true
       - name: Install nightly (rustdoc JSON for cargo-semver-checks)
         run: rustup toolchain install nightly --profile minimal
-      - uses: taiki-e/install-action@492cad282ff2bc751208d9bdcbbcce57c3a90925  # cargo-semver-checks
+      # Pin cargo-semver-checks >=0.49 so it can parse rustdoc JSON format v60+
+      # emitted by current nightly; the old install-action snapshot defaulted to
+      # 0.48.0 (v57 max) and failed with "unsupported rustdoc format v60".
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f  # v2.86.4
         with:
-          tool: cargo-semver-checks
+          tool: cargo-semver-checks@0.50.0
       - name: tau-ports ABI must not break without a version bump
         run: cargo semver-checks --baseline-rev origin/main --package tau-ports
 
