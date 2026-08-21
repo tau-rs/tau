@@ -6,6 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
+use crate::capability::CapabilityRequirements;
 use crate::check::Condition;
 use crate::ids::{AgentId, PipelineStepId, StepId, ToolId};
 
@@ -28,6 +29,18 @@ pub struct PipelineStep {
     pub run: StepRun,
     /// Input template (`${input}`, `${steps.<id>.output}`).
     pub input: String,
+}
+
+/// One spawnable per-kind agent definition inside a [`StepRun::Dynamic`]
+/// region, resolved with its capability grant so the runtime gate
+/// (EPIC 4.5) is self-contained (no re-resolution against `tau.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DynamicSpawn {
+    /// The agent-kind name (`[agent.kinds.<kind>]`).
+    pub kind: String,
+    /// The kind's resolved capability grant.
+    pub capabilities: CapabilityRequirements,
 }
 
 /// What a [`PipelineStep`] executes — a reference to an existing node.
@@ -80,6 +93,22 @@ pub enum StepRun {
     Suspend {
         /// Signal name that resumes the run.
         resume_signal: String,
+    },
+    /// EPIC 4.4: a bounded dynamic region. Spawns up to `max_spawns` children
+    /// (concurrency-capped by `max_concurrency`) drawn from `spawns`, each
+    /// attenuated to `envelope`. Build-time verified: every spawn ⊆ envelope ⊆
+    /// owner ⊆ root `[allow]` (see `tau check governance`). Runtime execution +
+    /// membership/attenuation/bounds counters land in EPIC 4.5; the interpreter
+    /// meets it with `RuntimeError::DynamicRegionRequiresRuntimeGate` until then.
+    Dynamic {
+        /// Region capability envelope (ceiling); every spawn ⊆ this.
+        envelope: CapabilityRequirements,
+        /// Spawnable per-kind agent definitions this region may launch.
+        spawns: Vec<DynamicSpawn>,
+        /// Hard cap on total spawns (`> 0`, enforced at author time).
+        max_spawns: u64,
+        /// Hard cap on concurrent spawns (`0 < n <= max_spawns`).
+        max_concurrency: u64,
     },
 }
 

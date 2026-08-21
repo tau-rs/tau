@@ -18,6 +18,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod agent;
+pub mod agent_kind;
 pub mod error;
 pub mod id;
 pub mod ir_feature;
@@ -35,6 +36,7 @@ pub use crate::package::skill::{
     SkillContent, SkillContentError, SkillFrontmatter, SkillManifest, SKILL_DIR_VAR,
 };
 pub use agent::{AgentDefinition, AgentStatus, FailureKind};
+pub use agent_kind::AgentKind;
 pub use error::{
     AgentIdError, PackageKindError, PackageManifestError, PackageNameError, PackageSourceError,
     PluginKindError, PortKindError,
