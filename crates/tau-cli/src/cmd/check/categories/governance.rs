@@ -3,7 +3,9 @@
 //! every referenced/defined tool and every tool→mcp binding registered in
 //! `[allow.*]`. Model references are validated upstream by `validate_models`.
 //! Lattice: L0 (tool⊆ceiling), L1 (package manifest⊆root), L2 (IR tool⊆agent
-//! effective caps), L3 transparency Note (agent⊇spawn, runtime-enforced).
+//! effective caps), L3 (agent⊇spawn, build-enforced via per-kind
+//! `[agent.kinds.*]` agent definitions, EPIC 4.4), L4 (dynamic-region
+//! envelope: region⊆owner, spawn⊆region, EPIC 4.4).
 
 use std::path::Path;
 use std::time::Duration;
@@ -227,7 +229,6 @@ fn lattice(
     }
 
     // L1/L2/L3: per-agent package capability lattice.
-    let mut any_spawn = false;
     for agent in project.agents.values() {
         match resolve_agent_caps(agent, ctx) {
             AgentCaps::NotInstalled => {
@@ -314,24 +315,142 @@ fn lattice(
                         }
                     }
                 }
-                // L3 transparency: agent ⊇ spawn is runtime-enforced + build-deferred.
-                if manifest.iter().any(|c| matches!(c, Capability::Agent(_))) {
-                    any_spawn = true;
+                // L3: agent ⊇ spawn, now build-time enforced (EPIC 4.4). Each
+                // kind in the agent's Agent(Spawn { allowed_kinds }) must be an
+                // [agent.kinds.<kind>] whose caps ⊆ the agent's effective grant.
+                for cap in &manifest {
+                    if let Capability::Agent(tau_domain::AgentCapability::Spawn {
+                        allowed_kinds,
+                        ..
+                    }) = cap
+                    {
+                        for kind in allowed_kinds {
+                            match project.agent_kinds.get(kind) {
+                                None => out.push(lattice_error(
+                                    "unknown_spawn_kind",
+                                    "tau.governance.unknown_spawn_kind",
+                                    &format!(
+                                        "agent '{}' may spawn kind '{kind}' but no [agent.kinds.{kind}] is defined",
+                                        agent.id
+                                    ),
+                                    &tau_toml,
+                                )),
+                                Some(k) => {
+                                    if let Err(v) =
+                                        capability_set_subset(&k.capabilities, &effective)
+                                    {
+                                        out.push(lattice_error(
+                                            "spawn_exceeds_agent",
+                                            "tau.governance.spawn_exceeds_agent",
+                                            &format!(
+                                                "agent '{}': spawn kind '{kind}' capability {} \"{}\" exceeds the agent's effective grant ({})",
+                                                agent.id, v.kind, v.offender, v.reason
+                                            ),
+                                            &tau_toml,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-    if any_spawn {
-        out.push(CheckFinding {
-            category: CheckCategory::Governance,
-            severity: Severity::Note,
-            rule_id: "tau.governance.spawn_runtime_enforced",
-            summary: "agent ⊇ spawn is enforced at runtime; build-time enforcement is deferred pending per-kind agent definitions (EPIC 4)".to_string(),
-            detail: None,
-            location: None,
-            remediation: None,
-            structured: json!({ "check": "spawn_runtime_enforced" }),
-        });
+
+    // L4: dynamic-region envelope lattice (EPIC 4.4).
+    //   L4a region ⊆ owner (named agent's effective, else root [allow]).
+    //   L4b each spawn kind ⊆ region ceiling.
+    if let Some(pipeline) = &project.pipeline {
+        check_dynamic_regions(&pipeline.steps, project, allow, ctx, out);
+    }
+}
+
+fn check_dynamic_regions(
+    steps: &[tau_pkg::project::PipelineStepConfig],
+    project: &ProjectConfig,
+    allow: &AllowConfig,
+    ctx: &CheckCtx,
+    out: &mut Vec<CheckFinding>,
+) {
+    use tau_pkg::project::PipelineRunRef;
+    let tau_toml = ctx.project_root.join("tau.toml");
+    for step in steps {
+        match &step.run {
+            PipelineRunRef::Dynamic {
+                spawns,
+                ceiling,
+                agent,
+                ..
+            } => {
+                // L4a: region ceiling ⊆ owner.
+                let (owner_caps, owner_desc): (Vec<Capability>, String) = match agent {
+                    Some(a) => match project.agents.get(a).map(|ag| resolve_agent_caps(ag, ctx)) {
+                        Some(AgentCaps::Resolved { effective, .. }) => {
+                            (effective, format!("agent '{a}' effective grant"))
+                        }
+                        _ => (
+                            allow.ceiling.clone(),
+                            format!("agent '{a}' (unresolved; falling back to [allow])"),
+                        ),
+                    },
+                    None => (allow.ceiling.clone(), "[allow] ceiling".to_string()),
+                };
+                if let Err(v) = capability_set_subset(ceiling, &owner_caps) {
+                    out.push(lattice_error(
+                        "region_exceeds_ceiling",
+                        "tau.governance.region_exceeds_ceiling",
+                        &format!(
+                            "dynamic region '{}': envelope capability {} \"{}\" exceeds {} ({})",
+                            step.id, v.kind, v.offender, owner_desc, v.reason
+                        ),
+                        &tau_toml,
+                    ));
+                }
+                // L4b: each spawn kind ⊆ region ceiling.
+                for kind in spawns {
+                    match project.agent_kinds.get(kind) {
+                        None => out.push(lattice_error(
+                            "unknown_spawn_kind",
+                            "tau.governance.unknown_spawn_kind",
+                            &format!(
+                                "dynamic region '{}' spawns kind '{kind}' but no [agent.kinds.{kind}] is defined",
+                                step.id
+                            ),
+                            &tau_toml,
+                        )),
+                        Some(k) => {
+                            if let Err(v) = capability_set_subset(&k.capabilities, ceiling) {
+                                out.push(lattice_error(
+                                    "spawn_exceeds_region",
+                                    "tau.governance.spawn_exceeds_region",
+                                    &format!(
+                                        "dynamic region '{}': spawn kind '{kind}' capability {} \"{}\" exceeds the region envelope ({})",
+                                        step.id, v.kind, v.offender, v.reason
+                                    ),
+                                    &tau_toml,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            PipelineRunRef::Branch {
+                then, otherwise, ..
+            } => {
+                check_dynamic_regions(then, project, allow, ctx, out);
+                check_dynamic_regions(otherwise, project, allow, ctx, out);
+            }
+            PipelineRunRef::Parallel { branches } => {
+                for b in branches {
+                    check_dynamic_regions(b, project, allow, ctx, out);
+                }
+            }
+            PipelineRunRef::Loop { body, .. } => {
+                check_dynamic_regions(body, project, allow, ctx, out)
+            }
+            _ => {}
+        }
     }
 }
 
@@ -868,6 +987,151 @@ name = "demo"
     // (Removed `coarse_double_star_host_flagged`: `hosts = ["**"]` is now a
     // decode error, and the sole coarse net.http form — `hosts = "any"` — is
     // covered by `coarse_any_host_flagged`. See ADR-0064.)
+
+    #[test]
+    fn over_reaching_spawn_in_region_fails_check() {
+        // [allow] permits any host; [agent.kinds.greedy] also grants any host;
+        // but the dynamic region's own ceiling only permits api.crawler.test.
+        // greedy's grant ⊄ region ceiling → spawn_exceeds_region.
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = "any" }
+
+[agent.kinds.greedy]
+capabilities = { "net.http" = { hosts = "any" } }
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["greedy"]
+ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+max_spawns = 4
+max_concurrency = 2
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.spawn_exceeds_region"
+                    && x.severity == Severity::Error),
+            "got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn well_formed_region_is_clean_and_note_is_gone() {
+        // spawn kind's caps ⊆ region ceiling ⊆ root [allow]: no errors, and the
+        // old runtime-deferred transparency Note no longer appears (EPIC 4.4
+        // promotes it to a real build-time check).
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["api.crawler.test"] }
+
+[agent.kinds.researcher]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+max_spawns = 4
+max_concurrency = 2
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        let errs: Vec<_> = f.iter().filter(|x| x.severity == Severity::Error).collect();
+        assert!(
+            errs.is_empty(),
+            "expected no errors, got: {}",
+            summaries(&f)
+        );
+        assert!(
+            !f.iter()
+                .any(|x| x.rule_id == "tau.governance.spawn_runtime_enforced"),
+            "the deferred Note must be gone, got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn undefined_spawn_kind_in_region_flagged() {
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["api.crawler.test"] }
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["ghost"]
+ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+max_spawns = 4
+max_concurrency = 2
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.unknown_spawn_kind"
+                    && x.severity == Severity::Error
+                    && x.summary.contains("ghost")),
+            "got: {}",
+            summaries(&f)
+        );
+    }
+
+    #[test]
+    fn region_ceiling_exceeding_root_flagged() {
+        // Region ceiling grants a host root [allow] never permits, even though
+        // the spawned kind fits within the (over-wide) region ceiling — L4a
+        // fires independently of L4b.
+        let (cfg, dir) = proj(
+            r#"
+[project]
+name = "demo"
+
+[allow]
+"net.http" = { hosts = ["api.crawler.test"] }
+
+[agent.kinds.researcher]
+capabilities = { "net.http" = { hosts = ["evil.example"] } }
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = { "net.http" = { hosts = ["evil.example"] } }
+max_spawns = 4
+max_concurrency = 2
+"#,
+        );
+        let ctx = ctx_for(&dir);
+        let f = governance_findings(&cfg, Path::new("tau.toml"), &ctx);
+        assert!(
+            f.iter()
+                .any(|x| x.rule_id == "tau.governance.region_exceeds_ceiling"
+                    && x.severity == Severity::Error
+                    && x.summary.contains("evil.example")),
+            "got: {}",
+            summaries(&f)
+        );
+    }
 
     #[test]
     fn agent_override_exceeding_root_flagged() {

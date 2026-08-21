@@ -788,6 +788,22 @@ where
             | StepRun::Suspend { .. } => {
                 unreachable!("control-flow blocks are early-dispatched")
             }
+            // EPIC 4.4: `PipelineRunRef::Dynamic` lowers to `StepRun::Dynamic`
+            // (tau-ir-lower), but the interpreter does not yet execute dynamic
+            // regions — no early-dispatch exists for this variant (unlike
+            // Branch/Parallel/Loop/Suspend above), so it IS reachable here.
+            // Compile-exhaustiveness stub only; fail closed with a clear error
+            // rather than claim unreachability. Real execution is a follow-up
+            // task (see EPIC 4.4 plan: interpreter early-guard).
+            StepRun::Dynamic { .. } => {
+                return Err(RuntimeError::Internal {
+                    message: format!(
+                        "pipeline step {}: dynamic-region execution is not yet implemented \
+                         by the interpreter (EPIC 4.4 follow-up)",
+                        step.id.0
+                    ),
+                })
+            }
         };
 
         store.insert(step.id.0.clone(), output);
