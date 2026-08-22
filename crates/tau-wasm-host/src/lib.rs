@@ -26,8 +26,9 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use tau_ports::llm::CompletionResponse;
+use tau_ports::llm::{CompletionRequest, CompletionResponse};
 use tau_ports::target::wasi_map::PreopenAccess;
 use tau_ports::target::{resolve_wasi_config, WasiConfiguration};
 use wasmtime::component::{Component, HasSelf, Linker};
@@ -58,6 +59,88 @@ use tau::host::host;
 const CLOCK_STEP_MILLIS: u64 = 1;
 /// Seed for the [`HostState`] PRNG. Fixed so randomness is reproducible.
 const PRNG_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
+
+/// The four host functions a product supplies to run a tau component —
+/// the Rust face of the `tau:host/runner` WIT imports (EPIC 7.2).
+///
+/// Ports are owned by the run (`Box<dyn EmbedPorts>`; wasmtime's
+/// `Store<T: 'static>` forbids borrows). Impls that need state back after
+/// the run hold an `Arc` handle and keep a clone outside.
+pub trait EmbedPorts: Send {
+    /// Live inference. Typed: the host layer (de)serializes across the WIT
+    /// boundary; the `Err` string crosses into the guest's `result` error
+    /// arm. The WIT import is synchronous — an async product client blocks
+    /// inside its impl.
+    fn complete(&mut self, req: CompletionRequest) -> Result<CompletionResponse, String>;
+    /// Wall clock in milliseconds.
+    fn now_millis(&mut self) -> u64;
+    /// Next value from the product's entropy source.
+    fn next_u64(&mut self) -> u64;
+    /// One serialized `RunEvent` per call, in order, live as the guest emits
+    /// it. Raw JSON so this crate needs no tau-runtime-core dependency;
+    /// products deserialize with their own dep if they want typed events.
+    fn on_event(&mut self, event_json: &str);
+}
+
+/// The conformance ports: canned-cassette LLM, fixed-step clock, seeded
+/// SplitMix64 — exactly the behavior `run_component` has always had, now as
+/// one `EmbedPorts` impl.
+pub(crate) struct DeterministicPorts {
+    responses: VecDeque<String>,
+    clock_millis: u64,
+    prng_state: u64,
+    emitted: Arc<Mutex<Vec<String>>>,
+}
+
+impl DeterministicPorts {
+    /// Returns the ports plus the shared event-buffer handle the caller
+    /// drains after the run.
+    pub(crate) fn new(responses: Vec<String>) -> (Self, Arc<Mutex<Vec<String>>>) {
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                responses: responses.into(),
+                clock_millis: 0,
+                prng_state: PRNG_SEED,
+                emitted: Arc::clone(&emitted),
+            },
+            emitted,
+        )
+    }
+}
+
+impl EmbedPorts for DeterministicPorts {
+    fn complete(&mut self, _req: CompletionRequest) -> Result<CompletionResponse, String> {
+        let raw = self
+            .responses
+            .pop_front()
+            .ok_or_else(|| "tau-wasm-host: no canned completion response left".to_string())?;
+        serde_json::from_str(&raw)
+            .map_err(|e| format!("tau-wasm-host: invalid canned CompletionResponse: {e}"))
+    }
+
+    fn now_millis(&mut self) -> u64 {
+        let now = self.clock_millis;
+        self.clock_millis = self.clock_millis.wrapping_add(CLOCK_STEP_MILLIS);
+        now
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        // SplitMix64 — identical to the legacy HostState sequence.
+        self.prng_state = self.prng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.prng_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn on_event(&mut self, event_json: &str) {
+        self.emitted
+            .lock()
+            .expect("event buffer lock")
+            .push(event_json.to_string());
+    }
+}
 
 /// Errors surfaced by [`run_component`]. `thiserror` at the crate boundary;
 /// `wasmtime`/`serde_json` failures are wrapped, never leaked as `anyhow`.
@@ -331,6 +414,7 @@ pub fn run_component(
 mod tests {
     use super::*;
     use host::Host as _;
+    use tau_ports::llm::CompletionRequest;
 
     fn canned_response() -> String {
         // Minimal valid CompletionResponse JSON for cassette validation.
@@ -442,6 +526,49 @@ mod tests {
             escaped.exists(),
             existed_before,
             "guard must not create a dir outside the sandbox"
+        );
+    }
+
+    /// DeterministicPorts must reproduce HostState's exact sequences —
+    /// cross-checked against the legacy impl before Task 2 rewires it.
+    #[test]
+    fn deterministic_ports_matches_legacy_clock_and_prng() {
+        let mut legacy = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
+        let (mut ports, _emitted) = DeterministicPorts::new(vec![]);
+        for _ in 0..4 {
+            assert_eq!(ports.now_millis(), legacy.now_millis());
+            assert_eq!(ports.next_u64(), legacy.next_u64());
+        }
+    }
+
+    #[test]
+    fn deterministic_ports_pops_cassette_in_order_and_exhausts_with_legacy_error() {
+        let first = canned_response();
+        let (mut ports, _emitted) = DeterministicPorts::new(vec![first]);
+        let req = CompletionRequest::new("m".to_string());
+        let resp = ports.complete(req.clone()).expect("first canned response");
+        assert_eq!(resp.text, "");
+        assert_eq!(
+            ports.complete(req).unwrap_err(),
+            "tau-wasm-host: no canned completion response left"
+        );
+    }
+
+    #[test]
+    fn deterministic_ports_rejects_malformed_canned_response() {
+        let (mut ports, _emitted) = DeterministicPorts::new(vec!["not json".to_string()]);
+        let err = ports.complete(CompletionRequest::new("m".to_string())).unwrap_err();
+        assert!(err.contains("invalid canned CompletionResponse"), "got: {err}");
+    }
+
+    #[test]
+    fn deterministic_ports_buffers_events_via_shared_handle() {
+        let (mut ports, emitted) = DeterministicPorts::new(vec![]);
+        ports.on_event("{\"RunStarted\":null}");
+        ports.on_event("{\"RunCompleted\":{}}");
+        assert_eq!(
+            emitted.lock().unwrap().as_slice(),
+            ["{\"RunStarted\":null}", "{\"RunCompleted\":{}}"]
         );
     }
 }
