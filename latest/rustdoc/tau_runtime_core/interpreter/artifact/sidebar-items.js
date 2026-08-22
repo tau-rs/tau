@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["InMemoryArtifactReader"],"trait":["ArtifactReader"]};

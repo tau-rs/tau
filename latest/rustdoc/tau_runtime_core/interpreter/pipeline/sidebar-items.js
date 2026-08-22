@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["PipelineOutcome"],"fn":["run_pipeline","run_pipeline_suspendable"],"struct":["ResumeState","SuspendConfig"]};

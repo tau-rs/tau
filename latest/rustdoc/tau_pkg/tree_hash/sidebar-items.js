@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["TreeHashError"],"fn":["sha256_of_file","tree_hash"],"struct":["FileHash"]};

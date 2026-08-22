@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["channel_with_writer"],"struct":["MpscTraceSubscriber"]};
