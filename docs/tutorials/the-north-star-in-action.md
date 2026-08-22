@@ -176,13 +176,6 @@ wasm leg of this same fixture graduates from "refusal asserted" to
 
 ## Known gaps (tracked, pinned by tests)
 
-- [#620](https://github.com/tau-rs/tau/issues/620) — governed projects
-  cannot `tau run` yet: the run-path plugin loader resolves model
-  aliases from `[models]` only, while ADR-0057 forces them under
-  `[allow.models]`. Until it lands, the execution tests drive an
-  ungoverned variant derived from the same fixture;
-  `north_star_governed_dev_run_is_blocked_by_model_alias_bug` pins the
-  broken behavior and two `#[ignore]`d tests carry the intended one.
 - [#621](https://github.com/tau-rs/tau/issues/621) — wasm guest cannot
   execute Branch/Loop (see above).
 - [#623](https://github.com/tau-rs/tau/issues/623) — `tau run --bundle`
