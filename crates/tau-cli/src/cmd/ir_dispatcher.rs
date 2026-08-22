@@ -1024,6 +1024,7 @@ pub(crate) async fn setup_mcp_runtime(
                 arc_client.clone(),
                 st.name.clone(),
                 st.caps.clone(),
+                None,
                 st.input_schema.0.clone(),
                 st.description.clone().unwrap_or_default(),
             );
