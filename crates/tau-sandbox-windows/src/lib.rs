@@ -27,6 +27,8 @@
 
 #[cfg(target_os = "windows")]
 mod acl;
+#[cfg(target_os = "windows")]
+mod pipe_proxy;
 mod profile;
 
 pub use profile::{build_appcontainer_caps, AppContainerCaps};

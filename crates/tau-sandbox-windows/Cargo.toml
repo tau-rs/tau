@@ -14,7 +14,7 @@ tau-ports           = { workspace = true, features = ["serde", "process"] }
 tau-sandbox-proxy   = { workspace = true }
 serde               = { workspace = true, features = ["std"] }
 tracing             = { workspace = true }
-tokio               = { workspace = true }
+tokio               = { workspace = true, features = ["net"] }
 thiserror           = { workspace = true }
 
 [[bin]]
@@ -34,6 +34,8 @@ features = [
     "Win32_System_JobObjects",
     "Win32_System_Console",
     "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
     "Win32_Storage_FileSystem",
 ]
 

@@ -271,6 +271,65 @@ pub(crate) fn revoke_access(
     result
 }
 
+/// String form ("S-1-15-2-…") of an AppContainer profile's package SID.
+// `dead_code` allow: called from `pipe_proxy::spawn_pipe_proxy`, which is
+// itself only wired into `wrap_spawn_windows` in a later task (#622 PR2
+// task 5) — until then this helper has no live caller on this branch.
+#[allow(dead_code)]
+pub(crate) fn sid_string(profile: &AppContainerSid) -> std::io::Result<String> {
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    let psid = sid_for(&profile.profile_name)?;
+    let mut s = PWSTR::null();
+    let r = unsafe { ConvertSidToStringSidW(psid, &mut s) };
+    unsafe { FreeSid(psid) };
+    r.map_err(|e| std::io::Error::other(format!("ConvertSidToStringSidW: {e}")))?;
+    let out =
+        unsafe { s.to_string() }.map_err(|e| std::io::Error::other(format!("sid utf16: {e}")))?;
+    unsafe {
+        let _ = LocalFree(HLOCAL(s.as_ptr() as *mut _));
+    }
+    Ok(out)
+}
+
+/// String SID of the current process token's user. Used as the
+/// "user part" ACE of the egress pipe's DACL (an AppContainer access
+/// check requires BOTH a user-part and a container-part grant; Everyone
+/// must not be used — it would admit any non-AppContainer local process).
+// See `dead_code` note on `sid_string` above — same reason.
+#[allow(dead_code)]
+pub(crate) fn current_user_sid_string() -> std::io::Result<String> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)
+            .map_err(|e| std::io::Error::other(format!("OpenProcessToken: {e}")))?;
+        let mut len = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
+        let mut buf = vec![0u8; len as usize];
+        let r = GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buf.as_mut_ptr() as *mut _),
+            len,
+            &mut len,
+        );
+        let _ = windows::Win32::Foundation::CloseHandle(token);
+        r.map_err(|e| std::io::Error::other(format!("GetTokenInformation: {e}")))?;
+        let tu = &*(buf.as_ptr() as *const TOKEN_USER);
+        let mut s = PWSTR::null();
+        ConvertSidToStringSidW(tu.User.Sid, &mut s)
+            .map_err(|e| std::io::Error::other(format!("ConvertSidToStringSidW: {e}")))?;
+        let out = s
+            .to_string()
+            .map_err(|e| std::io::Error::other(format!("sid utf16: {e}")))?;
+        let _ = LocalFree(HLOCAL(s.as_ptr() as *mut _));
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
