@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["install","install_with_options","uninstall"],"struct":["BuildOptions","InstallOptions","InstalledPackage"]};
