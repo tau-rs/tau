@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["BuildError","HandshakeFailureReason","PluginKind","RuntimeError"],"struct":["CapabilityDenial"]};
