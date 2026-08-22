@@ -45,6 +45,7 @@ use wasmtime_wasi_http::p2::{
 };
 use wasmtime_wasi_http::WasiHttpCtx;
 
+pub mod embed;
 mod wasi;
 pub use wasi::EgressPolicy;
 
@@ -169,25 +170,15 @@ pub enum WasmHostError {
     WasiConfig(#[source] anyhow::Error),
 }
 
-/// Store data backing the `tau:host/host` imports with deterministic
-/// behaviour. One instance per [`run_component`] call. Not part of the
-/// public API — `run_component` extracts and returns only the `emitted`
-/// buffer (as a plain `Vec<String>`) rather than leaking this whole struct
-/// (cassette queue, clock, prng) to callers.
+/// Store data backing the `tau:host/host` imports. One instance per
+/// [`run_component_with_ports`] call.
 ///
 /// No `#[derive(Debug)]`: the WASI fields (`WasiCtx`/`WasiHttpCtx`, EPIC 3.3)
 /// are not `Debug`, and this struct is never formatted.
 struct HostState {
-    /// Queue of canned `CompletionResponse` JSON strings, popped front-first
-    /// on each `complete` call. Empty queue → `complete` returns its error
-    /// arm so a guest that over-calls fails loudly rather than hangs.
-    responses: VecDeque<String>,
-    /// Monotonic millisecond counter; advances by [`CLOCK_STEP_MILLIS`].
-    clock_millis: u64,
-    /// SplitMix64 state, seeded from [`PRNG_SEED`].
-    prng_state: u64,
-    /// RunEvents streamed from the guest during `call_run`, in order.
-    emitted: Vec<String>,
+    /// The four host functions, supplied by the caller (EPIC 7.2). The
+    /// conformance entrypoints pass `DeterministicPorts`.
+    ports: Box<dyn EmbedPorts>,
     /// WASI 0.2 resource table (EPIC 3.3).
     table: ResourceTable,
     /// WASI 0.2 host context: exactly the preopens/network derived from the
@@ -204,12 +195,9 @@ struct HostState {
 }
 
 impl HostState {
-    fn new(responses: Vec<String>, wasi: WasiCtx, egress: EgressPolicy) -> Self {
+    fn new(ports: Box<dyn EmbedPorts>, wasi: WasiCtx, egress: EgressPolicy) -> Self {
         Self {
-            responses: responses.into(),
-            clock_millis: 0,
-            prng_state: PRNG_SEED,
-            emitted: Vec::new(),
+            ports,
             table: ResourceTable::new(),
             wasi,
             http: WasiHttpCtx::new(),
@@ -219,30 +207,24 @@ impl HostState {
 }
 
 impl host::Host for HostState {
-    fn complete(&mut self, _request_json: String) -> Result<String, String> {
-        match self.responses.pop_front() {
-            Some(resp) => Ok(resp),
-            None => Err("tau-wasm-host: no canned completion response left".to_string()),
-        }
+    fn complete(&mut self, request_json: String) -> Result<String, String> {
+        let req: CompletionRequest = serde_json::from_str(&request_json)
+            .map_err(|e| format!("tau-wasm-host: malformed CompletionRequest from guest: {e}"))?;
+        let resp = self.ports.complete(req)?;
+        serde_json::to_string(&resp)
+            .map_err(|e| format!("tau-wasm-host: failed to serialize CompletionResponse: {e}"))
     }
 
     fn now_millis(&mut self) -> u64 {
-        let now = self.clock_millis;
-        self.clock_millis = self.clock_millis.wrapping_add(CLOCK_STEP_MILLIS);
-        now
+        self.ports.now_millis()
     }
 
     fn next_u64(&mut self) -> u64 {
-        // SplitMix64 — small, fast, fully deterministic from a seed.
-        self.prng_state = self.prng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.prng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        self.ports.next_u64()
     }
 
     fn emit_event(&mut self, event_json: String) {
-        self.emitted.push(event_json);
+        self.ports.on_event(&event_json);
     }
 }
 
@@ -369,9 +351,23 @@ pub fn run_component_with_caps(
     for resp in &llm_responses {
         serde_json::from_str::<CompletionResponse>(resp).map_err(WasmHostError::InvalidResponse)?;
     }
+    let (ports, emitted) = DeterministicPorts::new(llm_responses);
+    let payload = run_component_with_ports(wasm_bytes, prompt, Box::new(ports), caps, sandbox_root)?;
+    let emitted = std::mem::take(&mut *emitted.lock().expect("event buffer lock"));
+    Ok((payload, emitted))
+}
 
-    // Consume the canonical no_std cap→config fold (tau-ports, PR #533); the
-    // host only translates its output into a wasmtime `WasiCtx` + egress gate.
+/// Variant A embedding entry (EPIC 7.2): run a built tau component with
+/// caller-supplied [`EmbedPorts`]. Events reach `ports.on_event` live, one
+/// serialized `RunEvent` per call; the `Ok` value is the guest's payload
+/// sentinel (empty today, reserved for forward-compat).
+pub fn run_component_with_ports(
+    wasm_bytes: &[u8],
+    prompt: &str,
+    ports: Box<dyn EmbedPorts>,
+    caps: &[tau_domain::Capability],
+    sandbox_root: &Path,
+) -> Result<String, WasmHostError> {
     let cfg = resolve_wasi_config(caps);
     let wasi = wasi_ctx_from_config(&cfg, sandbox_root)?;
     let egress = EgressPolicy::from_config(&cfg);
@@ -388,13 +384,12 @@ pub fn run_component_with_caps(
     Runner::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |state| state)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
-    let mut store = Store::new(&engine, HostState::new(llm_responses, wasi, egress));
+    let mut store = Store::new(&engine, HostState::new(ports, wasi, egress));
     let runner = Runner::instantiate(&mut store, &component, &linker)
         .map_err(|e| WasmHostError::Instantiate(e.into()))?;
 
-    let result = runner.call_run(&mut store, prompt);
-    match result {
-        Ok(Ok(payload)) => Ok((payload, store.into_data().emitted)),
+    match runner.call_run(&mut store, prompt) {
+        Ok(Ok(payload)) => Ok(payload),
         Ok(Err(guest_err)) => Err(WasmHostError::Guest(guest_err)),
         Err(trap) => Err(WasmHostError::Trap(trap.into())),
     }
@@ -435,7 +430,11 @@ mod tests {
 
     #[test]
     fn clock_advances_by_fixed_step() {
-        let mut state = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
+        let mut state = HostState::new(
+            Box::new(DeterministicPorts::new(vec![]).0),
+            empty_wasi_ctx(),
+            empty_egress(),
+        );
         assert_eq!(state.now_millis(), 0);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS);
         assert_eq!(state.now_millis(), CLOCK_STEP_MILLIS * 2);
@@ -443,8 +442,16 @@ mod tests {
 
     #[test]
     fn prng_is_deterministic_and_seeded() {
-        let mut a = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
-        let mut b = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
+        let mut a = HostState::new(
+            Box::new(DeterministicPorts::new(vec![]).0),
+            empty_wasi_ctx(),
+            empty_egress(),
+        );
+        let mut b = HostState::new(
+            Box::new(DeterministicPorts::new(vec![]).0),
+            empty_wasi_ctx(),
+            empty_egress(),
+        );
         let seq_a: Vec<u64> = (0..4).map(|_| a.next_u64()).collect();
         let seq_b: Vec<u64> = (0..4).map(|_| b.next_u64()).collect();
         assert_eq!(seq_a, seq_b, "same seed must yield same sequence");
@@ -453,15 +460,24 @@ mod tests {
 
     #[test]
     fn complete_pops_responses_then_errors() {
+        // HostState::complete now round-trips JSON across the delegation
+        // boundary (EPIC 7.2); the raw cassette-queue behavior it used to
+        // implement directly is covered at the `DeterministicPorts` level by
+        // `deterministic_ports_pops_cassette_in_order_and_exhausts_with_legacy_error`.
+        // This test proves HostState's `host::Host::complete` still delegates
+        // correctly end-to-end: valid request JSON in, canned response out,
+        // exhausted queue surfaces as an `Err` string.
         let mut state = HostState::new(
-            vec!["first".to_string(), "second".to_string()],
+            Box::new(DeterministicPorts::new(vec![canned_response(), canned_response()]).0),
             empty_wasi_ctx(),
             empty_egress(),
         );
-        assert_eq!(state.complete(String::new()), Ok("first".to_string()));
-        assert_eq!(state.complete(String::new()), Ok("second".to_string()));
+        let req_json =
+            serde_json::to_string(&CompletionRequest::new("m".to_string())).expect("req json");
+        assert!(state.complete(req_json.clone()).is_ok());
+        assert!(state.complete(req_json.clone()).is_ok());
         assert!(
-            state.complete(String::new()).is_err(),
+            state.complete(req_json).is_err(),
             "exhausted queue errors"
         );
     }
@@ -533,7 +549,11 @@ mod tests {
     /// cross-checked against the legacy impl before Task 2 rewires it.
     #[test]
     fn deterministic_ports_matches_legacy_clock_and_prng() {
-        let mut legacy = HostState::new(vec![], empty_wasi_ctx(), empty_egress());
+        let mut legacy = HostState::new(
+            Box::new(DeterministicPorts::new(vec![]).0),
+            empty_wasi_ctx(),
+            empty_egress(),
+        );
         let (mut ports, _emitted) = DeterministicPorts::new(vec![]);
         for _ in 0..4 {
             assert_eq!(ports.now_millis(), legacy.now_millis());
