@@ -62,8 +62,11 @@ supplies its own ports.
 CARGO_TARGET_DIR=target/main cargo run -p embed-native-host
 ```
 
-prints a `RunOutcome::Completed { total_turns: 2, final_message: Text("done"), .. }`
-and exits 0 (one tool-call turn for `echo`, one final text turn).
+prints a `{:#?}`-formatted `Completed { .. }` outcome (abbreviated below — the
+real derive(Debug) output nests the full `Message` struct and orders fields
+as declared) with `total_turns: 2` and a `final_message` whose payload is
+`Text { content: "done" }`, then exits 0 (one tool-call turn for `echo`, one
+final text turn).
 
 ```bash
 CARGO_TARGET_DIR=target/main cargo test -p embed-native-host
