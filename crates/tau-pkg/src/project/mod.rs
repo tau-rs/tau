@@ -10,6 +10,7 @@
 
 pub mod agent;
 pub mod allow;
+pub mod dirs;
 #[allow(clippy::module_inception)]
 pub mod project;
 

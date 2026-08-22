@@ -16,6 +16,7 @@ tau-ports             = { workspace = true, features = ["serde"] }
 thiserror             = { workspace = true, features = ["std"] }
 toml                  = { workspace = true }
 serde                 = { workspace = true }
+serde_yaml            = { workspace = true }
 # Source-agnostic whole-tree SHA-256 for `tau verify` (ADR-0012 / priority 7).
 sha2            = { workspace = true }
 walkdir         = { workspace = true }
