@@ -18,6 +18,7 @@
 - [Overview](tutorials/README.md)
 - [Bootstrap a tau project](tutorials/bootstrap-a-tau-project.md)
 - [Build your first skill](tutorials/build-your-first-skill.md)
+- [The north-star in action](tutorials/the-north-star-in-action.md)
 
 # How-to
 
