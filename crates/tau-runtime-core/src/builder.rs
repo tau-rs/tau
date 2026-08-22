@@ -133,6 +133,13 @@ pub trait DynTool: Send + Sync {
     /// Capabilities the tool requires of the calling agent's package.
     fn capabilities(&self) -> &[tau_domain::Capability];
 
+    /// Runtime authority when narrower than [`DynTool::capabilities`] —
+    /// see `Tool::effective_capabilities` (execution-trace TUI spec §12).
+    /// Default: not narrowed.
+    fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+        None
+    }
+
     /// Boxed-future wrapper for [`Tool::init`] (returns the empty
     /// session value `()` for stateless tools).
     fn init<'a>(&'a self, ctx: SessionContext) -> BoxFuture<'a, Result<(), ToolError>>;
@@ -160,6 +167,10 @@ impl<T: Tool<Session = ()> + 'static> DynTool for T {
 
     fn capabilities(&self) -> &[tau_domain::Capability] {
         Tool::capabilities(self)
+    }
+
+    fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+        Tool::effective_capabilities(self)
     }
 
     fn init<'a>(&'a self, ctx: SessionContext) -> BoxFuture<'a, Result<(), ToolError>> {
@@ -1017,5 +1028,75 @@ mod tests {
             runtime.tool_validators().contains_key("any-args"),
             "validator stored even on opt-out"
         );
+    }
+
+    #[test]
+    fn blanket_dyn_tool_forwards_effective_capabilities() {
+        use std::sync::Arc;
+
+        // A Tool overriding effective_capabilities must surface it through
+        // the blanket DynTool impl under dyn dispatch — not fall back to
+        // the DynTool default of None.
+        struct NarrowedTool {
+            inner: tau_ports::fixtures::MockTool,
+            effective: Vec<tau_domain::Capability>,
+        }
+
+        impl tau_ports::Tool for NarrowedTool {
+            type Session = ();
+
+            fn name(&self) -> &str {
+                tau_ports::Tool::name(&self.inner)
+            }
+
+            fn schema(&self) -> tau_ports::ToolSpec {
+                tau_ports::Tool::schema(&self.inner)
+            }
+
+            fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+                Some(&self.effective)
+            }
+
+            async fn init(
+                &self,
+                ctx: tau_ports::SessionContext,
+            ) -> Result<Self::Session, tau_ports::ToolError> {
+                tau_ports::Tool::init(&self.inner, ctx).await
+            }
+
+            async fn invoke(
+                &self,
+                session: &mut Self::Session,
+                args: tau_domain::Value,
+            ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
+                tau_ports::Tool::invoke(&self.inner, session, args).await
+            }
+
+            async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
+                tau_ports::Tool::teardown(&self.inner, session).await
+            }
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CapWrapper {
+            cap: tau_domain::Capability,
+        }
+        let cap: tau_domain::Capability = toml::from_str::<CapWrapper>(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n",
+        )
+        .unwrap()
+        .cap;
+
+        let spec = tau_ports::fixtures::make_tool_spec(
+            "narrowed".into(),
+            "narrowed".into(),
+            tau_domain::Value::Null,
+        );
+        let tool: Arc<dyn DynTool> = Arc::new(NarrowedTool {
+            inner: tau_ports::fixtures::MockTool::new("narrowed", spec),
+            effective: vec![cap.clone()],
+        });
+
+        assert_eq!(tool.effective_capabilities(), Some(&[cap][..]));
     }
 }
