@@ -101,6 +101,13 @@ jobs:
           # One review comment per PR, updated in place on re-review,
           # instead of a new comment per labeled run.
           use_sticky_comment: true
+          # Force tag mode for this labeled-PR event. Without it the
+          # action runs in bare agent mode, where the GitHub comment
+          # tools are not allowlisted — verified on PR #632: Claude
+          # completed the review (32 turns) but hit 13 permission
+          # denials trying to post it, and the run went green with no
+          # comment. Tag mode wires up PR context + the comment tool.
+          track_progress: true
           # Pin the model via claude_args (the v1 action has no `model`
           # input). Pinning survives the action's default-model churn —
           # the old pinned default was retired and 404'd every run.
@@ -118,8 +125,7 @@ jobs:
             clippy-caught issues (the clippy job covers those).
             Be concise. If the PR is in great shape, say so plainly
             instead of inventing nits.
-            Post the review as a PR comment using the GitHub comment
-            tools.
+            Post the full review in your PR comment.
 
   release-summary:
     name: release summary
@@ -152,6 +158,13 @@ jobs:
           echo "Previous tag/commit: $previous"
 
       - uses: anthropics/claude-code-action@dcb57747bfceeaa1fa72638cae52295d1d853d4a  # v1.0.199
+        # `release` events run in bare agent mode (track_progress only
+        # applies to PR/issue events), where no tools are allowlisted by
+        # default — grant exactly what the task needs via --allowedTools
+        # and give the Bash tool a GH_TOKEN so `gh issue create` works
+        # (the job's `issues: write` permission scopes what it can do).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # See note above on the PR-review job — same reason: survive
@@ -159,7 +172,9 @@ jobs:
           # instead of the GitHub App installation token.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # See the model-pin note on the PR-review job.
-          claude_args: "--model claude-sonnet-5"
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git tag:*),Bash(git rev-list:*),Bash(gh issue create:*)"
           # Both interpolated values are GitHub-controlled or
           # maintainer-controlled (tag name from a published release,
           # which requires write access; a tag/SHA resolved by the
@@ -177,5 +192,5 @@ jobs:
                 version should know about
               - Recommended manual smoke tests before publishing
                 release notes
-            Use the GitHub MCP tools to open the issue. Be concise;
-            this is a record, not a full audit.
+            Open the issue with `gh issue create`. Be concise; this is
+            a record, not a full audit.
