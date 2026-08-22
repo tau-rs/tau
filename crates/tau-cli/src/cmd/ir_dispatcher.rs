@@ -938,6 +938,44 @@ fn mcp_capability_plan(
     Ok(CapabilityPlan::new(caps, None, None))
 }
 
+/// Per-server-tool narrowed authority (execution-trace TUI spec §12.3).
+///
+/// `Some(effective)` iff the entry's meet-clamped [`CapabilityPlan`]
+/// narrows this tool's declared `net.http` caps — i.e. the declared net
+/// caps are not a subset of the plan's. The effective set is the tool's
+/// non-net declared caps plus `meet(declared_net, plan_net)` (which may
+/// contain no net cap at all after a fail-closed empty meet — still a
+/// clamp; the kernel renders it `none`). `None` = not narrowed: no net
+/// caps declared, ungoverned plan, or the ceiling already covers the
+/// declared hosts. Only hosts narrow today — the `[allow.mcp]` registry
+/// is an any-method host ceiling — but the comparison spans full net
+/// caps so a method-carrying ceiling needs no rework here.
+fn tool_effective_capabilities(
+    declared: &[tau_domain::Capability],
+    plan: &CapabilityPlan,
+) -> Option<Vec<tau_domain::Capability>> {
+    let (declared_net, declared_rest): (Vec<tau_domain::Capability>, Vec<tau_domain::Capability>) =
+        declared
+            .iter()
+            .cloned()
+            .partition(|c| matches!(c, tau_domain::Capability::Network(_)));
+    if declared_net.is_empty() {
+        return None;
+    }
+    let plan_net: Vec<tau_domain::Capability> = plan
+        .capabilities
+        .iter()
+        .filter(|c| matches!(c, tau_domain::Capability::Network(_)))
+        .cloned()
+        .collect();
+    if tau_domain::capability_subset(&declared_net, &plan_net).is_ok() {
+        return None;
+    }
+    let mut effective = declared_rest;
+    effective.extend(tau_domain::meet(&declared_net, &plan_net));
+    Some(effective)
+}
+
 /// Boot the MCP runtime: per-entry handshake + drift check +
 /// `WiredHostHandlers` + inbound dispatch + `McpBackedTool` registration.
 ///
@@ -1019,11 +1057,13 @@ pub(crate) async fn setup_mcp_runtime(
         // Per server-tool in the contract, register one McpBackedTool.
         for st in &arc_client.contract().tools {
             let ir_tool_id = tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
+            let effective = tool_effective_capabilities(&st.caps, &plan);
             let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
                 ir_tool_id.0.clone(),
                 arc_client.clone(),
                 st.name.clone(),
                 st.caps.clone(),
+                effective,
                 st.input_schema.0.clone(),
                 st.description.clone().unwrap_or_default(),
             );
@@ -1120,8 +1160,8 @@ mod sandbox_plan_tests {
     use std::sync::Arc;
 
     use super::{
-        mcp_capability_plan, setup_mcp_runtime, DynLlmBackend, LockFile, LockedMcpEntry,
-        RuntimeError,
+        mcp_capability_plan, setup_mcp_runtime, tool_effective_capabilities, DynLlmBackend,
+        LockFile, LockedMcpEntry, RuntimeError,
     };
 
     fn cap(json: serde_json::Value) -> Capability {
@@ -1312,6 +1352,89 @@ hosts = ["api.weather.com"]
             .expect("net cap present");
         let net_json = serde_json::to_value(net).expect("serialize");
         assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn tool_without_net_caps_is_never_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(
+            serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}),
+        )];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn tool_covered_by_plan_is_not_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        // This tool only ever declared the allowed host — nothing narrowed.
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com"],
+        }))];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn narrowed_tool_reports_effective_with_clamped_hosts() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let fs = cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}));
+        let declared = vec![
+            fs.clone(),
+            cap(serde_json::json!({
+                "kind": "net.http",
+                "hosts": ["api.weather.com", "evil.example"],
+            })),
+        ];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("narrowed → Some");
+        // Non-net declared caps pass through untouched.
+        assert!(effective.contains(&fs));
+        // Exactly one net cap, meet-clamped to the ceiling host.
+        let nets: Vec<&Capability> = effective
+            .iter()
+            .filter(|c| matches!(c, Capability::Network(_)))
+            .collect();
+        assert_eq!(nets.len(), 1, "one clamped net cap: {effective:?}");
+        let net_json = serde_json::to_value(nets[0]).expect("serialize");
+        assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn empty_meet_reports_effective_without_net_caps() {
+        // The plan dropped the disjoint net cap entirely (fail-closed) —
+        // the tool is clamped to zero net authority, which must surface as
+        // Some(effective-without-net), not None (kernel renders `none`).
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("clamped → Some");
+        assert!(
+            !effective
+                .iter()
+                .any(|c| matches!(c, Capability::Network(_))),
+            "no net authority survives: {effective:?}"
+        );
     }
 }
 
