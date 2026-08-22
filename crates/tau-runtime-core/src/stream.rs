@@ -4015,6 +4015,56 @@ paths = ["/etc/**"]
         toml::from_str::<CapWrapper>(toml_str).unwrap().cap
     }
 
+    /// A tool whose runtime authority was narrowed at open time (e.g. an
+    /// MCP entry meet-clamped by `[allow.mcp.<entry>].hosts`):
+    /// `capabilities()` returns the full declared set,
+    /// `effective_capabilities()` the narrower runtime set. Shared by the
+    /// clamp-verdict tests (success path and schema-invalid path).
+    struct ClampedTool {
+        inner: tau_ports::fixtures::MockTool,
+        required: Vec<tau_domain::Capability>,
+        effective: Vec<tau_domain::Capability>,
+    }
+
+    impl tau_ports::Tool for ClampedTool {
+        type Session = ();
+
+        fn name(&self) -> &str {
+            tau_ports::Tool::name(&self.inner)
+        }
+
+        fn schema(&self) -> tau_ports::ToolSpec {
+            tau_ports::Tool::schema(&self.inner)
+        }
+
+        fn capabilities(&self) -> &[tau_domain::Capability] {
+            &self.required
+        }
+
+        fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+            Some(&self.effective)
+        }
+
+        async fn init(
+            &self,
+            ctx: tau_ports::SessionContext,
+        ) -> Result<Self::Session, tau_ports::ToolError> {
+            tau_ports::Tool::init(&self.inner, ctx).await
+        }
+
+        async fn invoke(
+            &self,
+            session: &mut Self::Session,
+            args: tau_domain::Value,
+        ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
+            tau_ports::Tool::invoke(&self.inner, session, args).await
+        }
+
+        async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
+            tau_ports::Tool::teardown(&self.inner, session).await
+        }
+    }
+
     #[test]
     fn render_clamped_to_joins_sorted_hosts() {
         let eff = vec![test_cap(
@@ -4205,51 +4255,8 @@ paths = ["/etc/**"]
         // request two hosts, effective caps carry one. The grant covers the
         // DECLARED caps — kernel gate semantics unchanged — so dispatch
         // succeeds, but the ToolCall verdict must be Clamp, not Allow.
-        struct ClampedTool {
-            inner: MockTool,
-            required: Vec<tau_domain::Capability>,
-            effective: Vec<tau_domain::Capability>,
-        }
-
-        impl tau_ports::Tool for ClampedTool {
-            type Session = ();
-
-            fn name(&self) -> &str {
-                tau_ports::Tool::name(&self.inner)
-            }
-
-            fn schema(&self) -> tau_ports::ToolSpec {
-                tau_ports::Tool::schema(&self.inner)
-            }
-
-            fn capabilities(&self) -> &[tau_domain::Capability] {
-                &self.required
-            }
-
-            fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
-                Some(&self.effective)
-            }
-
-            async fn init(
-                &self,
-                ctx: tau_ports::SessionContext,
-            ) -> Result<Self::Session, tau_ports::ToolError> {
-                tau_ports::Tool::init(&self.inner, ctx).await
-            }
-
-            async fn invoke(
-                &self,
-                session: &mut Self::Session,
-                args: tau_domain::Value,
-            ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
-                tau_ports::Tool::invoke(&self.inner, session, args).await
-            }
-
-            async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
-                tau_ports::Tool::teardown(&self.inner, session).await
-            }
-        }
-
+        // `ClampedTool` is defined at module scope (shared with
+        // `schema_invalid_call_from_clamped_tool_emits_clamp_trace_event`).
         let declared = test_cap(
             "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\", \"evil.example\"]\n",
         );
@@ -4432,6 +4439,133 @@ paths = ["/etc/**"]
             tool_call.2, "error",
             "validation-failed call must report status \"error\""
         );
+    }
+
+    /// Final-review fix wave (M1.5 clamp rows): the schema-invalid emit
+    /// site (§12.4) shares its `capability_verdict` call with the
+    /// success-path emit, but only the success path had a covering test
+    /// for `Clamp`. Combines
+    /// `dispatch_emits_toolcall_trace_event_with_error_status_on_validation_failure`'s
+    /// strict-schema bad-args scenario with `clamped_tool_emits_clamp_trace_event`'s
+    /// `ClampedTool` (declared caps wider than effective caps) to assert the
+    /// schema-invalid row still carries a `Clamp` verdict, not `Allow`.
+    #[tokio::test]
+    async fn schema_invalid_call_from_clamped_tool_emits_clamp_trace_event() {
+        use tau_ports::fixtures::make_tool_spec;
+
+        let strict_schema = {
+            use tau_domain::Value;
+            let j = serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "required": ["x"],
+                "additionalProperties": false
+            });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let declared = test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\", \"evil.example\"]\n",
+        );
+        let effective = test_cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+
+        let spec = make_tool_spec(
+            "clamped-strict-tool".into(),
+            "clamped strict args".into(),
+            strict_schema.clone(),
+        );
+        let tool = ClampedTool {
+            inner: tau_ports::fixtures::MockTool::new("clamped-strict-tool", spec),
+            required: vec![declared.clone()],
+            effective: vec![effective],
+        };
+        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
+
+        let mut tools: HashMap<String, Arc<dyn DynTool>> = HashMap::new();
+        let mut validators: HashMap<String, ToolArgsValidator> = HashMap::new();
+        let tool_specs_list = vec![tool_arc.schema()];
+        tools.insert("clamped-strict-tool".to_string(), tool_arc);
+        validators.insert(
+            "clamped-strict-tool".to_string(),
+            crate::tool_args::ToolArgsValidator::compile(&strict_schema)
+                .expect("strict schema must compile"),
+        );
+
+        // Wire an orchestration_state with a collecting trace subscriber so
+        // we can inspect emitted TraceEvents after the run.
+        let (state_arc, collector) = collecting_trace_state("run-clamp-trace-badargs");
+
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // LLM sends invalid args (missing required "x" field), then
+        // self-corrects with plain text.
+        let bad_args = {
+            let j = serde_json::json!({ "y": 42 });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use(
+                        "call_1".into(),
+                        "clamped-strict-tool".into(),
+                        bad_args,
+                    ),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: None,
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Corrected".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: None,
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![declared.clone()], // grant covers DECLARED → kernel gate passes
+            tool_specs_list,
+            vec![],
+            vec![declared],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call = first_tool_call(&trace_events)
+            .expect("a ToolCall trace event must be emitted for a validation-failed call");
+
+        assert_eq!(tool_call.0, "clamped-strict-tool");
+        assert_eq!(
+            tool_call.2, "error",
+            "validation-failed call must report status \"error\""
+        );
+        match tool_call.3 {
+            Some(tau_ports::CapabilityVerdict::Clamp { ref to }) => {
+                assert_eq!(to, "api.weather.com");
+            }
+            ref other => panic!("expected Clamp verdict, got {other:?}"),
+        }
     }
 
     /// Item 1 (M1.5): a capability-DENIED tool aborts the run before the
