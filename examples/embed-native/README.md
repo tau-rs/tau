@@ -56,6 +56,12 @@ supplies its own ports.
   `run_ir`, and prints the resulting `RunOutcome`.
 - `tests/runs.rs` — asserts the embedding runs to completion in CI.
 
+Both `main.rs` and `tests/runs.rs` pick the entry agent with
+`module.workflow.agents.keys().next()`. That only works because this
+workflow has exactly one agent — `IrModule` has no `entry_agent()`
+accessor, so a multi-agent workflow would need the embedder to choose the
+entry `AgentId` deliberately.
+
 ## Run and test
 
 ```bash

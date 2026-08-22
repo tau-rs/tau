@@ -35,15 +35,7 @@ impl HostRandom {
             state: AtomicU64::new(seed),
         }
     }
-}
 
-impl Default for HostRandom {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HostRandom {
     /// Draw the next xorshift64* value via a compare-exchange retry loop
     /// so concurrent callers (this crate pulls tokio `rt-multi-thread`,
     /// and `RandomSource` is `Send + Sync`) each observe a distinct state
@@ -63,6 +55,12 @@ impl HostRandom {
                 Err(actual) => s = actual,
             }
         }
+    }
+}
+
+impl Default for HostRandom {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
