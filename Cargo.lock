@@ -4964,6 +4964,7 @@ dependencies = [
  "tau-ir-lower",
  "tau-mcp",
  "tau-mcp-tokio",
+ "tau-native-tools",
  "tau-observe",
  "tau-pkg",
  "tau-plugin-protocol",
@@ -5136,6 +5137,7 @@ dependencies = [
 name = "tau-native-tools"
 version = "0.0.0"
 dependencies = [
+ "regex-automata",
  "serde_json",
 ]
 

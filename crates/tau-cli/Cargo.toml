@@ -66,6 +66,9 @@ sha2               = { workspace = true }
 regex              = { workspace = true }
 # JSON Schema validation for the `FN_BUILTIN_SCHEMA_VALID` goal predicate (Task 22).
 jsonschema         = { workspace = true }
+# Shared std-free goal predicates (exists/non_empty/equals/matches/min_count),
+# delegated to from BuiltinDeterministicRegistry (#621 Task 2).
+tau-native-tools    = { path = "../tau-native-tools", features = ["goal-predicates"] }
 
 [dev-dependencies]
 assert_cmd       = "2"
