@@ -332,11 +332,6 @@ impl PluginProcess {
         );
 
         let mut command = Command::new(binary_path);
-        command
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
         // Clear the inherited env and re-add only the identity vars,
         // PATH, and the secret-env allowlist (so env-provided keys like
         // ANTHROPIC_API_KEY reach the plugin without plaintext config).
@@ -392,6 +387,20 @@ impl PluginProcess {
         } else {
             None
         };
+
+        // Apply piped stdio + kill_on_drop AFTER sandbox `wrap_spawn`. The
+        // command-rebuilding adapters (darwin sandbox-exec, windows launcher,
+        // container docker run) do `*cmd = Command::new(...)` and re-emit only
+        // program/args/envs/cwd, discarding anything set earlier — and
+        // `std::process::Command` exposes no stdio getters, so an adapter cannot
+        // re-apply it. Setting stdio here keeps the piped handles (and the
+        // `child.stdin.take()` below) valid across every adapter; native/mock/
+        // passthrough don't rebuild, so this is safe for them too.
+        command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
 
         let mut child = command
             .spawn()
