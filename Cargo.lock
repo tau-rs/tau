@@ -5136,6 +5136,7 @@ dependencies = [
 name = "tau-native-tools"
 version = "0.0.0"
 dependencies = [
+ "regex-automata",
  "serde_json",
 ]
 
