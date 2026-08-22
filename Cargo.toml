@@ -42,6 +42,7 @@ members = [
     "crates/tau-wasm-host",
     "xtask",
     "examples/embed-native/workflow-lib",
+    "examples/embed-native/host",
 ]
 exclude = [
     "crates/tau-plugin-compat/fixtures/controlled-env-binary",

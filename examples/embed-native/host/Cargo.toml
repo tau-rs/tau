@@ -1,0 +1,17 @@
+[package]
+name = "embed-native-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+embed-native-workflow-lib = { path = "../workflow-lib" }
+tau-runtime-core = { path = "../../../crates/tau-runtime-core" }
+tau-ir = { path = "../../../crates/tau-ir" }
+tau-ports = { path = "../../../crates/tau-ports" }
+tau-domain = { path = "../../../crates/tau-domain" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -1248,6 +1248,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "embed-native-host"
+version = "0.1.0"
+dependencies = [
+ "embed-native-workflow-lib",
+ "serde_json",
+ "tau-domain",
+ "tau-ir",
+ "tau-ports",
+ "tau-runtime-core",
+ "tokio",
+]
+
+[[package]]
 name = "embed-native-workflow-lib"
 version = "0.1.0"
 dependencies = [
