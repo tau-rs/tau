@@ -272,6 +272,10 @@ don't require rework:
 1. `tau-trace` as a new crate vs a module in an existing crate.
    (Recommend new crate: keeps ratatui out of the model, reusable by a
    web frontend.)
+2. M2: which backend adapter is the first reasoning source?
+3. Do control-flow spans (branch/loop/parallel) already reach the jsonl,
+   or do they need a projection like reasoning does? (Verify in plan;
+   agent/tool/spawn are confirmed present.)
 
 ## 12. Clamp rows (M1.5 deferred item 2) — design
 
@@ -309,6 +313,23 @@ tool's *declared* caps; the clamped plan never reaches it. Therefore a
 narrowed at open time to `<to>`." It surfaces a standing open-time
 decision on each affected per-call row; it is observability only — no
 enforcement change.
+
+**Reachability today, corrected.** The diagram above describes the
+kernel dispatch site (`tau-runtime-core/src/stream.rs`), and that site
+is real and testable — it is what §12.4 instruments. But it is not, in
+fact, where `tau run`'s MCP calls go today. MCP tools are registered
+into `ForwardingDispatcher` (the IR path), and IR agents wrap every
+tool in `DispatcherTool`
+(`tau-runtime-core/src/interpreter/agent_loop.rs`, ~line 482), which
+intentionally advertises **empty** capabilities and does not forward
+`effective_capabilities()` — this is the issue-#581 pinned contract,
+guarded by `tests/ir_dispatch_gate_inert.rs`, and is not something this
+design changes. Separately, IR-interpreter runs never populate
+`options.orchestration_state`, so they emit no `TraceEvent::ToolCall`
+at all, clamped or otherwise. Net effect: the §12 producer is correct
+and covered by its own tests, but it is **dormant infrastructure** for
+the stock `tau run` CLI until both gaps are closed — see the
+reachability-wiring item in §12.6.
 
 Prior-art audit (why this shape): object-capability systems attach
 narrowed authority to the object itself (Capsicum fd rights,
@@ -414,6 +435,12 @@ Rendering lives in the kernel, not the port — the port carries semantic
 
 ### 12.6 Out of scope / future
 
+- **Reachability wiring**: the clamp row goes live for stock `tau run`
+  when (a) IR-interpreter runs attach an orchestration trace sink and
+  (b) `DispatcherTool`/`ForwardingDispatcher` forward the underlying
+  tool's declared + effective capabilities to the kernel dispatch site.
+  Both touch the issue-#581 pinned contract (`DispatcherTool`
+  intentionally advertises empty caps) and need their own design.
 - **Enforcement observation**: rows record decided authority, not what
   the call actually touched. Surfacing "blocked egress to evil.com"
   needs events from the sandbox proxy (tau-sandbox-darwin) — separate
@@ -439,8 +466,3 @@ Rendering lives in the kernel, not the port — the port carries semantic
 - **Renderer**: `clamp` badge test already exists (M1.5).
 - **Docs**: add the `clamp` badge row to `reference/tau-trace.md`
   (omitted from the M1.5 table because it had no producer).
-2. M2: which backend adapter is the first reasoning source?
-3. Do control-flow spans (branch/loop/parallel) already reach the jsonl,
-   or do they need a projection like reasoning does? (Verify in plan;
-   agent/tool/spawn are confirmed present.)
-```
