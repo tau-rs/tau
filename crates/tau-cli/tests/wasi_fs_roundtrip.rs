@@ -1,9 +1,14 @@
-//! EPIC 3.6-b live host-enforcement round-trip: the REAL production guest,
-//! built by `tau build wasm`, driven by real IR, issues a `Read` at an
-//! UNGRANTED path — the host granted no preopen for it, so the guest holds no
-//! descriptor and surfaces `FsAccessDenied`. Denial-only (offline; a granted
-//! read needs seeded files, covered by the host-side `wasi_fs_enforcement.rs`
-//! fs-probe test). Builds the wasm32-wasip2 guest, so it is #[ignore]d.
+//! EPIC 3.6-b live host-enforcement round-trips through the REAL production
+//! guest, built by `tau build wasm` and driven by real IR.
+//!
+//! - Denial: a `Read` at an UNGRANTED path — the host granted no preopen for
+//!   it, so the guest holds no descriptor and surfaces `FsAccessDenied`.
+//! - Positive (#604 hardening): nested preopens bind the LONGEST-prefix
+//!   grant (a write under an RW child of an RO parent succeeds), `Write`
+//!   truncates (no stale tail when overwriting a longer file), and a `/`
+//!   (root) preopen serves subpaths.
+//!
+//! All tests build the wasm32-wasip2 guest, so they are #[ignore]d.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -44,7 +49,14 @@ fn build_guest(fixture_name: &str) -> Vec<u8> {
             "--message-format=json",
         ])
         .env("CARGO_INCREMENTAL", "0")
-        .env("CARGO_TARGET_DIR", root.join("target/tau-build-wasm"))
+        // Per-fixture target dir: sibling wasm-lane tests build the guest
+        // with DIFFERENT worlds (distinct TAU_WORLD_WIT); a shared output
+        // path lets a concurrent build clobber the .wasm between build and
+        // read (#604 infra note).
+        .env(
+            "CARGO_TARGET_DIR",
+            root.join(format!("target/tau-build-wasm-{fixture_name}")),
+        )
         .env("TAU_IR_BYTES", ir.path())
         .env("TAU_WORLD_WIT", wit.path())
         .output()
@@ -77,27 +89,45 @@ fn build_guest(fixture_name: &str) -> Vec<u8> {
     std::fs::read(&wasm_path).unwrap()
 }
 
-/// A cassette turn that calls the `read_file` tool at an ungranted path, then a
-/// turn that ends. Field spellings mirror `tau_ports::llm` exactly (verified in
-/// `wasi_http_roundtrip.rs`).
-fn cassette() -> Vec<String> {
-    let tool_use = serde_json::json!({
+/// One cassette turn invoking `tool` with `input`. Field spellings mirror
+/// `tau_ports::llm` exactly (verified in `wasi_http_roundtrip.rs`).
+fn tool_turn(id: &str, tool: &str, input: serde_json::Value) -> String {
+    serde_json::json!({
         "text": "",
-        "tool_uses": [{
-            "id": "call_1",
-            "name": "read_file",
-            "input": { "path": "/etc/secret" }
-        }],
+        "tool_uses": [{ "id": id, "name": tool, "input": input }],
         "stop_reason": "ToolUse",
         "usage": null
-    });
-    let end = serde_json::json!({
+    })
+    .to_string()
+}
+
+/// The cassette's terminating turn.
+fn end_turn() -> String {
+    serde_json::json!({
         "text": "done",
         "tool_uses": [],
         "stop_reason": "EndTurn",
         "usage": null
-    });
-    vec![tool_use.to_string(), end.to_string()]
+    })
+    .to_string()
+}
+
+/// A cassette that reads one ungranted path, then ends.
+fn cassette() -> Vec<String> {
+    vec![
+        tool_turn(
+            "call_1",
+            "read_file",
+            serde_json::json!({ "path": "/etc/secret" }),
+        ),
+        end_turn(),
+    ]
+}
+
+/// Manifest-authoring caps path, as in the denial test: `Capability`'s
+/// `Deserialize` impl (the fs variants are `#[non_exhaustive]`).
+fn caps(json: &str) -> Vec<tau_domain::Capability> {
+    serde_json::from_str::<Vec<tau_domain::Capability>>(json).unwrap()
 }
 
 #[test]
@@ -127,5 +157,101 @@ fn ungranted_path_is_denied_at_runtime_through_real_guest() {
     assert!(
         emitted.iter().any(|e| e.contains("FsAccessDenied")),
         "ungranted path must be denied with FsAccessDenied; emitted events:\n{emitted:#?}"
+    );
+}
+
+/// #604 positive path, gaps 1+3: with nested grants (`/data` read-only +
+/// `/data/logs` read-write) a `Write` under `/data/logs` must bind the
+/// LONGEST-prefix (RW) preopen — first-match would bind the RO `/data`
+/// preopen (BTreeMap order) and be host-denied at `open-at`. A second,
+/// shorter `Write` to the same file must leave no stale tail (`Write`
+/// implies TRUNCATE). A `Read` through the RO parent then proves the
+/// granted positive read path.
+#[test]
+#[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
+fn nested_preopens_bind_longest_prefix_and_write_truncates() {
+    let wasm = build_guest("fs-rw");
+    let granted = caps(
+        r#"[{"kind":"fs.read","paths":["/data/**"]},
+            {"kind":"fs.write","paths":["/data/logs/**"]}]"#,
+    );
+
+    let sandbox = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(sandbox.path().join("data")).unwrap();
+    std::fs::write(sandbox.path().join("data/seed.txt"), b"seeded-content").unwrap();
+
+    let script = vec![
+        // Longer content first, shorter second: without TRUNCATE the second
+        // write would leave "short56789" on disk.
+        tool_turn(
+            "call_1",
+            "write_file",
+            serde_json::json!({ "path": "/data/logs/note.txt", "content": "0123456789" }),
+        ),
+        tool_turn(
+            "call_2",
+            "write_file",
+            serde_json::json!({ "path": "/data/logs/note.txt", "content": "short" }),
+        ),
+        tool_turn(
+            "call_3",
+            "read_file",
+            serde_json::json!({ "path": "/data/seed.txt" }),
+        ),
+        end_turn(),
+    ];
+
+    let (_payload, emitted) =
+        tau_wasm_host::run_component_with_caps(&wasm, "go", script, &granted, sandbox.path())
+            .expect("granted writes and read complete without a host trap");
+
+    assert!(
+        !emitted.iter().any(|e| e.contains("FsAccessDenied")),
+        "granted paths must not be denied; emitted events:\n{emitted:#?}"
+    );
+    // The write reached the host filesystem through the RW `/data/logs`
+    // preopen, and the second write truncated the first.
+    let on_disk = std::fs::read_to_string(sandbox.path().join("data/logs/note.txt")).unwrap();
+    assert_eq!(on_disk, "short", "Write must truncate (no stale tail)");
+    // The positive read round-tripped the seeded content through wasi:filesystem.
+    assert!(
+        emitted.iter().any(|e| e.contains("seeded-content")),
+        "granted read must surface the file content; emitted events:\n{emitted:#?}"
+    );
+}
+
+/// #604 positive path, gap 2: a `/**` cap resolves to a `/` (root) preopen;
+/// subpaths under it must resolve (pre-fix, only the literal path `/`
+/// matched, so every subpath was FsAccessDenied despite the whole-FS grant).
+#[test]
+#[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
+fn root_preopen_serves_subpaths() {
+    let wasm = build_guest("fs-rw");
+    let granted = caps(r#"[{"kind":"fs.read","paths":["/**"]}]"#);
+
+    let sandbox = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(sandbox.path().join("data")).unwrap();
+    std::fs::write(sandbox.path().join("data/ok.txt"), b"root-grant-content").unwrap();
+
+    let script = vec![
+        tool_turn(
+            "call_1",
+            "read_file",
+            serde_json::json!({ "path": "/data/ok.txt" }),
+        ),
+        end_turn(),
+    ];
+
+    let (_payload, emitted) =
+        tau_wasm_host::run_component_with_caps(&wasm, "go", script, &granted, sandbox.path())
+            .expect("read under a root preopen completes without a host trap");
+
+    assert!(
+        !emitted.iter().any(|e| e.contains("FsAccessDenied")),
+        "a root preopen must serve subpaths; emitted events:\n{emitted:#?}"
+    );
+    assert!(
+        emitted.iter().any(|e| e.contains("root-grant-content")),
+        "granted read must surface the file content; emitted events:\n{emitted:#?}"
     );
 }

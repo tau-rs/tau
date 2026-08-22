@@ -15,10 +15,30 @@ use ratatui::Frame;
 use tau_ports::CapabilityVerdict;
 use tau_trace::{Span as TraceSpan, SpanKind, SpanStatus, TraceModel};
 
-/// Fixed column width (in cells) of the waterfall bar, and the
-/// `width_cols` passed to [`TraceModel::bar`] for every row so the
-/// glyph string built in [`bar_cell`] lines up with the column.
-const BAR_WIDTH: u16 = 20;
+/// Fixed widths of the four leading table columns (`Name`, `Tokens`,
+/// `Dur`, `Cap`). The waterfall `Bar` column takes whatever horizontal
+/// space is left, so it grows/shrinks as the terminal is resized.
+const NAME_W: u16 = 30;
+const TOKENS_W: u16 = 8;
+const DUR_W: u16 = 10;
+const CAP_W: u16 = 20;
+/// Smallest bar column we will render, so the waterfall never vanishes on
+/// a narrow terminal.
+const MIN_BAR_W: u16 = 8;
+
+/// Cells available for the waterfall bar within `area`: the table's inner
+/// width (minus its border) less the four fixed columns and the
+/// single-cell gaps ratatui inserts between the five columns. Floored at
+/// [`MIN_BAR_W`]. This is both the `width_cols` handed to
+/// [`TraceModel::bar`] and the glyph-string length built in [`bar_cell`],
+/// so the two always line up with the rendered column.
+fn bar_width(area: Rect) -> u16 {
+    const BORDERS: u16 = 2; // left + right table border
+    const GAPS: u16 = 4; // default 1-cell spacing between 5 columns
+    area.width
+        .saturating_sub(BORDERS + NAME_W + TOKENS_W + DUR_W + CAP_W + GAPS)
+        .max(MIN_BAR_W)
+}
 
 /// Which spans are visible in the waterfall table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -77,6 +97,10 @@ pub struct UiState {
     pub search: String,
     /// Vertical scroll offset (in rows) into the detail pane.
     pub scroll: u16,
+    /// When `true`, the detail pane renders each field on its own line
+    /// (an expanded view) instead of a single wrapped summary line.
+    /// Toggled by `Enter` (see [`crate::tui::app::App::apply_key`]).
+    pub expanded: bool,
 }
 
 /// Render `model` + `ui` into `frame`.
@@ -88,16 +112,20 @@ pub struct UiState {
 /// `ratatui::backend::TestBackend`.
 pub fn draw(frame: &mut Frame, model: &TraceModel, ui: &UiState) {
     let area = frame.area();
+    // The detail pane grows when expanded so its one-field-per-line view is
+    // not clipped; collapsed it stays a single summary line (3 rows incl.
+    // borders). The waterfall (`Min`) absorbs the difference.
+    let detail_h = if ui.expanded { 8 } else { 3 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(4),
-            Constraint::Length(3),
+            Constraint::Length(detail_h),
         ])
         .split(area);
 
-    draw_toolbar(frame, chunks[0], ui);
+    draw_toolbar(frame, chunks[0], ui, model.run_id());
 
     let visible: Vec<&TraceSpan> = model
         .spans()
@@ -109,9 +137,9 @@ pub fn draw(frame: &mut Frame, model: &TraceModel, ui: &UiState) {
     draw_detail(frame, chunks[2], &visible, ui);
 }
 
-/// Toolbar: static title, one chip per [`Filter`] (the active one
-/// bracketed), and the current search text.
-fn draw_toolbar(frame: &mut Frame, area: Rect, ui: &UiState) {
+/// Toolbar: run id, one chip per [`Filter`] (the active one bracketed),
+/// and the current search text.
+fn draw_toolbar(frame: &mut Frame, area: Rect, ui: &UiState, run_id: Option<&str>) {
     let chips = [
         Filter::All,
         Filter::Errors,
@@ -128,7 +156,8 @@ fn draw_toolbar(frame: &mut Frame, area: Rect, ui: &UiState) {
     })
     .collect::<Vec<_>>()
     .join(" ");
-    let text = format!("tau trace   {chips}   search: {}", ui.search);
+    let run = run_id.unwrap_or("(pending)");
+    let text = format!("run {run}   {chips}   search: {}", ui.search);
     let block = Block::default().borders(Borders::ALL).title("tau trace");
     frame.render_widget(Paragraph::new(text).block(block), area);
 }
@@ -147,6 +176,11 @@ fn draw_table(
     let header = Row::new(vec!["Name", "Tokens", "Dur", "Cap", "Bar"])
         .style(Style::default().add_modifier(Modifier::BOLD));
 
+    // Derive the bar column from the current area so the waterfall adapts
+    // to the terminal width (ratatui re-lays-out from `area` every draw, so
+    // a resize is picked up automatically on the next frame).
+    let bar_w = bar_width(area);
+
     let rows: Vec<Row> = visible
         .iter()
         .enumerate()
@@ -161,7 +195,7 @@ fn draw_table(
                 Cell::from(tokens),
                 Cell::from(duration_label(span)),
                 Cell::from(badge).style(badge_style),
-                Cell::from(bar_cell(model, span)),
+                Cell::from(bar_cell(model, span, bar_w)),
             ]);
             if i == ui.selected {
                 row = row.style(Style::default().add_modifier(Modifier::REVERSED));
@@ -171,11 +205,11 @@ fn draw_table(
         .collect();
 
     let widths = [
-        Constraint::Length(30),
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Length(20),
-        Constraint::Length(BAR_WIDTH),
+        Constraint::Length(NAME_W),
+        Constraint::Length(TOKENS_W),
+        Constraint::Length(DUR_W),
+        Constraint::Length(CAP_W),
+        Constraint::Length(bar_w),
     ];
 
     let table = Table::new(rows, widths)
@@ -184,22 +218,43 @@ fn draw_table(
     frame.render_widget(table, area);
 }
 
-/// Detail pane for the span at `ui.selected` within `visible`. Rendered as
-/// a single wrapped line (rather than one line per field) so it stays
-/// legible even in the minimum-height layout a small terminal forces.
+/// Detail pane for the span at `ui.selected` within `visible`.
+///
+/// Collapsed (the default) renders a single wrapped summary line so it
+/// stays legible in the minimum-height layout a small terminal forces.
+/// Expanded (`ui.expanded`, toggled by `Enter`) renders one field per line
+/// for a fuller view.
 fn draw_detail(frame: &mut Frame, area: Rect, visible: &[&TraceSpan], ui: &UiState) {
-    let block = Block::default().borders(Borders::ALL).title("Detail");
+    let title = if ui.expanded {
+        "Detail (expanded)"
+    } else {
+        "Detail"
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
     let text = match visible.get(ui.selected) {
-        Some(span) => format!(
-            "{}  |  kind: {:?}  |  status: {:?}  |  tokens: {}  |  capability: {}",
-            span.label,
-            span.kind,
-            span.status,
-            span.tokens
+        Some(span) => {
+            let tokens = span
+                .tokens
                 .map(|t| t.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            capability_detail(span.capability.as_ref()),
-        ),
+                .unwrap_or_else(|| "-".to_string());
+            let cap = capability_detail(span.capability.as_ref());
+            if ui.expanded {
+                format!(
+                    "name:       {}\nkind:       {:?}\nstatus:     {:?}\ntokens:     {}\nduration:   {}\ncapability: {}",
+                    span.label,
+                    span.kind,
+                    span.status,
+                    tokens,
+                    duration_label(span),
+                    cap,
+                )
+            } else {
+                format!(
+                    "{}  |  kind: {:?}  |  status: {:?}  |  tokens: {}  |  capability: {}",
+                    span.label, span.kind, span.status, tokens, cap,
+                )
+            }
+        }
         None => "(no span selected)".to_string(),
     };
     frame.render_widget(
@@ -246,12 +301,13 @@ fn duration_label(span: &TraceSpan) -> String {
     }
 }
 
-/// Build a `BAR_WIDTH`-wide glyph string for `span`'s waterfall bar:
+/// Build a `width`-wide glyph string for `span`'s waterfall bar:
 /// `░` background, `▊` over the span's `[offset, offset+len)` columns as
-/// returned by [`TraceModel::bar`].
-fn bar_cell(model: &TraceModel, span: &TraceSpan) -> String {
-    let (offset, len) = model.bar(span, BAR_WIDTH);
-    let mut glyphs = vec!['░'; BAR_WIDTH as usize];
+/// returned by [`TraceModel::bar`]. `width` is [`bar_width`] of the current
+/// area, so the string always matches the rendered `Bar` column.
+fn bar_cell(model: &TraceModel, span: &TraceSpan, width: u16) -> String {
+    let (offset, len) = model.bar(span, width);
+    let mut glyphs = vec!['░'; width as usize];
     let start = usize::from(offset).min(glyphs.len());
     let end = start.saturating_add(usize::from(len)).min(glyphs.len());
     for glyph in &mut glyphs[start..end] {
@@ -283,6 +339,7 @@ mod tests {
                 capability: Some(CapabilityVerdict::Drop {
                     reason: "egress denied".into(),
                 }),
+                turn_index: 0,
             },
         });
 
@@ -292,6 +349,7 @@ mod tests {
             filter: Filter::All,
             search: String::new(),
             scroll: 0,
+            expanded: false,
         };
         term.draw(|f| draw(f, &model, &ui)).unwrap();
         let buf = term.backend().buffer().clone();
@@ -317,6 +375,7 @@ mod tests {
                 duration_ms: 250,
                 status: "ok".into(),
                 capability: Some(CapabilityVerdict::Allow),
+                turn_index: 0,
             },
         });
 
@@ -326,6 +385,7 @@ mod tests {
             filter: Filter::Reasoning,
             search: String::new(),
             scroll: 0,
+            expanded: false,
         };
         term.draw(|f| draw(f, &model, &ui)).unwrap();
         let buf = term.backend().buffer().clone();
@@ -334,6 +394,85 @@ mod tests {
         assert!(
             !text.contains("net.http"),
             "Reasoning filter should hide the Tool span:\n{text}"
+        );
+    }
+
+    #[test]
+    fn bar_width_grows_with_area_and_floors_on_narrow_terminals() {
+        let narrow = bar_width(Rect::new(0, 0, 80, 20));
+        let wide = bar_width(Rect::new(0, 0, 160, 20));
+        assert!(
+            wide > narrow,
+            "a wider terminal must yield a wider bar column ({wide} !> {narrow})"
+        );
+        // Far too narrow to fit the fixed columns → floored, not zero/underflow.
+        assert_eq!(bar_width(Rect::new(0, 0, 10, 20)), MIN_BAR_W);
+    }
+
+    #[test]
+    fn expanded_detail_renders_multiline_labels() {
+        let mut model = TraceModel::new();
+        model.apply(&TraceEvent {
+            id: "evt-1".into(),
+            ts: Utc.timestamp_opt(100, 0).unwrap(),
+            run_id: "run-1".into(),
+            agent_id: Some("agent-1".into()),
+            kind: TraceEventKind::ToolCall {
+                tool_name: "net.http".into(),
+                duration_ms: 250,
+                status: "ok".into(),
+                capability: Some(CapabilityVerdict::Allow),
+                turn_index: 0,
+            },
+        });
+
+        let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        let ui = UiState {
+            selected: 0,
+            filter: Filter::All,
+            search: String::new(),
+            scroll: 0,
+            expanded: true,
+        };
+        term.draw(|f| draw(f, &model, &ui)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            text.contains("Detail (expanded)"),
+            "expanded detail pane must be titled as such:\n{text}"
+        );
+        assert!(
+            text.contains("duration:") && text.contains("capability:"),
+            "expanded view must show per-field labels:\n{text}"
+        );
+    }
+
+    #[test]
+    fn toolbar_shows_run_id() {
+        let mut model = TraceModel::new();
+        model.apply(&TraceEvent {
+            id: "evt-1".into(),
+            ts: Utc.timestamp_opt(100, 0).unwrap(),
+            run_id: "run-abc".into(),
+            agent_id: Some("agent-1".into()),
+            kind: TraceEventKind::ToolCall {
+                tool_name: "net.http".into(),
+                duration_ms: 250,
+                status: "ok".into(),
+                capability: None,
+                turn_index: 0,
+            },
+        });
+
+        let mut term = Terminal::new(TestBackend::new(120, 10)).unwrap();
+        term.draw(|f| draw(f, &model, &UiState::default())).unwrap();
+        let buf = term.backend().buffer().clone();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            text.contains("run-abc"),
+            "toolbar must show the run id:\n{text}"
         );
     }
 }
