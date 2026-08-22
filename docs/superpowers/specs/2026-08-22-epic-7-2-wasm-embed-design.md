@@ -78,11 +78,18 @@ in the `Store` for the duration of one run).
 pub fn run_component_with_ports(
     wasm_bytes: &[u8],
     prompt: &str,
-    ports: &mut dyn EmbedPorts,
+    ports: Box<dyn EmbedPorts>,
     caps: &[tau_domain::Capability],
     sandbox_root: &Path,
 ) -> Result<String, WasmHostError>
 ```
+
+The ports are **owned** (`Box`), not borrowed: wasmtime declares
+`Store<T: 'static>`, so the store's `HostState` cannot hold a
+`&mut dyn EmbedPorts`. Impls that need state back after the run (event
+buffers, call counters) hold an `Arc<Mutex<..>>`/`Arc<Atomic..>` handle
+and keep a clone outside — the pattern both `DeterministicPorts` (below)
+and the example use.
 
 - `HostState` replaces its hardcoded `responses`/`clock_millis`/
   `prng_state`/`emitted` fields with the ports handle; `host::Host for
@@ -92,11 +99,11 @@ pub fn run_component_with_ports(
   panic). WASI caps / egress wiring is unchanged and shared.
 - The deterministic behavior moves into a private `DeterministicPorts`
   (cassette `VecDeque`, `CLOCK_STEP_MILLIS` counter, `PRNG_SEED`
-  SplitMix64, event buffer). `run_component` /
-  `run_component_with_caps` keep their exact public signatures and
-  return `(payload, emitted)` by draining the buffer — behavior must
-  stay byte-identical (the existing conformance/e2e tests are the
-  guard; none of them change).
+  SplitMix64, and an `Arc<Mutex<Vec<String>>>` event buffer whose
+  handle the wrapper keeps). `run_component` / `run_component_with_caps`
+  keep their exact public signatures and return `(payload, emitted)` by
+  draining that handle — behavior must stay byte-identical (the existing
+  conformance/e2e tests are the guard; none of them change).
 - Engine config stays `determinism_config()` (NaN canonicalization
   etc.) for both paths — harmless for live hosts, and keeps one config.
 - The `Ok` payload remains the guest's sentinel string (empty today) —
