@@ -1,5 +1,5 @@
 # Negative twin of ../north-star: read_temp over-reaches the [allow]
-# fs.read ceiling (/etc/** vs ${PROJECT}/sensors/**), so
+# fs.read ceiling (/etc/** vs /data/incidents/**), so
 # `tau check governance` must fail with exit 2. Everything else is
 # identical to the governed fixture — the ONLY delta is the tool's
 # declared capabilities escaping the constitution.
@@ -9,7 +9,7 @@ name = "north-star-over-reach"
 version = "0.1.0"
 
 [allow]
-"fs.read" = { paths = ["${PROJECT}/sensors/**"] }
+"fs.read" = { paths = ["/data/incidents/**"] }
 
 [allow.models.default]
 backend = "echo-llm"
@@ -17,6 +17,7 @@ model = "claude-haiku-4-5"
 
 [allow.tools.read_temp]
 native = "ReadTemp"
+"fs.read" = { paths = ["/data/incidents/**"] }
 
 [agents.triage]
 display_name = "Triage"
@@ -38,6 +39,9 @@ model        = "default"
 [agents.oncall.prompt]
 system = "Escalate the incident to the on-call rotation."
 
+[agents.oncall.config]
+canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+
 [agents.scribe]
 display_name = "Scribe"
 package      = "echo-llm@^0.1"
@@ -45,6 +49,9 @@ model        = "default"
 
 [agents.scribe.prompt]
 system = "Acknowledge the routine report."
+
+[agents.scribe.config]
+canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
 
 [agents.reviewer]
 display_name = "Reviewer"
@@ -54,6 +61,9 @@ model        = "default"
 [agents.reviewer.prompt]
 system = "Draft the incident summary; revise until approved."
 
+[agents.reviewer.config]
+canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+
 [agents.reporter]
 display_name = "Reporter"
 package      = "echo-llm@^0.1"
@@ -62,7 +72,10 @@ model        = "default"
 [agents.reporter.prompt]
 system = "Publish the final incident report."
 
-# OVER-REACH: /etc/** is outside the ${PROJECT}/sensors/** ceiling.
+[agents.reporter.config]
+canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+
+# OVER-REACH: /etc/** is outside the /data/incidents/** ceiling.
 [tools.read_temp]
 native      = "ReadTemp"
 description = "Read the incident sensor temperature."
@@ -97,9 +110,9 @@ max_iters = 3
   [[pipeline.steps.body]]
   id = "draft"
   run = "agent:reviewer"
-  input = "${steps.escalate.output}"
+  input = "${steps.triage.output}"
 
 [[pipeline.steps]]
 id = "report"
 run = "agent:reporter"
-input = "${steps.draft.output}"
+input = "escalation: ${steps.escalate.output} / draft: ${steps.draft.output}"
