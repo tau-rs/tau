@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["bring_lo_up","main","parse_args","run_bridge_loop","splice_bidirectional"],"struct":["Args"]};
