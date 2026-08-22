@@ -110,7 +110,7 @@ impl Runner {
         let run_id = opts
             .run_id
             .clone()
-            .unwrap_or_else(|| ulid::Ulid::new().to_string());
+            .unwrap_or_else(|| ulid::Ulid::generate().to_string());
         let log_path = run_log_path(&self.scope_root, &workflow.name, &run_id);
         let mut log = RunLog::open_for_write(&log_path).await?;
 

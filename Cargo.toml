@@ -168,7 +168,7 @@ landlock     = "0.4"
 libc         = "0.2"
 nix          = { version = "0.31", default-features = false, features = ["sched", "user", "process", "fs"] }
 seccompiler  = "0.5"
-ulid         = { version = "1", default-features = false }
+ulid         = { version = "3", default-features = false }
 # Execution-trace TUI (M1). ratatui 0.30's default `crossterm` feature pulls
 # in `ratatui-crossterm`, whose own default feature (`crossterm_0_29`) pins
 # to crossterm 0.29 — matching the direct `crossterm` dep below so both
