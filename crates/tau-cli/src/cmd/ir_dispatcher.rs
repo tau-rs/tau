@@ -46,9 +46,10 @@ use crate::output::Output;
 /// pipeline via [`tau_runtime_core::interpreter::pipeline::run_pipeline`],
 /// threading each step's output to later steps and rendering the LAST
 /// step's output — symmetric with the cwd path's `try_run_pipeline` (see
-/// [`crate::cmd::run`]). Otherwise it picks the first agent in the IR
-/// module's `BTreeMap` (alphabetical order) as the entry per the β.2 v0
-/// contract and runs that single agent's loop unchanged.
+/// [`crate::cmd::run`]). Otherwise it runs the entry agent's single loop,
+/// where the entry is the positional `<agent>` argument resolved against
+/// the module's agents (#623 — matching the dev path's `tau run <agent>`
+/// semantics; an id absent from the module is a hard error).
 ///
 /// Returns `Ok(())` on a `RunOutcome::Completed`, `Err(AgentFailed)` on
 /// `RunOutcome::Failed`, and any other kernel/CLI error as a wrapped
@@ -100,14 +101,25 @@ pub(crate) async fn run_via_ir(
     force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
-    // 1. Pick the entry agent (first BTreeMap key — alphabetical order).
-    let entry_agent_id = module
-        .workflow
-        .agents
-        .keys()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("IR module has no agents"))?
-        .clone();
+    // 1. Resolve the entry agent from the positional `<agent>` argument,
+    //    validated against the module's agents (#623 — the argument used to
+    //    be silently ignored in favour of the alphabetically-first module
+    //    agent, so the plugin backend was configured from the wrong agent's
+    //    `[agents.<id>.config]`).
+    let entry_agent_id = tau_ir::ids::AgentId(args.agent_id.clone());
+    if !module.workflow.agents.contains_key(&entry_agent_id) {
+        let available: Vec<&str> = module
+            .workflow
+            .agents
+            .keys()
+            .map(|a| a.0.as_str())
+            .collect();
+        return Err(anyhow::anyhow!(
+            "agent id {:?} not found in the bundle's IR module (available \
+             agents: {available:?})",
+            args.agent_id
+        ));
+    }
 
     // 2. Load the project config from the cwd (proven byte-clean by the
     //    bundle verify gate). The IR module names agents using the IR's
@@ -235,6 +247,21 @@ pub(crate) async fn run_via_ir(
         .tool_refs
         .iter()
         .filter(|tid| !tools_by_id.contains_key(*tid))
+        // Native tools (`ToolImpl::Native`) are statically-linked bodies
+        // (see `tau-native-tools`), not plugin-installed binaries — their
+        // absence from the plugin runtime is not an install skew. The host
+        // CLI does not dispatch them (symmetric with the cwd path, which
+        // simply omits them from its dispatcher); an actual call at run
+        // time still surfaces as `ForwardingDispatcher`'s unknown-ToolId
+        // error. Before #623 this exemption was masked: the entry agent
+        // was the alphabetically-first module agent, which in the fixtures
+        // carried no tool_refs.
+        .filter(|tid| {
+            !matches!(
+                module.workflow.tools.get(*tid).map(|t| &t.impl_),
+                Some(tau_ir::ToolImpl::Native { .. })
+            )
+        })
         .collect();
     if !missing.is_empty() {
         let names: Vec<&str> = missing.iter().map(|t| t.0.as_str()).collect();

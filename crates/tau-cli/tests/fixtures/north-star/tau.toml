@@ -34,12 +34,15 @@ tool_refs    = ["read_temp"]
 [agents.triage.prompt]
 system = "Classify the incoming incident report."
 
-# The echo-llm plugin replays this text as every agent's output (one
-# backend instance, configured from the entry agent — every agent carries
-# the same config because the dev path and the bundle path pick different
-# entry agents). It deliberately carries BOTH markers: "URGENT" drives the
-# branch's then-arm, "APPROVED" satisfies the loop's until-predicate on
-# the first iteration.
+# The echo-llm plugin replays this text as every step's output (ONE
+# backend instance, configured from the ENTRY agent — `triage`, the
+# positional agent id on both the dev and the bundle path since #623).
+# It deliberately carries BOTH markers: "URGENT" drives the branch's
+# then-arm, "APPROVED" satisfies the loop's until-predicate on the first
+# iteration. Every OTHER agent carries a decoy config with NEITHER
+# marker: if entry resolution ever regresses to alphabetical-first
+# (`oncall`), the branch takes the wrong arm and the loop exhausts, so
+# the run hard-errors — the differentiated configs ARE the #623 witness.
 [agents.triage.config]
 canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
 
@@ -52,7 +55,7 @@ model        = "default"
 system = "Escalate the incident to the on-call rotation."
 
 [agents.oncall.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 [agents.scribe]
 display_name = "Scribe"
@@ -63,7 +66,7 @@ model        = "default"
 system = "Acknowledge the routine report."
 
 [agents.scribe.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 [agents.reviewer]
 display_name = "Reviewer"
@@ -74,7 +77,7 @@ model        = "default"
 system = "Draft the incident summary; revise until approved."
 
 [agents.reviewer.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 [agents.reporter]
 display_name = "Reporter"
@@ -85,7 +88,7 @@ model        = "default"
 system = "Publish the final incident report."
 
 [agents.reporter.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 # Capability-bounded native tool: its declared caps narrow the [allow]
 # fs.read ceiling above (sensors/ subtree only). The over-reach twin

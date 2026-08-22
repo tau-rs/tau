@@ -32,6 +32,13 @@
 //! executed. The loop's `until` matches "APPROVED" in the canned text —
 //! exhaustion (max_iters without the predicate holding) would hard-error.
 //!
+//! Since #623 the fixture ALSO witnesses entry-agent resolution: only the
+//! entry agent (`triage`) carries the marker canned text; every other
+//! agent's `[agents.<id>.config]` is a marker-free decoy. The backend is
+//! configured from the entry agent, so a bundle run that regressed to the
+//! alphabetically-first agent (`oncall`) would replay the decoy, take the
+//! branch's otherwise-arm, exhaust the loop, and fail.
+//!
 //! Harness mirrors `cmd_run_bundle_pipeline.rs`: echo-llm scaffold
 //! (.tau/config.toml, package manifest, schema-v6 lockfile written to BOTH
 //! `tau.lock` and `tau-lock.toml`) around the on-disk fixture tau.toml.
