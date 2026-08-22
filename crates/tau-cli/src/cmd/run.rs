@@ -206,7 +206,7 @@ pub async fn run(
     )?;
 
     let (agent_def, manifest) =
-        crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
+        crate::config::build_agent_definition(entry, &cwd, &scope, project.effective_models())
             .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
@@ -258,9 +258,14 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded =
-        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        entry,
+        &scope,
+        project.effective_models(),
+        trace_context,
+        host_options,
+    )
+    .await?;
 
     let runtime = loaded
         .builder
@@ -1133,12 +1138,12 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
 ///
 /// A ULID (Crockford base32, 26 chars) — lexicographically sortable and
 /// collision-resistant. Matches `run_main`'s workflow-run-id minting
-/// (`ulid::Ulid::new()`) and replaces the old bespoke `tau-run-<nanos>`
+/// (`ulid::Ulid::generate()`) and replaces the old bespoke `tau-run-<nanos>`
 /// string, which could collide under fast successive runs or a backward
 /// clock adjustment (D8). The only contract is uniqueness within a host
 /// process; the kernel still mints its own `AgentInstanceId`.
 pub(super) fn mint_run_id() -> String {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
 
 /// Project a [`MessagePayload`] to a single text string for display.

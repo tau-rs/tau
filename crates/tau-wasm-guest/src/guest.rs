@@ -142,19 +142,11 @@ impl Guest for Component {
             );
         }
 
-        // E2 scope: exactly one agent; it is the entry.
-        if module.workflow.agents.len() != 1 {
-            return Err(alloc::format!(
-                "tau-wasm-guest: E2 supports exactly one agent, found {}",
-                module.workflow.agents.len()
-            ));
-        }
+        // E2 scope: exactly one agent; it is the entry (the shared
+        // Variant B entry-point contract, `IrModule::entry_agent`).
         let entry = module
-            .workflow
-            .agents
-            .keys()
-            .next()
-            .expect("len checked == 1")
+            .entry_agent()
+            .map_err(|e| alloc::format!("tau-wasm-guest: {e}"))?
             .clone();
 
         let backend: Arc<dyn tau_runtime_core::builder::DynLlmBackend> =

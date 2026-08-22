@@ -2,7 +2,7 @@
 //!
 //! These are the only places in the kernel that materialize a session
 //! ID, run ID, trace ID, or wall-clock timestamp. The kernel never
-//! reaches `chrono::Utc::now()` / `ulid::Ulid::new()` /
+//! reaches `chrono::Utc::now()` / `ulid::Ulid::generate()` /
 //! `uuid::Uuid::new_v4()` directly — every call site routes through
 //! these helpers, fed by ports.
 

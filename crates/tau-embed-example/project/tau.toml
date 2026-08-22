@@ -1,0 +1,21 @@
+packages = ["anthropic"]
+
+# Root constitution (ADR-0057): this workflow asks for no capabilities
+# beyond one model alias — governed-by-default.
+[allow]
+
+[allow.models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[project]
+name = "embed-example"
+version = "0.1.0"
+
+[agents.main]
+display_name = "Main"
+package = "embed-example@^0.1"
+model = "claude"
+
+[agents.main.prompt]
+system = "You are the tau-embed-example agent. Reply once and stop."

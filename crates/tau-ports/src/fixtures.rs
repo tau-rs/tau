@@ -59,12 +59,7 @@ pub fn make_completion_response(
     stop_reason: StopReason,
     usage: Option<TokenUsage>,
 ) -> CompletionResponse {
-    CompletionResponse {
-        text,
-        tool_uses,
-        stop_reason,
-        usage,
-    }
+    CompletionResponse::new(text, tool_uses, stop_reason, usage)
 }
 
 /// Build a [`ToolUse`] without struct-literal syntax.

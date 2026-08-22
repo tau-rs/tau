@@ -289,6 +289,12 @@ pub struct BuildArgs {
     /// cron schedules systemd can't auto-translate are skipped with a note.
     #[arg(long = "emit-trigger", value_name = "ADAPTER", value_parser = ["systemd", "k8s"])]
     pub emit_trigger: Option<String>,
+    /// Reference tau crates by filesystem path (a tau workspace checkout
+    /// root) instead of a crates.io version in the generated Cargo.toml
+    /// (`--target rust-lib` only). Required to build the artifact until
+    /// tau is published to crates.io.
+    #[arg(long = "tau-dep-path", value_name = "DIR")]
+    pub tau_dep_path: Option<std::path::PathBuf>,
     /// Authorize a build of a project that declares NO `[allow]` ceiling
     /// (records bundle verdict `ungoverned`). Governed-by-default: without
     /// this, a missing `[allow]` is a hard error (GOV000). Distinct from
@@ -758,6 +764,11 @@ pub struct EmbedArgs {
     /// `<dir>/embed-{rust,c}/` or `<dir>/sdk/embed-js/`.
     #[arg(long, short = 'o', value_name = "DIR")]
     pub output: Option<PathBuf>,
+    /// Reference tau crates by filesystem path (a tau workspace checkout
+    /// root) instead of a crates.io version in the generated Cargo.toml.
+    /// Required to build the artifact until tau is published to crates.io.
+    #[arg(long = "tau-dep-path", value_name = "DIR")]
+    pub tau_dep_path: Option<PathBuf>,
 }
 
 /// Resource kinds accepted by `tau list`.

@@ -145,16 +145,19 @@ pub(crate) async fn load_plugins(
     let lockfile = LockFile::load(&scope.lockfile_path())
         .with_context(|| format!("loading lockfile {}", scope.lockfile_path().display()))?;
 
-    // Resolve the agent's LLM backend package name from the project `[models]`
-    // table via its `model` alias (per-agent model resolution); the removed
-    // `AgentEntry.llm_backend` field no longer carries it. `validate_models`
-    // refuses an unknown alias at build time — the error arm is defensive.
+    // Resolve the agent's LLM backend package name from the project's
+    // effective model-alias table via its `model` alias (per-agent model
+    // resolution); the removed `AgentEntry.llm_backend` field no longer
+    // carries it. Callers pass `ProjectConfig::effective_models()` so
+    // governed projects resolve via `[allow.models]` (#620).
+    // `validate_models` refuses an unknown alias at build time — the
+    // error arm is defensive.
     let llm_backend_name = models
         .get(&entry.model)
         .map(|m| m.backend.clone())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "agent {:?} references model alias {:?} absent from [models]",
+                "agent {:?} references model alias {:?} absent from [models] / [allow.models]",
                 entry.id,
                 entry.model
             )

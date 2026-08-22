@@ -57,7 +57,7 @@ pub use hash::compute_hash;
 pub use ids::{AgentId, CheckId, PipelineStepId, StepId, SubflowId, ToolId};
 pub use message::{Message, MessagePayload};
 pub use model_ref::ModelRef;
-pub use module::{IrFormatVersion, IrModule, Workflow};
+pub use module::{EntryAgentError, IrFormatVersion, IrModule, Workflow};
 pub use node::{Agent, Deterministic, Node, Subflow, Tool};
 pub use pipeline::{Pipeline, PipelineStep, StepRun};
 pub use subflow::SubflowKind;

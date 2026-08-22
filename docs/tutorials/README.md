@@ -19,13 +19,16 @@ arc over completeness.
   locally, invoke it from an agent, and export it for an Anthropic
   consumer. The fastest path to understanding how tau packages real
   agent behaviour.
+- [The north-star in action](the-north-star-in-action.md) — walk the
+  cross-epic demo fixture: an `[allow]`-governed Branch + Loop pipeline,
+  its over-reaching negative twin, the governed bundle roundtrip, and
+  the wasm feature-fit gate — every claim enforced in CI.
 
 ## Coming next
 
 The Phase 1 roadmap (`../../ROADMAP.md`) tracks the next batch of
-tutorials. Likely additions: writing your first LLM-backend plugin,
-running a multi-agent pipeline, and wiring tau into a parent application
-via serve mode.
+tutorials. Likely additions: writing your first LLM-backend plugin and
+wiring tau into a parent application via serve mode.
 
 ## Looking for something else?
 
