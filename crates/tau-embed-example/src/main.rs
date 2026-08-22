@@ -134,8 +134,13 @@ impl ToolDispatcher for ProductDispatcher {
 async fn run(on_event: &mut dyn FnMut(&RunEvent)) -> Result<(), Box<dyn std::error::Error>> {
     let module = Arc::new(from_canonical_bytes(TAU_IR)?);
     let entry = module.entry_agent()?.clone();
-    let stream =
-        run_ir_streaming(module, &entry, Arc::new(ProductDispatcher::new()), Vec::new()).await?;
+    let stream = run_ir_streaming(
+        module,
+        &entry,
+        Arc::new(ProductDispatcher::new()),
+        Vec::new(),
+    )
+    .await?;
     futures::pin_mut!(stream);
     while let Some(event) = stream.next().await {
         on_event(&event);
@@ -165,6 +170,9 @@ mod tests {
             }
         }))
         .expect("workflow runs");
-        assert!(saw_completed, "terminal RunCompleted must fire exactly once");
+        assert!(
+            saw_completed,
+            "terminal RunCompleted must fire exactly once"
+        );
     }
 }

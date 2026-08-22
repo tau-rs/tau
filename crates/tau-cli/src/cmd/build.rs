@@ -924,7 +924,7 @@ mod tests {
             target: t.map(|s| s.to_string()),
             output: None,
             agents: vec![],
-        tau_dep_path: None,
+            tau_dep_path: None,
             offline: false,
             emit_trigger: None,
             allow_ungoverned: false,
