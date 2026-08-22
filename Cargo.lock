@@ -5035,6 +5035,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tau-embed-example"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "serde_json",
+ "tau-ir",
+ "tau-runtime-core",
+]
+
+[[package]]
 name = "tau-ir"
 version = "0.0.0"
 dependencies = [

@@ -32,6 +32,9 @@ Options:
           
           [possible values: systemd, k8s]
 
+      --tau-dep-path <DIR>
+          Reference tau crates by filesystem path (a tau workspace checkout root) instead of a crates.io version in the generated Cargo.toml (`--target rust-lib` only). Required to build the artifact until tau is published to crates.io
+
       --allow-ungoverned
           Authorize a build of a project that declares NO `[allow]` ceiling (records bundle verdict `ungoverned`). Governed-by-default: without this, a missing `[allow]` is a hard error (GOV000). Distinct from `--no-governance`, which skips checking a ceiling that DOES exist
 
