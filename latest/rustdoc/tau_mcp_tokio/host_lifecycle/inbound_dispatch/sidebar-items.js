@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["INBOUND_REFUSED_ERROR_CODE"],"fn":["spawn_inbound_dispatch"],"struct":["InboundDispatchHandle"]};

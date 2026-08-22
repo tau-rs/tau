@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["validate_tool_args"],"struct":["SchemaCompileError","ToolArgsValidator"]};
