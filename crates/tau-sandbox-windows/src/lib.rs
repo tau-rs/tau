@@ -33,6 +33,7 @@ mod profile;
 
 pub use profile::{build_appcontainer_caps, AppContainerCaps};
 
+pub mod bridge_args;
 pub mod launcher_args;
 
 /// Windows-only test helpers, gated behind the `integration-tests`

@@ -21,6 +21,10 @@ thiserror           = { workspace = true }
 name = "tau-appcontainer-launcher"
 path = "src/bin/tau-appcontainer-launcher.rs"
 
+[[bin]]
+name = "tau-net-bridge-win"
+path = "src/bin/tau-net-bridge-win.rs"
+
 # Real Win32 AppContainer + ACL + process-creation calls. Target-gated so
 # the crate still builds on Linux/macOS (pure-logic modules only).
 [target.'cfg(target_os = "windows")'.dependencies.windows]
