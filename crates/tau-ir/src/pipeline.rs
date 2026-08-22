@@ -34,6 +34,11 @@ pub struct PipelineStep {
 /// One spawnable per-kind agent definition inside a [`StepRun::Dynamic`]
 /// region, resolved with its capability grant so the runtime gate
 /// (EPIC 4.5) is self-contained (no re-resolution against `tau.toml`).
+///
+/// EPIC 4.5 makes this a runnable template: alongside the capability grant
+/// it also carries everything the runtime gate needs to actually spawn a
+/// child agent (description, prompt, resolved model, tool allow-list) —
+/// no re-resolution against `tau.toml` at spawn time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DynamicSpawn {
@@ -41,6 +46,14 @@ pub struct DynamicSpawn {
     pub kind: String,
     /// The kind's resolved capability grant.
     pub capabilities: CapabilityRequirements,
+    /// LLM-visible spawn-tool description.
+    pub description: String,
+    /// The spawned child's system prompt.
+    pub prompt: crate::prompt::PromptSource,
+    /// The spawned child's build-time-resolved model.
+    pub model_ref: crate::model_ref::ModelRef,
+    /// Tool ids the spawned child may call.
+    pub tool_refs: Vec<ToolId>,
 }
 
 /// What a [`PipelineStep`] executes — a reference to an existing node.
@@ -101,6 +114,9 @@ pub enum StepRun {
     /// membership/attenuation/bounds counters land in EPIC 4.5; the interpreter
     /// meets it with `RuntimeError::DynamicRegionRequiresRuntimeGate` until then.
     Dynamic {
+        /// The coordinator agent that runs the region — must exist in
+        /// `workflow.agents` (typechecked).
+        owner: AgentId,
         /// Region capability envelope (ceiling); every spawn ⊆ this.
         envelope: CapabilityRequirements,
         /// Spawnable per-kind agent definitions this region may launch.
@@ -137,6 +153,36 @@ mod tests {
             steps: alloc::vec![PipelineStep {
                 id: PipelineStepId("check-report".into()),
                 run: StepRun::Check(CheckId("c".into())),
+                input: "${input}".into(),
+            }],
+        };
+        let bytes = serde_json::to_vec(&p).expect("serializes");
+        let back: Pipeline = serde_json::from_slice(&bytes).expect("deserializes");
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn dynamic_step_serde_round_trips_with_templates() {
+        let p = Pipeline {
+            steps: alloc::vec![PipelineStep {
+                id: PipelineStepId("fanout".into()),
+                run: StepRun::Dynamic {
+                    owner: AgentId("coordinator".into()),
+                    envelope: CapabilityRequirements::default(),
+                    spawns: alloc::vec![DynamicSpawn {
+                        kind: "researcher".into(),
+                        capabilities: CapabilityRequirements::default(),
+                        description: "Deep-dives one topic.".into(),
+                        prompt: crate::prompt::PromptSource::inline("Research one topic."),
+                        model_ref: crate::model_ref::ModelRef {
+                            backend: "anthropic".into(),
+                            model_id: "claude-haiku-4-5".into(),
+                        },
+                        tool_refs: alloc::vec![ToolId("probe".into())],
+                    }],
+                    max_spawns: 8,
+                    max_concurrency: 4,
+                },
                 input: "${input}".into(),
             }],
         };

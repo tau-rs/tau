@@ -5,8 +5,19 @@ version = "0.1.0"
 [allow]
 "net.http" = { hosts = ["api.crawler.test"] }
 
+[allow.models.fast]
+backend = "coordbackend"
+model = "m-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "fast"
+
 [agent.kinds.researcher]
 capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+prompt = "You are a researcher."
+model = "fast"
 
 # A bounded dynamic region (EPIC 4.4) — control-flow the wasm guest cannot
 # execute (run_ir_streaming has no run_pipeline path), so `tau build wasm`

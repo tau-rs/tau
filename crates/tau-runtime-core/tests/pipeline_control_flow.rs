@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::{CapabilityRequirements, CapabilityTable};
 use tau_ir::check::{Condition, GoalPredicate, Locus};
-use tau_ir::ids::{AgentId, PipelineStepId};
+use tau_ir::ids::{AgentId, PipelineStepId, ToolId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
 use tau_ir::pipeline::{DynamicSpawn, Pipeline, PipelineStep, StepRun};
@@ -722,10 +722,18 @@ fn dynamic_module() -> IrModule {
         steps: vec![PipelineStep {
             id: PipelineStepId("spawn-region".into()),
             run: StepRun::Dynamic {
+                owner: AgentId("coordinator".into()),
                 envelope: CapabilityRequirements::default(),
                 spawns: vec![DynamicSpawn {
                     kind: "researcher".into(),
                     capabilities: CapabilityRequirements::default(),
+                    description: "Deep-dives one topic.".into(),
+                    prompt: tau_ir::prompt::PromptSource::inline("Research one topic."),
+                    model_ref: tau_ir::model_ref::ModelRef {
+                        backend: "anthropic".into(),
+                        model_id: "claude-haiku-4-5".into(),
+                    },
+                    tool_refs: vec![ToolId("probe".into())],
                 }],
                 max_spawns: 1,
                 max_concurrency: 1,
