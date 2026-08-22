@@ -352,7 +352,8 @@ pub fn run_component_with_caps(
         serde_json::from_str::<CompletionResponse>(resp).map_err(WasmHostError::InvalidResponse)?;
     }
     let (ports, emitted) = DeterministicPorts::new(llm_responses);
-    let payload = run_component_with_ports(wasm_bytes, prompt, Box::new(ports), caps, sandbox_root)?;
+    let payload =
+        run_component_with_ports(wasm_bytes, prompt, Box::new(ports), caps, sandbox_root)?;
     let emitted = std::mem::take(&mut *emitted.lock().expect("event buffer lock"));
     Ok((payload, emitted))
 }
@@ -476,10 +477,7 @@ mod tests {
             serde_json::to_string(&CompletionRequest::new("m".to_string())).expect("req json");
         assert!(state.complete(req_json.clone()).is_ok());
         assert!(state.complete(req_json.clone()).is_ok());
-        assert!(
-            state.complete(req_json).is_err(),
-            "exhausted queue errors"
-        );
+        assert!(state.complete(req_json).is_err(), "exhausted queue errors");
     }
 
     #[test]
@@ -577,8 +575,13 @@ mod tests {
     #[test]
     fn deterministic_ports_rejects_malformed_canned_response() {
         let (mut ports, _emitted) = DeterministicPorts::new(vec!["not json".to_string()]);
-        let err = ports.complete(CompletionRequest::new("m".to_string())).unwrap_err();
-        assert!(err.contains("invalid canned CompletionResponse"), "got: {err}");
+        let err = ports
+            .complete(CompletionRequest::new("m".to_string()))
+            .unwrap_err();
+        assert!(
+            err.contains("invalid canned CompletionResponse"),
+            "got: {err}"
+        );
     }
 
     #[test]

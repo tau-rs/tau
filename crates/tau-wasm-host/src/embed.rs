@@ -16,6 +16,4 @@
 
 pub use crate::{run_component_with_ports, EmbedPorts, WasmHostError};
 pub use tau_domain::Capability;
-pub use tau_ports::llm::{
-    CompletionRequest, CompletionResponse, StopReason, TokenUsage, ToolUse,
-};
+pub use tau_ports::llm::{CompletionRequest, CompletionResponse, StopReason, TokenUsage, ToolUse};

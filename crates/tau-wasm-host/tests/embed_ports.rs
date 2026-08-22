@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use tau_wasm_host::embed::{run_component_with_ports, CompletionRequest, CompletionResponse, EmbedPorts};
+use tau_wasm_host::embed::{
+    run_component_with_ports, CompletionRequest, CompletionResponse, EmbedPorts,
+};
 
 /// Build `tau-wasm-guest` for `wasm32-wasip2` (release) and return the bytes
 /// of the emitted component, locating the artifact from cargo's JSON output
@@ -168,9 +170,8 @@ fn with_ports_streams_the_same_events_the_buffered_api_returns() {
         entropy: 0,
         events: Arc::clone(&events),
     };
-    let payload =
-        run_component_with_ports(&component, "hi", Box::new(ports), &[], Path::new("."))
-            .expect("live ports run the guest");
+    let payload = run_component_with_ports(&component, "hi", Box::new(ports), &[], Path::new("."))
+        .expect("live ports run the guest");
 
     let (buf_payload, buffered) =
         tau_wasm_host::run_component(&component, "hi", vec![end_turn_response()])
@@ -189,7 +190,11 @@ fn with_ports_streams_the_same_events_the_buffered_api_returns() {
     // Same component, same cassette → identical event *sequence shape*
     // (timestamps inside events may differ: live clock ≠ deterministic clock,
     // so compare count and variant markers, not bytes).
-    assert_eq!(live.len(), buffered.len(), "live: {live:?}\nbuffered: {buffered:?}");
+    assert_eq!(
+        live.len(),
+        buffered.len(),
+        "live: {live:?}\nbuffered: {buffered:?}"
+    );
 }
 
 #[test]
