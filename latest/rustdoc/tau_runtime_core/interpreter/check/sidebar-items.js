@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["eval_condition","evaluate_deliverable","evaluate_goal"],"struct":["CheckVerdict"]};
