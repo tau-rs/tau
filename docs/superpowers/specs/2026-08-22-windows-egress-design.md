@@ -28,7 +28,7 @@ primitives for the two platform-specific hops:
 tau.exe (parent)
  ├─ tokio task: pipe proxy (tau-sandbox-proxy core: HostAllow +
  │      CONNECT/SNI/port validation, unchanged)
- │      listens on \\.\pipe\LOCAL\tau-proxy-<pid>-<n>
+ │      listens on \\.\pipe\tau-proxy-<pid>-<n>
  │      pipe DACL: owner + THIS spawn's AppContainer package SID only
  │
  └─ spawn → tau-appcontainer-launcher.exe --profile P
@@ -79,11 +79,11 @@ The design's two Windows-behavior premises are measured, not assumed, by
 `crates/tau-sandbox-windows/tests/spike_appcontainer_net.rs` on the tier-2
 `nextest / windows` job before implementation starts:
 
-| # | Premise | If refuted |
+| # | Premise | Round-1 result (2026-08-22, run 32562993857) |
 |---|---------|-----------|
-| H1 | loopback works between two processes in the same AppContainer (same package SID); container→host loopback stays blocked (control) | bridge cannot serve `reqwest`/`curl` — fall back to presenting a revised option set (no viable no-SID transport is known) |
-| H2 | a named pipe whose DACL grants the package SID opens from inside (probing plain and `LOCAL\` namespaces); without the ACE it is denied (control) | if only `LOCAL\` works, use it (already the default in this design); if neither works, same fallback as H1 |
-| H3 | (item-2 premise) a leaf-only ACL grant on a nested path is/is not readable from the container — AppContainer tokens may retain `SeChangeNotifyPrivilege` (bypass traverse checking), which would make ancestor grants unnecessary | measurement only: decides whether item 2 is code + tests or tests only |
+| H1 | loopback works between two processes in the same AppContainer (same package SID); container→host loopback stays blocked (control) | control: **blocked ✅** (no runner exemption). Positive probe: connect + accept succeeded, data read got RST 10054 — suspected probe artifact (child `process::exit` right after `write_all` aborts the socket); round 2 adds a ping/pong ack. If round 2 still fails, the bridge cannot serve `reqwest`/`curl` — fall back to presenting a revised option set (no viable no-SID transport is known) |
+| H2 | a named pipe whose DACL grants the package SID opens from inside; without the ACE it is denied (control) | **CONFIRMED ✅** for the plain `\\.\pipe\<name>` namespace (round-trip works; no-ACE control denied). `LOCAL\` refuted with error 2 *not found* — that prefix remaps to a per-container namespace, so the design uses the plain name |
+| H3 | (item-2 premise) a leaf-only ACL grant on a nested path is NOT readable from the container — AppContainer tokens may retain `SeChangeNotifyPrivilege` (bypass traverse checking), which would make ancestor grants unnecessary | round 1 invisible (nextest hides passing stdout); round 2 asserts the premise — decides whether item 2 is code + tests or tests only |
 
 Spike results are recorded in the ADR amendment verbatim; the spike branch is
 then deleted unmerged.
@@ -123,12 +123,14 @@ pub(crate) fn spawn_pipe_proxy(
 ) -> std::io::Result<PipeProxyHandle>;
 
 pub(crate) struct PipeProxyHandle {
-    pipe_name: String,                // LOCAL\tau-proxy-<pid>-<n>
+    pipe_name: String,                // tau-proxy-<pid>-<n> (plain namespace)
     task: tokio::task::JoinHandle<()>,// accept loop; Drop aborts
 }
 ```
 
-Pipe name defaults to the `LOCAL\` namespace (H2b). The accept loop uses
+Pipe name uses the plain `\\.\pipe\` namespace — H2a measured it working
+end-to-end from inside the container, while `LOCAL\` names remap to a
+per-container namespace and are not visible (H2b, error 2). The accept loop uses
 `tokio::net::windows::named_pipe::NamedPipeServer`; the first instance is
 created via `ServerOptions` with raw security attributes (the one unsafe
 call, scoped like `acl.rs`). DACL: owner implicit + one `(A;;GA;;;<package
