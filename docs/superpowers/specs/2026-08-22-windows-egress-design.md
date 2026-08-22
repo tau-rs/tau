@@ -1,6 +1,6 @@
 # Windows AppContainer network egress + FILE_TRAVERSE positive FS grants
 
-Status: approved design, pending spike confirmation (2026-08-22)
+Status: approved design, spike-confirmed (2026-08-22, two CI rounds)
 Tracking: issue #622 · Spike: PR #626 · Amends: ADR-0067 §"Network egress: deferred, fail-closed"
 Prior art: #587/#610 (Phase 2 adapter), #617 (stdio-after-wrap invariant), ADR-0014 (fail-closed), ADR-0020 (egress proxy model)
 
@@ -79,14 +79,14 @@ The design's two Windows-behavior premises are measured, not assumed, by
 `crates/tau-sandbox-windows/tests/spike_appcontainer_net.rs` on the tier-2
 `nextest / windows` job before implementation starts:
 
-| # | Premise | Round-1 result (2026-08-22, run 32562993857) |
+| # | Premise | Final result (2026-08-22, runs 32562993857 + 32563879563) |
 |---|---------|-----------|
-| H1 | loopback works between two processes in the same AppContainer (same package SID); container→host loopback stays blocked (control) | control: **blocked ✅** (no runner exemption). Positive probe: connect + accept succeeded, data read got RST 10054 — suspected probe artifact (child `process::exit` right after `write_all` aborts the socket); round 2 adds a ping/pong ack. If round 2 still fails, the bridge cannot serve `reqwest`/`curl` — fall back to presenting a revised option set (no viable no-SID transport is known) |
+| H1 | loopback works between two processes in the same AppContainer (same package SID); container→host loopback stays blocked (control) | **CONFIRMED ✅** — full TCP round-trip inside the container; control blocked (no runner exemption). Round 1's RST 10054 was a probe artifact (child `process::exit` right after `write_all` aborts the socket); a ping/pong ack fixed it |
 | H2 | a named pipe whose DACL grants the package SID opens from inside; without the ACE it is denied (control) | **CONFIRMED ✅** for the plain `\\.\pipe\<name>` namespace (round-trip works; no-ACE control denied). `LOCAL\` refuted with error 2 *not found* — that prefix remaps to a per-container namespace, so the design uses the plain name |
-| H3 | (item-2 premise) a leaf-only ACL grant on a nested path is NOT readable from the container — AppContainer tokens may retain `SeChangeNotifyPrivilege` (bypass traverse checking), which would make ancestor grants unnecessary | round 1 invisible (nextest hides passing stdout); round 2 asserts the premise — decides whether item 2 is code + tests or tests only |
+| H3 | (item-2 premise) a leaf-only ACL grant on a nested path is NOT readable from the container | **REFUTED** — the read succeeds with no ancestor grants: AppContainer tokens retain `SeChangeNotifyPrivilege` (bypass traverse checking). ADR-0067's FILE_TRAVERSE premise is corrected in its amendment; item 2 is tests-only |
 
-Spike results are recorded in the ADR amendment verbatim; the spike branch is
-then deleted unmerged.
+Results are recorded in the ADR-0067 amendment; the spike PR (#626) is closed
+unmerged and its branch deleted.
 
 ## Components
 
@@ -176,19 +176,15 @@ Arg parsing is a pure module unit-tested on any host, like `launcher_args`.
   `capability_sids` stays empty — the launcher's `--cap` plumbing remains
   dormant (kept for future capability needs, not used by this design).
 
-### 5. FILE_TRAVERSE ancestor grants (item 2, shape decided by H3)
+### 5. Positive-FS reachability (item 2) — tests-only, per H3
 
-- If H3 shows leaf-only grants are **unreachable** (ADR-0067's stated
-  premise): in `wrap_spawn_windows`, for each granted path, walk ancestors up
-  to the grant root and `grant_access(..., AccessKind::Traverse)` — a new
-  `AccessKind` variant mapping to `FILE_TRAVERSE` only (no read: siblings
-  stay unlistable/unreadable, deny-by-default preserved). Record grants in
-  `granted_paths` so the existing reverse-order revoke covers them; the
-  merge-not-replace DACL invariant (`acl.rs` fix round 1) already protects
-  ancestor DACLs.
-- If H3 shows leaf-only grants **are reachable** (bypass-traverse privilege
-  held): no adapter change; item 2 reduces to the positive-FS acceptance
-  test + an ADR correction.
+H3 refuted ADR-0067's premise: leaf-only ACL grants ARE reachable at
+nested paths (AppContainer tokens retain `SeChangeNotifyPrivilege`,
+bypass traverse checking). No `FILE_TRAVERSE` ancestor-grant code is
+needed. Item 2 reduces to the positive-FS acceptance tests below plus
+the ADR-0067 amendment correcting the premise. (The spike's H3 probe is
+promoted to a permanent positive-FS regression test in PR2 so a future
+Windows hardening change that strips the privilege is caught.)
 
 ## Error handling
 
@@ -221,10 +217,10 @@ Arg parsing is a pure module unit-tested on any host, like `launcher_args`.
 1. **PR1 (cross-platform):** `tau-sandbox-proxy` handler genericization. No
    Windows code; tier-0 proves no Unix regression.
 2. **PR2 (Windows):** `pipe_proxy` + `tau-net-bridge-win` + `wrap_spawn`
-   rewire + traverse grants (per H3) + shapes/probe flip + all Windows
-   tests. `full-matrix` label.
-3. **PR3 (docs):** ADR-0067 amendment (or new ADR) with spike measurements,
-   escape-hatch/docs updates, close #622.
+   rewire + shapes/probe flip + all Windows tests (incl. the promoted
+   positive-FS regression test). `full-matrix` label.
+3. **PR3 (docs):** ADR-0067 amendment with spike measurements (drafted
+   alongside this spec), escape-hatch/docs updates, close #622.
 
 Crates touched: `tau-sandbox-proxy`, `tau-sandbox-windows`, possibly
 `tau-cli` (install acceptance test) and `tau-runtime-tokio` (tier/registry
