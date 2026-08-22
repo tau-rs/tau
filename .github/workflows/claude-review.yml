@@ -149,8 +149,13 @@ jobs:
           CURRENT_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
+          # grep exits 1 when CURRENT_TAG isn't in the QG11 tag list
+          # (first-ever release, or a non-QG11 tag) — under pipefail
+          # that would kill the step inside the assignment before the
+          # empty-string fallback below can run. Mask the pipeline
+          # status so the fallback handles it.
           previous=$(git tag --list 'v*.0.0' 'v0.*.0' --sort=-v:refname \
-            | grep -A1 "^${CURRENT_TAG}$" | tail -n1)
+            | grep -A1 "^${CURRENT_TAG}$" | tail -n1 || true)
           if [[ -z "$previous" || "$previous" == "$CURRENT_TAG" ]]; then
             previous=$(git rev-list --max-parents=0 HEAD | head -1)
           fi
