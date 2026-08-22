@@ -52,6 +52,23 @@ pub mod test_support {
     pub fn delete_profile(name: &str) -> std::io::Result<()> {
         crate::acl::delete_appcontainer_profile(name)
     }
+
+    /// Grant read+execute on `path` to the AppContainer profile named
+    /// `profile`. See [`crate::acl::grant_access`].
+    pub fn grant_read(profile: &str, path: &str) -> std::io::Result<()> {
+        let sid = crate::acl::AppContainerSid {
+            profile_name: profile.to_string(),
+        };
+        crate::acl::grant_access(&sid, path, crate::acl::AccessKind::Read)
+    }
+
+    /// Revoke a [`grant_read`] grant. See [`crate::acl::revoke_access`].
+    pub fn revoke_read(profile: &str, path: &str) -> std::io::Result<()> {
+        let sid = crate::acl::AppContainerSid {
+            profile_name: profile.to_string(),
+        };
+        crate::acl::revoke_access(&sid, path, crate::acl::AccessKind::Read)
+    }
 }
 
 use std::process::Command;

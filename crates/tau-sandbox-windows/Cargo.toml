@@ -21,6 +21,12 @@ thiserror           = { workspace = true }
 name = "tau-appcontainer-launcher"
 path = "src/bin/tau-appcontainer-launcher.rs"
 
+# THROWAWAY SPIKE (issue #622): in-container probe for the egress
+# transport design. Pure std; delete with the spike.
+[[bin]]
+name = "tau-spike-net-probe"
+path = "src/bin/tau-spike-net-probe.rs"
+
 # Real Win32 AppContainer + ACL + process-creation calls. Target-gated so
 # the crate still builds on Linux/macOS (pure-logic modules only).
 [target.'cfg(target_os = "windows")'.dependencies.windows]
@@ -34,6 +40,8 @@ features = [
     "Win32_System_JobObjects",
     "Win32_System_Console",
     "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
     "Win32_Storage_FileSystem",
 ]
 
