@@ -19,3 +19,4 @@ spawns = ["researcher"]
 ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
 max_spawns = 4
 max_concurrency = 2
+agent = "coordinator"

@@ -835,6 +835,7 @@ deterministic = "parse_celsius"
             ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
             max_spawns = 8
             max_concurrency = 4
+            agent = "coordinator"
         "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
         let researcher_caps = config
@@ -880,6 +881,7 @@ deterministic = "parse_celsius"
             ceiling = {}
             max_spawns = 1
             max_concurrency = 1
+            agent = "coordinator"
         "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
         let err = parse(&config, &no_prompt_files).expect_err("unknown kind rejected");

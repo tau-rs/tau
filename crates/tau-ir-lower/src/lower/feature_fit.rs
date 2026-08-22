@@ -104,6 +104,7 @@ spawns = ["researcher"]
 ceiling = {}
 max_spawns = 1
 max_concurrency = 1
+agent = "coordinator"
 "#;
 
     fn parsed(toml: &str) -> Parsed {
