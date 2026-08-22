@@ -29,6 +29,11 @@ pub struct McpBackedTool {
     server_tool_name: String,
     /// Capabilities the tool requires (per PR-4 expansion's intersection).
     capabilities: Vec<Capability>,
+    /// Runtime authority when the entry's meet-clamped `CapabilityPlan`
+    /// narrows this tool's declared net caps (execution-trace TUI spec
+    /// §12.3). `None` = not narrowed. Computed by the runtime composer
+    /// (`setup_mcp_runtime`), not here — the bridge just carries it.
+    effective_capabilities: Option<Vec<Capability>>,
     /// JSON Schema for the tool's input (passed through from the contract).
     /// Stored as `tau_domain::Value` to match `ToolSpec.input_schema`.
     input_schema: Value,
@@ -47,6 +52,7 @@ impl McpBackedTool {
         client: Arc<McpClient>,
         server_tool_name: impl Into<String>,
         capabilities: Vec<Capability>,
+        effective_capabilities: Option<Vec<Capability>>,
         input_schema_json: serde_json::Value,
         description: impl Into<String>,
     ) -> Arc<Self> {
@@ -59,6 +65,7 @@ impl McpBackedTool {
             client,
             server_tool_name: server_tool_name.into(),
             capabilities,
+            effective_capabilities,
             input_schema,
             description: description.into(),
         })
@@ -91,6 +98,10 @@ impl Tool for McpBackedTool {
 
     fn capabilities(&self) -> &[Capability] {
         &self.capabilities
+    }
+
+    fn effective_capabilities(&self) -> Option<&[Capability]> {
+        self.effective_capabilities.as_deref()
     }
 
     async fn init(&self, _ctx: SessionContext) -> Result<Self::Session, ToolError> {

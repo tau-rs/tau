@@ -54,6 +54,7 @@ call, colored by outcome:
 | Badge | Meaning |
 |---|---|
 | `allow` (green) | The call's required capability was granted; it ran as requested. |
+| `clamp:<to>` (amber) | The call ran, but under authority narrowed at MCP open time: the entry's `net.http` hosts were meet-clamped against the `[allow.mcp.<entry>].hosts` ceiling. `<to>` is the effective host list (`any` = host-unbounded; `none` = no net authority survived the clamp). Observability only — enforcement happens at the OS boundary. |
 | `drop:<reason>` (red) | Fail-closed: the required capability was denied, so the call never ran. A denied call still gets a row — the waterfall shows exactly where authority stopped the run. |
 | `-` | The tool is un-gated, or the trace predates capability recording. |
 
