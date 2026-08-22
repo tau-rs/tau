@@ -1,0 +1,24 @@
+packages = ["anthropic"]
+
+[project]
+name = "embed-native-workflow"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.assistant]
+display_name = "Assistant"
+package = "embed-native-workflow@^0.1"
+model = "claude"
+tool_refs = ["echo"]
+max_turns = 4
+
+[agents.assistant.prompt]
+system = "Echo the user's text via the echo tool, then reply 'done'."
+
+[tools.echo]
+native = "Echo"
+description = "Echo back the provided text."
+capabilities = []

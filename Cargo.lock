@@ -1248,6 +1248,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "embed-native-workflow-lib"
+version = "0.1.0"
+dependencies = [
+ "tau-runtime-core",
+]
+
+[[package]]
 name = "embedded-io"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
