@@ -43,14 +43,33 @@ impl Default for HostRandom {
     }
 }
 
-impl RandomSource for HostRandom {
-    fn fill(&self, dest: &mut [u8]) {
-        for chunk in dest.chunks_mut(8) {
-            let mut x = self.state.load(Ordering::Relaxed);
+impl HostRandom {
+    /// Draw the next xorshift64* value via a compare-exchange retry loop
+    /// so concurrent callers (this crate pulls tokio `rt-multi-thread`,
+    /// and `RandomSource` is `Send + Sync`) each observe a distinct state
+    /// transition instead of racing to load/store the same value.
+    fn next_u64(&self) -> u64 {
+        let mut s = self.state.load(Ordering::Relaxed);
+        loop {
+            let mut x = s;
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
-            self.state.store(x, Ordering::Relaxed);
+            match self
+                .state
+                .compare_exchange_weak(s, x, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return x,
+                Err(actual) => s = actual,
+            }
+        }
+    }
+}
+
+impl RandomSource for HostRandom {
+    fn fill(&self, dest: &mut [u8]) {
+        for chunk in dest.chunks_mut(8) {
+            let x = self.next_u64();
             for (d, b) in chunk.iter_mut().zip(x.to_le_bytes()) {
                 *d = b;
             }
