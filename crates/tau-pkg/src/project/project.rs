@@ -53,6 +53,63 @@ pub struct UncheckedProjectConfig {
     /// `[agent.kinds.*]` per-kind agent definitions (EPIC 4.4).
     #[serde(default)]
     pub agent: UncheckedAgentContainer,
+    /// Optional `[dirs]` table declaring directory-based definition roots.
+    #[serde(default)]
+    pub dirs: Option<UncheckedDirs>,
+}
+
+/// `[dirs]` table — opt-in directory-based definition roots (relative paths).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedDirs {
+    /// Root scanned for `agents/**/*.{md,toml}` definitions.
+    #[serde(default)]
+    pub agents: Option<String>,
+    /// Root scanned for `tools/**/*.toml` definitions.
+    #[serde(default)]
+    pub tools: Option<String>,
+}
+
+/// Validated `[dirs]` declaration (paths as declared, relative to project root).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirsEntry {
+    /// Agents root, if declared.
+    pub agents: Option<PathBuf>,
+    /// Tools root, if declared.
+    pub tools: Option<PathBuf>,
+}
+
+/// Syntactic validation of one `[dirs]` declaration: relative, no `..`/`.`
+/// components, no component starting with `.` or `_`. Existence, containment,
+/// and overlap need the filesystem and run in `dirs::scan_dirs`.
+pub(crate) fn validate_dirs_decl(
+    kind: &'static str,
+    decl: &str,
+) -> Result<PathBuf, ProjectConfigError> {
+    let err = |reason: &str| ProjectConfigError::DirsRoot {
+        kind,
+        path: decl.to_string(),
+        reason: reason.to_string(),
+    };
+    if decl.is_empty() {
+        return Err(err("must not be empty"));
+    }
+    let p = std::path::Path::new(decl);
+    if p.is_absolute() {
+        return Err(err("must be a relative path inside the project root"));
+    }
+    for comp in p.components() {
+        match comp {
+            std::path::Component::Normal(s) => {
+                let s = s.to_str().ok_or_else(|| err("must be UTF-8"))?;
+                if s.starts_with('.') || s.starts_with('_') {
+                    return Err(err("components must not start with `.` or `_`"));
+                }
+            }
+            _ => return Err(err("`..` and `.` components are not allowed")),
+        }
+    }
+    Ok(p.to_path_buf())
 }
 
 /// `[project]` table.
@@ -932,6 +989,8 @@ pub struct ProjectConfig {
     pub allow: Option<crate::project::allow::AllowConfig>,
     /// Map of kind name → validated per-kind agent definition (EPIC 4.4).
     pub agent_kinds: BTreeMap<String, AgentKind>,
+    /// Validated `[dirs]` declaration, if present.
+    pub dirs: Option<DirsEntry>,
 }
 
 /// Validated context-pipeline step.
@@ -1441,6 +1500,55 @@ pub enum ProjectConfigError {
         /// The agent id that had no model.
         agent: String,
     },
+
+    // --- [dirs] directory-based definitions ---
+    /// `[dirs]` present but parsing had no project root to scan from.
+    #[error(
+        "[dirs] requires a project root; load via `ProjectConfig::from_path` or `parse_str_at` (`parse_str` cannot scan directories)"
+    )]
+    DirsRequireRoot,
+
+    /// A `[dirs]` root declaration is invalid.
+    #[error("[dirs] {kind} = {path:?}: {reason}")]
+    DirsRoot {
+        /// Which key (`"agents"` | `"tools"`).
+        kind: &'static str,
+        /// Declared value.
+        path: String,
+        /// Why the declaration was rejected.
+        reason: String,
+    },
+
+    /// Two `[dirs]` roots overlap (equal or nested).
+    #[error("[dirs] roots overlap: {a:?} and {b:?} — roots must be disjoint")]
+    DirsRootsOverlap {
+        /// First root.
+        a: String,
+        /// Second root.
+        b: String,
+    },
+
+    /// A scanned definition file is invalid (hygiene, parse, or naming).
+    #[error("definition file {file}: {reason}")]
+    DefFile {
+        /// Project-root-relative path.
+        file: String,
+        /// Why the file was rejected.
+        reason: String,
+    },
+
+    /// The same definition name arrived from two sources.
+    #[error(
+        "duplicate {kind} definition {name:?} (from {file}); already defined in tau.toml or another definition file"
+    )]
+    DuplicateDefinition {
+        /// `"agent"` | `"tool"`.
+        kind: &'static str,
+        /// Full path-name.
+        name: String,
+        /// Offending file.
+        file: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -1540,6 +1648,22 @@ impl UncheckedProjectConfig {
             })
             .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
 
+        let dirs = match &self.dirs {
+            None => None,
+            Some(d) => Some(DirsEntry {
+                agents: d
+                    .agents
+                    .as_deref()
+                    .map(|s| validate_dirs_decl("agents", s))
+                    .transpose()?,
+                tools: d
+                    .tools
+                    .as_deref()
+                    .map(|s| validate_dirs_decl("tools", s))
+                    .transpose()?,
+            }),
+        };
+
         let mut result = ProjectConfig {
             project_name: self.project.name,
             description: self.project.description,
@@ -1554,6 +1678,7 @@ impl UncheckedProjectConfig {
             packages: self.packages,
             allow,
             agent_kinds,
+            dirs,
         };
 
         validate_postconditions(&mut result)?;
@@ -2915,6 +3040,9 @@ impl ProjectConfig {
     pub fn parse_str(toml: &str) -> Result<Self, ProjectConfigError> {
         let unchecked: UncheckedProjectConfig =
             toml::from_str(toml).map_err(|source| ProjectConfigError::ParseStr { source })?;
+        if unchecked.dirs.is_some() {
+            return Err(ProjectConfigError::DirsRequireRoot);
+        }
         unchecked.validate()
     }
 
@@ -3069,6 +3197,53 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
     fn validate_rejects_empty_project_name() {
         let result = parse("[project]\nname = \"\"\n");
         assert!(matches!(result, Err(ProjectConfigError::EmptyProjectName)));
+    }
+
+    // ----- [dirs] table (dir-based tool/agent definitions) -----
+
+    #[test]
+    fn dirs_table_parses_and_validates() {
+        let toml = r#"
+[project]
+name = "p"
+[dirs]
+agents = "agents"
+tools  = "defs/tools"
+"#;
+        // parse_str must REJECT [dirs] (no root available to scan).
+        let err = ProjectConfig::parse_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::DirsRequireRoot),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dirs_unknown_key_rejected() {
+        let toml = "[project]\nname = \"p\"\n[dirs]\nskils = \"x\"\n";
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn dirs_syntactic_validation_rejects_bad_roots() {
+        // Validation helper is exercised directly (fs checks live in scan, Task 3).
+        for bad in [
+            "/abs/agents",
+            "",
+            "../up",
+            "./agents",
+            ".tau/agents",
+            "_agents",
+            "a/.hidden/b",
+        ] {
+            let err = validate_dirs_decl("agents", bad).unwrap_err();
+            assert!(
+                matches!(err, ProjectConfigError::DirsRoot { .. }),
+                "{bad}: {err:?}"
+            );
+        }
+        assert!(validate_dirs_decl("agents", "agents").is_ok());
+        assert!(validate_dirs_decl("tools", "defs/tools").is_ok());
     }
 
     #[test]
@@ -5722,6 +5897,7 @@ mod proptests {
                 packages: Vec::new(),
                 allow: None,
                 agent: UncheckedAgentContainer::default(),
+                dirs: None,
             };
 
             let toml_str = toml::to_string(&original).unwrap();
