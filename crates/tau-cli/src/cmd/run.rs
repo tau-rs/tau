@@ -206,7 +206,7 @@ pub async fn run(
     )?;
 
     let (agent_def, manifest) =
-        crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
+        crate::config::build_agent_definition(entry, &cwd, &scope, project.effective_models())
             .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
@@ -258,9 +258,14 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded =
-        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        entry,
+        &scope,
+        project.effective_models(),
+        trace_context,
+        host_options,
+    )
+    .await?;
 
     let runtime = loaded
         .builder
