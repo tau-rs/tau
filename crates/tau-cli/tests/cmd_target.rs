@@ -25,13 +25,16 @@ fn list_default_shows_only_available() {
         "any-wasi-strict should appear in available list"
     );
     assert!(
-        !stdout.contains("windows-native-strict"),
-        "Reserved should be hidden by default"
+        stdout.contains("windows-native-strict"),
+        "Phase 2 graduated windows-native-strict to Available; \
+         it should now appear in the default (Available-only) list"
     );
 }
 
 #[test]
-fn list_all_includes_reserved() {
+fn list_all_matches_default_when_nothing_is_reserved() {
+    // Phase 2 graduated the last Reserved triple (windows-native-strict) to
+    // Available, so `--all` and the default list now show the same set.
     let out = Command::new(tau_bin())
         .args(["target", "list", "--all"])
         .output()
@@ -53,7 +56,7 @@ fn list_json_emits_one_event_per_triple() {
     assert_eq!(
         lines.len(),
         7,
-        "expected 7 entries (6 Available + 1 Reserved), got {} — stdout: {stdout}",
+        "expected 7 entries (7 Available + 0 Reserved), got {} — stdout: {stdout}",
         lines.len()
     );
     for l in &lines {
@@ -102,15 +105,16 @@ fn show_any_wasi_strict_prints_matrix() {
 }
 
 #[test]
-fn show_reserved_triple_includes_reason() {
+fn show_windows_native_strict_is_available() {
+    // Phase 2 graduated windows-native-strict Reserved -> Available.
     let out = Command::new(tau_bin())
         .args(["target", "show", "windows-native-strict"])
         .output()
         .expect("spawn");
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).expect("utf8");
-    assert!(stdout.contains("Reserved"));
-    assert!(stdout.contains("scaffold"));
+    assert!(stdout.contains("Available"));
+    assert!(stdout.contains("platform: windows"));
 }
 
 #[test]

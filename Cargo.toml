@@ -5,6 +5,7 @@ members = [
     "crates/tau-ports",
     "crates/tau-ir",
     "crates/tau-ir-lower",
+    "crates/tau-trace",
     "crates/tau-app",
     "crates/tau-pkg",
     "crates/tau-mcp",
@@ -87,9 +88,10 @@ dlmalloc    = { version = "0.2", features = ["global"] }
 # β.7.5 wasm host (std embedder; host targets only)
 wasmtime    = "47"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
-tau-ports           = { path = "crates/tau-ports",  version = "0.5.0", default-features = false }
+tau-ports           = { path = "crates/tau-ports",  version = "0.7.0", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
+tau-trace           = { path = "crates/tau-trace", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
 tau-mcp-tokio       = { path = "crates/tau-mcp-tokio", version = "0.0.0", default-features = false }
 tau-native-tools    = { path = "crates/tau-native-tools", version = "0.0.0", default-features = false }
@@ -167,6 +169,12 @@ libc         = "0.2"
 nix          = { version = "0.31", default-features = false, features = ["sched", "user", "process", "fs"] }
 seccompiler  = "0.5"
 ulid         = { version = "3", default-features = false }
+# Execution-trace TUI (M1). ratatui 0.30's default `crossterm` feature pulls
+# in `ratatui-crossterm`, whose own default feature (`crossterm_0_29`) pins
+# to crossterm 0.29 — matching the direct `crossterm` dep below so both
+# resolve to the same crate version instead of two co-installed majors.
+ratatui      = "0.30"
+crossterm    = "0.29"
 
 # Vendored no_std fork of async-stream (upstream 0.3.6 is std-only via
 # `thread_local!` + `use std::`). Required so the β.7.5 wasm guest can link

@@ -116,6 +116,25 @@ pub struct TraceEvent {
     pub kind: TraceEventKind,
 }
 
+/// Governance decision recorded for a capability-gated tool call.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "verdict", rename_all = "snake_case"))]
+pub enum CapabilityVerdict {
+    /// Call allowed as requested.
+    Allow,
+    /// Call allowed after meet-clamping to a narrower authority.
+    Clamp {
+        /// Human-readable clamped target (e.g. the allowed host).
+        to: String,
+    },
+    /// Call denied fail-closed.
+    Drop {
+        /// Why it was dropped.
+        reason: String,
+    },
+}
+
 /// Discriminated union of trace event kinds.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -149,6 +168,17 @@ pub enum TraceEventKind {
         duration_ms: u64,
         /// Status (`"ok"`, `"error"`).
         status: String,
+        /// Capability decision, if this tool was capability-gated.
+        /// `None` for un-gated tools or traces predating this field.
+        #[cfg_attr(feature = "serde", serde(default))]
+        capability: Option<CapabilityVerdict>,
+        /// Zero-based index of the turn this tool call belongs to, matching
+        /// the sibling [`TraceEventKind::Turn::turn_index`] of the same turn.
+        /// Lets a renderer nest a tool span under the correct turn rather
+        /// than the agent's first turn. `0` for un-indexed / legacy traces
+        /// predating this field (serde-defaulted).
+        #[cfg_attr(feature = "serde", serde(default))]
+        turn_index: u32,
     },
     /// A task was mutated.
     TaskMutation {
@@ -468,5 +498,36 @@ mod tests {
         assert_eq!(v["status"], "pending");
         let back: Task = serde_json::from_value(v).unwrap();
         assert_eq!(back, t);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn tool_call_serdes_capability_verdict() {
+        let evt = TraceEventKind::ToolCall {
+            tool_name: "net.http".into(),
+            duration_ms: 380,
+            status: "ok".into(),
+            capability: Some(CapabilityVerdict::Clamp {
+                to: "api.example.com".into(),
+            }),
+            turn_index: 0,
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains(r#""kind":"tool_call""#));
+        assert!(json.contains(r#""capability""#));
+        let back: TraceEventKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, evt);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn tool_call_capability_absent_deserializes_none() {
+        // Forward-compat: an older run without the field parses as None.
+        let json = r#"{"kind":"tool_call","tool_name":"fs.read","duration_ms":2,"status":"ok"}"#;
+        let back: TraceEventKind = serde_json::from_str(json).unwrap();
+        match back {
+            TraceEventKind::ToolCall { capability, .. } => assert!(capability.is_none()),
+            _ => panic!("wrong variant"),
+        }
     }
 }

@@ -13,6 +13,7 @@ pub mod exit;
 pub mod output;
 pub(crate) mod session;
 pub mod tracing;
+pub mod tui;
 
 pub use config::{
     build_agent_definition, AgentEntry, AgentResolutionError, ProjectConfig, ProjectConfigError,
@@ -194,6 +195,7 @@ async fn dispatch(cli: cli::Cli, workflow_run_id: Option<String>) -> anyhow::Res
         }
         cli::Command::Dev(args) => cmd::dev::run(args, &mut output).await,
         cli::Command::Embed(ref args) => cmd::embed::run(args, &mut output).await,
+        cli::Command::Trace(ref args) => cmd::trace::run(args).await,
         cli::Command::Resolve(args) => cmd::resolve::run(&args, &mut output).await,
         cli::Command::Uninstall(args) => cmd::uninstall::run(&args, &mut output).await,
         cli::Command::Update(args) => cmd::update::run(&args, &mut output).await,
