@@ -113,7 +113,8 @@ impl LlmBackend for EchoBackend {{
     }}
 
     async fn stream(&self, req: CompletionRequest) -> Result<CompletionStream, LlmError> {{
-        Ok(batch_to_stream(self.complete(req).await?))
+        // UFCS: the DynLlmBackend blanket impl makes `self.complete(..)` ambiguous.
+        Ok(batch_to_stream(LlmBackend::complete(self, req).await?))
     }}
 }}
 
