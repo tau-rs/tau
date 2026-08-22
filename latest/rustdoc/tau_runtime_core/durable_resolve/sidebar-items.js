@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Support"],"fn":["resolve_durability"],"struct":["DurabilityUnsupported","ResolvedDurability"]};
