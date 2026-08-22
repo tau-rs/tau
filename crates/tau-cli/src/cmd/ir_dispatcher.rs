@@ -349,24 +349,21 @@ pub(crate) async fn run_via_ir(
     //    step's output); a bundle with NO pipeline keeps the
     //    single-entry-agent `run_ir` path below BYTE-FOR-BYTE unchanged.
     if module.workflow.pipeline.is_some() {
-        // The id of the LAST NON-CHECK pipeline step — its stored output is
-        // the run's final result. Trailing `StepRun::Check` steps (lowered
-        // from `[goals.*]` / `[deliverables.*]`) evaluate postconditions but
-        // store NO output, so rendering one would hit the "no output" guard
-        // even when all checks pass — skip them and render the last
-        // output-producing step. The parser rejects an empty pipeline (see
-        // `tau_pkg`), but guard anyway rather than index blindly.
+        // The id of the LAST NON-CHECK, NON-SUSPEND pipeline step — its
+        // stored output is the run's final result. Trailing `StepRun::Check`
+        // steps (lowered from `[goals.*]` / `[deliverables.*]`) evaluate
+        // postconditions but store NO output, so rendering one would hit the
+        // "no output" guard even when all checks pass. `Suspend` likewise
+        // records no output. `Pipeline::final_leaf_step_id` skips both and
+        // renders the last output-producing step. The parser rejects an
+        // empty pipeline (see `tau_pkg`), but guard anyway rather than index
+        // blindly.
         let last_step_id = module
             .workflow
             .pipeline
             .as_ref()
-            .and_then(|p| {
-                p.steps
-                    .iter()
-                    .rev()
-                    .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
-            })
-            .map(|s| s.id.0.clone())
+            .and_then(|p| p.final_leaf_step_id())
+            .map(|id| id.0.clone())
             .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
 
         let store =

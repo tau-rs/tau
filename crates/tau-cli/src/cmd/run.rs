@@ -594,25 +594,22 @@ async fn try_run_pipeline(
     // caller's existing flow runs unchanged.
     let pipeline = module.workflow.pipeline.as_ref()?;
 
-    // The id of the LAST NON-CHECK pipeline step — its stored output is the
-    // run's final result. Trailing `StepRun::Check` steps (auto-appended by
-    // the lowerer for every `[goals.*]` / `[deliverables.*]` declaration)
-    // evaluate postconditions but store NO output in `OutputStore`. Selecting
-    // one as `last_step_id` would make `render_pipeline_result` call
-    // `store.get(check_step_id) → None` and return the "interpreter invariant
-    // violated" error even when all checks pass. Skip trailing check steps and
-    // find the last step that actually produces output.
+    // The id of the LAST NON-CHECK, NON-SUSPEND pipeline step — its stored
+    // output is the run's final result. Trailing `StepRun::Check` steps
+    // (auto-appended by the lowerer for every `[goals.*]` / `[deliverables.*]`
+    // declaration) evaluate postconditions but store NO output in
+    // `OutputStore`. Selecting one as `last_step_id` would make
+    // `render_pipeline_result` call `store.get(check_step_id) → None` and
+    // return the "interpreter invariant violated" error even when all checks
+    // pass. `Pipeline::final_leaf_step_id` skips trailing `Check`/`Suspend`
+    // steps and finds the last step that actually produces output.
     //
     // An empty `steps` vec cannot reach here (project validation rejects an
     // empty pipeline with `ProjectConfigError::EmptyPipeline`); a pipeline of
-    // ONLY check steps returns `None` to fall back to the single-agent path.
-    let last_step_id = match pipeline.steps.iter().rev().find(|s| {
-        !matches!(
-            s.run,
-            tau_ir::pipeline::StepRun::Check(_) | tau_ir::pipeline::StepRun::Suspend { .. }
-        )
-    }) {
-        Some(s) => s.id.0.clone(),
+    // ONLY check/suspend steps returns `None` to fall back to the
+    // single-agent path.
+    let last_step_id = match pipeline.final_leaf_step_id() {
+        Some(id) => id.0.clone(),
         None => return None,
     };
 

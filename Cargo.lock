@@ -4964,6 +4964,7 @@ dependencies = [
  "tau-ir-lower",
  "tau-mcp",
  "tau-mcp-tokio",
+ "tau-native-tools",
  "tau-observe",
  "tau-pkg",
  "tau-plugin-protocol",
