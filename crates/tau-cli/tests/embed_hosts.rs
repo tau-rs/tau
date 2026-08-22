@@ -11,7 +11,13 @@ fn fixture(name: &str) -> PathBuf {
 #[test]
 fn embed_host_rust_writes_native_host_crate() {
     let out = tempfile::tempdir().unwrap();
-    let art = tau_cli::cmd::embed::emit_host_to("rust", &fixture("trivial"), out.path()).unwrap();
+    let art = tau_cli::cmd::embed::emit_host_to(
+        "rust",
+        &fixture("trivial"),
+        out.path(),
+        tau_sdk_codegen::TauDep::Version(env!("CARGO_PKG_VERSION")),
+    )
+    .unwrap();
     assert_eq!(art.kind, "embed-rust");
     assert!(art.ir_hash.is_some());
     for f in [
@@ -22,8 +28,8 @@ fn embed_host_rust_writes_native_host_crate() {
         assert!(out.path().join(f).exists(), "missing {f}");
     }
     let main = std::fs::read_to_string(out.path().join("embed-rust/src/main.rs")).unwrap();
-    assert!(main.contains("run_ir("));
-    assert!(main.contains("impl ToolDispatcher"));
+    assert!(main.contains("run_ir_streaming("));
+    assert!(main.contains("impl ToolDispatcher for ScaffoldDispatcher"));
     let wit = std::fs::read_to_string(out.path().join("embed-rust/tau.wit")).unwrap();
     assert!(wit.contains("world runner"));
 }
@@ -31,7 +37,13 @@ fn embed_host_rust_writes_native_host_crate() {
 #[test]
 fn embed_host_c_writes_wasmtime_host_stub() {
     let out = tempfile::tempdir().unwrap();
-    let art = tau_cli::cmd::embed::emit_host_to("c", &fixture("trivial"), out.path()).unwrap();
+    let art = tau_cli::cmd::embed::emit_host_to(
+        "c",
+        &fixture("trivial"),
+        out.path(),
+        tau_sdk_codegen::TauDep::Version(env!("CARGO_PKG_VERSION")),
+    )
+    .unwrap();
     assert_eq!(art.kind, "embed-c");
     let header = std::fs::read_to_string(out.path().join("embed-c/tau_embed.h")).unwrap();
     assert!(header.contains("tau_host_complete"));

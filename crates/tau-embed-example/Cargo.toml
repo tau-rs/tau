@@ -1,0 +1,19 @@
+[package]
+name = "tau-embed-example"
+description = "EPIC 7.1 example: a product that embeds tau as a library — implements the Clock/Random/LLM/tool ports and drives a governed workflow via run_ir_streaming."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+publish = false
+
+[dependencies]
+tau-runtime-core = { workspace = true, features = ["wasm-interpreter"] }
+tau-ir     = { workspace = true }
+serde_json = { workspace = true }
+futures    = { workspace = true }
+
+[lints]
+workspace = true

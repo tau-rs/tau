@@ -33,6 +33,7 @@ members = [
     "crates/tau-sandbox-native",
     "crates/tau-sandbox-proxy",
     "crates/tau-sandbox-windows",
+    "crates/tau-embed-example",
     "crates/tau-sdk-codegen",
     "crates/tau-ts-extract",
     "crates/tau-workflow",
