@@ -31,6 +31,7 @@
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Build embedding artifacts](how-to/build-embedding-artifacts.md)
 - [Embed tau in a Rust product](how-to/embed-rust-native.md)
+- [Embed a tau wasm component](how-to/embed-wasm-component.md)
 - [Author a conditional branch](how-to/authoring-a-branch.md)
 - [Author a suspend step](how-to/authoring-suspend.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
