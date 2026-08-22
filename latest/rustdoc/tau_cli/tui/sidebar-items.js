@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Filter","Loop","TraceSource"],"fn":["draw","run_tui"],"struct":["App","UiState"]};
