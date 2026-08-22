@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["HostNameError","HostSet","HttpMethod"],"struct":["HostName","HttpMethodError"]};
