@@ -122,11 +122,17 @@ fn loopback_serve() -> ! {
     if &buf != b"ping" {
         fail(MODE, format_args!("bad payload: {buf:?}"));
     }
+    // Ack so the child can exit only after its payload was delivered
+    // (round 1 raced: child process::exit right after write_all aborted
+    // the socket with RST 10054 before the server's read).
+    if let Err(e) = conn.write_all(b"pong") {
+        fail(MODE, format_args!("write ack: {e}"));
+    }
     let _ = child.wait();
     ok(MODE, "same-container loopback round-trip");
 }
 
-/// Dial `127.0.0.1:<port>` and send "ping".
+/// Dial `127.0.0.1:<port>`, send "ping", wait for the "pong" ack.
 fn connect(port: &str) -> ! {
     const MODE: &str = "connect";
     let port: u16 = match port.parse() {
@@ -142,7 +148,15 @@ fn connect(port: &str) -> ! {
     if let Err(e) = conn.write_all(b"ping") {
         fail(MODE, format_args!("write: {e}"));
     }
-    ok(MODE, format_args!("connected to {addr}"));
+    // Block for the server's ack instead of exiting straight after the
+    // write — process::exit would abort the socket before delivery.
+    conn.set_read_timeout(Some(std::time::Duration::from_secs(4)))
+        .unwrap_or_else(|e| fail(MODE, format_args!("set_read_timeout: {e}")));
+    let mut ack = [0u8; 4];
+    if let Err(e) = conn.read_exact(&mut ack) {
+        fail(MODE, format_args!("read ack: {e}"));
+    }
+    ok(MODE, format_args!("round-trip via {addr}"));
 }
 
 /// Open a named pipe, send "ping", expect "pong" back.

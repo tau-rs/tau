@@ -169,9 +169,12 @@ fn spike_h2_control_pipe_without_sid_ace_denied() {
 /// H3: ADR-0067 asserts a leaf-only grant on `a/b/c/leaf.txt` is NOT
 /// readable without FILE_TRAVERSE on the ancestors. AppContainer tokens
 /// may retain SeChangeNotifyPrivilege (bypass traverse checking), which
-/// would make ancestor grants unnecessary — either outcome recalibrates
-/// item 2, so this test asserts nothing beyond "the probe ran" and
-/// reports the measurement through the panic-free marker output.
+/// would make ancestor grants unnecessary. Round 1 only asserted "the
+/// probe ran", but nextest hides passing tests' stdout, so the
+/// measurement was invisible. Round 2 asserts the ADR's premise
+/// (read DENIED): pass = premise confirmed (item 2 needs traverse
+/// grants); fail = the failure output shows the read succeeded, i.e.
+/// bypass-traverse holds and item 2 is tests-only.
 #[test]
 fn spike_h3_leaf_only_grant_nested_read_measurement() {
     let profile = unique("h3");
@@ -184,17 +187,17 @@ fn spike_h3_leaf_only_grant_nested_read_measurement() {
     test_support::grant_read(&profile, leaf_str).expect("grant leaf");
     let out = run_probe(&profile, &["read-file", leaf_str]);
     test_support::delete_profile(&profile).ok();
-    // Measurement, not assertion: print the outcome either way so the
-    // CI log records it; fail only if the launcher itself broke (probe
-    // never ran → no SPIKE marker at all).
     let stdout = String::from_utf8_lossy(&out.stdout);
-    println!(
-        "H3 MEASUREMENT (leaf-only grant, nested path): {}",
-        render(&out)
-    );
     assert!(
         stdout.contains("SPIKE probe=read-file"),
         "H3 probe never ran:\n{}",
+        render(&out)
+    );
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "H3 REFUTED — leaf-only grant WAS readable at a nested path \
+         (bypass-traverse holds; ADR-0067 item 2 becomes tests-only):\n{}",
         render(&out)
     );
 }
