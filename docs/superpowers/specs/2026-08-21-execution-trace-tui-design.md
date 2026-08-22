@@ -327,9 +327,9 @@ guarded by `tests/ir_dispatch_gate_inert.rs`, and is not something this
 design changes. Separately, IR-interpreter runs never populate
 `options.orchestration_state`, so they emit no `TraceEvent::ToolCall`
 at all, clamped or otherwise. Net effect: the §12 producer is correct
-and covered by its own tests, but it is **dormant infrastructure** for
-the stock `tau run` CLI until both gaps are closed — see the
-reachability-wiring item in §12.6.
+and covered by its own tests, but on its own it is dormant for the
+stock `tau run` CLI. Both gaps are closed by the reachability wiring
+designed in §13 (issue #631).
 
 Prior-art audit (why this shape): object-capability systems attach
 narrowed authority to the object itself (Capsicum fd rights,
@@ -414,6 +414,10 @@ fn capability_verdict(
 }
 ```
 
+(§13.1 later revises this helper: the clamp branch moves ahead of the
+`required.is_empty()` early-return so narrowed-but-ungated IR tools
+still surface their clamp. The shape above is what #630 shipped.)
+
 The kernel stays the single emit point — no trace sink in
 tau-mcp-tokio, no duplicate rows. The `Drop` path (denial
 early-returns) is untouched. The kernel gate itself is unchanged: it
@@ -435,12 +439,8 @@ Rendering lives in the kernel, not the port — the port carries semantic
 
 ### 12.6 Out of scope / future
 
-- **Reachability wiring**: the clamp row goes live for stock `tau run`
-  when (a) IR-interpreter runs attach an orchestration trace sink and
-  (b) `DispatcherTool`/`ForwardingDispatcher` forward the underlying
-  tool's declared + effective capabilities to the kernel dispatch site.
-  Both touch the issue-#581 pinned contract (`DispatcherTool`
-  intentionally advertises empty caps) and need their own design.
+- **Reachability wiring**: designed in §13 (issue #631) — no longer
+  out of scope.
 - **Enforcement observation**: rows record decided authority, not what
   the call actually touched. Surfacing "blocked egress to evil.com"
   needs events from the sandbox proxy (tau-sandbox-darwin) — separate
@@ -463,6 +463,260 @@ Rendering lives in the kernel, not the port — the port carries semantic
   Some(Clamp { to }) }` with the rendered host list; plus unit tests
   for `render_clamped_to` (hosts / any / none) and
   `capability_verdict` (empty-required ⇒ `None`, default ⇒ `Allow`).
-- **Renderer**: `clamp` badge test already exists (M1.5).
+- **Renderer**: the `clamp` badge match arm shipped in M1.5 but —
+  contrary to what this section originally claimed — without a render
+  test. §13.6 adds it.
 - **Docs**: add the `clamp` badge row to `reference/tau-trace.md`
   (omitted from the M1.5 table because it had no producer).
+
+## 13. Clamp-row reachability wiring (issue #631) — design
+
+§12 built the producer; this section makes it reachable from the stock
+CLI. Definition of done (from #631): a governed MCP project whose entry
+is host-clamped by `[allow.mcp]` renders an amber `clamp:<to>` row in
+`tau run --tui` / `tau trace`, with an e2e test covering that path.
+
+Scoping fact discovered during design: stock `tau run` *without*
+`--bundle` never calls `setup_mcp_runtime` — MCP tools exist only on
+the bundle-v2 path (`run_via_ir`) and `tau dev`. "Stock CLI" for this
+design therefore means `tau run --bundle`.
+
+The wiring is two independent gaps plus two latent CLI bugs that block
+the DoD end-to-end:
+
+| Gap | Closed by |
+|---|---|
+| `capability_verdict` never emits for un-gated tools | §13.1 verdict decoupling |
+| `DispatcherTool` forwards no effective capabilities | §13.2 dispatcher authority accessor |
+| IR runs attach no trace sink | §13.3 dispatcher sink accessor |
+| Sink attachment would activate virtual-tool intercepts | §13.4 intercept hardening |
+| `tau trace` cannot parse the jsonl the writer produces | §13.5 envelope parse fix |
+| `tau run --bundle --tui` silently ignores the flag | §13.5 live TUI join |
+
+### 13.1 Verdict semantics — clamp decoupled from gate participation
+
+The #630 helper (§12.4) couples "has a verdict" to "participates in
+the kernel grant gate": `required.is_empty() → None` fires before
+`effective_capabilities()` is consulted. IR tools always present
+`required = []` (the #581 contract), so no forwarding scheme alone can
+ever surface a clamp. Revised helper:
+
+```rust
+fn capability_verdict(
+    tool: &dyn DynTool,
+    required: &[Capability],
+) -> Option<tau_ports::CapabilityVerdict> {
+    // Narrowed authority is a property of the object (§12.1 ocap
+    // framing) and is always visible, whether or not the in-kernel
+    // grant gate looked at this tool.
+    if let Some(eff) = tool.effective_capabilities() {
+        return Some(tau_ports::CapabilityVerdict::Clamp {
+            to: render_clamped_to(eff),
+        });
+    }
+    if required.is_empty() {
+        None
+    } else {
+        Some(tau_ports::CapabilityVerdict::Allow)
+    }
+}
+```
+
+Semantics after this change:
+
+- `Clamp { to }` — the call ran under authority narrowed at open time,
+  regardless of gate participation.
+- `Allow` — gated (non-empty declared caps at the dispatch site) and
+  not narrowed. Unchanged.
+- `None` — un-gated **and** un-narrowed. Compatible with the
+  documented port contract ("`None` for un-gated tools",
+  `tau-ports/src/orchestration.rs`).
+
+Documented asymmetry: an **un**-clamped MCP tool renders `allow` on
+the multi-agent path (its `McpBackedTool` sits unwrapped in the
+registry, declared caps non-empty) but `-` on the IR path (behind
+`DispatcherTool`, genuinely un-gated per #581). This is honest — the
+badge reflects what the dispatch site actually checked —
+and `reference/tau-trace.md` gets a note saying so.
+
+No tau-ports change: `CapabilityVerdict` and the `Tool` trait are
+untouched (stays 0.7.1). The helper is kernel-internal.
+
+### 13.2 Capability forwarding — `ToolDispatcher` authority accessor
+
+The interpreter already sources every run ingredient (clock, random,
+checkpointing, context pipeline, assets) from the `ToolDispatcher`
+trait, and `ForwardingDispatcher` (tau-cli) already holds the
+`Arc<dyn DynTool>` for each `McpBackedTool`, which carries the
+meet-clamped effective set computed by §12.3. Thread it through the
+same seam — one new defaulted trait method
+(`tau-runtime-core/src/interpreter/tool_dispatch.rs`):
+
+```rust
+/// The meet-clamped authority a tool actually runs under, when
+/// narrower than its declared capabilities (§12). `None` (default) =
+/// not narrowed, or this dispatcher does not track authority.
+fn tool_effective_capabilities(
+    &self,
+    tool_id: &tau_ir::ids::ToolId,
+) -> Option<Vec<tau_domain::Capability>> {
+    let _ = tool_id;
+    None
+}
+```
+
+- `ForwardingDispatcher` implements it by consulting its tool map:
+  `self.tools.get(tool_id)?.effective_capabilities()` → owned `Vec`.
+- `prepare_agent_run` calls it once per tool at `DispatcherTool`
+  construction; the wrapper caches `Option<Vec<Capability>>` in a new
+  field and overrides **only** `Tool::effective_capabilities()`
+  (returning `as_deref()`).
+- `Tool::capabilities()` remains un-overridden — `required` stays `[]`
+  at the gate, so the #581 pinned contract
+  (`tests/ir_dispatch_gate_inert.rs`) holds verbatim. A sibling pin is
+  added to that file: a `DispatcherTool` whose dispatcher reports
+  effective caps still reaches the dispatcher un-gated (no
+  `PolicyDenied`) while its ToolCall row carries `Clamp`.
+- All other `ToolDispatcher` impls (wasm guest, `tau dev` callbacks,
+  conformance) inherit the `None` default and compile untouched.
+
+### 13.3 Trace sink — `ToolDispatcher` sink accessor + synthetic `RunState`
+
+Same seam, second defaulted method:
+
+```rust
+pub struct TraceSinkConfig {
+    pub run_id: tau_ports::RunId,
+    // TraceSubscriber lives in tau-runtime-core::orchestration::trace —
+    // same crate as ToolDispatcher, no tau-ports change.
+    pub subscribers: Vec<Arc<dyn crate::orchestration::trace::TraceSubscriber>>,
+}
+
+/// Trace sink for this run. `None` (default) = no trace emission
+/// (guest, dev, conformance today).
+fn trace_sink(&self) -> Option<TraceSinkConfig> {
+    None
+}
+```
+
+`TraceSinkConfig` is `Send + Sync` (subscriber `Arc`s), so it crosses
+the `D: Send + Sync` dispatcher bound — which `Arc<RefCell<RunState>>`
+cannot. `prepare_agent_run` consumes it:
+
+```text
+if let Some(sink) = dispatcher.trace_sink():
+    state = RunState::new(sink.run_id, agent_id, RunBudget::default(), clock.now())
+    for sub in sink.subscribers: state.trace.add_subscriber(sub)
+    options.orchestration_state = Some(Arc::new(RefCell::new(state)))
+```
+
+Notes:
+
+- The synthetic `RunState` is inert as orchestration: default budget =
+  unlimited (BudgetWatchdog no-ops), empty task list, no
+  `orchestration_runtime`. It exists only to carry `run_id` + the
+  `TraceStream` fan-out into the three guarded emit sites.
+- Pipelines construct one `RunState` per agent step, all sharing the
+  same `run_id` and subscribers — one jsonl, one waterfall.
+- `Turn` / `Completion` trace events come along for free
+  (`run.rs` `trace_ctx` needs state + clock + random, all now
+  present), so the IR waterfall gains full rows, not just clamps.
+- **`!Send` discipline**: `Arc<RefCell<RunState>>` never crosses a
+  spawn boundary. The run future stays on the caller's task; the TUI
+  runs in `spawn_blocking`, joined via `tokio::join!` — the exact
+  pattern the multi-agent path uses (`cmd/run.rs` `--tui` join). Do
+  not `tokio::spawn` the run future.
+- `run_ir` / `run_pipeline` signatures are unchanged — no ripple into
+  the no_std guest build.
+
+### 13.4 Virtual-tool intercept hardening
+
+The intercept in `stream.rs` (`task.*` / `run.*` / `agent.*.spawn`)
+gates on `orchestration_state.is_some()` alone. Attaching a sink to IR
+runs would let an MCP tool whose IR id is literally e.g. `task.create`
+(entry `task`, server tool `create`) be hijacked in-kernel. Harden the
+gate to require `orchestration_runtime.is_some()` **as well**:
+
+- Multi-agent runs set both (`spawn_root_agent_inner`) — no behavior
+  change, existing orchestration tests stay green.
+- IR runs set state only — the intercept stays dormant, preserving
+  "IR runs have no orchestration semantics."
+
+A regression test pins this: an IR run with a trace sink and a tool
+named `task.create` dispatches to the dispatcher (not the kernel) and
+emits an ordinary ToolCall row.
+
+### 13.5 CLI wiring (`run_via_ir`) + `tau trace` ingestion fix
+
+**Sink construction** (tau-cli `cmd/ir_dispatcher.rs`): `run_via_ir`
+mints one ULID run id (reused for the plugin `TraceContext` in place
+of today's separate `tau-run-bundle-<ulid>` id), builds the jsonl
+writer subscriber via the existing
+`tau_runtime_tokio::orchestration::trace_mpsc::channel_with_writer`
+targeting `<scope>/.tau/runs/<run_id>.jsonl`, and hands
+`TraceSinkConfig` to the dispatcher via a
+`ForwardingDispatcher::with_trace(...)` builder method. The writer and
+line format are reused as-is from the multi-agent path — same file
+namespace, so `tau trace --last` picks up IR runs with zero reader
+changes.
+
+**Live `--tui`**: today `run_via_ir` returns before `cmd/run.rs`'s
+"--tui requires a multi-agent run" bail, so the flag is silently
+ignored on the bundle path. Wire it: when `args.tui`, attach an
+`MpscTraceSubscriber` alongside the writer, hand the receiver to
+`run_tui(TraceSource::Live(rx))` in `spawn_blocking`, and
+`tokio::join!` it with the run future (per the §13.3 `!Send`
+discipline). The non-bundle bail and its message are unchanged.
+
+**Ingestion fix** (pre-existing bug, DoD-blocking): the writer emits
+envelope lines `{"line_kind":"trace_event","event":{...}}`
+(`RunLogLine`, tau-runtime-tokio `persistence.rs`), but
+`tau_trace::parse_line` deserializes a **bare** `TraceEvent` — so
+`tau trace` file mode renders an empty waterfall for every file ever
+written, multi-agent runs included. Fix in `tau-trace` (which must not
+depend on tau-runtime-tokio): parse leniently —
+
+1. try the envelope shape; `line_kind == "trace_event"` → yield the
+   inner event; any other `line_kind` (e.g. `task_mutation`) → skip
+   (`Ok(None)`);
+2. fall back to a bare `TraceEvent` for old files and test fixtures.
+
+The envelope shape is mirrored locally in `tau-trace` (a private
+struct, serde-tagged the same way) with a round-trip test against a
+literal line produced by `RunLogLine` serialization, so drift between
+the two definitions fails a test rather than silently rendering
+nothing.
+
+### 13.6 Testing
+
+- **Kernel (tau-runtime-core)**: `capability_verdict` unit tests for
+  the new ordering — narrowed + empty required ⇒ `Clamp` (the newly
+  reachable case); narrowed + non-empty ⇒ `Clamp`; un-narrowed cases
+  unchanged. Producer test: an IR run (via `run_ir` with a stub
+  dispatcher reporting effective caps + a collecting sink) yields
+  `ToolCall { capability: Some(Clamp { to }) }`.
+- **#581 pins** (`ir_dispatch_gate_inert.rs`): existing test untouched
+  and green; sibling test per §13.2; intercept-hardening test per
+  §13.4.
+- **tau-cli**: `ForwardingDispatcher::tool_effective_capabilities`
+  unit test (present / absent / non-MCP tool); envelope-parse
+  round-trip per §13.5; the missing `Clamp` badge render test in
+  `tui/render.rs` (amber `clamp:<to>` cell + detail pane).
+- **e2e (DoD anchor)**: a governed cassette-MCP project — `[allow]` +
+  `[allow.mcp.<entry>]` host ceiling narrower than the tool's declared
+  hosts, `cassette:` URL pin (no sandbox needed), scripted LLM —
+  driven through `tau run --bundle`; assert `.tau/runs/<run_id>.jsonl`
+  exists and, parsed through `tau_trace::parse_line` (the real reader),
+  contains a `ToolCall` with `capability: Some(Clamp { to })` matching
+  the ceiling hosts. Builds on `mcp_dispatch.rs`'s
+  `setup_project_with_pin` and `cmd_build_mcp.rs` scaffolding. The TUI
+  hop is covered by the render unit tests (a real-TTY e2e is not
+  attempted).
+
+### 13.7 Out of scope
+
+- `tau dev` trace sink — its session also calls `setup_mcp_runtime`
+  and can adopt `with_trace` later; nothing here blocks it.
+- A capability field on `RunEvent` (`--stream` / chat surfaces).
+- Everything already listed in §12.6 (enforcement observation, kernel
+  gating on effective caps, non-MCP producers).
