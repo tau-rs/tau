@@ -271,9 +271,10 @@ fn build_with_available_target_succeeds() {
 
     let tau_home = make_tau_home(scratch.path());
 
-    // `passthrough` is Available on every host. (Don't use `host()`:
-    // on Windows it is `windows-native-strict`, which is Reserved and
-    // would be rejected by the --target Available gate.)
+    // `passthrough` is Available on every host (including Windows, where
+    // Phase 2 also graduated `host()`'s own triple, `windows-native-strict`,
+    // to Available — see `resolve_target_accepts_windows_native_strict_now_available`
+    // in `cmd/build.rs` for that direct coverage).
     Command::cargo_bin("tau")
         .unwrap()
         .args(["build", "--allow-ungoverned", "--target", "passthrough"])

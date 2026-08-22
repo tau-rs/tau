@@ -151,6 +151,7 @@ host shells and OS sandboxes are adapters behind `tau-ports`.
 | Crate | Owns | Entry |
 |---|---|---|
 | `tau-cli` | The `tau` binary internals (`build`, `run`, `verify`, `check`, `embed`, `dev`, …) | `crates/tau-cli/src/main.rs` |
+| `tau-trace` | Pure, headless render model for execution traces — `TraceEvent` stream → `TraceModel` (span tree + time-axis); backs `tau run --tui` and `tau trace` | `crates/tau-trace/src/lib.rs` |
 | `tau-conformance` | Cross-profile (dev vs wasm) conformance gate for the canonical fan-monitor scenario | `crates/tau-conformance/` |
 | `tau-ir-conformance` | Cross-mode conformance fixtures + runner for the IR | `crates/tau-ir-conformance/` |
 | `landlock-exec-repro` | Minimal repro for the per-command exec-gating sub-project (kept for regression context) | `crates/landlock-exec-repro/` |

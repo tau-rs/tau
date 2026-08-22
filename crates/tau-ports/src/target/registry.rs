@@ -146,9 +146,7 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
         },
         shapes_fn: fs_rw_exec_net,
         supported_features: IrFeature::ALL,
-        status: TripleStatus::Reserved {
-            reason: "windows AppContainer scaffold; probe Unavailable in v1",
-        },
+        status: TripleStatus::Available,
     },
 ];
 
@@ -193,8 +191,10 @@ mod tests {
 
     #[test]
     fn list_available_excludes_reserved() {
+        // Phase 2 graduated `windows-native-strict` to Available, so all 7
+        // registry entries are now Available (0 Reserved).
         let avail: Vec<_> = list_available().map(|e| e.triple).collect();
-        assert_eq!(avail.len(), 6);
+        assert_eq!(avail.len(), 7);
         for e in avail {
             let entry = lookup(&e).unwrap();
             assert!(matches!(entry.status, TripleStatus::Available));
@@ -223,15 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn lookup_finds_reserved_windows() {
+    fn lookup_finds_available_windows() {
+        // Phase 2 graduated `windows-native-strict` Reserved -> Available,
+        // closing the `host()` divergence gap: default `tau build` and
+        // `--target windows-native-strict` now agree on Windows.
         let t: TargetTriple = "windows-native-strict".parse().unwrap();
         let e = lookup(&t).unwrap();
-        match &e.status {
-            TripleStatus::Reserved { reason } => {
-                assert!(!reason.is_empty());
-            }
-            other => panic!("expected Reserved, got {other:?}"),
-        }
+        assert!(matches!(e.status, TripleStatus::Available));
     }
 
     #[test]

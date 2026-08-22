@@ -4,7 +4,7 @@
 **Status:** design approved, pre-implementation.
 **Supersedes (Phase 2 of):** ADR-0023 (Windows AppContainer scaffold), spec
 `2026-05-09-sandbox-windows-design.md`.
-**New ADR:** ADR-0066 (to be written in PR3).
+**New ADR:** ADR-0067 (to be written in PR3).
 **Base:** `main` at or after `04a546db`.
 
 ## Goal
@@ -170,7 +170,7 @@ until the egress follow-on lands. The 10 gated tests are unaffected (their fixtu
 has no build and no net; `wrap` is never called). The adapter's FS enforcement is
 real and is proven via FS-only integration plans (below), not via a live cargo build.
 
-**Follow-on (separate spec, referenced from ADR-0066):** *Windows sandbox network
+**Follow-on (separate spec, referenced from ADR-0067):** *Windows sandbox network
 egress* — solve the loopback-exemption-vs-named-pipe problem properly, add a
 TCP/named-pipe transport to `tau-sandbox-proxy`, restore `NetworkHttp` to
 `supported_shapes`, and un-defer net.
@@ -205,7 +205,7 @@ now.
 | `crates/tau-ports/src/target/registry.rs` | `windows-native-strict` `Reserved → Available` | 3 |
 | `.github/workflows/tier2.yml` | `nextest / windows` job gains `--features integration-tests` | 2 |
 | `crates/tau-cli/tests/{cmd_install,cmd_list,cmd_uninstall,cmd_update}.rs` | remove the 10 `#[cfg_attr(windows, ignore = …)]` gates | 3 |
-| `docs/decisions/0066-*.md`; `docs/decisions/0023-sandbox-windows-scaffold.md` | new ADR-0066; mark 0023 Phase-2-superseded | 3 |
+| `docs/decisions/0066-*.md`; `docs/decisions/0023-sandbox-windows-scaffold.md` | new ADR-0067; mark 0023 Phase-2-superseded | 3 |
 
 ## Phasing (3 PRs, each independently green)
 
@@ -219,7 +219,7 @@ now.
   declines, so the resolver still falls back to Passthrough — production behavior on
   Windows is unchanged. **A green Windows integration run here is the gate for PR3.**
 - **PR3 — flip the switch.** `probe → Available { tier: Strict }`; registry
-  `+windows`; target-triple `→ Available`; un-gate the 10 tests; ADR-0066 + mark
+  `+windows`; target-triple `→ Available`; un-gate the 10 tests; ADR-0067 + mark
   0023 superseded. This is the only PR needing the `full-matrix` label. By now
   enforcement is already proven.
 

@@ -71,7 +71,10 @@ fn check_target_linux_native_strict_runs() {
 }
 
 #[test]
-fn check_target_against_reserved_triple_warns_but_passes() {
+fn check_target_against_windows_native_strict_passes() {
+    // Phase 2 graduated windows-native-strict Reserved -> Available, so this
+    // no longer exercises the target_reserved Warning path; it just confirms
+    // `check sandbox --target windows-native-strict` runs cleanly.
     let project = minimal_project();
     let out = Command::new(tau_bin())
         .current_dir(project.path())
@@ -84,9 +87,8 @@ fn check_target_against_reserved_triple_warns_but_passes() {
         ])
         .output()
         .expect("spawn");
-    // No plugins installed → sandbox category should skip ("no plugin packages in lockfile")
-    // before hitting the target_reserved Warning. Either outcome is acceptable;
-    // we just assert no internal error.
+    // No plugins installed → sandbox category should skip ("no plugin packages in lockfile").
+    // We just assert no internal error.
     assert_ne!(
         out.status.code(),
         Some(70),
