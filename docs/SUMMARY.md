@@ -18,6 +18,7 @@
 - [Overview](tutorials/README.md)
 - [Bootstrap a tau project](tutorials/bootstrap-a-tau-project.md)
 - [Build your first skill](tutorials/build-your-first-skill.md)
+- [The north-star in action](tutorials/the-north-star-in-action.md)
 
 # How-to
 
@@ -29,6 +30,7 @@
 - [Use MCP servers](how-to/mcp-servers.md)
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Build embedding artifacts](how-to/build-embedding-artifacts.md)
+- [Embed tau in a Rust product](how-to/embed-rust-native.md)
 - [Author a conditional branch](how-to/authoring-a-branch.md)
 - [Author a suspend step](how-to/authoring-suspend.md)
 - [Propose an ADR](how-to/propose-an-adr.md)

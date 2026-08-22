@@ -85,6 +85,7 @@ mod tests {
                 duration_ms: 12,
                 status: "ok".into(),
                 capability: None,
+                turn_index: 0,
             },
         };
         let line = serde_json::to_string(&evt).unwrap();

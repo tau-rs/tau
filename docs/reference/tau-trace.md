@@ -41,10 +41,24 @@ in-process at `tau run` time.
 |---|---|
 | `↓` | Select the next span. Also re-arms follow mode (auto-scroll to the newest span) once you catch back up to the newest visible row. |
 | `↑` | Select the previous span. Disarms follow mode — the view stops auto-scrolling while you browse history. |
-| `Enter` | Toggle the selected span's expanded-detail state. Reserved: not yet reflected in the rendered view — a later milestone consumes it. |
+| `Enter` | Toggle the selected span's expanded detail view: the detail pane grows and lists each field (name, kind, status, tokens, duration, capability) on its own line; toggling again collapses it back to the one-line summary. |
 | `/` | Enter search mode: subsequent characters filter spans by label substring. `Backspace` deletes; `Enter` or `Esc` exits search mode (without quitting). |
 | `f` | Cycle the row filter: `All` → `Errors` → `Tools` → `Reasoning` → `All`. |
-| `q` / `Esc` | Quit (outside search mode). |
+| `q` / `Q` / `Esc` | Quit (outside search mode). |
+
+## Capability badges
+
+Each tool row's `Cap` column shows the governance verdict recorded for that
+call, colored by outcome:
+
+| Badge | Meaning |
+|---|---|
+| `allow` (green) | The call's required capability was granted; it ran as requested. |
+| `drop:<reason>` (red) | Fail-closed: the required capability was denied, so the call never ran. A denied call still gets a row — the waterfall shows exactly where authority stopped the run. |
+| `-` | The tool is un-gated, or the trace predates capability recording. |
+
+The toolbar shows the run id, and the waterfall `Bar` column widens or
+narrows to fill the terminal, so resizing the window re-flows the timeline.
 
 ## See also
 

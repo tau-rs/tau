@@ -112,6 +112,7 @@ host shells and OS sandboxes are adapters behind `tau-ports`.
 | `tau-ir-lower` | Std-side lowering `ProjectConfig` → `IrModule` (kept out of the no_std `tau-ir`) | `crates/tau-ir-lower/src/lib.rs` |
 | `tau-ts-extract` | TypeScript source → `ProjectConfig` via swc static analysis | `crates/tau-ts-extract/src/lib.rs` |
 | `tau-sdk-codegen` | Codegen for authoring SDKs (`@tau/sdk`, Python) + the `@tau/embed-js` consumer scaffold, from the frozen IR schema | `crates/tau-sdk-codegen/src/lib.rs` |
+| `tau-embed-example` | EPIC 7.1 Variant B reference host: a product-shaped binary that links `tau-runtime-core` via the `embed` prelude, implements the ports, and drives a baked workflow | `crates/tau-embed-example/src/main.rs` |
 
 ### Host runtime — std adapters
 | Crate | Owns | Entry |

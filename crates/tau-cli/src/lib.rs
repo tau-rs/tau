@@ -146,7 +146,7 @@ fn prepare_workflow_run_layer(command: &cli::Command) -> Option<PreparedWorkflow
     };
     let cwd = std::env::current_dir().ok()?;
     let scope = tau_pkg::Scope::resolve(&cwd).ok()?;
-    let run_id = ulid::Ulid::new().to_string();
+    let run_id = ulid::Ulid::generate().to_string();
     let log_path = tau_workflow::run_log_path(scope.path(), &run_args.name, &run_id);
     let layer = tau_observe::layers::workflow_run_log::WorkflowRunLogLayer::new(log_path);
     Some(PreparedWorkflowRun { run_id, layer })
