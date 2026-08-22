@@ -40,7 +40,7 @@ model        = "default"
 system = "Escalate the incident to the on-call rotation."
 
 [agents.oncall.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 [agents.scribe]
 display_name = "Scribe"
@@ -51,7 +51,7 @@ model        = "default"
 system = "Acknowledge the routine report."
 
 [agents.scribe.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 [agents.reviewer]
 display_name = "Reviewer"
@@ -62,7 +62,7 @@ model        = "default"
 system = "Draft the incident summary; revise until approved."
 
 [agents.reviewer.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 [agents.reporter]
 display_name = "Reporter"
@@ -73,7 +73,7 @@ model        = "default"
 system = "Publish the final incident report."
 
 [agents.reporter.config]
-canned_text = "URGENT: coolant temperature rising - fan engaged. APPROVED"
+canned_text = "decoy config (not the entry agent) - routine, nothing to sign off"
 
 # OVER-REACH: /etc/** is outside the /data/incidents/** ceiling.
 [tools.read_temp]
