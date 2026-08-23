@@ -1,7 +1,8 @@
 # ADR-0046: Wasm AOT artifact + WIT world (β.7.5)
 
-**Status:** Proposed
+**Status:** Accepted (β.7.5)
 **Date:** 2026-06-14
+**Accepted:** 2026-06-20 — shipped via PR-E2 (#371); the wasm guest drives `run_ir_streaming` and the dev↔wasm conformance arm is live (see the dated in-body notes).
 **Supersedes:** none
 
 ## Context
@@ -27,8 +28,8 @@ Two design forces shape every decision here:
    over it.
 
 ADR-0040 split β.7 (the `tau dev` REPL) from β.7.5 (this) because the
-in-wasm MCP-facilitator path ballooned after β.3 PR-5/PR-6. ADR-0047
-(in-wasm MCP facilitator, forthcoming in Phase 5) records the facilitator
+in-wasm MCP-facilitator path ballooned after β.3 PR-5/PR-6. ADR-0054
+(in-wasm MCP facilitator) records the facilitator
 specifics; this ADR records the artifact shape, toolchain, and conformance
 boundary.
 
@@ -109,7 +110,7 @@ WIT records) in v1 to minimise `wit-bindgen` surface and keep the guest
 `no_std`. Richer WIT records are a γ refinement.
 
 A `tau:mcp` interface for real (non-cassette) MCP transport is **reserved but
-unused** in β.7.5; it is recorded in ADR-0047 as the γ.1 expansion.
+unused** in β.7.5; it is recorded in ADR-0054 as the γ.1 expansion.
 
 ### Decision 5 — Guest executor: single-threaded `block_on` + p2/p3 hedge
 
@@ -189,7 +190,7 @@ the wasm host runner (`tau-wasm-host`) lands in β.7.5 Phase 3.
   tau's build-time enforcement discipline.
 - The p2/p3 executor seam means WASI 0.3 async is a γ lift with no WIT world
   or API break.
-- ADR-0047 (in-wasm MCP facilitator) can land independently in Phase 5 without
+- ADR-0054 (in-wasm MCP facilitator) can land independently in Phase 5 without
   reshaping this ADR's decisions.
 
 **Negative / obligations:**
@@ -240,4 +241,4 @@ the wasm host runner (`tau-wasm-host`) lands in β.7.5 Phase 3.
   [ADR-0037](0037-workflow-ir.md) (workflow IR),
   [ADR-0040](0040-tau-dev-repl.md) (`tau dev` REPL + β.7/β.7.5 split),
   [ADR-0038](0038-mcp-facilitator.md) (MCP facilitator)
-- ADR-0047 — in-wasm MCP facilitator (forthcoming, Phase 5)
+- [ADR-0054](0054-in-wasm-mcp-facilitator.md) — in-wasm MCP facilitator

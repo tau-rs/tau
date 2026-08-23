@@ -123,6 +123,13 @@ jobs:
       # genuine break still fails all 3 attempts. (Tier 0 stays retries=0 for
       # hard signal on the fast lane.)
       - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
+      # macOS sandbox-exec adapter integration tests (probe + real
+      # `sandbox-exec` wrap_spawn under the strict profile) are gated behind
+      # `integration-tests` and only run on a real macos-latest runner.
+      # Mirrors the tau-sandbox-windows step on nextest-windows. Scoped to the
+      # crate so it cannot destabilize other crates' suites on the macOS job.
+      - name: Test tau-sandbox-darwin sandbox-exec (integration)
+        run: cargo nextest run --profile ci -p tau-sandbox-darwin --features integration-tests --tests --no-fail-fast --retries 2
 
   nextest-windows:
     name: nextest / windows
@@ -260,6 +267,19 @@ jobs:
           BUILDX_CACHE_TO: type=gha,mode=max
           BUILDKIT_PROGRESS: plain
           DOCKER_BUILDKIT: "1"
+      # The native leg excludes the 3 HTTP cassette tests
+      # (anthropic|ollama|openai _layer4_native_completes_via_cassette).
+      # Reason (#156): those tests drive `tau-net-bridge`, which sets up a
+      # network namespace and therefore needs CAP_SYS_ADMIN + CAP_NET_ADMIN.
+      # Standard GHA `ubuntu-latest` runners do not grant either — the
+      # lefthook deep gate gets them via `podman run --cap-add SYS_ADMIN
+      # --cap-add NET_ADMIN`. Without the exclusion they fail with
+      # `transport: error sending request for url (http://127.0.0.1:...)`
+      # after bridge lookup succeeds. The same strict-tier behaviour IS
+      # covered on the container leg (the images carry the bridge inside),
+      # so only the native-adapter variant is dark. Delete this exclusion
+      # when a privileged runner is available. Tracked in
+      # docs/test-ignores-inventory.md bucket 2a.
       - name: Build NEXTEST_FILTER for this leg
         run: |
           if [ "$FLAVOR" = "native" ]; then
@@ -314,6 +334,13 @@ jobs:
           binaries: "tau-controlled-env"
       - name: Test tau-runtime-tokio e2e
         run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --tests --verbose
+      # tests/sandbox_container.rs carries two `#[ignore]`d container-gated
+      # tests that `--tests` alone never runs. Mirrors the sibling
+      # `--run-ignored only` step on test-tau-sandbox-native-e2e above.
+      # ubuntu-latest ships both docker and podman, so the in-test probe
+      # resolves Available and the tests do real work rather than skipping.
+      - name: Run --ignored container-gated tests
+        run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --run-ignored only --verbose
 
   msrv-check:
     # MSRV is a rustc-version property, not an OS property. Moved from
