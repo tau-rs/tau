@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ResolveError"],"fn":["resolved_from_server_contract"],"struct":["PinnedResolver","ResolvedMcpContract","ResolvedServerTool"],"trait":["McpContractResolver"]};
