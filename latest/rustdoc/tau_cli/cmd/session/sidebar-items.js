@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["run"],"mod":["delete","export","list","show"]};
