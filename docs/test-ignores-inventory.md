@@ -94,21 +94,32 @@ today.** Plan Task 11 introduces a dedicated `layer4-ignored` CI matrix.
 | `crates/tau-plugin-compat/tests/layer4_container.rs:570` | `ollama_layer4_container_completes_via_cassette` | `tau-plugin-ollama-plugin:dev` |
 | `crates/tau-plugin-compat/tests/layer4_container.rs:653` | `openai_layer4_container_completes_via_cassette` | `tau-plugin-openai-plugin:dev` |
 
-### 2c — `tau-runtime` container smoke (Linux + Docker/Podman on PATH)
+### 2c — `tau-runtime-tokio` container smoke (Linux + Docker/Podman on PATH)
 
 The file is `#![cfg(all(target_os = "linux", feature = "integration-tests"))]`,
 so it already only compiles under the integration-tests feature.
 
 | File:line | Test | Reason |
 |-----------|------|--------|
-| `crates/tau-runtime/tests/sandbox_container.rs:16` | `fs_read_works_inside_container` | requires Linux + docker or podman on PATH |
-| `crates/tau-runtime/tests/sandbox_container.rs:44` | `shell_plugin_runs_under_container` | requires Linux + docker or podman on PATH |
+| `crates/tau-runtime-tokio/tests/sandbox_container.rs:23` | `fs_read_works_inside_container` | requires Linux + docker or podman on PATH |
+| `crates/tau-runtime-tokio/tests/sandbox_container.rs:51` | `shell_plugin_runs_under_container` | requires Linux + docker or podman on PATH |
 
-**CI plan (Task 11):** new matrix job `layer4-ignored` with two flavors
-(`native`, `container`), each prebuilding the required plugin binaries
-then running `cargo nextest run --run-ignored only -p <crate>`. Same job
-can pick up the `tau-runtime/tests/sandbox_container.rs` pair via
-`--features integration-tests`.
+**CI plan:** LIT since 2026-08-23. `test-tau-runtime-e2e` grew a second
+step (`Run --ignored container-gated tests`) that opts in via
+`cargo nextest run --run-ignored only -p tau-runtime-tokio
+--features integration-tests`, mirroring the sibling step on
+`test-tau-sandbox-native-e2e`. GHA `ubuntu-latest` ships both docker
+and podman, so the in-test probe resolves `Available` and the tests do
+real work rather than taking their skip branch.
+
+Enabling the lane surfaced a stale assertion in
+`shell_plugin_runs_under_container`: it asserted the wrapped argv still
+contained the original program path (`/bin/sh`). That contract changed
+when the adapter moved to per-plugin images — for a non-HTTP plan the
+image's own `ENTRYPOINT` *is* the plugin binary, so the program survives
+only as the image tag (`tau-plugin-sh:dev`, from its basename) and the
+caller's args are appended after the image. The assertion now checks the
+current contract.
 
 ### 2d — `tau-sandbox-native` landlock-gated tests
 
@@ -141,8 +152,14 @@ needs `CAP_SYS_ADMIN` + `CAP_NET_ADMIN`, which standard GHA
 container leg (Bucket 2b counterparts), so the strict-tier behaviour
 is exercised; only the native-adapter variant of that behaviour is
 ungated by privileges. Promotable when a privileged runner is
-available. Bucket 2c (`tau-runtime/tests/sandbox_container.rs`)
-remains DARK pending a sibling job or matrix expansion.
+available. The `NEXTEST_FILTER` filterset in `tier2.yml` that encodes
+this exclusion now carries that reason inline, so it can no longer read
+as an unexplained silent skip.
+
+**Status (2026-08-23):** Bucket 2c
+(`tau-runtime-tokio/tests/sandbox_container.rs`) is now LIT via the
+`--run-ignored only` step on `test-tau-runtime-e2e`. All remaining DARK
+entries are the 3 privileged-runner native HTTP tests.
 
 ---
 
@@ -183,10 +200,35 @@ gone but the test is still `#[ignore]`'d, promote in a dedicated PR.
 |--------|------:|---------|
 | LIVE-DOCUMENTED | 6 | Stay `#[ignore]`'d; document opt-in |
 | LIT — bucket 2d (Task T3) | 2 | `test-tau-sandbox-native-e2e` `--run-ignored only` step |
-| DARK | 5 | 3 × native HTTP (need privileged runner); 2 × `tau-runtime/sandbox_container.rs` |
+| LIT — bucket 2c (2026-08-23) | 2 | `test-tau-runtime-e2e` `--run-ignored only` step |
+| DARK | 3 | 3 × native HTTP (need privileged runner) |
 | LIT (Task 11) | 7 | 5 × container + 2 × native tool plugins via `test-tau-plugin-compat-layer4-ignored / {native,container}` matrix |
 | ENVIRONMENT-SPECIFIC | 2 | Sub-project D e2e (separate) |
 | DEFERRED | 2 | Promote when blocker resolves |
 | **Total** | **22** | |
 
 Numbers updated on each PR that touches an `#[ignore]` annotation.
+
+---
+
+## Appendix — feature-gated dark lanes (not `#[ignore]`)
+
+A test can be dark without an `#[ignore]` annotation: a whole file gated
+behind `#![cfg(all(target_os = "...", feature = "integration-tests"))]`
+never runs unless some CI job passes `--features integration-tests` on
+that OS. `--workspace --all-targets` does **not** enable it. These lanes
+are invisible to the buckets above, so they are tracked here.
+
+| Crate | Test file | Enabled by |
+|-------|-----------|-----------|
+| `tau-sandbox-windows` | AppContainer launcher + strict enforcement | `nextest-windows` → "Test tau-sandbox-windows AppContainer (integration)" |
+| `tau-sandbox-darwin` | `tests/strict_integration.rs` | `nextest-macos` → "Test tau-sandbox-darwin sandbox-exec (integration)" (added 2026-08-23) |
+| `tau-sandbox-native` | landlock/seccomp e2e | `test-tau-sandbox-native-e2e` (both steps) |
+| `tau-plugin-compat` | layer4 native/container | `test-tau-plugin-compat` + the layer4-ignored matrix |
+| `tau-runtime-tokio` | `tests/sandbox_container.rs` | `test-tau-runtime-e2e` (both steps) |
+
+Before 2026-08-23 `tau-sandbox-darwin` declared the
+`integration-tests` feature but **no** CI job enabled it, so macOS
+sandbox-exec enforcement was structurally untested. Adding a crate-scoped
+`integration-tests` feature without a matching CI step reintroduces that
+hole — add the step in the same PR.
