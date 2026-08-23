@@ -1,0 +1,451 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0004 — tau-pkg - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0004-tau-pkg.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0004-tau-pkg-package-manager--public-api-storage-layout-lockfile"><a class="header" href="#adr-0004-tau-pkg-package-manager--public-api-storage-layout-lockfile">ADR-0004: tau-pkg package manager — public API, storage layout, lockfile</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-04-27
+<strong>Supersedes:</strong> —</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>tau-pkg (sub-project 3) is the package manager that implements <code>tau install</code>
+from git URLs, as specified by ROADMAP row 3 and Constitution G7, G8, G14.
+It is the first sub-project that performs real I/O: git clone, file-system
+mutation, TOML parse-and-write. The earlier sub-projects (tau-domain,
+tau-ports) were pure data structures and trait boundaries.</p>
+<p>Per QG18, public API additions require an ADR. This ADR records the decisions
+made during the sub-project 3 implementation and locks them at v0.1.</p>
+<p>Relevant Constitution constraints: G7 (package manager is the only way to add
+extensions), G8 (global + project scopes), G14 (capabilities declared at
+install), NG9 (no credential management), NG11 (developer tool, not an
+end-user consumer product), NG12 (runtime not framework).</p>
+<p>Note that ADR-0005 (custom serde for <code>PackageSource</code> and <code>PackageKind</code>) was
+filed mid-implementation as a focused fix. ADR-0004 records the broader
+tau-pkg decisions and cross-references ADR-0005 where relevant.</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<h3 id="1-sync-public-api"><a class="header" href="#1-sync-public-api">1. Sync public API</a></h3>
+<p>The <code>tau_pkg</code> public surface (<code>install</code>, <code>uninstall</code>, <code>list</code>, <code>get</code>,
+<code>read_manifest</code>, <code>Scope::resolve</code>) is fully synchronous — no <code>async fn</code>, no
+<code>tokio</code> runtime dependency. The only v0.1 caller is <code>tau-cli</code>, a CLI tool
+where blocking on git clone is acceptable and concurrency adds no value.</p>
+<p>Trigger to revisit: a concrete async-server use case where multiple packages
+must be installed concurrently, or a long-running daemon that must remain
+responsive during installs.</p>
+<h3 id="2-shell-out-to-the-git-binary"><a class="header" href="#2-shell-out-to-the-git-binary">2. Shell out to the <code>git</code> binary</a></h3>
+<p>All git operations (clone, rev-parse) invoke the system <code>git</code> binary via
+<code>std::process::Command</code>. tau is a developer tool (NG11); users have git on
+PATH. This eliminates a C dependency (<code>libgit2</code> via <code>git2-rs</code>) and reduces
+binary size.</p>
+<p>Trigger to revisit: shipping pre-built binaries to non-developer environments
+where <code>git</code> is not guaranteed on PATH (NG11 guard).</p>
+<h3 id="3-storage-layout"><a class="header" href="#3-storage-layout">3. Storage layout</a></h3>
+<p>Packages are stored at <code>&lt;scope&gt;/.tau/packages/&lt;name&gt;/&lt;version&gt;/</code>, where
+<code>&lt;scope&gt;</code> is either the project root or the global home directory. This
+layout supports multi-version cohabitation: two packages at different versions
+live under different paths and do not conflict. The <code>.tau/</code> directory is
+considered local state and is not committed (see decision 6).</p>
+<h3 id="4-scope-resolution"><a class="header" href="#4-scope-resolution">4. Scope resolution</a></h3>
+<p>tau-pkg walks up the directory tree looking for a <code>.tau/</code> directory (or the
+project root marker). If no project scope is found, it falls back to the
+global scope at <code>~/.tau</code>. The global directory respects <code>$TAU_HOME</code> if set,
+and <code>$XDG_DATA_HOME/tau</code> if <code>$TAU_HOME</code> is absent and <code>$XDG_DATA_HOME</code> is
+set.</p>
+<p>This walk-up matches developer intuitions from tools like <code>git</code> and <code>npm</code>.
+The two-level fallback (env vars → XDG → <code>~/.tau</code>) follows the XDG Base
+Directory specification.</p>
+<h3 id="5-lockfile-location"><a class="header" href="#5-lockfile-location">5. Lockfile location</a></h3>
+<p>Project lockfile: <code>&lt;project-root&gt;/tau-lock.toml</code> — at the project root,
+alongside <code>tau.toml</code> and <code>Cargo.toml</code>. It is intended to be committed to
+version control (reproducible installs).</p>
+<p>Global lockfile: <code>~/.tau/tau-lock.toml</code> — inside the global tau home
+directory, treated as local state and not committed anywhere.</p>
+<p>The project lockfile lives outside <code>.tau/</code> deliberately: it must be committed
+while <code>.tau/</code> must not. Placing them in the same directory would require
+selective <code>.gitignore</code> entries that are fragile and easy to mis-configure.</p>
+<h3 id="6-tau-is-gitignored-local-state"><a class="header" href="#6-tau-is-gitignored-local-state">6. <code>.tau/</code> is gitignored local state</a></h3>
+<p>The <code>.tau/</code> directory holds installed package trees and the advisory lock
+file. It is local, machine-specific state and must not be committed.
+<code>tau init</code> (Phase 1, in <code>tau-cli</code>) will print a hint recommending that the
+user add <code>.tau/</code> to <code>.gitignore</code>, but does NOT modify <code>.gitignore</code>
+automatically. The hint is pure information; the user owns their gitignore.</p>
+<h3 id="7-lockfile-schema"><a class="header" href="#7-lockfile-schema">7. Lockfile schema</a></h3>
+<p>The lockfile is versioned (<code>schema_version = 1</code>). Each <code>[[package]]</code> entry
+records <code>name</code>, <code>active_version</code>, <code>source</code>, and a list of installed versions
+(<code>[[package.versions]]</code>). Each version entry records <code>version</code>, <code>rev</code>,
+<code>resolved_commit</code>, <code>sha256</code>, and <code>installed_at</code>. At v0.1 the <code>sha256</code> slot
+is written as an empty string. Phase 1+ <code>tau verify</code> will populate it by
+hashing the installed package tree. The schema version field allows future
+readers to detect and reject or migrate incompatible formats.</p>
+<h3 id="8-public-api-verbs"><a class="header" href="#8-public-api-verbs">8. Public API verbs</a></h3>
+<p>The v0.1 public API exports six operations: <code>install</code>, <code>uninstall</code>, <code>list</code>,
+<code>get</code>, <code>read_manifest</code>, and <code>Scope::resolve</code>. <code>update</code> and <code>verify</code> are
+deferred to Phase 1+; no stubs are included in the v0.1 crate surface to
+avoid committing a signature before the implementation exists.</p>
+<h3 id="9-manifest-location-convention"><a class="header" href="#9-manifest-location-convention">9. Manifest location convention</a></h3>
+<p><code>tau-pkg</code> expects the package manifest at <code>tau.toml</code> in the root of the
+cloned repository. This is a convention, not enforced by a config field.
+ADR-0002 established the manifest schema; ADR-0005 established its serde
+representation. tau-pkg reads the manifest using <code>read_manifest</code>, which
+parses to <code>UncheckedManifest</code>, validates it, and returns a <code>PackageManifest</code>.</p>
+<h3 id="10-no-transitive-dependency-resolution-at-v01"><a class="header" href="#10-no-transitive-dependency-resolution-at-v01">10. No transitive dependency resolution at v0.1</a></h3>
+<p>The <code>dependencies</code> field in <code>tau.toml</code> is parsed and stored but is
+informational only. <code>tau install A</code> does not automatically install A's
+declared dependencies. Users must <code>tau install B</code> separately. This keeps the
+v0.1 resolver trivially correct (no resolution graph, no version conflict
+analysis) and avoids committing a resolution algorithm before real use cases
+are known.</p>
+<p>Trigger to revisit: the first concrete multi-package workflow where manual
+chaining becomes a user pain point.</p>
+<h3 id="11-concurrent-install-protection"><a class="header" href="#11-concurrent-install-protection">11. Concurrent install protection</a></h3>
+<p>tau-pkg acquires an advisory exclusive file lock at
+<code>Scope::install_lock_path()</code> (project: <code>&lt;project&gt;/.tau/locks/install.lock</code>;
+global: <code>~/.tau/locks/install.lock</code>) at the start of every mutating operation
+(<code>install</code>, <code>uninstall</code>) via <code>fs4::FileExt::lock_exclusive</code>. If
+<code>block_on_lock</code> is <code>false</code>, it uses <code>try_lock_exclusive</code> and returns an error
+immediately instead of blocking. The lock prevents two concurrent <code>tau install</code> invocations from corrupting the package tree (a real risk in CI
+pipelines that run multiple install scripts in parallel).</p>
+<p>The lock is advisory: it does not protect against callers that skip tau-pkg
+and write to <code>.tau/packages/</code> directly. This is acceptable; such callers
+are outside the defined API.</p>
+<h3 id="12-error-taxonomy"><a class="header" href="#12-error-taxonomy">12. Error taxonomy</a></h3>
+<p>Six typed error enums cover the public surface: <code>ScopeError</code>, <code>GitError</code>,
+<code>ManifestReadError</code>, <code>RegistryError</code> (shared by <code>list</code>, <code>get</code>, and lockfile
+load/save), <code>InstallError</code>, <code>UninstallError</code>. There is no top-level
+<code>PkgError</code> umbrella. The composing errors (<code>InstallError</code>, <code>UninstallError</code>)
+use <code>#[from]</code> over the leaf errors so <code>?</code> propagation works without manual
+mapping. This mirrors the tau-domain and tau-ports error policy
+(see ADR-0003 §3).</p>
+<h3 id="13-file-scheme-support-in-packagesource"><a class="header" href="#13-file-scheme-support-in-packagesource">13. <code>file://</code> scheme support in <code>PackageSource</code></a></h3>
+<p><code>PackageSource::Git</code> accepts <code>file://</code> URLs in addition to <code>https</code>, <code>http</code>,
+<code>ssh</code>, and <code>git</code> schemes (an extension to tau-domain made during the
+tau-pkg integration test phase). This enables hermetic local test fixtures
+(no network required in CI) and supports air-gapped installs from a local
+mirror.</p>
+<p>The <code>file://</code> scheme is a first-class extension point: <code>GitLocation::from_str</code>
+in tau-domain accepts <code>file</code> alongside the other schemes, and the serde
+round-trip (ADR-0005) preserves it as the canonical string form.</p>
+<h3 id="14-protocolfileallowalways-override-in-gitclone"><a class="header" href="#14-protocolfileallowalways-override-in-gitclone">14. <code>protocol.file.allow=always</code> override in <code>Git::clone</code></a></h3>
+<p>git 2.38+ sets <code>protocol.file.allow=user</code> by default as a mitigation for
+<a href="https://nvd.nist.gov/vuln/detail/CVE-2022-39253">CVE-2022-39253</a>. With that
+default, cloning a <code>file://</code> URL on a stock git 2.38+ installation "succeeds"
+with exit code 0 but writes nothing — the protocol layer silently blocks the
+transfer.</p>
+<p>tau-pkg passes <code>-c protocol.file.allow=always</code> when invoking <code>git clone</code> with
+a <code>file://</code> source. The CVE-2022-39253 attack vector requires
+<code>--recurse-submodules</code>; tau-pkg does not use submodules. The override is
+therefore safe for the current implementation. This analysis must be
+re-checked if tau-pkg ever adds submodule support.</p>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<h3 id="positive"><a class="header" href="#positive">Positive</a></h3>
+<ul>
+<li>v0.1 ships a working <code>install</code> / <code>uninstall</code> / <code>list</code> / <code>get</code> path against
+real git repositories, with no async runtime dependency for callers.</li>
+<li>73 unit tests + 24 integration tests cover the public API surface.</li>
+<li>Per-operation typed errors enable <code>?</code>-propagation throughout the codebase
+and give callers precise match arms.</li>
+<li><code>file://</code> support lets integration tests run hermetically in CI with no
+network access.</li>
+</ul>
+<h3 id="negative"><a class="header" href="#negative">Negative</a></h3>
+<ul>
+<li>The sync API blocks the calling thread during git clone. This is fine for a
+CLI, but embeds in an async server would require <code>spawn_blocking</code>. Trigger
+to revisit: a concrete async-server use case.</li>
+<li><code>file://</code> support requires the <code>protocol.file.allow=always</code> env override.
+The security analysis (CVE-2022-39253 not applicable because we do not use
+<code>--recurse-submodules</code>) is documented here, but must be re-checked if
+submodule support is ever added.</li>
+<li>No transitive dependency resolution: <code>tau install A</code> does not install A's
+declared dependencies. Users must install each dependency manually.</li>
+<li>v0.1 lockfile has an empty <code>sha256</code> field — Phase 1+ <code>tau verify</code> will
+populate it, but until then <code>tau-lock.toml</code> cannot be used to detect
+tampered installs.</li>
+</ul>
+<h3 id="neutral--new-obligations"><a class="header" href="#neutral--new-obligations">Neutral / new obligations</a></h3>
+<ul>
+<li>Future PRs that change tau-pkg's public API surface require their own ADRs
+(QG18).</li>
+<li>ADR-0005 governs the manifest TOML serde format for <code>PackageSource</code> and
+<code>PackageKind</code>; this ADR governs the broader tau-pkg API and storage
+decisions.</li>
+<li>The walk-up scope resolution algorithm is now the v0.1 standard; changing
+it (e.g., to never fall back to global scope) requires a new ADR.</li>
+<li>Adding submodule support in the future requires revisiting the
+<code>protocol.file.allow=always</code> security analysis in decision 14.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<h3 id="a-async-first-public-api"><a class="header" href="#a-async-first-public-api">A. Async-first public API</a></h3>
+<p>Rejected for v0.1. The only caller is <code>tau-cli</code> (a CLI, not a server), there
+is no concurrency value at the call site, and adding a <code>tokio</code> dependency
+would impose a runtime on every future crate that links tau-pkg. Cost vs.
+benefit is poor; see decision 1.</p>
+<h3 id="b-pure-rust-git-client-gitoxide-or-git2-rs"><a class="header" href="#b-pure-rust-git-client-gitoxide-or-git2-rs">B. Pure-Rust git client (gitoxide or git2-rs)</a></h3>
+<p>Rejected for v0.1. tau is a developer tool (NG11); developers have git on
+PATH. Shelling out avoids a complex C dependency (<code>libgit2</code> via <code>git2-rs</code>) and
+keeps binary size small. <code>gitoxide</code> is promising but not yet stable across all
+needed operations. Reconsider when shipping pre-built binaries to environments
+where git may not be present.</p>
+<h3 id="c-centralized-package-registry"><a class="header" href="#c-centralized-package-registry">C. Centralized package registry</a></h3>
+<p>Rejected permanently (NG4). Git URLs are the canonical source of truth for
+tau packages. A centralized registry introduces availability, trust, and
+governance dependencies that tau explicitly avoids.</p>
+<h3 id="d-top-level-pkgerror-umbrella-with-all-variants"><a class="header" href="#d-top-level-pkgerror-umbrella-with-all-variants">D. Top-level <code>PkgError</code> umbrella with all variants</a></h3>
+<p>Rejected. Per-operation error enums give callers more precision and allow
+<code>?</code>-propagation through <code>#[from]</code> without pattern-matching over a large
+umbrella that mixes unrelated variants. Mirrors the error policy established
+in tau-domain and tau-ports (ADR-0003 §3).</p>
+<h3 id="e-project-lockfile-under-tautau-locktoml"><a class="header" href="#e-project-lockfile-under-tautau-locktoml">E. Project lockfile under <code>.tau/tau-lock.toml</code></a></h3>
+<p>Rejected. Project lockfiles must be committed to enable reproducible installs;
+<code>.tau/</code> must not be committed (it is machine-local state). Placing the
+lockfile at the project root alongside <code>tau.toml</code> makes the commit vs.
+non-commit distinction visible and does not require complex <code>.gitignore</code>
+exceptions.</p>
+<h3 id="f-tau-init-modifies-gitignore-automatically"><a class="header" href="#f-tau-init-modifies-gitignore-automatically">F. <code>tau init</code> modifies <code>.gitignore</code> automatically</a></h3>
+<p>Rejected. Automatically mutating a user-owned configuration file is too
+magical and surprising. <code>tau-cli</code>'s <code>tau init</code> will print a hint; the user
+decides whether and how to update their <code>.gitignore</code>. Pure information, no
+mutation.</p>
+<h3 id="g-no-advisory-file-lock--rely-on-users-not-running-concurrent-installs"><a class="header" href="#g-no-advisory-file-lock--rely-on-users-not-running-concurrent-installs">G. No advisory file lock — rely on users not running concurrent installs</a></h3>
+<p>Rejected. CI pipelines routinely run multiple install scripts in parallel; a
+TUI tool may run an install concurrently with a background script. The <code>fs4</code>
+file lock costs nothing in the non-contended path and prevents silent
+corruption. Relying on user discipline to avoid concurrency is a footgun.</p>
+<h3 id="h-protocolfileallowuser-git-238-default-for-file-clones"><a class="header" href="#h-protocolfileallowuser-git-238-default-for-file-clones">H. <code>protocol.file.allow=user</code> (git 2.38+ default) for <code>file://</code> clones</a></h3>
+<p>Initially considered. Rejected because CI runners with stock git 2.38+ config
+would produce silently empty clones from <code>file://</code> test fixtures — <code>git clone</code>
+exits 0 but writes nothing, since the protocol layer blocks the transfer.
+The override to <code>always</code> is safe because tau-pkg does not use
+<code>--recurse-submodules</code> (the CVE-2022-39253 attack vector). See decision 14.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0003-tau-ports.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0005-package-source-and-kind-serde.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0003-tau-ports.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0005-package-source-and-kind-serde.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

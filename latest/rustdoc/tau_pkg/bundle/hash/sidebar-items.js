@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["compute_self_hash","verify_self_hash"]};
