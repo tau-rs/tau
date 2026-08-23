@@ -635,6 +635,9 @@ async fn try_run_pipeline(
     }
     let dispatcher = std::sync::Arc::new(
         crate::cmd::ir_dispatcher::ForwardingDispatcher::new(llm_backends, tools_by_id)
+            // Native tool_refs are served from the statically-linked
+            // `tau-native-tools` crate, never the plugin registry (#639).
+            .with_native(crate::cmd::ir_dispatcher::native_tool_ids(&module))
             .with_assets(assets),
     );
 
