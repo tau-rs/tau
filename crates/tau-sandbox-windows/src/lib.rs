@@ -57,6 +57,33 @@ pub mod test_support {
     pub fn delete_profile(name: &str) -> std::io::Result<()> {
         crate::acl::delete_appcontainer_profile(name)
     }
+
+    /// Grant read+execute on `path` to the AppContainer profile `profile`
+    /// (spike #626 helper, re-added for `tests/egress_integration.rs`,
+    /// which needs to grant the probe exe to a *foreign* profile without
+    /// going through a full `wrap_spawn` plan).
+    pub fn grant_read(profile: &str, path: &str) -> std::io::Result<()> {
+        let sid = crate::acl::AppContainerSid {
+            profile_name: profile.to_string(),
+        };
+        crate::acl::grant_access(&sid, path, crate::acl::AccessKind::Read)
+    }
+
+    /// Spawn a pipe proxy DACL'd to `profile` and return the bare pipe
+    /// name plus an opaque keep-alive guard (drop aborts the accept
+    /// loop). For the foreign-container pipe-access control test, which
+    /// targets the pipe DACL directly rather than going through
+    /// `wrap_spawn`.
+    pub fn spawn_pipe_proxy(
+        profile: &str,
+        hosts: tau_sandbox_proxy::HostAllow,
+    ) -> std::io::Result<(String, Box<dyn std::any::Any + Send>)> {
+        let sid = crate::acl::AppContainerSid {
+            profile_name: profile.to_string(),
+        };
+        let h = crate::pipe_proxy::spawn_pipe_proxy(hosts, &sid)?;
+        Ok((h.pipe_name().to_string(), Box::new(h)))
+    }
 }
 
 use std::process::Command;

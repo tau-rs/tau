@@ -25,6 +25,11 @@ path = "src/bin/tau-appcontainer-launcher.rs"
 name = "tau-net-bridge-win"
 path = "src/bin/tau-net-bridge-win.rs"
 
+# Pure-std in-container probe used by tests/egress_integration.rs.
+[[bin]]
+name = "tau-sandbox-test-probe"
+path = "src/bin/tau-sandbox-test-probe.rs"
+
 # Real Win32 AppContainer + ACL + process-creation calls. Target-gated so
 # the crate still builds on Linux/macOS (pure-logic modules only).
 [target.'cfg(target_os = "windows")'.dependencies.windows]

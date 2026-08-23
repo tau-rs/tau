@@ -71,9 +71,15 @@ mod win {
             let sid: PSID = DeriveAppContainerSidFromAppContainerName(PCWSTR(profile_w.as_ptr()))
                 .map_err(|e| format!("DeriveAppContainerSid: {e}"))?;
 
-            // 2. SECURITY_CAPABILITIES (Phase 2: no capability SIDs; net deferred).
-            //    If a.caps is non-empty, build a SID_AND_ATTRIBUTES array here.
-            let caps_array: Vec<SID_AND_ATTRIBUTES> = Vec::new(); // net deferred -> empty
+            // 2. SECURITY_CAPABILITIES. No capability SIDs are granted, by
+            //    design (#622): network egress is enforced by the SID-ACL'd
+            //    named pipe (see `pipe_proxy.rs`), not by a well-known
+            //    capability SID like internetClient — that would let the
+            //    AppContainer reach the network directly, bypassing the
+            //    HostAllow proxy. `--cap` plumbing (`a.caps`) stays
+            //    available for a future capability that genuinely needs a
+            //    Win32 capability SID, but nothing currently populates it.
+            let caps_array: Vec<SID_AND_ATTRIBUTES> = Vec::new(); // intentionally empty (#622)
             let sec_caps = SECURITY_CAPABILITIES {
                 AppContainerSid: sid,
                 Capabilities: if caps_array.is_empty() {
