@@ -62,6 +62,21 @@ pub enum LowerError {
         target: TargetTriple,
     },
 
+    /// Predicate-fit failure (Task 4, #621 / ADR-0068). The workflow uses a
+    /// goal predicate the wasm guest's no_std goal-predicate registry cannot
+    /// answer — `GoalPredicate::SchemaValid`, `GoalPredicate::NativeFn`, or a
+    /// `Deterministic` step whose `fn_ref.name` is outside the five
+    /// `__tau::goal::{exists,non_empty,equals,matches,min_count}` names the
+    /// guest can execute in-guest. Wasm-only; native/host targets never
+    /// trigger this.
+    #[error("predicate-fit: no wasm guest execution path for fn(s) {fn_names:?} on {target}")]
+    WasmFnUnavailable {
+        /// The unsupported fn name(s), sorted and deduped.
+        fn_names: Vec<String>,
+        /// The target that lacks a guest-side implementation.
+        target: TargetTriple,
+    },
+
     /// A Deterministic step references a function name that the lowering
     /// registry doesn't know.
     #[error("deterministic step {step:?} references unknown fn `{fn_name}`")]
