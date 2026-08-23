@@ -289,3 +289,148 @@ async fn ir_run_without_sink_still_completes() {
     // The run still completes; there is simply no trace sink to emit into.
     assert!(matches!(events.last(), Some(RunEvent::RunCompleted { .. })));
 }
+
+/// Spec §13.4: attaching a trace sink to an IR run must NOT activate the
+/// in-kernel orchestration virtual-tool intercept. An MCP tool whose IR id
+/// collides with a virtual name (`[tools.task]` + server tool `create`)
+/// must still reach the dispatcher.
+#[tokio::test]
+async fn ir_run_with_sink_does_not_hijack_virtual_named_tools() {
+    let entry = AgentId("a".into());
+
+    let mut tools = BTreeMap::new();
+    tools.insert(
+        ToolId("task.create".into()),
+        Tool {
+            id: ToolId("task.create".into()),
+            // NOTE: the real `ToolImpl::Mcp` variant takes
+            // `{ url, contract_hash, capability_subset, server_tool_name }`,
+            // not `{ server, tool }`. The variant is immaterial to what
+            // this test proves — it's the IR *id* `task.create` that
+            // collides with the virtual-tool name, not the impl kind. Use
+            // `Native` (same shape as `module_with_net_tool`'s fixture)
+            // purely because it's simple and known to compile.
+            impl_: ToolImpl::Native {
+                fn_ref: NativeFnRef {
+                    name: "create".into(),
+                },
+                content_hash: [1u8; 32],
+            },
+            capabilities: CapabilityRequirements { declared: vec![] },
+            spec: ToolSpec {
+                name: "task.create".into(),
+                description: String::new(),
+                input_schema: Value::Null,
+            },
+        },
+    );
+
+    let mut agents = BTreeMap::new();
+    agents.insert(
+        entry.clone(),
+        Agent {
+            id: entry.clone(),
+            prompt: tau_ir::prompt::PromptSource::Inline(String::new()),
+            model_ref: tau_ir::model_ref::ModelRef {
+                backend: "mock-llm".into(),
+                model_id: "m".into(),
+            },
+            tool_refs: vec![ToolId("task.create".into())],
+            context: None,
+            budget: AgentBudget {
+                max_turns: Some(3),
+                max_tokens: None,
+            },
+            produces: vec![],
+            output_schema: None,
+            durable: None,
+        },
+    );
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+    let module = IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools,
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: tau_ir::capability::CapabilityTable(BTreeMap::new()),
+            pipeline: None,
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    };
+
+    /// Records every tool id the dispatcher is actually asked to invoke.
+    struct RecordingSink {
+        backend: Arc<dyn DynLlmBackend>,
+        collector: Arc<Collector>,
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+    impl ToolDispatcher for RecordingSink {
+        fn invoke<'a>(
+            &'a self,
+            tool_id: &'a ToolId,
+            _args: &'a Value,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<ToolInvocationResult, RuntimeError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            self.seen.lock().unwrap().push(tool_id.0.clone());
+            Box::pin(async {
+                Ok(ToolInvocationResult {
+                    body: Some(Value::String("ok".into())),
+                    error: None,
+                })
+            })
+        }
+        fn llm_backend_for(&self, _b: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+            Ok(self.backend.clone())
+        }
+        fn trace_sink(&self) -> Option<TraceSinkConfig> {
+            Some(TraceSinkConfig {
+                run_id: "run-virtual-collision".into(),
+                subscribers: vec![Arc::clone(&self.collector) as Arc<dyn TraceSubscriber>],
+            })
+        }
+    }
+
+    let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(Scripted {
+        queue: Mutex::new(vec![
+            resp(serde_json::json!({
+                "text":"","tool_uses":[{"id":"t1","name":"task.create","input":{}}],
+                "stop_reason":"ToolUse","usage":null
+            })),
+            resp(serde_json::json!({
+                "text":"done","tool_uses":[],"stop_reason":"EndTurn","usage":null
+            })),
+        ]),
+    });
+    let dispatcher = Arc::new(RecordingSink {
+        backend,
+        collector: collector.clone(),
+        seen: seen.clone(),
+    });
+
+    let stream = run_ir_streaming(Arc::new(module), &entry, dispatcher, Vec::new())
+        .await
+        .expect("stream builds");
+    let _events: Vec<RunEvent> = Box::pin(stream).collect().await;
+
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        ["task.create"],
+        "a virtual-named MCP tool must reach the dispatcher, not the kernel intercept"
+    );
+}

@@ -742,7 +742,17 @@ pub fn run_streaming_inner(
                 // crate::orchestration instead of forwarding to a plugin host.
                 // v1: task.* + run.* fully wired; agent.<kind>.spawn returns
                 // an is_error=true ToolResult noting deferred-to-follow-up.
-                if let Some(state_arc) = options.orchestration_state.as_ref() {
+                // Spec §13.4: the intercept requires BOTH pieces of
+                // orchestration context. `spawn_root_agent_inner` sets state
+                // AND runtime; IR-interpreter runs (§13.3) set state ONLY,
+                // to carry a trace sink. Gating on state alone would let an
+                // MCP tool whose IR id collides with a virtual name (e.g.
+                // `[tools.task]` + server tool `create` => `task.create`) be
+                // hijacked in-kernel on a bundle run.
+                if let (Some(state_arc), true) = (
+                    options.orchestration_state.as_ref(),
+                    options.orchestration_runtime.is_some(),
+                ) {
                     if crate::orchestration::is_virtual(&tool_use.name) {
                         // ADR-0006 §3.9: dispatch.tool_resolved fires after
                         // resolution succeeds. Virtual tools resolve to the
