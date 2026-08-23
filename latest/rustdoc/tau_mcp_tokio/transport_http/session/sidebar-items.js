@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["MCP_SESSION_ID_HEADER"],"struct":["SessionState"]};

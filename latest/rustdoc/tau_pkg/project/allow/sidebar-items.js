@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ToolBinding"],"fn":["validate_allow"],"struct":["AllowConfig","McpAllowEntry","ToolAllowEntry","UncheckedAllow","UncheckedMcpAllow","UncheckedToolAllow"]};
