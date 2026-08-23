@@ -493,6 +493,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `Cargo.toml` (workspace members — insert `"crates/tau-wasm-embed-example",` directly after the `"crates/tau-wasm-host",` line 43)
+- Modify: `ARCHITECTURE.md` (code-map table — an xtask guard fails CI for workspace members missing from it; insert after the `tau-embed-example` row, line 115): `| `tau-wasm-embed-example` | EPIC 7.2 Variant A reference host: a product-shaped binary that loads a built tau wasm component and runs it via `tau-wasm-host`'s `EmbedPorts` | `crates/tau-wasm-embed-example/src/main.rs` |`
 - Create: `crates/tau-wasm-embed-example/Cargo.toml`
 - Create: `crates/tau-wasm-embed-example/src/main.rs`
 - Create: `crates/tau-wasm-embed-example/README.md`
@@ -929,7 +930,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Format + lint gates on every touched crate**
 
+First apply formatting (clears the deferred fmt minors from Tasks 1-2 in one shot), then verify:
+
 ```bash
+timeout 30 env CARGO_TARGET_DIR=target/agent-impl cargo fmt -p tau-wasm-host -p tau-wasm-embed-example -p tau-cli
+git diff --stat   # review what fmt touched; commit as chore(fmt) if non-empty
 timeout 30 env CARGO_TARGET_DIR=target/agent-impl cargo fmt -p tau-wasm-host -p tau-wasm-embed-example -p tau-cli --check
 timeout 240 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/agent-impl cargo clippy -p tau-wasm-host --all-targets
 timeout 240 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/agent-impl cargo clippy -p tau-wasm-embed-example --all-targets
