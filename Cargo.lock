@@ -5484,6 +5484,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tau-wasm-embed-example"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tau-runtime-core",
+ "tau-wasm-host",
+]
+
+[[package]]
 name = "tau-wasm-guest"
 version = "0.0.0"
 dependencies = [
