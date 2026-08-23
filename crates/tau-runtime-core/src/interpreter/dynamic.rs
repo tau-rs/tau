@@ -640,10 +640,13 @@ mod tests {
         }
     }
 
+    /// `(reason, count, limit)` captured from one `runtime.dynamic.spawn_denied`
+    /// event — named to satisfy clippy's `type_complexity` lint on
+    /// [`CapturedSpawnDenials`]'s field.
+    type SpawnDenialRecord = (Option<String>, Option<u64>, Option<u64>);
+
     #[derive(Default, Clone)]
-    struct CapturedSpawnDenials(
-        Arc<Mutex<alloc::vec::Vec<(Option<String>, Option<u64>, Option<u64>)>>>,
-    );
+    struct CapturedSpawnDenials(Arc<Mutex<alloc::vec::Vec<SpawnDenialRecord>>>);
 
     impl<S: Subscriber> Layer<S> for CapturedSpawnDenials {
         fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: LayerContext<'_, S>) {}

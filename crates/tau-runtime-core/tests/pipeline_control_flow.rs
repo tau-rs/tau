@@ -27,7 +27,7 @@
 //! `pipeline_check.rs`'s `NonEmptyRegistry`/`CheckDispatcher` pattern).
 
 use std::boxed::Box;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -41,10 +41,11 @@ use tau_ir::ids::{AgentId, PipelineStepId, ToolId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
 use tau_ir::pipeline::{DynamicSpawn, Pipeline, PipelineStep, StepRun};
-use tau_ports::fixtures::MockSuspensionStore;
+use tau_ports::fixtures::{make_completion_response, make_tool_use, MockSuspensionStore};
 use tau_ports::orchestration::SuspensionStore;
 use tau_ports::{
     CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError, LlmProviderMessage,
+    StopReason,
 };
 
 use tau_runtime_core::builder::DynLlmBackend;
@@ -709,14 +710,19 @@ async fn run_pipeline_errors_suspend_unsupported() {
 }
 
 // -----------------------------------------------------------------------
-// `StepRun::Dynamic` — loud abort pending EPIC 4.5 (EPIC 4.4, Task 7). The
-// interpreter does not yet execute dynamic regions (membership,
-// attenuation, bounds counters land in 4.5); it meets one with a named
-// error rather than silently skipping or panicking.
+// `StepRun::Dynamic` — EPIC 4.5 runtime gate: the region's coordinator
+// (`owner`) runs with one `SpawnTool` registered per offered kind
+// (`agent.<kind>.spawn`); an admitted spawn attenuates and runs a child
+// agent, an over-bounds spawn is soft-denied (the run still completes).
 // -----------------------------------------------------------------------
 
 /// Build a `[dynamic:spawn-region]` module: a single `Dynamic` step, id
-/// "spawn-region", with one `researcher` `DynamicSpawn` and minimal bounds.
+/// "spawn-region", owner "coordinator" (registered in `workflow.agents`,
+/// backend "mock"), with one `researcher` `DynamicSpawn` (`max_spawns` /
+/// `max_concurrency` both 1 — enough to admit exactly one spawn per test,
+/// and to exercise the soft-deny path on a second). `tool_refs` is empty on
+/// both the coordinator and the spawned kind (no `workflow.tools` entries
+/// are wired — irrelevant to what this module exercises).
 fn dynamic_module() -> IrModule {
     let pipeline = Pipeline {
         steps: vec![PipelineStep {
@@ -730,17 +736,36 @@ fn dynamic_module() -> IrModule {
                     description: "Deep-dives one topic.".into(),
                     prompt: tau_ir::prompt::PromptSource::inline("Research one topic."),
                     model_ref: tau_ir::model_ref::ModelRef {
-                        backend: "anthropic".into(),
-                        model_id: "claude-haiku-4-5".into(),
+                        backend: "mock".into(),
+                        model_id: "mock-model".into(),
                     },
-                    tool_refs: vec![ToolId("probe".into())],
+                    tool_refs: Vec::new(),
                 }],
                 max_spawns: 1,
                 max_concurrency: 1,
             },
-            input: String::new(),
+            input: "${input}".into(),
         }],
     };
+
+    let mut agents = BTreeMap::new();
+    agents.insert(
+        AgentId("coordinator".into()),
+        Agent {
+            id: AgentId("coordinator".into()),
+            prompt: tau_ir::prompt::PromptSource::inline("You coordinate researchers."),
+            model_ref: tau_ir::ModelRef {
+                backend: "mock".into(),
+                model_id: "mock-model".into(),
+            },
+            tool_refs: Vec::new(),
+            context: None,
+            budget: AgentBudget::default(),
+            produces: Vec::new(),
+            output_schema: None,
+            durable: None,
+        },
+    );
 
     let target = tau_ports::target::registry::list_available()
         .next()
@@ -752,7 +777,7 @@ fn dynamic_module() -> IrModule {
         tau_version: env!("CARGO_PKG_VERSION").into(),
         target,
         workflow: Workflow {
-            agents: BTreeMap::new(),
+            agents,
             tools: BTreeMap::new(),
             steps: BTreeMap::new(),
             edges: Vec::new(),
@@ -764,20 +789,262 @@ fn dynamic_module() -> IrModule {
     }
 }
 
-/// A `Dynamic` step errors with a named runtime-gate-deferral error rather
-/// than executing (real execution is EPIC 4.5).
-#[tokio::test]
-async fn dynamic_region_errors_pending_runtime_gate() {
-    let module = dynamic_module();
-    let err = run_pipeline(Arc::new(module), "x".to_string(), dispatcher())
-        .await
-        .expect_err("dynamic region aborts pending the EPIC 4.5 runtime gate");
-    match err {
-        RuntimeError::DynamicRegionRequiresRuntimeGate { step_id } => {
-            assert_eq!(step_id, "spawn-region");
+/// Scripted backend: pops queued `CompletionResponse`s in order, shared by
+/// the coordinator and every spawned child — the interpreter dispatches one
+/// completion at a time (`subflow_attenuation.rs`'s `Scripted` uses the same
+/// shared-queue idiom for a parent/subflow-worker pair). Modeled on
+/// `tau_ports::fixtures::MockLlmBackend`'s impl block, with the response
+/// source swapped for a `Mutex<VecDeque<_>>` so responses are consumed
+/// (rather than replayed) and every request is still recorded for
+/// `render_messages` assertions.
+struct SeqBackend {
+    responses: Mutex<VecDeque<CompletionResponse>>,
+    requests: Mutex<Vec<CompletionRequest>>,
+}
+
+impl SeqBackend {
+    fn new(responses: Vec<CompletionResponse>) -> Self {
+        Self {
+            responses: Mutex::new(responses.into()),
+            requests: Mutex::new(Vec::new()),
         }
-        other => panic!("expected DynamicRegionRequiresRuntimeGate, got {other:?}"),
     }
+
+    /// Recorded requests in the order they were issued.
+    fn requests(&self) -> Vec<CompletionRequest> {
+        self.requests
+            .lock()
+            .expect("SeqBackend mutex poisoned")
+            .clone()
+    }
+}
+
+impl LlmBackend for SeqBackend {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
+    async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        self.requests
+            .lock()
+            .expect("SeqBackend mutex poisoned")
+            .push(req);
+        self.responses
+            .lock()
+            .expect("SeqBackend mutex poisoned")
+            .pop_front()
+            .ok_or_else(|| LlmError::Internal {
+                message: "SeqBackend: no more scripted responses".into(),
+            })
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+    ) -> Result<tau_ports::CompletionStream, LlmError> {
+        let resp = LlmBackend::complete(self, req).await?;
+        Ok(tau_ports::batch_to_stream(resp))
+    }
+}
+
+/// Dispatcher wiring a [`SeqBackend`] as the LLM backend for every
+/// requested backend name (both "mock"-backed agents in `dynamic_module`
+/// share the one scripted queue — mirrors `BranchDispatcher::llm_backend_for`
+/// ignoring its `_backend` argument). No agent in the test module carries
+/// tools, so `invoke` is unreachable.
+struct DynamicDispatcher {
+    backend: Arc<dyn DynLlmBackend>,
+}
+
+impl ToolDispatcher for DynamicDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "DynamicDispatcher::invoke should never be called (no workflow tools)"
+                    .into(),
+            })
+        })
+    }
+
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
+    }
+}
+
+fn dispatcher_with(backend: Arc<SeqBackend>) -> Arc<DynamicDispatcher> {
+    Arc::new(DynamicDispatcher { backend })
+}
+
+/// Bridge a `serde_json::json!` literal through the domain-`Value` serde
+/// round-trip `ToolUse::input` requires (mirrors
+/// `interpreter/dynamic.rs`'s test-module `domain_args` helper).
+fn domain_args(v: serde_json::Value) -> tau_domain::Value {
+    serde_json::from_value(v).expect("valid domain value")
+}
+
+/// Flatten a `CompletionRequest`'s messages to one string: assistant/user
+/// text blocks pass through verbatim, tool-use blocks render as
+/// `[tool_use:<name>]`, and tool-result text blocks pass through verbatim.
+/// Good enough to `.contains(..)`-assert on transcript content without
+/// hand-walking `LlmProviderMessage`/`ContentBlock` at every call site.
+fn render_messages(req: &CompletionRequest) -> String {
+    let mut out = String::new();
+    for m in &req.messages {
+        match m {
+            LlmProviderMessage::User { content } | LlmProviderMessage::Assistant { content } => {
+                for b in content {
+                    match b {
+                        ContentBlock::Text(t) => {
+                            out.push_str(t);
+                            out.push('\n');
+                        }
+                        ContentBlock::ToolUse(tu) => {
+                            out.push_str(&format!("[tool_use:{}]\n", tu.name));
+                        }
+                        // `ContentBlock` is `#[non_exhaustive]`; no other
+                        // variant exists as of tau-ports 0.6.0, but future
+                        // additions must not become compile errors here.
+                        _ => {}
+                    }
+                }
+            }
+            LlmProviderMessage::ToolResult { content, .. } => {
+                for b in content {
+                    if let ContentBlock::Text(t) = b {
+                        out.push_str(t);
+                        out.push('\n');
+                    }
+                }
+            }
+            // `LlmProviderMessage` is `#[non_exhaustive]`; same rationale.
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Read a pipeline step's output as a string (panics on a missing or
+/// non-string output — every assertion in this module expects a string).
+fn store_output(store: &OutputStore, id: &str) -> String {
+    match store.get(id) {
+        Some(Value::String(s)) => s.clone(),
+        other => panic!("expected string output for step {id:?}, got {other:?}"),
+    }
+}
+
+/// A coordinator spawns one `researcher` child; the child's report flows
+/// back into the coordinator's next turn (not the legacy
+/// `agent.<kind>.spawn` kernel intercept — see the "no orchestration
+/// runtime" negative assertion below), and the coordinator's final text
+/// becomes the `Dynamic` step's stored output.
+#[tokio::test]
+async fn dynamic_region_spawns_child_and_completes() {
+    let module = dynamic_module();
+    let responses = vec![
+        // r1: coordinator turn 1 — spawns the researcher.
+        make_completion_response(
+            String::new(),
+            vec![make_tool_use(
+                "s1".into(),
+                "agent.researcher.spawn".into(),
+                domain_args(json!({"message": "topic A"})),
+            )],
+            StopReason::ToolUse,
+            None,
+        ),
+        // r2: child's answer.
+        make_completion_response("CHILD REPORT A".into(), vec![], StopReason::EndTurn, None),
+        // r3: coordinator's final summary, having seen the child's report.
+        make_completion_response("SUMMARY: A".into(), vec![], StopReason::EndTurn, None),
+    ];
+    let seq_backend = Arc::new(SeqBackend::new(responses));
+
+    let out = run_pipeline(
+        Arc::new(module),
+        "x".into(),
+        dispatcher_with(seq_backend.clone()),
+    )
+    .await
+    .expect("region completes");
+
+    // Step output == coordinator's final text.
+    assert_eq!(store_output(&out, "spawn-region"), "SUMMARY: A");
+
+    // Non-collision pin (#582-adjacent): the spawn tool_use was answered by
+    // the REGISTRY SpawnTool, not the legacy kernel intercept — request 3's
+    // message history must contain the child's report, and must NOT contain
+    // the intercept's "no orchestration runtime" text.
+    let reqs = seq_backend.requests();
+    assert_eq!(
+        reqs.len(),
+        3,
+        "expected exactly 3 completions, got {}",
+        reqs.len()
+    );
+    let third = render_messages(&reqs[2]);
+    assert!(third.contains("CHILD REPORT A"), "{third}");
+    assert!(!third.contains("no orchestration runtime"), "{third}");
+}
+
+/// A coordinator's single turn emits TWO spawn requests against a region
+/// whose `max_spawns` is 1: the first is admitted (and its child runs to
+/// completion), the second is soft-denied — the run still completes, and
+/// the coordinator's next turn sees the denial text.
+#[tokio::test]
+async fn dynamic_region_soft_denies_past_max_spawns() {
+    let module = dynamic_module(); // max_spawns: 1
+    let responses = vec![
+        // r1: coordinator turn 1 — spawns TWO researchers in one turn.
+        make_completion_response(
+            String::new(),
+            vec![
+                make_tool_use(
+                    "s1".into(),
+                    "agent.researcher.spawn".into(),
+                    domain_args(json!({"message": "topic A"})),
+                ),
+                make_tool_use(
+                    "s2".into(),
+                    "agent.researcher.spawn".into(),
+                    domain_args(json!({"message": "topic B"})),
+                ),
+            ],
+            StopReason::ToolUse,
+            None,
+        ),
+        // r2: child A's answer (spawn A is admitted; spawn B is denied
+        // before any child construction, so it consumes no response).
+        make_completion_response("CHILD REPORT A".into(), vec![], StopReason::EndTurn, None),
+        // r3: coordinator's final response, having seen both A's report and
+        // B's soft-denial.
+        make_completion_response("DONE".into(), vec![], StopReason::EndTurn, None),
+    ];
+    let seq_backend = Arc::new(SeqBackend::new(responses));
+
+    let out = run_pipeline(
+        Arc::new(module),
+        "x".into(),
+        dispatcher_with(seq_backend.clone()),
+    )
+    .await
+    .expect("region completes (soft-deny, not a hard error)");
+
+    assert_eq!(store_output(&out, "spawn-region"), "DONE");
+
+    let reqs = seq_backend.requests();
+    assert_eq!(
+        reqs.len(),
+        3,
+        "expected exactly 3 completions, got {}",
+        reqs.len()
+    );
+    let third = render_messages(&reqs[2]);
+    assert!(third.contains("spawn denied"), "{third}");
+    assert!(third.contains("max_spawns exhausted (1/1)"), "{third}");
 }
 
 /// Build a `[agent:seed, suspend:pause]` module: `seed`'s output lands in
