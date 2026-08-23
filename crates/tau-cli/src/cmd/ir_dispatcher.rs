@@ -92,6 +92,24 @@ pub(crate) fn asset_map_from_bundle(
     Ok(map)
 }
 
+/// Every [`ToolId`] the module provides as [`tau_ir::ToolImpl::Native`].
+///
+/// Native bodies are statically linked (`tau-native-tools`), never
+/// installed as plugins, so they never appear in the runtime's tool
+/// registry. Both `ForwardingDispatcher` construction sites (this module's
+/// bundle path and [`crate::cmd::run`]'s cwd pipeline path) pass this set
+/// so a native tool_ref the agent calls is dispatchable rather than a
+/// hard "no tool registered" failure (#639).
+pub(crate) fn native_tool_ids(module: &IrModule) -> std::collections::BTreeSet<ToolId> {
+    module
+        .workflow
+        .tools
+        .iter()
+        .filter(|(_, t)| matches!(t.impl_, tau_ir::ToolImpl::Native { .. }))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 pub(crate) async fn run_via_ir(
     module: IrModule,
     assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
@@ -231,6 +249,11 @@ pub(crate) async fn run_via_ir(
     // Dropping them here would abort the pumps immediately.
     let _mcp_lifetime = mcp_setup.inbound_handles;
 
+    // Ids the IR provides natively — exempt from the plugin-install
+    // pre-check below, and served by the dispatcher from the linked
+    // `tau-native-tools` crate at invoke time (#639).
+    let native_ids = native_tool_ids(&module);
+
     // 5b. Pre-check: every ToolId referenced by the entry agent must be
     //     resolvable through the dispatcher. tau's general stance (per
     //     CLAUDE.md / "feedback_tau_rust_like_build_enforcement"): any
@@ -249,19 +272,9 @@ pub(crate) async fn run_via_ir(
         .filter(|tid| !tools_by_id.contains_key(*tid))
         // Native tools (`ToolImpl::Native`) are statically-linked bodies
         // (see `tau-native-tools`), not plugin-installed binaries — their
-        // absence from the plugin runtime is not an install skew. The host
-        // CLI does not dispatch them (symmetric with the cwd path, which
-        // simply omits them from its dispatcher); an actual call at run
-        // time still surfaces as `ForwardingDispatcher`'s unknown-ToolId
-        // error. Before #623 this exemption was masked: the entry agent
-        // was the alphabetically-first module agent, which in the fixtures
-        // carried no tool_refs.
-        .filter(|tid| {
-            !matches!(
-                module.workflow.tools.get(*tid).map(|t| &t.impl_),
-                Some(tau_ir::ToolImpl::Native { .. })
-            )
-        })
+        // absence from the plugin runtime is not an install skew. The
+        // dispatcher serves them from the linked crate instead (#639).
+        .filter(|tid| !native_ids.contains(*tid))
         .collect();
     if !missing.is_empty() {
         let names: Vec<&str> = missing.iter().map(|t| t.0.as_str()).collect();
@@ -307,7 +320,8 @@ pub(crate) async fn run_via_ir(
     //     checkpoints land under `<scope>/.tau/runs/<run_id>/`. On
     //     `--resume <id>` we load the latest committed checkpoint; on a fresh
     //     durable run we mint a run id and tell the operator how to resume.
-    let mut dispatcher = ForwardingDispatcher::new(llm_backends, tools_by_id);
+    let mut dispatcher =
+        ForwardingDispatcher::new(llm_backends, tools_by_id).with_native(native_ids);
     if let Some(durability) = entry_agent.durable.as_ref() {
         let store: Arc<dyn tau_ports::CheckpointStore> = Arc::new(
             tau_runtime_tokio::FileCheckpointStore::new(scope.path().to_path_buf()),
@@ -452,6 +466,11 @@ pub(crate) struct ForwardingDispatcher {
     /// the backend name baked into the agent's resolved `model_ref` at lowering.
     llm_backends: BTreeMap<String, Arc<dyn DynLlmBackend>>,
     tools: BTreeMap<ToolId, Arc<dyn DynTool>>,
+    /// Ids the IR declares as [`tau_ir::ToolImpl::Native`] (#639). Their
+    /// bodies are statically linked in `tau-native-tools`, not installed
+    /// as plugins, so they never appear in `tools`. Consulted only after
+    /// a `tools` miss — a real plugin handle always wins.
+    native: std::collections::BTreeSet<ToolId>,
     /// ADR-0053 durable handles. `None` for non-durable runs. Set via
     /// [`Self::with_durable`] when the entry agent declares `durable`.
     durable_store: Option<Arc<dyn tau_ports::CheckpointStore>>,
@@ -479,7 +498,17 @@ impl ForwardingDispatcher {
             durable_resume: None,
             durable_granularity: None,
             assets: None,
+            native: Default::default(),
         }
+    }
+
+    /// Declare which [`ToolId`]s the IR provides as
+    /// [`tau_ir::ToolImpl::Native`] (#639), so [`ToolDispatcher::invoke`]
+    /// can serve them from `tau-native-tools` instead of failing them as
+    /// unregistered. Build with [`native_tool_ids`].
+    pub(crate) fn with_native(mut self, native: std::collections::BTreeSet<ToolId>) -> Self {
+        self.native = native;
+        self
     }
 
     /// Attach the content-addressed asset store (D6-B) so the interpreter can
@@ -527,6 +556,7 @@ impl ForwardingDispatcher {
             durable_resume: None,
             durable_granularity: None,
             assets: None,
+            native: Default::default(),
         }
     }
 }
@@ -574,8 +604,34 @@ impl ToolDispatcher for ForwardingDispatcher {
         let args_owned = args.clone();
         let tool = self.tools.get(tool_id).cloned();
         let tool_id_str = tool_id.0.clone();
+        // Native fallback (#639): only when no plugin handle serves this id.
+        let is_native = tool.is_none() && self.native.contains(tool_id);
 
         Box::pin(async move {
+            // Native tools resolve from the statically-linked shared crate,
+            // keyed by ToolId — the SAME contract the wasm guest
+            // (`tau-wasm-guest/src/dispatcher.rs`) and the conformance
+            // profile use, so every profile returns byte-identical bodies.
+            // Handled before the domain-args conversion because native
+            // bodies take `serde_json::Value` directly.
+            if is_native {
+                return match tau_native_tools::invoke(&tool_id_str, &args_owned) {
+                    Some(body) => Ok(ToolInvocationResult {
+                        body: Some(body),
+                        error: None,
+                    }),
+                    // Declared Native but absent from the linked crate:
+                    // a build/install skew, not an empty result.
+                    None => Err(RuntimeError::Internal {
+                        message: format!(
+                            "IR declares tool {tool_id_str:?} as native but tau-native-tools \
+                             has no such body — the bundle's IR was built against a different \
+                             tau version than this host binary."
+                        ),
+                    }),
+                };
+            }
+
             let domain_args: tau_domain::Value =
                 serde_json::from_value(args_owned).map_err(|e| RuntimeError::Internal {
                     message: format!("argument conversion failed: {e}"),
@@ -1782,6 +1838,77 @@ mod tests {
             .await
             .expect("conversion should succeed on a plain JSON object");
         assert!(res.body.is_some());
+    }
+
+    /// A `ToolImpl::Native` tool_ref is LLM-visible on the IR paths
+    /// (`agent_loop.rs` builds one `DispatcherTool` per `agent.tool_refs`
+    /// entry and its Native arm forwards here), but native bodies live in
+    /// the statically-linked `tau-native-tools` crate rather than the
+    /// plugin registry. The dispatcher must route them by ToolId — the
+    /// same contract the wasm guest and the conformance profile use, so
+    /// all three profiles return byte-identical bodies (#639).
+    #[tokio::test]
+    async fn forwarding_dispatcher_invokes_native_tool_by_tool_id() {
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let disp = ForwardingDispatcher::single(backend, BTreeMap::new())
+            .with_native(std::iter::once(ToolId("read_temp".into())).collect());
+
+        let res = disp
+            .invoke(&ToolId("read_temp".into()), &serde_json::json!({}))
+            .await
+            .expect("declared native tool must dispatch");
+
+        assert!(res.error.is_none(), "unexpected error: {:?}", res.error);
+        assert_eq!(
+            res.body,
+            Some(serde_json::json!(32)),
+            "body must match tau_native_tools::invoke's shared body"
+        );
+    }
+
+    /// A plugin-backed tool of the same id wins: the native arm is a
+    /// fallback for ids the plugin registry cannot serve, never an
+    /// override of a real handle.
+    #[tokio::test]
+    async fn forwarding_dispatcher_prefers_plugin_tool_over_native() {
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
+        tools.insert(ToolId("read_temp".into()), Arc::new(PlainTextTool));
+        let disp = ForwardingDispatcher::single(backend, tools)
+            .with_native(std::iter::once(ToolId("read_temp".into())).collect());
+
+        let res = disp
+            .invoke(&ToolId("read_temp".into()), &serde_json::Value::Null)
+            .await
+            .expect("invoke must succeed");
+        assert_eq!(
+            res.body,
+            Some(serde_json::Value::String("hello".to_string())),
+            "the plugin handle must serve the call, not the native body"
+        );
+    }
+
+    /// Declared `Native` but absent from `tau-native-tools` is a build/
+    /// install skew: surface it as a typed error naming the tool rather
+    /// than returning an empty body the model would treat as a result.
+    #[tokio::test]
+    async fn forwarding_dispatcher_unknown_native_fn_yields_internal_error() {
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let disp = ForwardingDispatcher::single(backend, BTreeMap::new())
+            .with_native(std::iter::once(ToolId("no_such_native".into())).collect());
+
+        let err = match disp
+            .invoke(&ToolId("no_such_native".into()), &serde_json::Value::Null)
+            .await
+        {
+            Ok(res) => panic!("unknown native fn must error, got body {:?}", res.body),
+            Err(e) => e,
+        };
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("no_such_native") && msg.contains("tau-native-tools"),
+            "error should name the tool and the crate that lacks it; got {msg}"
+        );
     }
 
     #[tokio::test]
