@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["WasmHostError"],"fn":["run_component","run_component_with_caps","run_component_with_ports"],"mod":["embed","tau"],"struct":["EgressPolicy","Runner","RunnerIndices","RunnerPre"],"trait":["EmbedPorts"]};
