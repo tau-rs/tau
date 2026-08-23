@@ -167,16 +167,23 @@ async fn leaf_only_grant_readable_at_nested_path() {
     );
 }
 
-/// Sibling isolation stays: a path with NO grant is denied even while
-/// its cousin is granted.
+/// Sibling isolation stays: a path with NO grant is denied.
+///
+/// Positive-grant readability (the "cousin" side of this property) is
+/// already covered end-to-end by `leaf_only_grant_readable_at_nested_path`
+/// above. An earlier version of this test also created a `granted`
+/// sibling directory that was never actually ACL-granted — inert
+/// scaffolding that proved nothing and implied a positive-read
+/// assertion this test doesn't make. Deleted rather than wired up: doing
+/// so properly would mean a second `wrap_spawn`/probe invocation (a
+/// second AppContainer profile) inside this test purely to re-prove
+/// what `leaf_only_grant_readable_at_nested_path` already proves, for no
+/// added coverage.
 #[tokio::test]
 async fn ungranted_sibling_path_still_denied() {
     let base = std::env::temp_dir().join(format!("tau-egress-sib-{}", std::process::id()));
-    let granted = base.join("granted");
-    let sibling = base.join("sibling");
-    std::fs::create_dir_all(&granted).expect("mkdirs");
-    std::fs::create_dir_all(&sibling).expect("mkdirs");
-    let secret = sibling.join("secret.txt");
+    std::fs::create_dir_all(&base).expect("mkdirs");
+    let secret = base.join("secret.txt");
     std::fs::write(&secret, "secret").expect("write");
     let plan = plan_with_hosts_and_read(
         &["127.0.0.1"],
@@ -186,7 +193,16 @@ async fn ungranted_sibling_path_still_denied() {
     assert_ne!(
         out.status.code(),
         Some(0),
-        "ungranted sibling must stay denied:\n{}",
+        "ungranted path must stay denied:\n{}",
+        render(&out)
+    );
+    // Pin down *how* it failed: must be the probe's own access-denied
+    // read error, not a spawn failure or watchdog timeout that would
+    // also produce a non-zero exit without ever exercising the ACL.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("PROBE result=err detail=read"),
+        "expected the probe to run and report a denied read, got:\n{}",
         render(&out)
     );
 }
@@ -226,6 +242,24 @@ async fn foreign_container_cannot_open_pipe() {
         out.status.code(),
         Some(0),
         "foreign container opened another container's proxy pipe:\n{}",
+        render(&out)
+    );
+    // A non-zero exit alone doesn't prove the DACL was exercised — a
+    // launcher-level failure (foreign AppContainer can't even launch the
+    // probe: missing exe, image-load denial) or the probe's own 8s
+    // watchdog would also produce a non-zero exit here, and would let
+    // this test pass green without ever reaching the pipe-open call it
+    // exists to guard. Require the probe's own marker for a denied open,
+    // and explicitly rule out the watchdog path.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("PROBE result=err detail=open"),
+        "expected the probe to run and report a denied pipe open, got:\n{}",
+        render(&out)
+    );
+    assert!(
+        !stdout.contains("watchdog-timeout"),
+        "probe hit its watchdog instead of failing the pipe open — the DACL was never exercised:\n{}",
         render(&out)
     );
 }
