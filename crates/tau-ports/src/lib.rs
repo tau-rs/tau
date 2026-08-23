@@ -3,8 +3,9 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-//! Port (trait) definitions for tau's hexagonal architecture. Adapters in
-//! tau-infra implement these traits.
+//! Port (trait) definitions for tau's hexagonal architecture. Host crates
+//! (tau-runtime-tokio, the sandbox adapters, tau-pkg, …) implement these
+//! traits.
 //!
 //! tau-ports defines four trait families:
 //!
@@ -38,6 +39,8 @@ pub mod tool;
 
 #[cfg(feature = "process")]
 pub use capability_gate::process::ProcessCapabilityGate;
+#[cfg(feature = "process")]
+pub use capability_gate::{dyn_process::DynProcessGate, passthrough::PassthroughGate};
 pub use capability_gate::{
     CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe, CapabilityTier,
     ResourceLimits, WorkingContext,
@@ -56,8 +59,9 @@ pub use llm::{
     ToolChoice, ToolSpec, ToolUse, ToolUseAccumulator,
 };
 pub use orchestration::{
-    AgentId, CheckpointError, CheckpointStore, RunBudget, RunId, RunSnapshot, RunStatus, Task,
-    TaskEvent, TaskId, TaskListFilter, TaskStatus, TraceEvent, TraceEventKind, TurnCheckpoint,
+    AgentId, CapabilityVerdict, CheckpointError, CheckpointStore, PipelineSuspension, RunBudget,
+    RunId, RunSnapshot, RunStatus, SuspensionStore, Task, TaskEvent, TaskId, TaskListFilter,
+    TaskStatus, TraceEvent, TraceEventKind, TurnCheckpoint,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use random::DeterministicRandom;

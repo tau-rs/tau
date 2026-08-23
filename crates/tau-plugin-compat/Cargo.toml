@@ -40,3 +40,6 @@ tau-cli = { path = "../tau-cli" }
 tau-plugin-test-support = { workspace = true }
 tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
 tau-ports  = { workspace = true, features = ["serde", "test-fixtures"] }
+
+[lints]
+workspace = true

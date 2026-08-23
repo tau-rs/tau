@@ -32,13 +32,23 @@ pub(super) struct Parsed {
     pub(super) workflow: Workflow,
     /// Trigger bindings, canonically ordered by name (BTreeMap iteration).
     pub(super) triggers: alloc::vec::Vec<TriggerBinding>,
+    /// Content-addressed asset blobs (currently `system_file` prompts) read
+    /// at build time, keyed by hash (`"sha256:" + 64 hex`). Deduped by hash.
+    pub(super) assets: BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob>,
 }
 
 /// Run the parse stage on a `ProjectConfig`.
-pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
+///
+/// `prompt_file` reads an agent `system_file` prompt's bytes (D6-B); see
+/// [`crate::Caches::prompt_file`].
+pub(super) fn parse(
+    config: &ProjectConfig,
+    prompt_file: &dyn Fn(&std::path::Path) -> Result<alloc::vec::Vec<u8>, crate::PromptFileError>,
+) -> Result<Parsed, LowerError> {
     let mut agents: BTreeMap<AgentId, Agent> = BTreeMap::new();
     let mut tools: BTreeMap<ToolId, Tool> = BTreeMap::new();
     let mut steps: BTreeMap<StepId, Deterministic> = BTreeMap::new();
+    let mut assets: BTreeMap<alloc::string::String, tau_ir::asset::AssetBlob> = BTreeMap::new();
     let edges: alloc::vec::Vec<SubflowEdge> = alloc::vec::Vec::new();
     let mut capability_table: BTreeMap<ToolId, CapabilityRequirements> = BTreeMap::new();
 
@@ -99,18 +109,38 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
     for (name, entry) in config.agents.iter() {
         let agent_id = AgentId(name.clone());
         let tool_refs = entry.tool_refs.iter().cloned().map(ToolId).collect();
-        // Lower the prompt source. `Inline` maps straight through. `File`
-        // still maps the PATH into an inline string here — that is the
-        // `system_file` bug (the path, not the content, becomes the prompt).
-        // The asset-store follow-up (D6-B) reads the file at build time and
-        // emits a content-addressed `PromptSource::Asset` instead; this arm
-        // is the seam for that change.
+        // Lower the prompt source (D6-B). `Inline` maps straight through.
+        // `File` is read at build time via the injected `prompt_file` reader,
+        // hashed, and emitted as a content-addressed `PromptSource::Asset`;
+        // the bytes are collected into `assets` (deduped by hash). Paths never
+        // enter the IR, and a missing/unreadable file is a hard build error —
+        // this fixes the non-hermetic `system_file` bug (the IR used to carry
+        // the path string as the prompt).
         let prompt = match &entry.prompt {
             PromptEntry::Inline(s) => PromptSource::inline(s.clone()),
-            PromptEntry::File(p) => PromptSource::inline(p.to_string_lossy().into_owned()),
+            PromptEntry::File(p) => {
+                let bytes = prompt_file(p).map_err(|e| LowerError::PromptFileUnreadable {
+                    agent: agent_id.clone(),
+                    path: p.to_string_lossy().into_owned(),
+                    reason: e.0,
+                })?;
+                let hash = tau_ir::asset::asset_hash(&bytes);
+                // Identical content across agents dedupes to one blob.
+                assets
+                    .entry(hash.clone())
+                    .or_insert_with(|| tau_ir::asset::AssetBlob::prompt(bytes));
+                PromptSource::asset(hash)
+            }
             PromptEntry::None => PromptSource::inline(""),
-            // Non_exhaustive — default to empty inline for any future variant.
-            _ => PromptSource::inline(""),
+            // `PromptEntry` is `#[non_exhaustive]`, so this wildcard is
+            // required. A future variant reaching here is fail-closed (D7-B /
+            // ADR-0065): it used to silently become an empty prompt.
+            other => {
+                return Err(LowerError::UnsupportedPromptKind {
+                    agent: agent_id.clone(),
+                    detail: alloc::format!("{other:?}"),
+                });
+            }
         };
         agents.insert(
             agent_id.clone(),
@@ -119,7 +149,7 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
                 prompt,
                 model_ref: resolve_model_ref(config, &entry.model)?,
                 tool_refs,
-                context: lower_context(entry),
+                context: lower_context(name, entry)?,
                 budget: AgentBudget {
                     max_turns: entry.max_turns,
                     max_tokens: entry.max_tokens,
@@ -240,22 +270,21 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
     }
 
     // --- Pipeline ---------------------------------------------------------
-    let mut pipeline = config.pipeline.as_ref().map(|p| Pipeline {
-        steps: p
-            .steps
-            .iter()
-            .map(|s| PipelineStep {
-                id: PipelineStepId(s.id.clone()),
-                run: match &s.run {
-                    PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
-                    PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
-                    PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
-                    PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
-                },
-                input: s.input.clone(),
-            })
-            .collect(),
-    });
+    let kinds: BTreeMap<alloc::string::String, alloc::vec::Vec<tau_domain::Capability>> = config
+        .agent_kinds
+        .iter()
+        .map(|(name, kind)| (name.clone(), kind.capabilities.clone()))
+        .collect();
+    let mut pipeline = match &config.pipeline {
+        None => None,
+        Some(p) => Some(Pipeline {
+            steps: p
+                .steps
+                .iter()
+                .map(|s| lower_step(s, &kinds))
+                .collect::<Result<_, _>>()?,
+        }),
+    };
 
     // --- Checks (goals + deliverables) -----------------------------------
     let checks = lower_checks(config, &mut pipeline)?;
@@ -271,7 +300,17 @@ pub(super) fn parse(config: &ProjectConfig) -> Result<Parsed, LowerError> {
             checks,
         },
         triggers,
+        assets,
     })
+}
+
+/// Test-only stub reader for `parse`: no file prompts. Callers that don't
+/// exercise `system_file` prompts pass this so the reader is never invoked.
+#[cfg(test)]
+pub(crate) fn no_prompt_files(
+    _: &std::path::Path,
+) -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+    Ok(alloc::vec::Vec::new())
 }
 
 /// Lower `[goals.*]`/`[deliverables.*]` into IR [`Check`]s and position a
@@ -406,23 +445,37 @@ fn lower_checks(
 /// IR [`ContextConfig`]. Returns `None` when no context pipeline is declared
 /// (the default behaviour — the agent loop applies no context transforms).
 ///
-/// tau-pkg's validator already shape-checked the determinism strings and
-/// custom-node `(source, package)` pairs, so this is a pure structural copy.
-fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context::ContextConfig> {
+/// tau-pkg's validator shape-checks the custom-node `(source, package)` pairs
+/// but does **not** constrain the determinism string (it passes any value
+/// through via `unwrap_or_else(|| "pure")`). D7-B / ADR-0065 makes an
+/// unrecognized determinism string a hard `LowerError::UnknownDeterminism`
+/// here — the only build-time gate — instead of the former silent
+/// `_ => DeterminismClass::Pure` downgrade.
+fn lower_context(
+    agent: &str,
+    entry: &tau_pkg::project::AgentEntry,
+) -> Result<Option<tau_ir::context::ContextConfig>, LowerError> {
     use tau_ir::context::{ContextConfig, ContextNodeKind, ContextStep, DeterminismClass};
     if entry.context.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let pipeline = entry
-        .context
-        .iter()
-        .map(|s| ContextStep {
+    let mut pipeline = alloc::vec::Vec::with_capacity(entry.context.len());
+    for s in entry.context.iter() {
+        let determinism = match s.determinism.as_str() {
+            "pure" => DeterminismClass::Pure,
+            "llm_backed" => DeterminismClass::LlmBacked,
+            "stateful" => DeterminismClass::Stateful,
+            _ => {
+                return Err(LowerError::UnknownDeterminism {
+                    agent: agent.into(),
+                    transformer: s.transformer.clone(),
+                    determinism: s.determinism.clone(),
+                });
+            }
+        };
+        pipeline.push(ContextStep {
             transformer: s.transformer.clone(),
-            determinism: match s.determinism.as_str() {
-                "llm_backed" => DeterminismClass::LlmBacked,
-                "stateful" => DeterminismClass::Stateful,
-                _ => DeterminismClass::Pure,
-            },
+            determinism,
             kind: match &s.custom {
                 Some((source, package)) => ContextNodeKind::Custom {
                     source: source.clone(),
@@ -431,14 +484,14 @@ fn lower_context(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::context
                 None => ContextNodeKind::Builtin,
             },
             config: s.config.clone(),
-        })
-        .collect();
+        });
+    }
     // `ContextConfig` is `#[non_exhaustive]`; it cannot be built with a
     // struct literal from outside `tau-ir`. Build via `Default` + the
     // public `pipeline` field instead (behavior-identical).
     let mut cfg = ContextConfig::default();
     cfg.pipeline = pipeline;
-    Some(cfg)
+    Ok(Some(cfg))
 }
 
 /// Convert a validated tau-pkg [`DurableEntry`] into the IR
@@ -479,6 +532,106 @@ pub fn durable_entry_to_ir(
 /// not durable.
 fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable::Durability> {
     entry.durable.as_ref().map(durable_entry_to_ir)
+}
+
+/// Lower one validated pipeline step to an IR [`PipelineStep`], recursing
+/// into `Branch`/`Parallel`/`Loop` arms. Reference/scope integrity is
+/// validated separately by the IR typecheck (`check_pipeline`). `Dynamic`
+/// regions resolve their `spawns` kind names against `kinds` here (EPIC
+/// 4.4), which is the one way this mapping can fail — an unknown kind
+/// yields `LowerError::UnknownAgentKind`.
+fn lower_step(
+    s: &tau_pkg::project::PipelineStepConfig,
+    kinds: &BTreeMap<alloc::string::String, alloc::vec::Vec<tau_domain::Capability>>,
+) -> Result<PipelineStep, LowerError> {
+    let run = match &s.run {
+        PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
+        PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
+        PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
+        PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
+        PipelineRunRef::Suspend { resume_signal } => StepRun::Suspend {
+            resume_signal: resume_signal.clone(),
+        },
+        PipelineRunRef::Branch {
+            on,
+            then,
+            otherwise,
+        } => StepRun::Branch {
+            on: lower_condition(on),
+            then: then
+                .iter()
+                .map(|st| lower_step(st, kinds))
+                .collect::<Result<_, _>>()?,
+            otherwise: otherwise
+                .iter()
+                .map(|st| lower_step(st, kinds))
+                .collect::<Result<_, _>>()?,
+        },
+        PipelineRunRef::Parallel { branches } => StepRun::Parallel {
+            branches: branches
+                .iter()
+                .map(|b| b.iter().map(|st| lower_step(st, kinds)).collect())
+                .collect::<Result<_, _>>()?,
+        },
+        PipelineRunRef::Loop {
+            body,
+            until,
+            max_iters,
+        } => StepRun::Loop {
+            body: body
+                .iter()
+                .map(|st| lower_step(st, kinds))
+                .collect::<Result<_, _>>()?,
+            until: lower_condition(until),
+            max_iters: *max_iters,
+        },
+        PipelineRunRef::Dynamic {
+            spawns,
+            ceiling,
+            max_spawns,
+            max_concurrency,
+            agent: _,
+        } => {
+            let mut resolved = alloc::vec::Vec::with_capacity(spawns.len());
+            for kind in spawns {
+                let caps = kinds
+                    .get(kind)
+                    .ok_or_else(|| LowerError::UnknownAgentKind {
+                        kind: kind.clone(),
+                        step: s.id.clone(),
+                    })?;
+                resolved.push(tau_ir::pipeline::DynamicSpawn {
+                    kind: kind.clone(),
+                    capabilities: CapabilityRequirements {
+                        declared: caps.clone(),
+                    },
+                });
+            }
+            StepRun::Dynamic {
+                envelope: CapabilityRequirements {
+                    declared: ceiling.clone(),
+                },
+                spawns: resolved,
+                max_spawns: *max_spawns,
+                max_concurrency: *max_concurrency,
+            }
+        }
+    };
+    Ok(PipelineStep {
+        id: PipelineStepId(s.id.clone()),
+        run,
+        input: s.input.clone(),
+    })
+}
+
+/// Lower a tau-pkg [`ConditionConfig`](tau_pkg::project::ConditionConfig) to an
+/// IR [`Condition`](tau_ir::check::Condition), reusing the same locus/predicate
+/// mappings as `[goals.*]`.
+fn lower_condition(c: &tau_pkg::project::ConditionConfig) -> tau_ir::check::Condition {
+    tau_ir::check::Condition {
+        evaluates: lower_locus(&c.evaluates),
+        predicate: lower_predicate(&c.predicate),
+    }
 }
 
 /// Map a tau-pkg [`LocusConfig`] to an IR [`Locus`].
@@ -584,7 +737,7 @@ description = "Hand off to worker"
 capabilities = []
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
 
         let tool = parsed
             .workflow
@@ -619,7 +772,7 @@ tool_refs    = ["normalize"]
 deterministic = "parse_celsius"
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
 
         // Step registered in workflow.steps:
         assert!(parsed
@@ -638,6 +791,105 @@ deterministic = "parse_celsius"
             "expected ToolImpl::Step{{normalize}}; got {:?}",
             tool.impl_
         );
+    }
+
+    #[test]
+    fn lowers_suspend_leaf() {
+        // EPIC 4.3: a top-level `run = "suspend:<signal>"` step lowers to
+        // `StepRun::Suspend { resume_signal }`.
+        let toml = r#"
+            [project]
+            name = "p"
+            [[pipeline.steps]]
+            id = "pause"
+            run = "suspend:go"
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
+
+        let pipeline = parsed.workflow.pipeline.expect("pipeline lowered");
+        assert_eq!(
+            pipeline.steps[0].run,
+            StepRun::Suspend {
+                resume_signal: "go".into()
+            }
+        );
+    }
+
+    #[test]
+    fn dynamic_region_lowers_with_resolved_kind_caps() {
+        // EPIC 4.4: a dynamic region's `spawns` kind names resolve, at
+        // lowering, against `[agent.kinds.<name>]` to embed each kind's
+        // capability grant directly in the emitted `DynamicSpawn`.
+        let toml = r#"
+            [project]
+            name = "p"
+
+            [agent.kinds.researcher]
+            capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["researcher"]
+            ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+            max_spawns = 8
+            max_concurrency = 4
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let researcher_caps = config
+            .agent_kinds
+            .get("researcher")
+            .expect("researcher kind present")
+            .capabilities
+            .clone();
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
+
+        let pipeline = parsed.workflow.pipeline.expect("pipeline lowered");
+        match &pipeline.steps[0].run {
+            StepRun::Dynamic {
+                envelope,
+                spawns,
+                max_spawns,
+                max_concurrency,
+            } => {
+                assert_eq!(spawns.len(), 1);
+                assert_eq!(spawns[0].kind, "researcher");
+                assert_eq!(spawns[0].capabilities.declared, researcher_caps);
+                assert_eq!(envelope.declared.len(), 1);
+                assert_eq!(*max_spawns, 8);
+                assert_eq!(*max_concurrency, 4);
+            }
+            other => panic!("expected StepRun::Dynamic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_region_unknown_kind_is_lower_error() {
+        // A dynamic region spawning a kind with no `[agent.kinds.<name>]`
+        // definition must fail lowering with `UnknownAgentKind`, not
+        // silently drop the spawn or panic.
+        let toml = r#"
+            [project]
+            name = "p"
+
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["ghost"]
+            ceiling = {}
+            max_spawns = 1
+            max_concurrency = 1
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let err = parse(&config, &no_prompt_files).expect_err("unknown kind rejected");
+        match err {
+            LowerError::UnknownAgentKind { kind, step } => {
+                assert_eq!(kind, "ghost");
+                assert_eq!(step, "fanout");
+            }
+            other => panic!("expected UnknownAgentKind, got {other:?}"),
+        }
     }
 
     #[test]
@@ -668,7 +920,7 @@ capabilities = []
 deterministic = "do_foo"
 "#;
         let config = ProjectConfig::parse_str(toml).expect("toml parse");
-        let result = parse(&config);
+        let result = parse(&config, &no_prompt_files);
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("parse stage should reject collision but returned Ok"),
@@ -701,11 +953,90 @@ run = "agent:b"
 input = "${steps.a.output}"
 "#;
         let config = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
-        let parsed = parse(&config).expect("parses");
+        let parsed = parse(&config, &no_prompt_files).expect("parses");
         let pipe = parsed.workflow.pipeline.expect("pipeline present");
         assert_eq!(pipe.steps.len(), 2);
         assert_eq!(pipe.steps[0].id.0, "a");
         assert_eq!(pipe.steps[1].input, "${steps.a.output}");
+    }
+
+    #[test]
+    fn lowers_parallel_step_to_nested_branches() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "fanout"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "weather"
+    run = "agent:weather"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "news"
+    run = "agent:news"
+    [[pipeline.steps.branches.steps]]
+    id = "digest"
+    run = "agent:digest"
+    input = "${steps.news.output}"
+"#;
+        let config = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = parse(&config, &no_prompt_files).expect("parses");
+        let pipe = parsed.workflow.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            StepRun::Parallel { branches } => {
+                assert_eq!(branches.len(), 2);
+                assert_eq!(branches[0].len(), 1);
+                assert_eq!(
+                    branches[0][0].run,
+                    StepRun::Agent(AgentId("weather".into()))
+                );
+                assert_eq!(branches[1].len(), 2);
+                assert_eq!(branches[1][1].input, "${steps.news.output}");
+            }
+            other => panic!("expected StepRun::Parallel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lowers_loop_step_with_until_and_bound() {
+        let toml = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "refine"
+until = { evaluates = "steps.draft.output", check = "matches", pattern = "APPROVED" }
+max_iters = 4
+
+  [[pipeline.steps.body]]
+  id = "draft"
+  run = "agent:writer"
+  input = "${input}"
+"#;
+        let config = tau_pkg::project::ProjectConfig::parse_str(toml).unwrap();
+        let parsed = parse(&config, &no_prompt_files).expect("parses");
+        let pipe = parsed.workflow.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            StepRun::Loop {
+                body,
+                until,
+                max_iters,
+            } => {
+                assert_eq!(*max_iters, 4);
+                assert_eq!(
+                    until.evaluates,
+                    Locus::Output(PipelineStepId("draft".into()))
+                );
+                assert_eq!(until.predicate, GoalPredicate::Matches("APPROVED".into()));
+                assert_eq!(body.len(), 1);
+                assert_eq!(body[0].run, StepRun::Agent(AgentId("writer".into())));
+            }
+            other => panic!("expected StepRun::Loop, got {other:?}"),
+        }
     }
 
     #[test]
@@ -741,7 +1072,7 @@ description = "Hand off to worker"
 capabilities = []
 "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
-        let parsed = parse(&config).expect("parse stage");
+        let parsed = parse(&config, &no_prompt_files).expect("parse stage");
         assert!(
             parsed.workflow.edges.is_empty(),
             "expected no SubflowEdge entries; got {:?}",

@@ -10,7 +10,10 @@ COPY rust-toolchain.toml ./
 
 # Copy minimum needed to build tau-sandbox-native's tau-net-bridge bin target.
 # We pull in workspace metadata + the source crates the bridge depends on.
+# vendor/ is required: the workspace [patch.crates-io] points async-stream at
+# vendor/async-stream, so cargo cannot resolve the graph without it.
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 COPY crates ./crates
 COPY xtask ./xtask
 

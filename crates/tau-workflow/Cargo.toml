@@ -22,7 +22,7 @@ thiserror   = { workspace = true }
 tracing     = { workspace = true }
 tokio       = { workspace = true, features = ["fs", "io-util", "time", "macros", "rt"] }
 chrono      = { workspace = true, features = ["serde"] }
-ulid        = "1"
+ulid        = "3"
 
 [dev-dependencies]
 tempfile    = { workspace = true }
@@ -34,3 +34,6 @@ tau-ports   = { workspace = true, features = ["test-fixtures"] }
 # thread-local subscriber so `RunLog::append` (a `tracing::event!`
 # emitter post-Sub-project-D Task 3) actually materializes JSONL lines.
 tracing-subscriber = { workspace = true, features = ["registry"] }
+
+[lints]
+workspace = true

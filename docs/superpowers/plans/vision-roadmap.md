@@ -100,8 +100,21 @@ public ABIs, and the source for generated SDKs.
 - **3.2** Generate the WIT world from used+bounded caps at `tau build wasm`.
 - **3.3** Configure host `WasiCtx` from the same caps (allowed-hosts, preopens).
 - **3.4** Drop the in-guest gate on wasm; OS gate stays for host/native.
+  Drops the in-guest runtime check **only for `Disposition::Wasi` caps** (the
+  ABI + host `WasiCtx` own them); the in-guest gate for `Disposition::InGuest`
+  caps (agent/skill.spawn, tasklist, plan) stays. See
+  `docs/superpowers/specs/2026-08-09-epic-3-4-drop-in-guest-wasm-gate-design.md`.
 - **3.5** `verify --bundle`: generated WIT reproducible from declared caps.
+- **3.6** ✅ *(net + fs shipped)* **Guest effect ABI** — route the guest's net/fs effects through
+  `wasi:http`/`wasi:filesystem` so granted imports survive wasm-ld DCE and the
+  host `WasiCtx` (3.3) becomes the *live* runtime enforcement path. Closes the
+  epic's **binary-observable** DoD (until effects route through WASI, DCE strips
+  all WASI imports — 3.2/3.4 meet the DoD at the world-text + host-boundary layer
+  only). **Prereq: 3.4** (its `Wasi`-cap gate-drop is what lets rerouted effects
+  reach the host instead of being denied by the guest's empty-stub grant).
 **Epic DoD:** an ungranted cap is un-importable at the ABI; wasm caps == `[allow]`-bounded set.
+(*Binary*-observable half of "un-importable at the ABI" lands with **3.6**;
+3.2/3.4 establish it at the world-text + host-`WasiCtx` layer.)
 
 ## EPIC 4 — IR control flow: structured blocks + dynamic regions  [needs 2]
 **Goal:** Branch/Parallel/Loop/Suspend + capability-bounded dynamic regions; IR ≥ v2.3.0.
@@ -145,11 +158,14 @@ today."**
   + seed-and-skip resume) merges in. Interpreter currently aborts Suspend with a named error
   (deferred from #454). *Delta:* a user can newly suspend a run for a human/external signal and
   resume it.
-- **4.4** **Dynamic regions** (`StepRun::Dynamic` + ceiling + bounds; build-time envelope verify,
-  tier 2) — scope unchanged, **and** now the tracking home for the **agent⊇spawn lattice check**
-  (deferred from 1.5 "to EPIC 4" but absent from every story). Give it a named sub-story here
-  with its prerequisite **per-kind agent definitions** called out (origin ADR-0024). *Delta:* a
-  user can newly declare a bounded dynamic region whose spawns are lattice-checked at build.
+- **4.4** ✅ SHIPPED 2026-08-21 **Dynamic regions** (`StepRun::Dynamic` + ceiling + bounds;
+  build-time envelope verify, tier 2) — scope unchanged, **and** now the tracking home for the
+  **agent⊇spawn lattice check** (deferred from 1.5 "to EPIC 4" but absent from every story).
+  Named sub-story landed with its prerequisite **per-kind agent definitions**
+  (`[agent.kinds.*]`, origin ADR-0024). *Delta:* a user can newly declare a bounded dynamic
+  region whose spawns are lattice-checked at build (`spawn_exceeds_agent`,
+  `unknown_spawn_kind`, `region_exceeds_ceiling`, `spawn_exceeds_region`) — see
+  [Dynamic regions](../../explanation/dynamic-regions.md). Runtime execution deferred to 4.5.
 - **4.5** **Runtime gate for dynamic regions** (membership + attenuation + bounds counters).
   **MANDATORY cross-reference task before either 3.4 or 4.5 starts:** resolve the 3.4↔4.5
   collision — 3.4 *removes* the in-guest wasm gate while 4.5 *adds* a runtime gate; on wasm
@@ -165,7 +181,7 @@ from `tau.toml`; each construct is conformance-checked and its envelope enforced
 **Goal:** generated typed SDKs + `tau embed` + golden path + typed React/Angular; no surprises.
 - **5.1** `tau build --target wasm-guest | rust-lib`. *Accept:* both artifacts build.
 - **5.2** `tau embed --host c|rust|js` (generated host glue from WIT via wit-bindgen).
-- **5.3** Authoring-SDK codegen from the IR JSON schema (Smithy/JSON-Schema style); ship TS +
+- **5.3** ✅ Authoring-SDK codegen from the IR JSON schema (Smithy/JSON-Schema style); ship TS +
   Python. *Accept:* same agent in TOML/TS/Python → identical IR.
 - **5.4** Typed React hook + Angular service (jco + ergonomic `tau embed` wrappers; Web
   Worker; `RunEvent` stream). *Accept:* typed npm package; demo renders streaming.

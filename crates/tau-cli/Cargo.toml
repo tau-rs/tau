@@ -27,6 +27,10 @@ tau-ir-lower        = { workspace = true }
 tau-mcp             = { workspace = true, features = ["with-std-adapters"] }
 tau-mcp-tokio       = { workspace = true }
 tau-ts-extract      = { path = "../tau-ts-extract" }
+tau-sdk-codegen     = { workspace = true }
+tau-trace           = { workspace = true }
+ratatui             = { workspace = true }
+crossterm           = { workspace = true }
 futures-core        = { workspace = true }
 base64             = { workspace = true }
 humantime          = "2"
@@ -35,7 +39,7 @@ rmp-serde          = { workspace = true }
 rmpv               = { workspace = true }
 semver             = { workspace = true }
 clap               = { version = "4", features = ["derive", "env"] }
-tokio              = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tokio              = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tracing            = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 serde              = { workspace = true }
@@ -50,7 +54,7 @@ uuid               = { workspace = true }
 ulid               = { workspace = true }
 anyhow             = "1"
 chrono             = { workspace = true }
-termimad           = "0.34"
+termimad           = "0.35"
 rustyline          = "18"
 notify             = "8"
 is-terminal        = "0.4"
@@ -62,6 +66,9 @@ sha2               = { workspace = true }
 regex              = { workspace = true }
 # JSON Schema validation for the `FN_BUILTIN_SCHEMA_VALID` goal predicate (Task 22).
 jsonschema         = { workspace = true }
+# Shared std-free goal predicates (exists/non_empty/equals/matches/min_count),
+# delegated to from BuiltinDeterministicRegistry (#621 Task 2).
+tau-native-tools    = { path = "../tau-native-tools", features = ["goal-predicates"] }
 
 [dev-dependencies]
 assert_cmd       = "2"
@@ -83,6 +90,12 @@ tau-ports        = { workspace = true, features = ["test-fixtures", "serde"] }
 tau-runtime-tokio = { workspace = true, features = ["mock-sandbox"] }
 # Task 4: e2e tau build wasm → wasmtime → typed RunEvent stream (β.7.5 PR-E2).
 tau-wasm-host    = { path = "../tau-wasm-host" }
+# Task 6 (EPIC 3.2 DoD): decode the built component's world to assert an
+# ungranted capability's WASI interface is absent. Pinned to match the
+# workspace's wit-parser 0.251 pin (see Cargo.lock: wit-component 0.251.0
+# depends on wit-parser 0.251.0 exactly).
+wit-component    = "0.251"
+wit-parser       = { workspace = true }
 
 [features]
 # Production `tau` binary ships with OTLP support enabled out of the box.
@@ -92,3 +105,6 @@ default = ["otlp"]
 # Forwards to `tau-observe/otlp`: enables the optional OpenTelemetry/OTLP
 # exporter wiring in the CLI.
 otlp = ["tau-observe/otlp"]
+
+[lints]
+workspace = true

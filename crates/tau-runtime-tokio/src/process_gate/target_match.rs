@@ -84,8 +84,9 @@ pub fn adapter_satisfies(adapter: &AdapterRegistration, triple: &TargetTriple) -
 ///
 /// Returns the static registration; the caller is responsible for
 /// instantiating + probing if it wants a live adapter. `None` when no
-/// registered adapter can serve this triple (typical for Reserved
-/// triples like `wasi-*` or `windows-native-strict`).
+/// registered adapter can serve this triple (typical for `wasi-*` triples,
+/// which have no `RegistryKind` by design — capability enforcement is at
+/// the WASI boundary, not a process-gate adapter).
 ///
 /// # Example
 ///
@@ -98,9 +99,10 @@ pub fn adapter_satisfies(adapter: &AdapterRegistration, triple: &TargetTriple) -
 /// let reg = registration_for_triple(&triple).expect("passthrough always has a registration");
 /// assert_eq!(reg.kind, RegistryKind::Passthrough);
 ///
-/// // Reserved triple has no matching adapter.
-/// let reserved: TargetTriple = "windows-native-strict".parse().unwrap();
-/// assert!(registration_for_triple(&reserved).is_none());
+/// // A triple whose platform+family+tier no registered adapter can serve
+/// // (e.g. a `wasi-*` triple, which has no `RegistryKind` by design).
+/// let wasi: TargetTriple = "any-wasi-strict".parse().unwrap();
+/// assert!(registration_for_triple(&wasi).is_none());
 /// ```
 pub fn registration_for_triple(triple: &TargetTriple) -> Option<&'static AdapterRegistration> {
     REGISTRY.iter().find(|a| adapter_satisfies(a, triple))
@@ -146,11 +148,14 @@ mod tests {
     }
 
     #[test]
-    fn windows_native_strict_unsatisfied_in_v1() {
-        // Native adapter is Linux-only per the registry; the Windows
-        // triple has no satisfying entry.
+    fn windows_native_strict_satisfied_by_native_adapter() {
+        // Phase 2: the Native adapter's platform set now includes Windows
+        // (routes to WindowsSandbox / AppContainer), so the Windows triple
+        // has a satisfying entry — mirroring the Linux/Darwin cases above.
         let t = parse("windows-native-strict");
-        assert!(registration_for_triple(&t).is_none());
+        let r = registration_for_triple(&t).expect("adapter found");
+        assert_eq!(r.kind, RegistryKind::Native);
+        assert!(r.tiers_supported.contains(&CapabilityTier::Strict));
     }
 
     #[test]

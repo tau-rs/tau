@@ -15,7 +15,7 @@ uuid      = { workspace = true }
 chrono     = { workspace = true }
 url       = { workspace = true, optional = true }
 serde      = { workspace = true, optional = true }
-schemars   = { workspace = true, optional = true }
+schemars   = { workspace = true, optional = true, features = ["derive"] }
 base64     = { workspace = true, optional = true }
 serde_yaml = { version = "0.9", optional = true }
 
@@ -53,3 +53,6 @@ walkdir         = { workspace = true }
 # test-suite-upgrades plan; see src/package/{source,plugin}.rs
 # and tests/package_source_grammar.rs).
 assert_matches  = { workspace = true }
+
+[lints]
+workspace = true

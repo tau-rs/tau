@@ -1,15 +1,17 @@
 //! Process exit code taxonomy for tau-cli.
 //!
-//! Three buckets per the Outcome/Error dichotomy from ADR-0006:
+//! Four buckets per the Outcome/Error dichotomy from ADR-0006:
 //! - [`ExitCode::Success`] (0) — operation completed successfully.
 //! - [`ExitCode::AgentFailed`] (1) — `tau run` only: agent ran but
 //!   couldn't accomplish the task (`RunOutcome::Failed`).
 //! - [`ExitCode::Error`] (2) — kernel/CLI broke (`RuntimeError`,
 //!   `InstallError`, parse error, argument error, etc.).
+//! - [`ExitCode::Suspended`] (3) — `tau run` only: a pipeline paused at
+//!   a `Suspend` step (HITL). Not a failure — resumable with `--resume`.
 //!
 //! Other subcommands (`install`, `list`, `init`, `chat`) only ever
-//! produce 0 or 2; bucket 1 is reserved for `tau run`'s graceful
-//! agent failures.
+//! produce 0 or 2; buckets 1 and 3 are reserved for `tau run`'s
+//! graceful agent failures / pipeline suspensions.
 
 use tau_runtime_tokio::RunOutcome;
 
@@ -23,6 +25,9 @@ pub enum ExitCode {
     AgentFailed,
     /// Kernel error, CLI argument error, install failure, etc.
     Error,
+    /// `tau run` only: a pipeline paused at a `Suspend` step (HITL). Not
+    /// a failure — the run can be resumed with `--resume`.
+    Suspended,
 }
 
 impl From<&RunOutcome> for ExitCode {
@@ -53,6 +58,13 @@ impl From<ExitCode> for std::process::ExitCode {
             ExitCode::Success => Self::SUCCESS,
             ExitCode::AgentFailed => Self::from(1),
             ExitCode::Error => Self::from(2),
+            // Code 3 is shared with spec §C.3's `BundleVerifyFailed` (routed
+            // via `bvf.code`, not this enum). The overload is unambiguous:
+            // the two never co-occur in one invocation — a `--bundle` run
+            // that hits a `Suspend` step errors out at exit 2 before any
+            // suspension is emitted, so exit 3 means "verify failed" for a
+            // `--bundle` run and "suspended" for a plain `tau run`.
+            ExitCode::Suspended => Self::from(3),
         }
     }
 }
@@ -94,6 +106,15 @@ mod tests {
         assert_eq!(
             format!("{:?}", process_code),
             format!("{:?}", std::process::ExitCode::from(2))
+        );
+    }
+
+    #[test]
+    fn suspended_maps_to_process_three() {
+        let process_code: std::process::ExitCode = ExitCode::Suspended.into();
+        assert_eq!(
+            format!("{:?}", process_code),
+            format!("{:?}", std::process::ExitCode::from(3))
         );
     }
 }

@@ -94,8 +94,11 @@ fn simple_ir_bytes() -> Vec<u8> {
         native_tool: &|_| Some([1u8; 32]),
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
-    let module = tau_ir_lower::lower_project(&config, &target, &caches).expect("lowers");
+    let module = tau_ir_lower::lower_project(&config, &target, &caches)
+        .expect("lowers")
+        .module;
     tau_ir::to_canonical_bytes(&module)
 }
 
@@ -115,8 +118,12 @@ fn cassette() -> Vec<String> {
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
 fn simplified_fan_monitor_runs_in_guest() {
     let component = build_guest_with_ir(&simple_ir_bytes());
-    let out = tau_wasm_host::run_component(&component, "", cassette()).expect("guest runs");
-    let events: Vec<RunEvent> = serde_json::from_str(&out).expect("typed stream");
+    let (_out, emitted) =
+        tau_wasm_host::run_component(&component, "", cassette()).expect("guest runs");
+    let events: Vec<RunEvent> = emitted
+        .iter()
+        .map(|e| serde_json::from_str(e).expect("each emitted entry is a RunEvent"))
+        .collect();
 
     // Both native tools were dispatched in-guest, in order.
     let tool_completions: Vec<&str> = events

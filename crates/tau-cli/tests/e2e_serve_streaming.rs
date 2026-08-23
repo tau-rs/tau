@@ -55,11 +55,20 @@ fn send_line(stdin: &mut std::process::ChildStdin, line: &str) {
     writeln!(stdin, "{}", line).expect("write to tau serve stdin");
 }
 
-fn recv_line(reader: &mut BufReader<std::process::ChildStdout>) -> Value {
+fn recv_line(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    child: &mut std::process::Child,
+) -> Value {
     let mut line = String::new();
-    reader
+    let n = reader
         .read_line(&mut line)
         .expect("read from tau serve stdout");
+    if n == 0 || line.trim().is_empty() {
+        panic!(
+            "tau serve produced no stdout line (child likely exited during startup).{}",
+            e2e_common::drain_child_stderr(child)
+        );
+    }
     serde_json::from_str(line.trim()).expect("parse JSON-RPC response")
 }
 
@@ -78,7 +87,7 @@ fn unknown_agent_in_streaming_run_returns_32010() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":1,"method":"meta.handshake","params":{"protocol_version":1}}"#,
     );
-    let handshake_resp = recv_line(&mut reader);
+    let handshake_resp = recv_line(&mut reader, &mut child);
     assert_eq!(
         handshake_resp["result"]["protocol_version"], 1,
         "handshake failed: {handshake_resp}"
@@ -89,7 +98,7 @@ fn unknown_agent_in_streaming_run_returns_32010() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"runtime.run_streaming","params":{"agent":"no-such-agent","prompt":"hello"}}"#,
     );
-    let resp = recv_line(&mut reader);
+    let resp = recv_line(&mut reader, &mut child);
 
     assert_eq!(resp["id"], 2, "unexpected response id: {resp}");
     assert_eq!(
@@ -114,13 +123,13 @@ fn unknown_agent_in_batch_run_returns_32010() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":3,"method":"meta.handshake","params":{"protocol_version":1}}"#,
     );
-    let _ = recv_line(&mut reader);
+    let _ = recv_line(&mut reader, &mut child);
 
     send_line(
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":4,"method":"runtime.run","params":{"agent":"no-such-agent","prompt":"hello"}}"#,
     );
-    let resp = recv_line(&mut reader);
+    let resp = recv_line(&mut reader, &mut child);
 
     assert_eq!(resp["id"], 4, "unexpected response id: {resp}");
     assert_eq!(

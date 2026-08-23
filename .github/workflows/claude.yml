@@ -97,16 +97,18 @@ jobs:
       actions: read
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Shallow checkout is enough; the action fetches more if needed.
           fetch-depth: 1
 
-      - uses: anthropics/claude-code-action@4d7e1f0cd85743fdc93b1c8040ab54395da024e2  # beta
+      - uses: anthropics/claude-code-action@dcb57747bfceeaa1fa72638cae52295d1d853d4a  # v1.0.199
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Pin the model explicitly. This action's pinned default
-          # (`claude-sonnet-4-20250514`) was retired and now 404s from the
-          # API, breaking every run. Pin a current model; bump when the
-          # model line moves. (Mirrors claude-review.yml.)
-          model: claude-sonnet-4-6
+          # Pin the model via claude_args — the v1 action has no `model`
+          # input (the old `model:` here was silently ignored as an
+          # "Unexpected input"). Pinning survives the action's
+          # default-model churn: an earlier pinned default was retired
+          # and 404'd every run. Bump when the model line moves.
+          # (Mirrors claude-review.yml.)
+          claude_args: "--model claude-sonnet-5"

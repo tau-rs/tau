@@ -36,6 +36,11 @@ pub struct DevSession {
     pub project: ProjectConfig,
     /// Lowered IR module for the current project.
     pub ir: IrModule,
+    /// Content-addressed asset store (D6-B) for the current IR — the
+    /// `system_file` prompt bytes `self.ir` references. Re-derived on
+    /// `:reload` alongside `self.ir`; handed to the interpreter so
+    /// `PromptSource::Asset` prompts resolve.
+    pub assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
     /// Name of the agent the REPL is currently driving.
     pub current_agent: String,
     /// Multi-turn conversation history (in-memory only in v1).
@@ -98,7 +103,8 @@ impl DevSession {
                 .clone(),
         };
 
-        let ir = lower_project_to_ir(&project).context("lower project to IR")?;
+        let (ir, assets) =
+            lower_project_to_ir(&project, &project_root).context("lower project to IR")?;
 
         let pending_reload = Arc::new(AtomicBool::new(false));
 
@@ -120,6 +126,7 @@ impl DevSession {
             project_root,
             project,
             ir,
+            assets,
             current_agent,
             history: Vec::new(),
             pending_reload,
@@ -143,7 +150,7 @@ impl DevSession {
     /// `self.ir`. Conversation history is intentionally preserved so that
     /// the REPL retains multi-turn context across hot-reloads.
     ///
-    /// MCP clients are created per-turn in [`run_turn`] (the `_mcp_lifetime`
+    /// MCP clients are created per-turn in [`run_turn`][Self::run_turn] (the `_mcp_lifetime`
     /// binding), so there are no long-lived MCP handles to drop here —
     /// the next call to `run_turn` automatically picks up the new config.
     ///
@@ -167,8 +174,8 @@ impl DevSession {
             }
         };
 
-        let new_ir = match lower_project_to_ir(&new_project) {
-            Ok(ir) => ir,
+        let (new_ir, new_assets) = match lower_project_to_ir(&new_project, &self.project_root) {
+            Ok(pair) => pair,
             Err(e) => {
                 self.pending_reload.store(true, Ordering::Release);
                 return Err(anyhow!("lower IR: {e}"));
@@ -185,6 +192,7 @@ impl DevSession {
 
         self.project = new_project;
         self.ir = new_ir;
+        self.assets = new_assets;
         // history intentionally NOT touched
         Ok(true)
     }
@@ -202,9 +210,9 @@ impl DevSession {
     ///
     /// Mirrors the construction in `crate::cmd::ir_dispatcher::run_via_ir`:
     /// 1. Resolve the agent entry from `self.project`.
-    /// 2. Load the per-scope lockfile + plugins via [`plugin_loader`].
+    /// 2. Load the per-scope lockfile + plugins via `plugin_loader`.
     /// 3. Boot MCP servers from the project config + lockfile.
-    /// 4. Build a [`ForwardingDispatcher`].
+    /// 4. Build a `ForwardingDispatcher`.
     /// 5. Append the user prompt to `self.history` and call [`run_ir`].
     /// 6. Append the agent's reply to `self.history` and render the outcome.
     ///
@@ -279,20 +287,25 @@ impl DevSession {
         // 5. Boot MCP servers (from lockfile + project config) when a lockfile exists.
         //    Non-MCP projects (or projects not yet locked) skip this step safely.
         let lockfile_path = scope.lockfile_path();
-        let _mcp_lifetime; // keep inbound-dispatch handles alive for the full turn
-        if lockfile_path.exists() {
+        // keep inbound-dispatch handles alive for the full turn
+        let _mcp_lifetime = if lockfile_path.exists() {
             let lockfile = tau_pkg::lockfile::LockFile::load(&lockfile_path)
                 .with_context(|| format!("loading lockfile at {}", lockfile_path.display()))?;
-            let mcp_setup = setup_mcp_runtime(&self.project, &lockfile, llm_backend.clone())
-                .await
-                .map_err(|e| anyhow!("MCP setup failed: {e}"))?;
+            let mcp_setup = setup_mcp_runtime(
+                &self.project,
+                &lockfile,
+                llm_backend.clone(),
+                loaded.sandbox_adapter.clone(),
+            )
+            .await
+            .map_err(|e| anyhow!("MCP setup failed: {e}"))?;
             for (id, tool) in mcp_setup.tools {
                 tools_by_id.insert(id, tool);
             }
-            _mcp_lifetime = mcp_setup.inbound_handles;
+            mcp_setup.inbound_handles
         } else {
-            _mcp_lifetime = Vec::new();
-        }
+            Vec::new()
+        };
 
         // 6. Build dispatcher and append the user turn to history. The
         //    dispatcher supplies `TokioClock`/`OsRandom`, so `run_agent`'s
@@ -305,7 +318,9 @@ impl DevSession {
             .iter()
             .map(|(name, handle)| (name.clone(), handle.clone()))
             .collect();
-        let dispatcher = Arc::new(ForwardingDispatcher::new(llm_backends, tools_by_id));
+        let dispatcher = Arc::new(
+            ForwardingDispatcher::new(llm_backends, tools_by_id).with_assets(self.assets.clone()),
+        );
         let initial = Message::new(
             Address::User,
             Address::Agent(AgentInstanceId::new()),
@@ -373,13 +388,23 @@ impl DevSession {
 /// dev mode.
 ///
 /// Used by both `load` (Phase 2) and the `:reload` command (Phase 5).
-fn lower_project_to_ir(project: &ProjectConfig) -> Result<IrModule> {
+fn lower_project_to_ir(
+    project: &ProjectConfig,
+    project_root: &std::path::Path,
+) -> Result<(IrModule, BTreeMap<String, tau_ir::asset::AssetBlob>)> {
+    // `system_file` prompts resolve relative to the project root, matching
+    // `tau run` and the bundle builder (D6-B).
     let caches = Caches {
         native_tool: &|_| None,
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
     lower_project(project, &TargetTriple::PASSTHROUGH, &caches)
+        .map(|out| (out.module, out.assets))
         .map_err(|e| anyhow!("IR lowering failed: {e}"))
 }
 

@@ -46,7 +46,7 @@ jobs:
             echo ""
             echo "Run: $RUN_URL"
             echo ""
-            echo "_Non-blocking. Auto-merge gates on Tier 1 (ci-summary) only._"
+            echo "_Non-blocking. Auto-merge gates on Tier 0 (ci-summary) only._"
           } > comment.md
           echo "path=comment.md" >> "$GITHUB_OUTPUT"
       - name: Post or update comment

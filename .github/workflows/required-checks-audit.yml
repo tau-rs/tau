@@ -22,7 +22,7 @@ jobs:
     name: audit workflow name changes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
       - name: "Detect name: changes"
@@ -30,7 +30,11 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch origin "$BASE_REF" --depth 1
+          # Full fetch (no --depth 1): the checkout above is fetch-depth: 0, so
+          # origin/<base> must keep full history or the three-dot `...HEAD` diff
+          # fails with "no merge base" (exit 128) when the branch point is deeper
+          # than the shallow boundary.
+          git fetch origin "$BASE_REF"
           DIFF=$(git diff "origin/$BASE_REF...HEAD" -- '.github/workflows/*.yml')
           if echo "$DIFF" | grep -qE '^\+name:'; then
             echo "name_added=true" >> "$GITHUB_OUTPUT"

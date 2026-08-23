@@ -85,9 +85,8 @@ pub async fn resolve_all(
     Ok(out)
 }
 
-fn passthrough_gate() -> Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> {
-    use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
-    Arc::new(PassthroughSandbox::new())
+fn passthrough_gate() -> Arc<dyn tau_ports::DynProcessGate> {
+    Arc::new(tau_ports::PassthroughGate::new())
 }
 
 #[cfg(test)]

@@ -46,31 +46,80 @@ use crate::output::Output;
 /// pipeline via [`tau_runtime_core::interpreter::pipeline::run_pipeline`],
 /// threading each step's output to later steps and rendering the LAST
 /// step's output — symmetric with the cwd path's `try_run_pipeline` (see
-/// [`crate::cmd::run`]). Otherwise it picks the first agent in the IR
-/// module's `BTreeMap` (alphabetical order) as the entry per the β.2 v0
-/// contract and runs that single agent's loop unchanged.
+/// [`crate::cmd::run`]). Otherwise it runs the entry agent's single loop,
+/// where the entry is the positional `<agent>` argument resolved against
+/// the module's agents (#623 — matching the dev path's `tau run <agent>`
+/// semantics; an id absent from the module is a hard error).
 ///
 /// Returns `Ok(())` on a `RunOutcome::Completed`, `Err(AgentFailed)` on
 /// `RunOutcome::Failed`, and any other kernel/CLI error as a wrapped
 /// [`anyhow::Error`] — matching the cwd-based path's error shape so
 /// `lib::run_main`'s downcast continues to map exit codes correctly.
 #[allow(clippy::too_many_arguments)]
+/// Build the runtime asset map from a bundle's `[[assets]]` store (D6-B),
+/// decoding each blob and verifying its bytes hash matches its key. The bundle
+/// self-hash proves the manifest is untampered as a unit, but not that each
+/// asset *key* matches its bytes — this re-hash closes that gap so the IR's
+/// content-addressed reference can be trusted.
+pub(crate) fn asset_map_from_bundle(
+    assets: &[tau_pkg::bundle::manifest::BundleAsset],
+) -> anyhow::Result<BTreeMap<String, tau_ir::asset::AssetBlob>> {
+    let mut map = BTreeMap::new();
+    for a in assets {
+        let bytes = a
+            .bytes()
+            .map_err(|e| anyhow::anyhow!("bundle asset {:?}: {e}", a.hash))?;
+        let computed = tau_ir::asset::asset_hash(&bytes);
+        if computed != a.hash {
+            return Err(anyhow::anyhow!(
+                "bundle asset key {:?} does not match its content hash {:?} — tampered bundle.",
+                a.hash,
+                computed
+            ));
+        }
+        let kind = match a.kind.as_str() {
+            "prompt" => tau_ir::asset::AssetKind::Prompt,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "bundle asset {:?} has unknown kind {:?}",
+                    a.hash,
+                    other
+                ))
+            }
+        };
+        map.insert(a.hash.clone(), tau_ir::asset::AssetBlob { kind, bytes });
+    }
+    Ok(map)
+}
+
 pub(crate) async fn run_via_ir(
     module: IrModule,
+    assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
     args: &RunArgs,
     record_protocol: Option<PathBuf>,
     force_passthrough: bool,
     force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
-    // 1. Pick the entry agent (first BTreeMap key — alphabetical order).
-    let entry_agent_id = module
-        .workflow
-        .agents
-        .keys()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("IR module has no agents"))?
-        .clone();
+    // 1. Resolve the entry agent from the positional `<agent>` argument,
+    //    validated against the module's agents (#623 — the argument used to
+    //    be silently ignored in favour of the alphabetically-first module
+    //    agent, so the plugin backend was configured from the wrong agent's
+    //    `[agents.<id>.config]`).
+    let entry_agent_id = tau_ir::ids::AgentId(args.agent_id.clone());
+    if !module.workflow.agents.contains_key(&entry_agent_id) {
+        let available: Vec<&str> = module
+            .workflow
+            .agents
+            .keys()
+            .map(|a| a.0.as_str())
+            .collect();
+        return Err(anyhow::anyhow!(
+            "agent id {:?} not found in the bundle's IR module (available \
+             agents: {available:?})",
+            args.agent_id
+        ));
+    }
 
     // 2. Load the project config from the cwd (proven byte-clean by the
     //    bundle verify gate). The IR module names agents using the IR's
@@ -99,13 +148,9 @@ pub(crate) async fn run_via_ir(
     )?;
 
     // 4. Build plugin host options + spawn plugins (same flow the cwd path uses).
-    let run_id = format!(
-        "tau-run-bundle-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
+    // Trace-context id for log grouping; prefix kept for log filtering, suffix
+    // is a collision-resistant ULID (was `<nanos>`).
+    let run_id = format!("tau-run-bundle-{}", crate::cmd::run::mint_run_id());
     let trace_context = TraceContext::new(run_id, entry_agent_id.0.clone(), "root".to_string());
     let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
@@ -115,7 +160,7 @@ pub(crate) async fn run_via_ir(
     let loaded = plugin_loader::load_plugins(
         agent_entry,
         &scope,
-        &project.models,
+        project.effective_models(),
         trace_context,
         host_options,
     )
@@ -171,9 +216,14 @@ pub(crate) async fn run_via_ir(
                 scope.lockfile_path().display()
             )
         })?;
-    let mcp_setup = setup_mcp_runtime(&project, &lockfile, mcp_backend.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("MCP setup: {e}"))?;
+    let mcp_setup = setup_mcp_runtime(
+        &project,
+        &lockfile,
+        mcp_backend.clone(),
+        loaded.sandbox_adapter.clone(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("MCP setup: {e}"))?;
     for (id, tool) in mcp_setup.tools {
         tools_by_id.insert(id, tool);
     }
@@ -197,6 +247,21 @@ pub(crate) async fn run_via_ir(
         .tool_refs
         .iter()
         .filter(|tid| !tools_by_id.contains_key(*tid))
+        // Native tools (`ToolImpl::Native`) are statically-linked bodies
+        // (see `tau-native-tools`), not plugin-installed binaries — their
+        // absence from the plugin runtime is not an install skew. The host
+        // CLI does not dispatch them (symmetric with the cwd path, which
+        // simply omits them from its dispatcher); an actual call at run
+        // time still surfaces as `ForwardingDispatcher`'s unknown-ToolId
+        // error. Before #623 this exemption was masked: the entry agent
+        // was the alphabetically-first module agent, which in the fixtures
+        // carried no tool_refs.
+        .filter(|tid| {
+            !matches!(
+                module.workflow.tools.get(*tid).map(|t| &t.impl_),
+                Some(tau_ir::ToolImpl::Native { .. })
+            )
+        })
         .collect();
     if !missing.is_empty() {
         let names: Vec<&str> = missing.iter().map(|t| t.0.as_str()).collect();
@@ -207,6 +272,34 @@ pub(crate) async fn run_via_ir(
             entry_agent_id.0,
             names
         ));
+    }
+
+    // 5c. Closed-world asset check (D6-B): every `PromptSource::Asset` the
+    //     module references must resolve to a bundle asset, and every bundle
+    //     asset must be referenced (no orphans) — keeps bundles canonical and
+    //     mirrors the tool_refs pre-check above. Load-time, before any tokens.
+    {
+        let mut referenced: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for agent in module.workflow.agents.values() {
+            if let Some(h) = agent.prompt.asset_hash() {
+                if !assets.contains_key(h) {
+                    return Err(anyhow::anyhow!(
+                        "IR agent {:?} prompt references asset {:?} not present in the bundle's \
+                         asset store — build/install skew or a tampered bundle.",
+                        agent.id.0,
+                        h
+                    ));
+                }
+                referenced.insert(h);
+            }
+        }
+        if let Some(orphan) = assets.keys().find(|k| !referenced.contains(k.as_str())) {
+            return Err(anyhow::anyhow!(
+                "bundle asset {:?} is not referenced by any agent prompt (orphan) — the bundle \
+                 is not canonical.",
+                orphan
+            ));
+        }
     }
 
     // 5d. ADR-0053: wire durable checkpoint/resume when the entry agent
@@ -240,13 +333,11 @@ pub(crate) async fn run_via_ir(
                 (rid.clone(), resume)
             }
             None => {
-                let rid = format!(
-                    "run-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                );
+                // Collision-resistant ULID (matches `cmd::run`'s durable and
+                // workflow run-id minting). The previous `run-<nanos>` scheme
+                // could collide under fast successive runs or a backward clock
+                // step, corrupting the checkpoint directory shared by both runs.
+                let rid = crate::cmd::run::mint_run_id();
                 output.status(format!(
                     "durable run id: {rid} (resume after a crash with `tau run --resume {rid}`)"
                 ))?;
@@ -262,7 +353,9 @@ pub(crate) async fn run_via_ir(
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         dispatcher = dispatcher.with_durable(store, durable_run_id, resume, resolved.checkpoint);
     }
-    let dispatcher = Arc::new(dispatcher);
+    // D6-B: hand the interpreter the content-addressed asset store so it can
+    // resolve `PromptSource::Asset` prompt references (empty map => no-op).
+    let dispatcher = Arc::new(dispatcher.with_assets(assets));
 
     // 6. Build the initial prompt text from --prompt / stdin.
     let prompt_text = match &args.prompt {
@@ -283,24 +376,21 @@ pub(crate) async fn run_via_ir(
     //    step's output); a bundle with NO pipeline keeps the
     //    single-entry-agent `run_ir` path below BYTE-FOR-BYTE unchanged.
     if module.workflow.pipeline.is_some() {
-        // The id of the LAST NON-CHECK pipeline step — its stored output is
-        // the run's final result. Trailing `StepRun::Check` steps (lowered
-        // from `[goals.*]` / `[deliverables.*]`) evaluate postconditions but
-        // store NO output, so rendering one would hit the "no output" guard
-        // even when all checks pass — skip them and render the last
-        // output-producing step. The parser rejects an empty pipeline (see
-        // `tau_pkg`), but guard anyway rather than index blindly.
+        // The id of the LAST NON-CHECK, NON-SUSPEND pipeline step — its
+        // stored output is the run's final result. Trailing `StepRun::Check`
+        // steps (lowered from `[goals.*]` / `[deliverables.*]`) evaluate
+        // postconditions but store NO output, so rendering one would hit the
+        // "no output" guard even when all checks pass. `Suspend` likewise
+        // records no output. `Pipeline::final_leaf_step_id` skips both and
+        // renders the last output-producing step. The parser rejects an
+        // empty pipeline (see `tau_pkg`), but guard anyway rather than index
+        // blindly.
         let last_step_id = module
             .workflow
             .pipeline
             .as_ref()
-            .and_then(|p| {
-                p.steps
-                    .iter()
-                    .rev()
-                    .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
-            })
-            .map(|s| s.id.0.clone())
+            .and_then(|p| p.final_leaf_step_id())
+            .map(|id| id.0.clone())
             .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
 
         let store =
@@ -369,6 +459,11 @@ pub(crate) struct ForwardingDispatcher {
     durable_resume: Option<tau_ports::TurnCheckpoint>,
     /// Host-resolved checkpoint granularity (EPIC 6.1). `None` for non-durable runs.
     durable_granularity: Option<tau_ir::durable::CheckpointGranularity>,
+    /// Content-addressed asset store (D6-B). `None` when the run has no
+    /// file-backed prompts; set via [`Self::with_assets`]. Surfaced to the
+    /// interpreter through [`ToolDispatcher::assets`] to resolve
+    /// `PromptSource::Asset` prompt references.
+    assets: Option<Arc<BTreeMap<String, tau_ir::asset::AssetBlob>>>,
 }
 
 impl ForwardingDispatcher {
@@ -383,7 +478,21 @@ impl ForwardingDispatcher {
             durable_run_id: None,
             durable_resume: None,
             durable_granularity: None,
+            assets: None,
         }
+    }
+
+    /// Attach the content-addressed asset store (D6-B) so the interpreter can
+    /// resolve `PromptSource::Asset` prompt references. Empty maps are elided
+    /// (`None`) so a no-file-prompt run behaves exactly as before.
+    pub(crate) fn with_assets(
+        mut self,
+        assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
+    ) -> Self {
+        if !assets.is_empty() {
+            self.assets = Some(Arc::new(assets));
+        }
+        self
     }
 
     /// Attach durable checkpoint/resume handles (ADR-0053). The
@@ -417,6 +526,7 @@ impl ForwardingDispatcher {
             durable_run_id: None,
             durable_resume: None,
             durable_granularity: None,
+            assets: None,
         }
     }
 }
@@ -623,6 +733,13 @@ impl ToolDispatcher for ForwardingDispatcher {
         Some(crate::cmd::builtin_registry::make_artifact_reader())
     }
 
+    /// Supply the content-addressed asset store (D6-B) when configured via
+    /// [`Self::with_assets`], so the interpreter can resolve
+    /// `PromptSource::Asset` prompt references. `None` for no-file-prompt runs.
+    fn assets(&self) -> Option<Arc<BTreeMap<String, tau_ir::asset::AssetBlob>>> {
+        self.assets.clone()
+    }
+
     /// Supply durable checkpoint/resume handles (ADR-0053) when configured
     /// via [`Self::with_durable`]. Returns `None` for non-durable runs, in
     /// which case even a `durable` agent runs as ordinary (no store wired).
@@ -782,8 +899,9 @@ pub(crate) fn verify_lockfile_against_live(
 
 use tau_mcp_tokio::bridge::McpBackedTool;
 use tau_mcp_tokio::host_lifecycle::{open as mcp_open, InboundDispatchHandle, McpClientOptions};
+use tau_pkg::project::allow::AllowConfig;
 use tau_ports::CapabilityPlan;
-use tau_runtime_tokio::process_gate::passthrough::PassthroughSandbox;
+use tau_runtime_tokio::process_gate::DynProcessCapabilityGate;
 
 /// Outcome of `setup_mcp_runtime` — the `tools` extension vec for
 /// `ForwardingDispatcher` + handles whose `Drop` aborts the inbound pumps.
@@ -794,8 +912,100 @@ pub(crate) struct McpRuntimeSetup {
     pub inbound_handles: Vec<InboundDispatchHandle>,
 }
 
+/// Build the sandbox [`CapabilityPlan`] for one MCP server entry.
+///
+/// The base grant is the author's `[tools.<entry>]` capability envelope:
+/// `tau build` already refuses an envelope that does not cover every
+/// server-tool's declared caps (`McpBuildError::EnvelopeCoversContract`),
+/// so the envelope is the widest capability set the pinned contract can
+/// exercise. The runtime drift check right after the handshake rejects a
+/// server whose live contract no longer matches that pin.
+///
+/// Governed projects clamp the envelope against the `[allow.mcp.<entry>]`
+/// host ceiling: `net.http` caps are met (lattice intersection) with the
+/// ceiling hosts, so a net cap with no allowed host is dropped rather than
+/// granted (fail-closed). Non-network caps pass through — the `[allow.mcp]`
+/// registry carries only a host ceiling; fs/process grants are bounded by
+/// the root `[allow]` ceiling at build time.
+///
+/// A governed project whose entry is missing from `[allow.mcp]` is a
+/// build/run skew (`tau build` + `tau check` both refuse it) and fails
+/// here rather than running the server unlisted.
+fn mcp_capability_plan(
+    entry: &str,
+    envelope: &[tau_domain::Capability],
+    allow: Option<&AllowConfig>,
+) -> Result<CapabilityPlan, String> {
+    let Some(allow) = allow else {
+        // Ungoverned project (`--allow-ungoverned` / no `[allow]`): the
+        // envelope alone is the grant.
+        return Ok(CapabilityPlan::new(envelope.to_vec(), None, None));
+    };
+    let Some(mcp_allow) = allow.mcp.get(entry) else {
+        return Err(format!(
+            "governed project has no [allow.mcp.{entry}] registration — \
+             build/check refuse this, so the lockfile and tau.toml have skewed"
+        ));
+    };
+    // Ceiling shape: net.http over the registered hosts, any method.
+    // Capability variants are only constructable via the unified parser.
+    let ceiling: tau_domain::Capability = serde_json::from_value(serde_json::json!({
+        "kind": "net.http",
+        "hosts": mcp_allow.hosts,
+    }))
+    .map_err(|e| format!("[allow.mcp.{entry}].hosts is not a valid net.http ceiling: {e}"))?;
+    let (net, mut caps): (Vec<tau_domain::Capability>, Vec<tau_domain::Capability>) = envelope
+        .iter()
+        .cloned()
+        .partition(|c| matches!(c, tau_domain::Capability::Network(_)));
+    caps.extend(tau_domain::meet(&net, &[ceiling]));
+    Ok(CapabilityPlan::new(caps, None, None))
+}
+
+/// Per-server-tool narrowed authority (execution-trace TUI spec §12.3).
+///
+/// `Some(effective)` iff the entry's meet-clamped [`CapabilityPlan`]
+/// narrows this tool's declared `net.http` caps — i.e. the declared net
+/// caps are not a subset of the plan's. The effective set is the tool's
+/// non-net declared caps plus `meet(declared_net, plan_net)` (which may
+/// contain no net cap at all after a fail-closed empty meet — still a
+/// clamp; the kernel renders it `none`). `None` = not narrowed: no net
+/// caps declared, ungoverned plan, or the ceiling already covers the
+/// declared hosts. Only hosts narrow today — the `[allow.mcp]` registry
+/// is an any-method host ceiling — but the comparison spans full net
+/// caps so a method-carrying ceiling needs no rework here.
+fn tool_effective_capabilities(
+    declared: &[tau_domain::Capability],
+    plan: &CapabilityPlan,
+) -> Option<Vec<tau_domain::Capability>> {
+    let (declared_net, declared_rest): (Vec<tau_domain::Capability>, Vec<tau_domain::Capability>) =
+        declared
+            .iter()
+            .cloned()
+            .partition(|c| matches!(c, tau_domain::Capability::Network(_)));
+    if declared_net.is_empty() {
+        return None;
+    }
+    let plan_net: Vec<tau_domain::Capability> = plan
+        .capabilities
+        .iter()
+        .filter(|c| matches!(c, tau_domain::Capability::Network(_)))
+        .cloned()
+        .collect();
+    if tau_domain::capability_subset(&declared_net, &plan_net).is_ok() {
+        return None;
+    }
+    let mut effective = declared_rest;
+    effective.extend(tau_domain::meet(&declared_net, &plan_net));
+    Some(effective)
+}
+
 /// Boot the MCP runtime: per-entry handshake + drift check +
 /// `WiredHostHandlers` + inbound dispatch + `McpBackedTool` registration.
+///
+/// Each stdio server is spawned under `gate` (the resolved sandbox
+/// adapter) with the per-entry [`CapabilityPlan`] from
+/// [`mcp_capability_plan`] enforced at the OS boundary.
 ///
 /// Errors out before `ForwardingDispatcher` is constructed if any entry
 /// fails (drift, network, parse). Returns an empty setup struct when
@@ -804,6 +1014,7 @@ pub(crate) async fn setup_mcp_runtime(
     config: &crate::config::ProjectConfig,
     lockfile: &LockFile,
     backend: Arc<dyn DynLlmBackend>,
+    gate: Arc<dyn DynProcessCapabilityGate>,
 ) -> Result<McpRuntimeSetup, RuntimeError> {
     let mut tools: Vec<(tau_ir::ids::ToolId, Arc<dyn DynTool>)> = Vec::new();
     let mut inbound_handles: Vec<InboundDispatchHandle> = Vec::new();
@@ -839,21 +1050,24 @@ pub(crate) async fn setup_mcp_runtime(
             .unwrap_or_default();
         let roots = tool_entry.roots.clone();
 
-        // Open the MCP server (handshake). Use PassthroughSandbox for v0;
-        // PR-5.1 will plumb the real sandbox per-entry CapabilityPlan.
-        let gate: Arc<dyn tau_runtime_tokio::process_gate::DynProcessCapabilityGate> =
-            Arc::new(PassthroughSandbox::new());
-        let client = mcp_open(
-            &url,
-            &CapabilityPlan::new(Vec::new(), None, None),
-            gate,
-            McpClientOptions::default(),
+        // Open the MCP server (handshake) under the resolved sandbox
+        // adapter, with the per-entry plan enforced at the OS boundary
+        // (stdio servers; HTTP/cassette transports spawn no process).
+        let plan = mcp_capability_plan(
+            &locked.entry,
+            &tool_entry.capabilities,
+            config.allow.as_ref(),
         )
-        .await
-        .map_err(|e| RuntimeError::McpSetupFailed {
+        .map_err(|reason| RuntimeError::McpSetupFailed {
             entry: locked.entry.clone(),
-            reason: format!("open failed: {e}"),
+            reason,
         })?;
+        let client = mcp_open(&url, &plan, gate.clone(), McpClientOptions::default())
+            .await
+            .map_err(|e| RuntimeError::McpSetupFailed {
+                entry: locked.entry.clone(),
+                reason: format!("open failed: {e}"),
+            })?;
 
         // Drift check: live contract hash must match lockfile-recorded hash.
         verify_lockfile_against_live(locked, &client)?;
@@ -867,11 +1081,13 @@ pub(crate) async fn setup_mcp_runtime(
         // Per server-tool in the contract, register one McpBackedTool.
         for st in &arc_client.contract().tools {
             let ir_tool_id = tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
+            let effective = tool_effective_capabilities(&st.caps, &plan);
             let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
                 ir_tool_id.0.clone(),
                 arc_client.clone(),
                 st.name.clone(),
                 st.caps.clone(),
+                effective,
                 st.input_schema.0.clone(),
                 st.description.clone().unwrap_or_default(),
             );
@@ -948,6 +1164,301 @@ mod drift_tests {
             }
             other => panic!("expected McpContractDriftAtBoot, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod sandbox_plan_tests {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use tau_domain::Capability;
+    use tau_pkg::project::allow::{AllowConfig, McpAllowEntry};
+    use tau_pkg::project::ProjectConfig;
+    use tau_ports::fixtures::MockLlmBackend;
+    use tau_ports::{
+        CapabilityError, CapabilityGate, CapabilityHandle, CapabilityPlan, CapabilityProbe,
+        CapabilityShapeSet, CapabilityTier, ProcessCapabilityGate,
+    };
+
+    use std::sync::Arc;
+
+    use super::{
+        mcp_capability_plan, setup_mcp_runtime, tool_effective_capabilities, DynLlmBackend,
+        LockFile, LockedMcpEntry, RuntimeError,
+    };
+
+    fn cap(json: serde_json::Value) -> Capability {
+        serde_json::from_value(json).expect("test capability JSON must be valid")
+    }
+
+    fn allow_with_hosts(entry: &str, hosts: &[&str]) -> AllowConfig {
+        AllowConfig {
+            ceiling: Vec::new(),
+            models: BTreeMap::new(),
+            mcp: BTreeMap::from([(
+                entry.to_string(),
+                McpAllowEntry {
+                    url: "stdio:server".to_string(),
+                    hosts: hosts.iter().map(|h| h.to_string()).collect(),
+                },
+            )]),
+            tools: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn ungoverned_project_grants_envelope_unchanged() {
+        let envelope = vec![
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})),
+            cap(serde_json::json!({"kind": "net.http", "hosts": ["api.weather.com"]})),
+        ];
+        let plan = mcp_capability_plan("weather", &envelope, None).expect("plan");
+        assert_eq!(plan.capabilities, envelope);
+    }
+
+    #[test]
+    fn governed_clamps_net_hosts_to_allow_mcp_ceiling() {
+        let envelope = vec![
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})),
+            cap(serde_json::json!({
+                "kind": "net.http",
+                "hosts": ["api.weather.com", "evil.example"],
+            })),
+        ];
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let nets: Vec<&Capability> = plan
+            .capabilities
+            .iter()
+            .filter(|c| matches!(c, Capability::Network(_)))
+            .collect();
+        assert_eq!(
+            nets.len(),
+            1,
+            "one clamped net cap: {:?}",
+            plan.capabilities
+        );
+        let net_json = serde_json::to_value(nets[0]).expect("serialize");
+        assert_eq!(
+            net_json["hosts"],
+            serde_json::json!(["api.weather.com"]),
+            "hosts clamped to the [allow.mcp] ceiling"
+        );
+        // The non-network cap passes through untouched.
+        assert!(plan.capabilities.contains(&envelope[0]));
+        assert_eq!(plan.capabilities.len(), 2);
+    }
+
+    #[test]
+    fn governed_drops_net_cap_with_no_allowed_host() {
+        let envelope = vec![
+            cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]})),
+            cap(serde_json::json!({"kind": "net.http", "hosts": ["evil.example"]})),
+        ];
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        assert!(
+            !plan
+                .capabilities
+                .iter()
+                .any(|c| matches!(c, Capability::Network(_))),
+            "disjoint net cap must be dropped, not granted: {:?}",
+            plan.capabilities
+        );
+        assert_eq!(plan.capabilities, vec![envelope[0].clone()]);
+    }
+
+    #[test]
+    fn governed_unregistered_entry_is_refused() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let err = mcp_capability_plan("other-server", &[], Some(&allow))
+            .expect_err("unregistered entry must fail closed");
+        assert!(err.contains("[allow.mcp.other-server]"), "got: {err}");
+    }
+
+    /// A gate that records every plan it is asked to wrap, then refuses —
+    /// proving `setup_mcp_runtime` hands the clamped per-entry plan to the
+    /// sandbox without needing a live MCP server binary.
+    struct RecordingRefusalGate {
+        plans: Arc<Mutex<Vec<CapabilityPlan>>>,
+    }
+
+    impl CapabilityGate for RecordingRefusalGate {
+        fn name(&self) -> &str {
+            "recording-refusal"
+        }
+
+        async fn probe(&self) -> CapabilityProbe {
+            CapabilityProbe::Available {
+                tier: CapabilityTier::None,
+                details: "test gate".into(),
+            }
+        }
+
+        fn supported_shapes(&self) -> CapabilityShapeSet {
+            CapabilityShapeSet::default()
+        }
+
+        fn validate_plan(&self, _plan: &CapabilityPlan) -> Result<(), CapabilityError> {
+            Ok(())
+        }
+    }
+
+    impl ProcessCapabilityGate for RecordingRefusalGate {
+        async fn wrap_spawn(
+            &self,
+            plan: &CapabilityPlan,
+            _cmd: &mut std::process::Command,
+        ) -> Result<CapabilityHandle, CapabilityError> {
+            self.plans.lock().unwrap().push(plan.clone());
+            Err(CapabilityError::WrapFailed {
+                message: "recorded, then refused".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_mcp_runtime_gates_stdio_spawn_with_clamped_plan() {
+        let config = ProjectConfig::parse_str(
+            r#"
+[project]
+name = "sandbox-plan-test"
+
+[tools.weather]
+mcp = "stdio:/bin/false"
+capabilities = [
+    { kind = "net.http", hosts = ["api.weather.com", "evil.example"] },
+    { kind = "fs.read", paths = ["/tmp/**"] },
+]
+
+[allow.mcp.weather]
+url = "stdio:/bin/false"
+hosts = ["api.weather.com"]
+"#,
+        )
+        .expect("valid project config");
+
+        let mut lockfile = LockFile::default();
+        lockfile.mcp_entries.push(LockedMcpEntry::new(
+            "weather".to_string(),
+            "stdio:/bin/false".to_string(),
+            "0".repeat(64),
+            None,
+            vec![],
+        ));
+
+        let plans = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new(RecordingRefusalGate {
+            plans: plans.clone(),
+        });
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("stub-backend"));
+
+        let err = match setup_mcp_runtime(&config, &lockfile, backend, gate).await {
+            Ok(_) => panic!("the refusing gate must abort setup"),
+            Err(e) => e,
+        };
+        match err {
+            RuntimeError::McpSetupFailed { entry, reason } => {
+                assert_eq!(entry, "weather");
+                assert!(reason.contains("open failed"), "got: {reason}");
+            }
+            other => panic!("expected McpSetupFailed, got {other:?}"),
+        }
+
+        let recorded = plans.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "gate saw exactly one spawn attempt");
+        let caps = &recorded[0].capabilities;
+        assert_eq!(caps.len(), 2, "fs.read + clamped net.http: {caps:?}");
+        let net = caps
+            .iter()
+            .find(|c| matches!(c, Capability::Network(_)))
+            .expect("net cap present");
+        let net_json = serde_json::to_value(net).expect("serialize");
+        assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn tool_without_net_caps_is_never_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(
+            serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}),
+        )];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn tool_covered_by_plan_is_not_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        // This tool only ever declared the allowed host — nothing narrowed.
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com"],
+        }))];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn narrowed_tool_reports_effective_with_clamped_hosts() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let fs = cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}));
+        let declared = vec![
+            fs.clone(),
+            cap(serde_json::json!({
+                "kind": "net.http",
+                "hosts": ["api.weather.com", "evil.example"],
+            })),
+        ];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("narrowed → Some");
+        // Non-net declared caps pass through untouched.
+        assert!(effective.contains(&fs));
+        // Exactly one net cap, meet-clamped to the ceiling host.
+        let nets: Vec<&Capability> = effective
+            .iter()
+            .filter(|c| matches!(c, Capability::Network(_)))
+            .collect();
+        assert_eq!(nets.len(), 1, "one clamped net cap: {effective:?}");
+        let net_json = serde_json::to_value(nets[0]).expect("serialize");
+        assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn empty_meet_reports_effective_without_net_caps() {
+        // The plan dropped the disjoint net cap entirely (fail-closed) —
+        // the tool is clamped to zero net authority, which must surface as
+        // Some(effective-without-net), not None (kernel renders `none`).
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("clamped → Some");
+        assert!(
+            !effective
+                .iter()
+                .any(|c| matches!(c, Capability::Network(_))),
+            "no net authority survives: {effective:?}"
+        );
     }
 }
 

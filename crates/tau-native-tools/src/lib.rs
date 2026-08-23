@@ -13,6 +13,9 @@ extern crate std;
 
 use serde_json::{json, Value};
 
+#[cfg(feature = "goal-predicates")]
+pub mod goal_predicates;
+
 /// Invoke a native tool by its IR `ToolId` string.
 ///
 /// Returns `Some(body)` for a known tool, `None` otherwise (the caller turns

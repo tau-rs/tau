@@ -388,6 +388,7 @@ system = "you are solo"
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         })
         .expect("build fixture bundle");
         artifact.path
@@ -589,6 +590,7 @@ installed_at = "2024-01-01T00:00:00Z"
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         })
         .expect("build bundle with package");
         (artifact.path, pkg_dir)
@@ -677,6 +679,7 @@ system_file = "prompt.md"
             agent_filter: None,
             ir_payload: None,
             governance: None,
+            assets: Vec::new(),
         })
         .unwrap();
         // Mutate the prompt FILE after build (tau.toml unchanged, so step 6

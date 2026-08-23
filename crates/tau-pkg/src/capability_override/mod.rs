@@ -8,7 +8,6 @@
 //! narrowed allow-list and deny-list onto an `EffectiveCapability` rather
 //! than re-constructing variants.
 
-pub(crate) mod glob_subset;
 pub mod subset;
 pub use subset::{capability_set_subset, CeilingViolation};
 
@@ -249,22 +248,34 @@ fn cap_kind(cap: &Capability) -> &'static str {
 
 #[allow(dead_code)] // wired up by compute_effective, itself wired up by Task 5
 fn validate_allow_subset(cap: &Capability, allow: &[String]) -> Result<(), String> {
-    let parents = match cap {
-        Capability::Filesystem(FsCapability::Read { paths, .. }) => paths,
-        Capability::Filesystem(FsCapability::Write { paths, .. }) => paths,
-        Capability::Filesystem(FsCapability::Exec { paths, .. }) => paths,
-        Capability::Network(NetCapability::Http { hosts, .. }) => hosts,
-        Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands,
+    // A `net.http` grant of `HostSet::Any` subsumes every host, so any override
+    // list is a valid narrowing — short-circuit before the flat string-subset
+    // compare below. Without this, `Any` flattens to an EMPTY `exact_hosts()`
+    // list and `string_set_subset` would reject every non-empty override
+    // (falsely treating a narrowing as a grant expansion).
+    if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
+        if hosts.is_any() {
+            return Ok(());
+        }
+    }
+    // `Vec<String>` for the fs/process shapes; `net.http`'s `Exact` hosts are
+    // flattened to their canonical string form here (`exact_hosts()`).
+    let parents: Vec<String> = match cap {
+        Capability::Filesystem(FsCapability::Read { paths, .. })
+        | Capability::Filesystem(FsCapability::Write { paths, .. })
+        | Capability::Filesystem(FsCapability::Exec { paths, .. }) => paths.clone(),
+        Capability::Network(NetCapability::Http { hosts, .. }) => hosts.exact_hosts(),
+        Capability::Process(ProcessCapability::Spawn { commands, .. }) => commands.clone(),
         _ => {
             return Err("allow narrowing not supported for this capability kind".into());
         }
     };
     if matches!(cap, Capability::Filesystem(_)) {
-        subset::paths_subset(allow, parents).map_err(|offender| {
+        subset::paths_subset(allow, &parents).map_err(|offender| {
             format!("allow entry {offender:?} is not a subset of any package grant")
         })
     } else {
-        subset::string_set_subset(allow, parents)
+        subset::string_set_subset(allow, &parents)
             .map_err(|offender| format!("allow entry {offender:?} is not in package grant"))
     }
 }
@@ -299,6 +310,23 @@ mod tests {
         max_bytes: Option<u64>,
     ) -> CapabilityOverride {
         CapabilityOverride::new(kind.to_string(), allow, deny, max_bytes)
+    }
+
+    #[test]
+    fn net_http_any_grant_admits_any_narrowing_override() {
+        // An `Any` package grant subsumes every host, so a concrete override
+        // list is a valid narrowing — must NOT be rejected as a grant expansion.
+        let grant = cap(r#"{"kind":"net.http","hosts":"any"}"#);
+        assert!(validate_allow_subset(&grant, &["specific.com".to_string()]).is_ok());
+        assert!(validate_allow_subset(&grant, &[]).is_ok());
+    }
+
+    #[test]
+    fn net_http_exact_grant_rejects_override_outside_hosts() {
+        let grant = cap(r#"{"kind":"net.http","hosts":["api.x.com"]}"#);
+        assert!(validate_allow_subset(&grant, &["api.x.com".to_string()]).is_ok());
+        let err = validate_allow_subset(&grant, &["evil.com".to_string()]).unwrap_err();
+        assert!(err.contains("evil.com"), "got: {err}");
     }
 
     #[test]
@@ -358,8 +386,8 @@ mod tests {
 
     #[test]
     fn custom_capability_not_narrowable() {
-        let pkg = vec![cap(r#"{"kind":"mcp.tool.use","tool":"x"}"#)];
-        let over = vec![ov("mcp.tool.use", Some(vec![]), vec![], None)];
+        let pkg = vec![cap(r#"{"kind":"custom.mcp.tool.use","tool":"x"}"#)];
+        let over = vec![ov("custom.mcp.tool.use", Some(vec![]), vec![], None)];
         let err = compute_effective(&pkg, &over).unwrap_err();
         assert!(err.reason.contains("custom"), "got: {}", err.reason);
     }

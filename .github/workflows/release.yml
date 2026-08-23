@@ -8,7 +8,7 @@ name: Release
 # tag means "this exact commit passed the full heavy suite", re-run
 # against the tagged SHA rather than trusted from a stale main run:
 #
-#   * preflight-tier1  (ci.yml)    — fmt/clippy/unit/doc/deny/build + feature matrix
+#   * preflight-tier1  (ci.yml)    — tier-0 gate: fmt/clippy/deny/gitleaks/unit/doc/no-std/semver + macos/windows check
 #   * preflight-tier2  (tier2.yml) — full OS matrix · conformance · sandbox/runtime e2e · coverage
 #   * msrv             (this file) — MSRV re-asserted as a distinct release gate (audit G5)
 #   * fuzz             (this file) — cargo-fuzz crash regression on the tagged commit (audit G1)
@@ -17,8 +17,8 @@ name: Release
 # Publication (build-release-binaries → sbom → attest → gh-release-create)
 # NEEDS the blocking gates above, so no artifact ships unless they pass.
 #
-# Coverage is NOT duplicated here — it is owned by the separate
-# coverage.yml lane (measurement-not-gating); preflight-tier2 also
+# Coverage is NOT duplicated here — it is owned by tier2.yml's
+# nightly coverage job (measurement-not-gating); preflight-tier2
 # re-runs it against the tag.
 
 on:
@@ -54,15 +54,15 @@ jobs:
     secrets: inherit
 
   msrv:
-    # Audit G5: MSRV runs per-PR in ci.yml but is not a distinct
+    # Audit G5: MSRV runs nightly in tier2.yml but is not a distinct
     # release gate. Re-assert it on the tagged commit — the version
     # you ship is the version whose MSRV claim you guarantee. Mirrors
-    # ci.yml `msrv-check` (toolchain 1.91, --locked). Blocks the release.
+    # tier2.yml `msrv-check` (toolchain 1.91, --locked). Blocks the release.
     name: msrv
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.91"
@@ -92,7 +92,7 @@ jobs:
             fuzz_dir: crates/tau-plugin-protocol/fuzz
             target: frame_decode
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Skip if fuzz directory not present
         id: precheck
@@ -113,7 +113,7 @@ jobs:
 
       - name: Cache cargo-fuzz binary
         if: steps.precheck.outputs.skip != 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-bin-v1
@@ -187,9 +187,9 @@ jobs:
           - tau-plugin-protocol
           - tau-cli
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2  # stable
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
         with:
           shared-key: linux-stable
           save-if: "false"
@@ -227,7 +227,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - id: tag
         shell: bash
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
@@ -261,7 +261,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
@@ -283,7 +283,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Generate aggregate SBOM via syft
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
         with:
@@ -316,7 +316,7 @@ jobs:
           pattern: sbom-*
           path: _sbom/
           merge-multiple: true
-      - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: '_release/*'
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
@@ -332,7 +332,7 @@ jobs:
     outputs:
       body: ${{ steps.cliff.outputs.content }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
       - id: cliff
@@ -359,7 +359,7 @@ jobs:
           pattern: sbom-*
           path: _sbom/
           merge-multiple: true
-      - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3
         with:
           tag_name: ${{ needs.build-release-binaries.outputs.tag }}
           body: ${{ needs.changelog.outputs.body }}

@@ -10,17 +10,34 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 
 wit_bindgen::generate!({
-    world: "runner",
-    path: "../../wit",
+    world: "tau:generated/runner",
+    path: "wit-gen",
+    generate_all,
 });
 
 /// Re-export the WIT-generated host imports so sibling modules (host_ports.rs)
 /// can access them without knowing the exact generated module path.
 /// The path `tau::host::host` is what wit_bindgen generates for `import host`
 /// in the `tau:host` package's `runner` world (identical to the wasmtime host
-/// side which uses `tau::host::host`).
+/// side which uses `tau::host::host`). `wit-gen/` is assembled by `build.rs`
+/// from the vendored WASI deps, the frozen `tau:host` contract, and the
+/// capability-derived (or baseline) `tau:generated` world; `generate_all` is
+/// required once the world imports WASI interfaces (`wit_bindgen` otherwise
+/// errors with "missing `with` mapping" for interfaces reachable both
+/// directly and transitively, e.g. `wasi:io/poll`).
 pub(crate) mod wit_host {
     pub(crate) use super::tau::host::host::*;
+}
+
+/// Re-export the `generate_all`-generated WASI bindings so sibling modules
+/// (dispatcher.rs) can reach them without knowing the exact wit-bindgen path.
+/// Only present when the capability-derived world granted wasi:http OR
+/// wasi:filesystem — the `tau_cap_net_http`/`tau_cap_fs_read`/`tau_cap_fs_write`
+/// cfgs (set by build.rs) gate both this re-export and the effect arms that
+/// use it, so they are compiled in lockstep.
+#[cfg(any(tau_cap_net_http, tau_cap_fs_read, tau_cap_fs_write))]
+pub(crate) mod wit_wasi {
+    pub(crate) use super::wasi::*;
 }
 
 /// dlmalloc is a portable no_std allocator; the guest has no std heap.
@@ -76,8 +93,19 @@ unsafe extern "C" fn cabi_realloc(
 /// `compiler_builtins` provides `memcpy`/`memset`/`memmove` on this target but
 /// not `memcmp`, so the guest fills just this one. Byte-wise (no slice ops, to
 /// avoid lowering back into an intrinsic call).
+///
+/// The parameters are `*const c_void` (not `*const u8`) to match libc's
+/// canonical `memcmp` ABI exactly — Rust 1.98's `suspicious_runtime_symbol_
+/// definitions` lint rejects a mismatched signature for a well-known runtime
+/// symbol. The pointer types are ABI-identical; we cast to `*const u8` inside.
 #[no_mangle]
-unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+unsafe extern "C" fn memcmp(
+    a: *const core::ffi::c_void,
+    b: *const core::ffi::c_void,
+    n: usize,
+) -> i32 {
+    let a = a as *const u8;
+    let b = b as *const u8;
     let mut i = 0;
     while i < n {
         let x = *a.add(i);
@@ -103,30 +131,36 @@ impl Guest for Component {
         }
         let module = tau_ir::from_canonical_bytes(bytes).map_err(|e| e.to_string())?;
 
-        // E2 scope: exactly one agent; it is the entry.
-        if module.workflow.agents.len() != 1 {
-            return Err(alloc::format!(
-                "tau-wasm-guest: E2 supports exactly one agent, found {}",
-                module.workflow.agents.len()
-            ));
+        // The guest drives a single entry agent (run_ir_streaming below), not
+        // the pipeline executor (run_pipeline). Reject any pipeline-bearing IR
+        // — Branch/Parallel/Loop and linear pipelines alike — at load rather
+        // than silently running only the entry agent and skipping the pipeline.
+        // Driving run_pipeline in-wasm is a follow-up slice.
+        if module.workflow.pipeline.is_some() {
+            return Err(
+                "tau-wasm-guest: pipelines (incl. Branch) are not yet executed in-wasm".to_string(),
+            );
         }
+
+        // E2 scope: exactly one agent; it is the entry (the shared
+        // Variant B entry-point contract, `IrModule::entry_agent`).
         let entry = module
-            .workflow
-            .agents
-            .keys()
-            .next()
-            .expect("len checked == 1")
+            .entry_agent()
+            .map_err(|e| alloc::format!("tau-wasm-guest: {e}"))?
             .clone();
 
         let backend: Arc<dyn tau_runtime_core::builder::DynLlmBackend> =
             Arc::new(crate::host_ports::HostLlmBackend);
         let clock: Arc<dyn tau_ports::Clock> = Arc::new(crate::host_ports::HostClock);
         let random: Arc<dyn tau_ports::RandomSource> = Arc::new(crate::host_ports::HostRandom);
+        let module = Arc::new(module);
         let dispatcher = Arc::new(crate::dispatcher::GuestDispatcher::new(
-            backend, clock, random,
+            backend,
+            clock,
+            random,
+            module.clone(),
         ));
 
-        let module = Arc::new(module);
         let stream = crate::executor::block_on(tau_runtime_core::interpreter::run_ir_streaming(
             module,
             &entry,
@@ -135,8 +169,18 @@ impl Guest for Component {
         ))
         .map_err(|e| e.to_string())?;
 
-        let events = crate::executor::collect_stream(stream);
-        serde_json::to_string(&events).map_err(|e| e.to_string())
+        crate::executor::for_each_stream(stream, |event| {
+            // `RunEvent` is a plain derive(Serialize) enum over primitives/
+            // strings/nested plain structs — no maps with non-string keys,
+            // no floats that could be NaN/Inf, nothing serde_json rejects.
+            // Serialization is effectively infallible here, so a hypothetical
+            // error silently drops the event rather than aborting the whole
+            // run over a should-never-happen encoding failure.
+            if let Ok(json) = serde_json::to_string(&event) {
+                crate::wit_host::emit_event(&json);
+            }
+        });
+        Ok(String::new())
     }
 }
 

@@ -202,6 +202,32 @@ pub enum IrError {
         transformer: String,
     },
 
+    /// A context step declares a determinism class string that lowering does
+    /// not recognize (D7-B / ADR-0065). Mirror of
+    /// `tau_ir_lower::LowerError::UnknownDeterminism` (D11 consolidation debt).
+    #[error("agent '{agent}': context transformer '{transformer}' declares unknown determinism '{determinism}' (want one of: pure, llm_backed, stateful)")]
+    UnknownDeterminism {
+        /// The agent id whose context pipeline is invalid.
+        agent: String,
+        /// The offending transformer name.
+        transformer: String,
+        /// The unrecognized determinism string as authored.
+        determinism: String,
+    },
+
+    /// Lowering encountered a `PromptEntry` variant it does not know how to
+    /// lower (D7-B / ADR-0065). Mirror of
+    /// `tau_ir_lower::LowerError::UnsupportedPromptKind` (D11 consolidation
+    /// debt). A fail-closed guard for a future `#[non_exhaustive]`
+    /// `PromptEntry` variant, not a user-authoring error.
+    #[error("agent {agent:?}: unsupported prompt kind (this tau cannot lower {detail}); rebuild with a matching tau")]
+    UnsupportedPromptKind {
+        /// The agent whose prompt could not be lowered.
+        agent: AgentId,
+        /// Debug rendering of the offending `PromptEntry`.
+        detail: String,
+    },
+
     /// A check's `Locus::Output` references an unknown or later pipeline step.
     #[error(
         "check '{check}' evaluates output of '{output}' which is not an earlier pipeline step"

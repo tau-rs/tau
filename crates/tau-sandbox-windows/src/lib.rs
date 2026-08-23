@@ -19,7 +19,7 @@
 //!
 //! This crate cannot be exercised on macOS or Linux. The pure-logic
 //! parts (`profile`) compile and unit-test on any platform; the Win32
-//! parts (`acl`, `spawn`, the runtime path of `lib`) are
+//! parts (`acl`, the launcher command rebuild in `lib`) are
 //! `cfg(target_os = "windows")`-gated. Windows CI runners are the only
 //! place runtime behavior is verified.
 
@@ -28,10 +28,31 @@
 #[cfg(target_os = "windows")]
 mod acl;
 mod profile;
-#[cfg(target_os = "windows")]
-mod spawn;
 
 pub use profile::{build_appcontainer_caps, AppContainerCaps};
+
+pub mod launcher_args;
+
+/// Windows-only test helpers, gated behind the `integration-tests`
+/// feature so they never ship in a release build. Exposes just enough
+/// of the (otherwise private) `acl` module for
+/// `tests/launcher_integration.rs` to create and delete a real
+/// AppContainer profile without exposing the whole `acl` module.
+#[cfg(all(target_os = "windows", feature = "integration-tests"))]
+pub mod test_support {
+    /// Create a real AppContainer profile named `name` (idempotent: an
+    /// already-existing profile with the same name is treated as
+    /// success). See [`crate::acl::create_appcontainer_profile`].
+    pub fn create_profile(name: &str) -> std::io::Result<()> {
+        crate::acl::create_appcontainer_profile(name).map(|_| ())
+    }
+
+    /// Delete the AppContainer profile named `name`. See
+    /// [`crate::acl::delete_appcontainer_profile`].
+    pub fn delete_profile(name: &str) -> std::io::Result<()> {
+        crate::acl::delete_appcontainer_profile(name)
+    }
+}
 
 use std::process::Command;
 use std::sync::Arc;
@@ -78,7 +99,6 @@ impl CapabilityGate for WindowsSandbox {
         set.insert(tau_domain::CapabilityShape::FilesystemRead);
         set.insert(tau_domain::CapabilityShape::FilesystemWrite);
         set.insert(tau_domain::CapabilityShape::ProcessExec);
-        set.insert(tau_domain::CapabilityShape::NetworkHttp);
         set
     }
 
@@ -90,17 +110,17 @@ impl CapabilityGate for WindowsSandbox {
                 return Err(CapabilityError::ShapeUnsupported { shape });
             }
         }
-        let mut allowed_hosts: Vec<String> = Vec::new();
+        let mut exact: Vec<String> = Vec::new();
         for cap in &plan.capabilities {
             if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                allowed_hosts.extend(hosts.iter().cloned());
+                if !hosts.is_any() {
+                    exact.extend(hosts.exact_hosts());
+                }
             }
         }
-        if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| {
-                CapabilityError::Proxy {
-                    message: format!("host validation: {e}"),
-                }
+        if !exact.is_empty() {
+            tau_sandbox_proxy::validate_hosts(&exact).map_err(|e| CapabilityError::Proxy {
+                message: format!("host validation: {e}"),
             })?;
         }
         Ok(())
@@ -133,21 +153,21 @@ impl ProcessCapabilityGate for WindowsSandbox {
 /// Probe for AppContainer availability. Cached per `WindowsSandbox`
 /// instance via `OnceCell`.
 ///
-/// **Phase 1:** returns `Unavailable` everywhere — the Win32 ACL calls
-/// in `acl.rs` are stubs (no-ops). Returning `Unavailable` keeps the
-/// resolver from picking this adapter for real work and instead falling
-/// back to the next candidate (typically `PassthroughSandbox`). When
-/// Phase 2 lands the real Win32 implementation, this returns
-/// `Available { tier: Strict }` on Windows.
+/// **Phase 2:** the real Win32 AppContainer implementation has landed
+/// (`acl.rs` grant/revoke, `wrap_spawn` via the launcher exec-wrapper), so
+/// this returns `Available { tier: Strict }` on Windows — filesystem and
+/// process isolation are enforced. Network egress remains deferred and
+/// fail-closed (`NetworkHttp` is not in `supported_shapes`) until the
+/// egress follow-on lands.
 async fn run_probe() -> CapabilityProbe {
     if !cfg!(target_os = "windows") {
         return CapabilityProbe::Unavailable {
             reason: "not running on Windows".to_string(),
         };
     }
-    CapabilityProbe::Unavailable {
-        reason: "tau-sandbox-windows Phase 1 ships scaffold only; \
-                 Win32 AppContainer calls land in Phase 2"
+    CapabilityProbe::Available {
+        tier: tau_ports::CapabilityTier::Strict,
+        details: "AppContainer (FS + process isolation); network egress deferred (fail-closed)"
             .to_string(),
     }
 }
@@ -190,45 +210,52 @@ async fn wrap_spawn_windows(
         granted_paths.push((path.clone(), acl::AccessKind::Write));
     }
 
-    // Phase 2: spawn the host-side proxy task if the plan needs HTTP.
-    //
-    // `tau_sandbox_proxy::spawn_proxy` is currently `cfg(unix)`-gated
-    // because it builds on `tokio::net::UnixListener`. Making it work on
-    // Windows requires either:
-    //   - switching the proxy's IPC from Unix-domain sockets to TCP
-    //     loopback (simpler; reuses Linux's existing port 8443
-    //     convention; works on Windows 10+ since UDS support is
-    //     incomplete), or
-    //   - using Windows named pipes via `tokio::net::windows::named_pipe`.
-    //
-    // Phase 1 (this PR) skips the proxy spawn entirely. HTTP plans are
-    // refused at probe time (probe returns Unavailable). The proxy
-    // wiring lands in Phase 2 alongside the actual `CreateProcessAsUserW`
-    // integration.
+    // Fail closed on network — egress is a deferred follow-on EPIC.
+    // (Phase 2 spawns no host-side proxy task; `tau_sandbox_proxy::spawn_proxy`
+    // is currently `cfg(unix)`-gated because it builds on
+    // `tokio::net::UnixListener`. Windows egress requires either TCP-loopback
+    // IPC or named pipes — deferred.)
     if caps.has_http {
-        return Err(CapabilityError::Unavailable {
-            reason: "tau-sandbox-windows Phase 1 does not support Network(Http) plans; \
-                     proxy support requires Phase 2 (UDS->TCP conversion in tau-sandbox-proxy)"
+        return Err(CapabilityError::Unsupported {
+            what: "Network(Http) on Windows: egress not yet supported (deferred follow-on)"
                 .to_string(),
         });
     }
-    let proxy_handle: Option<()> = None;
 
-    // Configure the command for AppContainer-wrapped spawn. The actual
-    // CreateProcessAsUserW call happens when the caller spawns `cmd`;
-    // we attach the AppContainer security attributes via env vars that
-    // `spawn::pre_exec_appcontainer` reads at spawn time. Because
-    // std::process::Command on Windows doesn't expose pre_exec hooks, we
-    // record the SID + caps via a thread-local and override the spawn
-    // path through a `pre_exec`-style wrapper at spawn time. See spawn.rs
-    // for the implementation.
-    spawn::register_appcontainer_for_command(cmd, &app_sid, &caps);
+    // Rebuild the command to run the target THROUGH the launcher, which
+    // does CreateProcessAsUserW inside the AppContainer. Mirrors the
+    // darwin sandbox-exec rebuild (`*cmd = Command::new(...)`).
+    let launcher = std::env::var_os("TAU_APPCONTAINER_LAUNCHER_PATH")
+        .unwrap_or_else(|| std::ffi::OsString::from("tau-appcontainer-launcher"));
+    let orig_program = cmd.get_program().to_os_string();
+    let orig_args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_os_string()).collect();
+    let orig_envs: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = cmd
+        .get_envs()
+        .map(|(k, v)| (k.to_os_string(), v.map(|x| x.to_os_string())))
+        .collect();
+    let orig_cwd = cmd.get_current_dir().map(|p| p.to_path_buf());
+
+    *cmd = Command::new(launcher);
+    cmd.arg("--profile").arg(&profile_name);
+    // caps.capability_sids would be added here once net lands; empty in Phase 2.
+    cmd.arg("--").arg(orig_program).args(orig_args);
+    for (k, v) in orig_envs {
+        match v {
+            Some(val) => {
+                cmd.env(k, val);
+            }
+            None => {
+                cmd.env_remove(k);
+            }
+        }
+    }
+    if let Some(dir) = orig_cwd {
+        cmd.current_dir(dir);
+    }
 
     // Build the CapabilityHandle. On drop:
     // 1. revoke ACL grants in reverse order
     // 2. delete the AppContainer profile
-    // 3. (Phase 2) drop the proxy guard via nest_handle
-    let _ = proxy_handle; // currently always None; placeholder for Phase 2
     let cleanup_sid = app_sid.clone();
     let cleanup_profile = profile_name.clone();
     let cleanup_paths = granted_paths;
@@ -254,20 +281,23 @@ mod tests {
     }
 
     #[test]
-    fn supported_shapes_includes_all() {
+    fn supported_shapes_is_fs_and_exec() {
         let s = WindowsSandbox::new("windows");
         let supported = s.supported_shapes();
         assert!(supported.contains(&tau_domain::CapabilityShape::FilesystemRead));
         assert!(supported.contains(&tau_domain::CapabilityShape::FilesystemWrite));
         assert!(supported.contains(&tau_domain::CapabilityShape::ProcessExec));
-        assert!(supported.contains(&tau_domain::CapabilityShape::NetworkHttp));
+        assert!(
+            !supported.contains(&tau_domain::CapabilityShape::NetworkHttp),
+            "network is deferred (fail-closed) in Phase 2"
+        );
     }
 
     #[test]
     fn validate_plan_rejects_unsupported_shape() {
         let s = WindowsSandbox::new("windows");
         let plan_json = json!({
-            "capabilities": [{ "kind": "weird" }],
+            "capabilities": [{ "kind": "custom.weird" }],
             "context": null,
             "limits": null,
         });
@@ -287,8 +317,7 @@ mod tests {
         let plan_json = json!({
             "capabilities": [
                 { "kind": "fs.read",  "paths": ["/etc"] },
-                { "kind": "fs.write", "paths": ["/tmp"] },
-                { "kind": "net.http", "hosts": ["example.com"], "methods": ["GET"] }
+                { "kind": "fs.write", "paths": ["/tmp"] }
             ],
             "context": null,
             "limits": null,
@@ -300,7 +329,9 @@ mod tests {
 
     #[test]
     fn validate_plan_rejects_wildcard_host() {
-        let s = WindowsSandbox::new("windows");
+        // `HostSet`'s deserializer now rejects "*" as a non-hostname at
+        // decode time (before `validate_plan` even runs) — callers must
+        // spell pass-all as `hosts = "any"`, not a wildcard string.
         let plan_json = json!({
             "capabilities": [
                 { "kind": "net.http", "hosts": ["*"], "methods": ["GET"] }
@@ -308,13 +339,11 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
-        let err = s
-            .validate_plan(&plan)
-            .expect_err("wildcard must be rejected");
+        let err = serde_json::from_value::<CapabilityPlan>(plan_json)
+            .expect_err("wildcard host must be rejected at decode");
         assert!(
-            matches!(err, CapabilityError::Proxy { .. }),
-            "expected Proxy error, got {err:?}"
+            err.to_string().contains("wildcard"),
+            "expected wildcard-rejection error, got {err}"
         );
     }
 }

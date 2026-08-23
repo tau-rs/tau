@@ -1,0 +1,36 @@
+packages = ["anthropic"]
+
+[project]
+name = "needs-control-flow-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.weather]
+display_name = "Weather"
+package = "needs-control-flow-wasm@^0.1"
+model = "claude"
+
+[agents.news]
+display_name = "News"
+package = "needs-control-flow-wasm@^0.1"
+model = "claude"
+
+# A parallel fan-out — control-flow the wasm guest cannot execute
+# (run_ir_streaming has no run_pipeline path), so `tau build wasm` must refuse.
+[[pipeline.steps]]
+id = "fanout"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "weather"
+    run = "agent:weather"
+    input = "${input}"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "news"
+    run = "agent:news"
+    input = "${input}"

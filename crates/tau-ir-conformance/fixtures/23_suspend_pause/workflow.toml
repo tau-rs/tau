@@ -1,0 +1,23 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-23"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.seed]
+display_name = "Seed"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 1
+
+[[pipeline.steps]]
+id    = "seed"
+run   = "agent:seed"
+input = "${input}"
+
+[[pipeline.steps]]
+id  = "pause"
+run = "suspend:approved"

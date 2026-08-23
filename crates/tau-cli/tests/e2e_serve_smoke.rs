@@ -48,11 +48,20 @@ fn send_line(stdin: &mut std::process::ChildStdin, line: &str) {
     writeln!(stdin, "{}", line).expect("write to tau serve stdin");
 }
 
-fn recv_line(reader: &mut BufReader<std::process::ChildStdout>) -> Value {
+fn recv_line(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    child: &mut std::process::Child,
+) -> Value {
     let mut line = String::new();
-    reader
+    let n = reader
         .read_line(&mut line)
         .expect("read from tau serve stdout");
+    if n == 0 || line.trim().is_empty() {
+        panic!(
+            "tau serve produced no stdout line (child likely exited during startup).{}",
+            e2e_common::drain_child_stderr(child)
+        );
+    }
     serde_json::from_str(line.trim()).expect("parse JSON-RPC response")
 }
 
@@ -66,7 +75,7 @@ fn ping_before_handshake() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":1,"method":"meta.ping"}"#,
     );
-    let resp = recv_line(&mut reader);
+    let resp = recv_line(&mut reader, &mut child);
 
     assert_eq!(resp["id"], 1, "unexpected response: {resp}");
     assert_eq!(
@@ -88,7 +97,7 @@ fn handshake_response_over_real_pipe() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"meta.handshake","params":{"client_name":"e2e-test","client_version":"0.1.0","protocol_version":1}}"#,
     );
-    let resp = recv_line(&mut reader);
+    let resp = recv_line(&mut reader, &mut child);
 
     assert_eq!(resp["id"], 2, "unexpected response: {resp}");
     assert_eq!(
@@ -120,14 +129,14 @@ fn ping_after_handshake() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":10,"method":"meta.handshake","params":{"protocol_version":1}}"#,
     );
-    let _ = recv_line(&mut reader);
+    let _ = recv_line(&mut reader, &mut child);
 
     // Now ping.
     send_line(
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":11,"method":"meta.ping"}"#,
     );
-    let resp = recv_line(&mut reader);
+    let resp = recv_line(&mut reader, &mut child);
 
     assert_eq!(resp["id"], 11, "unexpected response: {resp}");
     assert_eq!(

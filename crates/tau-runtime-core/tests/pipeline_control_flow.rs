@@ -35,12 +35,14 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use tau_ir::budget::AgentBudget;
-use tau_ir::capability::CapabilityTable;
+use tau_ir::capability::{CapabilityRequirements, CapabilityTable};
 use tau_ir::check::{Condition, GoalPredicate, Locus};
 use tau_ir::ids::{AgentId, PipelineStepId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
-use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+use tau_ir::pipeline::{DynamicSpawn, Pipeline, PipelineStep, StepRun};
+use tau_ports::fixtures::MockSuspensionStore;
+use tau_ports::orchestration::SuspensionStore;
 use tau_ports::{
     CompletionRequest, CompletionResponse, ContentBlock, LlmBackend, LlmError, LlmProviderMessage,
 };
@@ -48,7 +50,10 @@ use tau_ports::{
 use tau_runtime_core::builder::DynLlmBackend;
 use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::deterministic::DeterministicRegistry;
-use tau_runtime_core::interpreter::pipeline::run_pipeline;
+use tau_runtime_core::interpreter::output_store::OutputStore;
+use tau_runtime_core::interpreter::pipeline::{
+    run_pipeline, run_pipeline_suspendable, PipelineOutcome, ResumeState, SuspendConfig,
+};
 use tau_runtime_core::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
 use tau_runtime_core::vocabulary::{FN_BUILTIN_EQUALS, FN_BUILTIN_MATCHES};
 
@@ -682,22 +687,350 @@ fn suspend_module() -> IrModule {
     }
 }
 
+/// `run_pipeline` (the non-suspend wrapper) has no `SuspensionStore` wired,
+/// so a `Suspend` step still surfaces as a named error rather than pausing —
+/// only `run_pipeline_suspendable` can pause.
 #[tokio::test]
-async fn suspend_returns_named_error() {
+async fn run_pipeline_errors_suspend_unsupported() {
     let module = suspend_module();
     let err = run_pipeline(Arc::new(module), "x".to_string(), dispatcher())
         .await
-        .expect_err("suspend aborts");
+        .expect_err("suspend aborts on the non-suspend wrapper");
     match err {
-        RuntimeError::SuspendNotImplemented {
+        RuntimeError::SuspendUnsupported {
             step,
             resume_signal,
         } => {
             assert_eq!(step, "pause");
             assert_eq!(resume_signal, "go");
         }
-        other => panic!("expected SuspendNotImplemented, got {other:?}"),
+        other => panic!("expected SuspendUnsupported, got {other:?}"),
     }
+}
+
+// -----------------------------------------------------------------------
+// `StepRun::Dynamic` — loud abort pending EPIC 4.5 (EPIC 4.4, Task 7). The
+// interpreter does not yet execute dynamic regions (membership,
+// attenuation, bounds counters land in 4.5); it meets one with a named
+// error rather than silently skipping or panicking.
+// -----------------------------------------------------------------------
+
+/// Build a `[dynamic:spawn-region]` module: a single `Dynamic` step, id
+/// "spawn-region", with one `researcher` `DynamicSpawn` and minimal bounds.
+fn dynamic_module() -> IrModule {
+    let pipeline = Pipeline {
+        steps: vec![PipelineStep {
+            id: PipelineStepId("spawn-region".into()),
+            run: StepRun::Dynamic {
+                envelope: CapabilityRequirements::default(),
+                spawns: vec![DynamicSpawn {
+                    kind: "researcher".into(),
+                    capabilities: CapabilityRequirements::default(),
+                }],
+                max_spawns: 1,
+                max_concurrency: 1,
+            },
+            input: String::new(),
+        }],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents: BTreeMap::new(),
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// A `Dynamic` step errors with a named runtime-gate-deferral error rather
+/// than executing (real execution is EPIC 4.5).
+#[tokio::test]
+async fn dynamic_region_errors_pending_runtime_gate() {
+    let module = dynamic_module();
+    let err = run_pipeline(Arc::new(module), "x".to_string(), dispatcher())
+        .await
+        .expect_err("dynamic region aborts pending the EPIC 4.5 runtime gate");
+    match err {
+        RuntimeError::DynamicRegionRequiresRuntimeGate { step_id } => {
+            assert_eq!(step_id, "spawn-region");
+        }
+        other => panic!("expected DynamicRegionRequiresRuntimeGate, got {other:?}"),
+    }
+}
+
+/// Build a `[agent:seed, suspend:pause]` module: `seed`'s output lands in
+/// the store, then the run pauses at `pause` (id "pause", resume_signal
+/// "go"). Proves a persisted suspension snapshot carries the pre-suspend
+/// step's output.
+fn seed_then_suspend_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("seed".into()), agent("seed"));
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("seed".into()),
+                run: StepRun::Agent(AgentId("seed".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("pause".into()),
+                run: StepRun::Suspend {
+                    resume_signal: "go".into(),
+                },
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// Suspending a pipeline persists a `PipelineSuspension` (with the
+/// pre-suspend step's output in the snapshot) and returns
+/// `PipelineOutcome::Suspended` rather than erroring.
+#[tokio::test]
+async fn suspend_persists_and_returns_suspended() {
+    let module = Arc::new(seed_then_suspend_module());
+    let store: Arc<dyn SuspensionStore> = Arc::new(MockSuspensionStore::new());
+    let outcome = run_pipeline_suspendable(
+        module.clone(),
+        "x".to_string(),
+        dispatcher(),
+        SuspendConfig {
+            run_id: "r1".into(),
+            store: store.clone(),
+        },
+        None,
+    )
+    .await
+    .expect("suspends cleanly");
+    match outcome {
+        PipelineOutcome::Suspended {
+            run_id,
+            resume_signal,
+            step_id,
+        } => {
+            assert_eq!(run_id, "r1");
+            assert_eq!(resume_signal, "go");
+            assert_eq!(step_id, "pause");
+        }
+        other => panic!("expected Suspended, got {other:?}"),
+    }
+    // The seed step's output was persisted in the snapshot.
+    let susp = store
+        .load_suspension(&"r1".to_string())
+        .unwrap()
+        .expect("suspension was persisted");
+    assert_eq!(susp.step_cursor, 1); // index of "pause"
+    assert!(susp.outputs.contains_key("seed"));
+}
+
+/// Construct an `Agent` node whose `model_ref.backend` equals `id` itself —
+/// `CountingDispatcher::llm_backend_for` counts calls keyed by its `backend`
+/// argument, so this makes the per-agent call counter queryable by agent id.
+fn counted_agent(id: &str) -> Agent {
+    let mut a = agent(id);
+    a.model_ref.backend = id.into();
+    a
+}
+
+/// Dispatcher wiring the echo backend and counting `llm_backend_for`
+/// invocations, keyed by the backend argument (which `counted_agent` sets
+/// equal to the agent id). Proves the resume path does not re-run the
+/// pre-suspend prefix: each agent step calls `llm_backend_for` exactly once
+/// per pipeline run it actually executes in.
+struct CountingDispatcher {
+    backend: Arc<dyn DynLlmBackend>,
+    calls: Mutex<BTreeMap<String, usize>>,
+}
+
+impl CountingDispatcher {
+    /// Number of times `llm_backend_for` was called with `agent_id` as the
+    /// backend argument (i.e. how many times that agent step ran).
+    fn calls(&self, agent_id: &str) -> usize {
+        self.calls
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl ToolDispatcher for CountingDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a tau_ir::ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "CountingDispatcher::invoke should never be called (no tools)".into(),
+            })
+        })
+    }
+
+    fn llm_backend_for(&self, backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        *self
+            .calls
+            .lock()
+            .unwrap()
+            .entry(backend.to_string())
+            .or_insert(0) += 1;
+        Ok(self.backend.clone())
+    }
+}
+
+fn resume_counting_dispatcher() -> Arc<CountingDispatcher> {
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    Arc::new(CountingDispatcher {
+        backend,
+        calls: Mutex::new(BTreeMap::new()),
+    })
+}
+
+/// Build a `[agent:seed, suspend:pause, agent:tail]` module: `seed` runs,
+/// the run pauses at `pause` (resume_signal "go"), and `tail` only runs
+/// once resumed. Both agents' `model_ref.backend` equal their pipeline-step
+/// id (via `counted_agent`) so `CountingDispatcher::calls` can query each
+/// step's invocation count independently.
+fn seed_suspend_tail_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("seed".into()), counted_agent("seed"));
+    agents.insert(AgentId("tail".into()), counted_agent("tail"));
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("seed".into()),
+                run: StepRun::Agent(AgentId("seed".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("pause".into()),
+                run: StepRun::Suspend {
+                    resume_signal: "go".into(),
+                },
+                input: String::new(),
+            },
+            PipelineStep {
+                id: PipelineStepId("tail".into()),
+                run: StepRun::Agent(AgentId("tail".into())),
+                input: "tail-input".into(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// Resuming a suspended pipeline restores the persisted `OutputStore`
+/// snapshot and continues at `step_cursor + 1` — the pre-suspend prefix
+/// (`seed`) must NOT re-run, and the post-suspend tail (`tail`) must run
+/// exactly once.
+#[tokio::test]
+async fn resume_continues_without_rerunning_prefix() {
+    let module = Arc::new(seed_suspend_tail_module());
+    let counting = resume_counting_dispatcher();
+    let store: Arc<dyn SuspensionStore> = Arc::new(MockSuspensionStore::new());
+
+    // Run 1: suspends after seed.
+    let _ = run_pipeline_suspendable(
+        module.clone(),
+        "x".into(),
+        counting.clone(),
+        SuspendConfig {
+            run_id: "r2".into(),
+            store: store.clone(),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let susp = store
+        .load_suspension(&"r2".to_string())
+        .unwrap()
+        .expect("suspension was persisted");
+
+    // Run 2: resume restores the store and continues at cursor+1.
+    let outcome = run_pipeline_suspendable(
+        module.clone(),
+        "x".into(),
+        counting.clone(),
+        SuspendConfig {
+            run_id: "r2".into(),
+            store: store.clone(),
+        },
+        Some(ResumeState {
+            store: OutputStore::restore(susp.outputs),
+            start_at: susp.step_cursor + 1,
+            attempts: susp.attempts,
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(outcome, PipelineOutcome::Completed(_)));
+    // seed ran exactly once (run 1 only); tail ran exactly once (run 2 only).
+    assert_eq!(
+        counting.calls("seed"),
+        1,
+        "prefix must NOT be re-run on resume"
+    );
+    assert_eq!(counting.calls("tail"), 1);
 }
 
 /// Build a `[agent:seed, branch:gate(inner), agent:tail]` module:
@@ -777,4 +1110,233 @@ async fn downstream_reads_block_output_by_bare_id() {
         .await
         .expect("runs");
     assert_eq!(store.get("tail").unwrap(), &serde_json::json!("inner-out"));
+}
+
+// ---------------------------------------------------------------------------
+// Check-retry attempts persist across a suspend/resume boundary (EPIC 4.3
+// follow-up). A `Check` whose `retry.gate` sits BEFORE the `Suspend` step
+// rewinds past the suspend on every failure, so each resume re-hits the
+// suspend and re-pauses. Because the per-check attempt counter is seeded from
+// the restored suspension (rather than reset per invocation), `max_attempts`
+// accumulates across resumes and eventually aborts — instead of looping
+// resume→rewind→re-suspend forever.
+// ---------------------------------------------------------------------------
+
+/// `DeterministicRegistry` answering `FN_BUILTIN_NON_EMPTY` (mirrors
+/// `pipeline_check.rs`'s `NonEmptyRegistry`): a `Goal { NonEmpty }` passes iff
+/// the evaluated output is present and non-empty.
+struct NonEmptyRegistry;
+
+impl DeterministicRegistry for NonEmptyRegistry {
+    fn invoke(&self, fn_name: &str, args: &Value) -> Result<Value, RuntimeError> {
+        if fn_name == tau_runtime_core::vocabulary::FN_BUILTIN_NON_EMPTY {
+            let present = args["present"].as_bool().unwrap_or(false);
+            let content = args["content"].as_str().unwrap_or("");
+            Ok(json!(present && !content.is_empty()))
+        } else {
+            Err(RuntimeError::Internal {
+                message: format!("NonEmptyRegistry: unknown fn {fn_name}"),
+            })
+        }
+    }
+}
+
+/// Dispatcher wiring the echo backend + a `NonEmptyRegistry`. No tools, no
+/// artifact reader (a `Goal` over an `Output` locus needs neither).
+struct RetryResumeDispatcher {
+    backend: Arc<dyn DynLlmBackend>,
+    registry: Arc<NonEmptyRegistry>,
+}
+
+impl ToolDispatcher for RetryResumeDispatcher {
+    fn invoke<'a>(
+        &'a self,
+        _tool_id: &'a tau_ir::ToolId,
+        _args: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(RuntimeError::Internal {
+                message: "RetryResumeDispatcher::invoke should never be called (no tools)".into(),
+            })
+        })
+    }
+
+    fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+        Ok(self.backend.clone())
+    }
+
+    fn deterministic_registry(&self) -> Option<Arc<dyn DeterministicRegistry>> {
+        Some(self.registry.clone())
+    }
+}
+
+fn retry_resume_dispatcher() -> Arc<RetryResumeDispatcher> {
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(EchoBackend);
+    Arc::new(RetryResumeDispatcher {
+        backend,
+        registry: Arc::new(NonEmptyRegistry),
+    })
+}
+
+/// Build a `[agent:writer, suspend:pause, check:g]` module. Run with an empty
+/// input, `writer` echoes `""`, so the `NonEmpty` goal `g` can never pass. Its
+/// `retry.gate` points at `writer` — the step BEFORE the suspend — so a
+/// retryable failure rewinds past the suspend. `max_attempts` bounds how many
+/// times the check may fire across the whole run (including across resumes).
+fn writer_suspend_check_module(max_attempts: u32) -> IrModule {
+    use tau_ir::check::{Check, CheckVerify, OnFail, RetryPolicy};
+    use tau_ir::ids::CheckId;
+
+    let mut agents = BTreeMap::new();
+    agents.insert(AgentId("writer".into()), agent("writer"));
+
+    let mut checks = BTreeMap::new();
+    checks.insert(
+        CheckId("g".into()),
+        Check {
+            id: CheckId("g".into()),
+            verify: CheckVerify::Goal {
+                evaluates: Locus::Output(PipelineStepId("writer".into())),
+                predicate: GoalPredicate::NonEmpty,
+            },
+            retry: RetryPolicy {
+                on_fail: OnFail::Retry,
+                max_attempts,
+                gate: PipelineStepId("writer".into()),
+            },
+        },
+    );
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("writer".into()),
+                run: StepRun::Agent(AgentId("writer".into())),
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("pause".into()),
+                run: StepRun::Suspend {
+                    resume_signal: "go".into(),
+                },
+                input: String::new(),
+            },
+            PipelineStep {
+                id: PipelineStepId("g".into()),
+                run: StepRun::Check(CheckId("g".into())),
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks,
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// A check whose gate sits before the suspend must have its `max_attempts`
+/// budget accumulate across resume boundaries. With `max_attempts = 2` the run
+/// aborts on the SECOND resume; if the attempt counter reset each resume it
+/// would rewind→re-suspend forever.
+#[tokio::test]
+async fn check_attempts_accumulate_across_resume_boundary() {
+    let module = Arc::new(writer_suspend_check_module(2));
+    let dispatcher = retry_resume_dispatcher();
+    let store: Arc<dyn SuspensionStore> = Arc::new(MockSuspensionStore::new());
+    let run_id = "attempts-run".to_string();
+
+    // Run 1 (fresh): pauses at the suspend step; the check has not run yet.
+    let out1 = run_pipeline_suspendable(
+        module.clone(),
+        String::new(),
+        dispatcher.clone(),
+        SuspendConfig {
+            run_id: run_id.clone(),
+            store: store.clone(),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out1, PipelineOutcome::Suspended { .. }));
+    let s1 = store.load_suspension(&run_id).unwrap().unwrap();
+    assert!(
+        s1.attempts.is_empty(),
+        "no check has evaluated at the first pause"
+    );
+
+    // Resume 1: check g fails (attempt 1 < max 2) -> rewind to writer (before
+    // the suspend) -> re-suspend. The persisted attempts must now record g=1.
+    let out2 = run_pipeline_suspendable(
+        module.clone(),
+        String::new(),
+        dispatcher.clone(),
+        SuspendConfig {
+            run_id: run_id.clone(),
+            store: store.clone(),
+        },
+        Some(ResumeState {
+            store: OutputStore::restore(s1.outputs),
+            start_at: s1.step_cursor + 1,
+            attempts: s1.attempts,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(out2, PipelineOutcome::Suspended { .. }),
+        "a retryable failure whose gate precedes the suspend re-suspends"
+    );
+    let s2 = store.load_suspension(&run_id).unwrap().unwrap();
+    assert_eq!(
+        s2.attempts.get("g").copied(),
+        Some(1),
+        "the attempt count must survive the first resume"
+    );
+
+    // Resume 2: restored attempt is 1, so this eval is attempt 2 == max_attempts
+    // -> abort with CheckFailed rather than looping forever.
+    let err = run_pipeline_suspendable(
+        module.clone(),
+        String::new(),
+        dispatcher.clone(),
+        SuspendConfig {
+            run_id: run_id.clone(),
+            store: store.clone(),
+        },
+        Some(ResumeState {
+            store: OutputStore::restore(s2.outputs),
+            start_at: s2.step_cursor + 1,
+            attempts: s2.attempts,
+        }),
+    )
+    .await
+    .expect_err("exhausting max_attempts across resumes must abort, not re-suspend");
+    match err {
+        RuntimeError::CheckFailed { id, attempt, .. } => {
+            assert_eq!(id, "g");
+            assert_eq!(
+                attempt, 2,
+                "the accumulated attempt count reached max_attempts"
+            );
+        }
+        other => panic!("expected RuntimeError::CheckFailed, got: {other:?}"),
+    }
 }

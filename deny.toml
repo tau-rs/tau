@@ -14,9 +14,9 @@ yanked = "deny"
 # beyond our control — flagging them gives no actionable signal until
 # the consuming crate cuts a release using a maintained alternative.
 unmaintained = "workspace"
-# Empty ignore list — review and add specific RUSTSEC-IDs or
-# `{ crate = "...", reason = "..." }` entries here if a flagged
-# vulnerability has no upstream patch + an explicit accept rationale.
+# Review and add specific RUSTSEC-IDs or `{ crate = "...", reason = "..." }`
+# entries here if a flagged vulnerability has no upstream patch (in our pinned
+# line) + an explicit accept rationale.
 ignore = []
 
 [licenses]

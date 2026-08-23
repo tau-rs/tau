@@ -17,4 +17,4 @@ max_turns    = 2
 [tools.weather]
 mcp         = "https://mcp.weather.example.com"
 description = "Look up current weather."
-capabilities = [{ kind = "net.http" }]
+capabilities = [{ kind = "net.http", hosts = "any" }]

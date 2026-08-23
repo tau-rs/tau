@@ -34,6 +34,32 @@ pub struct IrPayload {
     pub canonical_ir_bytes_hex: String,
 }
 
+/// One entry in a bundle's content-addressed asset store (D6-B).
+///
+/// An asset is a file-like resource — currently only agent `system_file`
+/// prompts — that the IR references by content hash
+/// (`PromptSource::Asset("sha256:<hex>")`). Stored as an array-of-tables
+/// sorted by `hash` for canonical determinism, mirroring `[[agents]]`.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleAsset {
+    /// Content hash, `"sha256:" + 64 lowercase hex` — the key the IR's
+    /// `PromptSource::Asset` references and the store is keyed by.
+    pub hash: String,
+    /// What the asset is (currently always `"prompt"`).
+    pub kind: String,
+    /// The raw content bytes, encoded as lowercase hex. Hashed into the
+    /// bundle's self-hash via the canonical TOML.
+    pub bytes_hex: String,
+}
+
+impl BundleAsset {
+    /// Decode `bytes_hex` back to the raw content bytes.
+    pub fn bytes(&self) -> Result<Vec<u8>, HexDecodeError> {
+        hex_decode(&self.bytes_hex)
+    }
+}
+
 /// Error from hex decoding of IrPayload fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HexDecodeError(pub String);
@@ -148,6 +174,12 @@ pub struct BundleManifest {
     /// the canonical TOML.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub governance: Option<GovernanceRecord>,
+    /// Content-addressed asset store (D6-B). Present only when the project
+    /// has `system_file` prompts (or other file-backed resources); the
+    /// bundle's `schema_version` is `5` whenever this is non-empty. Sorted
+    /// by `hash` and hashed into the bundle self-hash via the canonical TOML.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<BundleAsset>,
 }
 
 /// Bundle-level metadata.
@@ -308,6 +340,12 @@ pub struct BundleEffectiveCapabilities {
     /// net.http allow-list patterns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_net_http: Vec<String>,
+    /// net.http any-host grant (`hosts = "any"`, D7-B). When `true`, egress is
+    /// unrestricted and `allow_net_http` is not consulted. Additive + gated:
+    /// omitted from the wire form (and thus the canonical hash) when `false`,
+    /// so pre-D7-B bundles hash identically.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub any_net_http: bool,
     /// net.http deny-list patterns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny_net_http: Vec<String>,
@@ -348,6 +386,7 @@ impl BundleEffectiveCapabilities {
             && self.allow_exec.is_empty()
             && self.deny_exec.is_empty()
             && self.allow_net_http.is_empty()
+            && !self.any_net_http
             && self.deny_net_http.is_empty()
             && self.allow_agent_spawn.is_empty()
             && self.deny_agent_spawn.is_empty()
@@ -384,7 +423,7 @@ impl BundleManifest {
     /// ```
     pub fn parse_str(s: &str) -> Result<Self, BundleParseError> {
         let manifest: BundleManifest = toml::from_str(s)?;
-        if manifest.schema_version < 1 || manifest.schema_version > 4 {
+        if manifest.schema_version < 1 || manifest.schema_version > 5 {
             return Err(BundleParseError::UnsupportedSchemaVersion {
                 found: manifest.schema_version,
             });
@@ -403,6 +442,14 @@ impl BundleManifest {
         // rather than silently ignoring the verdict.
         if manifest.governance.is_some() && manifest.schema_version < 4 {
             return Err(BundleParseError::GovernanceSchemaVersionMismatch {
+                schema_version: manifest.schema_version,
+            });
+        }
+        // Same discipline for the asset store (D6-B): an `[[assets]]` section
+        // MUST declare schema_version >= 5 so an old tau rejects the bundle
+        // rather than silently dropping the prompt bytes the IR references.
+        if !manifest.assets.is_empty() && manifest.schema_version < 5 {
+            return Err(BundleParseError::AssetSchemaVersionMismatch {
                 schema_version: manifest.schema_version,
             });
         }
@@ -568,6 +615,7 @@ pub(crate) mod tests_helpers {
             ir_payload: None,
             triggers: Vec::new(),
             governance: None,
+            assets: Vec::new(),
         }
     }
 }
@@ -686,9 +734,11 @@ verdict = "governed"
     }
 
     #[test]
-    fn parse_str_rejects_schema_version_5() {
+    fn parse_str_rejects_schema_version_6() {
+        // v5 is now valid (the `[[assets]]` store, D6-B); v6 is the new
+        // above-max version an old tau must reject.
         let toml_str = r#"
-schema_version = 5
+schema_version = 6
 
 [bundle]
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -701,9 +751,9 @@ name = "x"
 version = "0.1.0"
 tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "#;
-        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v5");
+        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v6");
         match err {
-            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 5),
+            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 6),
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
     }

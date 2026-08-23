@@ -13,8 +13,15 @@
 //! `12_pipeline_reverse_alpha`, `13_context_pipeline`,
 //! `14_agent_output_schema`, `15_models_multi` (per-agent / per-judge
 //! model resolution), `16_durable_per_turn`,
-//! `17_durable_per_tool_call` (per-tool-call checkpoint granularity), and
-//! `18_durable_intent` (EPIC 6.1 intent-form durable knob).
+//! `17_durable_per_tool_call` (per-tool-call checkpoint granularity),
+//! `18_durable_intent` (EPIC 6.1 intent-form durable knob), and
+//! `19_subflow_attenuation_denied` (runtime subflow cap_subset denial —
+//! contrast fixture 04's proper-narrowing allow),
+//! `20_branch_route` (EPIC 4.2a authored conditional `Branch`),
+//! `21_parallel_fanout` (EPIC 4.2b authored `Parallel` fan-out/join),
+//! `22_loop_refine` (EPIC 4.2c authored bounded `Loop` with feedback), and
+//! `23_suspend_pause` (EPIC 4.3 HITL `Suspend` pause point — dev-mode vs
+//! bundle-mode agreement on the persisted `SuspendedSummary`).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -175,6 +182,15 @@ async fn fixture_03_cross_mode_conformance() {
 /// `report.tool_calls`. We assert subflow execution via the CHILD's
 /// recorded tool calls: if `page` is recorded, the recursive `run_ir`
 /// ran (since `page` only exists in the child agent).
+///
+/// This is the "proper narrowing" case for the subflow runtime attenuation
+/// decorator (`AttenuatedDispatcher`, wired at the `ToolImpl::Subflow` spawn
+/// in `agent_loop.rs`): `notify.capabilities = [{ kind = "net.http" }]`
+/// widens the frame grant so `meet({net.http}, {net.http}) = {net.http}` ⊇
+/// `page`'s declared requirement — the call is allowed through to the
+/// (recording) dispatcher. Contrast fixture 19
+/// (`19_subflow_attenuation_denied`), which uses an EMPTY cap_subset and so
+/// denies the identical child call.
 ///
 /// Expected: RunOutcome::Completed; multiset has `page:{}` = 1
 /// (the child's MCP call), proving the subflow recursion executed.
@@ -397,6 +413,205 @@ async fn fixture_08_cross_mode_conformance() {
     let dir = fixture_dir("08_pipeline_sequence");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+/// Fixture 20: an authored conditional `Branch` (EPIC 4.2a). `triage` emits
+/// text matching the `route` branch condition (`matches "urgent"`), so the
+/// `then` arm (`escalate`) runs and the run reaches `Completed`. Proves the
+/// full author→lower→typecheck→interpret path for a Branch.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_20_dev_mode_runs_branch() {
+    let dir = fixture_dir("20_branch_route");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed branch run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed for the taken branch arm, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 20 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 20: DevMode and BundleMode both drive
+/// the same `run_pipeline` over the Branch IR. BundleMode round-trips through
+/// `to_canonical_bytes` → `from_canonical_bytes` (the same load path the wasm
+/// guest uses), so equal reports prove the Branch survives serialization and
+/// the load gate.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_20_cross_mode_conformance() {
+    let dir = fixture_dir("20_branch_route");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 21 — parallel fan-out/join (EPIC 4.2b)
+// ---------------------------------------------------------------------------
+
+/// Fixture 21: an authored `Parallel` step. Two branches (`weather` and
+/// `news → digest`) run concurrently and join; the run reaches `Completed`.
+/// Proves the full author→lower→typecheck→interpret path for a `Parallel`
+/// fan-out, including a multi-step branch whose later step reads an earlier
+/// same-branch output. The report is order-insensitive (outcome + no tool
+/// calls), so the bounded-concurrency merge order does not matter.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_21_dev_mode_runs_parallel() {
+    let dir = fixture_dir("21_parallel_fanout");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed parallel run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed after the join, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 21 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 21: DevMode and BundleMode both drive
+/// the same `run_pipeline` over the `Parallel` IR. BundleMode round-trips
+/// through `to_canonical_bytes` → `from_canonical_bytes`, so equal reports
+/// prove the `Parallel` block survives serialization and the load gate.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_21_cross_mode_conformance() {
+    let dir = fixture_dir("21_parallel_fanout");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 22 — bounded loop with feedback (EPIC 4.2c)
+// ---------------------------------------------------------------------------
+
+/// Fixture 22: an authored `Loop`. The `drafter` body runs each pass; the
+/// deterministic `until` (`matches "APPROVED"`) fails on the first pass's
+/// output and holds on the second, so the loop converges at iteration 2 —
+/// inside the mandatory `max_iters = 5` bound — and the run reaches
+/// `Completed`. Proves the full author→lower→typecheck→interpret path for a
+/// `Loop`, including multi-pass convergence driven by changing body output.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_22_dev_mode_runs_loop() {
+    let dir = fixture_dir("22_loop_refine");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed loop run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "expected RunOutcome::Completed after the loop converged, got: {:?}",
+        report.run_outcome
+    );
+    assert!(
+        report.tool_calls.is_empty(),
+        "fixture 22 declares no tools; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 22: DevMode and BundleMode both drive
+/// the same `run_pipeline` over the `Loop` IR (with its `max_iters` bound and
+/// `until` condition). Equal reports prove the `Loop` block survives the
+/// canonical-bytes round-trip and the load gate.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_22_cross_mode_conformance() {
+    let dir = fixture_dir("22_loop_refine");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 23 — suspend pause point (EPIC 4.3)
+// ---------------------------------------------------------------------------
+
+/// Fixture 23: `agent:seed -> suspend:approved(pause)`. The `seed` agent's
+/// single scripted turn produces the text `"20"`, which the pipeline
+/// executor stores as `steps.seed.output`; the top-level `pause` step then
+/// hits `StepRun::Suspend { resume_signal: "approved" }` and
+/// `drive_pipeline` drives it via `run_pipeline_suspendable` — durably
+/// persisting a `PipelineSuspension` (carrying `step_cursor = 1`, the index
+/// of `pause`, and an `outputs` snapshot containing `seed`'s output) to a
+/// fresh `MockSuspensionStore` rather than erroring.
+///
+/// Expected: `report.suspended` is `Some`, `run_outcome` and `build_refused`
+/// are both `None` (a suspension is a third terminal state, not a
+/// completion or a build refusal), `resume_signal == "approved"`,
+/// `step_cursor == 1`, and `outputs_canonical` is non-empty (it carries the
+/// `seed` step's persisted output).
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_23_dev_mode_suspends() {
+    let dir = fixture_dir("23_suspend_pause");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed (suspended) run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        report.run_outcome.is_none(),
+        "a suspended report must not also carry a run_outcome, got: {:?}",
+        report.run_outcome
+    );
+    let summary = report
+        .suspended
+        .as_ref()
+        .expect("expected the pipeline to suspend at the `pause` step");
+    assert_eq!(summary.resume_signal, "approved");
+    assert_eq!(
+        summary.step_cursor, 1,
+        "`pause` is the second (index-1) top-level pipeline step"
+    );
+    assert!(
+        !summary.outputs_canonical.is_empty(),
+        "expected the persisted outputs snapshot to carry the seed step's output"
+    );
+    let outputs_json = std::str::from_utf8(&summary.outputs_canonical)
+        .expect("outputs_canonical must be valid UTF-8 JSON");
+    assert!(
+        outputs_json.contains("seed") && outputs_json.contains('2') && outputs_json.contains('0'),
+        "expected the seed step's output (\"20\") in the persisted snapshot; got: {outputs_json}"
+    );
+}
+
+/// Cross-mode conformance for fixture 23: DevMode and BundleMode both drive
+/// `run_pipeline_suspendable` over the same suspend-capable pipeline, so both
+/// must pause at the same step with the same persisted `SuspendedSummary` —
+/// proving dev-mode and bundle-mode agree at a pipeline's HITL pause point.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_23_cross_mode_conformance() {
+    let dir = fixture_dir("23_suspend_pause");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert!(
+        dev.suspended.is_some() && bundle.suspended.is_some(),
+        "expected both modes to suspend: dev={:?}, bundle={:?}",
+        dev.suspended,
+        bundle.suspended
+    );
     assert_conform(&dev, &bundle);
 }
 
@@ -767,8 +982,11 @@ fn fixture_15_lowers_distinct_models_and_judge_resolution() {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
-    let module = lower_project(&config, &target, &caches).expect("lower fixture-15");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower fixture-15")
+        .module;
 
     // Agents carry distinct resolved model ids.
     let gather = module
@@ -953,6 +1171,65 @@ async fn fixture_18_dev_mode_completed_with_durable_intent() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_18_cross_mode_conformance() {
     let dir = fixture_dir("18_durable_intent");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 19 — subflow_attenuation_denied (runtime cap_subset denial)
+// ---------------------------------------------------------------------------
+
+/// Fixture 19: mirrors fixture 04 (parent invokes subflow tool `notify`,
+/// spawning `worker`, which calls MCP tool `page`) except `notify`'s
+/// cap_subset is EMPTY (`capabilities = []`).
+///
+/// The `AttenuatedDispatcher` wired at the `ToolImpl::Subflow` spawn in
+/// `agent_loop.rs` computes `meet(∅, {net.http}) = ∅`, which does not cover
+/// `page`'s declared `net.http` requirement. The call is denied — soft: an
+/// `is_error` tool result is returned to the worker (never reaching
+/// `RecordingDispatcher::invoke`), and a `runtime.subflow.attenuation_denied`
+/// tracing event fires — and the worker's scripted final turn still runs, so
+/// the overall run reaches `RunOutcome::Completed`.
+///
+/// Expected: RunOutcome::Completed (soft-deny, not a hard failure); `page`
+/// does NOT appear in `tool_calls` (denied before ever reaching the
+/// dispatcher); `notify` does not appear either (subflow tools are never
+/// routed through `dispatcher.invoke` — same as fixture 04).
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_19_dev_mode_page_denied_by_attenuation() {
+    let dir = fixture_dir("19_subflow_attenuation_denied");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed run, got build_refused: {:?}",
+        report.build_refused
+    );
+    assert!(
+        matches!(report.run_outcome, Some(RunOutcome::Completed { .. })),
+        "soft-deny: run must still complete, got: {:?}",
+        report.run_outcome
+    );
+    assert_eq!(
+        count_tool_calls(&report, "page"),
+        0,
+        "page must be denied by the empty cap_subset before reaching dispatcher.invoke"
+    );
+    assert_eq!(
+        count_tool_calls(&report, "notify"),
+        0,
+        "subflow tools are not routed through dispatcher.invoke; should not appear in tool_calls"
+    );
+}
+
+/// Cross-mode conformance for fixture 19: dev-mode and bundle-mode must
+/// agree that `page` is denied, proving the attenuation decorator — which
+/// lives in shared `tau-runtime-core` — behaves identically regardless of
+/// which surface (in-process interpreter vs built bundle) drives it.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_19_cross_mode_conformance() {
+    let dir = fixture_dir("19_subflow_attenuation_denied");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);

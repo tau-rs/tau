@@ -147,7 +147,7 @@ pub async fn run(
     )?;
 
     let (agent_def, manifest) =
-        crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
+        crate::config::build_agent_definition(entry, &cwd, &scope, project.effective_models())
             .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
@@ -182,13 +182,9 @@ pub async fn run(
     // runtime is dropped, which drops the shims, which drops the
     // PluginProcess (kill_on_drop ensures the child exits).
 
-    let run_id = format!(
-        "tau-chat-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
+    // Trace-context id for log grouping; prefix kept for log filtering, suffix
+    // is a collision-resistant ULID (was `<nanos>`).
+    let run_id = format!("tau-chat-{}", crate::cmd::run::mint_run_id());
     let trace_context = TraceContext::new(run_id, args.agent_id.clone(), "root".to_string());
     let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
@@ -196,9 +192,14 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded =
-        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        entry,
+        &scope,
+        project.effective_models(),
+        trace_context,
+        host_options,
+    )
+    .await?;
 
     let runtime = loaded
         .builder

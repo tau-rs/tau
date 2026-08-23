@@ -414,6 +414,34 @@ impl Runtime {
         use futures_core::Stream as _;
         use tau_ports::{LlmError, ToolError};
 
+        // Capture the orchestration trace context BEFORE `agent_def` and
+        // `options` are moved into the streaming delegate. When this run is
+        // part of a multi-agent orchestration (an `orchestration_state` with
+        // its `TraceStream` is present, and the host injected clock+random),
+        // the collector below translates the pump's per-turn
+        // `RunEvent::TurnCompleted` and terminal `RunCompleted` into the
+        // multi-agent `Turn`/`Completion` trace events that
+        // `output_orchestration::run_printer` aggregates into the per-agent
+        // summary (issue #469). Every agent — root, spawned children, and
+        // interpreter-driven agents — funnels through this one method, so a
+        // single emit site covers them all. Non-orchestrated single-agent
+        // runs leave `orchestration_state` unset and skip emission entirely.
+        let trace_ctx = match (
+            options.orchestration_state.clone(),
+            options.clock.clone(),
+            options.random.clone(),
+        ) {
+            (Some(state), Some(clock), Some(random)) => {
+                Some((state, clock, random, agent_def.id.to_string()))
+            }
+            _ => None,
+        };
+        // Wall-clock mark for per-turn duration: initialised to run start,
+        // advanced on each `TurnCompleted`.
+        let mut last_turn_mark = trace_ctx
+            .as_ref()
+            .map(|(_, clock, _, _)| crate::ids::now_utc(clock));
+
         // Delegate all agent-loop logic to run_streaming_with_history.
         let stream = self
             .run_streaming_with_history(
@@ -428,7 +456,62 @@ impl Runtime {
         loop {
             let next = core::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
             match next {
-                Some(RunEvent::RunCompleted { outcome }) => return Ok(outcome),
+                Some(RunEvent::TurnCompleted { turn, usage, .. }) => {
+                    // Translate the pump's per-turn signal into a multi-agent
+                    // `Turn` trace event, timed off the injected clock.
+                    if let Some((state, clock, random, agent_id)) = trace_ctx.as_ref() {
+                        let now = crate::ids::now_utc(clock);
+                        let duration_ms = last_turn_mark
+                            .map(|prev| (now - prev).num_milliseconds().max(0) as u64)
+                            .unwrap_or(0);
+                        last_turn_mark = Some(now);
+                        // input + output, matching how `aggregated_tokens`
+                        // (and thus the Summary header `tokens_used`) sums.
+                        let tokens = usage
+                            .map(|u| u64::from(u.input_tokens) + u64::from(u.output_tokens))
+                            .unwrap_or(0);
+                        let s = state.borrow();
+                        s.trace.emit(tau_ports::TraceEvent {
+                            id: crate::ids::ulid(clock, random),
+                            ts: now,
+                            run_id: s.run_id.clone(),
+                            agent_id: Some(agent_id.clone()),
+                            kind: tau_ports::TraceEventKind::Turn {
+                                agent_id: agent_id.clone(),
+                                // `RunEvent::TurnCompleted.turn` is 1-indexed;
+                                // `TraceEventKind::Turn.turn_index` is 0-based.
+                                turn_index: turn.saturating_sub(1),
+                                duration_ms,
+                                tokens,
+                            },
+                        });
+                    }
+                    continue;
+                }
+                Some(RunEvent::RunCompleted { outcome }) => {
+                    // Emit the agent's `Completion` before returning so the
+                    // per-agent summary has an entry even for a zero-turn or
+                    // failed agent.
+                    if let Some((state, clock, random, agent_id)) = trace_ctx.as_ref() {
+                        let status = if matches!(outcome, RunOutcome::Completed { .. }) {
+                            "completed"
+                        } else {
+                            "failed"
+                        };
+                        let s = state.borrow();
+                        s.trace.emit(tau_ports::TraceEvent {
+                            id: crate::ids::ulid(clock, random),
+                            ts: crate::ids::now_utc(clock),
+                            run_id: s.run_id.clone(),
+                            agent_id: Some(agent_id.clone()),
+                            kind: tau_ports::TraceEventKind::Completion {
+                                agent_id: agent_id.clone(),
+                                status: status.to_string(),
+                            },
+                        });
+                    }
+                    return Ok(outcome);
+                }
                 Some(RunEvent::FatalError {
                     kind,
                     detail,
@@ -683,6 +766,15 @@ pub fn build_policy_denied_outcome(
 /// projection point in the kernel.
 pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProviderMessage> {
     let mut out = Vec::with_capacity(history.len());
+    // Provider id of the most recent tool-call, so each tool-result
+    // references the `tool_use` it answers rather than its own message id.
+    // Anthropic rejects a `tool_result` whose `tool_use_id` matches no
+    // preceding `tool_use.id` (orphaned pair) on multi-turn tool runs.
+    // A result message's `parent_id` (the message it replies to) is the
+    // authoritative link; when absent we fall back to the nearest preceding
+    // tool-call — the run loop pushes each call immediately before its
+    // result, so calls and results strictly alternate in the history.
+    let mut last_tool_use_id: Option<String> = None;
     for m in history {
         match (&m.sender, &m.payload) {
             (tau_domain::Address::User, MessagePayload::Text { content }) => {
@@ -700,13 +792,15 @@ pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProvid
                     tau_domain::Address::Tool(name) => name.clone(),
                     _ => String::new(),
                 };
+                let tool_use_id = alloc::format!("toolu_{}", m.id);
+                last_tool_use_id = Some(tool_use_id.clone());
                 out.push(LlmProviderMessage::assistant(vec![ContentBlock::ToolUse(
-                    ToolUse::new(alloc::format!("toolu_{}", m.id), tool_name, args.clone()),
+                    ToolUse::new(tool_use_id, tool_name, args.clone()),
                 )]));
             }
             (tau_domain::Address::Tool(_), MessagePayload::ToolResult { body }) => {
                 out.push(LlmProviderMessage::tool_result(
-                    alloc::format!("toolu_{}", m.id),
+                    answered_tool_use_id(m, last_tool_use_id.as_deref()),
                     vec![ContentBlock::Text(value_to_preview_string(body))],
                     false,
                 ));
@@ -720,7 +814,7 @@ pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProvid
                 },
             ) => {
                 out.push(LlmProviderMessage::tool_result(
-                    alloc::format!("toolu_{}", m.id),
+                    answered_tool_use_id(m, last_tool_use_id.as_deref()),
                     vec![ContentBlock::Text(message.clone())],
                     true,
                 ));
@@ -729,6 +823,19 @@ pub fn agent_messages_to_provider_messages(history: &[Message]) -> Vec<LlmProvid
         }
     }
     out
+}
+
+/// Provider `tool_use_id` for a tool-result/error message: prefer the
+/// message's `parent_id` (authoritative link to the tool-call it answers),
+/// then the nearest preceding tool-call id, then — for a malformed history
+/// with neither — the result's own id (degenerate, preserves old behavior).
+fn answered_tool_use_id(m: &Message, last_tool_use_id: Option<&str>) -> String {
+    match &m.parent_id {
+        Some(parent) => alloc::format!("toolu_{parent}"),
+        None => last_tool_use_id
+            .map(String::from)
+            .unwrap_or_else(|| alloc::format!("toolu_{}", m.id)),
+    }
 }
 
 /// Flatten a tool's content blocks into a single human-readable string.

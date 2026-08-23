@@ -114,6 +114,7 @@ fn lower_fixture(path: &std::path::Path) -> LowerFixtureOutcome {
         },
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
 
     match lower_project(&config, &target, &caches) {
@@ -257,7 +258,7 @@ name = "mcp_weather"
 
 [tools.weather]
 mcp = "https://mcp.example.com/weather"
-capabilities = [{ kind = "net.http", hosts = ["api.weather.com"], methods = [] }]
+capabilities = [{ kind = "net.http", hosts = ["api.weather.com"] }]
 "#,
     )
     .unwrap();

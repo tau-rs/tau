@@ -196,6 +196,11 @@ pub enum Command {
     /// editing `tau.toml` triggers a `:reload` hint that preserves
     /// conversation history.
     Dev(DevArgs),
+    /// Emit host-embedding glue for a target language (Phase 2 §5.2).
+    Embed(EmbedArgs),
+    /// Open the execution-trace waterfall TUI (M1) on a run's
+    /// `.tau/runs/<id>.jsonl` file.
+    Trace(TraceArgs),
 }
 
 /// Top-level arguments for `tau build [wasm] [...]`.
@@ -239,6 +244,14 @@ pub struct BuildWasmArgs {
     /// (default: `<project>/<name>-<version>.wasm`).
     #[arg(long, short = 'o', value_name = "PATH")]
     pub output: Option<std::path::PathBuf>,
+    /// Authorize a wasm build of a project that declares NO `[allow]` ceiling.
+    /// Governed-by-default: without this, a missing `[allow]` is a hard error
+    /// (GOV000). Distinct from `--no-governance` (skip an existing ceiling).
+    #[arg(long, conflicts_with = "no_governance")]
+    pub allow_ungoverned: bool,
+    /// Build a project that HAS an `[allow]` ceiling without enforcing it.
+    #[arg(long)]
+    pub no_governance: bool,
 }
 
 /// Arguments for `tau build` (bundle — Phase 2 §C.2).
@@ -249,9 +262,11 @@ pub struct BuildArgs {
     /// Defaults to the current working directory.
     #[arg(value_name = "PROJECT")]
     pub project: Option<std::path::PathBuf>,
-    /// Target triple to build for (default: host). Must be an
-    /// Available triple in the ADR-0034 registry.
-    #[arg(long, value_name = "TRIPLE")]
+    /// What to build: an artifact kind (`wasm-guest`, `rust-lib`) or an
+    /// Available hardware triple (default: host → `.tau` bundle). `wasm-guest`
+    /// emits the fully-linked wasm component; `rust-lib` emits a generated
+    /// no_std Rust embedding crate (EPIC 5.1).
+    #[arg(long, value_name = "KIND|TRIPLE")]
     pub target: Option<String>,
     /// Output path (default: `<project>/<name>-<version>.tau`).
     #[arg(long, short = 'o', value_name = "PATH")]
@@ -274,6 +289,12 @@ pub struct BuildArgs {
     /// cron schedules systemd can't auto-translate are skipped with a note.
     #[arg(long = "emit-trigger", value_name = "ADAPTER", value_parser = ["systemd", "k8s"])]
     pub emit_trigger: Option<String>,
+    /// Reference tau crates by filesystem path (a tau workspace checkout
+    /// root) instead of a crates.io version in the generated Cargo.toml
+    /// (`--target rust-lib` only). Required to build the artifact until
+    /// tau is published to crates.io.
+    #[arg(long = "tau-dep-path", value_name = "DIR")]
+    pub tau_dep_path: Option<std::path::PathBuf>,
     /// Authorize a build of a project that declares NO `[allow]` ceiling
     /// (records bundle verdict `ungoverned`). Governed-by-default: without
     /// this, a missing `[allow]` is a hard error (GOV000). Distinct from
@@ -547,6 +568,15 @@ pub struct VerifyArgs {
     /// (Phase 2 §E).
     #[arg(long, value_name = "PATH", conflicts_with = "package")]
     pub bundle: Option<std::path::PathBuf>,
+    /// Reproducibility check for a wasm build: re-derive the guest WIT world
+    /// from this project's declared capabilities and byte-compare it against
+    /// the shipped `.wit` (`--wit`). Exit 0 reproducible / 2 drift / 1 error.
+    /// Mutually exclusive with the package positional and `--bundle`.
+    #[arg(long, value_name = "PROJECT", conflicts_with_all = ["package", "bundle"], requires = "wit")]
+    pub wasm: Option<std::path::PathBuf>,
+    /// The shipped `.wit` sidecar to compare against (requires `--wasm`).
+    #[arg(long, value_name = "PATH", requires = "wasm")]
+    pub wit: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `tau update`.
@@ -614,8 +644,17 @@ pub struct RunArgs {
     /// declare `[durable]`; the run rehydrates the latest checkpoint under
     /// `.tau/runs/<RUN_ID>/` and re-enters at the next turn, so already
     /// committed turns are not re-billed.
+    ///
+    /// On the pipeline path (EPIC 4.3), `--resume <RUN_ID>` combined with
+    /// `--signal <NAME>` resumes a pipeline paused at a top-level `Suspend`
+    /// step instead: the run rehydrates its `OutputStore` snapshot from
+    /// `.tau/runs/<RUN_ID>/suspend.json` and continues after the `Suspend`
+    /// step.
     #[arg(long, value_name = "RUN_ID")]
     pub resume: Option<String>,
+    /// Signal name to resume a suspended pipeline run (with `--resume`).
+    #[arg(long, value_name = "NAME")]
+    pub signal: Option<String>,
     /// Authorize running a project/bundle with no `[allow]` ceiling. On the
     /// dev path a missing `[allow]` is otherwise a hard error (GOV000); on the
     /// `--bundle` path this is required to run a bundle built `ungoverned`.
@@ -625,6 +664,16 @@ pub struct RunArgs {
     /// No effect on `--bundle` runs (the bundle's verdict is already sealed).
     #[arg(long)]
     pub no_governance: bool,
+    /// Render the run live in the execution-trace waterfall TUI (M1)
+    /// instead of the scrolling-line printer. Requires an interactive
+    /// terminal on stdout (checked at dispatch time — the TUI takes over
+    /// the terminal). Mutually exclusive with `--json`: pipe the JSONL
+    /// trace instead of `--tui` when scripting. Currently only wired for
+    /// multi-agent runs (the ones that build a live `TraceEvent` stream
+    /// via `drive_with_live_trace`); `tau trace --last` re-opens any
+    /// finished run's `.tau/runs/<id>.jsonl` afterwards.
+    #[arg(long, conflicts_with = "json")]
+    pub tui: bool,
 }
 
 /// Arguments for `tau chat`.
@@ -680,6 +729,46 @@ pub struct DevArgs {
     /// Disable ANSI coloring of output.
     #[arg(long)]
     pub no_color: bool,
+}
+
+/// Arguments for `tau trace`.
+///
+/// Opens the execution-trace waterfall TUI on a run's JSONL trace file
+/// under `./.tau/runs/`. Exactly one of `run_id` / `--last` must resolve
+/// to an existing file; `cmd::trace::resolve_run` renders a friendly
+/// error (listing available run ids) otherwise.
+#[derive(Args, Debug)]
+pub struct TraceArgs {
+    /// Run id to open (matches `.tau/runs/<RUN_ID>.jsonl`). Omit and pass
+    /// `--last` to open the most recently modified run file instead.
+    #[arg(value_name = "RUN_ID", conflicts_with = "last")]
+    pub run_id: Option<String>,
+    /// Open the most recently modified run file under `.tau/runs`
+    /// instead of an explicit run id.
+    #[arg(long)]
+    pub last: bool,
+}
+
+/// Arguments for `tau embed`.
+#[derive(clap::Args, Debug)]
+pub struct EmbedArgs {
+    /// Host language for the generated glue: `js` (shipped), `rust`, or `c`.
+    #[arg(long, value_name = "HOST")]
+    pub host: String,
+    /// Project to derive IR + WIT from (directory with `tau.toml`, or a
+    /// `.ts` file). Required for `--host rust|c`; ignored for `--host js`
+    /// (that scaffold is project-independent). Defaults to the CWD.
+    #[arg(value_name = "PROJECT")]
+    pub project: Option<PathBuf>,
+    /// Output directory (default: current directory). Files land under
+    /// `<dir>/embed-{rust,c}/` or `<dir>/sdk/embed-js/`.
+    #[arg(long, short = 'o', value_name = "DIR")]
+    pub output: Option<PathBuf>,
+    /// Reference tau crates by filesystem path (a tau workspace checkout
+    /// root) instead of a crates.io version in the generated Cargo.toml.
+    /// Required to build the artifact until tau is published to crates.io.
+    #[arg(long = "tau-dep-path", value_name = "DIR")]
+    pub tau_dep_path: Option<PathBuf>,
 }
 
 /// Resource kinds accepted by `tau list`.
@@ -1322,6 +1411,64 @@ mod tests {
             wasm_args.project.as_deref(),
             Some(std::path::Path::new("examples/fan-monitor")),
         );
+    }
+
+    /// Local parse helper mirroring the task-7 brief's `try_parse`
+    /// pseudocode: a plain `Cli::try_parse_from` wrapped in `anyhow`, since
+    /// `--tui` (`RunArgs`) and `--json` (global, on `Cli`) are rejected by
+    /// clap's own `conflicts_with` — global args are propagated into every
+    /// subcommand's arg set, so `conflicts_with = "json"` on `tui` resolves
+    /// against the global flag with no extra glue code.
+    fn try_parse(argv: &[&str]) -> anyhow::Result<Cli> {
+        Ok(Cli::try_parse_from(argv)?)
+    }
+
+    #[test]
+    fn tui_conflicts_with_json() {
+        let err = try_parse(&["tau", "run", "agent-x", "--tui", "--json"]).unwrap_err();
+        assert!(err.to_string().contains("--tui"), "got: {err}");
+        assert!(err.to_string().contains("--json"), "got: {err}");
+    }
+
+    #[test]
+    fn tui_flag_defaults_off_and_parses_on() {
+        let cli = Cli::parse_from(["tau", "run", "agent-x"]);
+        let Command::Run(args) = cli.command else {
+            panic!()
+        };
+        assert!(!args.tui);
+
+        let cli = Cli::parse_from(["tau", "run", "agent-x", "--tui"]);
+        let Command::Run(args) = cli.command else {
+            panic!()
+        };
+        assert!(args.tui);
+    }
+
+    #[test]
+    fn parses_trace_with_run_id() {
+        let cli = Cli::parse_from(["tau", "trace", "01ABC"]);
+        let Command::Trace(args) = cli.command else {
+            panic!("expected Trace: {:?}", cli.command)
+        };
+        assert_eq!(args.run_id.as_deref(), Some("01ABC"));
+        assert!(!args.last);
+    }
+
+    #[test]
+    fn parses_trace_with_last() {
+        let cli = Cli::parse_from(["tau", "trace", "--last"]);
+        let Command::Trace(args) = cli.command else {
+            panic!("expected Trace: {:?}", cli.command)
+        };
+        assert_eq!(args.run_id, None);
+        assert!(args.last);
+    }
+
+    #[test]
+    fn trace_run_id_and_last_are_mutually_exclusive() {
+        let result = Cli::try_parse_from(["tau", "trace", "01ABC", "--last"]);
+        assert!(result.is_err(), "expected mutual exclusion error");
     }
 
     #[test]

@@ -1,0 +1,22 @@
+packages = ["anthropic"]
+
+[project]
+name = "tool-agent"
+
+[models.haiku]
+backend = "anthropic"
+model = "claude-haiku-4-5"
+
+[tools.read_temp]
+native = "ReadTemp"
+description = "Read the temperature sensor"
+capabilities = [{ kind = "fs.read", paths = ["/sys/**"] }]
+
+[agents.monitor]
+display_name = "Monitor"
+package = "monitor@^0.1"
+model = "haiku"
+tool_refs = ["read_temp"]
+
+[agents.monitor.prompt]
+system = "Watch the temperature; report if above 30C."

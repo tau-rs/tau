@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-/// Errors returned by [`crate::bundle::build`].
+/// Errors returned by [`crate::bundle::build`](crate::bundle::build()).
 ///
 /// Each variant maps to a CLI exit code via `tau-cli::cmd::build`:
 /// config/parse errors → 2, install-state errors → 3, internal/IO

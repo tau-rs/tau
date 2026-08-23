@@ -20,7 +20,7 @@ pub enum CheckCategory {
     Skills,
     /// MCP pinned-contract drift checks.
     McpContracts,
-    /// [allow] constitution enforcement (ADR-0057).
+    /// `[allow]` constitution enforcement (ADR-0057).
     Governance,
 }
 

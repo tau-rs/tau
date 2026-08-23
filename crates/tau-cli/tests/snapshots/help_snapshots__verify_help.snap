@@ -23,6 +23,12 @@ Options:
       --bundle <PATH>
           Reproducibility check: rebuild a bundle from the local tree and compare to this `.tau` file. Mutually exclusive with the package positional. Exit 0 reproducible / 2 not / 3 not-installed (Phase 2 §E)
 
+      --wasm <PROJECT>
+          Reproducibility check for a wasm build: re-derive the guest WIT world from this project's declared capabilities and byte-compare it against the shipped `.wit` (`--wit`). Exit 0 reproducible / 2 drift / 1 error. Mutually exclusive with the package positional and `--bundle`
+
+      --wit <PATH>
+          The shipped `.wit` sidecar to compare against (requires `--wasm`)
+
   -v, --verbose...
           Verbosity level. Repeat for more (-v: DEBUG, -vv: TRACE)
 

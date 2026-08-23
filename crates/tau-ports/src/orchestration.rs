@@ -9,6 +9,7 @@
 //! for the design and `docs/decisions/0023-multi-agent-orchestration.md`
 //! for the ADR.
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -115,6 +116,25 @@ pub struct TraceEvent {
     pub kind: TraceEventKind,
 }
 
+/// Governance decision recorded for a capability-gated tool call.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "verdict", rename_all = "snake_case"))]
+pub enum CapabilityVerdict {
+    /// Call allowed as requested.
+    Allow,
+    /// Call allowed after meet-clamping to a narrower authority.
+    Clamp {
+        /// Human-readable clamped target (e.g. the allowed host).
+        to: String,
+    },
+    /// Call denied fail-closed.
+    Drop {
+        /// Why it was dropped.
+        reason: String,
+    },
+}
+
 /// Discriminated union of trace event kinds.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -137,6 +157,8 @@ pub enum TraceEventKind {
         turn_index: u32,
         /// Duration of the turn in milliseconds.
         duration_ms: u64,
+        /// Total tokens (input + output) consumed by this turn.
+        tokens: u64,
     },
     /// An agent called a tool.
     ToolCall {
@@ -146,6 +168,17 @@ pub enum TraceEventKind {
         duration_ms: u64,
         /// Status (`"ok"`, `"error"`).
         status: String,
+        /// Capability decision, if this tool was capability-gated.
+        /// `None` for un-gated tools or traces predating this field.
+        #[cfg_attr(feature = "serde", serde(default))]
+        capability: Option<CapabilityVerdict>,
+        /// Zero-based index of the turn this tool call belongs to, matching
+        /// the sibling [`TraceEventKind::Turn::turn_index`] of the same turn.
+        /// Lets a renderer nest a tool span under the correct turn rather
+        /// than the agent's first turn. `0` for un-indexed / legacy traces
+        /// predating this field (serde-defaulted).
+        #[cfg_attr(feature = "serde", serde(default))]
+        turn_index: u32,
     },
     /// A task was mutated.
     TaskMutation {
@@ -326,6 +359,67 @@ pub trait CheckpointStore: Send + Sync {
     fn load_latest(&self, run_id: &RunId) -> Result<Option<TurnCheckpoint>, CheckpointError>;
 }
 
+/// A resumable snapshot of a pipeline paused at a top-level `Suspend` step.
+///
+/// Distinct from [`TurnCheckpoint`] (agent-turn durability): this carries the
+/// pipeline `OutputStore` snapshot + the step cursor, not message history. Both
+/// share the `run_id` handle and the `.tau/runs/<run_id>/` directory. Resume is
+/// restore-and-continue: rehydrate `outputs`, jump to `step_cursor + 1`.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PipelineSuspension {
+    /// Run this suspension belongs to (the `--resume` key).
+    pub run_id: RunId,
+    /// Signal the resumer must match to continue (`--signal`).
+    pub resume_signal: String,
+    /// Index of the `Suspend` step in the top-level pipeline slice. Resume
+    /// re-enters at `step_cursor + 1`.
+    pub step_cursor: usize,
+    /// The `Suspend` step's id (for the "paused at <id>" human message).
+    pub step_id: String,
+    /// Canonical-IR SHA-256 of the module at pause time (`"sha256:" + hex`).
+    /// Resume rejects a project that changed since the pause.
+    pub ir_digest: String,
+    /// The `OutputStore` snapshot as of the pause (step id -> output value).
+    pub outputs: BTreeMap<String, serde_json::Value>,
+    /// Per-check retry-attempt counts accumulated up to the pause (check id ->
+    /// count). Carried across resume so a `Check` whose `retry.gate` sits
+    /// *before* the `Suspend` step cannot reset its attempt budget on every
+    /// resume (which would let it rewind→re-suspend forever without
+    /// `max_attempts` ever tripping). Absent in pre-followup snapshots, so it
+    /// defaults to empty on deserialize.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub attempts: BTreeMap<String, u32>,
+}
+
+/// Port: persists and loads a pipeline [`PipelineSuspension`] for HITL resume.
+///
+/// One live suspension per run (a second `Suspend` on resume overwrites it; a
+/// completed run removes it). Keyed by the same `RunId` as [`CheckpointStore`]
+/// and stored in the same run directory, so one `--resume <run_id>` handle
+/// covers both agent-turn and pipeline-step resume.
+pub trait SuspensionStore: Send + Sync {
+    /// Durably record the pause point. Overwrites any prior suspension for the
+    /// same `run_id`.
+    fn persist_suspension(&self, s: &PipelineSuspension) -> Result<(), CheckpointError>;
+
+    /// Load the current suspension for `run_id`, or `None` if the run is not
+    /// paused.
+    fn load_suspension(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Option<PipelineSuspension>, CheckpointError>;
+
+    /// Remove the suspension for `run_id`, if any. Idempotent: absent = `Ok(())`.
+    /// Called after a resumed run completes so a stale snapshot cannot be
+    /// re-resumed (which would re-run the post-suspend steps). Default no-op for
+    /// stores that do not need cleanup.
+    fn delete_suspension(&self, run_id: &RunId) -> Result<(), CheckpointError> {
+        let _ = run_id;
+        Ok(())
+    }
+}
+
 #[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;
@@ -404,5 +498,36 @@ mod tests {
         assert_eq!(v["status"], "pending");
         let back: Task = serde_json::from_value(v).unwrap();
         assert_eq!(back, t);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn tool_call_serdes_capability_verdict() {
+        let evt = TraceEventKind::ToolCall {
+            tool_name: "net.http".into(),
+            duration_ms: 380,
+            status: "ok".into(),
+            capability: Some(CapabilityVerdict::Clamp {
+                to: "api.example.com".into(),
+            }),
+            turn_index: 0,
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains(r#""kind":"tool_call""#));
+        assert!(json.contains(r#""capability""#));
+        let back: TraceEventKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, evt);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn tool_call_capability_absent_deserializes_none() {
+        // Forward-compat: an older run without the field parses as None.
+        let json = r#"{"kind":"tool_call","tool_name":"fs.read","duration_ms":2,"status":"ok"}"#;
+        let back: TraceEventKind = serde_json::from_str(json).unwrap();
+        match back {
+            TraceEventKind::ToolCall { capability, .. } => assert!(capability.is_none()),
+            _ => panic!("wrong variant"),
+        }
     }
 }

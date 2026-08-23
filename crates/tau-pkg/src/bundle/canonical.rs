@@ -79,7 +79,23 @@ pub fn to_canonical_toml(manifest: &BundleManifest) -> String {
         write_ir_payload(&mut out, ir);
     }
 
+    // [[assets]] — content-addressed asset store (D6-B). The `build` writer
+    // sorts by `hash`; emit in that order so the bytes participate in the
+    // self-hash deterministically.
+    for asset in &manifest.assets {
+        out.push('\n');
+        out.push_str("[[assets]]\n");
+        write_asset(&mut out, asset);
+    }
+
     out
+}
+
+fn write_asset(out: &mut String, asset: &crate::bundle::manifest::BundleAsset) {
+    // Fixed field order for a deterministic hash; `bytes_hex` is already hex.
+    write_str_kv(out, "hash", &asset.hash);
+    write_str_kv(out, "kind", &asset.kind);
+    write_str_kv(out, "bytes_hex", &asset.bytes_hex);
 }
 
 fn write_governance(out: &mut String, gov: &GovernanceRecord) {
@@ -201,6 +217,10 @@ fn write_effective_capabilities(out: &mut String, caps: &BundleEffectiveCapabili
     if !caps.allow_net_http.is_empty() {
         write_string_array(out, "allow_net_http", caps.allow_net_http.clone());
     }
+    // Gated: only emitted when set, so pre-D7-B bundles hash identically.
+    if caps.any_net_http {
+        writeln!(out, "any_net_http = true").unwrap();
+    }
     if !caps.deny_net_http.is_empty() {
         write_string_array(out, "deny_net_http", caps.deny_net_http.clone());
     }
@@ -309,6 +329,42 @@ mod tests {
         let toml_str = to_canonical_toml(&m);
         let parsed = BundleManifest::parse_str(&toml_str).expect("parse");
         assert_eq!(parsed, m);
+    }
+
+    /// D6-B: the `[[assets]]` store is emitted, round-trips through parse, and
+    /// its bytes participate in the bundle self-hash (tamper-evidence).
+    #[test]
+    fn assets_are_emitted_round_trip_and_feed_the_self_hash() {
+        use crate::bundle::hash::compute_self_hash;
+        use crate::bundle::manifest::BundleAsset;
+
+        let mut m = sample_manifest();
+        m.schema_version = 5;
+        m.assets = vec![BundleAsset {
+            hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+            kind: "prompt".into(),
+            bytes_hex: "48656c6c6f".into(), // "Hello"
+        }];
+
+        let toml_str = to_canonical_toml(&m);
+        assert!(
+            toml_str.contains("[[assets]]"),
+            "assets section must be emitted: {toml_str}"
+        );
+
+        // Round-trips through parse.
+        let parsed = BundleManifest::parse_str(&toml_str).expect("parse");
+        assert_eq!(parsed, m);
+
+        // Assets feed the self-hash: mutating an asset's bytes changes it.
+        let h1 = compute_self_hash(&m);
+        let mut m2 = m.clone();
+        m2.assets[0].bytes_hex = "48656c6c6f21".into(); // "Hello!"
+        let h2 = compute_self_hash(&m2);
+        assert_ne!(
+            h1, h2,
+            "asset bytes must participate in the bundle self-hash"
+        );
     }
 
     #[test]

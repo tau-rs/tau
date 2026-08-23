@@ -18,8 +18,10 @@ extern crate alloc;
 extern crate std;
 
 pub mod agent;
+pub mod agent_kind;
 pub mod error;
 pub mod id;
+pub mod ir_feature;
 pub mod message;
 pub mod package;
 pub mod value;
@@ -34,21 +36,25 @@ pub use crate::package::skill::{
     SkillContent, SkillContentError, SkillFrontmatter, SkillManifest, SKILL_DIR_VAR,
 };
 pub use agent::{AgentDefinition, AgentStatus, FailureKind};
+pub use agent_kind::AgentKind;
 pub use error::{
     AgentIdError, PackageKindError, PackageManifestError, PackageNameError, PackageSourceError,
     PluginKindError, PortKindError,
 };
 pub use id::{AgentId, AgentInstanceId, MessageId, PackageName};
+pub use ir_feature::IrFeature;
 pub use message::{Address, Message, MessagePayload};
+pub use package::capability::lattice::{canon_caps, capability_subset, meet, CeilingViolation};
 #[cfg(feature = "std")]
 pub use package::detect_format;
 #[cfg(feature = "serde")]
 pub use package::synthesize_manifest_from_skill_md;
 pub use package::{
     kinds, AgentCapability, Capability, CapabilityShape, CapabilityShapeSet, FsCapability,
-    GitLocation, NetCapability, PackageDep, PackageId, PackageKind, PackageManifest, PackageSource,
-    PluginKind, PluginManifest, PluginRequiredTier, PluginSandboxRequirements, PortKind,
-    ProcessCapability, SkillCapability, SkillFormat, SynthesizeError, UncheckedManifest,
+    GitLocation, HostName, HostNameError, HostSet, HttpMethod, NetCapability, PackageDep,
+    PackageId, PackageKind, PackageManifest, PackageSource, PluginKind, PluginManifest,
+    PluginRequiredTier, PluginSandboxRequirements, PortKind, ProcessCapability, SkillCapability,
+    SkillFormat, SynthesizeError, UncheckedManifest, VocabMode, KNOWN_VOCAB,
 };
 pub use value::Value;
 pub use version::{Version, VersionReq};

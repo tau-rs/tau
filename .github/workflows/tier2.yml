@@ -5,7 +5,7 @@ name: Tier 2 — Heavy validation
 # - pull_request labeled `full-matrix` (opt-in pre-merge heavy run)
 # - workflow_dispatch (manual)
 #
-# Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 1
+# Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 0
 # (ci-summary) green; Tier 2 results are informational, posted as PR
 # comments or — on cron — as rolling regression issues.
 
@@ -65,7 +65,7 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
@@ -108,14 +108,21 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
           shared-key: macos-latest-stable
           with-nextest: true
           with-sccache: true
-      - run: cargo nextest run --profile ci --workspace --all-targets
+      # --no-fail-fast: nightly is a comprehensive regression sweep — surface
+      # EVERY failing test in one run rather than stopping at the first, so a
+      # single cron (and its auto-bisect) sees the whole picture.
+      # --retries 2: the shared macOS/Windows runners are loaded and several
+      # e2e tests are timing-sensitive; retries absorb transient flakes while a
+      # genuine break still fails all 3 attempts. (Tier 0 stays retries=0 for
+      # hard signal on the fast lane.)
+      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
 
   nextest-windows:
     name: nextest / windows
@@ -123,13 +130,20 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
           shared-key: windows-latest-stable
           with-nextest: true
-      - run: cargo nextest run --profile ci --workspace --all-targets
+      # --no-fail-fast + --retries 2: see nextest-macos above.
+      - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
+      # Windows AppContainer adapter integration tests (launcher + strict
+      # enforcement) are gated behind `integration-tests` and only run on a
+      # real windows-latest runner. Scoped to the crate so it cannot
+      # destabilize other crates' suites on the Windows job.
+      - name: Test tau-sandbox-windows AppContainer (integration)
+        run: cargo nextest run --profile ci -p tau-sandbox-windows --features integration-tests --tests --no-fail-fast --retries 2
 
   coverage:
     name: cargo llvm-cov nextest
@@ -138,7 +152,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
@@ -162,17 +176,13 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-sccache: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "anthropic-plugin ollama-plugin openai-plugin"
@@ -190,23 +200,19 @@ jobs:
     env:
       TAU_CONTAINER_RUNTIME: docker
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "all"
       - name: Build tau binary (debug)
         run: cargo build -p tau-cli --bin tau
       - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
         with:
           driver: docker-container
       - name: Build per-plugin images
@@ -232,22 +238,18 @@ jobs:
       TAU_CONTAINER_RUNTIME: docker
       FLAVOR: ${{ matrix.flavor }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "all"
       - name: Set up Docker buildx
         if: matrix.flavor == 'container'
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
         with:
           driver: docker-container
       - name: Build per-plugin images
@@ -281,16 +283,12 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "tau-controlled-env"
@@ -305,21 +303,253 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
         with:
           shared-key: linux-stable
           with-nextest: true
           with-mold: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: tier2-linux-fixture-binaries
-          path: _artifacts/
       - uses: ./.github/actions/place-fixture-binaries
         with:
           binaries: "tau-controlled-env"
       - name: Test tau-runtime-tokio e2e
         run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --tests --verbose
+
+  msrv-check:
+    # MSRV is a rustc-version property, not an OS property. Moved from
+    # per-PR ci.yml to nightly (ADR-0063): breaks are rare and bisect
+    # finds them trivially. release.yml re-asserts MSRV on tags.
+    name: msrv-check / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.91"
+          shared-key: linux-1.91
+          with-sccache: true
+          with-mold: true
+      - run: cargo check --workspace --all-targets --locked
+
+  test-fixtures-ports:
+    name: test-fixtures-ports / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Test tau-ports (test-fixtures feature only)
+        run: cargo nextest run --profile ci -p tau-ports --features test-fixtures
+      - name: Doctests tau-ports (test-fixtures feature only)
+        # Workspace-level `cargo test --workspace --doc` (ci.yml doc-tests)
+        # runs doctests without features; the fixtures module is gated
+        # behind `test-fixtures`, so its doctests only compile here.
+        run: cargo test --doc -p tau-ports --features test-fixtures
+
+  conformance:
+    # β.6 conformance gate on the tau-conformance crate. Distinct from
+    # test-conformance above (plugin conformance suites).
+    name: conformance / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Run β.6 conformance gate (dev profile)
+        # The #[ignore]'d wasm-profile test is skipped by nextest until
+        # β.7.5 ships `tau build wasm`. See ADR-0048.
+        run: cargo nextest run --profile ci -p tau-conformance
+
+  test-credential-chain:
+    name: test-credential-chain / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Credential port tests (tau-ports)
+        run: cargo nextest run --profile ci -p tau-ports -E 'test(/credential/)'
+      - name: Credential provider tests (tau-runtime-tokio)
+        run: cargo nextest run --profile ci -p tau-runtime-tokio -E 'test(/credentials/)'
+
+  feature-flag-matrix:
+    name: feature-flag-matrix / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Check each crate with --no-default-features
+        run: |
+          set -e
+          for crate in tau-domain tau-ports tau-pkg tau-runtime-tokio tau-cli tau-plugin-protocol tau-plugin-sdk tau-mcp tau-observe tau-native-tools; do
+            echo "::group::$crate"
+            cargo check -p "$crate" --no-default-features
+            echo "::endgroup::"
+          done
+      - name: tau-ports feature quadrants (serde / process independence)
+        # `process = ["serde?/std"]` in crates/tau-ports/Cargo.toml makes serde an
+        # OPTIONAL dep of process. Verify each feature builds WITHOUT the other so
+        # a consumer that enables only one never hits a missing-item error that the
+        # default (both-on) matrix would mask.
+        run: |
+          set -e
+          cargo check -p tau-ports --no-default-features --features serde
+          cargo check -p tau-ports --no-default-features --features process
+
+  mock-sandbox-prod-gate:
+    name: mock-sandbox absent from default tau binary / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: MockSandbox must not be reachable in a default tau build
+        # The `mock-sandbox` feature (tau-runtime-tokio) makes the
+        # `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` capability-gate bypass reachable.
+        # It is enabled ONLY via dev-dependencies, so under resolver v2 a
+        # default `cargo build` of the `tau` binary must contain neither the
+        # mock code path nor the env-var string literal. A hit here means the
+        # feature leaked into the production dependency graph (e.g. moved from a
+        # dev-dep to a normal dep) or the
+        # `#[cfg(any(feature = "mock-sandbox", test))]` gates in
+        # process_gate::resolver were dropped.
+        run: |
+          set -euo pipefail
+          cargo build -p tau-cli
+          BIN=target/debug/tau
+          if strings "$BIN" | grep -q 'TAU_TESTING_ALLOW_MOCK_SANDBOX'; then
+            echo "::error::mock-sandbox leaked into the default tau binary — the TAU_TESTING_ALLOW_MOCK_SANDBOX gate is reachable in production" >&2
+            strings "$BIN" | grep 'TAU_TESTING_ALLOW_MOCK_SANDBOX' >&2 || true
+            exit 1
+          fi
+          echo "OK: no mock-sandbox env gate in the default tau binary"
+
+  build-checks-linux:
+    name: build-checks / linux
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-stable
+          with-nextest: true
+          with-sccache: true
+          with-mold: true
+      - name: Build tau-plugin-test-support
+        run: cargo build -p tau-plugin-test-support
+      - name: Test tau-plugin-test-support
+        run: cargo nextest run --profile ci -p tau-plugin-test-support --all-targets
+      - name: Build tau-plugin-conformance
+        run: cargo build -p tau-plugin-conformance
+      - name: Build tau-plugin-compat
+        run: cargo build -p tau-plugin-compat
+      - name: Build tau-plugin-compat (integration-tests feature)
+        run: cargo build -p tau-plugin-compat --features integration-tests --tests
+
+  schema-conformance:
+    name: IR schema (drift + conformance)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: Drift check + conformance kit validation
+        run: cargo test -p tau-ir --features schema --test schema_export --test schema_conformance
+
+  wit-host-drift:
+    name: WIT host world (drift + freeze)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+      - name: WIT host world drift + freeze test
+        run: cargo test -p tau-wasm-host --test wit_host_drift
+
+  wasm-lane:
+    # The tau-wasm-host wasm lane: `#[ignore]`d tests that shell
+    # `cargo build --target wasm32-wasip2` for the guest + fs/http probe
+    # fixtures, then load them in the host and assert runtime enforcement
+    # (roundtrip determinism, WASI fs preopen scope, wasi:http egress policy).
+    # Too heavy for the Tier 0 PR gate (nested wasm builds run several
+    # minutes even warm), so it lives here — nightly is the gate that keeps
+    # the lane from silently rotting (issue #548).
+    name: wasm lane (guest + fs/http enforcement)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # Cold local wall-clock ~48 min (three nested wasm32-wasip2 fixture builds
+    # + host wasmtime stack); CI's shared-key sccache warms the host build, but
+    # give generous headroom.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          shared-key: linux-stable
+          with-sccache: true
+          with-mold: true
+          with-nextest: true
+      - name: Add wasm32-wasip2 target (guest + probe fixtures)
+        run: rustup target add wasm32-wasip2
+      - name: wasm lane — roundtrip + fs/http enforcement (runs #[ignore]d tests)
+        run: cargo nextest run -p tau-wasm-host --run-ignored all
 
   nightly-regression-handler:
     # Opens or updates a rolling issue on cron failure. Skips for PR-
@@ -334,10 +564,20 @@ jobs:
       - test-tau-plugin-compat-layer4-ignored
       - test-tau-sandbox-native-e2e
       - test-tau-runtime-e2e
+      - msrv-check
+      - test-fixtures-ports
+      - conformance
+      - test-credential-chain
+      - feature-flag-matrix
+      - mock-sandbox-prod-gate
+      - build-checks-linux
+      - schema-conformance
+      - wit-host-drift
+      - wasm-lane
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Open or append rolling regression issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -346,7 +586,7 @@ jobs:
         run: |
           # Find an existing open issue with the nightly-regression label.
           EXISTING=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
-          BODY="Nightly Tier 2 cron failed on commit \`$SHA\`.\n\nRun: $RUN_URL\n\nSee failing jobs in the run page; auto-bisect will post the offending commit when available."
+          BODY="Nightly Tier 2 cron failed on commit \`$SHA\`.\n\nRun: $RUN_URL\n\nSee failing jobs in the run page; a regression-range report (last green nightly → this commit) will follow."
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"
           else
@@ -357,60 +597,74 @@ jobs:
               --body "$BODY"
           fi
 
-  auto-bisect:
-    # Runs after nightly-regression-handler on cron failure. Bisects
-    # main between yesterday's passing SHA and today's failing SHA.
-    # Posts the offending commit to the rolling regression issue.
-    # Cap 7 days back; if no green ancestor found, file note without bisect.
-    name: auto-bisect
+  regression-range:
+    # Runs after nightly-regression-handler on cron failure. Posts the
+    # commit range (last green nightly → failing HEAD) to the rolling
+    # regression issue so a human can bisect.
+    #
+    # Automated cross-platform bisect is DEFERRED (was a v0 placeholder that
+    # never posted anything). The nightly reds live in platform/config-
+    # specific jobs — Windows-only tests, `--locked` msrv, `cargo test -p
+    # tau-ir` — that a generic ubuntu `--workspace` nextest bisect cannot
+    # reproduce: it marks every commit "good" and posts a wrong culprit or
+    # nothing. Until a bisect can run the *offending* job on the *offending*
+    # runner, report the range and let a human drive.
+    name: regression-range
     needs: nightly-regression-handler
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/setup-rust
-        with:
-          shared-key: linux-stable
-          with-nextest: true
-          with-mold: true
-      - name: Find yesterday's last green SHA
+      - name: Find last green nightly SHA
         id: green
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Look back 7 days of nightly cron runs for the most recent success.
+          # Most recent successful nightly cron. No date cap: the old
+          # `--created '>=7 days ago'` filter went silent once main had been
+          # red for >7 days — exactly when this report is most needed.
           PREV=$(gh run list --workflow=tier2.yml --event=schedule --status success \
-            --limit 20 --json databaseId,headSha --created '>=7 days ago' \
-            --jq '.[0] // empty')
+            --limit 100 --json headSha,createdAt --jq '.[0] // empty')
           if [ -z "$PREV" ]; then
-            echo "No green ancestor in 7 days; cannot bisect."
             echo "sha=" >> "$GITHUB_OUTPUT"
+            echo "green_date=" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=$(echo "$PREV" | jq -r '.headSha')" >> "$GITHUB_OUTPUT"
+            echo "green_date=$(echo "$PREV" | jq -r '.createdAt')" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Post regression range to the rolling issue
+        # ALWAYS post — the previous version exited silently when no green
+        # was found in the window, which is why no culprit ever appeared.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GREEN_SHA: ${{ steps.green.outputs.sha }}
+          GREEN_DATE: ${{ steps.green.outputs.green_date }}
+          BAD_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ISSUE=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
+          if [ -z "$ISSUE" ]; then
+            echo "No open nightly-regression issue to comment on; nothing to post."
             exit 0
           fi
-          echo "sha=$(echo "$PREV" | jq -r '.headSha')" >> "$GITHUB_OUTPUT"
-      - name: Bisect
-        if: steps.green.outputs.sha != ''
-        env:
-          GREEN_SHA: ${{ steps.green.outputs.sha }}
-          BAD_SHA: ${{ github.sha }}
-        run: |
-          # The exact test command must reproduce the failure.
-          # For v0, use a placeholder that runs the same workspace nextest
-          # as Tier 2's nextest-macos / windows. Real bisect against
-          # platform-specific jobs would need an macOS runner — defer
-          # cross-platform bisect to a follow-up.
-          git bisect start
-          git bisect bad "$BAD_SHA"
-          git bisect good "$GREEN_SHA"
-          BISECT_OUT=$(git bisect run cargo nextest run --profile ci --workspace --all-targets 2>&1 | tail -40)
-          OFFENDING=$(echo "$BISECT_OUT" | grep -E 'first bad commit' | awk '{print $1}')
-          if [ -n "$OFFENDING" ]; then
-            COMMIT=$(echo "$BISECT_OUT" | grep -oE '[0-9a-f]{40}' | head -1)
-            AUTHOR=$(git show -s --format='%an <%ae>' "$COMMIT")
-            ISSUE=$(gh issue list --label nightly-regression --state open --json number --jq '.[0].number // empty')
-            if [ -n "$ISSUE" ]; then
-              gh issue comment "$ISSUE" --body "Auto-bisect found offending commit: \`$COMMIT\` by $AUTHOR."
+          {
+            printf 'Regression-range report — automated cross-platform bisect is deferred (see job comment for why).\n\n'
+            printf -- '- Failing HEAD: `%s`\n' "$BAD_SHA"
+            printf -- '- Run: %s\n' "$RUN_URL"
+            if [ -n "$GREEN_SHA" ]; then
+              printf -- '- Last green nightly: `%s` (%s)\n' "$GREEN_SHA" "$GREEN_DATE"
+              printf -- '- Compare: %s/%s/compare/%s...%s\n\n' "$SERVER_URL" "$REPO" "$GREEN_SHA" "$BAD_SHA"
+              printf 'Commits in range (oldest → newest, capped at 50):\n\n'
+              git log --reverse --oneline --no-decorate "$GREEN_SHA..$BAD_SHA" 2>/dev/null \
+                | head -50 | sed 's/^/    /' \
+                || printf '    (unable to compute local range — see the Compare link)\n'
+            else
+              printf -- '- Last green nightly: none in the last 100 nightly runs. main has been red for an extended period; bisect from a known-good release tag instead.\n'
             fi
-          fi
+          } > "$RUNNER_TEMP/range-comment.md"
+          gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/range-comment.md"

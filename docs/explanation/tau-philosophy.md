@@ -399,6 +399,11 @@ combination:
 The moat is the **combination + conformance + vendor-independence +
 root-governed capability safety** — not novelty of any one piece.
 
+Concretely, "build-time enforcement and no runtime surprises" is three
+independent gates — compile-time types, `tau check`, and the conformance gate
+— each proving a property the other two cannot. See
+[The three-gate guarantee](three-gate-guarantee.md).
+
 ---
 
 ## Acknowledged risks

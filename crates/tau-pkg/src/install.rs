@@ -46,7 +46,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use fs4::FileExt;
-use tau_domain::{kinds, Capability, PackageName, PackageSource, PluginKind, Version};
+use tau_domain::{kinds, PackageName, PackageSource, PluginKind, Version};
 
 use crate::error::{InstallError, UninstallError};
 use crate::git::Git;
@@ -383,7 +383,10 @@ pub fn install_with_options(
 
         // Step 6: capability validation (warnings only — NG12).
         warn_unknown_kind(&manifest);
-        warn_non_namespaced_custom_capabilities(&manifest);
+        // (D7-B PR2: the former non-namespaced-Custom warning is obsolete —
+        // a `Capability::Custom` now requires an explicit `custom.` prefix at
+        // parse time, so a non-namespaced custom capability can no longer be
+        // constructed.)
 
         // Step 7: resolve commit.
         let resolved_commit = Git::resolve_head(staging_dir.path())?;
@@ -911,24 +914,6 @@ fn warn_unknown_kind(manifest: &tau_domain::PackageManifest) {
             kind = kind_str,
             "package declares unknown kind; tau-runtime will treat it as opaque",
         );
-    }
-}
-
-/// Warn (via `tracing`) on `Capability::Custom { name }` without a dot-namespaced name.
-/// Encourages `mcp.tool.use` style; permits non-namespaced for forward-compat.
-fn warn_non_namespaced_custom_capabilities(manifest: &tau_domain::PackageManifest) {
-    for cap in manifest.capabilities() {
-        if let Capability::Custom { name, .. } = cap {
-            if !name.contains('.') {
-                tracing::warn!(
-                    target: "tau_pkg::install",
-                    package = %manifest.name(),
-                    capability = %name,
-                    "Capability::Custom name is not dot-namespaced; \
-                     consider e.g. \"vendor.feature.action\"",
-                );
-            }
-        }
     }
 }
 
@@ -1537,31 +1522,6 @@ mod diagnostics_tracing_tests {
         // `weird-kind` is not in the canonical kinds list → warn path fires.
         let manifest = manifest_from_toml(&manifest_toml("weird-kind", "capabilities = []"));
         super::warn_unknown_kind(&manifest);
-
-        let events = captured.0.lock().expect("capture mutex poisoned").clone();
-        let warn = events
-            .iter()
-            .find(|e| e.level == Level::WARN && e.target == "tau_pkg::install")
-            .unwrap_or_else(|| panic!("no WARN @ tau_pkg::install; captured = {events:?}"));
-        assert_eq!(
-            warn.package.as_deref(),
-            Some("acme-tool"),
-            "warn event must carry the package-name field; captured = {events:?}"
-        );
-    }
-
-    #[test]
-    fn warn_non_namespaced_capability_emits_structured_warn() {
-        let captured = CaptureLayer::default();
-        let _guard = tracing_subscriber::registry()
-            .with(captured.clone())
-            .set_default();
-
-        // A capability whose `kind` has no dot deserializes to
-        // `Capability::Custom { name: "mytool" }` → warn path fires.
-        let caps = "[[capabilities]]\nkind = \"mytool\"";
-        let manifest = manifest_from_toml(&manifest_toml("tool", caps));
-        super::warn_non_namespaced_custom_capabilities(&manifest);
 
         let events = captured.0.lock().expect("capture mutex poisoned").clone();
         let warn = events

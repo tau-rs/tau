@@ -9,9 +9,9 @@ repository.workspace   = true
 authors.workspace      = true
 
 [dependencies]
-swc_ecma_parser = "41.0.1"
-swc_ecma_ast    = "25.0.0"
-swc_common      = { version = "23.0.1", features = ["tty-emitter"] }
+swc_ecma_parser = "45"
+swc_ecma_ast    = "29"
+swc_common      = { version = "26", features = ["tty-emitter"] }
 tau-pkg         = { workspace = true }
 anyhow          = { workspace = true }
 thiserror       = { workspace = true }
@@ -21,3 +21,6 @@ serde_json      = { workspace = true }
 tau-ir       = { workspace = true }
 tau-ir-lower = { workspace = true }
 tau-ports    = { workspace = true }
+
+[lints]
+workspace = true

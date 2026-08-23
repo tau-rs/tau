@@ -49,9 +49,11 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub produces: alloc::vec::Vec<alloc::string::String>,
     /// Optional JSON schema describing the agent's structured output.
-    /// Plumbed from `[agents.<id>].output_schema`; consumed by a later
-    /// judge-compat build-time check. `skip_serializing_if` keeps
-    /// schema-less agents byte-stable.
+    /// Plumbed from `[agents.<id>].output_schema`. The judge-compat
+    /// build-time check (Issue #470) runs at the authoring-config layer
+    /// (`validate_postconditions` in `tau-pkg`), comparing this schema
+    /// against downstream `schema_valid` goals before lowering.
+    /// `skip_serializing_if` keeps schema-less agents byte-stable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
     /// Optional durable-execution config (ADR-0053). `None` => not
@@ -70,8 +72,12 @@ pub struct Tool {
     pub id: ToolId,
     /// How the tool's behavior is provided.
     pub impl_: ToolImpl,
-    /// Declared capabilities. Used by the capability-fit check (D-3b)
-    /// and by the runtime gate.
+    /// Declared capabilities. Used by the capability-fit check (D-3b),
+    /// the governance ceiling check, and — at runtime — the subflow
+    /// attenuation gate (`AttenuatedDispatcher`). NOT consulted by the
+    /// kernel's per-tool dispatch-site gate: `DispatcherTool` deliberately
+    /// reports no required caps because the IR carries no per-agent grant
+    /// to check them against (issue #581).
     pub capabilities: CapabilityRequirements,
     /// Tool specification (name, description, input schema) used by the
     /// LLM to decide when to call the tool.

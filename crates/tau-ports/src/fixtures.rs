@@ -59,12 +59,7 @@ pub fn make_completion_response(
     stop_reason: StopReason,
     usage: Option<TokenUsage>,
 ) -> CompletionResponse {
-    CompletionResponse {
-        text,
-        tool_uses,
-        stop_reason,
-        usage,
-    }
+    CompletionResponse::new(text, tool_uses, stop_reason, usage)
 }
 
 /// Build a [`ToolUse`] without struct-literal syntax.
@@ -900,5 +895,114 @@ impl CheckpointStore for MockCheckpointStore {
             .expect("checkpoint mutex")
             .get(run_id)
             .and_then(|turns| turns.values().next_back().cloned()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MockSuspensionStore — in-memory SuspensionStore (EPIC 4.3)
+// ---------------------------------------------------------------------------
+
+use crate::orchestration::{PipelineSuspension, SuspensionStore};
+
+/// In-memory [`SuspensionStore`] for tests. One suspension per run (last write
+/// wins), mirroring the host `FileCheckpointStore` semantics.
+#[derive(Default)]
+pub struct MockSuspensionStore {
+    by_run: Mutex<BTreeMap<RunId, PipelineSuspension>>,
+    persists: Mutex<usize>,
+}
+
+impl MockSuspensionStore {
+    /// Construct an empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Total `persist_suspension` calls across all runs. Test introspection.
+    pub fn persist_count(&self) -> usize {
+        *self.persists.lock().expect("persist mutex")
+    }
+}
+
+impl SuspensionStore for MockSuspensionStore {
+    fn persist_suspension(&self, s: &PipelineSuspension) -> Result<(), CheckpointError> {
+        self.by_run
+            .lock()
+            .expect("suspension mutex")
+            .insert(s.run_id.clone(), s.clone());
+        *self.persists.lock().expect("persist mutex") += 1;
+        Ok(())
+    }
+    fn load_suspension(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Option<PipelineSuspension>, CheckpointError> {
+        Ok(self
+            .by_run
+            .lock()
+            .expect("suspension mutex")
+            .get(run_id)
+            .cloned())
+    }
+    fn delete_suspension(&self, run_id: &RunId) -> Result<(), CheckpointError> {
+        self.by_run.lock().expect("suspension mutex").remove(run_id);
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod suspension_fixture_tests {
+    use super::*;
+    use crate::orchestration::{PipelineSuspension, SuspensionStore};
+    use alloc::collections::BTreeMap;
+
+    fn susp(run_id: &str, cursor: usize) -> PipelineSuspension {
+        PipelineSuspension {
+            run_id: run_id.into(),
+            resume_signal: "approved".into(),
+            step_cursor: cursor,
+            step_id: "pause".into(),
+            ir_digest: "sha256:deadbeef".into(),
+            outputs: BTreeMap::new(),
+            attempts: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn mock_persists_and_loads_by_run_id() {
+        let store = MockSuspensionStore::new();
+        assert!(store.load_suspension(&"r".to_string()).unwrap().is_none());
+        store.persist_suspension(&susp("r", 2)).unwrap();
+        let got = store.load_suspension(&"r".to_string()).unwrap().unwrap();
+        assert_eq!(got.step_cursor, 2);
+        assert_eq!(got.resume_signal, "approved");
+        assert_eq!(store.persist_count(), 1);
+    }
+
+    #[test]
+    fn later_persist_overwrites_prior_for_same_run() {
+        let store = MockSuspensionStore::new();
+        store.persist_suspension(&susp("r", 1)).unwrap();
+        store.persist_suspension(&susp("r", 5)).unwrap();
+        assert_eq!(
+            store
+                .load_suspension(&"r".to_string())
+                .unwrap()
+                .unwrap()
+                .step_cursor,
+            5
+        );
+    }
+
+    #[test]
+    fn delete_suspension_removes_entry_and_is_idempotent() {
+        let store = MockSuspensionStore::new();
+        store.persist_suspension(&susp("r", 2)).unwrap();
+        assert!(store.load_suspension(&"r".to_string()).unwrap().is_some());
+
+        store.delete_suspension(&"r".to_string()).unwrap();
+        assert!(store.load_suspension(&"r".to_string()).unwrap().is_none());
+
+        // Deleting an already-absent suspension is Ok (idempotent).
+        store.delete_suspension(&"r".to_string()).unwrap();
     }
 }

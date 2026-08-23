@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use tau_domain::Value;
+use tau_domain::{Capability, Value};
 use tau_mcp::cassette::CassetteTransport;
 use tau_mcp::contract::{ServerContract, ServerInfo};
 use tau_mcp_tokio::bridge::McpBackedTool;
@@ -61,9 +61,10 @@ async fn mcp_backed_tool_round_trips_via_cassette() {
 
     let tool = McpBackedTool::new(
         "weather.echo",
-        client,
+        client.clone(),
         "echo",
         Vec::new(),
+        None,
         serde_json::json!({}),
         "echo tool",
     );
@@ -81,4 +82,34 @@ async fn mcp_backed_tool_round_trips_via_cassette() {
         }
         other => panic!("expected ToolContent::Text, got {other:?}"),
     }
+
+    // Clamp threading (spec §12): a tool constructed with Some(effective)
+    // must surface it via Tool::effective_capabilities; None (the tool
+    // above) must report not-narrowed.
+    assert!(tau_ports::Tool::effective_capabilities(&*tool).is_none());
+
+    let declared: Capability = serde_json::from_value(serde_json::json!({
+        "kind": "net.http",
+        "hosts": ["api.weather.com", "evil.example"],
+    }))
+    .expect("declared cap");
+    let effective: Capability = serde_json::from_value(serde_json::json!({
+        "kind": "net.http",
+        "hosts": ["api.weather.com"],
+    }))
+    .expect("effective cap");
+
+    let clamped = McpBackedTool::new(
+        "weather.echo2",
+        client,
+        "echo",
+        vec![declared],
+        Some(vec![effective.clone()]),
+        serde_json::json!({}),
+        "echo tool",
+    );
+    assert_eq!(
+        tau_ports::Tool::effective_capabilities(&*clamped),
+        Some(&[effective][..])
+    );
 }

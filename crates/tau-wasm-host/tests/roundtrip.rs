@@ -124,8 +124,11 @@ system = "You are a trivial test agent. Reply and stop."
         native_tool: &|_| Some([0u8; 32]),
         mcp_contract: &|_| None,
         skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
     };
-    let module = tau_ir_lower::lower_project(&config, &target, &caches).expect("lowers");
+    let module = tau_ir_lower::lower_project(&config, &target, &caches)
+        .expect("lowers")
+        .module;
     tau_ir::to_canonical_bytes(&module)
 }
 
@@ -147,13 +150,13 @@ fn guest_decodes_baked_ir_and_starts_run() {
     // The guest now drives `run_ir_streaming`. Feed one end-turn response so the
     // agent loop completes rather than hanging waiting for an LLM call.
     let component = build_guest_component(Some(&trivial_ir_bytes()));
-    let out =
+    let (_out, emitted) =
         run_component(&component, "hi", vec![end_turn_response()]).expect("runs with cassette");
-    // The guest returns a JSON array of RunEvents; the presence of "RunStarted"
-    // proves the IR was decoded and the interpreter was entered.
+    // Events now stream via `emit-event`; the presence of "RunStarted" in the
+    // buffer proves the IR was decoded and the interpreter was entered.
     assert!(
-        out.contains("RunStarted"),
-        "guest should return a RunEvent stream; got: {out}"
+        emitted.iter().any(|e| e.contains("RunStarted")),
+        "guest should stream a RunEvent stream via emit-event; got: {emitted:?}"
     );
 }
 
@@ -167,12 +170,14 @@ fn end_turn_response() -> String {
 #[ignore = "builds the wasm32-wasip2 guest; run with --run-ignored"]
 fn guest_drives_ir_and_returns_typed_stream() {
     let component = build_guest_component(Some(&trivial_ir_bytes()));
-    let out = tau_wasm_host::run_component(&component, "hi", vec![end_turn_response()])
+    let (_out, emitted) = tau_wasm_host::run_component(&component, "hi", vec![end_turn_response()])
         .expect("guest runs the baked IR");
 
-    // The guest returns a JSON array of RunEvents.
-    let events: Vec<tau_runtime_core::stream::RunEvent> =
-        serde_json::from_str(&out).expect("guest output is a RunEvent array");
+    // Events now stream via `emit-event`, one JSON-encoded RunEvent per entry.
+    let events: Vec<tau_runtime_core::stream::RunEvent> = emitted
+        .iter()
+        .map(|e| serde_json::from_str(e).expect("each emitted entry is a RunEvent"))
+        .collect();
 
     assert!(
         matches!(
@@ -198,10 +203,85 @@ fn host_guest_roundtrip_is_deterministic() {
     let ir = trivial_ir_bytes();
     let wasm = build_guest_component(Some(&ir));
     // Provide one cassette response so both runs complete without hanging.
-    let first = run_component(&wasm, "hello", vec![end_turn_response()]).expect("first run");
-    let second = run_component(&wasm, "hello", vec![end_turn_response()]).expect("second run");
+    let (first_out, first_emitted) =
+        run_component(&wasm, "hello", vec![end_turn_response()]).expect("first run");
+    let (second_out, second_emitted) =
+        run_component(&wasm, "hello", vec![end_turn_response()]).expect("second run");
     assert_eq!(
-        first, second,
-        "same inputs must yield byte-identical output"
+        first_out, second_out,
+        "same inputs must yield byte-identical output payload"
     );
+    assert_eq!(
+        first_emitted, second_emitted,
+        "same inputs must yield byte-identical streamed events"
+    );
+}
+
+/// A Branch pipeline is rejected at **lowering** for `any-wasi-strict`, not at
+/// guest load. The wasm guest drives `run_ir_streaming` and has no control-flow
+/// path, so #535's `IrFeature` feature-fit gate refuses the build up front
+/// (`FeatureUnsupported { missing: [Branch], .. }`) rather than deferring the
+/// rejection to guest load. Native `tau run` still executes the branch fully;
+/// driving `run_pipeline` in-wasm is a follow-up slice.
+///
+/// This test is **not** `#[ignore]`d: asserting the lowering `Err` needs no
+/// wasm build, so it runs on the default unit-test lane and can't silently rot.
+#[test]
+fn authored_branch_rejected_at_lowering() {
+    let toml = r#"
+packages = ["anthropic"]
+
+[project]
+name = "branch-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.triage]
+display_name = "Triage"
+package = "branch-wasm@^0.1"
+model = "claude"
+[agents.triage.prompt]
+system = "Reply and stop."
+
+[agents.arm]
+display_name = "Arm"
+package = "branch-wasm@^0.1"
+model = "claude"
+[agents.arm.prompt]
+system = "Reply and stop."
+
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "non_empty" }
+
+  [[pipeline.steps.then]]
+  id = "arm"
+  run = "agent:arm"
+  input = "${steps.triage.output}"
+"#;
+    let config = tau_pkg::project::ProjectConfig::parse_str(toml).expect("fixture parses");
+    let target: tau_ports::target::TargetTriple = "any-wasi-strict".parse().unwrap();
+    let caches = tau_ir_lower::Caches {
+        native_tool: &|_| Some([0u8; 32]),
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+        prompt_file: &|_| Ok(Vec::new()),
+    };
+
+    match tau_ir_lower::lower_project(&config, &target, &caches) {
+        Err(tau_ir_lower::LowerError::FeatureUnsupported { missing, .. }) => assert!(
+            missing.contains(&tau_domain::IrFeature::Branch),
+            "expected Branch among the unsupported features, got {missing:?}"
+        ),
+        Err(other) => panic!("expected FeatureUnsupported, got {other:?}"),
+        Ok(_) => panic!("wasm-strict must reject a Branch pipeline at lowering"),
+    }
 }

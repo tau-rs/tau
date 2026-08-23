@@ -10,3 +10,12 @@ authors.workspace      = true
 
 [dependencies]
 serde_json = { workspace = true, default-features = false, features = ["alloc"] }
+# Feature list is the starting set for a no_std meta::Regex with (?i) support
+# (per task-1 brief). Adjust only if compilation demands it; do not enable "std".
+regex-automata = { workspace = true, optional = true, features = ["alloc", "meta", "syntax", "nfa-pikevm", "unicode-case", "unicode-perl"] }
+
+[features]
+goal-predicates = ["dep:regex-automata"]
+
+[lints]
+workspace = true

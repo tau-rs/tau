@@ -26,13 +26,13 @@
 
 #![allow(dead_code)]
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use tau_domain::{
-    AgentCapability, Capability, FsCapability, NetCapability, ProcessCapability, SkillCapability,
-    Value,
+    AgentCapability, Capability, FsCapability, HttpMethod, NetCapability, ProcessCapability,
+    SkillCapability, Value,
 };
 
 /// Returns `true` iff `granted` covers `required` for one capability pair.
@@ -78,6 +78,28 @@ pub fn check_capabilities<'a>(
         .find(|req| !granted.iter().any(|g| capability_satisfies(g, req)))
 }
 
+/// Whether a *required* capability is enforced by the in-guest runtime gate on
+/// the given target.
+///
+/// On wasm, `Disposition::Wasi` capabilities (net.http, fs.read/write) are
+/// enforced by the generated WIT world (EPIC 3.2 — an ungranted interface is
+/// absent from the world, hence un-importable) and the host `WasiCtx`
+/// (EPIC 3.3 — preopens + egress allow-list), so the in-guest software check
+/// for them is redundant and — against the guest's empty stub grant — wrong.
+/// Story 3.4 drops it for exactly those. Every other disposition (`InGuest`,
+/// `HostMediated`, unknown future variant) has no ABI/host realization and
+/// stays in-guest gated. On native (`is_wasm == false`) the OS sandbox is the
+/// enforcement path and the in-guest check stays for ALL dispositions
+/// (defense in depth).
+///
+/// `is_wasm` is threaded in (rather than read from `cfg!` here) so both target
+/// behaviors are unit-testable from a single native `cargo test`. `Disposition`
+/// (EPIC 3.1) is the single source of truth — do not hand-enumerate cap kinds.
+fn in_guest_gated_on(required: &Capability, is_wasm: bool) -> bool {
+    use tau_ports::target::wasi_map::{map_capability, Disposition};
+    !(is_wasm && matches!(map_capability(required).disposition, Disposition::Wasi))
+}
+
 /// Tool-dispatch wrapper around [`check_capabilities`] that owns the
 /// ADR-0006 §3.9 `capability.check` span and the five capability
 /// lifecycle events.
@@ -106,7 +128,17 @@ pub fn check_capabilities_for_tool<'a>(
         name = v::EV_CAPABILITY_GRANTED_LOADED,
         granted_count = granted.len(),
     );
-    let missing = check_capabilities(granted, required);
+    // Story 3.4: on wasm, Disposition::Wasi caps are enforced by the generated
+    // WIT world (3.2) + host WasiCtx (3.3), not in-guest — skip them here.
+    // `cfg!` (not `#[cfg]`) so native compiles to a constant `false` and the
+    // filter is a provable no-op off-wasm. The pure `check_capabilities`
+    // (root-spawn, tool-spec filtering, AttenuatedDispatcher) is intentionally
+    // NOT changed — only this dispatch-site wrapper drops the Wasi gate.
+    let is_wasm = cfg!(target_arch = "wasm32");
+    let missing = required
+        .iter()
+        .filter(|req| in_guest_gated_on(req, is_wasm))
+        .find(|req| !granted.iter().any(|g| capability_satisfies(g, req)));
     tracing::debug!(
         name = v::EV_CAPABILITY_SATISFIES_CHECK,
         satisfied = missing.is_none(),
@@ -194,10 +226,25 @@ pub fn net_satisfies(granted: &NetCapability, required: &NetCapability) -> bool 
                 methods: rm,
                 ..
             },
-        ) => paths_subset(gh, rh) && string_subset(gm, rm),
+        ) => gh.subsumes(rh) && methods_satisfies(gm.as_ref(), rm.as_ref()),
         // Future `NetCapability` variants added in tau-domain default
         // to deny — additive evolution must not silently widen grants.
         _ => false,
+    }
+}
+
+/// HTTP-method satisfies-relation: `required ⊆ granted`, where an absent
+/// `methods` field denotes the full method set. A bounded grant cannot
+/// cover an unbounded (`None`) request — same conservatism rule as
+/// [`max_bytes_satisfies`].
+fn methods_satisfies(
+    granted: Option<&BTreeSet<HttpMethod>>,
+    required: Option<&BTreeSet<HttpMethod>>,
+) -> bool {
+    match (granted, required) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(g), Some(r)) => r.is_subset(g),
     }
 }
 
@@ -386,7 +433,7 @@ fn segment_matches(pattern: &str, candidate: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[derive(serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize)]
     struct CapWrapper {
         cap: Capability,
     }
@@ -534,18 +581,24 @@ methods = ["DELETE"]
     }
 
     #[test]
-    fn net_http_host_glob_satisfies() {
-        let granted = cap(r#"[cap]
+    fn net_http_host_wildcard_rejected_at_decode() {
+        // Host-suffix globs (`*.example.com`) are deliberately deferred in
+        // `HostSet`/`HostName` (tau-domain) — a wildcard string is rejected
+        // at TOML decode, before `net_satisfies` is ever reached. This
+        // replaces the old glob-satisfies coverage now that host
+        // subsumption is exact-set (`HostSet::subsumes`), not glob-based.
+        let err = toml::from_str::<CapWrapper>(
+            r#"[cap]
 kind = "net.http"
 hosts = ["*.example.com"]
 methods = ["GET"]
-"#);
-        let required = cap(r#"[cap]
-kind = "net.http"
-hosts = ["api.example.com"]
-methods = ["GET"]
-"#);
-        assert!(capability_satisfies(&granted, &required));
+"#,
+        )
+        .expect_err("wildcard host must be rejected at decode");
+        assert!(
+            alloc::string::ToString::to_string(&err).contains("wildcard"),
+            "got: {err}"
+        );
     }
 
     // -------------------- Process --------------------
@@ -611,11 +664,11 @@ allowed_skills = ["critic", "fact-checker"]
     #[test]
     fn custom_params_exact_match_satisfies() {
         let granted = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         let required = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         assert!(capability_satisfies(&granted, &required));
@@ -626,11 +679,11 @@ servers = ["fs-mcp"]
         // Required has an extra `mode` key not present in the grant —
         // conservative deny.
         let granted = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         let required = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 mode = "strict"
 "#);
@@ -640,11 +693,11 @@ mode = "strict"
     #[test]
     fn custom_different_names_fail() {
         let granted = cap(r#"[cap]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 servers = ["fs-mcp"]
 "#);
         let required = cap(r#"[cap]
-kind = "mcp.resource.read"
+kind = "custom.mcp.resource.read"
 servers = ["fs-mcp"]
 "#);
         assert!(!capability_satisfies(&granted, &required));
@@ -813,7 +866,7 @@ paths = ["/tmp/**"]
 "#),
             cap(r#"[cap]
 kind = "net.http"
-hosts = ["*.example.com"]
+hosts = ["api.example.com"]
 methods = ["GET", "POST"]
 "#),
         ];
@@ -829,6 +882,77 @@ methods = ["GET"]
 "#),
         ];
         assert!(check_capabilities(&granted, &required).is_none());
+    }
+
+    // -------------------- in_guest_gated_on (story 3.4) --------------------
+
+    #[test]
+    fn wasi_caps_are_not_in_guest_gated_on_wasm() {
+        let net =
+            cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.example.com\"]\nmethods = [\"GET\"]\n");
+        let fs_r = cap("[cap]\nkind = \"fs.read\"\npaths = [\"/tmp/**\"]\n");
+        let fs_w = cap("[cap]\nkind = \"fs.write\"\npaths = [\"/tmp/**\"]\n");
+        // On wasm the ABI (3.2) + host WasiCtx (3.3) own these → not in-guest gated.
+        assert!(!in_guest_gated_on(&net, true));
+        assert!(!in_guest_gated_on(&fs_r, true));
+        assert!(!in_guest_gated_on(&fs_w, true));
+        // On native the in-guest check stays for all dispositions.
+        assert!(in_guest_gated_on(&net, false));
+        assert!(in_guest_gated_on(&fs_r, false));
+        assert!(in_guest_gated_on(&fs_w, false));
+    }
+
+    #[test]
+    fn in_guest_caps_stay_gated_on_every_target() {
+        let spawn = cap("[cap]\nkind = \"agent.spawn\"\nallowed_kinds = [\"worker\"]\n");
+        let plan = cap("[cap]\nkind = \"plan\"\nmode = \"write\"\n");
+        // InGuest disposition has no ABI/host realization → gated on wasm AND native.
+        assert!(in_guest_gated_on(&spawn, true));
+        assert!(in_guest_gated_on(&spawn, false));
+        assert!(in_guest_gated_on(&plan, true));
+        assert!(in_guest_gated_on(&plan, false));
+    }
+
+    // -------------- check_capabilities_for_tool wasm skip (story 3.4) ---------
+
+    #[test]
+    fn for_tool_native_denies_ungranted_wasi_cap() {
+        // Native (this test binary) keeps the full gate: net.http with an EMPTY
+        // grant is denied. cfg!(wasm32) is false here.
+        let granted: Vec<Capability> = alloc::vec![];
+        let required = alloc::vec![cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.example.com\"]\nmethods = [\"GET\"]\n"
+        )];
+        assert!(check_capabilities_for_tool("http_get", &granted, &required).is_some());
+    }
+
+    #[test]
+    fn for_tool_still_denies_ungranted_in_guest_cap() {
+        // agent.spawn is InGuest → gated on every target, empty grant → denied.
+        let granted: Vec<Capability> = alloc::vec![];
+        let required = alloc::vec![cap(
+            "[cap]\nkind = \"agent.spawn\"\nallowed_kinds = [\"worker\"]\n"
+        )];
+        assert!(check_capabilities_for_tool("spawn_worker", &granted, &required).is_some());
+    }
+
+    #[test]
+    fn wasm_arm_skips_wasi_but_denies_in_guest() {
+        // Simulate the wrapper's wasm-arm scan: filter by in_guest_gated_on(_, true)
+        // then run the same unsatisfied predicate the wrapper uses. Empty grant.
+        let granted: Vec<Capability> = alloc::vec![];
+        let net = cap("[cap]\nkind = \"net.http\"\nhosts = [\"h\"]\nmethods = [\"GET\"]\n");
+        let spawn = cap("[cap]\nkind = \"agent.spawn\"\nallowed_kinds = [\"w\"]\n");
+        let required = alloc::vec![net, spawn];
+        let missing = required
+            .iter()
+            .filter(|req| in_guest_gated_on(req, true))
+            .find(|req| !granted.iter().any(|g| capability_satisfies(g, req)));
+        // net.http filtered out (ABI/host owns it); agent.spawn remains and is missing.
+        match missing {
+            Some(Capability::Agent(_)) => {}
+            other => panic!("expected agent.spawn as first missing on wasm arm, got {other:?}"),
+        }
     }
 }
 

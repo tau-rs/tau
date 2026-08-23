@@ -15,8 +15,8 @@ Arguments:
           Path to the project to build. May be a directory (containing `tau.toml`) or a `.ts` file (β.8 TypeScript-authoring surface). Defaults to the current working directory
 
 Options:
-      --target <TRIPLE>
-          Target triple to build for (default: host). Must be an Available triple in the ADR-0034 registry
+      --target <KIND|TRIPLE>
+          What to build: an artifact kind (`wasm-guest`, `rust-lib`) or an Available hardware triple (default: host → `.tau` bundle). `wasm-guest` emits the fully-linked wasm component; `rust-lib` emits a generated no_std Rust embedding crate (EPIC 5.1)
 
   -o, --output <PATH>
           Output path (default: `<project>/<name>-<version>.tau`)
@@ -31,6 +31,9 @@ Options:
           Also emit host-adapter descriptors for the project's cron triggers. `systemd` writes `.timer` + `.service` units; `k8s` writes `CronJob` manifests. Files are written next to the bundle. Manual triggers and cron schedules systemd can't auto-translate are skipped with a note
           
           [possible values: systemd, k8s]
+
+      --tau-dep-path <DIR>
+          Reference tau crates by filesystem path (a tau workspace checkout root) instead of a crates.io version in the generated Cargo.toml (`--target rust-lib` only). Required to build the artifact until tau is published to crates.io
 
       --allow-ungoverned
           Authorize a build of a project that declares NO `[allow]` ceiling (records bundle verdict `ungoverned`). Governed-by-default: without this, a missing `[allow]` is a hard error (GOV000). Distinct from `--no-governance`, which skips checking a ceiling that DOES exist

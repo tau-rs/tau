@@ -18,6 +18,7 @@ extern crate alloc;
 #[cfg(feature = "with-std-adapters")]
 extern crate std;
 
+pub mod asset;
 pub mod budget;
 pub mod canonical;
 pub mod capability;
@@ -25,6 +26,7 @@ pub mod check;
 pub mod context;
 pub mod durable;
 pub mod error;
+pub mod features;
 pub mod hash;
 pub mod ids;
 pub mod message;
@@ -39,6 +41,7 @@ pub mod tool_impl;
 pub mod trigger;
 
 // Re-exports of the canonical public API surface.
+pub use asset::{AssetBlob, AssetKind};
 pub use budget::AgentBudget;
 pub use canonical::{from_canonical_bytes, to_canonical_bytes};
 pub use capability::{CapabilityRequirements, CapabilityTable};
@@ -49,11 +52,12 @@ pub use check::{Check, CheckVerify, Condition, GoalPredicate, JudgeRef, Locus, O
 pub use context::ContextConfig;
 pub use durable::{CheckpointGranularity, Durability, DurableStore};
 pub use error::IrError;
+pub use features::{features_in_pipeline, features_used};
 pub use hash::compute_hash;
 pub use ids::{AgentId, CheckId, PipelineStepId, StepId, SubflowId, ToolId};
 pub use message::{Message, MessagePayload};
 pub use model_ref::ModelRef;
-pub use module::{IrFormatVersion, IrModule, Workflow};
+pub use module::{EntryAgentError, IrFormatVersion, IrModule, Workflow};
 pub use node::{Agent, Deterministic, Node, Subflow, Tool};
 pub use pipeline::{Pipeline, PipelineStep, StepRun};
 pub use subflow::SubflowKind;

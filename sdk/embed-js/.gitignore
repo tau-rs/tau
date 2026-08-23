@@ -1,0 +1,6 @@
+# npm install output (this is a library scaffold; the lockfile is not pinned).
+node_modules/
+package-lock.json
+
+# jco transpile build output (produced by `npm run build --wasm=...`).
+src/generated/

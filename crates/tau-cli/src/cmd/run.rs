@@ -18,12 +18,13 @@
 //! `requires.tools` entry must be installed via `tau install` and
 //! carry a `[plugin]` table in their `tau.toml`; the host then spawns
 //! the recorded binary at run time. See
-//! [`crate::cmd::plugin_loader`] for the resolution logic.
+//! `crate::cmd::plugin_loader` for the resolution logic.
 
 use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use is_terminal::IsTerminal;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
 use tau_plugin_protocol::handshake::TraceContext;
 use tau_runtime_tokio::{RunOptions, RunOutcome};
@@ -43,6 +44,20 @@ use crate::output::Output;
 #[derive(Debug, thiserror::Error)]
 #[error("agent failed (exit code 1)")]
 pub(crate) struct AgentFailed;
+
+/// Marker error: a pipeline paused at a top-level `Suspend` step (HITL).
+///
+/// Threaded through the existing `anyhow::Result<()>` dispatch — like
+/// [`AgentFailed`] — so `lib::run_main` can downcast it and map to
+/// [`crate::ExitCode::Suspended`] (exit code 3) instead of the generic
+/// [`crate::ExitCode::Error`] (2). A suspension is NOT a failure: by the
+/// time this error is returned, `render_pipeline_outcome` has already
+/// emitted the structured `{"outcome":"suspended", ...}` payload (or the
+/// human "Resume with: ..." message) to stdout, so `run_main` must skip
+/// its usual "error:" prefix for this variant.
+#[derive(Debug, thiserror::Error)]
+#[error("pipeline suspended")]
+pub(crate) struct SuspendedRun;
 
 /// Marker error: `tau run --bundle` verification failed.
 ///
@@ -85,6 +100,8 @@ pub async fn run(
     force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
+    validate_tui_flag(args, output)?;
+
     let cwd = std::env::current_dir()?;
 
     // §C.3: when --bundle is set, verify the cwd matches the sealed
@@ -126,6 +143,10 @@ pub async fn run(
                     })?;
                     let module = tau_ir::from_canonical_bytes(&bytes)
                         .map_err(|e| anyhow::anyhow!("decoding IR module from bundle: {e:?}"))?;
+                    // D6-B: decode + integrity-check the bundle's content-
+                    // addressed asset store (prompt bytes the IR references).
+                    let assets =
+                        crate::cmd::ir_dispatcher::asset_map_from_bundle(&report.manifest.assets)?;
 
                     if args.dry_run {
                         tracing::info!(
@@ -141,6 +162,7 @@ pub async fn run(
                     } else {
                         return crate::cmd::ir_dispatcher::run_via_ir(
                             module,
+                            assets,
                             args,
                             record_protocol,
                             force_passthrough,
@@ -184,7 +206,7 @@ pub async fn run(
     )?;
 
     let (agent_def, manifest) =
-        crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
+        crate::config::build_agent_definition(entry, &cwd, &scope, project.effective_models())
             .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
@@ -236,9 +258,14 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded =
-        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        entry,
+        &scope,
+        project.effective_models(),
+        trace_context,
+        host_options,
+    )
+    .await?;
 
     let runtime = loaded
         .builder
@@ -278,7 +305,16 @@ pub async fn run(
     // pipeline is declared (the overwhelming majority of projects), this
     // returns `None` and the single-agent path below runs BYTE-FOR-BYTE
     // unchanged.
-    if let Some(result) = try_run_pipeline(&project, &runtime, prompt_text, output).await {
+    if let Some(result) = try_run_pipeline(
+        &project,
+        &runtime,
+        prompt_text,
+        args.resume.clone(),
+        args.signal.clone(),
+        output,
+    )
+    .await
+    {
         drop(runtime);
         plugin_loader::flush_recorders().await;
         return result;
@@ -300,7 +336,7 @@ pub async fn run(
     });
 
     if is_multi_agent {
-        use crate::cmd::output_orchestration::{print_summary, AgentStats};
+        use crate::cmd::output_orchestration::{print_summary, run_printer};
 
         let scope_root = scope.path().to_path_buf();
         // v1.1: spawn_root_agent takes `Arc<Runtime>` so the in-stream
@@ -312,28 +348,77 @@ pub async fn run(
             max_total_agents: args.max_total_agents,
         };
         let runtime_arc = std::sync::Arc::new(runtime);
-        let snapshot = tau_runtime_tokio::drive(
+
+        // Issue #469: render the trace live. `drive_with_live_trace`
+        // attaches a second subscriber alongside the JSONL writer and
+        // hands back its receiver; the printer drains it concurrently
+        // with the run future, so events surface as they happen instead
+        // of only in a post-run summary. `run_printer` honors `--json`.
+        let (rx, run_fut) = tau_runtime_tokio::drive_with_live_trace(
             runtime_arc.clone(),
             agent_def,
             manifest,
             initial,
             budget,
             scope_root,
-        )
-        .await
-        .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
+        );
+
+        let snapshot = if args.tui {
+            // Task 7: `run_tui` (crate::tui::app) is SYNC/blocking — it owns
+            // a raw-mode read loop polling both keyboard input and `rx` on a
+            // fixed interval. Calling it directly on this async task would
+            // block the tokio worker thread it landed on, stalling the
+            // reactor (and therefore `run_fut`, which needs to keep
+            // executing on some worker to make progress) for the TUI's
+            // entire lifetime. `spawn_blocking` moves it to the blocking
+            // thread pool so `run_fut` keeps driving concurrently on the
+            // async runtime, exactly like the `run_printer` arm below.
+            //
+            // `rx` is `tokio::sync::mpsc::UnboundedReceiver<tau_ports::TraceEvent>`
+            // — precisely `tui::TraceSource::Live`'s payload type, so no
+            // adapter is needed at this seam.
+            let tui_task = tokio::task::spawn_blocking(move || {
+                crate::tui::run_tui(crate::tui::TraceSource::Live(rx))
+            });
+            let (snapshot_res, tui_res) = tokio::join!(run_fut, tui_task);
+            // When both the run and the TUI task fail, the run/agent error
+            // is the one the operator needs to act on — surface it first,
+            // noting the TUI failure as extra context rather than letting
+            // it eclipse the more useful error (final-review fix wave,
+            // M1 execution-trace TUI).
+            match (snapshot_res, tui_res) {
+                (Err(run_err), tui_res) => {
+                    let err = anyhow::Error::new(run_err)
+                        .context(format!("multi-agent run for agent {:?}", args.agent_id));
+                    let err = match tui_res {
+                        Ok(Ok(())) => err,
+                        Ok(Err(tui_err)) => {
+                            err.context(format!("execution-trace TUI also errored: {tui_err}"))
+                        }
+                        Err(join_err) => err.context(format!(
+                            "execution-trace TUI task also panicked: {join_err}"
+                        )),
+                    };
+                    return Err(err);
+                }
+                (Ok(_), Ok(Err(e))) => return Err(e.context("execution-trace TUI")),
+                (Ok(_), Err(join_err)) => {
+                    return Err(anyhow::anyhow!(
+                        "execution-trace TUI task panicked: {join_err}"
+                    ))
+                }
+                (Ok(snapshot), Ok(Ok(()))) => snapshot,
+            }
+        } else {
+            let (snapshot_res, stats) = tokio::join!(run_fut, run_printer(rx, output));
+            let snapshot = snapshot_res
+                .with_context(|| format!("multi-agent run for agent {:?}", args.agent_id))?;
+            print_summary(&snapshot, &stats, output);
+            snapshot
+        };
 
         drop(runtime_arc);
         plugin_loader::flush_recorders().await;
-
-        // Print snapshot summary. Live trace rendering is deferred;
-        // v1 reads the JSONL log post-hoc. Stats are empty here because
-        // the printer was not wired to the trace stream — that wiring is
-        // a follow-up (requires subscribe-handle plumbing through
-        // spawn_root_agent).
-        let stats: std::collections::BTreeMap<String, AgentStats> =
-            std::collections::BTreeMap::new();
-        print_summary(&snapshot, &stats);
 
         return if matches!(snapshot.status, tau_ports::RunStatus::Completed) {
             Ok(())
@@ -343,6 +428,19 @@ pub async fn run(
                 snapshot.status
             ))
         };
+    }
+
+    if args.tui {
+        // Every path above that could build a live `TraceEvent` stream
+        // (`drive_with_live_trace`, gated on `is_multi_agent`) has already
+        // returned. Fail closed with a clear hint instead of silently
+        // falling through to the batch/streaming printer path below, which
+        // would make `--tui` a silent no-op.
+        anyhow::bail!(
+            "--tui currently requires a multi-agent run (an agent declaring Agent::Spawn or \
+             TaskList capabilities) — this agent doesn't drive a live trace stream. Drop \
+             --tui, or inspect the finished run afterwards with `tau trace --last`."
+        );
     }
 
     if args.stream {
@@ -365,6 +463,37 @@ pub async fn run(
 
         render_outcome(outcome, output)
     }
+}
+
+/// Reject `--tui` up front, before any project/plugin work, when it can't
+/// do anything useful.
+///
+/// `--tui` + `--json` is already rejected at parse time by
+/// `RunArgs::tui`'s `conflicts_with = "json"` (clap propagates the global
+/// `--json` flag into every subcommand's arg set, so the conflict is
+/// caught before `run` is ever called); this is defense-in-depth for
+/// callers that build a `RunArgs` programmatically (e.g. tests) rather
+/// than through `Cli::parse`. The TTY check has no parse-time equivalent
+/// — clap can't see the runtime terminal — so it always runs here.
+fn validate_tui_flag(args: &RunArgs, output: &Output) -> anyhow::Result<()> {
+    if !args.tui {
+        return Ok(());
+    }
+    if output.is_json() {
+        anyhow::bail!(
+            "--tui cannot be combined with --json: the TUI takes over the terminal, so \
+             there's no output stream left to serialize. Drop --tui to get the \
+             JSONL/line-per-event stream instead."
+        );
+    }
+    if !std::io::stdout().is_terminal() {
+        anyhow::bail!(
+            "--tui requires an interactive terminal on stdout (none detected). Drop --tui \
+             to use the scrolling-line printer, or inspect a finished run afterwards with \
+             `tau trace --last`."
+        );
+    }
+    Ok(())
 }
 
 /// Run the governed-by-default gate (ADR-0057 / D2) for the dev (non-bundle)
@@ -427,6 +556,8 @@ async fn try_run_pipeline(
     project: &tau_pkg::project::ProjectConfig,
     runtime: &tau_runtime_tokio::Runtime,
     prompt_text: String,
+    resume_id: Option<String>,
+    signal: Option<String>,
     output: &mut Output,
 ) -> Option<anyhow::Result<()>> {
     // Lower the cwd project to an IR module so we can inspect its
@@ -435,17 +566,24 @@ async fn try_run_pipeline(
     // no skill resolution. A lowering failure is NOT fatal here — it just
     // means "no pipeline path", so we fall through to the legacy flow
     // (which has its own, independent validation/errors).
+    // D6-B: `system_file` prompts resolve relative to the cwd (the project
+    // root for `tau run`), matching how the bundle builder resolves them.
+    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let caches = tau_ir_lower::Caches {
         native_tool: &crate::cmd::build::native_tool_hash,
         mcp_contract: &|_url| None,
         skill: &|_name| None,
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, &project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
-    let module = match tau_ir_lower::lower_project(
+    let (module, assets) = match tau_ir_lower::lower_project(
         project,
         &tau_ports::target::TargetTriple::host(),
         &caches,
     ) {
-        Ok(m) => m,
+        Ok(out) => (out.module, out.assets),
         Err(e) => {
             tracing::debug!("pipeline lowering skipped (project did not lower): {e}");
             return None;
@@ -456,25 +594,22 @@ async fn try_run_pipeline(
     // caller's existing flow runs unchanged.
     let pipeline = module.workflow.pipeline.as_ref()?;
 
-    // The id of the LAST NON-CHECK pipeline step — its stored output is the
-    // run's final result. Trailing `StepRun::Check` steps (auto-appended by
-    // the lowerer for every `[goals.*]` / `[deliverables.*]` declaration)
-    // evaluate postconditions but store NO output in `OutputStore`. Selecting
-    // one as `last_step_id` would make `render_pipeline_result` call
-    // `store.get(check_step_id) → None` and return the "interpreter invariant
-    // violated" error even when all checks pass. Skip trailing check steps and
-    // find the last step that actually produces output.
+    // The id of the LAST NON-CHECK, NON-SUSPEND pipeline step — its stored
+    // output is the run's final result. Trailing `StepRun::Check` steps
+    // (auto-appended by the lowerer for every `[goals.*]` / `[deliverables.*]`
+    // declaration) evaluate postconditions but store NO output in
+    // `OutputStore`. Selecting one as `last_step_id` would make
+    // `render_pipeline_result` call `store.get(check_step_id) → None` and
+    // return the "interpreter invariant violated" error even when all checks
+    // pass. `Pipeline::final_leaf_step_id` skips trailing `Check`/`Suspend`
+    // steps and finds the last step that actually produces output.
     //
     // An empty `steps` vec cannot reach here (project validation rejects an
     // empty pipeline with `ProjectConfigError::EmptyPipeline`); a pipeline of
-    // ONLY check steps returns `None` to fall back to the single-agent path.
-    let last_step_id = match pipeline
-        .steps
-        .iter()
-        .rev()
-        .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
-    {
-        Some(s) => s.id.0.clone(),
+    // ONLY check/suspend steps returns `None` to fall back to the
+    // single-agent path.
+    let last_step_id = match pipeline.final_leaf_step_id() {
+        Some(id) => id.0.clone(),
         None => return None,
     };
 
@@ -498,25 +633,95 @@ async fn try_run_pipeline(
             tools_by_id.insert(ir_tool_id.clone(), handle.clone());
         }
     }
-    let dispatcher = std::sync::Arc::new(crate::cmd::ir_dispatcher::ForwardingDispatcher::new(
-        llm_backends,
-        tools_by_id,
-    ));
+    let dispatcher = std::sync::Arc::new(
+        crate::cmd::ir_dispatcher::ForwardingDispatcher::new(llm_backends, tools_by_id)
+            .with_assets(assets),
+    );
 
     // Drive the pipeline, reusing the SAME input (`prompt_text`) and the
-    // SAME dispatcher.
-    let store = match tau_runtime_core::interpreter::pipeline::run_pipeline(
-        std::sync::Arc::new(module),
+    // SAME dispatcher. `run_pipeline_suspendable` durably persists a pause
+    // point via `SuspensionStore` and returns `PipelineOutcome::Suspended`
+    // rather than erroring when the run hits a top-level `Suspend` step
+    // (EPIC 4.3); `render_pipeline_outcome` renders both terminal shapes.
+    let suspensions: std::sync::Arc<dyn tau_ports::orchestration::SuspensionStore> =
+        std::sync::Arc::new(tau_runtime_tokio::FileCheckpointStore::new(
+            project_root.clone(),
+        ));
+
+    let module_arc = std::sync::Arc::new(module);
+    let (run_id, resume) = match (&resume_id, &signal) {
+        (Some(rid), Some(sig)) => {
+            let susp = match suspensions.load_suspension(rid) {
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    return Some(Err(anyhow::anyhow!("no suspended run {rid:?} to resume")))
+                }
+                Err(e) => return Some(Err(anyhow::Error::new(e).context("loading suspension"))),
+            };
+            if &susp.resume_signal != sig {
+                return Some(Err(anyhow::anyhow!(
+                    "signal {sig:?} does not match the suspended run's signal {:?}",
+                    susp.resume_signal
+                )));
+            }
+            // Drift guard: the re-lowered module must match the pause-time IR.
+            let digest = tau_ir::asset::asset_hash(&tau_ir::to_canonical_bytes(&module_arc));
+            if digest != susp.ir_digest {
+                return Some(Err(anyhow::anyhow!(
+                    "project changed since the run was suspended; cannot resume {rid:?}"
+                )));
+            }
+            let start_at = susp.step_cursor + 1;
+            (
+                rid.clone(),
+                Some(tau_runtime_core::interpreter::pipeline::ResumeState {
+                    store: tau_runtime_core::interpreter::output_store::OutputStore::restore(
+                        susp.outputs,
+                    ),
+                    start_at,
+                    attempts: susp.attempts,
+                }),
+            )
+        }
+        (Some(_), None) => return Some(Err(anyhow::anyhow!("--resume requires --signal <NAME>"))),
+        (None, Some(_)) => {
+            return Some(Err(anyhow::anyhow!(
+                "--signal is only valid with --resume <RUN_ID>"
+            )))
+        }
+        (None, None) => (mint_run_id(), None),
+    };
+
+    let outcome = match tau_runtime_core::interpreter::pipeline::run_pipeline_suspendable(
+        module_arc,
         prompt_text,
         dispatcher,
+        tau_runtime_core::interpreter::pipeline::SuspendConfig {
+            run_id: run_id.clone(),
+            store: suspensions.clone(),
+        },
+        resume,
     )
     .await
     {
-        Ok(s) => s,
+        Ok(o) => o,
         Err(e) => return Some(Err(anyhow::Error::new(e).context("running pipeline"))),
     };
 
-    Some(render_pipeline_result(&store, &last_step_id, output))
+    // Clear any stale suspend.json once the run reaches a terminal
+    // `Completed` outcome (whether this was a fresh run that never
+    // suspended, or a resumed run that just finished): otherwise a second
+    // `--resume <run_id> --signal <sig>` would reload the stale snapshot
+    // and re-run the post-suspend steps (re-billing LLM agent steps).
+    // Best-effort — a delete failure must not fail an otherwise-successful
+    // run.
+    if let tau_runtime_core::interpreter::pipeline::PipelineOutcome::Completed(_) = &outcome {
+        if let Err(e) = suspensions.delete_suspension(&run_id) {
+            tracing::warn!("failed to clear suspend.json for completed run {run_id:?}: {e}");
+        }
+    }
+
+    Some(render_pipeline_outcome(outcome, &last_step_id, output))
 }
 
 /// Render the LAST NON-CHECK pipeline step's output as the run result,
@@ -564,6 +769,49 @@ pub(super) fn render_pipeline_result(
         output.human(&text)?;
     }
     Ok(())
+}
+
+/// Render a [`tau_runtime_core::interpreter::pipeline::PipelineOutcome`]:
+/// the `Completed` arm delegates to [`render_pipeline_result`] unchanged; the
+/// `Suspended` arm (EPIC 4.3) emits the `{"outcome":"suspended", ...}` JSON
+/// shape / the human "paused, resume with ..." message and returns
+/// `Err(SuspendedRun.into())` so `run_main` maps the process exit to
+/// [`crate::ExitCode::Suspended`] (3) instead of the generic error bucket.
+///
+/// `pub(super)` for the same reason as `render_pipeline_result`: the bundle
+/// run path renders a bundled pipeline's outcome identically to the cwd path
+/// (deferred — the bundle path does not yet thread `SuspendConfig`).
+pub(super) fn render_pipeline_outcome(
+    outcome: tau_runtime_core::interpreter::pipeline::PipelineOutcome,
+    last_step_id: &str,
+    output: &mut Output,
+) -> anyhow::Result<()> {
+    use tau_runtime_core::interpreter::pipeline::PipelineOutcome;
+    match outcome {
+        PipelineOutcome::Completed(store) => render_pipeline_result(&store, last_step_id, output),
+        PipelineOutcome::Suspended {
+            run_id,
+            resume_signal,
+            step_id,
+        } => {
+            if output.is_json() {
+                output.json(&serde_json::json!({
+                    "outcome": "suspended",
+                    "run_id": run_id,
+                    "resume_signal": resume_signal,
+                    "step_id": step_id,
+                }))?;
+            } else {
+                output.human(&format!(
+                    "Paused at step '{step_id}' (signal: {resume_signal}).\n\
+                     Resume with:  tau run --resume {run_id} --signal {resume_signal}"
+                ))?;
+            }
+            // Signal the suspended exit code (3) to run_main via downcast;
+            // NOT a failure — see SuspendedRun's docstring.
+            Err(SuspendedRun.into())
+        }
+    }
 }
 
 /// Render a [`RunOutcome`] from the batch (non-streaming) path.
@@ -887,12 +1135,12 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
 ///
 /// A ULID (Crockford base32, 26 chars) — lexicographically sortable and
 /// collision-resistant. Matches `run_main`'s workflow-run-id minting
-/// (`ulid::Ulid::new()`) and replaces the old bespoke `tau-run-<nanos>`
+/// (`ulid::Ulid::generate()`) and replaces the old bespoke `tau-run-<nanos>`
 /// string, which could collide under fast successive runs or a backward
 /// clock adjustment (D8). The only contract is uniqueness within a host
 /// process; the kernel still mints its own `AgentInstanceId`.
 pub(super) fn mint_run_id() -> String {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
 
 /// Project a [`MessagePayload`] to a single text string for display.
@@ -1027,7 +1275,7 @@ mod bundle_source_xcheck_tests {
     use tau_ports::target::TargetTriple;
 
     /// Write a native-tool project whose single tool declares `caps`
-    /// (a TOML capabilities array, e.g. `[]` or `[{ kind = "net.http" }]`).
+    /// (a TOML capabilities array, e.g. `[]` or `[{ kind = "net.http", hosts = "any" }]`).
     /// The capability set is what makes two otherwise-identical projects
     /// lower to different IR hashes.
     fn write_project(root: &std::path::Path, name: &str, caps: &str) {
@@ -1090,6 +1338,7 @@ capabilities = {caps}
             agent_filter: None,
             ir_payload,
             governance: None,
+            assets: Vec::new(),
         })
         .expect("build must succeed")
         .path
@@ -1102,7 +1351,11 @@ capabilities = {caps}
         write_project(a.path(), "proj", "[]");
         // B: a divergent source the attacker lowered the IR from.
         let b = tempfile::tempdir().unwrap();
-        write_project(b.path(), "proj", "[{ kind = \"net.http\" }]");
+        write_project(
+            b.path(),
+            "proj",
+            "[{ kind = \"net.http\", hosts = \"any\" }]",
+        );
 
         let ir_b = lower(b.path());
         // Bundle records A's tau.toml hash, but carries B's IR.

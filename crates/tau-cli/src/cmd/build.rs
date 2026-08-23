@@ -1,6 +1,6 @@
 //! `tau build` — see spec `2026-05-27-tau-build-design.md`.
 //!
-//! Thin CLI shim over [`tau_pkg::bundle::build`]. Resolves the project
+//! Thin CLI shim over [`tau_pkg::bundle::build`](tau_pkg::bundle::build()). Resolves the project
 //! root from the current directory, calls the bundle builder with the
 //! host target + default output path, prints progress to stderr and
 //! the bundle path to stdout, then exits with the appropriate code
@@ -60,12 +60,19 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         }
     };
 
-    let target = match resolve_target(args) {
+    let build_target = match resolve_target(args) {
         Ok(t) => t,
         Err(msg) => {
             let _ = output.error(msg);
             std::process::exit(2);
         }
+    };
+    // Artifact-kind targets (EPIC 5.1) branch to their own pipelines; the
+    // bundle path below runs only for a hardware triple / default host.
+    let target = match build_target {
+        BuildTarget::Bundle(t) => t,
+        BuildTarget::WasmGuest => return dispatch_wasm_guest(args, output).await,
+        BuildTarget::RustLib => return dispatch_rust_lib(args, output).await,
     };
 
     // Governed-by-default gate (ADR-0057 / D2). Evaluate the `[allow]`
@@ -117,6 +124,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         payload: ir_payload,
         triggers: trigger_bindings,
         lower_error,
+        assets: ir_assets,
     } = lower_ir(&project_root, &target, &mcp_cache_ir, ts_project.as_ref());
 
     // A typecheck/lowering error (e.g. an invalid context pipeline where
@@ -134,6 +142,7 @@ pub async fn run(args: &BuildArgs, output: &mut Output) -> Result<()> {
         agent_filter,
         ir_payload,
         governance,
+        assets: ir_assets_to_bundle(ir_assets),
     };
 
     let _ = output.status("Building bundle…");
@@ -414,6 +423,12 @@ pub(crate) struct LowerIrResult {
     /// e.g. an invalid context pipeline — is surfaced at build time rather
     /// than silently dropped (see ADR: build-time enforcement discipline).
     pub lower_error: Option<tau_ir_lower::LowerError>,
+    /// Content-addressed assets (currently `system_file` prompts) the module
+    /// references, keyed by hash (`"sha256:" + 64 hex`). Empty when lowering
+    /// failed or the project uses only inline prompts. `tau build` persists
+    /// these into the bundle's asset store; verify/dev use them to resolve
+    /// prompt references at run time (D6-B).
+    pub assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
 }
 
 /// Attempt to lower the project IR, returning `Some(IrPayload)` on
@@ -454,6 +469,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -465,6 +481,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -476,6 +493,7 @@ pub(crate) fn lower_ir(
                     payload: None,
                     triggers: Vec::new(),
                     lower_error: None,
+                    assets: BTreeMap::new(),
                 };
             }
         };
@@ -493,21 +511,30 @@ pub(crate) fn lower_ir(
         native_tool: &|name: &str| Some(sha256_name(name)),
         mcp_contract: &|url| mcp_cache.get(url).cloned(),
         skill: &|_name| None,
+        // D6-B: read `system_file` prompts at build time (missing/unreadable
+        // => LowerError::PromptFileUnreadable => build fails). Routed through
+        // tau-pkg's `read_prompt_file` so the IR asset hash is computed over
+        // the same bytes as the bundle's `system_prompt_sha256`.
+        prompt_file: &|p: &std::path::Path| {
+            tau_pkg::bundle::read_prompt_file(p, project_root)
+                .map_err(|e| tau_ir_lower::PromptFileError(e.to_string()))
+        },
     };
 
     match tau_ir_lower::lower_project(config, target, &caches) {
-        Ok(module) => {
-            let bytes = tau_ir::to_canonical_bytes(&module);
-            let hash_bytes = tau_ir::compute_hash(&module);
+        Ok(out) => {
+            let bytes = tau_ir::to_canonical_bytes(&out.module);
+            let hash_bytes = tau_ir::compute_hash(&out.module);
             let payload = Some(IrPayload {
-                ir_format: module.ir_format.0.clone(),
+                ir_format: out.module.ir_format.0.clone(),
                 canonical_ir_hash: hex_lower(&hash_bytes),
                 canonical_ir_bytes_hex: hex_lower(&bytes),
             });
             LowerIrResult {
                 payload,
-                triggers: module.triggers,
+                triggers: out.module.triggers,
                 lower_error: None,
+                assets: out.assets,
             }
         }
         Err(e) => {
@@ -516,9 +543,27 @@ pub(crate) fn lower_ir(
                 payload: None,
                 triggers: Vec::new(),
                 lower_error: Some(e),
+                assets: BTreeMap::new(),
             }
         }
     }
+}
+
+/// Convert the asset blobs `tau_ir_lower` collected into the bundle's
+/// `[[assets]]` shape (bytes hex-encoded), sorted by hash for determinism.
+/// Shared by `tau build` and `tau verify --bundle` so both derive an
+/// identical asset store from the same source (D6-B).
+pub(crate) fn ir_assets_to_bundle(
+    ir_assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
+) -> Vec<tau_pkg::bundle::manifest::BundleAsset> {
+    ir_assets
+        .into_iter()
+        .map(|(hash, blob)| tau_pkg::bundle::manifest::BundleAsset {
+            hash,
+            kind: blob.kind.as_str().to_string(),
+            bytes_hex: hex_lower(&blob.bytes),
+        })
+        .collect()
 }
 
 /// `Caches::native_tool`-shaped stand-in: `Some(SHA-256(name))`.
@@ -555,27 +600,209 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
-/// Resolve the build target from CLI args. `None` → host; `Some(s)` →
-/// parse + validate it's an Available triple (ADR-0034). Returns a
-/// human-readable error string on invalid input.
-fn resolve_target(args: &BuildArgs) -> Result<TargetTriple, String> {
-    match &args.target {
-        None => Ok(TargetTriple::host()),
+/// The selected build artifact kind (EPIC 5.1). `--target` accepts two
+/// artifact-kind keywords resolved ahead of hardware-triple parsing; any
+/// other value is a hardware triple producing a `.tau` bundle.
+#[derive(Debug)]
+pub(crate) enum BuildTarget {
+    /// Default / hardware triple → `.tau` bundle.
+    Bundle(TargetTriple),
+    /// `--target wasm-guest` → fully-linked wasm component.
+    WasmGuest,
+    /// `--target rust-lib` → generated no_std Rust library crate.
+    RustLib,
+}
+
+/// Resolve the build target. Keywords `wasm-guest`/`rust-lib` select an
+/// embedding artifact; `None` → host bundle; anything else is parsed as an
+/// Available triple (ADR-0034). Returns a human-readable error on invalid input.
+fn resolve_target(args: &BuildArgs) -> Result<BuildTarget, String> {
+    match args.target.as_deref() {
+        None => Ok(BuildTarget::Bundle(TargetTriple::host())),
+        Some("wasm-guest") => Ok(BuildTarget::WasmGuest),
+        Some("rust-lib") => Ok(BuildTarget::RustLib),
         Some(s) => {
-            let triple: TargetTriple = s
-                .parse()
-                .map_err(|e| format!("invalid target triple '{s}': {e}"))?;
+            let triple: TargetTriple = s.parse().map_err(|e| {
+                format!(
+                    "invalid --target '{s}': {e}. Expected an artifact kind \
+                     (wasm-guest, rust-lib) or an Available triple: {}",
+                    available_triples_joined(),
+                )
+            })?;
             let available = tau_ports::target::lookup(&triple)
                 .is_some_and(|e| matches!(e.status, tau_ports::target::TripleStatus::Available));
             if !available {
                 return Err(format!(
-                    "target '{triple}' is not an Available build target; available: {}",
+                    "target '{triple}' is not an Available build target. Expected an \
+                     artifact kind (wasm-guest, rust-lib) or an Available triple: {}",
                     available_triples_joined(),
                 ));
             }
-            Ok(triple)
+            Ok(BuildTarget::Bundle(triple))
         }
     }
+}
+
+/// Test seam: classify a `--target` value into its artifact-kind label without
+/// running a build. Returns `"bundle" | "wasm-guest" | "rust-lib" | "invalid"`.
+pub fn classify_target_for_test(target: Option<&str>) -> &'static str {
+    let args = BuildArgs {
+        project: None,
+        target: target.map(|s| s.to_string()),
+        output: None,
+        agents: vec![],
+        tau_dep_path: None,
+        offline: false,
+        emit_trigger: None,
+        allow_ungoverned: false,
+        no_governance: false,
+    };
+    match resolve_target(&args) {
+        Ok(BuildTarget::Bundle(_)) => "bundle",
+        Ok(BuildTarget::WasmGuest) => "wasm-guest",
+        Ok(BuildTarget::RustLib) => "rust-lib",
+        Err(_) => "invalid",
+    }
+}
+
+/// Emit the rust-lib embedding crate for `project` into `out_dir`. Test seam:
+/// lowers for `any-wasi-strict` (cap-fit refuses ProcessExec/AgentSpawn), derives
+/// the WIT world, renders the scaffold, and writes it. Does not run governance
+/// or touch `Output` — the CLI dispatch wraps this.
+pub fn emit_rust_lib_to(
+    project: &std::path::Path,
+    out_dir: &std::path::Path,
+    tau_dep: tau_sdk_codegen::TauDep,
+) -> Result<RustLibArtifact> {
+    use crate::cmd::build_wasm::{lower_to_wasm_ir, world_from_module};
+    let (module, bytes) = lower_to_wasm_ir(project)?;
+    let ir_hash = hex_lower(&tau_ir::compute_hash(&module));
+    let wit = world_from_module(&module)?;
+    let stem = project
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workflow");
+    let crate_name = sanitize_crate_name(stem);
+
+    let files = tau_sdk_codegen::render_rust_lib(tau_sdk_codegen::RustLibInput {
+        crate_name: &crate_name,
+        ir_bytes: &bytes,
+        ir_hash: &ir_hash,
+        wit: &wit,
+        tau_dep,
+    });
+
+    let mut written = 0usize;
+    for (rel, contents) in &files {
+        let path = out_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, contents)?;
+        written += 1;
+    }
+    Ok(RustLibArtifact {
+        out_dir: out_dir.to_path_buf(),
+        ir_hash,
+        files: written,
+    })
+}
+
+/// Result of a rust-lib emission (for human/JSON output).
+pub struct RustLibArtifact {
+    /// Directory the generated crate was written to.
+    pub out_dir: std::path::PathBuf,
+    /// Lowercase-hex IR module hash baked into the crate.
+    pub ir_hash: String,
+    /// Number of files written.
+    pub files: usize,
+}
+
+/// Lowercase, replace non-alphanumeric with `_`, so the stem is a valid crate name.
+pub(crate) fn sanitize_crate_name(stem: &str) -> String {
+    let name: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        "workflow".to_string()
+    } else {
+        name
+    }
+}
+
+/// `--target rust-lib` dispatch: governed-by-default gate, then emit the crate.
+async fn dispatch_rust_lib(args: &BuildArgs, output: &mut Output) -> Result<()> {
+    let project = args
+        .project
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().expect("cwd is readable"));
+    let flags = crate::cmd::check::GovernanceFlags {
+        allow_ungoverned: args.allow_ungoverned,
+        no_governance: args.no_governance,
+    };
+    if let Err(diag) = crate::cmd::build_wasm::wasm_governance_gate(&project, flags).await {
+        let _ = output.diagnostic(diag);
+        std::process::exit(2);
+    }
+    let stem = project
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workflow");
+    let out_dir = args
+        .output
+        .clone()
+        .unwrap_or_else(|| project.join(format!("{stem}-rust-lib")));
+    let dep_path; // owned String kept alive for the borrow below
+    let tau_dep = match &args.tau_dep_path {
+        Some(p) => {
+            dep_path = p.display().to_string().replace('\\', "/");
+            tau_sdk_codegen::TauDep::Path(&dep_path)
+        }
+        None => tau_sdk_codegen::TauDep::Version(env!("CARGO_PKG_VERSION")),
+    };
+    let artifact = match emit_rust_lib_to(&project, &out_dir, tau_dep) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = output.error(format!("{e}"));
+            std::process::exit(2);
+        }
+    };
+    if output.is_json() {
+        let _ = output.json(&serde_json::json!({
+            "kind": "rust-lib",
+            "path": artifact.out_dir.display().to_string(),
+            "ir_hash": artifact.ir_hash,
+            "files": artifact.files,
+        }));
+    } else {
+        let _ = output.human(&format!(
+            "built rust-lib crate: {} ({} files, ir {})",
+            artifact.out_dir.display(),
+            artifact.files,
+            artifact.ir_hash,
+        ));
+    }
+    Ok(())
+}
+
+/// `--target wasm-guest` dispatch: map the bundle-shaped args onto the wasm
+/// subcommand and reuse the existing β.7.5 pipeline verbatim (no duplicated
+/// lowering/build).
+async fn dispatch_wasm_guest(args: &BuildArgs, output: &mut Output) -> Result<()> {
+    let wasm_args = crate::cli::BuildWasmArgs {
+        project: args.project.clone(),
+        output: args.output.clone(),
+        allow_ungoverned: args.allow_ungoverned,
+        no_governance: args.no_governance,
+    };
+    crate::cmd::build_wasm::run(&wasm_args, output).await
 }
 
 /// Comma-joined Display list of Available registry triples (sorted).
@@ -697,6 +924,7 @@ mod tests {
             target: t.map(|s| s.to_string()),
             output: None,
             agents: vec![],
+            tau_dep_path: None,
             offline: false,
             emit_trigger: None,
             allow_ungoverned: false,
@@ -706,37 +934,69 @@ mod tests {
 
     #[test]
     fn resolve_target_defaults_to_host() {
-        assert_eq!(
+        assert!(matches!(
             resolve_target(&args_with_target(None)).unwrap(),
-            TargetTriple::host()
-        );
+            BuildTarget::Bundle(t) if t == TargetTriple::host()
+        ));
     }
 
     #[test]
     fn resolve_target_accepts_available_triple() {
-        // Use `passthrough` — Available on every host. Don't use
-        // `host()`: on Windows `host()` is `windows-native-strict`,
-        // which the registry marks Reserved (scaffold-only), so it
-        // would (correctly) be rejected by the Available gate.
+        // `passthrough` is Available on every host, including Windows.
         let available = TargetTriple::PASSTHROUGH;
-        assert_eq!(
+        assert!(matches!(
             resolve_target(&args_with_target(Some(&available.to_string()))).unwrap(),
-            available,
-        );
+            BuildTarget::Bundle(t) if t == available
+        ));
+    }
+
+    #[test]
+    fn resolve_target_accepts_windows_native_strict_now_available() {
+        // Phase 2 graduated `windows-native-strict` Reserved -> Available,
+        // closing the `host()` divergence gap: on Windows, `host()` returns
+        // this exact triple, and it must now resolve successfully (it no
+        // longer hits the Reserved rejection branch).
+        let t: TargetTriple = "windows-native-strict".parse().unwrap();
+        assert!(matches!(
+            resolve_target(&args_with_target(Some(&t.to_string()))).unwrap(),
+            BuildTarget::Bundle(bt) if bt == t
+        ));
     }
 
     #[test]
     fn resolve_target_rejects_unparseable() {
         let err = resolve_target(&args_with_target(Some("not a triple!!!"))).unwrap_err();
-        assert!(err.contains("invalid target triple"), "got {err}");
+        assert!(err.contains("invalid --target"), "got {err}");
     }
 
     #[test]
-    fn resolve_target_rejects_reserved_or_unknown() {
-        // "windows-native-strict" parses the platform-adapter-tier grammar
-        // and IS in the registry, but with status Reserved (not Available)
-        // — exercises the lookup-Some(Reserved) branch of the Available check.
-        let err = resolve_target(&args_with_target(Some("windows-native-strict"))).unwrap_err();
+    fn resolve_target_maps_artifact_keywords() {
+        assert!(matches!(
+            resolve_target(&args_with_target(Some("wasm-guest"))).unwrap(),
+            BuildTarget::WasmGuest
+        ));
+        assert!(matches!(
+            resolve_target(&args_with_target(Some("rust-lib"))).unwrap(),
+            BuildTarget::RustLib
+        ));
+    }
+
+    #[test]
+    fn resolve_target_invalid_names_both_value_spaces() {
+        let err = resolve_target(&args_with_target(Some("not a triple!!!"))).unwrap_err();
+        assert!(
+            err.contains("wasm-guest") && err.contains("rust-lib"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_target_rejects_unregistered_triple() {
+        // "darwin-container-strict" parses the platform-adapter-tier grammar
+        // but is not in the registry at all — exercises the lookup-None
+        // branch of the Available check (no registered Reserved triples
+        // remain post-Phase-2, so this is the only "not Available" case).
+        let err = resolve_target(&args_with_target(Some("darwin-container-strict"))).unwrap_err();
         assert!(err.contains("not an Available"), "got {err}");
     }
 

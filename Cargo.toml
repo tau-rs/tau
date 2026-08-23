@@ -5,7 +5,7 @@ members = [
     "crates/tau-ports",
     "crates/tau-ir",
     "crates/tau-ir-lower",
-    "crates/tau-infra",
+    "crates/tau-trace",
     "crates/tau-app",
     "crates/tau-pkg",
     "crates/tau-mcp",
@@ -33,6 +33,8 @@ members = [
     "crates/tau-sandbox-native",
     "crates/tau-sandbox-proxy",
     "crates/tau-sandbox-windows",
+    "crates/tau-embed-example",
+    "crates/tau-sdk-codegen",
     "crates/tau-ts-extract",
     "crates/tau-workflow",
     "crates/tau-ir-conformance",
@@ -61,21 +63,41 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/LEBOCQTitouan/tau"
 authors = ["Titouan Lebocq <75916953+LEBOCQTitouan@users.noreply.github.com>"]
 
+# Centralised lint policy. Every member opts in with `[lints]\nworkspace = true`.
+# CI runs `cargo clippy --workspace --all-targets -- -D warnings`, so a lint at
+# `"warn"` here is effectively DENIED in CI — this table only contains lints the
+# workspace already satisfies. Noisier lints (clippy::pedantic, missing_docs) are
+# tracked as backlog and raised in follow-up PRs once their fallout is cleared.
+[workspace.lints.rust]
+# unsafe is deny-by-default across the workspace; the few crates that genuinely
+# need it opt out locally with `#![allow(unsafe_code)]` (tau-sandbox-native,
+# tau-wasm-guest) or a scoped `#[allow(unsafe_code)]` (tau-app's PR_SET_PDEATHSIG
+# call site). Crates that already declare `#![forbid(unsafe_code)]` keep that
+# stricter local level.
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+# Already enforced by CI's `-D warnings`; declaring it here makes the policy
+# explicit and centrally toggleable.
+all = "warn"
+
 [workspace.dependencies]
 # β.7.5 wasm guest (wasm32-wasip2 only)
 wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
 wit-parser  = "0.251"
 dlmalloc    = { version = "0.2", features = ["global"] }
 # β.7.5 wasm host (std embedder; host targets only)
-wasmtime    = "45"
+wasmtime    = "47"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
-tau-ports           = { path = "crates/tau-ports",  version = "0.1.0", default-features = false }
+tau-ports           = { path = "crates/tau-ports",  version = "0.7.1", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
+tau-trace           = { path = "crates/tau-trace", version = "0.0.0" }
 tau-mcp             = { path = "crates/tau-mcp",       version = "0.0.0", default-features = false }
 tau-mcp-tokio       = { path = "crates/tau-mcp-tokio", version = "0.0.0", default-features = false }
 tau-native-tools    = { path = "crates/tau-native-tools", version = "0.0.0", default-features = false }
 tau-pkg             = { path = "crates/tau-pkg",    version = "0.0.0" }
+tau-ts-extract      = { path = "crates/tau-ts-extract", version = "0.0.0" }
 # `default-features = false` so the no_std wasm guest can link this alias
 # directly (it opts into only `wasm-interpreter`/`tool-validation`). Host/std
 # consumers re-enable the full surface with `features = ["std"]`.
@@ -93,6 +115,7 @@ tau-sandbox-proxy       = { path = "crates/tau-sandbox-proxy",       version = "
 tau-workflow            = { path = "crates/tau-workflow",            version = "0.0.0" }
 tau-app                 = { path = "crates/tau-app",                 version = "0.0.0" }
 tau-observe             = { path = "crates/tau-observe",             version = "0.0.0" }
+tau-sdk-codegen     = { path = "crates/tau-sdk-codegen", version = "0.0.0" }
 # `default-features = false` on these aliases so no_std members can honour
 # their `default-features = false` declarations (cargo silently IGNORES a
 # member's `default-features = false` unless the workspace alias also sets
@@ -106,14 +129,15 @@ url             = "2"
 serde           = { version = "1", default-features = false, features = ["derive"] }
 serde_json      = { version = "1", default-features = false, features = ["alloc"] }
 sha2            = { version = "0.11", default-features = false }
-base64          = { version = "0.22", default-features = false, features = ["alloc"] }
+base64          = { version = "0.23", default-features = false, features = ["alloc"] }
 proptest        = "1"
 assert_matches  = "1"
 rstest          = "0.26"
 walkdir         = "2"
 globset         = "0.4"
 regex           = "1"
-jsonschema      = "0.46"
+regex-automata  = { version = "0.4.18", default-features = false }
+jsonschema      = "0.49"
 schemars        = { version = "1", default-features = false }
 foldhash     = { version = "0.2", default-features = false }
 futures-core    = { version = "0.3", default-features = false, features = ["alloc"] }
@@ -146,7 +170,13 @@ landlock     = "0.4"
 libc         = "0.2"
 nix          = { version = "0.31", default-features = false, features = ["sched", "user", "process", "fs"] }
 seccompiler  = "0.5"
-ulid         = { version = "1", default-features = false }
+ulid         = { version = "3", default-features = false }
+# Execution-trace TUI (M1). ratatui 0.30's default `crossterm` feature pulls
+# in `ratatui-crossterm`, whose own default feature (`crossterm_0_29`) pins
+# to crossterm 0.29 — matching the direct `crossterm` dep below so both
+# resolve to the same crate version instead of two co-installed majors.
+ratatui      = "0.30"
+crossterm    = "0.29"
 
 # Vendored no_std fork of async-stream (upstream 0.3.6 is std-only via
 # `thread_local!` + `use std::`). Required so the β.7.5 wasm guest can link

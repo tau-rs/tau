@@ -36,14 +36,15 @@ pub struct UncheckedAllow {
     pub caps: BTreeMap<String, toml::Value>,
 }
 
-/// Unchecked `[allow.mcp.<name>]` block. The `url` is the grant of network
-/// reach; `hosts` (optional) widens/narrows the derived host ceiling.
+/// Unchecked `[allow.mcp.<name>]` block. `hosts` is the explicit host
+/// ceiling; it must be authored (non-empty) — URL-derived hosts are no
+/// longer supported.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncheckedMcpAllow {
     /// MCP server URL.
     pub url: String,
-    /// Explicit host ceiling override; empty = derive from `url`.
+    /// Explicit host ceiling; required (must be non-empty).
     #[serde(default)]
     pub hosts: Vec<String>,
 }
@@ -104,10 +105,14 @@ pub enum ToolBinding {
     Mcp(String),
 }
 
-/// Raw-cap kinds permitted as `[allow]` keys (and `[allow.tools.*]` ceiling
-/// keys). `agent.spawn` flows through the lattice's spawn link, not a raw
-/// ceiling entry; `custom`/anything else is not a narrowable ceiling kind.
-const ALLOWED_CAP_KINDS: &[&str] = &[
+/// Capability kinds accepted as `[allow]` ceiling entries (and
+/// `[allow.tools.*]` ceiling keys). This is the *semantic* allow-list, applied
+/// after the unified capability parser (D7-B PR2, Decision 4-A) — so a typo
+/// fails at the parser with a did-you-mean, while a valid-but-non-ceiling kind
+/// (`skill.spawn`, `task_list`, `custom.*`, …) fails here with a distinct
+/// message. `agent.spawn` flows through the lattice's spawn link, not a raw
+/// ceiling entry; nothing else is a narrowable ceiling kind.
+const ALLOW_CEILING_KINDS: &[&str] = &[
     "fs.read",
     "fs.write",
     "fs.exec",
@@ -121,16 +126,14 @@ fn err(message: impl Into<String>) -> ProjectConfigError {
     }
 }
 
-/// Bridge one kind-as-key raw cap (`"fs.read" => { paths = [...] }`) into a
-/// canonical `Capability`, re-emitting it as `{ kind, ... }` for the domain
-/// deserializer. Rejects non-whitelisted kinds and non-table values.
-fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConfigError> {
-    if !ALLOWED_CAP_KINDS.contains(&kind) {
-        return Err(err(format!(
-            "raw-cap kind {kind:?} is not permitted in [allow] \
-             (allowed: fs.read, fs.write, fs.exec, net.http, process.spawn)"
-        )));
-    }
+/// Parse one kind-as-key raw cap into a `Capability` through the single
+/// domain deserializer (typo/unknown-kind/field-shape errors surface here).
+/// No `[allow]` ceiling-kind gate — callers that accept any narrowable cap
+/// (agent-kind grants, dynamic-region envelopes) use this directly.
+pub(crate) fn bridge_cap_any(
+    kind: &str,
+    value: &toml::Value,
+) -> Result<Capability, ProjectConfigError> {
     // toml::Value → serde_json::Value, then inject `kind`.
     let json: JsonValue = serde_json::to_value(value)
         .map_err(|e| err(format!("raw-cap {kind:?}: not serializable: {e}")))?;
@@ -138,8 +141,34 @@ fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConf
         return Err(err(format!("raw-cap {kind:?}: value must be a table")));
     };
     obj.insert("kind".to_string(), JsonValue::String(kind.to_string()));
+    // Unified parse: typos, unknown kinds, and field-shape errors surface here
+    // (with a did-you-mean), exactly as they do for a package manifest.
     serde_json::from_value::<Capability>(JsonValue::Object(obj))
-        .map_err(|e| err(format!("raw-cap {kind:?}: malformed: {e}")))
+        .map_err(|e| err(format!("capability {e}")))
+}
+
+/// Bridge a kind-as-key cap map into a `Vec<Capability>` with no ceiling gate.
+pub(crate) fn bridge_caps_any(
+    caps: &BTreeMap<String, toml::Value>,
+) -> Result<Vec<Capability>, ProjectConfigError> {
+    // BTreeMap iteration is sorted by key, giving deterministic order.
+    caps.iter().map(|(k, v)| bridge_cap_any(k, v)).collect()
+}
+
+/// Bridge one kind-as-key raw cap into a `Capability`, gated to the
+/// narrowable `[allow]` ceiling kinds. Delegates parsing to
+/// [`bridge_cap_any`] so `[allow]` and package manifests share one
+/// unknown-kind / typo / did-you-mean / field-shape path and cannot diverge.
+fn bridge_cap(kind: &str, value: &toml::Value) -> Result<Capability, ProjectConfigError> {
+    let cap = bridge_cap_any(kind, value)?;
+    // Semantic gate: the kind parses, but is it a narrowable ceiling?
+    if !ALLOW_CEILING_KINDS.contains(&kind) {
+        return Err(err(format!(
+            "capability kind {kind:?} is valid but not permitted as an [allow] \
+             ceiling entry (ceilings: fs.read, fs.write, fs.exec, net.http, process.spawn)"
+        )));
+    }
+    Ok(cap)
 }
 
 /// Bridge a kind-as-key cap map into a sorted `Vec<Capability>`.
@@ -148,22 +177,6 @@ fn bridge_caps(
 ) -> Result<Vec<Capability>, ProjectConfigError> {
     // BTreeMap iteration is sorted by key, giving deterministic ceiling order.
     caps.iter().map(|(k, v)| bridge_cap(k, v)).collect()
-}
-
-/// Derive the host from a URL without pulling in a URL crate: strip the
-/// scheme (`scheme://`), then take everything up to the first `/`, `:`, `?`,
-/// or `#`. Returns `None` for an empty/scheme-less/host-less string.
-fn derive_host(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest)?;
-    let host: String = after_scheme
-        .chars()
-        .take_while(|c| !matches!(c, '/' | ':' | '?' | '#'))
-        .collect();
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
 }
 
 /// Validate an `[allow]` constitution into an [`AllowConfig`].
@@ -194,17 +207,13 @@ pub fn validate_allow(raw: UncheckedAllow) -> Result<AllowConfig, ProjectConfigE
         if m.url.trim().is_empty() {
             return Err(err(format!("[allow.mcp.{name}]: url must be non-empty")));
         }
-        let hosts = if m.hosts.is_empty() {
-            let host = derive_host(&m.url).ok_or_else(|| {
-                err(format!(
-                    "[allow.mcp.{name}]: cannot derive host from url {:?}",
-                    m.url
-                ))
-            })?;
-            vec![host]
-        } else {
-            m.hosts
-        };
+        if m.hosts.is_empty() {
+            return Err(err(format!(
+                "[allow.mcp.{name}]: hosts must be non-empty \
+                 (URL-derived hosts are no longer supported; author them explicitly)"
+            )));
+        }
+        let hosts = m.hosts;
         mcp.insert(name, McpAllowEntry { url: m.url, hosts });
     }
 
@@ -258,7 +267,8 @@ mod tests {
         )));
         assert!(cfg.ceiling.iter().any(|c| matches!(
             c,
-            Capability::Network(NetCapability::Http { hosts, .. }) if hosts == &["api.weather.com".to_string()]
+            Capability::Network(NetCapability::Http { hosts, .. })
+                if hosts.exact_hosts() == vec!["api.weather.com".to_string()]
         )));
         assert!(cfg.ceiling.iter().any(|c| matches!(
             c,
@@ -285,6 +295,41 @@ mod tests {
         let raw = allow_from(r#""fs.teleport" = { paths = ["/"] }"#);
         let err = validate_allow(raw).unwrap_err();
         assert!(format!("{err}").contains("fs.teleport"), "got: {err}");
+    }
+
+    // ----- D7-B PR2: unified parser + ceiling gate (Decision 4-A) -----
+
+    #[test]
+    fn typo_kind_errors_at_the_typo_with_did_you_mean() {
+        // The canonical D7 example: a typo in [allow] fails at the typo (a
+        // parse error with a did-you-mean), NOT as a downstream governance error.
+        let raw = allow_from(r#""fs.raed" = { paths = ["/x"] }"#);
+        let err = format!("{}", validate_allow(raw).unwrap_err());
+        assert!(err.contains("fs.raed"), "got: {err}");
+        assert!(
+            err.contains("fs.read"),
+            "should suggest fs.read; got: {err}"
+        );
+    }
+
+    #[test]
+    fn valid_but_non_ceiling_kind_rejected_distinctly() {
+        // `skill.spawn` is a valid capability, but not an [allow] ceiling —
+        // a distinct message from a typo.
+        let raw = allow_from(r#""skill.spawn" = { allowed_skills = ["critic"] }"#);
+        let err = format!("{}", validate_allow(raw).unwrap_err());
+        assert!(err.contains("skill.spawn"), "got: {err}");
+        assert!(err.contains("not permitted as an [allow]"), "got: {err}");
+    }
+
+    #[test]
+    fn field_shape_strictness_applies_in_allow() {
+        // net.http with `paths` (an fs field) is now a hard error in [allow]
+        // too — the shared parser enforces field-shape (D7-B).
+        let raw = allow_from(r#""net.http" = { paths = ["/x"] }"#);
+        let err = format!("{}", validate_allow(raw).unwrap_err());
+        assert!(err.contains("net.http"), "got: {err}");
+        assert!(err.contains("paths"), "got: {err}");
     }
 
     #[test]
@@ -338,18 +383,24 @@ fast = { backend = "anthropic", model = "claude-haiku-4-5" }
     }
 
     #[test]
-    fn mcp_url_derives_host_when_absent() {
+    fn mcp_absent_hosts_now_rejected() {
         let raw = allow_from(
             r#"
 [mcp.weather]
 url = "https://api.weather.com/mcp"
 "#,
         );
+        let err = validate_allow(raw).unwrap_err();
+        assert!(format!("{err}").contains("hosts"), "got: {err}");
+    }
+
+    #[test]
+    fn allow_net_http_any_bridges_to_hostset_any() {
+        let raw = allow_from(r#""net.http" = { hosts = "any" }"#);
         let cfg = validate_allow(raw).expect("validate");
-        assert_eq!(
-            cfg.mcp["weather"].hosts,
-            vec!["api.weather.com".to_string()]
-        );
+        assert!(cfg.ceiling.iter().any(|c| matches!(
+            c, Capability::Network(NetCapability::Http { hosts, .. }) if hosts.is_any()
+        )));
     }
 
     #[test]
@@ -374,18 +425,6 @@ hosts = ["a.example.com", "b.example.com"]
             r#"
 [mcp.weather]
 url = ""
-"#,
-        );
-        let err = validate_allow(raw).unwrap_err();
-        assert!(format!("{err}").contains("weather"), "got: {err}");
-    }
-
-    #[test]
-    fn mcp_unparseable_url_rejected() {
-        let raw = allow_from(
-            r#"
-[mcp.weather]
-url = "not a url"
 "#,
         );
         let err = validate_allow(raw).unwrap_err();

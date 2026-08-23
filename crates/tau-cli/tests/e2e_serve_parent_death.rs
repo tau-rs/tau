@@ -48,13 +48,22 @@ fn child_exits_on_stdin_eof() {
         let stderr = child.stderr.take().unwrap();
         let reader = std::io::BufReader::new(stderr);
         let mut ready = false;
+        // Retain stderr lines so a startup failure (e.g. sandbox-adapter
+        // resolution error) is visible in CI instead of a bare miss.
+        let mut collected: Vec<String> = Vec::new();
         for line in reader.lines().map_while(Result::ok).take(50) {
             if line.contains("tau-serve ready") {
                 ready = true;
                 break;
             }
+            collected.push(line);
         }
-        assert!(ready, "tau serve never printed 'tau-serve ready' on stderr");
+        assert!(
+            ready,
+            "tau serve never printed 'tau-serve ready' on stderr.\n\
+             --- tau serve child stderr ---\n{}\n--- end child stderr ---",
+            collected.join("\n")
+        );
         // stderr BufReader + ChildStderr are dropped here, closing the
         // read end. This is fine — we only need to know startup completed.
     }

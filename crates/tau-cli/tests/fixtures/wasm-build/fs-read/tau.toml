@@ -1,0 +1,23 @@
+packages = ["anthropic"]
+
+[project]
+name = "fs-read-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.main]
+display_name = "Main"
+package = "fs-read-wasm@^0.1"
+model = "claude"
+tool_refs = ["read_file"]
+
+[agents.main.prompt]
+system = "Uses an fs.read tool."
+
+[tools.read_file]
+native = "Read"
+description = "Read a file from a granted path."
+capabilities = [{ kind = "fs.read", paths = ["/data/**"] }]

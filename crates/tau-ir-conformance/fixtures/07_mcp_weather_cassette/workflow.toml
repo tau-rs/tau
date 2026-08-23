@@ -17,4 +17,4 @@ max_turns    = 2
 [tools.weather]
 mcp         = "cassette:./weather_cassette.jsonl"
 description = "Look up current weather via cassette replay."
-capabilities = [{ kind = "net.http" }]
+capabilities = [{ kind = "net.http", hosts = "any" }]

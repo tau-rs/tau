@@ -113,12 +113,14 @@ mod tests {
 
     #[tokio::test]
     async fn non_notfound_io_error_surfaces_as_io() {
-        // Create a regular file, then use it as the "dir" so <file>/<filename>
-        // resolves through a non-directory => ENOTDIR (not NotFound).
-        let tmp = tempfile::tempdir().unwrap();
-        let not_a_dir = tmp.path().join("iam_a_file");
-        std::fs::write(&not_a_dir, b"x").unwrap();
-        let p = FileProvider::new(not_a_dir, key_map());
+        // Make the credential "file" actually a directory, so reading it fails
+        // with a non-NotFound IO error on every platform: EISDIR on Unix,
+        // access-denied on Windows (opening a directory for read fails there).
+        // The earlier file-as-parent-dir trick produced ENOTDIR on Unix but a
+        // NotFound-classified error on Windows. See #530.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("anthropic-key")).unwrap();
+        let p = FileProvider::new(dir.path().to_path_buf(), key_map());
         let res = p.resolve(&req("anthropic_api_key")).await;
         assert!(
             matches!(res, Err(tau_ports::CredentialError::Io { .. })),

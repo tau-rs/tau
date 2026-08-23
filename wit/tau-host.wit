@@ -15,13 +15,20 @@ interface host {
 
     /// Next u64 from the host RandomSource (deterministic in conformance).
     next-u64: func() -> u64;
+
+    /// Stream one RunEvent to the host as it is produced. `event-json` is a
+    /// serialized tau_runtime_core::stream::RunEvent (externally-tagged serde).
+    /// Fire-and-forget: no return, the guest does not observe host errors.
+    emit-event: func(event-json: string);
 }
 
 world runner {
     import host;
 
-    /// Drive the baked IR from its entry agent with `prompt`.
-    /// Returns a serialized observable (JSON) on success. The exact payload
-    /// schema is settled in a later PR; the WIT signature is stable.
+    /// Drive the baked IR from its entry agent with `prompt`. On success
+    /// returns an empty sentinel string; the run's `RunEvent`s are streamed
+    /// one at a time via `emit-event` (serialized JSON each) rather than
+    /// buffered into the `ok` payload. The `err` arm carries a fatal error
+    /// message.
     export run: func(prompt: string) -> result<string, string>;
 }

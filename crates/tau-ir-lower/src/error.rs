@@ -3,10 +3,11 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use tau_domain::CapabilityShape;
+use tau_domain::{CapabilityShape, IrFeature};
 use thiserror::Error;
 
 use tau_ir::ids::{AgentId, StepId, SubflowId, ToolId};
+use tau_ports::target::TargetTriple;
 
 /// IR-level error type.
 #[derive(Debug, Error)]
@@ -49,6 +50,18 @@ pub enum LowerError {
         tools: Vec<ToolId>,
     },
 
+    /// Feature-fit failure (EPIC 4.2). The workflow uses one or more IR
+    /// execution features the build target cannot run — e.g. any control-flow
+    /// (`Branch`/`Parallel`/`Loop`) for a wasm target, whose guest drives
+    /// `run_ir_streaming` and has no `run_pipeline` control-flow path.
+    #[error("workflow uses IR feature(s) unsupported by target {target}: {missing:?}")]
+    FeatureUnsupported {
+        /// The features the target does not support.
+        missing: Vec<IrFeature>,
+        /// The target that lacks them.
+        target: TargetTriple,
+    },
+
     /// A Deterministic step references a function name that the lowering
     /// registry doesn't know.
     #[error("deterministic step {step:?} references unknown fn `{fn_name}`")]
@@ -87,6 +100,19 @@ pub enum LowerError {
         tool: ToolId,
         /// The unresolved step id.
         step: StepId,
+    },
+
+    /// An agent's `system_file` prompt could not be read at build time.
+    /// This deliberately moves prompt-file existence from run time to build
+    /// time (D6-B): a missing or unreadable prompt file is a hard build error.
+    #[error("agent {agent:?}: cannot read prompt file {path:?}: {reason}")]
+    PromptFileUnreadable {
+        /// The agent whose `system_file` prompt failed to load.
+        agent: AgentId,
+        /// The prompt file path, as written in the config.
+        path: String,
+        /// Why the read failed (from the injected `prompt_file` reader).
+        reason: String,
     },
 
     /// Generic parse failure surfacing from the upstream TOML parser.
@@ -215,6 +241,67 @@ pub enum LowerError {
         step: String,
     },
 
+    /// A dynamic region references an agent kind with no `[agent.kinds.<name>]`
+    /// definition (EPIC 4.4).
+    #[error("dynamic region in step '{step}' spawns unknown agent kind '{kind}' — declare [agent.kinds.{kind}]")]
+    UnknownAgentKind {
+        /// The undefined kind name.
+        kind: String,
+        /// The pipeline-step id of the region.
+        step: String,
+    },
+
+    /// A `StepRun::Dynamic` has `max_spawns == 0`, which would never spawn a
+    /// region member. The bound must be at least 1. Defense-in-depth: mirrors
+    /// `LoopMaxItersZero` — tau-pkg validates this at author time, but
+    /// hand-constructed IR that bypasses tau-pkg must still be rejected.
+    #[error("pipeline step '{step}': Dynamic.max_spawns must be > 0")]
+    DynamicMaxSpawnsZero {
+        /// The pipeline step id containing the offending Dynamic region.
+        step: String,
+    },
+
+    /// A `StepRun::Dynamic` has `max_concurrency` outside `1..=max_spawns`
+    /// (either zero, or greater than the total-spawn cap). Defense-in-depth:
+    /// mirrors `LoopMaxItersZero` for the Dynamic region's own bounds.
+    #[error("pipeline step '{step}': Dynamic.max_concurrency must be in 1..={max_spawns} (got {max_concurrency})")]
+    DynamicConcurrencyInvalid {
+        /// The pipeline step id containing the offending Dynamic region.
+        step: String,
+        /// The region's configured total-spawn cap.
+        max_spawns: u64,
+        /// The offending concurrency value.
+        max_concurrency: u64,
+    },
+
+    /// A context step declares a determinism class string that lowering does
+    /// not recognize (D7-B / ADR-0065). Replaces the former silent
+    /// `_ => DeterminismClass::Pure` default, which downgraded an unknown
+    /// string to the most permissive class.
+    #[error("agent '{agent}': context transformer '{transformer}' declares unknown determinism '{determinism}' (want one of: pure, llm_backed, stateful)")]
+    UnknownDeterminism {
+        /// The agent id whose context pipeline is invalid.
+        agent: String,
+        /// The offending transformer name.
+        transformer: String,
+        /// The unrecognized determinism string as authored.
+        determinism: String,
+    },
+
+    /// Lowering encountered a `PromptEntry` variant it does not know how to
+    /// lower (D7-B / ADR-0065). Replaces the former silent wildcard that
+    /// mapped an unknown prompt kind to an empty prompt. Only reachable if a
+    /// future `#[non_exhaustive]` `PromptEntry` variant is added upstream
+    /// without a corresponding lowering arm — a fail-closed guard, not a
+    /// user-authoring error.
+    #[error("agent {agent:?}: unsupported prompt kind (this tau cannot lower {detail}); rebuild with a matching tau")]
+    UnsupportedPromptKind {
+        /// The agent whose prompt could not be lowered.
+        agent: AgentId,
+        /// Debug rendering of the offending `PromptEntry`.
+        detail: String,
+    },
+
     /// A `Condition::evaluates` is a `Locus::Output(id)` that names a step
     /// not yet visible at this point in the pipeline.
     #[error(
@@ -226,4 +313,59 @@ pub enum LowerError {
         /// The referenced step id that is missing or out of scope.
         output: String,
     },
+
+    /// A `Suspend` step appeared below the top-level pipeline slice (inside a
+    /// Branch arm, Loop body, or Parallel branch). Suspend is top-level only.
+    #[error("suspend step {step:?} is nested inside a control-flow block; suspend is only allowed at the top level of the pipeline (EPIC 4.3)")]
+    SuspendNotTopLevel {
+        /// The nested suspend step id.
+        step: String,
+    },
+
+    /// A step template references `${steps.<id>.output}` where `<id>` is a
+    /// `Suspend` step, which produces no output.
+    #[error("step {step:?} references {referenced:?}.output, but {referenced:?} is a suspend step and produces no output")]
+    SuspendHasNoOutput {
+        /// The referencing step.
+        step: String,
+        /// The suspend step id whose (nonexistent) output was referenced.
+        referenced: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn unknown_determinism_renders_the_offending_values() {
+        let e = LowerError::UnknownDeterminism {
+            agent: "reviewer".into(),
+            transformer: "trim_old".into(),
+            determinism: "sometimes".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("reviewer"), "got: {msg}");
+        assert!(msg.contains("trim_old"), "got: {msg}");
+        assert!(msg.contains("sometimes"), "got: {msg}");
+        assert!(msg.contains("pure"), "should name the valid set: {msg}");
+    }
+
+    // `UnsupportedPromptKind` is only reachable if a future
+    // `#[non_exhaustive]` `PromptEntry` variant is added upstream without a
+    // lowering arm; it cannot be triggered through the public lowering API
+    // (the three current variants are all handled). This asserts its Display
+    // is actionable so the fail-closed message is not vacuous.
+    #[test]
+    fn unsupported_prompt_kind_renders_actionably() {
+        let e = LowerError::UnsupportedPromptKind {
+            agent: AgentId("writer".into()),
+            detail: "SomeFutureVariant".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("writer"), "got: {msg}");
+        assert!(msg.contains("SomeFutureVariant"), "got: {msg}");
+        assert!(msg.contains("rebuild"), "got: {msg}");
+    }
 }

@@ -202,6 +202,7 @@ impl DenyEntry {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ToolResult {
     /// Multi-block content describing the tool's output.
     pub content: Vec<ToolContent>,
@@ -242,6 +243,7 @@ impl ToolResult {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ToolContent {
     /// Plain-text content.
     Text {
@@ -306,6 +308,21 @@ pub trait Tool: Send + Sync {
     /// ```
     fn capabilities(&self) -> &[tau_domain::Capability] {
         &[]
+    }
+
+    /// The authority this tool actually runs under, when narrower than
+    /// [`Tool::capabilities`] — e.g. an MCP entry whose `net.http` hosts
+    /// were meet-clamped against the `[allow.mcp.<entry>].hosts` ceiling
+    /// at open time. `None` (the default) means the runtime authority
+    /// equals the declared capabilities.
+    ///
+    /// Observability-only in v0.1: the kernel maps `Some` to a
+    /// `CapabilityVerdict::Clamp` on the call's `ToolCall` trace event.
+    /// Enforcement is unchanged — the kernel grant gate still checks the
+    /// declared capabilities, and the OS boundary enforces the narrowed
+    /// plan (execution-trace TUI spec §12).
+    fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+        None
     }
 
     /// Open a session. Called once before any `invoke`.
@@ -482,5 +499,23 @@ mod tests {
         let ctx: SessionContext =
             serde_json::from_value(json).expect("SessionContext deserializes without deny_entries");
         assert!(ctx.deny_entries.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod effective_capabilities_tests {
+    use super::Tool;
+    use crate::fixtures::{make_tool_spec, MockTool};
+    use tau_domain::Value;
+
+    #[test]
+    fn default_effective_capabilities_is_none() {
+        // The defaulted method means every existing Tool impl reports
+        // "not narrowed" without changes.
+        let tool = MockTool::new(
+            "noop",
+            make_tool_spec("noop".into(), "noop".into(), Value::Null),
+        );
+        assert!(Tool::effective_capabilities(&tool).is_none());
     }
 }

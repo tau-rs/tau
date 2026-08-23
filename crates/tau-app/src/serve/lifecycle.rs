@@ -116,8 +116,9 @@ pub async fn run(opts: ServeOptions) -> Result<()> {
     Ok(())
 }
 
-/// Resolve an agent entry's LLM backend package name via the project
-/// `[models]` table (per-agent model resolution). `validate_models`
+/// Resolve an agent entry's LLM backend package name via the project's
+/// effective model-alias table (`[models]` / `[allow.models]` — callers
+/// pass `ProjectConfig::effective_models()`, #620). `validate_models`
 /// (D7 stage 1) refuses a project whose agent names an unknown alias, so this
 /// is infallible for a validated config; the error arm is defense-in-depth.
 fn agent_llm_backend(
@@ -129,7 +130,7 @@ fn agent_llm_backend(
         .map(|m| m.backend.clone())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "agent {:?} references model alias {:?} absent from [models]",
+                "agent {:?} references model alias {:?} absent from [models] / [allow.models]",
                 entry.id,
                 entry.model
             )
@@ -185,10 +186,12 @@ async fn build_runtime(project: &Project) -> Result<tau_runtime_tokio::Runtime> 
 
     for entry in project.config.agents.values() {
         // ---- LLM backend ----
-        // The agent's backend package is derived from the project `[models]`
-        // table via its `model` alias (per-agent model resolution); the
-        // removed `AgentEntry.llm_backend` field no longer carries it.
-        let backend_name = agent_llm_backend(entry, &project.config.models)?;
+        // The agent's backend package is derived from the project's
+        // effective model-alias table (`[models]`, or `[allow.models]` when
+        // governed — #620) via its `model` alias (per-agent model
+        // resolution); the removed `AgentEntry.llm_backend` field no longer
+        // carries it.
+        let backend_name = agent_llm_backend(entry, project.config.effective_models())?;
         if seen_llm_backends.insert(backend_name.clone()) {
             let pkg_name: tau_domain::PackageName = backend_name
                 .parse()
@@ -342,10 +345,15 @@ fn gather_plugin_sandbox_reqs(
     let mut seen: std::collections::HashSet<String> = Default::default();
     let mut reqs = Vec::new();
     for entry in config.agents.values() {
-        // Backend package derived from the project `[models]` table; skip
-        // agents whose model alias does not resolve (validate_models refuses
-        // these at build time — defensive skip here).
-        if let Some(backend) = config.models.get(&entry.model).map(|m| m.backend.clone()) {
+        // Backend package derived from the project's effective model-alias
+        // table ([models] / [allow.models] — #620); skip agents whose model
+        // alias does not resolve (validate_models refuses these at build
+        // time — defensive skip here).
+        if let Some(backend) = config
+            .effective_models()
+            .get(&entry.model)
+            .map(|m| m.backend.clone())
+        {
             if seen.insert(backend.clone()) {
                 if let Some(req) = read_plugin_sandbox_req(scope, lockfile, &backend) {
                     reqs.push(req);

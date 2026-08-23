@@ -6,6 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
+use crate::capability::CapabilityRequirements;
 use crate::check::Condition;
 use crate::ids::{AgentId, PipelineStepId, StepId, ToolId};
 
@@ -15,6 +16,18 @@ use crate::ids::{AgentId, PipelineStepId, StepId, ToolId};
 pub struct Pipeline {
     /// Steps, executed top-to-bottom in this order.
     pub steps: Vec<PipelineStep>,
+}
+
+impl Pipeline {
+    /// Id of the last top-level step that records an output — skips
+    /// trailing `Check` and `Suspend` steps. `None` if no step qualifies.
+    pub fn final_leaf_step_id(&self) -> Option<&PipelineStepId> {
+        self.steps
+            .iter()
+            .rev()
+            .find(|s| !matches!(s.run, StepRun::Check(_) | StepRun::Suspend { .. }))
+            .map(|s| &s.id)
+    }
 }
 
 /// One step in a [`Pipeline`].
@@ -28,6 +41,18 @@ pub struct PipelineStep {
     pub run: StepRun,
     /// Input template (`${input}`, `${steps.<id>.output}`).
     pub input: String,
+}
+
+/// One spawnable per-kind agent definition inside a [`StepRun::Dynamic`]
+/// region, resolved with its capability grant so the runtime gate
+/// (EPIC 4.5) is self-contained (no re-resolution against `tau.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DynamicSpawn {
+    /// The agent-kind name (`[agent.kinds.<kind>]`).
+    pub kind: String,
+    /// The kind's resolved capability grant.
+    pub capabilities: CapabilityRequirements,
 }
 
 /// What a [`PipelineStep`] executes — a reference to an existing node.
@@ -81,6 +106,22 @@ pub enum StepRun {
         /// Signal name that resumes the run.
         resume_signal: String,
     },
+    /// EPIC 4.4: a bounded dynamic region. Spawns up to `max_spawns` children
+    /// (concurrency-capped by `max_concurrency`) drawn from `spawns`, each
+    /// attenuated to `envelope`. Build-time verified: every spawn ⊆ envelope ⊆
+    /// owner ⊆ root `[allow]` (see `tau check governance`). Runtime execution +
+    /// membership/attenuation/bounds counters land in EPIC 4.5; the interpreter
+    /// meets it with `RuntimeError::DynamicRegionRequiresRuntimeGate` until then.
+    Dynamic {
+        /// Region capability envelope (ceiling); every spawn ⊆ this.
+        envelope: CapabilityRequirements,
+        /// Spawnable per-kind agent definitions this region may launch.
+        spawns: Vec<DynamicSpawn>,
+        /// Hard cap on total spawns (`> 0`, enforced at author time).
+        max_spawns: u64,
+        /// Hard cap on concurrent spawns (`0 < n <= max_spawns`).
+        max_concurrency: u64,
+    },
 }
 
 #[cfg(test)]
@@ -114,5 +155,45 @@ mod tests {
         let bytes = serde_json::to_vec(&p).expect("serializes");
         let back: Pipeline = serde_json::from_slice(&bytes).expect("deserializes");
         assert_eq!(p, back);
+    }
+
+    #[test]
+    fn final_leaf_skips_trailing_check_and_suspend() {
+        let p = Pipeline {
+            steps: alloc::vec![
+                PipelineStep {
+                    id: PipelineStepId("a".into()),
+                    run: StepRun::Agent(AgentId("x".into())),
+                    input: "${input}".into(),
+                },
+                PipelineStep {
+                    id: PipelineStepId("b".into()),
+                    run: StepRun::Agent(AgentId("y".into())),
+                    input: "${steps.a.output}".into(),
+                },
+                PipelineStep {
+                    id: PipelineStepId("c".into()),
+                    run: StepRun::Check(CheckId("c".into())),
+                    input: "${steps.b.output}".into(),
+                },
+                PipelineStep {
+                    id: PipelineStepId("s".into()),
+                    run: StepRun::Suspend {
+                        resume_signal: "sig".into(),
+                    },
+                    input: "${steps.b.output}".into(),
+                },
+            ],
+        };
+        assert_eq!(p.final_leaf_step_id(), Some(&PipelineStepId("b".into())));
+
+        let checks_only = Pipeline {
+            steps: alloc::vec![PipelineStep {
+                id: PipelineStepId("c".into()),
+                run: StepRun::Check(CheckId("c".into())),
+                input: "${input}".into(),
+            }],
+        };
+        assert_eq!(checks_only.final_leaf_step_id(), None);
     }
 }

@@ -12,7 +12,7 @@ use alloc::string::{String, ToString};
 use serde_json::Value;
 
 /// Pipeline step outputs accumulated during a run.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutputStore {
     map: BTreeMap<String, Value>,
 }
@@ -21,6 +21,16 @@ impl OutputStore {
     /// Empty store.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Clone the backing map for a durable suspension snapshot.
+    pub fn snapshot(&self) -> BTreeMap<String, Value> {
+        self.map.clone()
+    }
+
+    /// Rebuild a store from a persisted snapshot (resume path).
+    pub fn restore(map: BTreeMap<String, Value>) -> Self {
+        Self { map }
     }
 
     /// Record `id`'s output.

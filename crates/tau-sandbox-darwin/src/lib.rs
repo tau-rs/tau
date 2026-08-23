@@ -82,17 +82,20 @@ impl CapabilityGate for DarwinSandbox {
         }
         // Reject HTTP plans whose host allowlist contains forms the proxy
         // can't validate (wildcards, non-loopback IP literals).
-        let mut allowed_hosts: Vec<String> = Vec::new();
+        // `HostSet::Any` has no exact strings to validate; only collect the
+        // `Exact` union (defense in depth: rejects wildcards + non-loopback
+        // IP literals).
+        let mut exact: Vec<String> = Vec::new();
         for cap in &plan.capabilities {
             if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                allowed_hosts.extend(hosts.iter().cloned());
+                if !hosts.is_any() {
+                    exact.extend(hosts.exact_hosts());
+                }
             }
         }
-        if !allowed_hosts.is_empty() {
-            tau_sandbox_proxy::validate_hosts(&allowed_hosts).map_err(|e| {
-                CapabilityError::Proxy {
-                    message: format!("host validation: {e}"),
-                }
+        if !exact.is_empty() {
+            tau_sandbox_proxy::validate_hosts(&exact).map_err(|e| CapabilityError::Proxy {
+                message: format!("host validation: {e}"),
             })?;
         }
         Ok(())
@@ -162,14 +165,24 @@ async fn wrap_spawn_macos(
         .iter()
         .any(|c| matches!(c, Capability::Network(NetCapability::Http { .. })));
     let proxy_handle = if has_http {
-        let mut allowed_hosts: Vec<String> = Vec::new();
+        let mut any = false;
+        let mut exact: Vec<String> = Vec::new();
         for cap in &plan.capabilities {
             if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
-                allowed_hosts.extend(hosts.iter().cloned());
+                if hosts.is_any() {
+                    any = true;
+                } else {
+                    exact.extend(hosts.exact_hosts());
+                }
             }
         }
+        let policy = if any {
+            tau_sandbox_proxy::HostAllow::Any
+        } else {
+            tau_sandbox_proxy::HostAllow::Exact(exact)
+        };
         let handle =
-            tau_sandbox_proxy::spawn_proxy(allowed_hosts).map_err(|e| CapabilityError::Proxy {
+            tau_sandbox_proxy::spawn_proxy(policy).map_err(|e| CapabilityError::Proxy {
                 message: format!("spawn_proxy: {e}"),
             })?;
         Some(handle)
@@ -272,7 +285,7 @@ mod tests {
     fn validate_plan_rejects_unsupported_shape() {
         let s = DarwinSandbox::new("darwin");
         let plan_json = json!({
-            "capabilities": [{ "kind": "weird" }],
+            "capabilities": [{ "kind": "custom.weird" }],
             "context": null,
             "limits": null,
         });
@@ -305,7 +318,9 @@ mod tests {
 
     #[test]
     fn validate_plan_rejects_wildcard_host() {
-        let s = DarwinSandbox::new("darwin");
+        // `HostSet`'s deserializer now rejects "*" as a non-hostname at
+        // decode time (before `validate_plan` even runs) — callers must
+        // spell pass-all as `hosts = "any"`, not a wildcard string.
         let plan_json = json!({
             "capabilities": [
                 { "kind": "net.http", "hosts": ["*"], "methods": ["GET"] }
@@ -313,13 +328,11 @@ mod tests {
             "context": null,
             "limits": null,
         });
-        let plan: CapabilityPlan = serde_json::from_value(plan_json).expect("decode");
-        let err = s
-            .validate_plan(&plan)
-            .expect_err("wildcard must be rejected");
+        let err = serde_json::from_value::<CapabilityPlan>(plan_json)
+            .expect_err("wildcard host must be rejected at decode");
         assert!(
-            matches!(err, CapabilityError::Proxy { .. }),
-            "expected Proxy error, got {err:?}"
+            err.to_string().contains("wildcard"),
+            "expected wildcard-rejection error, got {err}"
         );
     }
 }

@@ -6,12 +6,37 @@
 
 use std::path::PathBuf;
 
-use tau_cli::cmd::build_wasm::lower_to_wasm_ir;
+use tau_cli::cmd::build_wasm::{lower_to_wasm_ir, wasm_governance_gate, wasm_world_for_project};
+use tau_cli::cmd::check::GovernanceFlags;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/wasm-build")
         .join(name)
+}
+
+/// Point `$TAU_HOME` at a process-local tempdir so the governance gate can
+/// resolve a global scope.
+///
+/// The wasm-build fixtures carry no `.tau/`, so `CheckCtx::load` walks up,
+/// finds none, and falls back to `Scope::global()`, which reads
+/// `$TAU_HOME`/`$XDG_DATA_HOME`/`$HOME`. On Windows CI none of those are set,
+/// so the gate fails with `HomeNotFound` instead of the expected governance
+/// verdict. We give it a dedicated tempdir initialized once, with
+/// `config.toml` pre-created so parallel tests don't race writing it. Mirrors
+/// `e2e_common::ensure_home_env` (added in #545). See #530.
+fn ensure_home_env() {
+    use std::sync::OnceLock;
+    static TAU_HOME_INIT: OnceLock<()> = OnceLock::new();
+    TAU_HOME_INIT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("tau-wasm-build-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create tau_home tempdir");
+        let cfg = dir.join("config.toml");
+        if !cfg.exists() {
+            let _ = std::fs::write(&cfg, "");
+        }
+        std::env::set_var("TAU_HOME", dir);
+    });
 }
 
 #[test]
@@ -31,5 +56,156 @@ fn project_needing_process_exec_is_refused() {
     assert!(
         msg.contains("capability") || msg.contains("CapabilityFit"),
         "expected a capability-fit refusal, got: {msg}"
+    );
+}
+
+#[test]
+fn project_using_control_flow_is_refused() {
+    // A `Parallel` pipeline is control-flow; wasm guests drive run_ir_streaming,
+    // not run_pipeline, so `tau build wasm` must refuse it (feature-fit, EPIC 4.2).
+    let err = lower_to_wasm_ir(&fixture("needs-control-flow")).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("feature-fit") && msg.contains("control-flow") && msg.contains("Parallel"),
+        "expected a feature-fit control-flow refusal naming Parallel, got: {msg}"
+    );
+}
+
+#[test]
+fn project_using_dynamic_region_is_refused() {
+    // EPIC 4.4: a `StepRun::Dynamic` region is control-flow the wasm guest's
+    // `run_ir_streaming` path cannot execute, same as Branch/Parallel/Loop/
+    // Suspend — `tau build wasm` must refuse it (feature-fit, Task 8
+    // conformance Fixture C). Unit-level coverage of the same refusal
+    // already lives in `tau-ir-lower`'s `feature_fit::wasm_target_rejects_
+    // dynamic_region`; this test exercises the CLI-facing `lower_to_wasm_ir`
+    // entry point, mirroring `project_using_control_flow_is_refused` above.
+    let err = lower_to_wasm_ir(&fixture("needs-dynamic-region")).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("feature-fit") && msg.contains("Dynamic"),
+        "expected a feature-fit refusal naming Dynamic, got: {msg}"
+    );
+}
+
+#[test]
+fn trivial_project_generates_host_only_world() {
+    let world = wasm_world_for_project(&fixture("trivial")).expect("trivial world");
+    assert!(world.contains("import tau:host/host@0.1.0;"));
+    assert!(
+        !world.contains("wasi:"),
+        "trivial should grant no wasi surface:\n{world}"
+    );
+}
+
+#[test]
+fn net_http_project_generates_http_world() {
+    let world = wasm_world_for_project(&fixture("net-http")).expect("net-http world");
+    assert!(
+        world.contains("import wasi:http/outgoing-handler@0.2.3;"),
+        "{world}"
+    );
+    assert!(world.contains("import wasi:io/streams@0.2.3;"), "{world}");
+}
+
+#[test]
+fn emitted_world_is_deterministic_and_matches_generator() {
+    let a = wasm_world_for_project(&fixture("net-http")).unwrap();
+    let b = wasm_world_for_project(&fixture("net-http")).unwrap();
+    assert_eq!(a, b, "world generation must be byte-deterministic");
+    // The net-http fixture grants net → the world imports wasi:http, not wasi:filesystem.
+    assert!(
+        a.contains("import wasi:http/outgoing-handler@0.2.3;"),
+        "{a}"
+    );
+    assert!(
+        !a.contains("wasi:filesystem"),
+        "net-only must not grant fs:\n{a}"
+    );
+}
+
+/// Locate the committed net.http-granting world the CI clippy job feeds to
+/// `TAU_WORLD_WIT` (see `.github/workflows/ci.yml`, the `clippy` job's
+/// wasm-guest-net step). It lives beside the guest's `wit-baseline/` so both
+/// worlds the guest is compiled against sit together.
+fn committed_net_http_world() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tau-wasm-guest/wit-cfg/net-http.wit")
+}
+
+/// The committed net.http-granting world (#597) MUST stay byte-identical to
+/// `wasm_world_for_project` on the `net-http` fixture — the same generator the
+/// manual #585 verification used. CI feeds this file to `TAU_WORLD_WIT` so
+/// `build.rs` fires `cfg(tau_cap_net_http)` and clippy lints the guest's effect
+/// arm under `-D warnings`. If it drifts (world text or generator change), the
+/// clippy job would feed a stale world; re-bless with `BLESS_WASM_WORLD=1`.
+#[test]
+fn committed_net_http_world_matches_generator() {
+    let generated = wasm_world_for_project(&fixture("net-http")).expect("net-http world");
+
+    // Guard against a green-but-blind CI job: the world MUST grant wasi:http, or
+    // `build.rs` never sets `cfg(tau_cap_net_http)` and the effect arm compiles
+    // out (the exact bug #597 fixes).
+    assert!(
+        generated.contains("wasi:http"),
+        "net-http world must grant wasi:http so cfg(tau_cap_net_http) fires:\n{generated}"
+    );
+
+    let golden = committed_net_http_world();
+    if std::env::var_os("BLESS_WASM_WORLD").is_some() {
+        std::fs::create_dir_all(golden.parent().unwrap()).unwrap();
+        std::fs::write(&golden, generated.as_bytes()).unwrap();
+    }
+    let committed = std::fs::read_to_string(&golden).unwrap_or_else(|e| {
+        panic!(
+            "committed net.http world missing at {} ({e}); \
+             regenerate with BLESS_WASM_WORLD=1",
+            golden.display()
+        )
+    });
+    assert_eq!(
+        committed,
+        generated,
+        "committed {} drifted from wasm_world_for_project(net-http); \
+         re-bless with BLESS_WASM_WORLD=1",
+        golden.display()
+    );
+}
+
+#[tokio::test]
+async fn ungoverned_project_is_refused_on_wasm_path() {
+    ensure_home_env();
+    // `trivial` declares no `[allow]` ceiling → GOV000 unless opted out.
+    let err = wasm_governance_gate(&fixture("trivial"), GovernanceFlags::default())
+        .await
+        .expect_err("ungoverned must be refused");
+    assert!(err.contains("GOV000"), "expected GOV000, got: {err}");
+}
+
+#[tokio::test]
+async fn allow_ungoverned_flag_lets_it_proceed() {
+    ensure_home_env();
+    let flags = GovernanceFlags {
+        allow_ungoverned: true,
+        no_governance: false,
+    };
+    wasm_governance_gate(&fixture("trivial"), flags)
+        .await
+        .expect("--allow-ungoverned proceeds");
+}
+
+#[tokio::test]
+async fn over_reaching_project_is_refused_on_wasm_path() {
+    ensure_home_env();
+    // `over-reach` declares a `[allow]` ceiling of `net.http` scoped to
+    // `example.com`, but its `fetch` tool actually requires
+    // `api.anthropic.com` — a ceiling violation (`tau.governance.over_reach`),
+    // not an absent-ceiling GOV000. Proves Approach B's headline behavior
+    // (tool ⊆ agent-effective ⊆ root ceiling) is enforced on the wasm path too.
+    let err = wasm_governance_gate(&fixture("over-reach"), GovernanceFlags::default())
+        .await
+        .expect_err("over-reaching project must be refused");
+    assert!(
+        err.contains("tau.governance.over_reach"),
+        "expected an over_reach ceiling violation, got: {err}"
     );
 }

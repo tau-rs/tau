@@ -16,6 +16,7 @@ tau-pkg           = { workspace = true }
 tau-runtime-core  = { workspace = true, features = ["std", "test-fixtures"] }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
+regex             = { workspace = true }
 tokio             = { workspace = true }
 async-trait       = { workspace = true }
 sha2              = { workspace = true }
@@ -29,3 +30,6 @@ tempfile          = { workspace = true }
 
 [features]
 default = []
+
+[lints]
+workspace = true

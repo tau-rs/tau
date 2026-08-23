@@ -296,8 +296,12 @@ impl ExecutionMode for DevMode {
                     native_tool: &|name: &str| Some(crate::sha256_name(name)),
                     mcp_contract: &|_| None,
                     skill: &|_| None,
+                    // Conformance fixtures use inline prompts only.
+                    prompt_file: &|_| Ok(Vec::new()),
                 };
-                lower_project(&config, &target, &caches)
+                // Conformance fixtures carry no file prompts, so the asset map
+                // is always empty; keep the module only (D6-B).
+                lower_project(&config, &target, &caches).map(|out| out.module)
             }; // caches dropped here
 
             match module_result {
@@ -404,6 +408,13 @@ pub(crate) async fn drive_module(
     report
 }
 
+/// Fixed run id fed to `run_pipeline_suspendable`'s `SuspendConfig` — the
+/// `--resume` handle a real CLI invocation would generate per-run. Held
+/// constant (like [`CONFORMANCE_PIPELINE_INPUT`]) so DevMode and BundleMode
+/// persist/load suspensions under the same key and produce byte-identical
+/// `SuspendedSummary`s under `assert_conform`.
+const CONFORMANCE_RUN_ID: &str = "conformance";
+
 /// Drive an `IrModule`'s engine-sequenced pipeline with a scripted LLM
 /// backend, recording side effects into a `ConformanceReport`.
 ///
@@ -414,26 +425,44 @@ pub(crate) async fn drive_module(
 /// built bundle); both feed identical `(module, responses)` for the same
 /// fixture so the emitted reports compare under `assert_conform`.
 ///
-/// `run_pipeline` returns only the per-step output store (it discards the
-/// internal per-agent `RunOutcome`s and message histories), so:
+/// Drives `run_pipeline_suspendable` (not the non-suspend `run_pipeline`
+/// convenience wrapper) wired to a fresh in-memory `MockSuspensionStore`
+/// under the fixed [`CONFORMANCE_RUN_ID`], with `resume: None` — every
+/// conformance run starts fresh; resume-after-suspend is exercised by
+/// `tau-cli`'s integration tests (Task 6), not this cross-mode harness.
+/// This makes a `Suspend` step a first-class comparable terminal state
+/// instead of the old `run_pipeline` behavior (which mapped a `Suspend`
+/// step to `Err(SuspendUnsupported)` → `RunOutcome::Failed`, so two modes
+/// would only "conform" by both erroring — never actually comparing the
+/// pause point).
 ///
 /// - **Tool calls** are still captured: each pipeline agent runs through
 ///   the SAME shared `RecordingDispatcher`, so any tool the agents invoke
-///   is recorded exactly as in `drive_module`.
+///   is recorded exactly as in `drive_module`, on every branch below.
 /// - **Messages** are NOT observable here — the pipeline executor does not
 ///   surface them — so `message_added` stays empty. Cross-mode
 ///   conformance still holds because BOTH modes drive the same
-///   `run_pipeline` and observe the same (empty) message multiset.
-/// - **Outcome** is synthesized as `RunOutcome::Completed` on `Ok`. A
-///   pipeline-step failure surfaces as `Err(RuntimeError)` from
-///   `run_pipeline`, which we map to `RunOutcome::Failed` so both modes
-///   report a failed pipeline symmetrically.
+///   `run_pipeline_suspendable` and observe the same (empty) message
+///   multiset.
+/// - **`PipelineOutcome::Completed`** synthesizes `RunOutcome::Completed`
+///   exactly as the old `run_pipeline` path did.
+/// - **`PipelineOutcome::Suspended`** loads the just-persisted
+///   `PipelineSuspension` back out of the mock store (its `step_cursor`
+///   and `outputs` snapshot are not on `PipelineOutcome` itself — only
+///   `resume_signal` is) and returns [`ConformanceReport::suspended`].
+/// - **`Err(RuntimeError)`** (a real pipeline-step failure, not a suspend)
+///   maps to `RunOutcome::Failed` exactly as the old `run_pipeline` path
+///   did.
 pub(crate) async fn drive_pipeline(
     module: Arc<IrModule>,
     input: String,
     responses: Vec<CompletionResponse>,
 ) -> ConformanceReport {
-    use tau_runtime_core::interpreter::pipeline::run_pipeline;
+    use tau_ports::fixtures::MockSuspensionStore;
+    use tau_ports::orchestration::SuspensionStore;
+    use tau_runtime_core::interpreter::pipeline::{
+        run_pipeline_suspendable, PipelineOutcome, SuspendConfig,
+    };
 
     // Build a name→name map for RecordingDispatcher (ToolId == tool name in v0).
     let tool_names: std::collections::BTreeMap<String, String> = module
@@ -449,13 +478,13 @@ pub(crate) async fn drive_pipeline(
 
     // The id of the LAST pipeline step in execution order — its stored
     // output is the run's final result. Captured before `module` is moved
-    // into `run_pipeline`. Mirrors production `render_pipeline_result`
-    // (tau-cli::cmd::run), which keys off `pipeline.steps.last()` rather
-    // than the alphabetically-last id surfaced by `template_map().into_values()`:
-    // the BTreeMap projection only coincidentally yields the last-executed
-    // step when step ids sort in execution order (fixture 08: `gather` <
-    // `writer`). A reverse-alphabetical fixture would silently harvest the
-    // wrong step.
+    // into `run_pipeline_suspendable`. Mirrors production
+    // `render_pipeline_result` (tau-cli::cmd::run), which keys off
+    // `pipeline.steps.last()` rather than the alphabetically-last id
+    // surfaced by `template_map().into_values()`: the BTreeMap projection
+    // only coincidentally yields the last-executed step when step ids sort
+    // in execution order (fixture 08: `gather` < `writer`). A
+    // reverse-alphabetical fixture would silently harvest the wrong step.
     let last_step_id: Option<String> = module
         .workflow
         .pipeline
@@ -463,8 +492,14 @@ pub(crate) async fn drive_pipeline(
         .and_then(|p| p.steps.last())
         .map(|step| step.id.0.clone());
 
-    match run_pipeline(module, input, dispatcher).await {
-        Ok(store) => {
+    let suspension_store = Arc::new(MockSuspensionStore::new());
+    let suspend_config = SuspendConfig {
+        run_id: CONFORMANCE_RUN_ID.to_string(),
+        store: suspension_store.clone(),
+    };
+
+    match run_pipeline_suspendable(module, input, dispatcher, suspend_config, None).await {
+        Ok(PipelineOutcome::Completed(store)) => {
             // Synthesize a Completed outcome carrying the last step's
             // output text as the final message (the pipeline executor
             // does not return a RunOutcome of its own). The message
@@ -492,6 +527,33 @@ pub(crate) async fn drive_pipeline(
                 token_usage: Default::default(),
             };
             let mut report = ConformanceReport::new(outcome);
+            let records = records_handle.lock().expect("records mutex poisoned");
+            for rec in records.iter() {
+                report.record_tool_call(rec.tool_name.clone(), rec.args_canonical.clone());
+            }
+            report
+        }
+        Ok(PipelineOutcome::Suspended { resume_signal, .. }) => {
+            // `PipelineOutcome::Suspended` itself carries only
+            // `run_id`/`resume_signal`/`step_id` — the `step_cursor` and
+            // `outputs` snapshot were durably persisted to the
+            // `SuspensionStore` by `run_pipeline_suspendable` before it
+            // returned, so load them back out to build the comparable
+            // `SuspendedSummary`.
+            let persisted = suspension_store
+                .load_suspension(&CONFORMANCE_RUN_ID.to_string())
+                .expect("MockSuspensionStore::load_suspension never errors")
+                .expect(
+                    "PipelineOutcome::Suspended implies a suspension was persisted under \
+                     CONFORMANCE_RUN_ID",
+                );
+            let summary = crate::SuspendedSummary {
+                resume_signal,
+                step_cursor: persisted.step_cursor,
+                outputs_canonical: serde_json::to_vec(&persisted.outputs)
+                    .expect("BTreeMap<String, serde_json::Value> always serializes"),
+            };
+            let mut report = ConformanceReport::suspended(summary);
             let records = records_handle.lock().expect("records mutex poisoned");
             for rec in records.iter() {
                 report.record_tool_call(rec.tool_name.clone(), rec.args_canonical.clone());

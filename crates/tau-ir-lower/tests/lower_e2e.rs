@@ -41,6 +41,7 @@ fn caches_with(native_known: Vec<String>, mcp_known: Vec<String>) -> Caches<'sta
             },
         )),
         skill: Box::leak(Box::new(|_name: &str| -> Option<[u8; 32]> { None })),
+        prompt_file: &|_| Ok(Vec::new()),
     }
 }
 
@@ -106,7 +107,9 @@ fn lowering_passes_minimal_workflow() {
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec!["ReadTemp".into(), "SetFan".into()], vec![]);
-    let module = lower_project(&config, &target, &caches).expect("lower");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
     assert_eq!(module.ir_format.0, IrFormatVersion::CURRENT);
     assert!(
         module
@@ -157,7 +160,7 @@ fn lowering_refuses_on_capability_fit_mismatch() {
 
         [tools.weather]
         mcp = "https://example.com"
-        capabilities = [{ kind = "net.http" }]
+        capabilities = [{ kind = "net.http", hosts = "any" }]
     "#;
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     // Use a target triple that EXCLUDES NetworkHttp from required_shapes.
@@ -227,7 +230,9 @@ fn lowers_goals_and_deliverables_into_checks() {
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec!["WriteFile".into()], vec![]);
-    let ir = lower_project(&config, &target, &caches).expect("lower");
+    let ir = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
 
     // produces copied onto the IR Agent.
     assert_eq!(
@@ -288,7 +293,9 @@ max_tokens = 4000
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec![], vec![]);
-    let module = lower_project(&config, &target, &caches).expect("lower");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
     let agent = module
         .workflow
         .agents
@@ -298,6 +305,97 @@ max_tokens = 4000
     assert_eq!(ctx.pipeline.len(), 2);
     assert_eq!(ctx.pipeline[0].transformer, "trim_old");
     assert_eq!(ctx.pipeline[1].transformer, "fit_budget");
+}
+
+/// D7-B PR3: an explicit `llm_backed` / `stateful` determinism string lowers
+/// to the matching `DeterminismClass`. Guards the explicit match arms against
+/// regressing back to the silent `_ => Pure` default.
+#[test]
+fn known_determinism_strings_lower_to_their_class() {
+    use tau_ir::context::DeterminismClass;
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "det-lower"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+
+[[agents.a.context.pipeline]]
+transformer = "trim_old"
+determinism = "llm_backed"
+
+[[agents.a.context.pipeline]]
+transformer = "compact_tool_outputs"
+determinism = "stateful"
+
+[[agents.a.context.pipeline]]
+transformer = "fit_budget"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
+    let agent = module
+        .workflow
+        .agents
+        .get(&tau_ir::AgentId("a".into()))
+        .unwrap();
+    let ctx = agent.context.as_ref().expect("context present");
+    assert_eq!(ctx.pipeline[0].determinism, DeterminismClass::LlmBacked);
+    assert_eq!(ctx.pipeline[1].determinism, DeterminismClass::Stateful);
+    assert_eq!(ctx.pipeline[2].determinism, DeterminismClass::Pure);
+}
+
+/// D7-B PR3: an unknown determinism string is a hard build error, not a
+/// silent downgrade to `Pure` (the most permissive class). Per ADR-0065.
+#[test]
+fn unknown_determinism_string_is_rejected() {
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "det-bad"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+
+[[agents.a.context.pipeline]]
+transformer = "trim_old"
+determinism = "sometimes"
+
+[[agents.a.context.pipeline]]
+transformer = "fit_budget"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let err = lower_project(&config, &target, &caches).expect_err("must reject");
+    match err {
+        LowerError::UnknownDeterminism {
+            agent,
+            transformer,
+            determinism,
+        } => {
+            assert_eq!(agent, "a");
+            assert_eq!(transformer, "trim_old");
+            assert_eq!(determinism, "sometimes");
+        }
+        other => panic!("expected UnknownDeterminism, got {other:?}"),
+    }
 }
 
 #[test]
@@ -362,7 +460,9 @@ fn explicit_check_placement_is_not_double_appended() {
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec!["WriteFile".into()], vec![]);
-    let ir = lower_project(&config, &target, &caches).expect("lower");
+    let ir = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
 
     let pipe = ir.workflow.pipeline.as_ref().expect("pipeline present");
 
@@ -435,7 +535,9 @@ output_schema = { type = "object" }
     let config = ProjectConfig::parse_str(toml).expect("parse config");
     let target = lookup_first_available();
     let caches = caches_with(vec![], vec![]);
-    let module = lower_project(&config, &target, &caches).expect("lower");
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
     let agent = module
         .workflow
         .agents
@@ -474,12 +576,281 @@ fn lowering_resolves_model_from_allow_models() {
     let target = lookup_first_available();
     let caches = caches_with(vec![], vec![]);
     let module = lower_project(&config, &target, &caches)
-        .expect("governed project with [allow.models] must lower");
+        .expect("governed project with [allow.models] must lower")
+        .module;
     assert!(
         module
             .workflow
             .agents
             .contains_key(&tau_ir::AgentId("monitor".into())),
         "expected agent 'monitor' in workflow"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// D6-B: `system_file` prompts lower to content-addressed assets.
+// ---------------------------------------------------------------------------
+
+/// Two agents referencing the SAME `system_file` lower to one deduped asset,
+/// each agent's prompt becomes a `PromptSource::Asset` with the content hash,
+/// and the blob carries the file bytes. Proves the non-hermetic path bug is
+/// fixed: the IR carries a content hash, never the path string.
+#[test]
+fn system_file_prompts_lower_to_deduped_content_addressed_assets() {
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "asset-demo"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+[agents.a.prompt]
+system_file = "shared.md"
+
+[agents.b]
+display_name = "B"
+package      = "demo@^0.1"
+model        = "default"
+[agents.b.prompt]
+system_file = "shared.md"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    const CONTENT: &[u8] = b"You are a careful assistant.";
+
+    let caches = Caches {
+        native_tool: &|_| None,
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+        prompt_file: &|p: &std::path::Path| {
+            assert_eq!(p, std::path::Path::new("shared.md"));
+            Ok(CONTENT.to_vec())
+        },
+    };
+    let out = lower_project(&config, &target, &caches).expect("lower");
+
+    let expected_hash = tau_ir::asset::asset_hash(CONTENT);
+    for id in ["a", "b"] {
+        let agent = out
+            .module
+            .workflow
+            .agents
+            .get(&tau_ir::AgentId(id.into()))
+            .unwrap_or_else(|| panic!("agent {id} present"));
+        assert_eq!(
+            agent.prompt.asset_hash(),
+            Some(expected_hash.as_str()),
+            "agent {id} prompt must be a content-addressed asset ref (never the path)"
+        );
+    }
+
+    // Dedup by construction: identical content across agents => one blob.
+    assert_eq!(
+        out.assets.len(),
+        1,
+        "identical prompts must dedup to one blob"
+    );
+    let blob = out.assets.get(&expected_hash).expect("asset blob present");
+    assert_eq!(blob.bytes, CONTENT, "blob carries the file content");
+    assert_eq!(blob.kind, tau_ir::asset::AssetKind::Prompt);
+}
+
+/// A missing/unreadable `system_file` prompt is a hard build error (D6-B moves
+/// prompt-file existence from run time to build time), naming the agent + path.
+#[test]
+fn missing_system_file_prompt_is_a_build_error() {
+    let toml = r#"
+packages = ["mock-llm"]
+
+[project]
+name = "asset-missing"
+
+[models]
+default = { backend = "mock-llm", model = "mock-model" }
+
+[agents.a]
+display_name = "A"
+package      = "demo@^0.1"
+model        = "default"
+[agents.a.prompt]
+system_file = "gone.md"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+
+    let caches = Caches {
+        native_tool: &|_| None,
+        mcp_contract: &|_| None,
+        skill: &|_| None,
+        prompt_file: &|p: &std::path::Path| {
+            Err(tau_ir_lower::PromptFileError(format!(
+                "no such file: {}",
+                p.display()
+            )))
+        },
+    };
+    match lower_project(&config, &target, &caches) {
+        Err(LowerError::PromptFileUnreadable { agent, path, .. }) => {
+            assert_eq!(agent.0, "a");
+            assert_eq!(path, "gone.md");
+        }
+        other => panic!("expected PromptFileUnreadable build error, got {other:?}"),
+    }
+}
+
+#[test]
+fn lowers_authored_branch_into_steprun_branch() {
+    use tau_ir::check::{GoalPredicate, Locus};
+    use tau_ir::pipeline::StepRun;
+
+    let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "branch-demo"
+[models.m]
+backend = "mock-llm"
+model = "m"
+[agents.triage]
+display_name = "Triage"
+package = "branch-demo@^0.1"
+model = "m"
+max_turns = 1
+[agents.oncall]
+display_name = "Oncall"
+package = "branch-demo@^0.1"
+model = "m"
+max_turns = 1
+[agents.writer]
+display_name = "Writer"
+package = "branch-demo@^0.1"
+model = "m"
+max_turns = 1
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "matches", pattern = "(?i)urgent" }
+[[pipeline.steps.then]]
+id = "escalate"
+run = "agent:oncall"
+input = "${steps.triage.output}"
+[[pipeline.steps.otherwise]]
+id = "ack"
+run = "agent:writer"
+input = "${steps.triage.output}"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let module = lower_project(&config, &target, &caches)
+        .expect("lower")
+        .module;
+
+    let pipe = module.workflow.pipeline.as_ref().expect("pipeline present");
+    assert_eq!(pipe.steps.len(), 2);
+    match &pipe.steps[1].run {
+        StepRun::Branch {
+            on,
+            then,
+            otherwise,
+        } => {
+            assert!(matches!(&on.evaluates, Locus::Output(s) if s.0 == "triage"));
+            assert!(matches!(&on.predicate, GoalPredicate::Matches(p) if p == "(?i)urgent"));
+            assert_eq!(then.len(), 1);
+            assert!(matches!(&then[0].run, StepRun::Agent(a) if a.0 == "oncall"));
+            assert_eq!(otherwise.len(), 1);
+            assert!(matches!(&otherwise[0].run, StepRun::Agent(a) if a.0 == "writer"));
+        }
+        other => panic!("expected Branch, got {other:?}"),
+    }
+}
+
+#[test]
+fn branch_arm_referencing_ghost_agent_is_rejected() {
+    let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "branch-ghost"
+[models.m]
+backend = "mock-llm"
+model = "m"
+[agents.triage]
+display_name = "Triage"
+package = "branch-ghost@^0.1"
+model = "m"
+max_turns = 1
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "non_empty" }
+[[pipeline.steps.then]]
+id = "boom"
+run = "agent:ghost"
+input = "${input}"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let err = lower_project(&config, &target, &caches).unwrap_err();
+    assert!(
+        matches!(err, LowerError::UnknownPipelineRun { .. }),
+        "expected UnknownPipelineRun for ghost arm agent, got {err:?}"
+    );
+}
+
+#[test]
+fn branch_condition_reading_out_of_scope_output_is_rejected() {
+    // `route` reads `steps.later.output`, but `later` runs AFTER `route`.
+    let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "branch-scope"
+[models.m]
+backend = "mock-llm"
+model = "m"
+[agents.triage]
+display_name = "Triage"
+package = "branch-scope@^0.1"
+model = "m"
+max_turns = 1
+[agents.later]
+display_name = "Later"
+package = "branch-scope@^0.1"
+model = "m"
+max_turns = 1
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.later.output", check = "non_empty" }
+[[pipeline.steps.then]]
+id = "arm"
+run = "agent:triage"
+input = "${input}"
+[[pipeline.steps]]
+id = "later"
+run = "agent:later"
+input = "${input}"
+"#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = lookup_first_available();
+    let caches = caches_with(vec![], vec![]);
+    let err = lower_project(&config, &target, &caches).unwrap_err();
+    assert!(
+        matches!(err, LowerError::ConditionUnknownOutput { .. }),
+        "expected ConditionUnknownOutput, got {err:?}"
     );
 }

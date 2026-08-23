@@ -13,6 +13,7 @@ pub mod exit;
 pub mod output;
 pub(crate) mod session;
 pub mod tracing;
+pub mod tui;
 
 pub use config::{
     build_agent_definition, AgentEntry, AgentResolutionError, ProjectConfig, ProjectConfigError,
@@ -104,6 +105,17 @@ pub async fn run_main() -> std::process::ExitCode {
                 std::process::ExitCode::from(bvf.code as u8)
             } else if err.downcast_ref::<crate::cmd::run::AgentFailed>().is_some() {
                 ExitCode::AgentFailed.into()
+            } else if err
+                .downcast_ref::<crate::cmd::run::SuspendedRun>()
+                .is_some()
+            {
+                // A pipeline paused at a `Suspend` step (HITL, EPIC 4.3). Not
+                // a failure: `render_pipeline_outcome` already rendered the
+                // structured `{"outcome":"suspended", ...}` payload (or the
+                // human "Resume with: tau run --resume ..." message), so —
+                // like AgentFailed — skip the generic "error:" prefix and map
+                // straight to the dedicated exit code.
+                ExitCode::Suspended.into()
             } else {
                 if debug {
                     eprintln!("error: {err:?}");
@@ -134,7 +146,7 @@ fn prepare_workflow_run_layer(command: &cli::Command) -> Option<PreparedWorkflow
     };
     let cwd = std::env::current_dir().ok()?;
     let scope = tau_pkg::Scope::resolve(&cwd).ok()?;
-    let run_id = ulid::Ulid::new().to_string();
+    let run_id = ulid::Ulid::generate().to_string();
     let log_path = tau_workflow::run_log_path(scope.path(), &run_args.name, &run_id);
     let layer = tau_observe::layers::workflow_run_log::WorkflowRunLogLayer::new(log_path);
     Some(PreparedWorkflowRun { run_id, layer })
@@ -182,6 +194,8 @@ async fn dispatch(cli: cli::Cli, workflow_run_id: Option<String>) -> anyhow::Res
             .await
         }
         cli::Command::Dev(args) => cmd::dev::run(args, &mut output).await,
+        cli::Command::Embed(ref args) => cmd::embed::run(args, &mut output).await,
+        cli::Command::Trace(ref args) => cmd::trace::run(args).await,
         cli::Command::Resolve(args) => cmd::resolve::run(&args, &mut output).await,
         cli::Command::Uninstall(args) => cmd::uninstall::run(&args, &mut output).await,
         cli::Command::Update(args) => cmd::update::run(&args, &mut output).await,

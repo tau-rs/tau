@@ -1,6 +1,6 @@
 # ADR-0023: Windows AppContainer adapter — Phase 1 scaffold
 
-**Status:** Accepted (scaffold only — Phase 2 deferred)
+**Status:** Accepted (scaffold); Phase 2 superseded by [ADR-0067](0067-sandbox-windows-appcontainer-phase2.md)
 **Date:** 2026-05-09
 **Deciders:** Titouan Lebocq
 **Related:** [ADR-0014 — Sandboxing](0014-sandboxing.md), [ADR-0022 — macOS sandbox-exec adapter](0022-sandbox-darwin.md)

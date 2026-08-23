@@ -127,6 +127,7 @@ fn random_ref(opts: &RunOptions) -> &Arc<dyn RandomSource> {
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RunEvent {
     /// Run started. Emitted once, before the first turn. Typed
     /// counterpart of the `runtime.run_started` tracing event (β.7.5:
@@ -245,6 +246,9 @@ pub enum RunEvent {
     },
 }
 
+/// Frozen schema version for `RunEvent` (see schemas/run-event/).
+pub const RUN_EVENT_SCHEMA_VERSION: &str = "v1";
+
 /// Build the stream of `RunEvent`s for a single agent run.
 ///
 /// Happy path (no tool uses): drains the LLM stream, yields `TextDelta`
@@ -292,7 +296,6 @@ fn persist_checkpoint_if_durable(
 
 /// Constructed inputs are pre-validated by the caller in Task 6
 /// (`Runtime::run_streaming`); here we trust them.
-#[allow(dead_code)] // wired up by Task 6
 #[allow(clippy::too_many_arguments)] // 12 params intentional: see Task 4 design doc
 pub fn run_streaming_inner(
     backend: Arc<dyn DynLlmBackend>,
@@ -379,6 +382,25 @@ pub fn run_streaming_inner(
         // Multi-turn loop: continues until LLM responds with no tool uses
         // OR max_turns is reached.
         while total_turns < options.max_turns {
+            // Enforce the run budget (tokens / duration / agents) at each turn
+            // boundary. On breach, end the run with OutOfResources instead of
+            // spending another turn. RunState + budget are threaded via
+            // `orchestration_state`; guest/test paths without it skip the check.
+            if let Some(state_arc) = options.orchestration_state.as_ref() {
+                let now = crate::ids::now_utc(clock_ref(&options));
+                let breach = crate::orchestration::budget::BudgetWatchdog
+                    .tick(&state_arc.borrow(), now)
+                    .err();
+                if let Some(err) = breach {
+                    yield make_budget_exceeded_outcome(
+                        messages,
+                        total_turns,
+                        aggregated_tokens,
+                        err,
+                    );
+                    return;
+                }
+            }
             total_turns += 1;
             // Per ADR-0006 §3.9: wrap the turn body in a `runtime.turn`
             // span so child spans/events (llm.complete, dispatch.tool,
@@ -643,6 +665,15 @@ pub fn run_streaming_inner(
                     aggregated_tokens.output_tokens = aggregated_tokens
                         .output_tokens
                         .saturating_add(u64::from(usage.output_tokens));
+                    // Feed per-turn usage into the shared RunState so the
+                    // BudgetWatchdog (turn-boundary tick above) can enforce
+                    // `max_total_tokens`.
+                    if let Some(state_arc) = options.orchestration_state.as_ref() {
+                        state_arc.borrow().add_tokens(
+                            u64::from(usage.input_tokens)
+                                .saturating_add(u64::from(usage.output_tokens)),
+                        );
+                    }
                 }
             } // end else (normal LLM-drain prologue)
 
@@ -746,6 +777,15 @@ pub fn run_streaming_inner(
                         });
                         if let Some(cap) = missing {
                             let kind = crate::capability::capability_kind_str(cap);
+                            // Fail-closed: record a `Drop` waterfall row before
+                            // the run aborts (virtual-tool denial path).
+                            emit_capability_drop(
+                                &options,
+                                &agent_def.id.to_string(),
+                                &tool_use.name,
+                                total_turns.saturating_sub(1),
+                                kind.clone(),
+                            );
                             let denial = crate::error::CapabilityDenial::new(
                                 agent_def.id.to_string(),
                                 agent_def.package.name.to_string(),
@@ -1446,6 +1486,16 @@ pub fn run_streaming_inner(
                 });
                 if let Some(cap) = missing {
                     let kind = crate::capability::capability_kind_str(cap);
+                    // Fail-closed: record a `Drop` waterfall row before the run
+                    // aborts — this denied call never reaches the post-dispatch
+                    // `ToolCall` emit below.
+                    emit_capability_drop(
+                        &options,
+                        &agent_def.id.to_string(),
+                        &tool_use.name,
+                        total_turns.saturating_sub(1),
+                        kind.clone(),
+                    );
                     let denial = crate::error::CapabilityDenial::new(
                         agent_def.id.to_string(),
                         agent_def.package.name.to_string(),
@@ -1463,6 +1513,14 @@ pub fn run_streaming_inner(
                     yield RunEvent::RunCompleted { outcome };
                     return;
                 }
+
+                // M1 execution-trace TUI (ADR pending): mark the dispatch
+                // start so the `ToolCall` trace event emitted after this
+                // tool completes can report a wall-clock duration. Captured
+                // post-capability-check: a denied capability aborts the run
+                // above before any dispatch work happens, so there is
+                // nothing to time on that path.
+                let dispatch_start_ms = clock_ref(&options).now();
 
                 // ----- Append the tool-call message -------------------------
                 let agent_addr = Address::Agent(agent_instance_id);
@@ -1572,6 +1630,36 @@ pub fn run_streaming_inner(
                                 role = ?validation_err_msg.sender,
                             );
                             messages.push(validation_err_msg);
+
+                            // M1 execution-trace TUI: a schema-invalid tool
+                            // call still deserves a waterfall row (status
+                            // "error") — mirrors the success-path emit
+                            // below, just without an invoke/teardown
+                            // duration beyond dispatch_start_ms. See
+                            // `capability_verdict` for the Allow/Clamp
+                            // mapping.
+                            if let Some(state_arc) = options.orchestration_state.as_ref() {
+                                let duration_ms = (clock_ref(&options).now() - dispatch_start_ms)
+                                    .max(0) as u64;
+                                let capability = capability_verdict(&*tool, required);
+                                let s = state_arc.borrow();
+                                s.trace.emit(tau_ports::TraceEvent {
+                                    id: crate::ids::ulid(clock_ref(&options), random_ref(&options)),
+                                    ts: crate::ids::now_utc(clock_ref(&options)),
+                                    run_id: s.run_id.clone(),
+                                    agent_id: Some(agent_def.id.to_string()),
+                                    kind: tau_ports::TraceEventKind::ToolCall {
+                                        tool_name: tool_use.name.clone(),
+                                        duration_ms,
+                                        status: "error".into(),
+                                        capability,
+                                        // 0-based to match the sibling Turn
+                                        // event; `total_turns` is 1-indexed.
+                                        turn_index: total_turns.saturating_sub(1),
+                                    },
+                                });
+                            }
+
                             yield RunEvent::ToolCallCompleted {
                                 id: tool_use.id.clone(),
                                 name: tool_use.name.clone(),
@@ -1687,6 +1775,42 @@ pub fn run_streaming_inner(
                 );
                 messages.push(tool_result_msg);
 
+                // M1 execution-trace TUI: emit a `ToolCall` trace event so
+                // the waterfall UI has a row for this dispatch. Mirrors the
+                // `Turn`/`Completion` emission pattern in `run.rs` — a no-op
+                // when no orchestration_state is attached (single-agent /
+                // guest runs without a trace sink).
+                if let Some(state_arc) = options.orchestration_state.as_ref() {
+                    let duration_ms =
+                        (clock_ref(&options).now() - dispatch_start_ms).max(0) as u64;
+                    // The `missing.is_some()` branch above already returned
+                    // before dispatch, so reaching here means the kernel gate
+                    // passed: the verdict is `Allow`, or `Clamp` when the tool
+                    // reports open-time-narrowed authority (spec §12.4).
+                    // `Drop` rows come from `emit_capability_drop`.
+                    let capability = capability_verdict(&*tool, required);
+                    let s = state_arc.borrow();
+                    s.trace.emit(tau_ports::TraceEvent {
+                        id: crate::ids::ulid(clock_ref(&options), random_ref(&options)),
+                        ts: crate::ids::now_utc(clock_ref(&options)),
+                        run_id: s.run_id.clone(),
+                        agent_id: Some(agent_def.id.to_string()),
+                        kind: tau_ports::TraceEventKind::ToolCall {
+                            tool_name: tool_use.name.clone(),
+                            duration_ms,
+                            status: if tool_result.is_error {
+                                "error".into()
+                            } else {
+                                "ok".into()
+                            },
+                            capability,
+                            // 0-based to match the sibling Turn event;
+                            // `total_turns` is 1-indexed.
+                            turn_index: total_turns.saturating_sub(1),
+                        },
+                    });
+                }
+
                 yield RunEvent::ToolCallCompleted {
                     id: tool_use.id.clone(),
                     name: tool_use.name.clone(),
@@ -1746,9 +1870,91 @@ pub fn run_streaming_inner(
 // Outcome helpers
 // ---------------------------------------------------------------------------
 
+/// Render the `to` of a clamp verdict: the sorted, comma-joined host list
+/// of the effective net authority. `any` when any effective net cap is
+/// host-unbounded; `none` when no net cap survived the open-time meet
+/// (fail-closed empty meet). Execution-trace TUI spec §12.5 — rendering
+/// lives kernel-side so the port carries semantic `Capability` values only.
+fn render_clamped_to(effective: &[Capability]) -> String {
+    use tau_domain::{HostSet, NetCapability};
+    let mut any = false;
+    let mut hosts: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
+    for cap in effective {
+        if let Capability::Network(NetCapability::Http { hosts: h, .. }) = cap {
+            match h {
+                HostSet::Any => any = true,
+                HostSet::Exact(set) => {
+                    hosts.extend(set.iter().map(|hn| String::from(hn.as_str())));
+                }
+            }
+        }
+    }
+    if any {
+        String::from("any")
+    } else if hosts.is_empty() {
+        String::from("none")
+    } else {
+        hosts.into_iter().collect::<Vec<String>>().join(",")
+    }
+}
+
+/// Map a dispatch-completed call's capability posture to the trace verdict
+/// (execution-trace TUI spec §12.4). `None` for un-gated tools; `Clamp`
+/// when the tool reports open-time-narrowed authority; `Allow` otherwise.
+/// Denials never reach this — they abort dispatch earlier and are recorded
+/// by `emit_capability_drop`.
+fn capability_verdict(
+    tool: &dyn DynTool,
+    required: &[Capability],
+) -> Option<tau_ports::CapabilityVerdict> {
+    if required.is_empty() {
+        return None;
+    }
+    Some(match tool.effective_capabilities() {
+        Some(eff) => tau_ports::CapabilityVerdict::Clamp {
+            to: render_clamped_to(eff),
+        },
+        None => tau_ports::CapabilityVerdict::Allow,
+    })
+}
+
 /// Emit `runtime.failed` with `failure_kind = PolicyDenied` under the given
 /// turn span. Dedupes two byte-identical warn! sites (orchestration
 /// virtual-tool deny + regular tool-dispatch deny).
+/// Emit a fail-closed `ToolCall` trace event (verdict `Drop`) for a tool
+/// whose required capability was denied.
+///
+/// Called at each capability-denial early-return site BEFORE the run aborts,
+/// so the execution-trace TUI renders a `drop` / ✕ fail-closed row for the
+/// denied call — which otherwise never reaches the normal post-dispatch
+/// `ToolCall` emit (the run returns first). `duration_ms` is `0`: the tool
+/// never dispatched. No-op when no `orchestration_state`/trace sink is
+/// attached (single-agent / guest runs), matching the success-path emit.
+fn emit_capability_drop(
+    options: &RunOptions,
+    agent_id: &str,
+    tool_name: &str,
+    turn_index: u32,
+    reason: String,
+) {
+    if let Some(state_arc) = options.orchestration_state.as_ref() {
+        let s = state_arc.borrow();
+        s.trace.emit(tau_ports::TraceEvent {
+            id: crate::ids::ulid(clock_ref(options), random_ref(options)),
+            ts: crate::ids::now_utc(clock_ref(options)),
+            run_id: s.run_id.clone(),
+            agent_id: Some(agent_id.to_string()),
+            kind: tau_ports::TraceEventKind::ToolCall {
+                tool_name: tool_name.to_string(),
+                duration_ms: 0,
+                status: "error".into(),
+                capability: Some(tau_ports::CapabilityVerdict::Drop { reason }),
+                turn_index,
+            },
+        });
+    }
+}
+
 fn emit_policy_denied_failure(turn_span: &tracing::Span, turn_index: u32, tool_name: &str) {
     warn!(
         parent: turn_span,
@@ -1859,6 +2065,29 @@ fn make_max_turns_outcome(
             status: AgentStatus::failed(
                 FailureKind::OutOfResources,
                 Some(format!("max_turns ({max_turns}) reached")),
+            ),
+            all_messages: messages,
+            total_turns,
+            token_usage,
+        },
+    }
+}
+
+/// Build the terminal `RunCompleted{Failed{OutOfResources}}` event for a
+/// [`crate::orchestration::budget::BudgetWatchdog`] breach (max tokens /
+/// duration / agents), mirroring [`make_max_turns_outcome`].
+fn make_budget_exceeded_outcome(
+    messages: Vec<Message>,
+    total_turns: u32,
+    token_usage: crate::options::TokenUsage,
+    err: crate::orchestration::error::OrchestrationError,
+) -> RunEvent {
+    use tau_domain::{AgentStatus, FailureKind};
+    RunEvent::RunCompleted {
+        outcome: RunOutcome::Failed {
+            status: AgentStatus::failed(
+                FailureKind::OutOfResources,
+                Some(format!("run budget exceeded: {err}")),
             ),
             all_messages: messages,
             total_turns,
@@ -2894,6 +3123,92 @@ paths = ["/etc/**"]
         );
     }
 
+    /// A run that exceeds `RunBudget::max_total_tokens` must abort with
+    /// `OutOfResources` at the next turn boundary rather than run on. Turn 1
+    /// burns 15 tokens against a 10-token budget; if the budget were NOT
+    /// enforced, turn 2's scripted text response would complete the run.
+    #[tokio::test]
+    async fn run_budget_max_tokens_exceeded_aborts_with_out_of_resources() {
+        use crate::orchestration::run_state::RunState;
+        use core::cell::RefCell;
+        use tau_domain::{AgentStatus, FailureKind};
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+        use tau_ports::RunBudget;
+
+        let spec = make_tool_spec("echo".into(), "echo tool".into(), Value::Null);
+        let tool_arc: Arc<dyn DynTool> = Arc::new(MockTool::new("echo", spec));
+        let (tools, validators, tool_specs_list) = make_tool_entry("echo", tool_arc);
+
+        let state = RunState::new(
+            "run-budget".into(),
+            "agent-1".into(),
+            RunBudget {
+                max_total_tokens: Some(10),
+                ..Default::default()
+            },
+            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
+        );
+        #[allow(clippy::arc_with_non_send_sync)]
+        let state_arc = Arc::new(RefCell::new(state));
+
+        let options = {
+            let mut o = test_run_options();
+            o.max_turns = 5; // high enough that max_turns is NOT the trigger
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // Turn 1: ToolUse + Finish(10 in / 5 out = 15). Turn 2 (only reached
+        // if the budget is NOT enforced): plain text that completes the run.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::new(vec![
+            Ok(CompletionChunk::ToolUse(
+                tau_ports::fixtures::make_tool_use("call_1".into(), "echo".into(), Value::Null),
+            )),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::ToolUse,
+                usage: Some(PortsTokenUsage::new(10, 5)),
+            }),
+            Ok(CompletionChunk::Text {
+                delta: "done".into(),
+            }),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::EndTurn,
+                usage: Some(PortsTokenUsage::new(1, 1)),
+            }),
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![],
+            tool_specs_list,
+            vec![],
+            vec![],
+        );
+        let events = strip_gate_events(collect_events(Box::pin(stream)).await);
+
+        let Some(RunEvent::RunCompleted { outcome }) = events.last() else {
+            panic!("expected RunCompleted last, got {:?}", events.last())
+        };
+        let RunOutcome::Failed { status, .. } = outcome else {
+            panic!("budget breach must fail the run, got {outcome:?}")
+        };
+        let AgentStatus::Failed { kind, .. } = status else {
+            panic!("expected AgentStatus::Failed, got {status:?}")
+        };
+        assert_eq!(
+            *kind,
+            FailureKind::OutOfResources,
+            "expected OutOfResources from budget breach, got {kind:?}"
+        );
+    }
+
     #[tokio::test]
     async fn mid_dispatch_crash_after_one_success_yields_started_completed_started_then_run_completed_failed(
     ) {
@@ -3623,6 +3938,749 @@ paths = ["/etc/**"]
         assert!(
             matches!(events.last(), Some(RunEvent::RunCompleted { .. })),
             "stream must end with RunCompleted; got {events:#?}"
+        );
+    }
+
+    // ---- M1 execution-trace TUI: ToolCall trace-event producer ----
+
+    /// Trace subscriber that collects every emitted event, for assertions.
+    /// Mirrors `orchestration::trace::tests::CollectSubscriber` (private to
+    /// that module) — duplicated here rather than exposed cross-module for
+    /// a single test.
+    struct CollectingTraceSubscriber(std::sync::Mutex<Vec<tau_ports::TraceEvent>>);
+
+    impl crate::orchestration::TraceSubscriber for CollectingTraceSubscriber {
+        fn emit(&self, event: tau_ports::TraceEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    /// Build an `orchestration_state` Arc wired to a fresh
+    /// [`CollectingTraceSubscriber`], returning both so a test can attach the
+    /// state to `RunOptions` and inspect the collected `TraceEvent`s after the
+    /// run. Deduplicates the wiring the ToolCall-producer tests repeat.
+    #[allow(clippy::type_complexity)]
+    fn collecting_trace_state(
+        run_id: &str,
+    ) -> (
+        Arc<core::cell::RefCell<crate::orchestration::run_state::RunState>>,
+        Arc<CollectingTraceSubscriber>,
+    ) {
+        use crate::orchestration::run_state::RunState;
+        use core::cell::RefCell;
+        let state = RunState::new(
+            run_id.into(),
+            "test-agent".into(),
+            tau_ports::RunBudget::default(),
+            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
+        );
+        #[allow(clippy::arc_with_non_send_sync)]
+        let state_arc = Arc::new(RefCell::new(state));
+        let collector = Arc::new(CollectingTraceSubscriber(std::sync::Mutex::new(Vec::new())));
+        state_arc.borrow_mut().trace.add_subscriber(
+            Arc::clone(&collector) as Arc<dyn crate::orchestration::TraceSubscriber>
+        );
+        (state_arc, collector)
+    }
+
+    /// First `ToolCall` trace event in `events` as
+    /// `(tool_name, duration_ms, status, capability)`.
+    fn first_tool_call(
+        events: &[tau_ports::TraceEvent],
+    ) -> Option<(String, u64, String, Option<tau_ports::CapabilityVerdict>)> {
+        events.iter().find_map(|e| match &e.kind {
+            tau_ports::TraceEventKind::ToolCall {
+                tool_name,
+                duration_ms,
+                status,
+                capability,
+                ..
+            } => Some((
+                tool_name.clone(),
+                *duration_ms,
+                status.clone(),
+                capability.clone(),
+            )),
+            _ => None,
+        })
+    }
+
+    /// Build a Capability from its canonical TOML form (variants are
+    /// #[non_exhaustive] outside tau-domain). Same pattern as capability.rs.
+    fn test_cap(toml_str: &str) -> tau_domain::Capability {
+        #[derive(serde::Deserialize)]
+        struct CapWrapper {
+            cap: tau_domain::Capability,
+        }
+        toml::from_str::<CapWrapper>(toml_str).unwrap().cap
+    }
+
+    /// A tool whose runtime authority was narrowed at open time (e.g. an
+    /// MCP entry meet-clamped by `[allow.mcp.<entry>].hosts`):
+    /// `capabilities()` returns the full declared set,
+    /// `effective_capabilities()` the narrower runtime set. Shared by the
+    /// clamp-verdict tests (success path and schema-invalid path).
+    struct ClampedTool {
+        inner: tau_ports::fixtures::MockTool,
+        required: Vec<tau_domain::Capability>,
+        effective: Vec<tau_domain::Capability>,
+    }
+
+    impl tau_ports::Tool for ClampedTool {
+        type Session = ();
+
+        fn name(&self) -> &str {
+            tau_ports::Tool::name(&self.inner)
+        }
+
+        fn schema(&self) -> tau_ports::ToolSpec {
+            tau_ports::Tool::schema(&self.inner)
+        }
+
+        fn capabilities(&self) -> &[tau_domain::Capability] {
+            &self.required
+        }
+
+        fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+            Some(&self.effective)
+        }
+
+        async fn init(
+            &self,
+            ctx: tau_ports::SessionContext,
+        ) -> Result<Self::Session, tau_ports::ToolError> {
+            tau_ports::Tool::init(&self.inner, ctx).await
+        }
+
+        async fn invoke(
+            &self,
+            session: &mut Self::Session,
+            args: tau_domain::Value,
+        ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
+            tau_ports::Tool::invoke(&self.inner, session, args).await
+        }
+
+        async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
+            tau_ports::Tool::teardown(&self.inner, session).await
+        }
+    }
+
+    #[test]
+    fn render_clamped_to_joins_sorted_hosts() {
+        let eff = vec![test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"b.example\", \"a.example\"]\n",
+        )];
+        assert_eq!(super::render_clamped_to(&eff), "a.example,b.example");
+    }
+
+    #[test]
+    fn render_clamped_to_any_hosts() {
+        let eff = vec![test_cap("[cap]\nkind = \"net.http\"\nhosts = \"any\"\n")];
+        assert_eq!(super::render_clamped_to(&eff), "any");
+    }
+
+    #[test]
+    fn render_clamped_to_without_net_caps_is_none() {
+        // Empty-meet fail-closed case: no net authority survived the clamp.
+        let eff = vec![test_cap(
+            "[cap]\nkind = \"fs.read\"\npaths = [\"/tmp/**\"]\n",
+        )];
+        assert_eq!(super::render_clamped_to(&eff), "none");
+        assert_eq!(super::render_clamped_to(&[]), "none");
+    }
+
+    #[test]
+    fn capability_verdict_empty_required_is_none_default_is_allow() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+        let tool = MockTool::new(
+            "plain",
+            make_tool_spec("plain".into(), "plain".into(), Value::Null),
+        );
+        let tool: Arc<dyn DynTool> = Arc::new(tool);
+        // Un-gated tool → no verdict at all.
+        assert_eq!(super::capability_verdict(&*tool, &[]), None);
+        // Gated tool without narrowing → Allow.
+        let req = vec![test_cap(
+            "[cap]\nkind = \"fs.read\"\npaths = [\"/tmp/**\"]\n",
+        )];
+        assert_eq!(
+            super::capability_verdict(&*tool, &req),
+            Some(tau_ports::CapabilityVerdict::Allow)
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_emits_toolcall_trace_event_with_verdict() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+
+        // A gated "echo" tool: requires fs.read on /etc/**, matching the
+        // `CapRequiringTool` pattern from
+        // `tool_dispatch_capability_denial_yields_run_completed_failed`,
+        // but here the grant covers the requirement so dispatch succeeds
+        // and the capability verdict must be `Allow`.
+        struct CapRequiringTool {
+            inner: MockTool,
+            required: Vec<tau_domain::Capability>,
+        }
+
+        impl tau_ports::Tool for CapRequiringTool {
+            type Session = ();
+
+            fn name(&self) -> &str {
+                tau_ports::Tool::name(&self.inner)
+            }
+
+            fn schema(&self) -> tau_ports::ToolSpec {
+                tau_ports::Tool::schema(&self.inner)
+            }
+
+            fn capabilities(&self) -> &[tau_domain::Capability] {
+                &self.required
+            }
+
+            async fn init(
+                &self,
+                ctx: tau_ports::SessionContext,
+            ) -> Result<Self::Session, tau_ports::ToolError> {
+                tau_ports::Tool::init(&self.inner, ctx).await
+            }
+
+            async fn invoke(
+                &self,
+                session: &mut Self::Session,
+                args: tau_domain::Value,
+            ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
+                tau_ports::Tool::invoke(&self.inner, session, args).await
+            }
+
+            async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
+                tau_ports::Tool::teardown(&self.inner, session).await
+            }
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CapWrapper {
+            cap: tau_domain::Capability,
+        }
+        let cap: tau_domain::Capability = toml::from_str::<CapWrapper>(
+            r#"[cap]
+kind = "fs.read"
+paths = ["/etc/**"]
+"#,
+        )
+        .unwrap()
+        .cap;
+
+        let spec = make_tool_spec("echo".into(), "echo tool".into(), Value::Null);
+        let tool = CapRequiringTool {
+            inner: MockTool::new("echo", spec),
+            required: vec![cap.clone()],
+        };
+        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
+        let (tools, validators, tool_specs_list) = make_tool_entry("echo", tool_arc);
+
+        // Wire an orchestration_state with a collecting trace subscriber so
+        // we can inspect emitted TraceEvents after the run.
+        let (state_arc, collector) = collecting_trace_state("run-toolcall-trace");
+
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // Turn 1: LLM emits ToolUse("echo"); Turn 2: plain text that ends
+        // the run — same two-turn shape as
+        // `tool_dispatch_happy_path_yields_tool_call_started_then_completed_then_turn_completed`.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use("call_1".into(), "echo".into(), Value::Null),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: Some(PortsTokenUsage::new(10, 5)),
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Done!".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: Some(PortsTokenUsage::new(5, 3)),
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![cap.clone()], // granted matches required → Allow, not Drop
+            tool_specs_list,
+            vec![],
+            vec![cap],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call =
+            first_tool_call(&trace_events).expect("a ToolCall trace event must be emitted");
+
+        assert_eq!(tool_call.0, "echo");
+        assert_eq!(tool_call.2, "ok");
+        assert!(
+            tool_call.3.is_some(),
+            "capability verdict must be populated for a gated tool"
+        );
+        assert!(
+            matches!(tool_call.3, Some(tau_ports::CapabilityVerdict::Allow)),
+            "expected Allow verdict for a satisfied grant, got {:?}",
+            tool_call.3
+        );
+    }
+
+    #[tokio::test]
+    async fn clamped_tool_emits_clamp_trace_event() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+
+        // A tool whose runtime authority was narrowed at open time (an MCP
+        // entry meet-clamped by [allow.mcp.<entry>].hosts): declared caps
+        // request two hosts, effective caps carry one. The grant covers the
+        // DECLARED caps — kernel gate semantics unchanged — so dispatch
+        // succeeds, but the ToolCall verdict must be Clamp, not Allow.
+        // `ClampedTool` is defined at module scope (shared with
+        // `schema_invalid_call_from_clamped_tool_emits_clamp_trace_event`).
+        let declared = test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\", \"evil.example\"]\n",
+        );
+        let effective = test_cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+
+        let spec = make_tool_spec("echo".into(), "echo tool".into(), Value::Null);
+        let tool = ClampedTool {
+            inner: MockTool::new("echo", spec),
+            required: vec![declared.clone()],
+            effective: vec![effective],
+        };
+        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
+        let (tools, validators, tool_specs_list) = make_tool_entry("echo", tool_arc);
+
+        let (state_arc, collector) = collecting_trace_state("run-clamp-trace");
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // Two-turn script: ToolUse("echo") then a plain-text final turn —
+        // same shape as dispatch_emits_toolcall_trace_event_with_verdict.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use("call_1".into(), "echo".into(), Value::Null),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: Some(PortsTokenUsage::new(10, 5)),
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Done!".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: Some(PortsTokenUsage::new(5, 3)),
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![declared.clone()], // grant covers DECLARED → kernel gate passes
+            tool_specs_list,
+            vec![],
+            vec![declared],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call =
+            first_tool_call(&trace_events).expect("a ToolCall trace event must be emitted");
+
+        assert_eq!(tool_call.0, "echo");
+        assert_eq!(tool_call.2, "ok");
+        match tool_call.3 {
+            Some(tau_ports::CapabilityVerdict::Clamp { ref to }) => {
+                assert_eq!(to, "api.weather.com");
+            }
+            ref other => panic!("expected Clamp verdict, got {other:?}"),
+        }
+    }
+
+    /// FIX 1 (final-review fix wave, M1 execution-trace TUI): a tool call
+    /// whose args fail schema validation must still get a waterfall row.
+    /// Combines `dispatch_emits_toolcall_trace_event_with_verdict`'s
+    /// orchestration_state + collecting-subscriber harness with
+    /// `tool_dispatch_schema_validation_failure_yields_tool_call_completed_with_err`'s
+    /// strict-schema bad-args scenario.
+    #[tokio::test]
+    async fn dispatch_emits_toolcall_trace_event_with_error_status_on_validation_failure() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+
+        let strict_schema = {
+            use tau_domain::Value;
+            let j = serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "required": ["x"],
+                "additionalProperties": false
+            });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let spec = make_tool_spec(
+            "strict-tool".into(),
+            "strict args".into(),
+            strict_schema.clone(),
+        );
+        let mock_tool = MockTool::new("strict-tool", spec);
+        let tool_arc: Arc<dyn DynTool> = Arc::new(mock_tool);
+
+        let mut tools: HashMap<String, Arc<dyn DynTool>> = HashMap::new();
+        let mut validators: HashMap<String, ToolArgsValidator> = HashMap::new();
+        let tool_specs_list = vec![tool_arc.schema()];
+        tools.insert("strict-tool".to_string(), tool_arc);
+        validators.insert(
+            "strict-tool".to_string(),
+            crate::tool_args::ToolArgsValidator::compile(&strict_schema)
+                .expect("strict schema must compile"),
+        );
+
+        // Wire an orchestration_state with a collecting trace subscriber so
+        // we can inspect emitted TraceEvents after the run.
+        let (state_arc, collector) = collecting_trace_state("run-toolcall-trace-badargs");
+
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // LLM sends invalid args (missing required "x" field), then
+        // self-corrects with plain text.
+        let bad_args = {
+            let j = serde_json::json!({ "y": 42 });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use(
+                        "call_1".into(),
+                        "strict-tool".into(),
+                        bad_args,
+                    ),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: None,
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Corrected".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: None,
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![],
+            tool_specs_list,
+            vec![],
+            vec![],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call = first_tool_call(&trace_events)
+            .expect("a ToolCall trace event must be emitted for a validation-failed call");
+
+        assert_eq!(tool_call.0, "strict-tool");
+        assert_eq!(
+            tool_call.2, "error",
+            "validation-failed call must report status \"error\""
+        );
+    }
+
+    /// Final-review fix wave (M1.5 clamp rows): the schema-invalid emit
+    /// site (§12.4) shares its `capability_verdict` call with the
+    /// success-path emit, but only the success path had a covering test
+    /// for `Clamp`. Combines
+    /// `dispatch_emits_toolcall_trace_event_with_error_status_on_validation_failure`'s
+    /// strict-schema bad-args scenario with `clamped_tool_emits_clamp_trace_event`'s
+    /// `ClampedTool` (declared caps wider than effective caps) to assert the
+    /// schema-invalid row still carries a `Clamp` verdict, not `Allow`.
+    #[tokio::test]
+    async fn schema_invalid_call_from_clamped_tool_emits_clamp_trace_event() {
+        use tau_ports::fixtures::make_tool_spec;
+
+        let strict_schema = {
+            use tau_domain::Value;
+            let j = serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "required": ["x"],
+                "additionalProperties": false
+            });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let declared = test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\", \"evil.example\"]\n",
+        );
+        let effective = test_cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+
+        let spec = make_tool_spec(
+            "clamped-strict-tool".into(),
+            "clamped strict args".into(),
+            strict_schema.clone(),
+        );
+        let tool = ClampedTool {
+            inner: tau_ports::fixtures::MockTool::new("clamped-strict-tool", spec),
+            required: vec![declared.clone()],
+            effective: vec![effective],
+        };
+        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
+
+        let mut tools: HashMap<String, Arc<dyn DynTool>> = HashMap::new();
+        let mut validators: HashMap<String, ToolArgsValidator> = HashMap::new();
+        let tool_specs_list = vec![tool_arc.schema()];
+        tools.insert("clamped-strict-tool".to_string(), tool_arc);
+        validators.insert(
+            "clamped-strict-tool".to_string(),
+            crate::tool_args::ToolArgsValidator::compile(&strict_schema)
+                .expect("strict schema must compile"),
+        );
+
+        // Wire an orchestration_state with a collecting trace subscriber so
+        // we can inspect emitted TraceEvents after the run.
+        let (state_arc, collector) = collecting_trace_state("run-clamp-trace-badargs");
+
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // LLM sends invalid args (missing required "x" field), then
+        // self-corrects with plain text.
+        let bad_args = {
+            let j = serde_json::json!({ "y": 42 });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use(
+                        "call_1".into(),
+                        "clamped-strict-tool".into(),
+                        bad_args,
+                    ),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: None,
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Corrected".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: None,
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![declared.clone()], // grant covers DECLARED → kernel gate passes
+            tool_specs_list,
+            vec![],
+            vec![declared],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call = first_tool_call(&trace_events)
+            .expect("a ToolCall trace event must be emitted for a validation-failed call");
+
+        assert_eq!(tool_call.0, "clamped-strict-tool");
+        assert_eq!(
+            tool_call.2, "error",
+            "validation-failed call must report status \"error\""
+        );
+        match tool_call.3 {
+            Some(tau_ports::CapabilityVerdict::Clamp { ref to }) => {
+                assert_eq!(to, "api.weather.com");
+            }
+            ref other => panic!("expected Clamp verdict, got {other:?}"),
+        }
+    }
+
+    /// Item 1 (M1.5): a capability-DENIED tool aborts the run before the
+    /// normal post-dispatch emit, so without the dedicated denial-site emit
+    /// the waterfall would show no row at all. Assert the denied call still
+    /// produces a `ToolCall` trace event carrying a `Drop` verdict.
+    #[tokio::test]
+    async fn capability_denied_tool_emits_drop_trace_event() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+
+        // A tool requiring fs.read on /etc/**, but the run grants nothing —
+        // the dispatch-site capability check denies it and returns.
+        struct CapRequiringTool {
+            inner: MockTool,
+            required: Vec<tau_domain::Capability>,
+        }
+
+        impl tau_ports::Tool for CapRequiringTool {
+            type Session = ();
+            fn name(&self) -> &str {
+                tau_ports::Tool::name(&self.inner)
+            }
+            fn schema(&self) -> tau_ports::ToolSpec {
+                tau_ports::Tool::schema(&self.inner)
+            }
+            fn capabilities(&self) -> &[tau_domain::Capability] {
+                &self.required
+            }
+            async fn init(
+                &self,
+                ctx: tau_ports::SessionContext,
+            ) -> Result<Self::Session, tau_ports::ToolError> {
+                tau_ports::Tool::init(&self.inner, ctx).await
+            }
+            async fn invoke(
+                &self,
+                session: &mut Self::Session,
+                args: tau_domain::Value,
+            ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
+                tau_ports::Tool::invoke(&self.inner, session, args).await
+            }
+            async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
+                tau_ports::Tool::teardown(&self.inner, session).await
+            }
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CapWrapper {
+            cap: tau_domain::Capability,
+        }
+        let cap: tau_domain::Capability = toml::from_str::<CapWrapper>(
+            r#"[cap]
+kind = "fs.read"
+paths = ["/etc/**"]
+"#,
+        )
+        .unwrap()
+        .cap;
+
+        let spec = make_tool_spec("secret".into(), "reads secrets".into(), Value::Null);
+        let tool = CapRequiringTool {
+            inner: MockTool::new("secret", spec),
+            required: vec![cap],
+        };
+        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
+        let (tools, validators, tool_specs_list) = make_tool_entry("secret", tool_arc);
+
+        let (state_arc, collector) = collecting_trace_state("run-toolcall-drop");
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // Turn 1: LLM asks for the gated tool; the denial aborts the run
+        // before turn 2, so a single denied dispatch is all we observe.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![vec![
+            Ok(CompletionChunk::ToolUse(
+                tau_ports::fixtures::make_tool_use("call_1".into(), "secret".into(), Value::Null),
+            )),
+            Ok(CompletionChunk::Finish {
+                stop_reason: PortsStopReason::ToolUse,
+                usage: None,
+            }),
+        ]]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![], // granted: nothing → the fs.read requirement is denied
+            tool_specs_list,
+            vec![],
+            vec![],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call = first_tool_call(&trace_events)
+            .expect("a denied tool must still emit a ToolCall trace event");
+
+        assert_eq!(tool_call.0, "secret");
+        assert_eq!(
+            tool_call.2, "error",
+            "a denied call must report status \"error\""
+        );
+        assert!(
+            matches!(tool_call.3, Some(tau_ports::CapabilityVerdict::Drop { .. })),
+            "expected a Drop verdict for a denied capability, got {:?}",
+            tool_call.3
         );
     }
 }

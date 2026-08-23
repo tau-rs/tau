@@ -1,6 +1,33 @@
-*.json text eol=lf
-*.toml text eol=lf
-*.rs text eol=lf
-*.md text eol=lf
-*.yml text eol=lf
-*.txt text eol=lf
+# Normalize all text files to LF in the repo and on checkout (incl. Windows
+# core.autocrlf=true), so committed goldens stay byte-identical to LF renders.
+# This is a global default so a *new* committed golden/drift file with an
+# unpinned extension is covered automatically — closing the recurring gap where
+# .wit (#553) and .gitignore (#553) each had to be pinned individually after a
+# Windows Tier-2 drift test caught the CRLF.
+* text=auto eol=lf
+
+# Explicit binary markers so git never line-ending-munges these. None are
+# committed today, but pinning the extensions keeps a future binary blob from
+# being treated as text by the `* text=auto` default above.
+*.wasm binary
+*.png binary
+*.gif binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.gz binary
+
+# Golden-file drift intent (retained from #553): these committed files are
+# byte-compared against a fresh LF render on the Windows Tier-2 job and MUST
+# stay LF. They are now covered by `* text=auto eol=lf` above, but the pointer
+# is kept so the coupling to the tests stays discoverable:
+#   - crates/tau-wasm-guest/wit-baseline/runner.wit vs generate_world(&[])
+#     (tau-wasm-guest tests/wit_world.rs::baseline_equals_empty_generate_world)
+#   - sdk/embed-js/.gitignore vs render_embed_js()
+#     (tau-sdk-codegen tests/embed_js_drift.rs::committed_embed_js_matches_fresh_render)

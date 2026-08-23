@@ -104,6 +104,7 @@ Until task 6.5 ships, `unshare_flags_for_plan` retains its v0.1 fallback behavio
 **Consequences:**
 - Plans that declare `hosts: ["*"]` (the "any host" escape hatch) will fail validation when the per-host filter is active.
 - Plugin authors who need unrestricted network access should declare no Network capability and use a non-strict tier.
+- Superseded in part by ADR-0064: hosts are now a `HostSet`; `"*"` is a decode error and `"any"` is the sentinel.
 
 **Alternatives considered:**
 - Allow wildcards and expand at resolution time: impractical with static nftables rules. Rejected.
@@ -211,8 +212,8 @@ The architectural conflict (child PID unavailable during `wrap_spawn` / `pre_exe
 
 ## References
 
-- Spec: [`docs/superpowers/specs/2026-05-06-sandbox-net-filter-design.md`](../superpowers/specs/2026-05-06-sandbox-net-filter-design.md)
-- Plan: [`docs/superpowers/plans/2026-05-06-sandbox-net-filter.md`](../superpowers/plans/2026-05-06-sandbox-net-filter.md)
+- Spec: [`docs/superpowers/specs/2026-05-06-net-filter-integration-design.md`](../superpowers/specs/2026-05-06-net-filter-integration-design.md)
+- Plan: [`docs/superpowers/plans/2026-05-06-net-filter-integration.md`](../superpowers/plans/2026-05-06-net-filter-integration.md)
 - INTEGRATION.md: `crates/tau-sandbox-native/src/net_filter/INTEGRATION.md` — deleted with the `net_filter` module per ADR-0020.
 - PR #35 (merged 2026-05-06 at commit d4438ae): per-host network filter machinery
 - Phase 0 verification PR #34 (closed): GHA uid_map write failure discovery

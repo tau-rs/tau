@@ -272,6 +272,25 @@ pub struct CompletionResponse {
     pub usage: Option<TokenUsage>,
 }
 
+impl CompletionResponse {
+    /// Construct a response. The struct is `#[non_exhaustive]`, so this
+    /// is the supported way for plugins and embedders (EPIC 7.1) to
+    /// build one outside this crate.
+    pub fn new(
+        text: String,
+        tool_uses: Vec<ToolUse>,
+        stop_reason: StopReason,
+        usage: Option<TokenUsage>,
+    ) -> Self {
+        Self {
+            text,
+            tool_uses,
+            stop_reason,
+            usage,
+        }
+    }
+}
+
 /// One streamed event from a `CompletionStream`.
 ///
 /// Plugin authors are responsible for buffering provider-specific
@@ -338,6 +357,7 @@ pub struct ToolSpec {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum StopReason {
     /// Model finished naturally.
     EndTurn,
@@ -356,6 +376,7 @@ pub enum StopReason {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TokenUsage {
     /// Tokens consumed from the input (system + messages + tools).
     pub input_tokens: u32,
@@ -608,6 +629,15 @@ mod helper_tests {
     use alloc::vec;
 
     use core::pin::Pin;
+
+    #[test]
+    fn completion_response_new_constructs_all_fields() {
+        let r = CompletionResponse::new("hi".to_string(), Vec::new(), StopReason::EndTurn, None);
+        assert_eq!(r.text, "hi");
+        assert!(r.tool_uses.is_empty());
+        assert!(matches!(r.stop_reason, StopReason::EndTurn));
+        assert!(r.usage.is_none());
+    }
 
     use futures_core::Stream;
 

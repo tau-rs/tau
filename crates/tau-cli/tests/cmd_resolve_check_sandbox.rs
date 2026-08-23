@@ -175,7 +175,7 @@ kind = "tool"
 dependencies = []
 
 [[capabilities]]
-kind = "mcp.tool.use"
+kind = "custom.mcp.tool.use"
 tool = "some-tool"
 
 [plugin]
