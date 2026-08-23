@@ -1899,10 +1899,11 @@ fn render_clamped_to(effective: &[Capability]) -> String {
 }
 
 /// Map a dispatch-completed call's capability posture to the trace verdict
-/// (execution-trace TUI spec §12.4). `None` for un-gated tools; `Clamp`
-/// when the tool reports open-time-narrowed authority; `Allow` otherwise.
-/// Denials never reach this — they abort dispatch earlier and are recorded
-/// by `emit_capability_drop`.
+/// (execution-trace TUI spec §12.4, spec §13.1). Returns `Clamp { to }`
+/// when the tool reports open-time-narrowed authority (regardless of gate
+/// participation); `Allow` when gated (non-empty required) and not narrowed;
+/// `None` only when un-gated AND un-narrowed. Denials never reach this —
+/// they abort dispatch earlier and are recorded by `emit_capability_drop`.
 fn capability_verdict(
     tool: &dyn DynTool,
     required: &[Capability],
