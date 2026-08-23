@@ -1,0 +1,258 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0044 — Trigger ingress, slice 1 - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0044-trigger-ingress-slice-1.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="0044--trigger-ingress-slice-1-cron--manual--retry-policy"><a class="header" href="#0044--trigger-ingress-slice-1-cron--manual--retry-policy">0044 — Trigger ingress, slice 1: cron + manual + retry policy</a></h1>
+<p><strong>Status:</strong> Accepted</p>
+<p><strong>Date:</strong> 2026-06-13</p>
+<p><strong>Relates to:</strong> the framing doc <code>docs/superpowers/specs/2026-06-13-trigger-ingress-and-serve-transport-framing.md</code>, <a href="0043-trigger-ingress.html">ADR-0043</a> (the trigger-ingress stance), <a href="0037-workflow-ir.html">ADR-0037</a> (workflow IR), the egress-only capability vocabulary, NG3 / NG5 / NG6.</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>The framing doc takes the position <em>compile the trigger; delegate the substrate.</em> This ADR records the implementation decisions for the first slice: the self-contained kinds (<code>cron</code>, <code>manual</code>) plus a <code>[trigger.*.retry]</code> policy and <code>tau build --emit-trigger=systemd|k8s</code>. <code>webhook</code> / <code>queue</code> (which require a host-adapter contract that <code>tau check</code> enforces) are slice 2.</p>
+<h2 id="decisions"><a class="header" href="#decisions">Decisions</a></h2>
+<h3 id="d1--triggers-is-a-sibling-of-workflow-ir_format-is-not-bumped"><a class="header" href="#d1--triggers-is-a-sibling-of-workflow-ir_format-is-not-bumped">D1 — <code>triggers</code> is a sibling of <code>workflow</code>; <code>ir_format</code> is NOT bumped</a></h3>
+<p><code>IrModule</code> gains <code>triggers: Vec&lt;TriggerBinding&gt;</code> as a sibling of <code>workflow</code> (triggers are about <em>invocation</em>, not the call graph). The field carries <code>#[serde(default, skip_serializing_if = "Vec::is_empty")]</code>, so a trigger-less module emits no <code>triggers</code> key and its canonical bytes — and content hash — are byte-identical to a pre-trigger module; a trigger-bearing module appends a <code>triggers</code> array, which differentiates its hash on its own.</p>
+<p><code>ir_format</code> stays <code>v1.0.0</code> in all cases — it is <strong>not</strong> bumped. The framing doc leaned toward a minor bump, but <strong>triggers are inert at runtime</strong>: a trigger decides when/whether the host invokes tau, a decision made before tau's process starts, so an old runtime that silently ignores the <code>triggers</code> field still executes the workflow correctly. There is no reader-side gate on <code>ir_format</code> and we deliberately add none (it would reject a runnable workflow). The gate with teeth is the bundle <code>schema_version</code> (D3), read at build/inspect time. Since nothing keys off the IR language version, a bump would be a label with no consumer — so we leave it at <code>v1.0.0</code>. An unconditional bump was independently disqualified: it would re-hash every existing trigger-less module.</p>
+<h3 id="d2--dlq-envelope-shape-deferred"><a class="header" href="#d2--dlq-envelope-shape-deferred">D2 — DLQ envelope shape deferred</a></h3>
+<p>Slice 1 compiles the retry <em>policy</em> (<code>max_attempts</code>, <code>backoff</code>, <code>dead_letter</code> sink reference). The dead-letter <em>envelope</em> is a runtime artifact produced when a trigger fires and exhausts its attempts; nothing in tau fires triggers yet (retry is host-honoured), so the envelope shape lands with the host-adapter runtime work.</p>
+<h3 id="d3--bundle-schema_version-bumps-to-3-only-when-triggers-are-present"><a class="header" href="#d3--bundle-schema_version-bumps-to-3-only-when-triggers-are-present">D3 — bundle <code>schema_version</code> bumps to 3 only when triggers are present</a></h3>
+<p>A trigger-less bundle stays <code>schema_version = 2</code> and serialises identically to today. A trigger-bearing bundle is <code>3</code>, so an old tau rejects it loudly rather than silently dropping the binding. <code>BundleManifest</code> accepts <code>{1, 2, 3}</code>, and <code>parse_str</code> additionally rejects a trigger-bearing bundle whose <code>schema_version &lt; 3</code> — the invariant is enforced at parse time, not merely produced by <code>tau build</code>.</p>
+<h3 id="d4--systemd-needs-a-crononcalendar-converter-k8s-takes-cron-verbatim"><a class="header" href="#d4--systemd-needs-a-crononcalendar-converter-k8s-takes-cron-verbatim">D4 — systemd needs a cron→OnCalendar converter; k8s takes cron verbatim</a></h3>
+<p>k8s <code>CronJob.schedule</code> consumes 5-field cron exactly. systemd <code>OnCalendar</code> does not, so slice 1 ships a converter for the subset where each field is <code>*</code> or a plain integer. Schedules outside that subset are skipped for systemd (with a logged note) but still emit exactly for k8s. <code>tau.toml</code> validation additionally range-checks any plain-integer cron field (e.g. rejects hour <code>25</code>) at build time.</p>
+<h3 id="non-goal-cross-check"><a class="header" href="#non-goal-cross-check">Non-goal cross-check</a></h3>
+<p>No inbound capability verb was added. cron/manual are egress-shaped: the host invokes tau as a child process. The egress-only vocabulary remains load-bearing for NG3. Retry is host-honoured (NG6 — no durable state in core); <code>dead_letter</code> is a sink reference, never a tau-owned store.</p>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<p><code>tau.toml</code> authors can declare cron/manual triggers that compile into the content-hashed artifact and reproduce across targets. <code>tau build --emit-trigger</code> generates the scheduler wiring; the operator owns the substrate. Slice 2 adds <code>webhook</code> / <code>queue</code> plus the <code>tau check</code> host-adapter rule.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0042-cross-repo-ci-template-sync.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0043-trigger-ingress.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0042-cross-repo-ci-template-sync.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0043-trigger-ingress.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
