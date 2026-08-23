@@ -5,15 +5,6 @@
 use tau_domain::{Capability, FsCapability, NetCapability};
 use tau_ports::CapabilityPlan;
 
-/// TCP port the host-side `tau-sandbox-proxy` task listens on. Plugins
-/// reach it via `HTTPS_PROXY=http://127.0.0.1:8443`.
-//
-// `dead_code` allow: on non-Windows builds the lib.rs's `wrap_spawn_windows`
-// is cfg-gated out, so the const has no runtime use, but the unit test
-// below still references it as a cross-platform invariant assertion.
-#[allow(dead_code)]
-pub(crate) const PROXY_PORT: u16 = 8443;
-
 /// Result of [`build_appcontainer_caps`]: the AppContainer-shape inputs that
 /// the spawn layer turns into Win32 calls.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,13 +16,14 @@ pub struct AppContainerCaps {
     /// Filesystem paths the plugin needs to write. Spawn layer adds an ACL
     /// grant on each (the AppContainer SID + GENERIC_READ + GENERIC_WRITE).
     pub fs_write_paths: Vec<String>,
-    /// Whether the plan requests outbound HTTP. When true, spawn layer:
-    ///   - adds the `lpacPnpNotifications` + `privateNetworkClientServer`
-    ///     well-known capability SIDs to the AppContainer (loopback only;
-    ///     **NOT** `internetClient` so direct internet is blocked);
-    ///   - sets `HTTPS_PROXY=http://127.0.0.1:PROXY_PORT` env so reqwest
-    ///     routes via the host-side proxy task;
-    ///   - spawns the proxy task before `CreateProcessAsUserW`.
+    /// Whether the plan requests outbound HTTP. When true, the spawn layer
+    /// spawns a per-container named-pipe proxy and routes the command
+    /// through `tau-net-bridge-win` (`launcher -- bridge --pipe <name> --
+    /// <orig> <args...>`); the bridge dials the pipe and relays the
+    /// plugin's traffic to the host-side `tau_sandbox_proxy` allowlist
+    /// enforcement. **No capability SIDs are added** (spike #626:
+    /// same-package loopback and SID-ACL'd pipes need none, and
+    /// `internetClient` would allow bypassing the allowlist).
     pub has_http: bool,
     /// Whether the plan grants process-spawn. AppContainer children inherit
     /// the same security context, so this doesn't widen the sandbox; we
@@ -167,13 +159,5 @@ mod tests {
         ]));
         let caps = build_appcontainer_caps(&plan);
         assert!(caps.has_process_spawn);
-    }
-
-    #[test]
-    fn proxy_port_is_8443() {
-        // Cross-platform invariant: the proxy port matches what the
-        // Linux native + macOS darwin adapters use, so the same
-        // tau-sandbox-proxy crate works for all three.
-        assert_eq!(PROXY_PORT, 8443);
     }
 }

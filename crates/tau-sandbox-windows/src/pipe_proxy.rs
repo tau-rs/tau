@@ -11,13 +11,7 @@
 //!
 //! Win32 FFI (SDDL → SECURITY_ATTRIBUTES) is inherently unsafe; scope
 //! the workspace opt-out locally, like `acl.rs`.
-//!
-//! `dead_code` allow: `spawn_pipe_proxy` (and everything it pulls in)
-//! has no caller outside this module's own tests until a later task
-//! (#622 PR2 task 5) wires it into `wrap_spawn_windows`. Only the
-//! `#[cfg(test)]` build exercises it on this branch.
 #![allow(unsafe_code)]
-#![allow(dead_code)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -272,10 +272,8 @@ pub(crate) fn revoke_access(
 }
 
 /// String form ("S-1-15-2-…") of an AppContainer profile's package SID.
-// `dead_code` allow: called from `pipe_proxy::spawn_pipe_proxy`, which is
-// itself only wired into `wrap_spawn_windows` in a later task (#622 PR2
-// task 5) — until then this helper has no live caller on this branch.
-#[allow(dead_code)]
+/// Called from `pipe_proxy::spawn_pipe_proxy` to build the pipe's DACL
+/// (the "container part" ACE).
 pub(crate) fn sid_string(profile: &AppContainerSid) -> std::io::Result<String> {
     use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
     let psid = sid_for(&profile.profile_name)?;
@@ -295,8 +293,6 @@ pub(crate) fn sid_string(profile: &AppContainerSid) -> std::io::Result<String> {
 /// "user part" ACE of the egress pipe's DACL (an AppContainer access
 /// check requires BOTH a user-part and a container-part grant; Everyone
 /// must not be used — it would admit any non-AppContainer local process).
-// See `dead_code` note on `sid_string` above — same reason.
-#[allow(dead_code)]
 pub(crate) fn current_user_sid_string() -> std::io::Result<String> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
