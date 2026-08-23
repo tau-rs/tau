@@ -749,11 +749,16 @@ where
             // arm immediately above for `user_message` construction, span
             // instrumentation, and `RunOutcome::Failed` error mapping — the
             // only difference is the coordinator's tool registry gains the
-            // per-kind spawn tools. No loop-feedback injection here: retry
-            // rewind (`pending_initial_feedback`/`feedback`) targets gate
-            // *agent* steps (`StepRun::Agent`), and a `Dynamic` region is
-            // never a rewind gate (typecheck enforces `retry.gate` names an
-            // agent step), so neither applies to this arm.
+            // per-kind spawn tools. `retry_from`/`retry.gate` accepts ANY
+            // step id (tau-pkg validation only requires gate_index <=
+            // producer_index and that some agent step exists in the rewound
+            // range) — a `Dynamic` step id is a legal rewind gate, so both
+            // `pending_initial_feedback` (loop prior-iteration rationale)
+            // and `feedback.get(&step.id.0)` (check-retry rationale) are
+            // injected here exactly like the `Agent` arm, so a check that
+            // rewinds to a `Dynamic` gate doesn't burn its whole
+            // `max_attempts` budget re-running the coordinator with an
+            // identical prompt and no rationale.
             StepRun::Dynamic {
                 owner,
                 envelope,
@@ -786,7 +791,18 @@ where
                         )
                     })
                     .collect();
-                let initial = alloc::vec![user_message(&rendered)];
+                let mut initial: alloc::vec::Vec<Message> = alloc::vec::Vec::new();
+                if let Some(fb) = pending_initial_feedback.take() {
+                    initial.push(user_message(&format!("Previous attempt rejected: {fb}")));
+                }
+                if let Some(inner) = feedback.get(&step.id.0) {
+                    for (cid, fb) in inner {
+                        initial.push(user_message(&format!(
+                            "Previous attempt rejected: (check '{cid}') {fb}"
+                        )));
+                    }
+                }
+                initial.push(user_message(&rendered));
                 let outcome = Box::pin(run_agent_with_spawn_tools(
                     module.clone(),
                     &agent,

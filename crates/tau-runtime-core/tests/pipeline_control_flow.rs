@@ -36,8 +36,8 @@ use serde_json::{json, Value};
 
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::{CapabilityRequirements, CapabilityTable};
-use tau_ir::check::{Condition, GoalPredicate, Locus};
-use tau_ir::ids::{AgentId, PipelineStepId, ToolId};
+use tau_ir::check::{Check, CheckVerify, Condition, GoalPredicate, Locus, OnFail, RetryPolicy};
+use tau_ir::ids::{AgentId, CheckId, PipelineStepId, ToolId};
 use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
 use tau_ir::node::Agent;
 use tau_ir::pipeline::{DynamicSpawn, Pipeline, PipelineStep, StepRun};
@@ -851,9 +851,13 @@ impl LlmBackend for SeqBackend {
 /// requested backend name (both "mock"-backed agents in `dynamic_module`
 /// share the one scripted queue — mirrors `BranchDispatcher::llm_backend_for`
 /// ignoring its `_backend` argument). No agent in the test module carries
-/// tools, so `invoke` is unreachable.
+/// tools, so `invoke` is unreachable. Always wires an [`EqualsRegistry`]
+/// (unused by the tests that carry no `Check` step; needed by
+/// `dynamic_region_check_retry_delivers_feedback_to_coordinator`'s
+/// `Goal { Equals }` gate check).
 struct DynamicDispatcher {
     backend: Arc<dyn DynLlmBackend>,
+    registry: Arc<EqualsRegistry>,
 }
 
 impl ToolDispatcher for DynamicDispatcher {
@@ -873,10 +877,17 @@ impl ToolDispatcher for DynamicDispatcher {
     fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
         Ok(self.backend.clone())
     }
+
+    fn deterministic_registry(&self) -> Option<Arc<dyn DeterministicRegistry>> {
+        Some(self.registry.clone())
+    }
 }
 
 fn dispatcher_with(backend: Arc<SeqBackend>) -> Arc<DynamicDispatcher> {
-    Arc::new(DynamicDispatcher { backend })
+    Arc::new(DynamicDispatcher {
+        backend,
+        registry: Arc::new(EqualsRegistry),
+    })
 }
 
 /// Bridge a `serde_json::json!` literal through the domain-`Value` serde
@@ -1045,6 +1056,304 @@ async fn dynamic_region_soft_denies_past_max_spawns() {
     let third = render_messages(&reqs[2]);
     assert!(third.contains("spawn denied"), "{third}");
     assert!(third.contains("max_spawns exhausted (1/1)"), "{third}");
+}
+
+/// Build `[dynamic:spawn-region, check:gate-check]`: the coordinator answers
+/// the dynamic region directly (no `agent.<kind>.spawn` tool_use — this
+/// module isolates the check-retry-into-a-`Dynamic`-gate behavior, not
+/// spawning). `gate-check` is a `Goal { Output(spawn-region) Equals "GO" }`,
+/// retryable up to 2 attempts, gated back to `spawn-region` — a `Dynamic`
+/// step id, which IS a legal retry gate: `retry.gate` accepts any step id
+/// (tau-pkg validation only requires `gate_index <= producer_index` and that
+/// some agent step exists in the rewound range), not just `StepRun::Agent`
+/// ids.
+fn dynamic_check_retry_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(
+        AgentId("coordinator".into()),
+        Agent {
+            id: AgentId("coordinator".into()),
+            prompt: tau_ir::prompt::PromptSource::inline("You coordinate researchers."),
+            model_ref: tau_ir::ModelRef {
+                backend: "mock".into(),
+                model_id: "mock-model".into(),
+            },
+            tool_refs: Vec::new(),
+            context: None,
+            budget: AgentBudget::default(),
+            produces: Vec::new(),
+            output_schema: None,
+            durable: None,
+        },
+    );
+
+    let mut checks = BTreeMap::new();
+    checks.insert(
+        CheckId("gate-check".into()),
+        Check {
+            id: CheckId("gate-check".into()),
+            verify: CheckVerify::Goal {
+                evaluates: Locus::Output(PipelineStepId("spawn-region".into())),
+                predicate: GoalPredicate::Equals("GO".into()),
+            },
+            retry: RetryPolicy {
+                on_fail: OnFail::Retry,
+                max_attempts: 2,
+                gate: PipelineStepId("spawn-region".into()),
+            },
+        },
+    );
+
+    let pipeline = Pipeline {
+        steps: vec![
+            PipelineStep {
+                id: PipelineStepId("spawn-region".into()),
+                run: StepRun::Dynamic {
+                    owner: AgentId("coordinator".into()),
+                    envelope: CapabilityRequirements::default(),
+                    spawns: vec![DynamicSpawn {
+                        kind: "researcher".into(),
+                        capabilities: CapabilityRequirements::default(),
+                        description: "Deep-dives one topic.".into(),
+                        prompt: tau_ir::prompt::PromptSource::inline("Research one topic."),
+                        model_ref: tau_ir::ModelRef {
+                            backend: "mock".into(),
+                            model_id: "mock-model".into(),
+                        },
+                        tool_refs: Vec::new(),
+                    }],
+                    max_spawns: 5,
+                    max_concurrency: 5,
+                },
+                input: "${input}".into(),
+            },
+            PipelineStep {
+                id: PipelineStepId("gate-check".into()),
+                run: StepRun::Check(CheckId("gate-check".into())),
+                input: String::new(),
+            },
+        ],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks,
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// A `Check`'s retry rewinds to a `Dynamic` region's own step id as its
+/// gate. Proves the rewound-to coordinator's next request carries the
+/// check's rejection rationale as a labelled prior turn — exactly like the
+/// `Agent` arm does — rather than an identical, unlabelled re-prompt (the
+/// hole IMPORTANT-C's fix closed: the `Dynamic` arm previously never read
+/// `feedback`/`pending_initial_feedback` at all).
+#[tokio::test]
+async fn dynamic_region_check_retry_delivers_feedback_to_coordinator() {
+    let module = dynamic_check_retry_module();
+    let responses = vec![
+        // r1: coordinator attempt 1 — answers directly, fails the gate check.
+        make_completion_response("NOTGO".into(), vec![], StopReason::EndTurn, None),
+        // r2: coordinator attempt 2 (after the check rewinds to spawn-region)
+        // — answers correctly, passes the gate check.
+        make_completion_response("GO".into(), vec![], StopReason::EndTurn, None),
+    ];
+    let seq_backend = Arc::new(SeqBackend::new(responses));
+
+    let out = run_pipeline(
+        Arc::new(module),
+        "x".into(),
+        dispatcher_with(seq_backend.clone()),
+    )
+    .await
+    .expect("check converges on attempt 2");
+
+    assert_eq!(store_output(&out, "spawn-region"), "GO");
+
+    let reqs = seq_backend.requests();
+    assert_eq!(
+        reqs.len(),
+        2,
+        "expected exactly 2 coordinator turns, got {}",
+        reqs.len()
+    );
+    let second = render_messages(&reqs[1]);
+    assert!(
+        second.contains("Previous attempt rejected"),
+        "attempt 2 must carry the check's rejection rationale: {second}"
+    );
+    assert!(
+        second.contains("goal predicate Equals(\"GO\") returned false"),
+        "{second}"
+    );
+}
+
+/// Build `[dynamic:spawn-region]` with TWO offered kinds ("researcher" and
+/// "writer") sharing ONE region — `max_spawns: 1`, `max_concurrency: 1`.
+fn dynamic_two_kinds_module() -> IrModule {
+    let mut agents = BTreeMap::new();
+    agents.insert(
+        AgentId("coordinator".into()),
+        Agent {
+            id: AgentId("coordinator".into()),
+            prompt: tau_ir::prompt::PromptSource::inline("You coordinate a team."),
+            model_ref: tau_ir::ModelRef {
+                backend: "mock".into(),
+                model_id: "mock-model".into(),
+            },
+            tool_refs: Vec::new(),
+            context: None,
+            budget: AgentBudget::default(),
+            produces: Vec::new(),
+            output_schema: None,
+            durable: None,
+        },
+    );
+
+    let spawn = |kind: &str| DynamicSpawn {
+        kind: kind.into(),
+        capabilities: CapabilityRequirements::default(),
+        description: format!("Deep-dives one topic ({kind})."),
+        prompt: tau_ir::prompt::PromptSource::inline("Research one topic."),
+        model_ref: tau_ir::ModelRef {
+            backend: "mock".into(),
+            model_id: "mock-model".into(),
+        },
+        tool_refs: Vec::new(),
+    };
+
+    let pipeline = Pipeline {
+        steps: vec![PipelineStep {
+            id: PipelineStepId("spawn-region".into()),
+            run: StepRun::Dynamic {
+                owner: AgentId("coordinator".into()),
+                envelope: CapabilityRequirements::default(),
+                spawns: vec![spawn("researcher"), spawn("writer")],
+                max_spawns: 1,
+                max_concurrency: 1,
+            },
+            input: "${input}".into(),
+        }],
+    };
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools: BTreeMap::new(),
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: CapabilityTable(BTreeMap::new()),
+            pipeline: Some(pipeline),
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    }
+}
+
+/// Pins the shared-counters invariant: `RegionCounters` is ONE pool shared
+/// by every `SpawnTool` offered by a region, not one pool per kind. Every
+/// other dynamic-region test in this file uses a single spawn kind, so a
+/// regression that moved `RegionCounters::new` inside the per-kind `.map()`
+/// (giving "researcher" and "writer" each their own independent
+/// `max_spawns: 1` counter, silently doubling the region's real budget)
+/// would leave every other test green. A region offering two kinds with
+/// `max_spawns: 1`: spawning kind A (researcher) admits the region's one
+/// slot; spawning kind B (writer) in the SAME turn must then be denied
+/// against that same exhausted pool, not its own fresh one.
+#[tokio::test]
+async fn dynamic_region_pools_bounds_counters_across_kinds() {
+    let module = dynamic_two_kinds_module();
+    let responses = vec![
+        // r1: coordinator turn 1 — spawns kind A (researcher) then kind B
+        // (writer) in the same turn.
+        make_completion_response(
+            String::new(),
+            vec![
+                make_tool_use(
+                    "s1".into(),
+                    "agent.researcher.spawn".into(),
+                    domain_args(json!({"message": "topic A"})),
+                ),
+                make_tool_use(
+                    "s2".into(),
+                    "agent.writer.spawn".into(),
+                    domain_args(json!({"message": "topic B"})),
+                ),
+            ],
+            StopReason::ToolUse,
+            None,
+        ),
+        // r2: researcher (kind A) child's answer — kind A is admitted
+        // (spawned index 0 of a fresh pool); kind B is denied before any
+        // child construction, so it consumes no response. If the shared
+        // pool were broken (per-kind counters), kind B would ALSO admit and
+        // its child would need a response this script never provides —
+        // `SeqBackend` would then hard-error ("no more scripted responses"),
+        // failing this test's `.expect(...)` below rather than the intended
+        // assertions, which still catches the regression class.
+        make_completion_response(
+            "RESEARCHER REPORT".into(),
+            vec![],
+            StopReason::EndTurn,
+            None,
+        ),
+        // r3: coordinator's final response, having seen both A's report and
+        // B's pool-exhausted soft-denial.
+        make_completion_response("DONE".into(), vec![], StopReason::EndTurn, None),
+    ];
+    let seq_backend = Arc::new(SeqBackend::new(responses));
+
+    let out = run_pipeline(
+        Arc::new(module),
+        "x".into(),
+        dispatcher_with(seq_backend.clone()),
+    )
+    .await
+    .expect("region completes (soft-deny, not a hard error)");
+
+    assert_eq!(store_output(&out, "spawn-region"), "DONE");
+
+    let reqs = seq_backend.requests();
+    assert_eq!(
+        reqs.len(),
+        3,
+        "expected exactly 3 completions, got {}",
+        reqs.len()
+    );
+    let third = render_messages(&reqs[2]);
+    assert!(third.contains("spawn denied"), "{third}");
+    assert!(
+        third.contains("max_spawns exhausted (1/1)"),
+        "kind B must be denied against the SAME 1/1 pool kind A admitted \
+         into, not a fresh per-kind counter: {third}"
+    );
+    assert!(
+        third.contains("writer"),
+        "the denial must name the denied kind (writer), not the admitted one: {third}"
+    );
 }
 
 /// Build a `[agent:seed, suspend:pause]` module: `seed`'s output lands in

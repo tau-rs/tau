@@ -107,12 +107,17 @@ pub enum StepRun {
         /// Signal name that resumes the run.
         resume_signal: String,
     },
-    /// EPIC 4.4: a bounded dynamic region. Spawns up to `max_spawns` children
-    /// (concurrency-capped by `max_concurrency`) drawn from `spawns`, each
-    /// attenuated to `envelope`. Build-time verified: every spawn ⊆ envelope ⊆
-    /// owner ⊆ root `[allow]` (see `tau check governance`). Runtime execution +
-    /// membership/attenuation/bounds counters land in EPIC 4.5; the interpreter
-    /// meets it with `RuntimeError::DynamicRegionRequiresRuntimeGate` until then.
+    /// EPIC 4.4/4.5: a bounded dynamic region. The interpreter runs `owner`
+    /// (the region's coordinator agent) with one `agent.<kind>.spawn` tool
+    /// registered per offered kind in `spawns`. Each spawn is admitted
+    /// against the region's `max_spawns`/`max_concurrency` bounds counters
+    /// — pooled across every offered kind, not per-kind — and, once
+    /// admitted, attenuated to the meet of `envelope` and the spawned
+    /// kind's declared capabilities before its child agent runs. A spawn
+    /// past bounds is a soft denial: the coordinator receives an
+    /// `is_error` tool result describing the exhausted bound and the
+    /// run continues. Build-time verified: every spawn ⊆ envelope ⊆
+    /// owner ⊆ root `[allow]` (see `tau check governance`).
     Dynamic {
         /// The coordinator agent that runs the region — must exist in
         /// `workflow.agents` (typechecked).

@@ -1254,7 +1254,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "EPIC 4.4: a bounded dynamic region. Spawns up to `max_spawns` children\n(concurrency-capped by `max_concurrency`) drawn from `spawns`, each\nattenuated to `envelope`. Build-time verified: every spawn ⊆ envelope ⊆\nowner ⊆ root `[allow]` (see `tau check governance`). Runtime execution +\nmembership/attenuation/bounds counters land in EPIC 4.5; the interpreter\nmeets it with `RuntimeError::DynamicRegionRequiresRuntimeGate` until then.",
+          "description": "EPIC 4.4/4.5: a bounded dynamic region. The interpreter runs `owner`\n(the region's coordinator agent) with one `agent.<kind>.spawn` tool\nregistered per offered kind in `spawns`. Each spawn is admitted\nagainst the region's `max_spawns`/`max_concurrency` bounds counters\n— pooled across every offered kind, not per-kind — and, once\nadmitted, attenuated to the meet of `envelope` and the spawned\nkind's declared capabilities before its child agent runs. A spawn\npast bounds is a soft denial: the coordinator receives an\n`is_error` tool result describing the exhausted bound and the\nrun continues. Build-time verified: every spawn ⊆ envelope ⊆\nowner ⊆ root `[allow]` (see `tau check governance`).",
           "properties": {
             "Dynamic": {
               "properties": {
