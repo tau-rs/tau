@@ -1,0 +1,37 @@
+packages = ["anthropic"]
+
+[project]
+name = "pipeline-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.draft]
+display_name = "Draft"
+package = "pipeline-wasm@^0.1"
+model = "claude"
+
+[agents.draft.prompt]
+system = "Draft a reply."
+
+[agents.polish]
+display_name = "Polish"
+package = "pipeline-wasm@^0.1"
+model = "claude"
+
+[agents.polish.prompt]
+system = "Polish the draft."
+
+[pipeline]
+
+[[pipeline.steps]]
+id = "draft"
+run = "agent:draft"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "polish"
+run = "agent:polish"
+input = "${steps.draft.output}"
