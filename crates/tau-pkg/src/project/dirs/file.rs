@@ -46,8 +46,14 @@ pub(crate) fn split_frontmatter(text: &str) -> Result<(String, String), String> 
 pub(crate) fn parse_agent_md(raw: &str) -> Result<UncheckedAgent, String> {
     let text = normalize_crlf(raw);
     let (yaml, body) = split_frontmatter(&text)?;
-    // Targeted checks for forbidden keys before the typed parse (the typed
-    // parse would report them as generic unknown fields).
+    // Targeted checks for forbidden keys before the typed parse. `name` isn't
+    // a field on `UncheckedAgent` at all, so without this check the typed
+    // parse would reject it as a generic unknown field (a confusing error).
+    // `prompt`, however, IS a real `UncheckedAgent` field — without this
+    // check the typed parse would silently accept it, letting the
+    // frontmatter's `prompt` fight the markdown body for the system prompt.
+    // Do not delete this as redundant UX polish; it is load-bearing for
+    // `prompt`.
     if !yaml.trim().is_empty() {
         let map: serde_yaml::Mapping =
             serde_yaml::from_str(&yaml).map_err(|e| format!("frontmatter YAML: {e}"))?;
@@ -178,5 +184,55 @@ mod tests {
     fn toml_tool_parses() {
         let t = parse_tool_toml("native = \"ReadTemp\"\ndescription = \"d\"\n").unwrap();
         assert_eq!(t.description, "d");
+    }
+
+    // -- split_frontmatter: direct branch coverage --
+    //
+    // These exercise split_frontmatter directly rather than via
+    // parse_agent_md: the empty-frontmatter cases would fail a typed
+    // UncheckedAgent parse for an unrelated reason (missing required
+    // `display_name`/`package`), which would obscure which branch of
+    // split_frontmatter actually ran.
+
+    #[test]
+    fn split_frontmatter_empty_with_trailing_newline_no_body() {
+        // "---\n---\n": closing fence immediately follows the opening one,
+        // with a newline and nothing after — file.rs:28-29.
+        let (yaml, body) = split_frontmatter("---\n---\n").unwrap();
+        assert_eq!(yaml, "");
+        assert_eq!(body, "");
+    }
+
+    #[test]
+    fn split_frontmatter_empty_with_trailing_body() {
+        // Same branch (file.rs:28-29) but with a non-empty body after the
+        // closing fence.
+        let (yaml, body) = split_frontmatter("---\n---\nBODY\n").unwrap();
+        assert_eq!(yaml, "");
+        assert_eq!(body, "BODY\n");
+    }
+
+    #[test]
+    fn split_frontmatter_bare_empty_no_trailing_newline() {
+        // "---\n---" with no trailing newline at all — file.rs:31-32.
+        let (yaml, body) = split_frontmatter("---\n---").unwrap();
+        assert_eq!(yaml, "");
+        assert_eq!(body, "");
+    }
+
+    #[test]
+    fn split_frontmatter_nonempty_yaml_no_trailing_newline_after_close() {
+        // Non-empty frontmatter where the file ends exactly at the closing
+        // `---` with no trailing newline — file.rs:37-39.
+        let (yaml, body) = split_frontmatter("---\nfoo: bar\n---").unwrap();
+        assert_eq!(yaml, "foo: bar");
+        assert_eq!(body, "");
+    }
+
+    #[test]
+    fn split_frontmatter_unterminated_fence_is_error() {
+        // Opening fence present but no closing `---` anywhere — file.rs:40.
+        let e = split_frontmatter("---\nfoo: bar\n").unwrap_err();
+        assert!(e.contains("unterminated"), "{e}");
     }
 }
