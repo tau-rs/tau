@@ -102,6 +102,26 @@ impl RegionCounters {
     }
 }
 
+/// RAII guard pairing a successful `try_admit` with `release()`.
+///
+/// A bare `counters.release()` statement placed after an `.await` is only
+/// reached if that `.await` returns normally — a panic unwinding through it
+/// (the workspace default is `panic = "unwind"`) or the `invoke()` future
+/// being dropped without being polled to completion (cancellation, a
+/// `select!`, an external timeout) both skip it, permanently leaking an
+/// `in_flight` slot and wedging the region at `max_concurrency` for the
+/// rest of its lifetime. Binding this guard immediately after a successful
+/// `try_admit` and holding it across the child run makes `release()` run
+/// on every exit path via `Drop`, unwind or not. No `unsafe`; `AtomicU64`
+/// stays `Send + Sync` under `no_std`.
+struct ReleaseOnDrop<'a>(&'a RegionCounters);
+
+impl Drop for ReleaseOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Attenuation: child grant = meet(region envelope, offered kind's caps)
 // ---------------------------------------------------------------------------
@@ -246,7 +266,15 @@ where
         let n = match self.counters.try_admit() {
             Ok(n) => n,
             Err(err) => {
-                let (reason, spawned_snapshot, max_snapshot, text) = match err {
+                // Neutral `count`/`limit` field names (not `spawned`/`max_spawns`)
+                // because this arm covers BOTH refusal kinds and each binds a
+                // different pair of counters: Bounds's are the lifetime
+                // spawn count vs. `max_spawns`; Concurrency's are the
+                // in-flight count vs. `max_concurrency`. A single field name
+                // reused across both with only one arm's semantics (as
+                // before) silently mislabels the other arm's tracing event —
+                // a real defect in a security-relevant admission-denial log.
+                let (reason, count, limit, text) = match err {
                     AdmitError::Bounds { spawned, max } => (
                         "bounds",
                         spawned,
@@ -271,8 +299,8 @@ where
                     region_step = %self.region_step,
                     kind = %self.spawn.kind,
                     reason = %reason,
-                    spawned = spawned_snapshot,
-                    max_spawns = max_snapshot,
+                    count = count,
+                    limit = limit,
                 );
                 return Ok(ToolResult::new(
                     alloc::vec![ToolContent::Text { text }],
@@ -280,6 +308,10 @@ where
                 ));
             }
         };
+        // RAII: pairs this successful admission with `release()` on every
+        // exit path (normal return, early `?`, or panic unwind) — see
+        // `ReleaseOnDrop`'s doc comment.
+        let _release_guard = ReleaseOnDrop(&self.counters);
 
         // 3-5. Child id, meet-attenuated grant, child Agent node.
         let child_id = alloc::format!("{}:{}#{n}", self.region_step, self.spawn.kind);
@@ -299,13 +331,15 @@ where
             durable: None,
         };
 
-        // 6. Admission accepted.
+        // 6. Admission accepted. `index` (not `spawned`, which the denial
+        //    event above uses for a *count*) — `n` is the 0-based admission
+        //    index, a different quantity from a spawned-count snapshot.
         tracing::info!(
             name = "runtime.dynamic.spawned",
             region_step = %self.region_step,
             kind = %self.spawn.kind,
             child_id = %child_id,
-            spawned = n,
+            index = n,
             max_spawns = self.counters.max_spawns,
         );
 
@@ -320,8 +354,9 @@ where
             "runtime.dynamic.attenuation_denied",
         ));
 
-        // 8. Run the child agent. `counters.release()` always runs after
-        //    the await, on both success and failure paths.
+        // 8. Run the child agent. `_release_guard` releases the in_flight
+        //    slot on drop — reached on every exit path, not just the
+        //    fall-through after this `.await`.
         let user_msg = user_message(&message);
         let outcome = alloc::boxed::Box::pin(run_agent(
             self.module.clone(),
@@ -330,7 +365,6 @@ where
             alloc::vec![user_msg],
         ))
         .await;
-        self.counters.release();
 
         // 9. Map the outcome to a ToolResult.
         let (is_error, text) = match &outcome {
@@ -362,10 +396,17 @@ where
 mod tests {
     use alloc::string::String;
     use alloc::sync::Arc;
+    use std::sync::Mutex;
 
     use tau_ir::capability::CapabilityRequirements;
     use tau_ir::module::{IrFormatVersion, IrModule, Workflow};
     use tau_ports::tool::{Tool, ToolContent};
+    use tracing::field::{Field, Visit};
+    use tracing::span::Attributes;
+    use tracing::{Event, Id, Subscriber};
+    use tracing_subscriber::layer::Context as LayerContext;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::Layer;
 
     use crate::error::RuntimeError;
     use crate::interpreter::tool_dispatch::{ToolDispatcher, ToolInvocationResult};
@@ -541,5 +582,130 @@ mod tests {
         counters.release();
         counters.release();
         assert_eq!(counters.try_admit().expect("admit 3"), 3);
+    }
+
+    // -----------------------------------------------------------------
+    // tracing-event field capture — asserts on the structured fields of
+    // `runtime.dynamic.spawn_denied`, not just its rendered text. Mirrors
+    // the `CapturedEvents`/`Visit` harness in
+    // `tests/pipeline_retry.rs` (numeric-field variant).
+    // -----------------------------------------------------------------
+
+    #[derive(Default)]
+    struct SpawnDeniedFields {
+        reason: Option<String>,
+        count: Option<u64>,
+        limit: Option<u64>,
+    }
+
+    impl Visit for SpawnDeniedFields {
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            match field.name() {
+                "count" => self.count = Some(value),
+                "limit" => self.limit = Some(value),
+                _ => {}
+            }
+        }
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            if value < 0 {
+                return;
+            }
+            match field.name() {
+                "count" => self.count = Some(value as u64),
+                "limit" => self.limit = Some(value as u64),
+                _ => {}
+            }
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "reason" {
+                self.reason = Some(value.to_string());
+            }
+        }
+        fn record_debug(&mut self, field: &Field, value: &dyn core::fmt::Debug) {
+            let raw = alloc::format!("{value:?}");
+            match field.name() {
+                "reason" => self.reason = Some(raw.trim_matches('"').to_string()),
+                "count" => {
+                    if let Ok(n) = raw.trim().parse::<u64>() {
+                        self.count = Some(n);
+                    }
+                }
+                "limit" => {
+                    if let Ok(n) = raw.trim().parse::<u64>() {
+                        self.limit = Some(n);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct CapturedSpawnDenials(
+        Arc<Mutex<alloc::vec::Vec<(Option<String>, Option<u64>, Option<u64>)>>>,
+    );
+
+    impl<S: Subscriber> Layer<S> for CapturedSpawnDenials {
+        fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: LayerContext<'_, S>) {}
+
+        fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+            let mut visitor = SpawnDeniedFields::default();
+            event.record(&mut visitor);
+            if visitor.reason.is_some() {
+                self.0
+                    .lock()
+                    .expect("captured-events mutex poisoned")
+                    .push((visitor.reason, visitor.count, visitor.limit));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_denied_concurrency_event_reports_in_flight_not_max_spawns() {
+        // IMPORTANT-2 regression: the concurrency-denial arm previously
+        // reused the bounds arm's `spawned`/`max_spawns` field names while
+        // emitting `in_flight`/`max_concurrency` values — mislabeling a
+        // security-relevant admission-denial event. Assert the emitted
+        // event's structured fields directly (not just its message text).
+        let captured = CapturedSpawnDenials::default();
+        let _tracing_guard = tracing_subscriber::registry()
+            .with(captured.clone())
+            .set_default();
+
+        let counters = Arc::new(RegionCounters::new(4, 1));
+        // Saturate concurrency without releasing — spawned=1, in_flight=1.
+        counters.try_admit().expect("first admit");
+        let tool = SpawnTool::new(
+            test_spawn("researcher"),
+            CapabilityRequirements::default(),
+            counters,
+            "fanout".into(),
+            test_module(),
+            Arc::new(PanicDispatcher),
+        );
+        let mut session = ();
+        tool.invoke(
+            &mut session,
+            domain_args(serde_json::json!({"message": "go"})),
+        )
+        .await
+        .expect("soft-deny returns Ok(ToolResult)");
+
+        let events = captured.0.lock().expect("poisoned").clone();
+        let (reason, count, limit) = events
+            .iter()
+            .find(|(reason, ..)| reason.as_deref() == Some("concurrency"))
+            .cloned()
+            .expect("expected a concurrency spawn_denied event");
+        assert_eq!(reason.as_deref(), Some("concurrency"));
+        // `count` must be the in-flight snapshot (1), and `limit` must be
+        // `max_concurrency` (1) — NOT `max_spawns` (4), which the old
+        // mislabeled `max_spawns` field name would have implied.
+        assert_eq!(count, Some(1), "count must report in_flight, not spawned");
+        assert_eq!(
+            limit,
+            Some(1),
+            "limit must report max_concurrency (1), not max_spawns (4)"
+        );
     }
 }
