@@ -189,7 +189,7 @@ impl core::fmt::Display for CapabilityDenial {
             self.tool_name,
         )?;
         if let Some(frame) = &self.narrowing_frame {
-            write!(f, " (narrowed by subflow `{frame}`)")?;
+            write!(f, " (narrowed by `{frame}`)")?;
         }
         Ok(())
     }
@@ -714,7 +714,7 @@ mod tests {
         let s = d.to_string();
         assert!(s.contains("page"), "{s}");
         assert!(s.contains("net.http"), "{s}");
-        assert!(s.contains("narrowed by subflow `notify`"), "{s}");
+        assert!(s.contains("narrowed by `notify`"), "{s}");
         assert_eq!(d.narrowing_frame.as_deref(), Some("notify"));
     }
 
@@ -722,6 +722,6 @@ mod tests {
     fn denial_without_frame_is_unchanged() {
         let d = CapabilityDenial::new("a", "p", "t", "k", "detail");
         assert_eq!(d.narrowing_frame, None);
-        assert!(!d.to_string().contains("narrowed by subflow"));
+        assert!(!d.to_string().contains("narrowed by"));
     }
 }
