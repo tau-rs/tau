@@ -112,6 +112,10 @@ pub enum VocabMode {
 /// when a kind graduates from `Forward` to a typed variant.
 pub const KNOWN_VOCAB: u32 = 1;
 
+// `forward_open` is consulted only by the `serde` deserializer in
+// `capability_de` below, so the whole impl tracks that gate — ungated it is a
+// deny-level `dead_code` in the feature-less build.
+#[cfg(feature = "serde")]
 impl VocabMode {
     /// `true` if unknown non-`custom.` kinds should parse as
     /// [`Capability::Forward`] rather than erroring.

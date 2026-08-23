@@ -36,6 +36,25 @@ lint:
 lint-wasm-guest-net:
     cargo clippy -p tau-wasm-guest --target wasm32-wasip2 --release -- -D warnings
 
+# Lint tau-domain's two no_std shapes. The workspace `just lint` above unifies
+# features across members, so some host member always turns on tau-domain's
+# `std` and the feature-less configuration is NEVER linted — even though the
+# workspace `tau-domain` alias sets `default-features = false`, which is exactly
+# what tau-sandbox-proxy and tau-wasm-guest build against. That gap hid a
+# deny-level `unused_imports` (alloc::borrow::ToOwned) + `dead_code`
+# (VocabMode::forward_open), both declared ungated but used only from
+# `#[cfg(feature = "serde")]` blocks. `--features serde` is the guest's actual
+# configuration; bare `--no-default-features` is the floor.
+#
+# Deliberately NOT `--all-targets`: tau-domain's own cfg(test) modules exercise
+# the host surface (`MessageId::new` needs uuid/std, `PackageSource::Url` needs
+# `package-source`, `detect_format` needs `skill-md`), so the test targets do
+# not compile without `std` at all. Downstream no_std consumers link the lib
+# only, which is precisely what this gate covers.
+lint-domain-featureless:
+    cargo clippy -p tau-domain --no-default-features -- -D warnings
+    cargo clippy -p tau-domain --no-default-features --features serde -- -D warnings
+
 # Measure + gate the wasm-guest bundle size (EPIC 5.6) — mirrors the CI step in
 # the `runtime-core-no-std` job. Reports the shipped-component size (wasm-tools)
 # + the wasm-metadce tree-shaken floor (Binaryen, optional), and fails if the
