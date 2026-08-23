@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["builder","capability","context","dispatch","durable_resolve","embed","error","ids","interpreter","options","orchestration","outcome","run","stream","tool_args"]};

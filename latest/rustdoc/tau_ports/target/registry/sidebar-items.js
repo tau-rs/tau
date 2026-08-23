@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["list_all","list_available","lookup"],"static":["REGISTRY"],"struct":["TargetTripleEntry"]};
