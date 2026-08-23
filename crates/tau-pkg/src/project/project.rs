@@ -3102,7 +3102,19 @@ impl ProjectConfig {
             }
         })?;
         let project_root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        Self::parse_str_at(&bytes, project_root)
+        Self::parse_str_at(&bytes, project_root).map_err(|err| match err {
+            // `parse_str_at` has no path to report (it also serves the
+            // in-memory `parse_str` caller), so it always reports a TOML
+            // syntax error as `ParseStr`. Callers of `from_path` — and the
+            // `tau check` "kind" contract — expect the file-based `Parse`
+            // variant, which carries the path. Restore it here rather than
+            // pushing path-formatting onto every `from_path` call site.
+            ProjectConfigError::ParseStr { source } => ProjectConfigError::Parse {
+                path: path.to_path_buf(),
+                source,
+            },
+            other => other,
+        })
     }
 }
 

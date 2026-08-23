@@ -67,3 +67,27 @@ fn project_without_dirs_is_unaffected() {
     write(t.path(), "tau.toml", "[project]\nname = \"p\"\n");
     assert!(ProjectConfig::from_path(t.path().join("tau.toml")).is_ok());
 }
+
+/// `from_path` delegates to `parse_str_at`, which has no path to report and
+/// so always raises a TOML syntax error as `ParseStr`. `from_path` must
+/// remap that back to the file-based `Parse { path, source }` variant so
+/// callers relying solely on the error's own `Display` (no added
+/// `.with_context`, e.g. `tau resolve` / `tau list`) still get the file
+/// path, and so `tau check`'s `--json`/SARIF `"kind": "Parse"` contract
+/// doesn't silently become `"ParseStr"`.
+#[test]
+fn from_path_malformed_toml_reports_parse_with_path() {
+    let t = tempfile::TempDir::new().unwrap();
+    let tau_toml = t.path().join("tau.toml");
+    write(t.path(), "tau.toml", "[project\nname = \"p\"\n");
+    let err = ProjectConfig::from_path(&tau_toml).unwrap_err();
+    assert!(
+        matches!(&err, ProjectConfigError::Parse { path, .. } if path == &tau_toml),
+        "{err:?}"
+    );
+    let display = err.to_string();
+    assert!(
+        display.contains(&tau_toml.display().to_string()),
+        "{display}"
+    );
+}
