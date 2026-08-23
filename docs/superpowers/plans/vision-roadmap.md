@@ -202,7 +202,9 @@ from `tau.toml`; each construct is conformance-checked and its envelope enforced
 **Goal:** tau-as-component on devices; wasm-on-MCU gated; firmware a niche.
 - **7.1** no_std lib (Variant B) embedding API + example (product links tau, impls ports).
 - **7.2** wasm-guest (Variant A) embedding in a product runtime + example.
-- **7.3** *(gated: WAMR Component Model)* wasm-on-MCU spine.
+- **7.3** *(gated: WAMR Component Model)* wasm-on-MCU spine. Gate **re-verified closed
+  2026-08-23** — upstream WAMR (2.4.5) ships zero Component Model code and its own
+  `dev/cm_wasip2` branch is `ahead_by=0`; evidence in [#415](https://github.com/tau-rs/tau/issues/415).
 - **7.4** *(gated: named gateway-less buyer)* tau-as-firmware niche (embassy+WAMR layering).
 **Epic DoD:** a product embeds tau as a no_std lib AND a wasm-guest; MCU path documented as gated.
 
