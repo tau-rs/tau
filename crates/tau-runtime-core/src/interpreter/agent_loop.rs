@@ -646,6 +646,39 @@ where
         }
     }
 
+    // 6d. Spec §13.3: attach the host's trace sink, if any, so the kernel's
+    //     `TraceEvent` emit sites fire for this IR run. The `RunState` is
+    //     synthetic and orchestration-inert — a default (unlimited) budget
+    //     so the BudgetWatchdog no-ops, an empty task list, and NO
+    //     `orchestration_runtime`, which keeps the virtual-tool intercept
+    //     disabled (§13.4). It exists purely to carry the run id and the
+    //     subscriber fan-out into the emit sites. Dispatchers that don't
+    //     override `trace_sink` (wasm guest, `tau dev`, conformance) return
+    //     `None` and this is a no-op.
+    if let Some(sink) = dispatcher.trace_sink() {
+        let clock = run_options
+            .clock
+            .as_ref()
+            .expect("clock is present (checked above)");
+        let mut state = crate::orchestration::run_state::RunState::new(
+            sink.run_id,
+            agent.id.0.clone(),
+            tau_ports::RunBudget::default(),
+            crate::ids::now_utc(clock),
+        );
+        for subscriber in sink.subscribers {
+            state.trace.add_subscriber(subscriber);
+        }
+        // `RunState` is `!Send` (interior `RefCell` sharing); it never
+        // crosses a spawn boundary — the run future stays on the caller's
+        // task. See §13.3's `!Send` discipline note.
+        #[allow(clippy::arc_with_non_send_sync)]
+        {
+            run_options.orchestration_state =
+                Some(alloc::sync::Arc::new(core::cell::RefCell::new(state)));
+        }
+    }
+
     // 7. Split initial_messages into history + initial_message.
     //    The kernel requires exactly one initial_message; if the caller
     //    provided none, synthesise a placeholder so the run loop has

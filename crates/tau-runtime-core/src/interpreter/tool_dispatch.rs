@@ -49,6 +49,25 @@ pub struct ToolInvocationResult {
     pub error: Option<String>,
 }
 
+/// Trace sink supplied by the host shell for an IR-interpreter run
+/// (execution-trace TUI spec §13.3).
+///
+/// `spawn_root_agent` builds a full `RunState` for multi-agent runs; the
+/// interpreter has no equivalent, so the host passes the two ingredients
+/// the kernel's `TraceEvent` emit sites actually need — a run id and the
+/// subscribers to fan out to — and `prepare_agent_run` assembles a
+/// synthetic, orchestration-inert `RunState` around them.
+///
+/// Both fields are `Send + Sync`, so this crosses the dispatcher's
+/// `D: Send + Sync` bound (an `Arc<RefCell<RunState>>` could not).
+pub struct TraceSinkConfig {
+    /// Run id stamped on every emitted `TraceEvent`; also the
+    /// `.tau/runs/<run_id>.jsonl` filename the host writes.
+    pub run_id: tau_ports::RunId,
+    /// Sinks to fan events out to (JSONL writer, live TUI channel, …).
+    pub subscribers: alloc::vec::Vec<Arc<dyn crate::orchestration::trace::TraceSubscriber>>,
+}
+
 /// Boundary the interpreter calls through to invoke tools and obtain
 /// the LLM backend used for agent-loop construction.
 pub trait ToolDispatcher {
@@ -184,6 +203,23 @@ pub trait ToolDispatcher {
         tool_id: &ToolId,
     ) -> Option<alloc::vec::Vec<tau_domain::Capability>> {
         let _ = tool_id;
+        None
+    }
+
+    /// Optional trace sink for this run (spec §13.3).
+    ///
+    /// Returning `Some` makes the kernel's `TraceEvent` emit sites live for
+    /// an IR-interpreter run: `prepare_agent_run` builds a synthetic
+    /// `RunState` from it and attaches it as `RunOptions::orchestration_state`.
+    /// Returning `None` (the default) preserves today's behavior — no trace
+    /// emission at all — which is what the wasm guest, `tau dev` and the
+    /// conformance runner rely on.
+    ///
+    /// The synthetic state is orchestration-*inert*: it carries a default
+    /// (unlimited) budget and no `orchestration_runtime`, so the budget
+    /// watchdog no-ops and the virtual-tool intercept stays disabled
+    /// (§13.4).
+    fn trace_sink(&self) -> Option<TraceSinkConfig> {
         None
     }
 }
