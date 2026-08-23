@@ -98,9 +98,13 @@ markdown rendering; drop it to see the styled output.
 This step depends on the agent surrounding your skill. The pattern
 in tau is:
 
+    [allow.models.default]
+    backend = "anthropic"
+    model   = "claude-haiku-4-5"
+
     [agents.reviewer]
     package = "code-reviewer@^0.1"
-    llm_backend = "anthropic"
+    model = "default"   # the alias — not "claude-haiku-4-5"
 
     [[agents.reviewer.capabilities]]
     kind = "skill.spawn"
