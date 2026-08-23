@@ -163,4 +163,27 @@ pub trait ToolDispatcher {
     fn checkpointing(&self) -> Option<DurableHandles> {
         None
     }
+
+    /// The meet-clamped authority a tool actually runs under, when narrower
+    /// than its declared capabilities (execution-trace TUI spec §12/§13.2).
+    ///
+    /// Returning `None` (the default) means "not narrowed, or this
+    /// dispatcher does not track authority". `tau-cli`'s
+    /// `ForwardingDispatcher` answers from the `Arc<dyn DynTool>` it holds
+    /// for each MCP-backed tool, whose effective set was computed at MCP
+    /// open time by `setup_mcp_runtime`.
+    ///
+    /// This is **observability only**. The value is forwarded onto the
+    /// interpreter's `DispatcherTool` wrapper via
+    /// `Tool::effective_capabilities()` so the kernel can emit a
+    /// `CapabilityVerdict::Clamp` on the call's `ToolCall` trace event.
+    /// Declared capabilities are deliberately NOT forwarded — see issue
+    /// #581 and `tests/ir_dispatch_gate_inert.rs`.
+    fn tool_effective_capabilities(
+        &self,
+        tool_id: &ToolId,
+    ) -> Option<alloc::vec::Vec<tau_domain::Capability>> {
+        let _ = tool_id;
+        None
+    }
 }

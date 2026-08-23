@@ -112,6 +112,12 @@ struct DispatcherTool<D> {
     tool_impl: tau_ir::ToolImpl,
     /// Shared dispatcher handle.
     dispatcher: Arc<D>,
+    /// Meet-clamped authority for this tool, when narrower than declared
+    /// (spec §13.2). Sourced once at construction from
+    /// [`ToolDispatcher::tool_effective_capabilities`]. `None` = not
+    /// narrowed. Surfaced through `Tool::effective_capabilities()` so the
+    /// kernel emits a `Clamp` verdict; NEVER through `capabilities()`.
+    effective_capabilities: Option<alloc::vec::Vec<tau_domain::Capability>>,
 }
 
 // `Tool::capabilities()` is intentionally NOT overridden (issue #581): the
@@ -123,6 +129,11 @@ struct DispatcherTool<D> {
 // ceiling + D-3b capability-fit), at the host boundary (OS sandbox / wasm
 // WIT world + WasiCtx), and at subflow frames (`AttenuatedDispatcher`).
 // Contract pinned by `tests/ir_dispatch_gate_inert.rs`.
+//
+// `Tool::effective_capabilities()` IS overridden (spec §13.2): it carries
+// the MCP open-time meet-clamp for observability only. It never reaches the
+// grant gate — `capability_verdict` reads it purely to label the ToolCall
+// trace row — so the #581 contract below is unaffected.
 impl<D> tau_ports::tool::Tool for DispatcherTool<D>
 where
     D: ToolDispatcher + Send + Sync + 'static,
@@ -135,6 +146,10 @@ where
 
     fn schema(&self) -> ToolSpec {
         self.spec.clone()
+    }
+
+    fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+        self.effective_capabilities.as_deref()
     }
 
     async fn init(&self, _ctx: SessionContext) -> Result<Self::Session, ToolError> {
@@ -486,6 +501,9 @@ where
             module: module.clone(),
             tool_impl: ir_tool.impl_.clone(),
             dispatcher: dispatcher.clone(),
+            // Spec §13.2: ask the host dispatcher once, at wrapper
+            // construction, whether this tool's authority was narrowed.
+            effective_capabilities: dispatcher.tool_effective_capabilities(tool_id),
         });
     }
 
@@ -817,6 +835,7 @@ mod tests {
             module: stub_module,
             tool_impl: stub_impl,
             dispatcher,
+            effective_capabilities: None,
         }
     }
 
@@ -1153,5 +1172,153 @@ mod tests {
             tau_ports::tool::ToolContent::Text { text } => assert_eq!(text, "boom"),
             other => panic!("expected Text content, got {other:?}"),
         }
+    }
+
+    /// Build a Capability from its canonical TOML form (variants are
+    /// `#[non_exhaustive]` outside tau-domain). Same pattern as stream.rs.
+    fn test_cap(toml_str: &str) -> tau_domain::Capability {
+        #[derive(serde::Deserialize)]
+        struct CapWrapper {
+            cap: tau_domain::Capability,
+        }
+        toml::from_str::<CapWrapper>(toml_str).unwrap().cap
+    }
+
+    /// A dispatcher that reports a clamped authority for exactly one tool id.
+    struct ClampReportingDispatcher {
+        clamped_id: ToolId,
+        effective: alloc::vec::Vec<tau_domain::Capability>,
+    }
+
+    impl ToolDispatcher for ClampReportingDispatcher {
+        fn invoke<'a>(
+            &'a self,
+            _tool_id: &'a ToolId,
+            _args: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolInvocationResult, RuntimeError>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(ToolInvocationResult {
+                    body: Some(Value::String("ok".into())),
+                    error: None,
+                })
+            })
+        }
+
+        fn llm_backend_for(&self, _backend: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+            Err(RuntimeError::Internal {
+                message: "not used in this test".into(),
+            })
+        }
+
+        fn tool_effective_capabilities(
+            &self,
+            tool_id: &ToolId,
+        ) -> Option<alloc::vec::Vec<tau_domain::Capability>> {
+            if tool_id == &self.clamped_id {
+                Some(self.effective.clone())
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Test-only IR module: no agents/tools/steps needed — `DispatcherTool`
+    /// construction just needs an `Arc<IrModule>` to hold, and its `Native`/
+    /// `Mcp` invoke branches never read it.
+    fn empty_module() -> alloc::sync::Arc<tau_ir::IrModule> {
+        alloc::sync::Arc::new(tau_ir::IrModule {
+            ir_format: tau_ir::IrFormatVersion::current(),
+            tau_version: env!("CARGO_PKG_VERSION").into(),
+            target: tau_ports::target::registry::list_available()
+                .next()
+                .expect("at least one available target")
+                .triple,
+            workflow: tau_ir::Workflow {
+                agents: alloc::collections::BTreeMap::new(),
+                tools: alloc::collections::BTreeMap::new(),
+                steps: alloc::collections::BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: tau_ir::CapabilityTable(alloc::collections::BTreeMap::new()),
+                pipeline: None,
+                checks: alloc::collections::BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+        })
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn dispatcher_tool_forwards_effective_capabilities_but_not_declared() {
+        let clamped_id = ToolId("weather.get_forecast".into());
+        let effective = alloc::vec![test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n",
+        )];
+        let dispatcher = Arc::new(ClampReportingDispatcher {
+            clamped_id: clamped_id.clone(),
+            effective: effective.clone(),
+        });
+
+        let module = empty_module();
+
+        let tool = DispatcherTool {
+            tool_name: "get_forecast".into(),
+            tool_id: clamped_id.clone(),
+            spec: make_tool_spec("get_forecast", "", &Value::Null),
+            module: module.clone(),
+            tool_impl: tau_ir::ToolImpl::Mcp {
+                url: "https://mcp.weather.com".into(),
+                contract_hash: [0u8; 32],
+                capability_subset: tau_ir::CapabilityRequirements {
+                    declared: alloc::vec::Vec::new(),
+                },
+                server_tool_name: "get_forecast".into(),
+            },
+            dispatcher: dispatcher.clone(),
+            effective_capabilities: dispatcher.tool_effective_capabilities(&clamped_id),
+        };
+
+        // Issue #581: declared caps are NEVER forwarded — the gate must keep
+        // seeing an empty required set for IR-authored tools.
+        assert!(
+            tau_ports::tool::Tool::capabilities(&tool).is_empty(),
+            "DispatcherTool must not forward declared capabilities (#581)"
+        );
+        // Spec §13.2: effective (meet-clamped) authority IS forwarded.
+        assert_eq!(
+            tau_ports::tool::Tool::effective_capabilities(&tool),
+            Some(effective.as_slice()),
+        );
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn dispatcher_tool_reports_no_effective_capabilities_when_unclamped() {
+        let dispatcher = Arc::new(ClampReportingDispatcher {
+            clamped_id: ToolId("other".into()),
+            effective: alloc::vec![test_cap(
+                "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n",
+            )],
+        });
+        let tool_id = ToolId("plain".into());
+
+        let module = empty_module();
+
+        let tool = DispatcherTool {
+            tool_name: "plain".into(),
+            tool_id: tool_id.clone(),
+            spec: make_tool_spec("plain", "", &Value::Null),
+            module,
+            tool_impl: tau_ir::ToolImpl::Native {
+                fn_ref: tau_ir::NativeFnRef {
+                    name: "plain".into(),
+                },
+                content_hash: [0u8; 32],
+            },
+            dispatcher: dispatcher.clone(),
+            effective_capabilities: dispatcher.tool_effective_capabilities(&tool_id),
+        };
+
+        assert_eq!(tau_ports::tool::Tool::effective_capabilities(&tool), None);
     }
 }
