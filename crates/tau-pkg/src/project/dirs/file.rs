@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use super::super::project::{UncheckedAgent, UncheckedPrompt, UncheckedTool};
 
 /// Replace every `\r\n` with `\n` (spec: build-time CRLF normalization).
-#[allow(dead_code)] // wired up by Task 3 (dirs/scan.rs)
 pub(crate) fn normalize_crlf(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
@@ -15,7 +14,6 @@ pub(crate) fn normalize_crlf(s: &str) -> String {
 /// The first line must be exactly `---`; the closing fence is the next
 /// line that is exactly `---`. Body keeps everything after the closing
 /// fence's newline.
-#[allow(dead_code)] // wired up by Task 3 (dirs/scan.rs)
 pub(crate) fn split_frontmatter(text: &str) -> Result<(String, String), String> {
     let missing = || {
         "missing `---` frontmatter fence on line 1 (a non-definition file must be \
@@ -42,7 +40,6 @@ pub(crate) fn split_frontmatter(text: &str) -> Result<(String, String), String> 
 
 /// Parse an `agents/**/*.md` definition: YAML frontmatter → `UncheckedAgent`
 /// (full `[agents.X]` schema), body → inline system prompt.
-#[allow(dead_code)] // wired up by Task 3 (dirs/scan.rs)
 pub(crate) fn parse_agent_md(raw: &str) -> Result<UncheckedAgent, String> {
     let text = normalize_crlf(raw);
     let (yaml, body) = split_frontmatter(&text)?;
@@ -83,14 +80,12 @@ pub(crate) fn parse_agent_md(raw: &str) -> Result<UncheckedAgent, String> {
 }
 
 /// Parse an `agents/**/*.toml` definition (the `[agents.X]` table body).
-#[allow(dead_code)] // wired up by Task 3 (dirs/scan.rs)
 pub(crate) fn parse_agent_toml(raw: &str) -> Result<UncheckedAgent, String> {
     forbid_name_key(raw)?;
     toml::from_str(raw).map_err(|e| e.to_string())
 }
 
 /// Parse a `tools/**/*.toml` definition (the `[tools.X]` table body).
-#[allow(dead_code)] // wired up by Task 3 (dirs/scan.rs)
 pub(crate) fn parse_tool_toml(raw: &str) -> Result<UncheckedTool, String> {
     forbid_name_key(raw)?;
     toml::from_str(raw).map_err(|e| e.to_string())
@@ -99,7 +94,6 @@ pub(crate) fn parse_tool_toml(raw: &str) -> Result<UncheckedTool, String> {
 /// Reject a `name` key: the definition's name is derived from the file
 /// path, not declared inline (keeps directory-based and inline `[tools.X]`
 /// definitions from disagreeing about identity).
-#[allow(dead_code)] // wired up by Task 3 (dirs/scan.rs)
 fn forbid_name_key(raw: &str) -> Result<(), String> {
     let table: toml::Table = toml::from_str(raw).map_err(|e| e.to_string())?;
     if table.contains_key("name") {
