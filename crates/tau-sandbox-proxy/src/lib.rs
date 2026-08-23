@@ -82,10 +82,15 @@ mod host_allow_tests {
 
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 #[cfg(unix)]
-use tokio::net::{TcpStream, UnixListener, UnixStream};
+use tokio::net::UnixListener;
+// `UnixStream` is only named explicitly in the unix integration tests below
+// (`accept_loop` gets it via `UnixListener::accept()` type inference, so the
+// non-test unix build never names the type itself).
+#[cfg(all(unix, test))]
+use tokio::net::UnixStream;
 #[cfg(unix)]
 use tokio::task::JoinHandle;
 
@@ -205,27 +210,37 @@ async fn accept_loop(listener: UnixListener, hosts: HostAllow) {
     }
 }
 
-#[cfg(unix)]
-async fn handle_connection(plugin_sock: &mut UnixStream, hosts: &HostAllow) -> std::io::Result<()> {
+/// Serve one proxied connection over any duplex byte stream.
+///
+/// This is the platform-agnostic core shared by the Unix socket
+/// listener ([`spawn_proxy`]) and the Windows named-pipe front end in
+/// `tau-sandbox-windows`. Reads one request head, validates the host
+/// against `hosts`, then tunnels (CONNECT) or forwards (plain HTTP).
+pub async fn handle_connection<S>(conn: &mut S, hosts: &HostAllow) -> std::io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
     let mut buf = [0u8; 4096];
-    let n = plugin_sock.read(&mut buf).await?;
+    let n = conn.read(&mut buf).await?;
     let first_line: &[u8] = match buf[..n].iter().position(|&b| b == b'\n') {
         Some(idx) => &buf[..idx],
         None => &buf[..n],
     };
     if first_line.starts_with(b"CONNECT ") {
-        handle_connect(plugin_sock, &buf[..n], hosts).await
+        handle_connect(conn, &buf[..n], hosts).await
     } else {
-        handle_http(plugin_sock, &buf[..n], hosts).await
+        handle_http(conn, &buf[..n], hosts).await
     }
 }
 
-#[cfg(unix)]
-async fn handle_connect(
-    plugin_sock: &mut UnixStream,
+async fn handle_connect<S>(
+    plugin_sock: &mut S,
     initial: &[u8],
     hosts: &HostAllow,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
     let req = match parse_connect_request(initial) {
         Ok(r) => r,
         Err(_) => {
@@ -266,7 +281,7 @@ async fn handle_connect(
     }
     // Forward the peeked bytes onward, then splice
     remote.write_all(&peek_buf[..n]).await?;
-    let (pr, pw) = plugin_sock.split();
+    let (pr, pw) = tokio::io::split(&mut *plugin_sock);
     let (rr, rw) = remote.split();
     splice_bidirectional(pr, pw, rr, rw, &req.host).await;
     Ok(())
@@ -281,7 +296,6 @@ async fn handle_connect(
 /// debug; on error a `warn!` carries the destination `host` and the io error,
 /// so a mid-stream truncation (reset, upstream drop, partial transfer) is no
 /// longer silent (audit O3).
-#[cfg(unix)]
 async fn splice_bidirectional<CR, CW, RR, RW>(
     mut client_r: CR,
     mut client_w: CW,
@@ -335,7 +349,6 @@ async fn splice_bidirectional<CR, CW, RR, RW>(
 /// True if `host` is an IP literal that is a loopback address
 /// (`127.0.0.0/8` or `::1`). Non-IP hostnames are never loopback.
 /// Matches the loopback semantics of [`validate::validate_hosts`].
-#[cfg(unix)]
 fn is_loopback_host(host: &str) -> bool {
     host.parse::<std::net::IpAddr>()
         .map(|ip| ip.is_loopback())
@@ -346,17 +359,18 @@ fn is_loopback_host(host: &str) -> bool {
 /// rule: a remote (non-loopback) host may only be reached on the well-known
 /// HTTP port 80; loopback hosts may use any port so local servers (e.g. a
 /// local model server on `http://127.0.0.1:11434`) keep working.
-#[cfg(unix)]
 fn http_port_allowed(host: &str, port: u16) -> bool {
     is_loopback_host(host) || port == 80
 }
 
-#[cfg(unix)]
-async fn handle_http(
-    plugin_sock: &mut UnixStream,
+async fn handle_http<S>(
+    plugin_sock: &mut S,
     initial: &[u8],
     hosts: &HostAllow,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
     let req = match parse_http_request(initial) {
         Ok(r) => r,
         Err(_) => {
@@ -404,7 +418,7 @@ async fn handle_http(
     remote.write_all(rewritten.as_bytes()).await?;
     remote.write_all(&initial[req.line_end..]).await?;
     // Splice both directions for the rest of the conversation.
-    let (pr, pw) = plugin_sock.split();
+    let (pr, pw) = tokio::io::split(&mut *plugin_sock);
     let (rr, rw) = remote.split();
     splice_bidirectional(pr, pw, rr, rw, &req.host).await;
     Ok(())
@@ -719,7 +733,6 @@ mod splice_logging_tests {
     }
 }
 
-#[cfg(unix)]
 #[cfg(test)]
 mod port_gate_tests {
     use super::{http_port_allowed, is_loopback_host};
@@ -747,5 +760,66 @@ mod port_gate_tests {
         assert!(is_loopback_host("::1"));
         assert!(!is_loopback_host("8.8.8.8"));
         assert!(!is_loopback_host("example.com"));
+    }
+}
+
+#[cfg(test)]
+mod generic_handler_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // The generic handler must enforce the host allowlist over ANY
+    // duplex byte stream — this is what the Windows named-pipe front
+    // end (tau-sandbox-windows) relies on. tokio::io::duplex proves it
+    // without any OS socket, on every platform.
+    #[tokio::test]
+    async fn connect_to_forbidden_host_gets_403_over_generic_stream() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let hosts = HostAllow::Exact(vec!["allowed.example.com".to_string()]);
+        let task = tokio::spawn(async move { handle_connection(&mut server, &hosts).await });
+        client
+            .write_all(b"CONNECT denied.example.com:443 HTTP/1.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 128];
+        let n = client.read(&mut buf).await.unwrap();
+        let s = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.starts_with("HTTP/1.1 403"), "got: {s}");
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn plaintext_http_to_forbidden_host_gets_403_over_generic_stream() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let hosts = HostAllow::Exact(vec!["allowed.example.com".to_string()]);
+        let task = tokio::spawn(async move { handle_connection(&mut server, &hosts).await });
+        client
+            .write_all(
+                b"GET http://denied.example.com/ HTTP/1.1\r\nHost: denied.example.com\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let mut buf = [0u8; 128];
+        let n = client.read(&mut buf).await.unwrap();
+        let s = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.starts_with("HTTP/1.1 403"), "got: {s}");
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_request_gets_400_over_generic_stream() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let hosts = HostAllow::Any;
+        let task = tokio::spawn(async move { handle_connection(&mut server, &hosts).await });
+        client
+            .write_all(b"NOTAMETHOD / HTTP/1.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0u8; 128];
+        let n = client.read(&mut buf).await.unwrap();
+        assert!(std::str::from_utf8(&buf[..n])
+            .unwrap()
+            .starts_with("HTTP/1.1 400"));
+        task.await.unwrap().unwrap();
     }
 }

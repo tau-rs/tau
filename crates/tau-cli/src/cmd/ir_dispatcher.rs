@@ -46,9 +46,10 @@ use crate::output::Output;
 /// pipeline via [`tau_runtime_core::interpreter::pipeline::run_pipeline`],
 /// threading each step's output to later steps and rendering the LAST
 /// step's output — symmetric with the cwd path's `try_run_pipeline` (see
-/// [`crate::cmd::run`]). Otherwise it picks the first agent in the IR
-/// module's `BTreeMap` (alphabetical order) as the entry per the β.2 v0
-/// contract and runs that single agent's loop unchanged.
+/// [`crate::cmd::run`]). Otherwise it runs the entry agent's single loop,
+/// where the entry is the positional `<agent>` argument resolved against
+/// the module's agents (#623 — matching the dev path's `tau run <agent>`
+/// semantics; an id absent from the module is a hard error).
 ///
 /// Returns `Ok(())` on a `RunOutcome::Completed`, `Err(AgentFailed)` on
 /// `RunOutcome::Failed`, and any other kernel/CLI error as a wrapped
@@ -100,14 +101,25 @@ pub(crate) async fn run_via_ir(
     force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
-    // 1. Pick the entry agent (first BTreeMap key — alphabetical order).
-    let entry_agent_id = module
-        .workflow
-        .agents
-        .keys()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("IR module has no agents"))?
-        .clone();
+    // 1. Resolve the entry agent from the positional `<agent>` argument,
+    //    validated against the module's agents (#623 — the argument used to
+    //    be silently ignored in favour of the alphabetically-first module
+    //    agent, so the plugin backend was configured from the wrong agent's
+    //    `[agents.<id>.config]`).
+    let entry_agent_id = tau_ir::ids::AgentId(args.agent_id.clone());
+    if !module.workflow.agents.contains_key(&entry_agent_id) {
+        let available: Vec<&str> = module
+            .workflow
+            .agents
+            .keys()
+            .map(|a| a.0.as_str())
+            .collect();
+        return Err(anyhow::anyhow!(
+            "agent id {:?} not found in the bundle's IR module (available \
+             agents: {available:?})",
+            args.agent_id
+        ));
+    }
 
     // 2. Load the project config from the cwd (proven byte-clean by the
     //    bundle verify gate). The IR module names agents using the IR's
@@ -148,7 +160,7 @@ pub(crate) async fn run_via_ir(
     let loaded = plugin_loader::load_plugins(
         agent_entry,
         &scope,
-        &project.models,
+        project.effective_models(),
         trace_context,
         host_options,
     )
@@ -235,6 +247,21 @@ pub(crate) async fn run_via_ir(
         .tool_refs
         .iter()
         .filter(|tid| !tools_by_id.contains_key(*tid))
+        // Native tools (`ToolImpl::Native`) are statically-linked bodies
+        // (see `tau-native-tools`), not plugin-installed binaries — their
+        // absence from the plugin runtime is not an install skew. The host
+        // CLI does not dispatch them (symmetric with the cwd path, which
+        // simply omits them from its dispatcher); an actual call at run
+        // time still surfaces as `ForwardingDispatcher`'s unknown-ToolId
+        // error. Before #623 this exemption was masked: the entry agent
+        // was the alphabetically-first module agent, which in the fixtures
+        // carried no tool_refs.
+        .filter(|tid| {
+            !matches!(
+                module.workflow.tools.get(*tid).map(|t| &t.impl_),
+                Some(tau_ir::ToolImpl::Native { .. })
+            )
+        })
         .collect();
     if !missing.is_empty() {
         let names: Vec<&str> = missing.iter().map(|t| t.0.as_str()).collect();
@@ -349,24 +376,21 @@ pub(crate) async fn run_via_ir(
     //    step's output); a bundle with NO pipeline keeps the
     //    single-entry-agent `run_ir` path below BYTE-FOR-BYTE unchanged.
     if module.workflow.pipeline.is_some() {
-        // The id of the LAST NON-CHECK pipeline step — its stored output is
-        // the run's final result. Trailing `StepRun::Check` steps (lowered
-        // from `[goals.*]` / `[deliverables.*]`) evaluate postconditions but
-        // store NO output, so rendering one would hit the "no output" guard
-        // even when all checks pass — skip them and render the last
-        // output-producing step. The parser rejects an empty pipeline (see
-        // `tau_pkg`), but guard anyway rather than index blindly.
+        // The id of the LAST NON-CHECK, NON-SUSPEND pipeline step — its
+        // stored output is the run's final result. Trailing `StepRun::Check`
+        // steps (lowered from `[goals.*]` / `[deliverables.*]`) evaluate
+        // postconditions but store NO output, so rendering one would hit the
+        // "no output" guard even when all checks pass. `Suspend` likewise
+        // records no output. `Pipeline::final_leaf_step_id` skips both and
+        // renders the last output-producing step. The parser rejects an
+        // empty pipeline (see `tau_pkg`), but guard anyway rather than index
+        // blindly.
         let last_step_id = module
             .workflow
             .pipeline
             .as_ref()
-            .and_then(|p| {
-                p.steps
-                    .iter()
-                    .rev()
-                    .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
-            })
-            .map(|s| s.id.0.clone())
+            .and_then(|p| p.final_leaf_step_id())
+            .map(|id| id.0.clone())
             .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
 
         let store =
@@ -938,6 +962,44 @@ fn mcp_capability_plan(
     Ok(CapabilityPlan::new(caps, None, None))
 }
 
+/// Per-server-tool narrowed authority (execution-trace TUI spec §12.3).
+///
+/// `Some(effective)` iff the entry's meet-clamped [`CapabilityPlan`]
+/// narrows this tool's declared `net.http` caps — i.e. the declared net
+/// caps are not a subset of the plan's. The effective set is the tool's
+/// non-net declared caps plus `meet(declared_net, plan_net)` (which may
+/// contain no net cap at all after a fail-closed empty meet — still a
+/// clamp; the kernel renders it `none`). `None` = not narrowed: no net
+/// caps declared, ungoverned plan, or the ceiling already covers the
+/// declared hosts. Only hosts narrow today — the `[allow.mcp]` registry
+/// is an any-method host ceiling — but the comparison spans full net
+/// caps so a method-carrying ceiling needs no rework here.
+fn tool_effective_capabilities(
+    declared: &[tau_domain::Capability],
+    plan: &CapabilityPlan,
+) -> Option<Vec<tau_domain::Capability>> {
+    let (declared_net, declared_rest): (Vec<tau_domain::Capability>, Vec<tau_domain::Capability>) =
+        declared
+            .iter()
+            .cloned()
+            .partition(|c| matches!(c, tau_domain::Capability::Network(_)));
+    if declared_net.is_empty() {
+        return None;
+    }
+    let plan_net: Vec<tau_domain::Capability> = plan
+        .capabilities
+        .iter()
+        .filter(|c| matches!(c, tau_domain::Capability::Network(_)))
+        .cloned()
+        .collect();
+    if tau_domain::capability_subset(&declared_net, &plan_net).is_ok() {
+        return None;
+    }
+    let mut effective = declared_rest;
+    effective.extend(tau_domain::meet(&declared_net, &plan_net));
+    Some(effective)
+}
+
 /// Boot the MCP runtime: per-entry handshake + drift check +
 /// `WiredHostHandlers` + inbound dispatch + `McpBackedTool` registration.
 ///
@@ -1019,11 +1081,13 @@ pub(crate) async fn setup_mcp_runtime(
         // Per server-tool in the contract, register one McpBackedTool.
         for st in &arc_client.contract().tools {
             let ir_tool_id = tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
+            let effective = tool_effective_capabilities(&st.caps, &plan);
             let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
                 ir_tool_id.0.clone(),
                 arc_client.clone(),
                 st.name.clone(),
                 st.caps.clone(),
+                effective,
                 st.input_schema.0.clone(),
                 st.description.clone().unwrap_or_default(),
             );
@@ -1120,8 +1184,8 @@ mod sandbox_plan_tests {
     use std::sync::Arc;
 
     use super::{
-        mcp_capability_plan, setup_mcp_runtime, DynLlmBackend, LockFile, LockedMcpEntry,
-        RuntimeError,
+        mcp_capability_plan, setup_mcp_runtime, tool_effective_capabilities, DynLlmBackend,
+        LockFile, LockedMcpEntry, RuntimeError,
     };
 
     fn cap(json: serde_json::Value) -> Capability {
@@ -1312,6 +1376,89 @@ hosts = ["api.weather.com"]
             .expect("net cap present");
         let net_json = serde_json::to_value(net).expect("serialize");
         assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn tool_without_net_caps_is_never_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(
+            serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}),
+        )];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn tool_covered_by_plan_is_not_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        // This tool only ever declared the allowed host — nothing narrowed.
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com"],
+        }))];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn narrowed_tool_reports_effective_with_clamped_hosts() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let fs = cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}));
+        let declared = vec![
+            fs.clone(),
+            cap(serde_json::json!({
+                "kind": "net.http",
+                "hosts": ["api.weather.com", "evil.example"],
+            })),
+        ];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("narrowed → Some");
+        // Non-net declared caps pass through untouched.
+        assert!(effective.contains(&fs));
+        // Exactly one net cap, meet-clamped to the ceiling host.
+        let nets: Vec<&Capability> = effective
+            .iter()
+            .filter(|c| matches!(c, Capability::Network(_)))
+            .collect();
+        assert_eq!(nets.len(), 1, "one clamped net cap: {effective:?}");
+        let net_json = serde_json::to_value(nets[0]).expect("serialize");
+        assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn empty_meet_reports_effective_without_net_caps() {
+        // The plan dropped the disjoint net cap entirely (fail-closed) —
+        // the tool is clamped to zero net authority, which must surface as
+        // Some(effective-without-net), not None (kernel renders `none`).
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("clamped → Some");
+        assert!(
+            !effective
+                .iter()
+                .any(|c| matches!(c, Capability::Network(_))),
+            "no net authority survives: {effective:?}"
+        );
     }
 }
 

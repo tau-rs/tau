@@ -154,6 +154,7 @@
 - [ADR-0065 — Unknown-input policy: strict authoring surfaces, versioned interchange](decisions/0065-unknown-input-policy.md)
 - [ADR-0066 — Guest fs-effect descriptor resolution: preopen plumbing, dual cfg, absence-denial](decisions/0066-guest-fs-effect-descriptor-resolution.md)
 - [ADR-0067 — Windows AppContainer adapter — Phase 2 (Strict-tier enforcement)](decisions/0067-sandbox-windows-appcontainer-phase2.md)
+- [ADR-0068 — Wasm guest executes IR control-flow in-guest](decisions/0068-wasm-guest-control-flow.md)
 
 # Retrospectives
 

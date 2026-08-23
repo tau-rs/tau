@@ -12,27 +12,15 @@
 //!   IS the consent) produces a bundle carrying the Governed verdict,
 //! - execution: the pipeline (triage → Branch(route) → Loop(review) →
 //!   report) runs end to end via `tau run` and via `tau build` +
-//!   `tau run --bundle` — today on an ungoverned variant derived from the
-//!   same fixture, because of #620 (below),
+//!   `tau run --bundle`, governed (no flags — #620 fixed the run-path
+//!   alias resolution via `ProjectConfig::effective_models()`) AND on an
+//!   ungoverned variant (`ungoverned_variant()` — the SAME pipeline with
+//!   `[allow.models.default]` rewritten to `[models]`, driven with
+//!   `--allow-ungoverned` to keep that escape hatch covered),
 //! - wasm: `tau build --target wasm-guest` REFUSES the workflow at
 //!   feature-fit (ADR-0059 — the guest drives `run_ir_streaming`, which has
 //!   no control-flow execution path; #621 tracks guest control-flow). The
 //!   refusal IS part of the demo: enforcement happens at build time.
-//!
-//! ## #620: governed projects cannot `tau run` yet
-//!
-//! ADR-0057 §3 forces model aliases under `[allow.models]` (top-level
-//! `[models]` is rejected when `[allow]` is present), but the run-path
-//! plugin loader resolves aliases from `project.models` only
-//! (`cmd/plugin_loader.rs`), so EVERY governed project fails `tau run` with
-//! `model alias ... absent from [models]`. Until that lands:
-//! - `north_star_governed_dev_run_is_blocked_by_model_alias_bug` PINS the
-//!   broken behavior (delete it when #620 is fixed),
-//! - `north_star_runs_governed_in_dev` / `north_star_governed_bundle_roundtrip`
-//!   carry the intended behavior under `#[ignore]` (un-ignore them then),
-//! - `north_star_pipeline_executes_in_dev` / `..._bundle_roundtrip` prove
-//!   Branch+Loop execution in CI today via `ungoverned_variant()` — the
-//!   SAME pipeline with `[allow.models.default]` rewritten to `[models]`.
 //!
 //! ## Control-flow proof without inspecting internals
 //!
@@ -43,6 +31,13 @@
 //! ran), so a completed run proves the Branch arm and the Loop body both
 //! executed. The loop's `until` matches "APPROVED" in the canned text —
 //! exhaustion (max_iters without the predicate holding) would hard-error.
+//!
+//! Since #623 the fixture ALSO witnesses entry-agent resolution: only the
+//! entry agent (`triage`) carries the marker canned text; every other
+//! agent's `[agents.<id>.config]` is a marker-free decoy. The backend is
+//! configured from the entry agent, so a bundle run that regressed to the
+//! alphabetically-first agent (`oncall`) would replay the decoy, take the
+//! branch's otherwise-arm, exhaust the loop, and fail.
 //!
 //! Harness mirrors `cmd_run_bundle_pipeline.rs`: echo-llm scaffold
 //! (.tau/config.toml, package manifest, schema-v6 lockfile written to BOTH
@@ -68,8 +63,9 @@ fn fixture_toml(name: &str) -> String {
 
 /// Derive the ungoverned-but-otherwise-identical variant of the governed
 /// fixture: strip the `[allow]` ceiling + `[allow.tools]` registration and
-/// move the model alias back to top-level `[models]`. Execution witness for
-/// the SAME pipeline while #620 blocks governed `tau run`.
+/// move the model alias back to top-level `[models]`. Keeps the
+/// `--allow-ungoverned` + `[models]` path witnessed on the SAME pipeline
+/// alongside the governed tests.
 fn ungoverned_variant(toml: &str) -> String {
     let ceiling = "[allow]\n\"fs.read\" = { paths = [\"/data/incidents/**\"] }\n";
     let models = "[allow.models.default]\nbackend = \"echo-llm\"\nmodel = \"claude-haiku-4-5\"\n";
@@ -304,10 +300,11 @@ fn north_star_wasm_guest_build_is_refused_at_feature_fit() {
         .stderr(predicate::str::contains("Loop"));
 }
 
-/// Dev path, execution witness (see module docs — governed `tau run` is
-/// blocked by #620, so this drives the ungoverned variant of the SAME
-/// pipeline): triage → Branch(route)/then → Loop(review) → report, exit 0,
-/// pipeline-shaped completed outcome carrying the final step's output.
+/// Dev path, execution witness on the ungoverned variant of the SAME
+/// pipeline (keeps `--allow-ungoverned` + `[models]` covered; the governed
+/// twin is `north_star_runs_governed_in_dev`): triage → Branch(route)/then
+/// → Loop(review) → report, exit 0, pipeline-shaped completed outcome
+/// carrying the final step's output.
 #[test]
 fn north_star_pipeline_executes_in_dev() {
     let dir = setup_project(&ungoverned_variant(&fixture_toml("north-star")));
@@ -340,9 +337,10 @@ fn north_star_pipeline_executes_in_dev() {
     assert_completed_pipeline_outcome(&String::from_utf8(output.stdout).unwrap());
 }
 
-/// Artifact path, execution witness (ungoverned variant while #620 blocks
-/// the governed roundtrip): `tau build` + `tau run --bundle` replay the
-/// same Branch+Loop pipeline to the same outcome.
+/// Artifact path, execution witness on the ungoverned variant (governed
+/// twin: `north_star_governed_bundle_roundtrip`): `tau build` +
+/// `tau run --bundle` replay the same Branch+Loop pipeline to the same
+/// outcome.
 #[test]
 fn north_star_pipeline_bundle_roundtrip() {
     let dir = setup_project(&ungoverned_variant(&fixture_toml("north-star")));
@@ -386,40 +384,9 @@ fn north_star_pipeline_bundle_roundtrip() {
     assert_completed_pipeline_outcome(&String::from_utf8(output.stdout).unwrap());
 }
 
-/// PINS #620: a governed project (model aliases under `[allow.models]`,
-/// as ADR-0057 §3 mandates) cannot `tau run` because the plugin loader
-/// resolves aliases from `[models]` only. When #620 is fixed this test
-/// FAILS — delete it and un-ignore the two `#[ignore]`d tests below.
+/// Dev-path governed run (#620): the governed fixture runs WITHOUT
+/// `--allow-ungoverned` and renders the final leaf step's output.
 #[test]
-fn north_star_governed_dev_run_is_blocked_by_model_alias_bug() {
-    let dir = setup_project(&fixture_toml("north-star"));
-
-    let output = AssertCmd::cargo_bin("tau")
-        .unwrap()
-        .args(["run", "triage", "coolant alarm"])
-        .current_dir(dir.path())
-        .env("TAU_HOME", dir.path().join("global"))
-        .env("TAU_TESTING_ALLOW_MOCK_SANDBOX", "1")
-        .output()
-        .unwrap();
-
-    assert!(
-        !output.status.success(),
-        "expected the governed dev run to fail while #620 is open; if it \
-         succeeded, #620 is fixed — delete this test and un-ignore \
-         north_star_runs_governed_in_dev / north_star_governed_bundle_roundtrip"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("absent from [models]"),
-        "expected the #620 model-alias error; got stderr: {stderr}"
-    );
-}
-
-/// INTENDED dev-path behavior once #620 lands: the governed fixture runs
-/// WITHOUT `--allow-ungoverned` and renders the final leaf step's output.
-#[test]
-#[ignore = "blocked by #620: governed projects cannot tau run (plugin loader ignores [allow.models])"]
 fn north_star_runs_governed_in_dev() {
     let dir = setup_project(&fixture_toml("north-star"));
 
@@ -441,10 +408,9 @@ fn north_star_runs_governed_in_dev() {
     assert_completed_pipeline_outcome(&String::from_utf8(output.stdout).unwrap());
 }
 
-/// INTENDED artifact-path behavior once #620 lands: governed build +
-/// governed bundle run, no flags, same outcome.
+/// Artifact-path governed run (#620): governed build + governed bundle
+/// run, no flags, same outcome.
 #[test]
-#[ignore = "blocked by #620: governed projects cannot tau run (plugin loader ignores [allow.models])"]
 fn north_star_governed_bundle_roundtrip() {
     let dir = setup_project(&fixture_toml("north-star"));
     let tau_home = dir.path().join("global");

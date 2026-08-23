@@ -2918,6 +2918,24 @@ impl ProjectConfig {
         unchecked.validate()
     }
 
+    /// The effective model-alias table: `[allow.models]` when a
+    /// constitution is declared, else the top-level `[models]`.
+    ///
+    /// ADR-0057 §3 makes `[allow.models]` the sole home for aliases in a
+    /// governed project — [`UncheckedProjectConfig::validate`] rejects a
+    /// coexisting `[models]` — so at most one of the two tables is
+    /// populated and this selection equals the `[models] ∪ [allow.models]`
+    /// union that `validate_models` resolves references against. Every
+    /// alias lookup outside validation (plugin loading, agent-definition
+    /// building, `tau check` probes) MUST go through this accessor rather
+    /// than reading `self.models` directly (#620).
+    pub fn effective_models(&self) -> &BTreeMap<String, ModelEntry> {
+        match &self.allow {
+            Some(allow) => &allow.models,
+            None => &self.models,
+        }
+    }
+
     /// Load and validate from a path. Convenience wrapper around the
     /// deserialize-then-validate pipeline.
     pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, ProjectConfigError> {
@@ -5525,6 +5543,51 @@ fast = { backend = "anthropic", model = "claude-haiku-4-5" }
         let allow = cfg.allow.expect("allow present");
         assert_eq!(allow.ceiling.len(), 1);
         assert_eq!(allow.models["fast"].model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn effective_models_selects_allow_models_when_governed() {
+        let governed = r#"
+packages = ["anthropic@^1"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(governed)
+            .unwrap()
+            .validate()
+            .expect("validate");
+        assert!(cfg.models.is_empty(), "governed: top-level [models] empty");
+        assert_eq!(
+            cfg.effective_models()["fast"].backend,
+            "anthropic",
+            "governed: aliases resolve via [allow.models]"
+        );
+
+        let ungoverned = r#"
+packages = ["anthropic@^1"]
+
+[project]
+name = "demo"
+
+[models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(ungoverned)
+            .unwrap()
+            .validate()
+            .expect("validate");
+        assert_eq!(
+            cfg.effective_models()["fast"].backend,
+            "anthropic",
+            "ungoverned: aliases resolve via [models]"
+        );
     }
 
     #[test]
