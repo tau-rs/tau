@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["IngestError","SpanKind","SpanStatus"],"fn":["parse_line"],"struct":["Span","TraceModel"]};

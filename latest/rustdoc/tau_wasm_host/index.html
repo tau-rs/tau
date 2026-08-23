@@ -1,0 +1,56 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="β.7.5 wasm host — a std `wasmtime` embedder for the `tau-wasm-guest` WASI 0.2 component."><title>tau_wasm_host - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="tau_wasm_host" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tau_wasm_host</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tau_wasm_host/index.html">tau_<wbr>wasm_<wbr>host</a><span class="version">0.0.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tau_<wbr>wasm_<wbr>host</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tau_wasm_host/lib.rs.html#1-655">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>β.7.5 wasm host — a std [<code>wasmtime</code>] embedder for the <code>tau-wasm-guest</code>
+WASI 0.2 component.</p>
+<p>The guest (built for <code>wasm32-wasip2</code>, see the <code>tau-wasm-guest</code> crate)
+exports <code>run(prompt) -&gt; result&lt;string, string&gt;</code> from the <code>tau:host/runner</code>
+world and imports four host ports it cannot satisfy in-wasm:</p>
+<ul>
+<li><code>complete(request-json) -&gt; result&lt;string, string&gt;</code> — delegated
+inference (credentials live host-side, β.5).</li>
+<li><code>now-millis() -&gt; u64</code> — wall clock.</li>
+<li><code>next-u64() -&gt; u64</code> — randomness.</li>
+<li><code>emit-event(event-json: string)</code> — streams one <code>RunEvent</code> at a time
+(fire-and-forget; see <a href="fn.run_component.html" title="fn tau_wasm_host::run_component"><code>run_component</code></a>’s return value).</li>
+</ul>
+<p>This crate offers those imports two implementations, through one seam
+(<a href="trait.EmbedPorts.html" title="trait tau_wasm_host::EmbedPorts"><code>embed::EmbedPorts</code></a>): a <strong>deterministic</strong> one for conformance —
+<a href="fn.run_component.html" title="fn tau_wasm_host::run_component"><code>run_component</code></a> / <a href="fn.run_component_with_caps.html" title="fn tau_wasm_host::run_component_with_caps"><code>run_component_with_caps</code></a>, where time is a
+fixed-step counter, randomness is a seeded SplitMix64 PRNG, and inference
+replays a caller-supplied queue of canned <code>CompletionResponse</code> JSON
+strings (cassette-style), so the same <code>(component, prompt, llm_responses)</code> triple always yields the same bytes (the property β.6
+conformance / <code>WasmProfile</code> depends on) — and a caller-supplied one for
+embedding products (<a href="fn.run_component_with_ports.html" title="fn tau_wasm_host::run_component_with_ports"><code>embed::run_component_with_ports</code></a>, EPIC 7.2), where
+the product owns the clock, entropy, and LLM client.</p>
+<p><a href="fn.run_component.html" title="fn tau_wasm_host::run_component"><code>run_component</code></a> and <a href="fn.run_component_with_caps.html" title="fn tau_wasm_host::run_component_with_caps"><code>run_component_with_caps</code></a> instantiate the guest,
+drive <code>run</code>, and hand back the guest’s payload (an empty sentinel —
+events flow via <code>emit-event</code>) plus the <code>RunEvent</code> JSON strings streamed
+via <code>emit-event</code>, in order. <a href="fn.run_component_with_ports.html" title="fn tau_wasm_host::run_component_with_ports"><code>embed::run_component_with_ports</code></a> follows
+the same shape but returns only the payload — events reach the caller
+live through <code>EmbedPorts::on_event</code> instead of being buffered. <strong><code>Ok</code> from
+any of these three means the guest’s <code>run</code> returned its <code>ok</code> arm — it
+does NOT mean the workflow succeeded.</strong> Once baked IR decodes, <code>run</code>
+always reaches its <code>ok</code> arm; a mid-run failure (e.g. an LLM error) is
+reported as a <code>RunEvent::FatalError</code> on the event stream, not as an
+<code>Err</code> here. <code>Err</code> is reserved for load/instantiate/trap failures and the
+guest’s own load-time error arm (malformed IR before execution starts).
+Callers that care whether the run actually completed must watch for a
+terminal <code>RunEvent::RunCompleted</code> (see <code>crates/tau-wasm-embed-example</code>’s
+<code>completed</code> flag for the pattern).</p>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="embed/index.html" title="mod tau_wasm_host::embed">embed</a></dt><dd>Curated Variant A embedding surface (EPIC 7.2).</dd><dt><a class="mod" href="tau/index.html" title="mod tau_wasm_host::tau">tau</a></dt></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.EgressPolicy.html" title="struct tau_wasm_host::EgressPolicy">Egress<wbr>Policy</a></dt><dd>Network egress policy folded across a component’s allow-bounded caps,
+sourced from the canonical <code>resolve_wasi_config</code> output. Consulted by the
+<code>WasiHttpHooks::send_request</code> override before any outgoing request is
+sent.</dd><dt><a class="struct" href="struct.Runner.html" title="struct tau_wasm_host::Runner">Runner</a></dt><dd>Auto-generated bindings for an instance a component which
+implements the world <code>runner</code>.</dd><dt><a class="struct" href="struct.RunnerIndices.html" title="struct tau_wasm_host::RunnerIndices">Runner<wbr>Indices</a></dt><dd>Auto-generated bindings for index of the exports of
+<code>runner</code>.</dd><dt><a class="struct" href="struct.RunnerPre.html" title="struct tau_wasm_host::RunnerPre">Runner<wbr>Pre</a></dt><dd>Auto-generated bindings for a pre-instantiated version of a
+component which implements the world <code>runner</code>.</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.WasmHostError.html" title="enum tau_wasm_host::WasmHostError">Wasm<wbr>Host<wbr>Error</a></dt><dd>Errors surfaced by <a href="fn.run_component.html" title="fn tau_wasm_host::run_component"><code>run_component</code></a>, <a href="fn.run_component_with_caps.html" title="fn tau_wasm_host::run_component_with_caps"><code>run_component_with_caps</code></a>, and
+<a href="fn.run_component_with_ports.html" title="fn tau_wasm_host::run_component_with_ports"><code>embed::run_component_with_ports</code></a>. <code>thiserror</code> at the crate boundary;
+<code>wasmtime</code>/<code>serde_json</code> failures are wrapped, never leaked as <code>anyhow</code>.
+None of these variants cover a mid-run workflow failure — that surfaces
+as a <code>RunEvent::FatalError</code> on the event stream while this crate still
+returns <code>Ok</code> (see the module docs above).</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.EmbedPorts.html" title="trait tau_wasm_host::EmbedPorts">Embed<wbr>Ports</a></dt><dd>The four host functions a product supplies to run a tau component —
+the Rust face of the <code>tau:host/runner</code> WIT imports (EPIC 7.2).</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.run_component.html" title="fn tau_wasm_host::run_component">run_<wbr>component</a></dt><dd>Determinism-conformance entry: no capabilities, so no WASI grants.
+Returns the same <code>(payload, emitted)</code> pair as <a href="fn.run_component_with_caps.html" title="fn tau_wasm_host::run_component_with_caps"><code>run_component_with_caps</code></a>.</dd><dt><a class="fn" href="fn.run_component_with_caps.html" title="fn tau_wasm_host::run_component_with_caps">run_<wbr>component_<wbr>with_<wbr>caps</a></dt><dd>Load <code>wasm_bytes</code> as a component, satisfy the four <code>tau:host/host</code> imports
+with deterministic stubs, instantiate it under a determinism <code>Config</code>,
+and drive the exported <code>run(prompt)</code>.</dd><dt><a class="fn" href="fn.run_component_with_ports.html" title="fn tau_wasm_host::run_component_with_ports">run_<wbr>component_<wbr>with_<wbr>ports</a></dt><dd>Variant A embedding entry (EPIC 7.2): run a built tau component with
+caller-supplied <a href="trait.EmbedPorts.html" title="trait tau_wasm_host::EmbedPorts"><code>EmbedPorts</code></a>. Events reach <code>ports.on_event</code> live, one
+serialized <code>RunEvent</code> per call; the <code>Ok</code> value is the guest’s payload
+sentinel (empty today, reserved for forward-compat).</dd></dl></section></div></main></body></html>
