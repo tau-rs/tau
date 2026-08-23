@@ -3046,8 +3046,49 @@ impl ProjectConfig {
         unchecked.validate()
     }
 
-    /// Load and validate from a path. Convenience wrapper around the
-    /// deserialize-then-validate pipeline.
+    /// Parse + validate with a project root, enabling `[dirs]` scanning.
+    ///
+    /// When `[dirs]` is declared, scans `project_root` for directory-based
+    /// agent/tool definitions (ADR-0067) and merges them into the inline
+    /// `[agents.*]`/`[tools.*]` tables before validation. A definition name
+    /// present in both the inline table and a scanned directory is a hard
+    /// error ([`ProjectConfigError::DuplicateDefinition`]) — dirs and inline
+    /// tables must not disagree about identity.
+    pub fn parse_str_at(
+        toml_str: &str,
+        project_root: &std::path::Path,
+    ) -> Result<Self, ProjectConfigError> {
+        let mut unchecked: UncheckedProjectConfig =
+            toml::from_str(toml_str).map_err(|source| ProjectConfigError::ParseStr { source })?;
+        if let Some(dirs) = unchecked.dirs.clone() {
+            let scanned = crate::project::dirs::scan_dirs(project_root, &dirs)?;
+            for (name, (agent, file)) in scanned.agents {
+                if unchecked.agents.contains_key(&name) {
+                    return Err(ProjectConfigError::DuplicateDefinition {
+                        kind: "agent",
+                        name,
+                        file: file.display().to_string(),
+                    });
+                }
+                unchecked.agents.insert(name, agent);
+            }
+            for (name, (tool, file)) in scanned.tools {
+                if unchecked.tools.contains_key(&name) {
+                    return Err(ProjectConfigError::DuplicateDefinition {
+                        kind: "tool",
+                        name,
+                        file: file.display().to_string(),
+                    });
+                }
+                unchecked.tools.insert(name, tool);
+            }
+        }
+        unchecked.validate()
+    }
+
+    /// Load and validate from a path. The project root (the manifest's
+    /// parent directory) is passed to [`Self::parse_str_at`], so `[dirs]`
+    /// scanning is available from every `from_path` call site.
     pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, ProjectConfigError> {
         let path = path.as_ref();
         let bytes = std::fs::read_to_string(path).map_err(|source| {
@@ -3060,12 +3101,8 @@ impl ProjectConfig {
                 }
             }
         })?;
-        let unchecked: UncheckedProjectConfig =
-            toml::from_str(&bytes).map_err(|source| ProjectConfigError::Parse {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        unchecked.validate()
+        let project_root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        Self::parse_str_at(&bytes, project_root)
     }
 }
 

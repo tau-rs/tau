@@ -44,10 +44,8 @@ pub fn load_project(path: &Path) -> Result<LoadedProject> {
                 .unwrap_or_else(|| path.to_path_buf())
         };
         let tau_toml = project_root.join("tau.toml");
-        let toml_str = std::fs::read_to_string(&tau_toml)
-            .with_context(|| format!("read {}", tau_toml.display()))?;
-        let project =
-            ProjectConfig::parse_str(&toml_str).map_err(|e| anyhow!("parse tau.toml: {e}"))?;
+        let project = ProjectConfig::from_path(&tau_toml)
+            .map_err(|e| anyhow!("load {}: {e}", tau_toml.display()))?;
         Ok(LoadedProject {
             project_root,
             project,
