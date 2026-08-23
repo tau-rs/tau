@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["TAU_IR"],"fn":["main","run"],"struct":["EchoBackend","ProductDispatcher","SystemClock","XorShiftRandom"]};
