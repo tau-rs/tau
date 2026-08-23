@@ -41,6 +41,7 @@ members = [
     "crates/tau-conformance",
     "crates/tau-wasm-guest",
     "crates/tau-wasm-host",
+    "crates/tau-wasm-embed-example",
     "xtask",
 ]
 exclude = [
