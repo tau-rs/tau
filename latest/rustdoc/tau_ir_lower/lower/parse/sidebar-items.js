@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["durable_entry_to_ir"]};
