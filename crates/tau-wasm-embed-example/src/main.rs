@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,7 +24,7 @@ const USAGE: &str = "usage: tau-wasm-embed-example <component.wasm> [prompt]";
 /// entropy, and a live event sink. A real product supplies its inference
 /// client (credentials stay host-side) and OS entropy here.
 struct ProductPorts {
-    entropy: AtomicU64,
+    entropy: u64,
     events: Arc<AtomicUsize>,
     completed: Arc<AtomicBool>,
 }
@@ -52,11 +52,11 @@ impl EmbedPorts for ProductPorts {
 
     fn next_u64(&mut self) -> u64 {
         // xorshift64* — NOT cryptographic; a real product supplies OS entropy.
-        let mut x = self.entropy.load(Ordering::Relaxed);
+        let mut x = self.entropy;
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
-        self.entropy.store(x, Ordering::Relaxed);
+        self.entropy = x;
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
@@ -108,7 +108,7 @@ fn main() -> ExitCode {
     let events = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicBool::new(false));
     let ports = ProductPorts {
-        entropy: AtomicU64::new(wall_clock_millis() | 1),
+        entropy: wall_clock_millis() | 1,
         events: Arc::clone(&events),
         completed: Arc::clone(&completed),
     };

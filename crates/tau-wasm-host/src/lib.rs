@@ -12,17 +12,32 @@
 //! - `emit-event(event-json: string)` — streams one `RunEvent` at a time
 //!   (fire-and-forget; see [`run_component`]'s return value).
 //!
-//! This crate satisfies those imports with **deterministic** stubs so the
-//! same `(component, prompt, llm_responses)` triple always yields the same
-//! bytes — the property β.6 conformance (`WasmProfile`) depends on. Time is
-//! a fixed-step counter, randomness is a seeded SplitMix64 PRNG, and
-//! inference replays a caller-supplied queue of canned `CompletionResponse`
-//! JSON strings (cassette-style).
+//! This crate offers those imports two implementations, through one seam
+//! ([`embed::EmbedPorts`]): a **deterministic** one for conformance —
+//! [`run_component`] / [`run_component_with_caps`], where time is a
+//! fixed-step counter, randomness is a seeded SplitMix64 PRNG, and inference
+//! replays a caller-supplied queue of canned `CompletionResponse` JSON
+//! strings (cassette-style), so the same `(component, prompt,
+//! llm_responses)` triple always yields the same bytes (the property β.6
+//! conformance / `WasmProfile` depends on) — and a caller-supplied one for
+//! embedding products ([`embed::run_component_with_ports`], EPIC 7.2), where
+//! the product owns the clock, entropy, and LLM client.
 //!
-//! [`run_component`] is the whole public surface: feed it the guest bytes
-//! and it instantiates, drives `run`, and hands back the guest's payload
-//! (an empty sentinel — events flow via `emit-event`) plus the `RunEvent`
-//! JSON strings streamed via `emit-event`, in order.
+//! [`run_component`] and [`run_component_with_caps`] instantiate the guest,
+//! drive `run`, and hand back the guest's payload (an empty sentinel —
+//! events flow via `emit-event`) plus the `RunEvent` JSON strings streamed
+//! via `emit-event`, in order. [`embed::run_component_with_ports`] follows
+//! the same shape but returns only the payload — events reach the caller
+//! live through `EmbedPorts::on_event` instead of being buffered. **`Ok` from
+//! any of these three means the guest's `run` returned its `ok` arm — it
+//! does NOT mean the workflow succeeded.** Once baked IR decodes, `run`
+//! always reaches its `ok` arm; a mid-run failure (e.g. an LLM error) is
+//! reported as a `RunEvent::FatalError` on the event stream, not as an
+//! `Err` here. `Err` is reserved for load/instantiate/trap failures and the
+//! guest's own load-time error arm (malformed IR before execution starts).
+//! Callers that care whether the run actually completed must watch for a
+//! terminal `RunEvent::RunCompleted` (see `crates/tau-wasm-embed-example`'s
+//! `completed` flag for the pattern).
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -143,8 +158,12 @@ impl EmbedPorts for DeterministicPorts {
     }
 }
 
-/// Errors surfaced by [`run_component`]. `thiserror` at the crate boundary;
+/// Errors surfaced by [`run_component`], [`run_component_with_caps`], and
+/// [`embed::run_component_with_ports`]. `thiserror` at the crate boundary;
 /// `wasmtime`/`serde_json` failures are wrapped, never leaked as `anyhow`.
+/// None of these variants cover a mid-run workflow failure — that surfaces
+/// as a `RunEvent::FatalError` on the event stream while this crate still
+/// returns `Ok` (see the module docs above).
 #[derive(Debug, thiserror::Error)]
 pub enum WasmHostError {
     /// The supplied bytes are not a loadable component.
@@ -156,12 +175,18 @@ pub enum WasmHostError {
     /// The guest trapped (panicked / unreachable) while running `run`.
     #[error("guest `run` trapped: {0}")]
     Trap(#[source] anyhow::Error),
-    /// The guest's `run` completed but returned its error arm.
+    /// The guest's `run` completed but returned its error arm (a load-time
+    /// failure, e.g. malformed IR — not a mid-run failure; those are
+    /// `FatalError` events, not this variant).
     #[error("guest `run` returned an error: {0}")]
     Guest(String),
     /// A caller-supplied canned completion response is not valid
     /// `CompletionResponse` JSON. Caught up-front so a malformed cassette
-    /// fails before instantiation rather than mid-run.
+    /// fails before instantiation rather than mid-run. Only reachable
+    /// through the deterministic/cassette entrypoints ([`run_component`],
+    /// [`run_component_with_caps`]) — [`embed::run_component_with_ports`]
+    /// takes live `EmbedPorts` instead of a cassette, so it never produces
+    /// this variant.
     #[error("invalid canned completion response JSON: {0}")]
     InvalidResponse(#[source] serde_json::Error),
     /// Building the WASI context (e.g. a preopen dir failed to open, or a
@@ -362,6 +387,39 @@ pub fn run_component_with_caps(
 /// caller-supplied [`EmbedPorts`]. Events reach `ports.on_event` live, one
 /// serialized `RunEvent` per call; the `Ok` value is the guest's payload
 /// sentinel (empty today, reserved for forward-compat).
+///
+/// **`Ok` does not mean the workflow succeeded** — once baked IR decodes,
+/// the guest's `run` always returns its `ok` arm. A mid-run failure (e.g.
+/// the LLM port erroring) surfaces only as a `RunEvent::FatalError` on the
+/// `on_event` stream; `Err` from this function covers load/instantiate/trap
+/// and the guest's own load-time error arm. To know whether the run actually
+/// completed, watch for a terminal `RunEvent::RunCompleted` on `on_event`
+/// (see `crates/tau-wasm-embed-example`'s `completed` flag for the pattern).
+///
+/// `caps` bounds the WASI authority granted to the component (which
+/// preopens exist, which network egress is allowed); today the only
+/// supported way to obtain a non-empty, meaningfully-scoped `caps` slice is
+/// deserializing it from a package manifest via `tau-pkg` (the curated
+/// `tau_domain::Capability` constructors are behind tau-domain's
+/// test-only `test-fixtures` feature, not part of this crate's public
+/// surface). The shipped example ([`crate`]-level docs;
+/// `crates/tau-wasm-embed-example`) deliberately grants none (`&[]`) — no
+/// fs/net reaches the workflow.
+///
+/// `sandbox_root` is security-relevant: every preopen `caps` authorizes is
+/// resolved *under* this path, so it is the ceiling on what the
+/// component's filesystem grants can reach even before
+/// `caps` narrows further. `Path::new(".")` is only a safe value when
+/// `caps` grants no filesystem access at all — with any fs cap granted, pick
+/// a real sandbox directory.
+///
+/// The component and this host must come from compatible tau versions: the
+/// `complete` port round-trips `tau_ports::llm::CompletionRequest` /
+/// `CompletionResponse` as JSON across the wasm boundary, and neither type
+/// has serde defaults. An older component run against a newer host (or vice
+/// versa) after a field is added fails every `complete` call — reported as a
+/// `FatalError` event carrying a "malformed CompletionRequest" message, not
+/// as an `Err` return.
 pub fn run_component_with_ports(
     wasm_bytes: &[u8],
     prompt: &str,

@@ -550,6 +550,8 @@ jobs:
         run: rustup target add wasm32-wasip2
       - name: wasm lane — roundtrip + fs/http enforcement (runs #[ignore]d tests)
         run: cargo nextest run -p tau-wasm-host --run-ignored all
+      - name: wasm lane — embed_wasm_e2e (runs #[ignore]d tests)
+        run: cargo nextest run -p tau-cli -E 'binary(embed_wasm_e2e)' --run-ignored all
 
   nightly-regression-handler:
     # Opens or updates a rolling issue on cron failure. Skips for PR-
