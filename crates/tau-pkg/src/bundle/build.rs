@@ -616,7 +616,27 @@ pub fn read_prompt_file(
     if !canon.starts_with(&root) {
         return Err(deny("prompt file path escapes the project root"));
     }
-    std::fs::read(&canon)
+    std::fs::read(&canon).map(normalize_crlf)
+}
+
+/// Build-time CRLF normalization, mirroring `tau-ir-lower`'s
+/// `normalize_crlf_bytes` (parse.rs). Applied here — at the single read
+/// point `resolve_agent_prompt_bytes` and the lowering `prompt_file` closure
+/// both go through — so an autocrlf Windows checkout can't desync the
+/// bundle's `system_prompt_sha256` from the IR asset hash: both are computed
+/// over these same normalized bytes.
+fn normalize_crlf(input: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] == b'\r' && input.get(i + 1) == Some(&b'\n') {
+            i += 1; // skip the \r, keep the \n
+            continue;
+        }
+        out.push(input[i]);
+        i += 1;
+    }
+    out
 }
 
 /// SHA-256 of `bytes` as lowercase hex. The single source of truth for
@@ -1224,6 +1244,30 @@ generated_at = "2024-01-01T00:00:00Z"
             .join(outside.path().file_name().unwrap())
             .join("secret.md");
         assert!(read_prompt_file(&escape, t.path()).is_err());
+    }
+
+    #[test]
+    fn read_prompt_file_normalizes_crlf() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("p.md"), b"line one\r\nline two\r\n").unwrap();
+        let bytes = read_prompt_file(std::path::Path::new("p.md"), t.path()).unwrap();
+        assert_eq!(bytes, b"line one\nline two\n");
+    }
+
+    #[test]
+    fn read_prompt_file_crlf_and_lf_hash_equal() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("crlf.md"), b"line one\r\nline two\r\n").unwrap();
+        std::fs::write(t.path().join("lf.md"), b"line one\nline two\n").unwrap();
+
+        let crlf_bytes = read_prompt_file(std::path::Path::new("crlf.md"), t.path()).unwrap();
+        let lf_bytes = read_prompt_file(std::path::Path::new("lf.md"), t.path()).unwrap();
+
+        assert_eq!(
+            sha256_hex(&crlf_bytes),
+            sha256_hex(&lf_bytes),
+            "system_prompt_sha256 must be CRLF-invariant, matching the IR asset hash"
+        );
     }
 
     // Helper: parse a Capability from its serialized kind/field JSON
