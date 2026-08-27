@@ -25,7 +25,7 @@ pub use error::{
     INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, PLUGIN_CONTRACT_VIOLATION,
     PORT_SPECIFIC_ERROR_BASE,
 };
-pub use frame::Frame;
+pub use frame::{Frame, MAX_DECODE_DEPTH};
 pub use framer::{FramedReader, FramedWriter, FramerOptions};
 pub use handshake::{
     meta, HandshakeRequest, HandshakeResponse, MethodSchema, TraceContext, PROTOCOL_VERSION,

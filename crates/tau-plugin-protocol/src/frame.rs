@@ -73,14 +73,54 @@ const TYPE_REQUEST: i64 = 0;
 const TYPE_RESPONSE: i64 = 1;
 const TYPE_NOTIFICATION: i64 = 2;
 
+/// Maximum MessagePack container nesting accepted in a frame body.
+///
+/// Exactly this many nested containers decode; one more yields
+/// [`ProtocolError::BodyTooDeep`].
+///
+/// The decoder recurses per container level, so this is a **stack**
+/// budget spent on behalf of an untrusted plugin, and it is cheap to
+/// spend: one input byte of `0x91` (one-element array) buys one level.
+/// tau pins it here rather than inheriting `rmpv`'s default of 1024,
+/// which is not survivable — measured on this crate, a 1024-deep body
+/// needs 64–128 KiB of stack in a release build, and in a debug build
+/// it overflows a 2 MiB thread stack (tokio's worker default) somewhere
+/// between depth 256 and 384, aborting the process. That made ~1 KiB of
+/// attacker-chosen bytes a host-kill primitive (issue #676).
+///
+/// 128 matches `serde_json`'s recursion limit, so a payload that
+/// survives a JSON hop survives this one.
+pub const MAX_DECODE_DEPTH: usize = 128;
+
+/// Recursion budget handed to `rmpv`.
+///
+/// `rmpv` spends two units per container level, so this is derived from
+/// [`MAX_DECODE_DEPTH`] rather than equal to it. The exact resulting
+/// boundary is pinned by `decode_accepts_nesting_at_the_depth_limit`, so
+/// a change in rmpv's accounting fails a test rather than silently
+/// moving tau's published limit.
+const DECODER_RECURSION_BUDGET: usize = 2 * (MAX_DECODE_DEPTH + 1);
+
 impl Frame {
     /// Decode a frame body (as produced by [`crate::FramedReader`])
     /// into a typed [`Frame`]. Malformed bodies (non-array, wrong
     /// arity, unknown type discriminator, wrong member types) return
-    /// [`ProtocolError::BodyDecodeFailed`].
+    /// [`ProtocolError::BodyDecodeFailed`]; bodies nested deeper than
+    /// [`MAX_DECODE_DEPTH`] return [`ProtocolError::BodyTooDeep`].
+    ///
+    /// # Resource bounds
+    ///
+    /// `body` is untrusted — it arrives from a plugin subprocess. Two
+    /// bounds hold for every input:
+    ///
+    /// * **Stack**: recursion is capped at [`MAX_DECODE_DEPTH`].
+    /// * **Heap**: peak allocation is proportional to `body.len()`, not
+    ///   to any length a container header *declares*. A five-byte
+    ///   `str32` announcing 4 GiB reserves 64 KiB, not 4 GiB. Pinned by
+    ///   `tests/decode_allocation_bound.rs`.
     pub fn decode(body: &[u8]) -> Result<Frame, ProtocolError> {
         let mut cursor = body;
-        let value: Value = rmpv::decode::read_value(&mut cursor).map_err(decode_err)?;
+        let value: Value = read_value_bounded(&mut cursor)?;
 
         let array = match value {
             Value::Array(a) => a,
@@ -231,7 +271,23 @@ fn value_to_bytes(value: &Value) -> Result<Vec<u8>, ProtocolError> {
 /// MessagePack.
 fn bytes_to_value(bytes: &[u8]) -> Result<Value, ProtocolError> {
     let mut cursor = bytes;
-    rmpv::decode::read_value(&mut cursor).map_err(decode_err)
+    read_value_bounded(&mut cursor)
+}
+
+/// `rmpv::decode::read_value` with tau's own recursion cap
+/// ([`MAX_DECODE_DEPTH`]) instead of rmpv's default of 1024, mapping
+/// rmpv's depth error onto the typed [`ProtocolError::BodyTooDeep`].
+///
+/// Every path that turns untrusted bytes into an `rmpv::Value` goes
+/// through here, so the bound cannot be bypassed by reaching a decoder
+/// entry point directly.
+fn read_value_bounded(cursor: &mut &[u8]) -> Result<Value, ProtocolError> {
+    rmpv::decode::read_value_with_max_depth(cursor, DECODER_RECURSION_BUDGET).map_err(|e| match e {
+        rmpv::decode::Error::DepthLimitExceeded => ProtocolError::BodyTooDeep {
+            max: MAX_DECODE_DEPTH,
+        },
+        other => decode_err(other),
+    })
 }
 
 fn value_as_i64(value: &Value) -> Option<i64> {
@@ -417,6 +473,110 @@ mod tests {
             matches!(err, ProtocolError::BodyDecodeFailed(_)),
             "expected BodyDecodeFailed, got {err:?}"
         );
+    }
+
+    /// A container header may declare a length far beyond the bytes that
+    /// actually follow. Decoding must fail with a typed error — never
+    /// reserve capacity for the declared length. Issue #676.
+    ///
+    /// The allocation side of this contract (peak bytes stay
+    /// proportional to the *body* length, not the declared length) is
+    /// asserted in `tests/decode_allocation_bound.rs`.
+    #[test]
+    fn decode_rejects_container_length_beyond_remaining_bytes() {
+        // (name, body): a length prefix announcing up to 4 GiB of
+        // payload, with no payload at all.
+        let cases: [(&str, &[u8]); 7] = [
+            ("array32 len=2^32-1", &[0xdd, 0xff, 0xff, 0xff, 0xff]),
+            ("map32 len=2^32-1", &[0xdf, 0xff, 0xff, 0xff, 0xff]),
+            ("str32 len=2^32-1", &[0xdb, 0xff, 0xff, 0xff, 0xff]),
+            ("bin32 len=2^32-1", &[0xc6, 0xff, 0xff, 0xff, 0xff]),
+            ("ext32 len=2^32-1", &[0xc9, 0xff, 0xff, 0xff, 0xff, 0x01]),
+            ("array16 len=65535", &[0xdc, 0xff, 0xff]),
+            ("str16 len=65535", &[0xda, 0xff, 0xff]),
+        ];
+
+        for (name, body) in cases {
+            let err =
+                Frame::decode(body).expect_err(&format!("{name} unexpectedly decoded to a Frame"));
+            assert!(
+                matches!(err, ProtocolError::BodyDecodeFailed(_)),
+                "{name}: expected BodyDecodeFailed, got {err:?}"
+            );
+        }
+    }
+
+    /// Nesting past [`MAX_DECODE_DEPTH`] is rejected with a typed error.
+    ///
+    /// Before #676 this input reached `rmpv`'s own limit of 1024 instead,
+    /// which is deep enough to **abort the process** with a stack
+    /// overflow: measured at ~6–8 KiB of stack per level in a debug
+    /// build, a 2 MiB thread stack (tokio's worker default) blows
+    /// somewhere between depth 256 and 384. That made ~1 KiB of
+    /// attacker-chosen bytes a host-kill primitive.
+    #[test]
+    fn decode_rejects_nesting_past_the_depth_limit() {
+        // Far past the limit — this is the input that used to abort.
+        let mut body = vec![0x91_u8; 8192];
+        body.push(0xc0);
+
+        let err = Frame::decode(&body).unwrap_err();
+        assert!(
+            matches!(err, ProtocolError::BodyTooDeep { max } if max == MAX_DECODE_DEPTH),
+            "expected BodyTooDeep {{ max: {MAX_DECODE_DEPTH} }}, got {err:?}"
+        );
+    }
+
+    /// The boundary itself: exactly at the limit decodes, one past it
+    /// does not. Guards against an off-by-one when the constant moves.
+    #[test]
+    fn decode_accepts_nesting_at_the_depth_limit() {
+        let at_limit = {
+            let mut b = vec![0x91_u8; MAX_DECODE_DEPTH];
+            b.push(0xc0);
+            b
+        };
+        let past_limit = {
+            let mut b = vec![0x91_u8; MAX_DECODE_DEPTH + 1];
+            b.push(0xc0);
+            b
+        };
+
+        // Just inside the limit the body is structurally fine, so it
+        // fails later (wrong arity / bad discriminator) — not on depth.
+        let err = Frame::decode(&at_limit).unwrap_err();
+        assert!(
+            matches!(err, ProtocolError::BodyDecodeFailed(_)),
+            "just inside the limit, expected a structural error, got {err:?}"
+        );
+
+        let err = Frame::decode(&past_limit).unwrap_err();
+        assert!(
+            matches!(err, ProtocolError::BodyTooDeep { .. }),
+            "one past the limit, expected BodyTooDeep, got {err:?}"
+        );
+    }
+
+    /// The input libFuzzer saved when the `frame_decode` leg crossed its
+    /// RSS limit in CI (run 33085192232, issue #676). It is a
+    /// well-formed-enough notification carrying a deeply nested opaque
+    /// `params` blob; the contract is that `decode` returns normally and
+    /// the blob round-trips. Also lives in the fuzz corpus so the
+    /// nightly keeps executing it.
+    #[test]
+    fn decode_handles_the_ci_oom_artifact() {
+        let body = include_bytes!("../fuzz/corpus/frame_decode/regress_676_ci_oom_artifact");
+
+        let frame = Frame::decode(body).expect("artifact should decode to a notification");
+        let Frame::Notification { method, params } = &frame else {
+            panic!("expected a Notification, got {frame:?}");
+        };
+        assert_eq!(method, "");
+        assert!(!params.is_empty());
+
+        // Re-encoding must not blow the depth bound either — the params
+        // blob came in under it, so it must go back out under it.
+        frame.clone().encode().expect("artifact should re-encode");
     }
 
     #[test]
