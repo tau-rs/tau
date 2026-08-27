@@ -60,14 +60,16 @@ fn project_needing_process_exec_is_refused() {
 }
 
 #[test]
-fn project_using_control_flow_is_refused() {
-    // A `Parallel` pipeline is control-flow; wasm guests drive run_ir_streaming,
-    // not run_pipeline, so `tau build wasm` must refuse it (feature-fit, EPIC 4.2).
-    let err = lower_to_wasm_ir(&fixture("needs-control-flow")).unwrap_err();
+fn project_using_suspend_is_refused() {
+    // ADR-0068 (#621): Branch/Parallel/Loop now execute in-guest via
+    // run_pipeline, so `tau build wasm` accepts them. `Suspend` has no
+    // `SuspensionStore` channel in the guest, so it stays refused
+    // (feature-fit, EPIC 4.2 / ADR-0068).
+    let err = lower_to_wasm_ir(&fixture("needs-suspend")).unwrap_err();
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("feature-fit") && msg.contains("control-flow") && msg.contains("Parallel"),
-        "expected a feature-fit control-flow refusal naming Parallel, got: {msg}"
+        msg.contains("feature-fit") && msg.contains("Suspend"),
+        "expected a feature-fit refusal naming Suspend, got: {msg}"
     );
 }
 

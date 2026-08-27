@@ -158,26 +158,29 @@ $ tau build                   # prints <project>.tau; manifest records verdict "
 within its bound, and the final leaf step's output is rendered as the
 run result.
 
-**Wasm.** `tau build --target wasm-guest` *refuses* the workflow:
+**Wasm.** `tau build --target wasm-guest` now *builds* the workflow:
+[ADR-0068](../decisions/0068-wasm-guest-control-flow.md) (#621) flipped
+`any-wasi-strict` to execute Branch/Parallel/Loop in-guest via
+`run_pipeline`, so this fixture's feature-fit gate passes and the build
+proceeds to compile the wasm guest with the baked IR.
+
+The refusal witness moved to a twin fixture,
+`crates/tau-cli/tests/fixtures/north-star-suspend/tau.toml` — byte-identical
+to this one plus one `suspend:human-signoff` step before `report`:
 
 ```text
-$ tau build --target wasm-guest   # exit 2
-error: ... feature-fit ... control-flow (Branch, Loop) not supported on any-wasi-strict
+$ tau build --target wasm-guest   # (north-star-suspend) exit 2
+error: ... feature-fit ... unsupported by target any-wasi-strict: [Suspend]
 ```
 
-This refusal is part of the demo, not a caveat: the wasm guest drives
-`run_ir_streaming`, which has no control-flow execution path, so the
-build is rejected *before any artifact exists* — the same
-enforce-at-build-time principle as governance. Guest-side control-flow
-execution is tracked in
-[#621](https://github.com/tau-rs/tau/issues/621); when it lands, the
-wasm leg of this same fixture graduates from "refusal asserted" to
-"guest executes the same workflow".
+This refusal is still part of the demo, not a caveat: the wasm guest has
+no `SuspensionStore` channel, so a workflow that suspends is rejected
+*before any artifact exists* — the same enforce-at-build-time principle
+as governance. `Dynamic` regions (EPIC 4.5, pending) are refused the same
+way.
 
 ## Known gaps (tracked, pinned by tests)
 
-- [#621](https://github.com/tau-rs/tau/issues/621) — wasm guest cannot
-  execute Branch/Loop (see above).
 - [#623](https://github.com/tau-rs/tau/issues/623) — `tau run --bundle`
   ignores the positional agent argument and picks the
   alphabetically-first agent as entry; the fixture gives every agent the
@@ -187,8 +190,9 @@ wasm leg of this same fixture graduates from "refusal asserted" to
 
 One fixture now witnesses the whole pitch: a root constitution that
 build-gates capability over-reach (positive and negative), Branch + Loop
-authoring that survives lowering, canonical IR, and a bundle roundtrip,
-and a wasm target that refuses what it cannot yet execute — with every
-remaining gap pinned to an issue by a test that flips when it is fixed.
-Extend *this* fixture when your epic lands a new construct or target;
-don't add a throwaway one.
+authoring that survives lowering, canonical IR, a bundle roundtrip, and a
+wasm target that now builds the same in-guest via `run_pipeline`
+(ADR-0068) — with a Suspend twin still refused where the guest lacks a
+durable channel, and every remaining gap pinned to an issue by a test
+that flips when it is fixed. Extend *this* fixture when your epic lands a
+new construct or target; don't add a throwaway one.

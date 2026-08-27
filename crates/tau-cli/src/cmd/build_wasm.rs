@@ -71,10 +71,11 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
                  before building for wasm.",
             ),
             LowerError::FeatureUnsupported { ref missing, .. } => anyhow::anyhow!(
-                "feature-fit refused for {WASM_TARGET}: wasm guests cannot execute \
-                 control-flow pipeline steps {missing:?} — the guest drives run_ir_streaming, \
-                 which has no run_pipeline path. Flatten the pipeline (remove \
-                 Branch/Parallel/Loop steps) before building for wasm.",
+                "feature-fit refused for {WASM_TARGET}: wasm guests cannot execute IR \
+                 feature(s) {missing:?} — Branch/Parallel/Loop run in-guest via run_pipeline \
+                 (ADR-0068), but Suspend has no SuspensionStore channel and Dynamic is not \
+                 yet executed natively either. Remove Suspend/Dynamic steps before building \
+                 for wasm.",
             ),
             LowerError::WasmFnUnavailable { ref fn_names, .. } => anyhow::anyhow!(
                 "predicate-fit refused for {WASM_TARGET}: no wasm guest execution path for \

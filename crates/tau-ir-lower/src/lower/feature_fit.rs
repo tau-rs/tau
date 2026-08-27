@@ -8,11 +8,12 @@
 //! `supported_features`. **No override flag** — matches the Rust-like
 //! build-time enforcement principle.
 //!
-//! Today the only target that lists no features is `any-wasi-strict`: the wasm
-//! guest drives `run_ir_streaming`, which has no `run_pipeline` control-flow
-//! execution path, so a control-flow workflow (`Branch`/`Parallel`/`Loop`/
-//! `Suspend`) is refused for wasm here. Every native/host target supports all
-//! features, so this check is a no-op for them.
+//! As of ADR-0068 (#621), `any-wasi-strict` lists `[Branch, Parallel, Loop]`:
+//! the wasm guest executes these in-guest via `run_pipeline`. `Suspend` (no
+//! `SuspensionStore` channel in the WIT world) and `Dynamic` (EPIC 4.5
+//! pending) stay absent from `supported_features`, so a workflow using either
+//! is refused for wasm here. Every native/host target supports all features,
+//! so this check is a no-op for them.
 
 use alloc::vec::Vec;
 use tau_domain::IrFeature;
@@ -106,6 +107,20 @@ max_spawns = 1
 max_concurrency = 1
 "#;
 
+    const SUSPEND_TOML: &str = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "a"
+run = "agent:a"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "pause"
+run = "suspend:human"
+"#;
+
     fn parsed(toml: &str) -> Parsed {
         let config = ProjectConfig::parse_str(toml).expect("toml parses");
         parse::parse(&config, &no_prompt_files).expect("parse stage")
@@ -118,22 +133,28 @@ max_concurrency = 1
     }
 
     #[test]
-    fn wasm_target_rejects_control_flow() {
+    fn wasm_target_accepts_branch() {
         let t: TargetTriple = "any-wasi-strict".parse().unwrap();
-        let err = check(&parsed(BRANCH_TOML), &t).expect_err("wasm must refuse control-flow");
-        match err {
-            LowerError::FeatureUnsupported { missing, target } => {
-                assert_eq!(missing, alloc::vec![IrFeature::Branch]);
-                assert_eq!(target, t);
-            }
-            other => panic!("expected FeatureUnsupported, got {other:?}"),
-        }
+        assert!(check(&parsed(BRANCH_TOML), &t).is_ok());
     }
 
     #[test]
     fn wasm_target_accepts_leaf_only_pipeline() {
         let t: TargetTriple = "any-wasi-strict".parse().unwrap();
         assert!(check(&parsed(LEAF_TOML), &t).is_ok());
+    }
+
+    #[test]
+    fn wasm_target_rejects_suspend() {
+        let t: TargetTriple = "any-wasi-strict".parse().unwrap();
+        let err = check(&parsed(SUSPEND_TOML), &t).expect_err("wasm must refuse Suspend");
+        match err {
+            LowerError::FeatureUnsupported { missing, target } => {
+                assert_eq!(missing, alloc::vec![IrFeature::Suspend]);
+                assert_eq!(target, t);
+            }
+            other => panic!("expected FeatureUnsupported, got {other:?}"),
+        }
     }
 
     #[test]

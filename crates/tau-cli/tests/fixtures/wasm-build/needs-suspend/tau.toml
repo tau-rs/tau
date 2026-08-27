@@ -1,0 +1,29 @@
+packages = ["anthropic"]
+
+[project]
+name = "needs-suspend-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.triage]
+display_name = "Triage"
+package = "needs-suspend-wasm@^0.1"
+model = "claude"
+
+[agents.triage.prompt]
+system = "Reply and stop."
+
+# ADR-0068 (#621): Branch/Parallel/Loop now execute in-guest via
+# run_pipeline, so this fixture uses `suspend` instead — the wasm guest has
+# no `SuspensionStore` channel, so `tau build wasm` must still refuse it.
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "pause"
+run = "suspend:human"

@@ -17,10 +17,12 @@
 //!   ungoverned variant (`ungoverned_variant()` — the SAME pipeline with
 //!   `[allow.models.default]` rewritten to `[models]`, driven with
 //!   `--allow-ungoverned` to keep that escape hatch covered),
-//! - wasm: `tau build --target wasm-guest` REFUSES the workflow at
-//!   feature-fit (ADR-0059 — the guest drives `run_ir_streaming`, which has
-//!   no control-flow execution path; #621 tracks guest control-flow). The
-//!   refusal IS part of the demo: enforcement happens at build time.
+//! - wasm: `tau build --target wasm-guest` BUILDS this fixture — ADR-0068
+//!   (#621) flipped `any-wasi-strict` to execute Branch/Parallel/Loop
+//!   in-guest via `run_pipeline`. The build-refusal witness moved to the
+//!   Suspend twin (`tests/fixtures/north-star-suspend/tau.toml`, ONLY
+//!   delta: one `suspend:human-signoff` step before `report`), refused at
+//!   feature-fit because the guest has no `SuspensionStore` channel.
 //!
 //! ## Control-flow proof without inspecting internals
 //!
@@ -276,15 +278,12 @@ fn north_star_builds_governed_bundle() {
     );
 }
 
-/// Wasm path: `tau build --target wasm-guest` refuses the workflow at
-/// feature-fit — Branch/Loop have no execution path in the wasm guest
-/// (`run_ir_streaming`), so the build is rejected BEFORE any artifact
-/// exists (ADR-0059; #621 tracks guest control-flow execution). This runs
-/// the real binary: the refusal happens at lowering, well before any
-/// `cargo build` of the guest, so the test needs no wasm toolchain.
+/// Wasm path: control-flow now executes in-guest (ADR-0068), so the
+/// refusal witness moves to the Suspend twin — the guest has no durable
+/// suspend channel, and feature-fit refuses BEFORE any artifact exists.
 #[test]
 fn north_star_wasm_guest_build_is_refused_at_feature_fit() {
-    let dir = setup_project(&fixture_toml("north-star"));
+    let dir = setup_project(&fixture_toml("north-star-suspend"));
     let tau_home = dir.path().join("global");
     std::fs::create_dir_all(&tau_home).unwrap();
 
@@ -296,8 +295,7 @@ fn north_star_wasm_guest_build_is_refused_at_feature_fit() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("feature-fit"))
-        .stderr(predicate::str::contains("Branch"))
-        .stderr(predicate::str::contains("Loop"));
+        .stderr(predicate::str::contains("Suspend"));
 }
 
 /// Dev path, execution witness on the ungoverned variant of the SAME

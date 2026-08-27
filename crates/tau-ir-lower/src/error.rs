@@ -51,9 +51,11 @@ pub enum LowerError {
     },
 
     /// Feature-fit failure (EPIC 4.2). The workflow uses one or more IR
-    /// execution features the build target cannot run — e.g. any control-flow
-    /// (`Branch`/`Parallel`/`Loop`) for a wasm target, whose guest drives
-    /// `run_ir_streaming` and has no `run_pipeline` control-flow path.
+    /// execution features the build target cannot run — e.g. `Suspend` for a
+    /// wasm target (ADR-0068, #621): `any-wasi-strict` executes
+    /// `Branch`/`Parallel`/`Loop` in-guest via `run_pipeline`, but the guest
+    /// has no `SuspensionStore` channel, and `Dynamic` stays refused pending
+    /// EPIC 4.5.
     #[error("workflow uses IR feature(s) unsupported by target {target}: {missing:?}")]
     FeatureUnsupported {
         /// The features the target does not support.
