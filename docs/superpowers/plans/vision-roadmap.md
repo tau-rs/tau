@@ -166,16 +166,19 @@ today."**
   region whose spawns are lattice-checked at build (`spawn_exceeds_agent`,
   `unknown_spawn_kind`, `region_exceeds_ceiling`, `spawn_exceeds_region`) — see
   [Dynamic regions](../../explanation/dynamic-regions.md). Runtime execution deferred to 4.5.
-- **4.5** **Runtime gate for dynamic regions** (membership + attenuation + bounds counters).
-  **MANDATORY cross-reference task before either 3.4 or 4.5 starts:** resolve the 3.4↔4.5
-  collision — 3.4 *removes* the in-guest wasm gate while 4.5 *adds* a runtime gate; on wasm
-  these interact. The D1-C attenuation handoff also touches this surface — link all three.
-  *Delta:* a dynamic region's runtime spawns are gated against its declared envelope.
+- **4.5** ✅ SHIPPED 2026-08-27 **Runtime gate for dynamic regions** (membership +
+  attenuation + bounds counters). The 3.4↔4.5 wasm collision resolved as divergence, not
+  merge: `tau build --target wasm` rejects any workflow containing a dynamic region at
+  build time (`FeatureUnsupported`), so the guest interpreter never sees one and needs no
+  gate of its own. *Delta:* a user can run a bounded dynamic region: the coordinator
+  spawns store-backed kinds via `agent.<kind>.spawn`, gated by membership + bounds +
+  meet-attenuation — see [Dynamic regions](../../explanation/dynamic-regions.md).
 - **4.6** ~~Conformance~~ **DELETED as a story.** Conformance/parity is in every slice's DoD
   above, never a trailing phase (per slicing-policy.md rule 4).
 
 **Epic DoD:** a user can author + run Branch/Parallel/Loop/Suspend and bounded dynamic regions
-from `tau.toml`; each construct is conformance-checked and its envelope enforced.
+from `tau.toml`; each construct is conformance-checked and its envelope enforced. **Fully met
+as of 4.5 (2026-08-27)** — 4.5 was EPIC 4's last outstanding story.
 
 ## EPIC 5 — Polyglot sourcing + DX  [needs 0,2]
 **Goal:** generated typed SDKs + `tau embed` + golden path + typed React/Angular; no surprises.
