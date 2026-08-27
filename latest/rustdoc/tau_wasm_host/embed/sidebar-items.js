@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Capability","StopReason"],"struct":["CompletionRequest","CompletionResponse","TokenUsage","ToolUse"]};
