@@ -449,3 +449,52 @@ fn north_star_governed_bundle_roundtrip() {
     );
     assert_completed_pipeline_outcome(&String::from_utf8(output.stdout).unwrap());
 }
+
+/// Wasm execution leg (#621 DoD, ADR-0068): the SAME Branch+Loop fixture
+/// builds for wasm AND the guest executes it to the SAME terminal outcome
+/// as the dev leg.
+///
+/// Completion is itself the control-flow witness — `report`'s input
+/// template reads `${steps.escalate.output}` (produced only if the
+/// Branch's then-arm ran) and `${steps.draft.output}` (only if the Loop
+/// body ran), and template resolution hard-errors on unresolved refs. So
+/// a returned payload proves both ran IN-GUEST, via `run_pipeline`.
+///
+/// The payload equals `SENTINEL` — the same value the dev leg asserts as
+/// `final_message` (see `assert_completed_pipeline_outcome`): both paths
+/// render the last leaf step's output through the same contract.
+#[test]
+#[ignore = "builds a wasm component; run with --run-ignored"]
+fn north_star_wasm_guest_executes_same_workflow_same_terminal_outcome() {
+    let dir = setup_project(&fixture_toml("north-star"));
+
+    // Lowering now ADMITS Branch+Loop for any-wasi-strict (the flip this
+    // issue is about); before ADR-0068 this returned FeatureUnsupported.
+    let (_module, ir_bytes) = tau_cli::cmd::build_wasm::lower_to_wasm_ir(dir.path())
+        .expect("wasm lowering admits Branch+Loop (ADR-0068)");
+    let component = common::wasm_component::build_component_with_ir(&ir_bytes);
+
+    // Host cassette stands in for the echo-llm plugin: the guest's
+    // `HostLlmBackend` pops one canned completion per agent turn. Four
+    // agents run (triage, escalate, draft, report); surplus entries stay
+    // unconsumed, and running short would surface as a host error.
+    let response = serde_json::json!({
+        "text": SENTINEL,
+        "tool_uses": [],
+        "stop_reason": "EndTurn",
+        "usage": null,
+    })
+    .to_string();
+    let (payload, _events) = tau_wasm_host::run_component(
+        &component,
+        "incident: coolant temperature rising",
+        vec![response; 8],
+    )
+    .expect("guest executes the Branch+Loop pipeline");
+
+    assert_eq!(
+        payload, SENTINEL,
+        "guest payload must be the last leaf step's output — the same \
+         terminal outcome the dev leg asserts as final_message"
+    );
+}
