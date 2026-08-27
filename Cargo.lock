@@ -5093,6 +5093,7 @@ dependencies = [
  "sha2 0.11.0",
  "tau-domain",
  "tau-ir",
+ "tau-native-tools",
  "tau-pkg",
  "tau-ports",
  "thiserror 2.0.20",
@@ -5480,6 +5481,15 @@ dependencies = [
  "tau-pkg",
  "tau-ports",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "tau-wasm-embed-example"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tau-runtime-core",
+ "tau-wasm-host",
 ]
 
 [[package]]

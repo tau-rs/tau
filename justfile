@@ -55,6 +55,25 @@ lint-domain-featureless:
     cargo clippy -p tau-domain --no-default-features -- -D warnings
     cargo clippy -p tau-domain --no-default-features --features serde -- -D warnings
 
+# Same hole, same crate set: `just lint` never sees tau-ports without `process`,
+# even though the workspace alias is `default-features = false` and the guest
+# links `--no-default-features --features serde`
+# (crates/tau-wasm-guest/Cargo.toml:33). The third shape is the one that was
+# actually broken: `test-fixtures` did not declare its dependency on `process`,
+# so `--no-default-features --features test-fixtures` failed to compile the LIB
+# (E0061 on `SessionContext::new`, E0560 on `WorkingContext.working_dir`, plus a
+# deny-level `unused_imports`) — src/fixtures.rs builds both through
+# `#[cfg(feature = "process")]` API.
+#
+# Lib-only for the same reason as tau-domain above: tau-ports' in-src
+# `#[cfg(test)]` code calls the `process`-gated `SessionContext::new`, so the
+# feature-less test targets do not compile. Tracked in the tau-ports sibling of
+# #647; `--all-targets` goes on all three lines once that lands.
+lint-ports-featureless:
+    cargo clippy -p tau-ports --no-default-features -- -D warnings
+    cargo clippy -p tau-ports --no-default-features --features serde -- -D warnings
+    cargo clippy -p tau-ports --no-default-features --features test-fixtures -- -D warnings
+
 # Measure + gate the wasm-guest bundle size (EPIC 5.6) — mirrors the CI step in
 # the `runtime-core-no-std` job. Reports the shipped-component size (wasm-tools)
 # + the wasm-metadce tree-shaken floor (Binaryen, optional), and fails if the

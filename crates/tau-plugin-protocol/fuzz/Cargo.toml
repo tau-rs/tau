@@ -28,3 +28,12 @@ panic = "abort"
 
 [profile.dev]
 panic = "abort"
+
+[workspace]
+# Empty workspace block: cargo treats this manifest as its own workspace root
+# so it does not try to attach to the outer workspace. The root Cargo.toml
+# `exclude` entry is NOT sufficient on its own for a package nested under a
+# member crate directory — without this table every `cargo fuzz` invocation
+# dies with "current package believes it is in a workspace when it is not",
+# which is why Fuzz nightly failed at build for months. Mirrors the marker in
+# crates/tau-mcp-tokio/tests/fixtures/mock-mcp-server/Cargo.toml.
