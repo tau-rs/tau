@@ -22,11 +22,13 @@ pub enum CheckCategory {
     McpContracts,
     /// `[allow]` constitution enforcement (ADR-0057).
     Governance,
+    /// `[dirs]` gitignored-definition lint (ADR-0067).
+    Dirs,
 }
 
 impl CheckCategory {
-    /// All 8 categories in stable order.
-    pub const ALL: [Self; 8] = [
+    /// All 9 categories in stable order.
+    pub const ALL: [Self; 9] = [
         Self::Config,
         Self::Lockfile,
         Self::Packages,
@@ -35,6 +37,7 @@ impl CheckCategory {
         Self::Skills,
         Self::McpContracts,
         Self::Governance,
+        Self::Dirs,
     ];
 
     /// Display name used in CLI output and JSON `category` fields.
@@ -48,6 +51,7 @@ impl CheckCategory {
             Self::Skills => "skills",
             Self::McpContracts => "mcp_contracts",
             Self::Governance => "governance",
+            Self::Dirs => "dirs",
         }
     }
 

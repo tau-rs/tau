@@ -2,7 +2,7 @@
 //!
 //! See spec at `docs/superpowers/specs/2026-05-18-tau-check-design.md`.
 //!
-//! Bare `tau check` runs all 8 categories; subcommands run one each.
+//! Bare `tau check` runs all 9 categories; subcommands run one each.
 //! Output: human (default), `--json` (JSONL), `--sarif` (SARIF 2.1.0).
 //! Exit codes: 0 clean / 2 fixable / 3 needs-setup / 64 usage / 70 internal.
 
@@ -94,6 +94,7 @@ pub async fn run(args: crate::cli::CheckArgs) -> Result<()> {
         Some("skills") => vec![CheckCategory::Skills],
         Some("mcp-contracts") => vec![CheckCategory::McpContracts],
         Some("governance") => vec![CheckCategory::Governance],
+        Some("dirs") => vec![CheckCategory::Dirs],
         Some(other) => anyhow::bail!("unknown check category: {other}"),
     };
 

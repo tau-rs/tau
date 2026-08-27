@@ -411,6 +411,35 @@ mod tests {
         }
     }
 
+    /// `definition_files` is the only entry point `tau check dirs` uses
+    /// (Task 10); it had no direct coverage before this test — it was only
+    /// exercised transitively via `scan_dirs`. Its only non-trivial logic is
+    /// the `DirsEntry: Option<PathBuf>` → `String` round-trip via
+    /// `to_string_lossy` that re-enters `validate_dirs_decl` through
+    /// `UncheckedDirs`; this pins that both roots resolve to the expected
+    /// project-root-relative paths.
+    #[test]
+    fn definition_files_returns_relative_paths_for_both_roots() {
+        let t = tempfile::TempDir::new().unwrap();
+        write(t.path(), "agents/triage.md", AGENT_MD);
+        write(t.path(), "agents/review/strict.md", AGENT_MD);
+        write(t.path(), "tools/github/search.toml", TOOL_TOML);
+        let dirs = DirsEntry {
+            agents: Some(PathBuf::from("agents")),
+            tools: Some(PathBuf::from("tools")),
+        };
+        let mut files = definition_files(t.path(), &dirs).unwrap();
+        files.sort();
+        assert_eq!(
+            files,
+            vec![
+                PathBuf::from("agents/review/strict.md"),
+                PathBuf::from("agents/triage.md"),
+                PathBuf::from("tools/github/search.toml"),
+            ]
+        );
+    }
+
     #[test]
     fn root_checks() {
         let t = tempfile::TempDir::new().unwrap();
