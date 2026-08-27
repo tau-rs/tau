@@ -1,0 +1,3 @@
+{"turn": 0, "response": {"tool_uses": [{"id": "1", "name": "agent.researcher.spawn", "input": {"message": "topic A"}}, {"id": "2", "name": "agent.researcher.spawn", "input": {"message": "topic B"}}], "stop_reason": "tool_use"}}
+{"turn": 1, "response": {"text": "REPORT A", "stop_reason": "end_turn"}}
+{"turn": 2, "response": {"text": "SUMMARY", "stop_reason": "end_turn"}}

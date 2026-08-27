@@ -21,7 +21,10 @@
 //! `21_parallel_fanout` (EPIC 4.2b authored `Parallel` fan-out/join),
 //! `22_loop_refine` (EPIC 4.2c authored bounded `Loop` with feedback), and
 //! `23_suspend_pause` (EPIC 4.3 HITL `Suspend` pause point — dev-mode vs
-//! bundle-mode agreement on the persisted `SuspendedSummary`).
+//! bundle-mode agreement on the persisted `SuspendedSummary`), and
+//! `24_dynamic_region` (EPIC 4.5 `Dynamic` region runtime gate: coordinator
+//! spawns an admitted child AND is bounds-denied on a second spawn attempt,
+//! in the same run).
 //! No `DEFERRED_FIXTURES` slots remain.
 
 use std::path::Path;
@@ -1230,6 +1233,86 @@ async fn fixture_19_dev_mode_page_denied_by_attenuation() {
 #[tokio::test(flavor = "current_thread")]
 async fn fixture_19_cross_mode_conformance() {
     let dir = fixture_dir("19_subflow_attenuation_denied");
+    let dev = DevMode.run(&dir).await;
+    let bundle = BundleMode.run(&dir).await;
+    assert_conform(&dev, &bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Fixture 24 — dynamic_region (EPIC 4.5 runtime gate: spawn + bounds denial)
+// ---------------------------------------------------------------------------
+
+/// Fixture 24: an authored `Dynamic` region (`[pipeline.steps.dynamic]`)
+/// whose coordinator issues TWO `agent.researcher.spawn` tool_uses in its
+/// first turn against `max_spawns = 1`.
+///
+/// `RegionCounters::try_admit` (see `tau_runtime_core::interpreter::dynamic`)
+/// admits the first spawn (topic A): a `researcher` child agent actually
+/// runs to completion, consuming the next scripted LLM turn and returning
+/// its output as a successful tool result. The second spawn (topic B) is
+/// soft-denied BEFORE any child is constructed — an `is_error` tool result
+/// containing `max_spawns exhausted (1/1)`, and (load-bearing for this
+/// fixture) no LLM turn consumed.
+///
+/// `mock_llm.jsonl` has exactly three scripted turns: the coordinator's
+/// fan-out turn, the admitted child's one turn, and the coordinator's final
+/// turn. This is deliberately tight: if the bounds gate ever let BOTH spawns
+/// through, the second child would consume the coordinator's final turn
+/// instead, desynchronizing the queue — `SequencedLlm` would run dry on the
+/// coordinator's real final turn and the run would fail rather than
+/// complete. If the gate ever denied BOTH spawns, the coordinator's next
+/// turn would consume the child's ("REPORT A") response instead of its own,
+/// ending the run one turn early with the wrong final text. So asserting
+/// `RunOutcome::Completed` with final text `"SUMMARY"` pins BOTH the
+/// admission and the denial, not just one of them.
+///
+/// `SpawnTool::invoke` never calls `ToolDispatcher::invoke` (it gates
+/// admission, then drives the child through `run_agent` directly) — same as
+/// a subflow tool in fixture 04/19 — so `tool_calls` stays empty regardless.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_24_dev_mode_admits_one_spawn_and_denies_the_next() {
+    use tau_domain::MessagePayload;
+
+    let dir = fixture_dir("24_dynamic_region");
+    let report = DevMode.run(&dir).await;
+
+    assert!(
+        report.build_refused.is_none(),
+        "expected an executed run, got build_refused: {:?}",
+        report.build_refused
+    );
+    let final_message = match report.run_outcome {
+        Some(RunOutcome::Completed {
+            ref final_message, ..
+        }) => final_message.clone(),
+        other => panic!(
+            "soft-deny: run must still complete (a broken bounds gate desyncs the scripted \
+             LLM queue and fails the run instead), got: {other:?}"
+        ),
+    };
+    match final_message.payload {
+        MessagePayload::Text { content } => assert_eq!(
+            content, "SUMMARY",
+            "final text must be the coordinator's own last scripted turn — only reachable if \
+             exactly one spawn was admitted (consuming the child's turn) and the second was \
+             denied without consuming a turn"
+        ),
+        other => panic!("expected a Text payload, got: {other:?}"),
+    }
+    assert!(
+        report.tool_calls.is_empty(),
+        "agent.*.spawn bypasses ToolDispatcher::invoke entirely; expected no tool calls, got: {:?}",
+        report.tool_calls
+    );
+}
+
+/// Cross-mode conformance for fixture 24: DevMode and BundleMode both drive
+/// the same `Dynamic` region IR through `drive_pipeline`, proving the
+/// spawn-gate + child-agent-run path survives the bundle's
+/// `to_canonical_bytes` → `from_canonical_bytes` round-trip identically.
+#[tokio::test(flavor = "current_thread")]
+async fn fixture_24_cross_mode_conformance() {
+    let dir = fixture_dir("24_dynamic_region");
     let dev = DevMode.run(&dir).await;
     let bundle = BundleMode.run(&dir).await;
     assert_conform(&dev, &bundle);
