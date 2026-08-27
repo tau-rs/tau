@@ -440,6 +440,11 @@ pub(crate) struct ForwardingDispatcher {
     /// interpreter through [`ToolDispatcher::assets`] to resolve
     /// `PromptSource::Asset` prompt references.
     assets: Option<Arc<BTreeMap<String, tau_ir::asset::AssetBlob>>>,
+    /// Trace sink for this run (execution-trace TUI spec §13.3). `None`
+    /// unless [`Self::with_trace`] was called, which keeps IR runs that
+    /// don't want tracing byte-identical to their pre-§13 behavior.
+    trace_run_id: Option<String>,
+    trace_subscribers: Vec<Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber>>,
 }
 
 impl ForwardingDispatcher {
@@ -455,6 +460,8 @@ impl ForwardingDispatcher {
             durable_resume: None,
             durable_granularity: None,
             assets: None,
+            trace_run_id: None,
+            trace_subscribers: Vec::new(),
         }
     }
 
@@ -488,6 +495,26 @@ impl ForwardingDispatcher {
         self
     }
 
+    /// Attach the run's trace sink (spec §13.3). The interpreter reads it
+    /// via [`ToolDispatcher::trace_sink`] and builds a synthetic `RunState`
+    /// so the kernel's `TraceEvent` emit sites fire for this IR run.
+    ///
+    /// `run_id` is the id stamped on every event and the
+    /// `.tau/runs/<run_id>.jsonl` filename; `subscribers` is typically the
+    /// JSONL writer plus, under `--tui`, a live channel.
+    #[allow(dead_code)] // wired up by Task 8
+    pub(crate) fn with_trace(
+        mut self,
+        run_id: String,
+        subscribers: Vec<Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber>>,
+    ) -> Self {
+        if !subscribers.is_empty() {
+            self.trace_run_id = Some(run_id);
+            self.trace_subscribers = subscribers;
+        }
+        self
+    }
+
     /// Test-only convenience: build a dispatcher from a single backend,
     /// keyed by its `name()`. Production code passes the whole name-keyed
     /// registry via [`Self::new`].
@@ -503,6 +530,8 @@ impl ForwardingDispatcher {
             durable_resume: None,
             durable_granularity: None,
             assets: None,
+            trace_run_id: None,
+            trace_subscribers: Vec::new(),
         }
     }
 }
@@ -726,6 +755,27 @@ impl ToolDispatcher for ForwardingDispatcher {
             resume: self.durable_resume.clone(),
             checkpoint: self.durable_granularity?,
         })
+    }
+
+    /// Spec §13.2: surface the meet-clamped authority `setup_mcp_runtime`
+    /// computed at MCP open time. The `McpBackedTool` in our map carries it;
+    /// every other tool reports `None` (the `DynTool` default).
+    fn tool_effective_capabilities(&self, tool_id: &ToolId) -> Option<Vec<tau_domain::Capability>> {
+        self.tools
+            .get(tool_id)?
+            .effective_capabilities()
+            .map(<[tau_domain::Capability]>::to_vec)
+    }
+
+    /// Spec §13.3: hand the interpreter this run's trace sink, if the host
+    /// attached one via [`Self::with_trace`].
+    fn trace_sink(&self) -> Option<tau_runtime_core::interpreter::tool_dispatch::TraceSinkConfig> {
+        Some(
+            tau_runtime_core::interpreter::tool_dispatch::TraceSinkConfig {
+                run_id: self.trace_run_id.clone()?,
+                subscribers: self.trace_subscribers.clone(),
+            },
+        )
     }
 }
 
@@ -1853,5 +1903,118 @@ mod tests {
             .expect("dispatcher call succeeds (the tool semantically errors)");
         assert!(res.body.is_none(), "body must be None on is_error=true");
         assert_eq!(res.error.as_deref(), Some("tool said no"));
+    }
+
+    /// Deserializes a single capability from a `[cap] ...` TOML fragment.
+    /// `Capability` is `#[non_exhaustive]`, so tests construct it via the
+    /// same serde escape hatch `sandbox_plan_tests::cap` uses for JSON —
+    /// this is the TOML equivalent, needed because `narrowed_tool_reports_*`
+    /// style fixtures read more naturally as TOML capability blocks.
+    fn cap_toml(toml_str: &str) -> tau_domain::Capability {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            cap: tau_domain::Capability,
+        }
+        toml::from_str::<Wrapper>(toml_str)
+            .expect("test capability TOML must be valid")
+            .cap
+    }
+
+    /// Stand-in for `McpBackedTool` exercising the identical dispatcher
+    /// code path (`self.tools.get(id)?.effective_capabilities()`) without
+    /// a live MCP client handle. Constructing a real `McpBackedTool` needs
+    /// an `Arc<McpClient>`, which itself needs a real `Arc<dyn Transport>`
+    /// and a `ServerContract` from a completed handshake, impractical to
+    /// stand up in a `tau-cli` unit test. The dispatcher only ever sees a
+    /// `dyn DynTool`, so a stub that overrides `effective_capabilities()`
+    /// exercises the same production code as the real MCP-backed tool.
+    struct ClampedStub {
+        effective: Vec<tau_domain::Capability>,
+    }
+
+    impl Tool for ClampedStub {
+        type Session = ();
+
+        fn name(&self) -> &str {
+            "clamped"
+        }
+
+        fn schema(&self) -> ToolSpec {
+            serde_json::from_value(serde_json::json!({
+                "name": "clamped",
+                "description": "test stub carrying a meet-clamped authority",
+                "input_schema": tau_domain::Value::Object(Default::default()),
+            }))
+            .expect("ToolSpec must deserialize")
+        }
+
+        fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+            Some(&self.effective)
+        }
+
+        async fn init(&self, _ctx: SessionContext) -> Result<Self::Session, ToolError> {
+            Ok(())
+        }
+
+        async fn invoke(
+            &self,
+            _session: &mut Self::Session,
+            _args: tau_domain::Value,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult::new(Vec::new(), false))
+        }
+
+        async fn teardown(&self, _session: Self::Session) -> Result<(), ToolError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dispatcher_reports_effective_caps_from_its_tool_map() {
+        use tau_runtime_core::interpreter::tool_dispatch::ToolDispatcher as _;
+
+        // A ClampedStub-backed handle carrying a narrowed authority — see
+        // `ClampedStub`'s doc comment for why this substitutes for a real
+        // `McpBackedTool` here.
+        let effective = cap_toml("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+        let clamped: Arc<dyn DynTool> = Arc::new(ClampedStub {
+            effective: vec![effective.clone()],
+        });
+
+        let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
+        tools.insert(ToolId("weather.get_forecast".into()), clamped);
+
+        let dispatcher = ForwardingDispatcher::new(BTreeMap::new(), tools);
+
+        assert_eq!(
+            dispatcher.tool_effective_capabilities(&ToolId("weather.get_forecast".into())),
+            Some(vec![effective]),
+            "the dispatcher must surface the tool's meet-clamped authority"
+        );
+        assert_eq!(
+            dispatcher.tool_effective_capabilities(&ToolId("not-registered".into())),
+            None,
+            "unknown ids report no clamp rather than panicking"
+        );
+    }
+
+    #[test]
+    fn dispatcher_reports_no_trace_sink_until_with_trace_is_called() {
+        use tau_runtime_core::interpreter::tool_dispatch::ToolDispatcher as _;
+
+        let dispatcher = ForwardingDispatcher::new(BTreeMap::new(), BTreeMap::new());
+        assert!(
+            dispatcher.trace_sink().is_none(),
+            "a dispatcher without with_trace must not enable trace emission"
+        );
+
+        let collector: Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber> =
+            Arc::new(tau_runtime_core::orchestration::trace::NoopTraceSubscriber);
+        let dispatcher = ForwardingDispatcher::new(BTreeMap::new(), BTreeMap::new())
+            .with_trace("run-abc".to_string(), vec![collector]);
+
+        let sink = dispatcher.trace_sink().expect("sink after with_trace");
+        assert_eq!(sink.run_id, "run-abc");
+        assert_eq!(sink.subscribers.len(), 1);
     }
 }
