@@ -69,10 +69,25 @@ pub fn spawn(
     // otherwise race the boot sequence and cause spurious reloads.
     let last_hash = Arc::new(AtomicU64::new(hash_watched(&watched)));
 
+    // `[dirs]`-subtree analogue of `last_hash` above, for the same reason:
+    // FSEvents replays historical Create/Modify events for files that
+    // already existed under a root when the recursive watch registers, and
+    // under load (nextest parallelism) those replays race the boot
+    // sequence — see `hash_watched`'s doc comment / commit 6d1a8552 (#363),
+    // which fixed the identical race for the flat file watchlist. Real
+    // projects have pre-existing files under `agents/`/`tools/` at
+    // registration time, so this is the common case, not an edge case.
+    // Fingerprint is `(path, len, mtime)` per file, not file bytes: cheap
+    // enough to recompute on every dir event (a `stat`, not a `read`, per
+    // file) while still detecting adds/removes/edits (mtime and/or length
+    // change on write).
+    let last_dir_hash = Arc::new(AtomicU64::new(hash_watched_dirs(&watched_dirs)));
+
     let pending_for_callback = pending_reload.clone();
     let watched_for_callback = watched.clone();
     let watched_dirs_for_callback = watched_dirs.clone();
     let last_hash_for_callback = last_hash.clone();
+    let last_dir_hash_for_callback = last_dir_hash.clone();
     let mut watcher = RecommendedWatcher::new(
         move |res: std::result::Result<notify::Event, notify::Error>| {
             let Ok(event) = res else { return };
@@ -116,12 +131,19 @@ pub fn spawn(
             }
 
             if touches_watched_dir {
-                // No content-hash dedup here: `hash_watched`/`last_hash`
-                // only fingerprint the flat `watched` file set, not `[dirs]`
-                // subtrees, so a hash comparison would never detect a
-                // change under a dir root. Any create/modify/remove that
-                // reaches this point under a watched root is a real change.
-                pending_for_callback.store(true, Ordering::Release);
+                // Metadata-based change detection, same purpose as the
+                // content-hash check below but scoped to `[dirs]`
+                // subtrees: ignore the FSEvents at-registration replay of
+                // Create events for files that already existed at boot
+                // (their (path, len, mtime) triple is unchanged from the
+                // initial snapshot), while still catching real adds,
+                // removes, edits, and renames (renames change the set of
+                // present paths, so the fingerprint changes regardless of
+                // which half of the remove+add pair is processed first).
+                let new_dir_hash = hash_watched_dirs(&watched_dirs_for_callback);
+                if new_dir_hash != last_dir_hash_for_callback.swap(new_dir_hash, Ordering::AcqRel) {
+                    pending_for_callback.store(true, Ordering::Release);
+                }
                 return;
             }
 
@@ -173,6 +195,61 @@ fn hash_watched(watched: &HashSet<PathBuf>) -> u64 {
         }
     }
     hasher.finish()
+}
+
+/// Combined `(path, len, mtime)` fingerprint of every file under the given
+/// `[dirs]` roots, order-independent (paths sorted for determinism).
+///
+/// This is the `[dirs]`-subtree analogue of `hash_watched`: same boot-race
+/// purpose (see the call site's comment), but hashing file *metadata*
+/// rather than *bytes* — reading every file under `agents/`/`tools/` on
+/// every fs event would be needless I/O for a category whose purpose is
+/// just "did anything under this subtree change", and metadata already
+/// answers that (a write changes length and/or mtime; an add/remove/rename
+/// changes which paths are present at all).
+fn hash_watched_dirs(dirs: &[PathBuf]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut entries: Vec<(PathBuf, u64, Option<std::time::Duration>)> = Vec::new();
+    for root in dirs {
+        collect_dir_snapshot(root, &mut entries);
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (path, len, mtime) in entries {
+        path.hash(&mut hasher);
+        len.hash(&mut hasher);
+        mtime.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Recursively collect `(path, len, mtime-since-epoch)` for every file
+/// under `dir`, appending to `out`. Unreadable directories/entries are
+/// silently skipped (mirrors `resolve_watch_paths`' `.flatten()` pattern
+/// elsewhere in this file) — a transient stat failure just means that
+/// entry doesn't contribute to the fingerprint this round, which is no
+/// worse than the file not existing yet.
+fn collect_dir_snapshot(dir: &Path, out: &mut Vec<(PathBuf, u64, Option<std::time::Duration>)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_dir_snapshot(&path, out);
+        } else if file_type.is_file() {
+            if let Ok(meta) = entry.metadata() {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+                out.push((path, meta.len(), mtime));
+            }
+        }
+    }
 }
 
 /// Resolve the full set of paths to watch for this project:
