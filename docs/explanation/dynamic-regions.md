@@ -178,9 +178,12 @@ prior turns), the same as an agent step.
 Every gate action is observable: denials surface as ordinary error
 `ToolCallCompleted` events in the run stream (no new `RunEvent`
 variant), and as `runtime.dynamic.spawned` / `runtime.dynamic.spawn_denied`
-/ `runtime.dynamic.attenuation_denied` trace events (drop rows in
-`tau run --tui`) — a bounded-out run is auditable without reading the
-coordinator's prose.
+/ `runtime.dynamic.attenuation_denied` `tracing` events, visible via
+`RUST_LOG` or the OTLP layer. These are not currently surfaced as `tau
+run --tui` drop rows — the IR interpreter path that runs dynamic
+regions builds `RunOptions` with no orchestration channel wired, so it
+emits none of the orchestration `TraceEvent`s the TUI renders — but a
+bounded-out run is auditable without reading the coordinator's prose.
 
 **wasm divergence (explicit):** dynamic regions are native-only. `tau
 build --target wasm` rejects any workflow containing one at build

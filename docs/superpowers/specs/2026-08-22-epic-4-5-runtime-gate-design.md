@@ -203,10 +203,13 @@ if review demands it).
 - **RunEvent stream (conformance channel):** spawns and denials surface as the ordinary
   `ToolCallStarted` / `ToolCallCompleted` pairs — name identifies the kind, `Err` carries
   the rendered typed denial.
-- **Trace events (TUI channel):**
+- **Trace events (`tracing`, not the TUI channel):** the IR interpreter path builds
+  `RunOptions` with no orchestration channel wired, so these are plain `tracing` events
+  (visible via `RUST_LOG` or the OTLP layer) — NOT `tau run --tui` drop rows, which are
+  fed only from the `spawn_root_agent` orchestration `TraceEvent` channel (cf. #618's
+  capability drops).
   - `runtime.dynamic.spawned { region_step, kind, child_id, spawned, max_spawns }`
   - `runtime.dynamic.spawn_denied { region_step, kind, reason, spawned, max_spawns }`
-    (drop-row family, as #618's capability drops)
   - `runtime.dynamic.attenuation_denied { … , frame }` — mirrors
     `runtime.subflow.attenuation_denied`
 
