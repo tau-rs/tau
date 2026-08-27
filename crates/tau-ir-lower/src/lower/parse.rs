@@ -124,6 +124,7 @@ pub(super) fn parse(
                     path: p.to_string_lossy().into_owned(),
                     reason: e.0,
                 })?;
+                let bytes = normalize_crlf_bytes(bytes);
                 let hash = tau_ir::asset::asset_hash(&bytes);
                 // Identical content across agents dedupes to one blob.
                 assets
@@ -302,6 +303,23 @@ pub(super) fn parse(
         triggers,
         assets,
     })
+}
+
+/// Build-time CRLF normalization (spec: dir-based definitions, determinism).
+/// Without this, an autocrlf Windows checkout changes prompt asset hashes and
+/// breaks `tau verify` cross-platform (same class as the #553 *.wit incident).
+fn normalize_crlf_bytes(input: alloc::vec::Vec<u8>) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec::Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] == b'\r' && input.get(i + 1) == Some(&b'\n') {
+            i += 1; // skip the \r, keep the \n
+            continue;
+        }
+        out.push(input[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Test-only stub reader for `parse`: no file prompts. Callers that don't
@@ -790,6 +808,36 @@ deterministic = "parse_celsius"
             matches!(&tool.impl_, ToolImpl::Step { id } if id.0 == "normalize"),
             "expected ToolImpl::Step{{normalize}}; got {:?}",
             tool.impl_
+        );
+    }
+
+    #[test]
+    fn prompt_asset_hash_is_crlf_invariant() {
+        let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "p"
+[models]
+default = { backend = "mock-llm", model = "m" }
+[agents.solo]
+display_name = "Solo"
+package      = "p@^0.1"
+model        = "default"
+[agents.solo.prompt]
+system_file  = "prompt.md"
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let lf = |_p: &std::path::Path| -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+            Ok(b"line one\nline two\n".to_vec())
+        };
+        let crlf = |_p: &std::path::Path| -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+            Ok(b"line one\r\nline two\r\n".to_vec())
+        };
+        let out_lf = parse(&config, &lf).expect("lf");
+        let out_crlf = parse(&config, &crlf).expect("crlf");
+        assert_eq!(
+            out_lf.assets.keys().collect::<alloc::vec::Vec<_>>(),
+            out_crlf.assets.keys().collect::<alloc::vec::Vec<_>>()
         );
     }
 
