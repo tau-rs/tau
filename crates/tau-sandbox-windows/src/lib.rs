@@ -33,7 +33,7 @@ mod acl;
 mod pipe_proxy;
 mod profile;
 
-pub use profile::{build_appcontainer_caps, AppContainerCaps};
+pub use profile::{build_appcontainer_caps, dir_shaped_write_paths, AppContainerCaps};
 
 pub mod bridge_args;
 pub mod launcher_args;
@@ -235,7 +235,22 @@ async fn wrap_spawn_windows(
         })?;
         granted_paths.push((path.clone(), acl::AccessKind::Read));
     }
+    // A write grant needs its target to EXIST: `SetNamedSecurityInfoW`
+    // answers `WIN32_ERROR(2)` (ERROR_FILE_NOT_FOUND) otherwise and the
+    // whole plan fails closed — which is what #622's CI round 1 hit on
+    // cargo's not-yet-created `<package>/target`. The container cannot
+    // create it either (its parent is deliberately not write-granted),
+    // so the spawn layer materialises the directory here. Only
+    // glob-shaped (`<dir>/**`) write entries qualify; see
+    // [`dir_shaped_write_paths`].
+    let dir_shaped: std::collections::HashSet<String> =
+        dir_shaped_write_paths(plan).into_iter().collect();
     for path in &caps.fs_write_paths {
+        if dir_shaped.contains(path) && !std::path::Path::new(path).exists() {
+            std::fs::create_dir_all(path).map_err(|e| CapabilityError::WrapFailed {
+                message: format!("create write-grant dir {path}: {e}"),
+            })?;
+        }
         acl::grant_access(&app_sid, path, acl::AccessKind::Write).map_err(|e| {
             CapabilityError::WrapFailed {
                 message: format!("grant write on {path}: {e}"),

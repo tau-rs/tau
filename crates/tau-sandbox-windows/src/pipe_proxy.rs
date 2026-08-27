@@ -111,32 +111,59 @@ pub(crate) fn spawn_pipe_proxy(
     // Create the first instance before returning so a racing name-squat
     // fails HERE (fail-closed) rather than inside the task.
     let first = make_instance(&path, &sd, true)?;
+    eprintln!("PIPEPROXY listening name={name}");
 
     let task = tokio::spawn(accept_loop(path, sd, first, hosts));
     Ok(PipeProxyHandle { name, task })
 }
 
+/// Accept loop for one spawn's pipe.
+///
+/// Every step also prints a `PIPEPROXY ` stderr marker next to its
+/// `tracing` event: the Windows integration tests (and the AppContainer
+/// chain generally) run with no tracing subscriber installed, so the
+/// events alone are invisible exactly when the data path breaks. The
+/// markers are the host-side counterpart of `tau-net-bridge-win`'s
+/// `BRIDGE ` markers — grep both to see which hop stalled.
 async fn accept_loop(path: String, sd: OwnedSd, first: NamedPipeServer, hosts: HostAllow) {
     let mut server = first;
+    let mut n: u64 = 0;
     loop {
         if let Err(e) = server.connect().await {
             tracing::warn!(error = %e, "pipe proxy accept failed");
+            eprintln!(
+                "PIPEPROXY accept FAILED path={path} err={e} os={:?}",
+                e.raw_os_error()
+            );
             return;
         }
+        n += 1;
+        eprintln!("PIPEPROXY conn={n} connected");
         // Next instance must exist before we serve this one, or a
         // second bridge conn would get ERROR_FILE_NOT_FOUND.
         let next = match make_instance(&path, &sd, false) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = %e, "pipe proxy re-listen failed");
+                eprintln!(
+                    "PIPEPROXY re-listen FAILED path={path} err={e} os={:?}",
+                    e.raw_os_error()
+                );
                 return;
             }
         };
         let mut conn = std::mem::replace(&mut server, next);
         let hosts = hosts.clone();
         tokio::spawn(async move {
-            if let Err(e) = tau_sandbox_proxy::handle_connection(&mut conn, &hosts).await {
-                tracing::warn!(error = %e, "pipe proxy connection failed");
+            match tau_sandbox_proxy::handle_connection(&mut conn, &hosts).await {
+                Ok(()) => eprintln!("PIPEPROXY conn={n} handler done"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "pipe proxy connection failed");
+                    eprintln!(
+                        "PIPEPROXY conn={n} handler FAILED err={e} os={:?}",
+                        e.raw_os_error()
+                    );
+                }
             }
         });
     }

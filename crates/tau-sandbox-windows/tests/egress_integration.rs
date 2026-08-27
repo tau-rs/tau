@@ -132,10 +132,12 @@ async fn egress_unlisted_host_denied() {
         "unlisted host must be denied:\n{}",
         render(&out)
     );
+    // Pin the *proxy's* answer, not just the digits "403" appearing
+    // anywhere in the output (an ephemeral port could contain them).
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("403"),
-        "expected proxy 403, got:\n{}",
+        stdout.contains("PROBE result=status detail=HTTP/1.1 403"),
+        "expected proxy 403 status line, got:\n{}",
         render(&out)
     );
 }

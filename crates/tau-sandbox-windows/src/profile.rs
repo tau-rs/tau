@@ -69,6 +69,41 @@ pub fn build_appcontainer_caps(plan: &CapabilityPlan) -> AppContainerCaps {
     }
 }
 
+/// The write paths of `plan` whose *raw* capability spelling was a
+/// directory subtree (`<dir>/**`, `<dir>/*`, or a trailing `/`),
+/// normalised exactly like [`build_appcontainer_caps`] normalises them.
+///
+/// The Windows spawn layer creates these directories when they are
+/// missing, before granting the AppContainer SID write access on them.
+/// Two facts make that necessary rather than optional:
+///
+/// - `SetNamedSecurityInfoW` fails with `ERROR_FILE_NOT_FOUND`
+///   (`WIN32_ERROR(2)`) on a path that does not exist, so the grant —
+///   and with it the whole `wrap_spawn` — fails closed. `tau-pkg`'s
+///   build envelope grants write on `<package>/target/**`, which cargo
+///   has not created yet at wrap time; #622's CI round 1 failed exactly
+///   there.
+/// - The container cannot create the directory itself: the *parent* is
+///   not write-granted, by design.
+///
+/// Only glob-shaped entries qualify. A bare path (`C:\out\report.txt`)
+/// may well name a file the plan wants created, and silently turning it
+/// into a directory would be worse than the current loud failure — so
+/// those still fail closed.
+pub fn dir_shaped_write_paths(plan: &CapabilityPlan) -> Vec<String> {
+    let mut out = Vec::new();
+    for cap in &plan.capabilities {
+        if let Capability::Filesystem(FsCapability::Write { paths, .. }) = cap {
+            for p in paths {
+                if p.ends_with("/**") || p.ends_with("/*") || p.ends_with('/') {
+                    out.push(clean_glob_suffix(p));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Strip trailing glob suffixes from a path. AppContainer ACLs are
 /// per-directory + inherited; `/srv/data/**` and `/srv/data` both grant
 /// the same scope so we normalise to the parent path.
@@ -141,6 +176,44 @@ mod tests {
                 "/tmp".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn dir_shaped_write_paths_only_matches_globs() {
+        let plan = plan_from(json!([
+            { "kind": "fs.write", "paths": [
+                "C:\\pkg\\target/**", "/var/cache/*", "/srv/out/", "C:\\out\\report.txt"
+            ] },
+            // Read globs must NOT be included: only write grants are
+            // allowed to materialise a directory.
+            { "kind": "fs.read", "paths": ["/etc/cfg/**"] }
+        ]));
+        assert_eq!(
+            dir_shaped_write_paths(&plan),
+            vec![
+                "C:\\pkg\\target".to_string(),
+                "/var/cache".to_string(),
+                "/srv/out".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn dir_shaped_write_paths_normalises_like_build_caps() {
+        // Whatever this returns must be comparable against
+        // `AppContainerCaps::fs_write_paths` entry-for-entry — the spawn
+        // layer looks paths up in a set built from it.
+        let plan = plan_from(json!([
+            { "kind": "fs.write", "paths": ["/a/b/**", "/c/d"] }
+        ]));
+        let caps = build_appcontainer_caps(&plan);
+        let dirs = dir_shaped_write_paths(&plan);
+        assert_eq!(
+            caps.fs_write_paths,
+            vec!["/a/b".to_string(), "/c/d".to_string()]
+        );
+        assert_eq!(dirs, vec!["/a/b".to_string()]);
+        assert!(caps.fs_write_paths.contains(&dirs[0]));
     }
 
     #[test]

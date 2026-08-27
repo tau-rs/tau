@@ -17,6 +17,13 @@
 use std::io::{Read, Write};
 
 fn main() {
+    // stderr canary. Result markers go to STDOUT, so a run where the
+    // stdout markers arrive but this line does not proves the launcher
+    // -> bridge -> probe chain loses stderr — which would also mean the
+    // bridge's own `BRIDGE ` diagnostics never reach CI. Distinguishing
+    // "the bridge printed nothing" from "nothing the bridge prints can
+    // be seen" is otherwise a whole CI round.
+    eprintln!("PROBE stderr-alive");
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(8));
         println!("PROBE result=watchdog-timeout");
@@ -65,6 +72,7 @@ fn http_get(url: &str) -> ! {
         println!("PROBE result=err detail=no-http-proxy-env");
         std::process::exit(1);
     };
+    eprintln!("PROBE proxy={proxy}");
     let host = url
         .strip_prefix("http://")
         .and_then(|r| r.split('/').next())
