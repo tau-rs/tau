@@ -22,9 +22,13 @@ foldhash   = { workspace = true }
 sha2       = { workspace = true, default-features = false }
 
 [dev-dependencies]
-tau-domain = { workspace = true, features = ["serde", "test-fixtures"] }
-tau-pkg    = { workspace = true }
-tau-ports  = { workspace = true, features = ["serde"] }
+tau-domain        = { workspace = true, features = ["serde", "test-fixtures"] }
+tau-pkg           = { workspace = true }
+tau-ports         = { workspace = true, features = ["serde"] }
+# Test-only: pins predicate_fit's local GUEST_FNS literal against the
+# authoritative SUPPORTED constant. goal-predicates pulls in regex-automata,
+# but only for this crate's own test builds — no production dependency edge.
+tau-native-tools  = { workspace = true, features = ["goal-predicates"] }
 
 [lints]
 workspace = true

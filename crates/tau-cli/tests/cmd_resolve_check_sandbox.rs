@@ -64,28 +64,6 @@ required_tier = "none"
     .unwrap();
 }
 
-/// Write a v3 scope config.toml that requires strict tier.
-///
-/// On macOS without Docker, the resolver finds no suitable adapter and
-/// exits 2. Do NOT set `TAU_TESTING_ALLOW_MOCK_SANDBOX=1` when using
-/// this config if you want to test the "no adapter" error path —
-/// the mock env var bypasses the registry entirely.
-fn write_strict_tier_config(scope_dir: &std::path::Path) {
-    std::fs::create_dir_all(scope_dir).unwrap();
-    std::fs::write(
-        scope_dir.join("config.toml"),
-        r#"schema_version = 3
-kind = "project"
-created_at = "2026-05-04T00:00:00Z"
-created_by_tau_version = "0.0.0"
-
-[sandbox]
-required_tier = "strict"
-"#,
-    )
-    .unwrap();
-}
-
 /// Write a lockfile with a plugin entry whose capabilities are declared in
 /// a tau.toml at `<scope>.tau/packages/<name>/<version>/tau.toml`.
 ///
@@ -365,56 +343,22 @@ fn json_output_emits_per_line_events() {
     );
 }
 
-// ---- Test 4: no adapter available exits 2 with a clear message -----------
+// ---- Test 4: REMOVED (2026-08-23) ---------------------------------------
 //
-// Uses `required_tier = "strict"` WITHOUT `TAU_TESTING_ALLOW_MOCK_SANDBOX=1`
-// so the real registry runs. Requires a host where no strict-capable adapter
-// is present (e.g., macOS without Docker Desktop). If Docker or a native
-// sandbox is available, the resolver succeeds and this test would fail —
-// hence `#[ignore]`. Enable in e2e CI where the sandbox-free environment
-// is guaranteed (sub-project D).
-
-#[test]
-#[ignore = "requires a host with no strict-capable sandbox adapter (no Docker, no Linux native); run in sub-project D e2e CI"]
-fn no_adapter_emits_clear_error() {
-    let dir = TempDir::new().unwrap();
-    let root = dir.path();
-
-    std::fs::create_dir_all(root.join(".tau")).unwrap();
-    write_tau_toml(root);
-    // v3 strict tier config — no mock env var, so real registry runs.
-    write_strict_tier_config(&root.join(".tau"));
-    write_plugin_fixture_with_standard_caps(root, "fs-plugin", "0.1.0");
-
-    let output = Command::cargo_bin("tau")
-        .unwrap()
-        .args(["resolve", "--check-sandbox"])
-        .current_dir(root)
-        .env("TAU_HOME", root.join(".tau-global"))
-        // Explicitly unset mock injection so the real resolver runs.
-        .env_remove("TAU_TESTING_ALLOW_MOCK_SANDBOX")
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(
-        !output.status.success(),
-        "expected failure when no adapter meets strict tier; stdout={stdout} stderr={stderr}"
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "exit code must be 2; stderr: {stderr}"
-    );
-    // The "no sandbox adapter available" message goes to stderr via
-    // output.error().
-    assert!(
-        stderr.contains("no sandbox adapter available"),
-        "expected 'no sandbox adapter available' in stderr; stderr: {stderr}"
-    );
-}
+// `no_adapter_emits_clear_error` asserted the `required_tier = "strict"` +
+// no-strict-capable-adapter error path. It was `#[ignore]`d pending a
+// "sub-project D e2e CI" job that was never built, and no GitHub-hosted
+// runner has that host shape: ubuntu-latest probes the Linux native
+// (Landlock) adapter Available, macos-latest probes the darwin
+// sandbox-exec adapter Available, windows-latest has Docker. On every one
+// of them the resolver succeeds and the test fails (verified on macOS —
+// `✓ fs-plugin / 1 plugins checked: 1 ok, 0 errors`). Rather than leave a
+// test alive but permanently unrun, it is deleted. What remains covered:
+// `ResolutionError::NoAdapterMatches`'s Display is unit-tested in
+// `tau-runtime-tokio::process_gate::resolution_error`, and the resolver
+// tests there accept `NoAdapterMatches` host-adaptively. The CLI's
+// error-to-exit-2 mapping on that path (`cmd/resolve.rs`) is NOT covered —
+// it was not covered before either, since this test never ran.
 
 // ---- Test 5: empty lockfile (no plugins) reports 0 checked ---------------
 
@@ -530,54 +474,14 @@ fn check_sandbox_skips_passthrough_to_native_or_container() {
     );
 }
 
-// ---- Test 8: errors when only passthrough is available --------------------
-
-/// When `required_tier = "none"` AND no real (non-passthrough) adapter is
-/// available, `--check-sandbox` must exit 2 with a clear error.
-///
-/// `resolve_strict_for_validation()` finds no non-passthrough adapter and
-/// returns an error, which is surfaced as exit 2 with a descriptive message.
-/// Requires a host with no strict-capable adapter present. Ignored in
-/// regular CI where Docker or native sandbox is typically available.
-#[test]
-#[ignore = "requires a host with no non-passthrough sandbox adapter (no Docker, no Linux native); run in sub-project D e2e CI"]
-fn check_sandbox_errors_when_only_passthrough_available() {
-    let dir = TempDir::new().unwrap();
-    let root = dir.path();
-
-    std::fs::create_dir_all(root.join(".tau")).unwrap();
-    write_tau_toml(root);
-    // required_tier = "none" → resolve_strict_for_validation runs.
-    // Without mock env var, no real adapter is found on the target host.
-    write_mock_sandbox_config(&root.join(".tau"));
-    write_plugin_fixture_with_standard_caps(root, "fs-plugin", "0.1.0");
-
-    let output = Command::cargo_bin("tau")
-        .unwrap()
-        .args(["resolve", "--check-sandbox"])
-        .current_dir(root)
-        .env("TAU_HOME", root.join(".tau-global"))
-        .env_remove("TAU_TESTING_ALLOW_MOCK_SANDBOX")
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(
-        !output.status.success(),
-        "expected exit 2 when no non-passthrough adapter available; stdout={stdout} stderr={stderr}"
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "exit code must be 2; stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("no non-permissive adapter available"),
-        "expected 'no non-permissive adapter available' in stderr; got: {stderr}"
-    );
-}
+// ---- Test 8: REMOVED (2026-08-23) ---------------------------------------
+//
+// `check_sandbox_errors_when_only_passthrough_available` asserted the
+// `required_tier = "none"` + only-passthrough-available error path. Deleted
+// for the same reason as Test 4 above: it was `#[ignore]`d for a host shape
+// (no Docker, no Linux native, no darwin sandbox-exec) that no CI runner
+// has, gated behind a "sub-project D e2e CI" job that does not exist, so it
+// never ran anywhere. Verified failing on macOS before removal.
 
 // ---- Test 9: plugin with custom cap triggers rejection (tier-none config) --
 

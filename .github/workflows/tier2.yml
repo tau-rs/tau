@@ -123,6 +123,13 @@ jobs:
       # genuine break still fails all 3 attempts. (Tier 0 stays retries=0 for
       # hard signal on the fast lane.)
       - run: cargo nextest run --profile ci --workspace --all-targets --no-fail-fast --retries 2
+      # macOS sandbox-exec adapter integration tests (probe + real
+      # `sandbox-exec` wrap_spawn under the strict profile) are gated behind
+      # `integration-tests` and only run on a real macos-latest runner.
+      # Mirrors the tau-sandbox-windows step on nextest-windows. Scoped to the
+      # crate so it cannot destabilize other crates' suites on the macOS job.
+      - name: Test tau-sandbox-darwin sandbox-exec (integration)
+        run: cargo nextest run --profile ci -p tau-sandbox-darwin --features integration-tests --tests --no-fail-fast --retries 2
 
   nextest-windows:
     name: nextest / windows
@@ -260,6 +267,19 @@ jobs:
           BUILDX_CACHE_TO: type=gha,mode=max
           BUILDKIT_PROGRESS: plain
           DOCKER_BUILDKIT: "1"
+      # The native leg excludes the 3 HTTP cassette tests
+      # (anthropic|ollama|openai _layer4_native_completes_via_cassette).
+      # Reason (#156): those tests drive `tau-net-bridge`, which sets up a
+      # network namespace and therefore needs CAP_SYS_ADMIN + CAP_NET_ADMIN.
+      # Standard GHA `ubuntu-latest` runners do not grant either — the
+      # lefthook deep gate gets them via `podman run --cap-add SYS_ADMIN
+      # --cap-add NET_ADMIN`. Without the exclusion they fail with
+      # `transport: error sending request for url (http://127.0.0.1:...)`
+      # after bridge lookup succeeds. The same strict-tier behaviour IS
+      # covered on the container leg (the images carry the bridge inside),
+      # so only the native-adapter variant is dark. Delete this exclusion
+      # when a privileged runner is available. Tracked in
+      # docs/test-ignores-inventory.md bucket 2a.
       - name: Build NEXTEST_FILTER for this leg
         run: |
           if [ "$FLAVOR" = "native" ]; then
@@ -314,6 +334,13 @@ jobs:
           binaries: "tau-controlled-env"
       - name: Test tau-runtime-tokio e2e
         run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --tests --verbose
+      # tests/sandbox_container.rs carries two `#[ignore]`d container-gated
+      # tests that `--tests` alone never runs. Mirrors the sibling
+      # `--run-ignored only` step on test-tau-sandbox-native-e2e above.
+      # ubuntu-latest ships both docker and podman, so the in-test probe
+      # resolves Available and the tests do real work rather than skipping.
+      - name: Run --ignored container-gated tests
+        run: cargo nextest run --profile ci -p tau-runtime-tokio --features integration-tests --run-ignored only --verbose
 
   msrv-check:
     # MSRV is a rustc-version property, not an OS property. Moved from
@@ -522,7 +549,7 @@ jobs:
         run: cargo test -p tau-wasm-host --test wit_host_drift
 
   wasm-lane:
-    # The tau-wasm-host wasm lane: `#[ignore]`d tests that shell
+    # The wasm lane (tau-wasm-host + tau-cli): `#[ignore]`d tests that shell
     # `cargo build --target wasm32-wasip2` for the guest + fs/http probe
     # fixtures, then load them in the host and assert runtime enforcement
     # (roundtrip determinism, WASI fs preopen scope, wasi:http egress policy).
@@ -535,8 +562,11 @@ jobs:
     runs-on: ubuntu-latest
     # Cold local wall-clock ~48 min (three nested wasm32-wasip2 fixture builds
     # + host wasmtime stack); CI's shared-key sccache warms the host build, but
-    # give generous headroom.
-    timeout-minutes: 45
+    # give generous headroom. Raised 45 → 90 on 2026-08-23 when the tau-cli
+    # half of the lane joined: six more nested guest builds, several on their
+    # own CARGO_TARGET_DIR (so no cross-test reuse), plus a full tau-cli test
+    # binary + `tau` bin build.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/setup-rust
@@ -550,8 +580,35 @@ jobs:
         run: rustup target add wasm32-wasip2
       - name: wasm lane — roundtrip + fs/http enforcement (runs #[ignore]d tests)
         run: cargo nextest run -p tau-wasm-host --run-ignored all
-      - name: wasm lane — embed_wasm_e2e (runs #[ignore]d tests)
-        run: cargo nextest run -p tau-cli -E 'binary(embed_wasm_e2e)' --run-ignored all
+      # The tau-cli half of the same lane: every `#[ignore]`d tau-cli test
+      # shells `cargo build -p tau-wasm-guest --target wasm32-wasip2` from the
+      # CLI's own lowering (`lower_to_wasm_ir` / `wasm_world_for_project`) and
+      # asserts on the produced component — build_wasm_e2e (typed RunEvent
+      # stream), build_wasm_world_dod (EPIC 3.2 capability-exact WIT world),
+      # wasi_http_roundtrip (egress denial), wasi_fs_roundtrip x3 (#604
+      # preopen hardening), embed_wasm_e2e (EPIC 7.2 product-runtime load).
+      # Six of the seven were written and maintained but run by no CI job at
+      # all; wiring them here closes that hole (2026-08-23 QA sweep).
+      #
+      # This subsumes the `-E 'binary(embed_wasm_e2e)'` step added in #648 —
+      # `-p tau-cli --run-ignored ignored-only` already covers that binary's
+      # single ignored test, so the narrow step was dropped rather than run
+      # twice.
+      #
+      # `ignored-only`, not `all`: tau-cli's ~813 non-ignored tests already
+      # run in Tier 0, and several need fixture binaries this job doesn't
+      # build.
+      #
+      # `--test-threads 1` is load-bearing, not caution: these tests pick
+      # their guest CARGO_TARGET_DIR by fixture name, so the two `fs-rw`
+      # tests share one dir, and wasi_http_roundtrip shares `tau-build-wasm`
+      # with build_wasm_world_dod. Run in parallel, two cargo processes drive
+      # the same target dir with different `TAU_WORLD_WIT`/`TAU_IR_BYTES` and
+      # the guest fails to compile (reproduced locally: 2 of 6 tests needed a
+      # retry). Serialized from cold with retries disabled, all six passed
+      # first try in 185s and the shared dirs stay warm for what follows.
+      - name: wasm lane — tau-cli guest-build tests (runs #[ignore]d tests)
+        run: cargo nextest run -p tau-cli --run-ignored ignored-only --test-threads 1
 
   nightly-regression-handler:
     # Opens or updates a rolling issue on cron failure. Skips for PR-
