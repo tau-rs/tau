@@ -144,8 +144,7 @@ struct PreparedWorkflowRun {
 /// Note `Workflow(Resume(...))` deliberately gets no layer: the records
 /// a resumed run produces are not appended to the original log, because
 /// `check_drift` treats a log longer than the step list as drift and
-/// would reject every subsequent resume. Tracked separately — see the
-/// follow-up filed against #650.
+/// would reject every subsequent resume. Tracked separately in #695.
 fn prepare_workflow_run_layer(command: &cli::Command) -> Option<PreparedWorkflowRun> {
     let cli::Command::Workflow(cli::WorkflowSubcommand::Run(run_args)) = command else {
         return None;

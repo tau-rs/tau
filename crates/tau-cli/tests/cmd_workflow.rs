@@ -192,7 +192,7 @@ fn step_events_for(stderr_plain: &str, step_id: &str) -> usize {
 ///
 /// The resumed run's own records are NOT appended to the log; `check_drift`
 /// treats a log longer than the step list as drift, so persisting them would
-/// break every subsequent resume. Tracked as a follow-up to #650.
+/// break every subsequent resume. Tracked in #695.
 #[test]
 fn workflow_resume_replays_completed_steps_instead_of_rerunning_them() {
     let dir = common::setup_echo_project("echo", "canned_text = \"echoed: alpha\"\n", &[]);
@@ -285,7 +285,7 @@ args = { path = "/tmp/x" }
     );
 
     // The original log survives the resume intact — resume replays it, and
-    // (pending the #650 follow-up) does not append its own records.
+    // (pending #695) does not append its own records.
     let log_after = fs::read_to_string(&log_path).unwrap();
     let records_after: Vec<serde_json::Value> = log_after
         .lines()
