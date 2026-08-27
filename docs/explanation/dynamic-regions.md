@@ -118,7 +118,7 @@ max_concurrency = 4
   the region (must be ≥ 1, ≤ `max_spawns`).
 
 Lowered, a dynamic region becomes a `StepRun::Dynamic` node in the
-workflow IR (`ir_format` v2.6.0+) — see
+workflow IR (`ir_format` v2.7.0+) — see
 [Workflows](workflows.md) for how pipeline steps generally lower.
 
 ## The build-time check
