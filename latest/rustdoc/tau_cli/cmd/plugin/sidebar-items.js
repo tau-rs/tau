@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["dispatch"],"mod":["describe","protocol_decode","run"]};
