@@ -1523,7 +1523,7 @@ mod schema_tests {
 
     #[test]
     fn capability_schema_has_ten_oneof_branches() {
-        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let v = serde_json::to_value(schemars::schema_for!(Capability)).unwrap();
         let one_of = v["oneOf"].as_array().expect("oneOf must be present");
         assert_eq!(
             one_of.len(),
@@ -1535,7 +1535,7 @@ mod schema_tests {
 
     #[test]
     fn capability_schema_all_fixed_kinds_present_as_const() {
-        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let v = serde_json::to_value(schemars::schema_for!(Capability)).unwrap();
         let one_of = v["oneOf"].as_array().expect("oneOf must be present");
         for kind in FIXED_KINDS {
             let found = one_of
@@ -1547,7 +1547,7 @@ mod schema_tests {
 
     #[test]
     fn capability_schema_custom_branch_has_not_enum_exclusion() {
-        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let v = serde_json::to_value(schemars::schema_for!(Capability)).unwrap();
         let one_of = v["oneOf"].as_array().expect("oneOf must be present");
         // The Custom branch has no `const` on `kind`; instead it has a `not`/`enum` exclusion.
         let custom_branch = one_of
@@ -1570,7 +1570,7 @@ mod schema_tests {
 
     #[test]
     fn capability_schema_is_oneof_tagged_by_kind() {
-        let v = serde_json::to_value(&schemars::schema_for!(Capability)).unwrap();
+        let v = serde_json::to_value(schemars::schema_for!(Capability)).unwrap();
         let variants = v["oneOf"].as_array().expect("oneOf present");
         // Every fixed branch pins a const "kind" — verified via the const assertion above.
         // At least one branch has kind==fs.read

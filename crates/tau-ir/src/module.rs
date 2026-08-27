@@ -166,7 +166,7 @@ mod schema_tests {
     use super::*;
     #[test]
     fn ir_module_schema_builds_and_is_object() {
-        let v = serde_json::to_value(&schemars::schema_for!(IrModule)).unwrap();
+        let v = serde_json::to_value(schemars::schema_for!(IrModule)).unwrap();
         assert_eq!(v["type"], "object");
         // ir_format is a required top-level property
         let req = v["required"].as_array().expect("required present");
