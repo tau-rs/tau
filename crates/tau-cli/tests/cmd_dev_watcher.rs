@@ -70,6 +70,58 @@ prompt.system = "second"
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn watcher_flips_pending_reload_on_new_file_under_dirs_root() {
+    let tmp = assert_fs::TempDir::new().expect("tmpdir");
+    tmp.child("tau.toml")
+        .write_str(
+            r#"
+packages = ["mock-llm"]
+
+[project]
+name = "watcher-dirs-test"
+
+[dirs]
+tools = "tools"
+
+[models]
+mock-1 = { backend = "mock-llm", model = "claude-haiku-4-5" }
+
+[agents.a]
+display_name = "A"
+package      = "agent-a@^0.1"
+model        = "mock-1"
+prompt.system = "x"
+"#,
+        )
+        .expect("write");
+    tmp.child("tools").create_dir_all().expect("mkdir tools");
+
+    let session = tau_cli::cmd::dev::session::DevSession::load(tmp.path().to_path_buf(), None)
+        .await
+        .expect("load");
+
+    assert!(
+        !session.pending_reload.load(Ordering::Acquire),
+        "pending_reload must start false"
+    );
+
+    // Create a new file in a *nested* subdirectory of the watched `[dirs]`
+    // root — exercises RecursiveMode::Recursive, not just the root itself.
+    tmp.child("tools/sub/new_tool.toml")
+        .write_str("# not a real definition, just an fs event source\n")
+        .expect("write nested file");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        if session.pending_reload.load(Ordering::Acquire) {
+            return; // success
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("pending_reload did not flip within 2 s after a new file appeared under a [dirs] root");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn watcher_ignores_tau_lock_changes() {
     let tmp = assert_fs::TempDir::new().expect("tmpdir");
     tmp.child("tau.toml")
