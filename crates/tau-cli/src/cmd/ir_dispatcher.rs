@@ -136,10 +136,12 @@ pub(crate) async fn run_via_ir(
     )?;
 
     // 4. Build plugin host options + spawn plugins (same flow the cwd path uses).
-    // Trace-context id for log grouping; prefix kept for log filtering, suffix
-    // is a collision-resistant ULID (was `<nanos>`).
-    let run_id = format!("tau-run-bundle-{}", crate::cmd::run::mint_run_id());
-    let trace_context = TraceContext::new(run_id, entry_agent_id.0.clone(), "root".to_string());
+    // One ULID per run, shared by the plugin TraceContext (log grouping) and
+    // the orchestration trace sink (spec §13.5), so `.tau/runs/<id>.jsonl`,
+    // `tau trace <id>` and the plugin logs all agree on the run's identity.
+    let run_id = crate::cmd::run::mint_run_id();
+    let trace_context =
+        TraceContext::new(run_id.clone(), entry_agent_id.0.clone(), "root".to_string());
     let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
         force_passthrough,
@@ -328,7 +330,29 @@ pub(crate) async fn run_via_ir(
     }
     // D6-B: hand the interpreter the content-addressed asset store so it can
     // resolve `PromptSource::Asset` prompt references (empty map => no-op).
-    let dispatcher = Arc::new(dispatcher.with_assets(assets));
+    let dispatcher = dispatcher.with_assets(assets);
+
+    // Spec §13.5: attach the run-log writer (and, under --tui, a live
+    // channel) so the interpreter's agent loop emits TraceEvents. Reuses the
+    // same writer + file namespace as the multi-agent path, so
+    // `tau trace --last` picks up bundle runs with no reader changes.
+    let mut trace_subscribers: Vec<
+        Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber>,
+    > = Vec::new();
+    trace_subscribers.push(
+        tau_runtime_tokio::orchestration::trace_mpsc::channel_with_writer(
+            tau_runtime_tokio::orchestration::persistence::run_log_path(scope.path(), &run_id),
+        ),
+    );
+    let tui_rx = if args.tui {
+        let (subscriber, rx) =
+            tau_runtime_tokio::orchestration::trace_mpsc::MpscTraceSubscriber::channel();
+        trace_subscribers.push(Arc::new(subscriber));
+        Some(rx)
+    } else {
+        None
+    };
+    let dispatcher = Arc::new(dispatcher.with_trace(run_id.clone(), trace_subscribers));
 
     // 6. Build the initial prompt text from --prompt / stdin.
     let prompt_text = match &args.prompt {
@@ -369,9 +393,11 @@ pub(crate) async fn run_via_ir(
             .map(|s| s.id.0.clone())
             .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
 
-        let store =
-            tau_runtime_core::interpreter::pipeline::run_pipeline(module, prompt_text, dispatcher)
-                .await;
+        let store = drive_with_optional_tui(
+            tau_runtime_core::interpreter::pipeline::run_pipeline(module, prompt_text, dispatcher),
+            tui_rx,
+        )
+        .await;
 
         // Drop runtime + flush recorders before rendering, identical to
         // the single-agent path's discipline below so plugin processes are
@@ -391,8 +417,12 @@ pub(crate) async fn run_via_ir(
         },
     );
 
-    // 8. Drive the single entry agent (today's path, unchanged).
-    let run_outcome = run_ir(module, &entry_agent_id, dispatcher, vec![initial]).await;
+    // 8. Drive the single entry agent.
+    let run_outcome = drive_with_optional_tui(
+        run_ir(module, &entry_agent_id, dispatcher, vec![initial]),
+        tui_rx,
+    )
+    .await;
 
     // 9. Drop runtime + flush recorders before rendering, identical to
     //    the cwd path's discipline so plugin processes are reaped and
@@ -402,6 +432,61 @@ pub(crate) async fn run_via_ir(
 
     let outcome = run_outcome.context("running agent via IR interpreter")?;
     render_outcome(outcome, output)
+}
+
+/// Drive `fut` to completion, joining the blocking execution-trace TUI
+/// alongside it when `tui_rx` is `Some` (spec §13.5). Shared by both of
+/// `run_via_ir`'s drive sites (`run_pipeline` and `run_ir`) so `--tui`
+/// covers pipeline bundles as well as single-agent ones — wiring only one
+/// site would leave `--tui` silently inert for pipeline bundles.
+///
+/// Mirrors `cmd/run.rs`'s multi-agent `--tui` join (`run.rs:366-411`):
+/// `run_tui` is a blocking raw-mode loop, so it moves to the blocking pool
+/// while `fut` keeps driving concurrently on the current task via
+/// `tokio::join!`. `fut` is deliberately never `tokio::spawn`ed — the
+/// interpreter's synthetic `RunState` is `!Send` (spec §13.3), and moving
+/// it to another task would violate that.
+///
+/// Error precedence matches `run.rs:389-411`: when `fut` itself fails,
+/// that is the error the operator needs to act on, so it is returned
+/// unchanged (a concurrent TUI failure is only logged as extra context);
+/// a TUI failure is surfaced as an error only when `fut` succeeded.
+async fn drive_with_optional_tui<F, T>(
+    fut: F,
+    tui_rx: Option<tokio::sync::mpsc::UnboundedReceiver<tau_ports::TraceEvent>>,
+) -> Result<T, RuntimeError>
+where
+    F: Future<Output = Result<T, RuntimeError>>,
+{
+    let Some(rx) = tui_rx else {
+        return fut.await;
+    };
+    let tui_task =
+        tokio::task::spawn_blocking(move || crate::tui::run_tui(crate::tui::TraceSource::Live(rx)));
+    let (run_res, tui_res) = tokio::join!(fut, tui_task);
+    match run_res {
+        Err(run_err) => {
+            match tui_res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!("execution-trace TUI also errored: {e}");
+                }
+                Err(join_err) => {
+                    tracing::warn!("execution-trace TUI task also panicked: {join_err}");
+                }
+            }
+            Err(run_err)
+        }
+        Ok(value) => match tui_res {
+            Ok(Ok(())) => Ok(value),
+            Ok(Err(e)) => Err(RuntimeError::Internal {
+                message: format!("execution-trace TUI: {e}"),
+            }),
+            Err(join_err) => Err(RuntimeError::Internal {
+                message: format!("execution-trace TUI task panicked: {join_err}"),
+            }),
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +587,6 @@ impl ForwardingDispatcher {
     /// `run_id` is the id stamped on every event and the
     /// `.tau/runs/<run_id>.jsonl` filename; `subscribers` is typically the
     /// JSONL writer plus, under `--tui`, a live channel.
-    #[allow(dead_code)] // wired up by Task 8
     pub(crate) fn with_trace(
         mut self,
         run_id: String,
