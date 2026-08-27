@@ -404,6 +404,24 @@ mod tests {
     use alloc::vec;
     use tau_domain::Value;
 
+    // `SessionContext::new` has two shapes: `process` adds the `deadline`
+    // parameter. Mirror that split here so these tests keep compiling — and
+    // keep asserting — in the feature-less shape too. Without it the whole
+    // `lib test` target fails to build without `process` (#657).
+    #[cfg(feature = "process")]
+    fn session_ctx() -> SessionContext {
+        SessionContext::new(
+            tau_domain::AgentInstanceId::new(),
+            uuid::Uuid::now_v7(),
+            None,
+        )
+    }
+
+    #[cfg(not(feature = "process"))]
+    fn session_ctx() -> SessionContext {
+        SessionContext::new(tau_domain::AgentInstanceId::new(), uuid::Uuid::now_v7())
+    }
+
     struct EchoTool;
     impl StatelessTool for EchoTool {
         fn name(&self) -> &str {
@@ -431,14 +449,7 @@ mod tests {
         let tool = StatelessAdapter(EchoTool);
         assert_eq!(Tool::name(&tool), "echo");
 
-        let mut session = tool
-            .init(SessionContext::new(
-                tau_domain::AgentInstanceId::new(),
-                uuid::Uuid::now_v7(),
-                None,
-            ))
-            .await
-            .unwrap();
+        let mut session = tool.init(session_ctx()).await.unwrap();
 
         let result = tool
             .invoke(&mut session, Value::String("hi".into()))
@@ -452,23 +463,14 @@ mod tests {
 
     #[test]
     fn session_context_default_deny_entries_is_empty() {
-        let ctx = SessionContext::new(
-            tau_domain::AgentInstanceId::new(),
-            uuid::Uuid::now_v7(),
-            None,
-        );
+        let ctx = session_ctx();
         assert!(ctx.deny_entries.is_empty());
     }
 
     #[test]
     fn session_context_with_deny_entries_replaces_field() {
         let entry = DenyEntry::new("fs.read".to_string(), vec!["/etc/secret".to_string()]);
-        let ctx = SessionContext::new(
-            tau_domain::AgentInstanceId::new(),
-            uuid::Uuid::now_v7(),
-            None,
-        )
-        .with_deny_entries(vec![entry]);
+        let ctx = session_ctx().with_deny_entries(vec![entry]);
         assert_eq!(ctx.deny_entries.len(), 1);
         assert_eq!(ctx.deny_entries[0].kind, "fs.read");
         assert_eq!(ctx.deny_entries[0].deny, vec!["/etc/secret".to_string()]);
