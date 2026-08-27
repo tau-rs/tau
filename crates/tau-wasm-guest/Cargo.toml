@@ -32,7 +32,7 @@ tau-ir = { workspace = true }
 # self-correction trace).
 tau-ports = { workspace = true, default-features = false, features = ["serde"] }
 tau-runtime-core = { workspace = true, features = ["wasm-interpreter", "tool-validation"] }
-tau-native-tools = { path = "../tau-native-tools", default-features = false }
+tau-native-tools = { path = "../tau-native-tools", default-features = false, features = ["goal-predicates"] }
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 serde_json = { workspace = true }
 

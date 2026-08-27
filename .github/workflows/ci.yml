@@ -115,6 +115,15 @@ jobs:
       # under `#[cfg(feature = "serde")]`.
       - name: clippy tau-domain no_std shapes (-D warnings)
         run: just lint-domain-featureless
+      # Same gap, one crate over: tau-ports is never linted without `process`
+      # either. That hid a genuine lib-level breakage — `test-fixtures` did not
+      # imply `process`, so `--no-default-features --features test-fixtures`
+      # failed to compile the lib at all (src/fixtures.rs builds
+      # `SessionContext`/`WorkingContext` through `#[cfg(feature = "process")]`
+      # API). Covers the guest's real shape (`--features serde`), the floor, and
+      # the fixtures shape.
+      - name: clippy tau-ports no_std shapes (-D warnings)
+        run: just lint-ports-featureless
 
   cargo-deny:
     name: cargo-deny / linux

@@ -35,7 +35,13 @@ default       = ["process"]
 process       = ["serde?/std"]
 serde         = ["dep:serde", "tau-domain/serde", "uuid/serde"]
 schema        = ["dep:schemars", "tau-domain/schema"]
-test-fixtures = ["dep:tempfile"]
+# `src/fixtures.rs` builds `SessionContext` via `SessionContext::new`
+# (`#[cfg(feature = "process")]`) and sets `WorkingContext.working_dir`
+# (same gate), so the fixtures module only ever compiled because every host
+# caller happened to have `process` on too. Declare the dependency: without
+# it `--no-default-features --features test-fixtures` fails to compile the
+# LIB target (E0061 + E0560 + a deny-level `unused_imports`).
+test-fixtures = ["dep:tempfile", "process"]
 
 [dev-dependencies]
 tokio        = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

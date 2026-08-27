@@ -51,12 +51,24 @@ jobs:
         include:
           # Each entry pairs a fuzz directory with the binary target name
           # defined in its Cargo.toml (`[[bin]]` section).
+          #
+          # SIBLING MATRIX: release.yml's `fuzz` job carries an identical
+          # `matrix.include`. Both are hand-maintained; `xtask/tests/fuzz_matrix.rs`
+          # is the gate that keeps them honest (it fails `test-stable` if a
+          # `[[bin]]` under `crates/*/fuzz/` is missing from EITHER file).
+          # Add a harness here AND there, or CI will tell you.
           - crate: tau-pkg
             fuzz_dir: crates/tau-pkg/fuzz
             target: lockfile_from_toml_str
           - crate: tau-plugin-protocol
             fuzz_dir: crates/tau-plugin-protocol/fuzz
             target: frame_decode
+          - crate: tau-domain
+            fuzz_dir: crates/tau-domain/fuzz
+            target: parse_skill_md
+          - crate: tau-domain
+            fuzz_dir: crates/tau-domain/fuzz
+            target: parse_package_manifest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

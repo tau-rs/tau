@@ -76,6 +76,12 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
                  which has no run_pipeline path. Flatten the pipeline (remove \
                  Branch/Parallel/Loop steps) before building for wasm.",
             ),
+            LowerError::WasmFnUnavailable { ref fn_names, .. } => anyhow::anyhow!(
+                "predicate-fit refused for {WASM_TARGET}: no wasm guest execution path for \
+                 {fn_names:?}. schema_valid and user-registered fns have no no_std \
+                 implementation; use exists/non_empty/equals/matches/min_count, or build for \
+                 a native target.",
+            ),
             other => anyhow::anyhow!("lowering for {WASM_TARGET} failed: {other}"),
         })?;
     // NOTE(D6-B PR3): embedding the content-addressed asset store into the
