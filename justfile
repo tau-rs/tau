@@ -65,14 +65,18 @@ lint-domain-featureless:
 # deny-level `unused_imports`) — src/fixtures.rs builds both through
 # `#[cfg(feature = "process")]` API.
 #
-# Lib-only for the same reason as tau-domain above: tau-ports' in-src
-# `#[cfg(test)]` code calls the `process`-gated `SessionContext::new`, so the
-# feature-less test targets do not compile. Tracked in the tau-ports sibling of
-# #647; `--all-targets` goes on all three lines once that lands.
+# `--all-targets` (unlike tau-domain above, which stays lib-only): #657 gated
+# tau-ports' in-src `#[cfg(test)]` code off the `process`-only API it was
+# calling, so the test targets now build in every shape here. Note what this
+# does and does not prove — tau-ports links std unconditionally under cfg(test)
+# (`crates/tau-ports/src/lib.rs:22`), so green here means the test code compiles
+# against the feature-less FEATURE SET, not that the test targets are
+# no-std-clean. The lib is the artifact downstream no_std consumers link, and it
+# is covered by the same three lines.
 lint-ports-featureless:
-    cargo clippy -p tau-ports --no-default-features -- -D warnings
-    cargo clippy -p tau-ports --no-default-features --features serde -- -D warnings
-    cargo clippy -p tau-ports --no-default-features --features test-fixtures -- -D warnings
+    cargo clippy -p tau-ports --no-default-features --all-targets -- -D warnings
+    cargo clippy -p tau-ports --no-default-features --features serde --all-targets -- -D warnings
+    cargo clippy -p tau-ports --no-default-features --features test-fixtures --all-targets -- -D warnings
 
 # Measure + gate the wasm-guest bundle size (EPIC 5.6) — mirrors the CI step in
 # the `runtime-core-no-std` job. Reports the shipped-component size (wasm-tools)
