@@ -283,6 +283,7 @@ async fn resolve_mcp_cache(
     }
 
     let pin_base = project_root.join(".tau").join("mcp");
+    let rel_pin_base = std::path::Path::new(".tau/mcp");
 
     if offline {
         // Pinned path: read `.tau/mcp/<entry>.contract.json`.
@@ -298,7 +299,7 @@ async fn resolve_mcp_cache(
                 entry,
                 url,
                 &resolved,
-                Some(format!(".tau/mcp/{entry}.contract.json")),
+                Some(contract_pin_path(rel_pin_base, entry).display().to_string()),
             ));
             ir_cache.insert(url.clone(), to_ir_shape(resolved));
         }
@@ -317,12 +318,17 @@ async fn resolve_mcp_cache(
             .await
             .map_err(|e| anyhow::anyhow!("MCP live resolve failed: {e}"))?;
 
-        // Write pinned files for next-time --offline.
-        std::fs::create_dir_all(&pin_base)
-            .map_err(|e| anyhow::anyhow!("failed to create .tau/mcp/: {e}"))?;
+        // Write pinned files for next-time --offline. Path-named entries
+        // (`github/search`) nest, so the parent must be created per-entry
+        // rather than just the flat `.tau/mcp/` base.
         for (entry, url) in &mcp_entries {
             if let Some(lr) = live.get(url) {
-                let path = pin_base.join(format!("{entry}.contract.json"));
+                let path = contract_pin_path(&pin_base, entry);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        anyhow::anyhow!("failed to create {}: {e}", parent.display())
+                    })?;
+                }
                 let bytes = serde_json::to_vec_pretty(&lr.pinned)
                     .map_err(|e| anyhow::anyhow!("serialize pinned contract for {entry:?}: {e}"))?;
                 std::fs::write(&path, bytes)
@@ -338,13 +344,20 @@ async fn resolve_mcp_cache(
                     entry,
                     url,
                     &lr.resolved,
-                    Some(format!(".tau/mcp/{entry}.contract.json")),
+                    Some(contract_pin_path(rel_pin_base, entry).display().to_string()),
                 ));
                 ir_cache.insert(url.clone(), to_ir_shape(lr.resolved.clone()));
             }
         }
         Ok((locked_entries, ir_cache))
     }
+}
+
+/// Pin path for an MCP tool entry. Path-named tools (`github/search`) nest —
+/// safe against a sibling `github.contract.json` because the file name always
+/// carries the `.contract.json` suffix.
+fn contract_pin_path(pin_base: &std::path::Path, entry: &str) -> std::path::PathBuf {
+    pin_base.join(format!("{entry}.contract.json"))
 }
 
 /// Convert a `tau_mcp` resolver output to tau-ir's structurally-identical type.
@@ -1129,5 +1142,18 @@ capabilities = []
         let payload = payload.unwrap();
         assert!(!payload.canonical_ir_hash.is_empty());
         assert!(!payload.canonical_ir_bytes_hex.is_empty());
+    }
+
+    #[test]
+    fn contract_pin_path_nests_slash_names() {
+        let base = std::path::Path::new(".tau/mcp");
+        assert_eq!(
+            contract_pin_path(base, "github/search"),
+            std::path::Path::new(".tau/mcp/github/search.contract.json")
+        );
+        assert_eq!(
+            contract_pin_path(base, "plain"),
+            std::path::Path::new(".tau/mcp/plain.contract.json")
+        );
     }
 }
