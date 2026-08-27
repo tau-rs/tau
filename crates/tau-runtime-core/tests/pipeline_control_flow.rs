@@ -33,6 +33,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
+use tracing::field::{Field, Visit};
+use tracing::span::Attributes;
+use tracing::{Event, Id, Subscriber};
+use tracing_subscriber::layer::Context as LayerContext;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::Layer;
 
 use tau_ir::budget::AgentBudget;
 use tau_ir::capability::{CapabilityRequirements, CapabilityTable};
@@ -947,6 +953,116 @@ fn store_output(store: &OutputStore, id: &str) -> String {
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Trace-event capture for `runtime.dynamic.spawned` (Task 5, EPIC 4.5).
+//
+// Sibling to `interpreter/dynamic.rs`'s `CapturedSpawnDenials` harness, not
+// a reuse of it: that layer's `Visit` impl only understands the denial
+// event's `reason`/`count`/`limit` fields. The success event
+// (`runtime.dynamic.spawned`, emitted at `dynamic.rs`'s admission-accepted
+// arm) carries a disjoint field set — `region_step`/`kind`/`child_id`/
+// `index`/`max_spawns` — so it needs its own `Visit` impl. Placed here
+// (an integration test) rather than as a `dynamic.rs` unit test because
+// pinning the success path needs a real child run, and `dynamic.rs`'s unit
+// tests deliberately use a `PanicDispatcher` that panics if a child ever
+// runs; this file's `SeqBackend`/`dynamic_module` scaffolding already runs
+// a real spawned child to completion in `dynamic_region_spawns_child_and_completes`.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// `(region_step, kind, child_id, index, max_spawns)` captured from one
+/// `runtime.dynamic.spawned` event — named to satisfy clippy's
+/// `type_complexity` lint on [`CapturedSpawned`]'s field.
+type SpawnedRecord = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<u64>,
+    Option<u64>,
+);
+
+#[derive(Default)]
+struct SpawnedFields {
+    name: Option<String>,
+    region_step: Option<String>,
+    kind: Option<String>,
+    child_id: Option<String>,
+    index: Option<u64>,
+    max_spawns: Option<u64>,
+}
+
+impl Visit for SpawnedFields {
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        match field.name() {
+            "index" => self.index = Some(value),
+            "max_spawns" => self.max_spawns = Some(value),
+            _ => {}
+        }
+    }
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        if value < 0 {
+            return;
+        }
+        match field.name() {
+            "index" => self.index = Some(value as u64),
+            "max_spawns" => self.max_spawns = Some(value as u64),
+            _ => {}
+        }
+    }
+    fn record_str(&mut self, field: &Field, value: &str) {
+        match field.name() {
+            "name" => self.name = Some(value.to_string()),
+            "region_step" => self.region_step = Some(value.to_string()),
+            "kind" => self.kind = Some(value.to_string()),
+            "child_id" => self.child_id = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        let raw = format!("{value:?}");
+        match field.name() {
+            "name" => self.name = Some(raw.trim_matches('"').to_string()),
+            "region_step" => self.region_step = Some(raw.trim_matches('"').to_string()),
+            "kind" => self.kind = Some(raw.trim_matches('"').to_string()),
+            "child_id" => self.child_id = Some(raw.trim_matches('"').to_string()),
+            "index" => {
+                if let Ok(n) = raw.trim().parse::<u64>() {
+                    self.index = Some(n);
+                }
+            }
+            "max_spawns" => {
+                if let Ok(n) = raw.trim().parse::<u64>() {
+                    self.max_spawns = Some(n);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct CapturedSpawned(Arc<Mutex<Vec<SpawnedRecord>>>);
+
+impl<S: Subscriber> Layer<S> for CapturedSpawned {
+    fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: LayerContext<'_, S>) {}
+
+    fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+        let mut visitor = SpawnedFields::default();
+        event.record(&mut visitor);
+        if visitor.name.as_deref() == Some("runtime.dynamic.spawned") {
+            self.0
+                .lock()
+                .expect("captured-events mutex poisoned")
+                .push((
+                    visitor.region_step,
+                    visitor.kind,
+                    visitor.child_id,
+                    visitor.index,
+                    visitor.max_spawns,
+                ));
+        }
+    }
+}
+
 /// A coordinator spawns one `researcher` child; the child's report flows
 /// back into the coordinator's next turn (not the legacy
 /// `agent.<kind>.spawn` kernel intercept — see the "no orchestration
@@ -954,6 +1070,11 @@ fn store_output(store: &OutputStore, id: &str) -> String {
 /// becomes the `Dynamic` step's stored output.
 #[tokio::test]
 async fn dynamic_region_spawns_child_and_completes() {
+    let captured = CapturedSpawned::default();
+    let _tracing_guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
     let module = dynamic_module();
     let responses = vec![
         // r1: coordinator turn 1 — spawns the researcher.
@@ -999,6 +1120,30 @@ async fn dynamic_region_spawns_child_and_completes() {
     let third = render_messages(&reqs[2]);
     assert!(third.contains("CHILD REPORT A"), "{third}");
     assert!(!third.contains("no orchestration runtime"), "{third}");
+
+    // Mirror assertion (Task 5): the admitted spawn emitted exactly one
+    // `runtime.dynamic.spawned` event, with the correct structured fields —
+    // `region_step`/`kind` naming this region and spawn kind, `child_id`
+    // matching the id the child agent actually ran under, `index` at its
+    // 0-based admission index (the region's only admission), and
+    // `max_spawns` echoing the region's configured bound (1, per
+    // `dynamic_module`'s doc comment).
+    let spawned = captured.0.lock().expect("poisoned").clone();
+    assert_eq!(
+        spawned.len(),
+        1,
+        "expected exactly one runtime.dynamic.spawned event; got: {spawned:?}"
+    );
+    let (region_step, kind, child_id, index, max_spawns) = spawned[0].clone();
+    assert_eq!(region_step.as_deref(), Some("spawn-region"));
+    assert_eq!(kind.as_deref(), Some("researcher"));
+    assert_eq!(child_id.as_deref(), Some("spawn-region:researcher#0"));
+    assert_eq!(index, Some(0), "index must be the 0-based admission index");
+    assert_eq!(
+        max_spawns,
+        Some(1),
+        "max_spawns must echo the region's configured bound"
+    );
 }
 
 /// A coordinator's single turn emits TWO spawn requests against a region

@@ -711,4 +711,50 @@ mod tests {
             "limit must report max_concurrency (1), not max_spawns (4)"
         );
     }
+
+    #[tokio::test]
+    async fn spawn_denied_bounds_event_reports_spawned_count_not_concurrency() {
+        // Bounds denial (max_spawns exhaustion): assert the emitted
+        // event's structured fields are correct (count=spawned, limit=max_spawns),
+        // not mislabeled with concurrency counters.
+        let captured = CapturedSpawnDenials::default();
+        let _tracing_guard = tracing_subscriber::registry()
+            .with(captured.clone())
+            .set_default();
+
+        let counters = Arc::new(RegionCounters::new(1, 10));
+        // Saturate bounds: spawned = 1, max_spawns = 1.
+        counters.try_admit().expect("first admit");
+        let tool = SpawnTool::new(
+            test_spawn("researcher"),
+            CapabilityRequirements::default(),
+            counters,
+            "fanout".into(),
+            test_module(),
+            Arc::new(PanicDispatcher),
+        );
+        let mut session = ();
+        tool.invoke(
+            &mut session,
+            domain_args(serde_json::json!({"message": "go"})),
+        )
+        .await
+        .expect("soft-deny returns Ok(ToolResult)");
+
+        let events = captured.0.lock().expect("poisoned").clone();
+        let (reason, count, limit) = events
+            .iter()
+            .find(|(reason, ..)| reason.as_deref() == Some("bounds"))
+            .cloned()
+            .expect("expected a bounds spawn_denied event");
+        assert_eq!(reason.as_deref(), Some("bounds"));
+        // `count` must be the spawned snapshot (1), and `limit` must be
+        // `max_spawns` (1) — NOT `max_concurrency` (10).
+        assert_eq!(count, Some(1), "count must report spawned, not in_flight");
+        assert_eq!(
+            limit,
+            Some(1),
+            "limit must report max_spawns (1), not max_concurrency (10)"
+        );
+    }
 }
