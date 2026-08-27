@@ -122,6 +122,13 @@ jobs:
       # `SessionContext`/`WorkingContext` through `#[cfg(feature = "process")]`
       # API). Covers the guest's real shape (`--features serde`), the floor, and
       # the fixtures shape.
+      #
+      # All three shapes run `--all-targets` since #657 gated the in-src
+      # `#[cfg(test)]` callers of that same `process`-only API. That extends the
+      # gate to test-only code, but it does NOT make the test targets
+      # no-std-clean: tau-ports links std unconditionally under cfg(test)
+      # (crates/tau-ports/src/lib.rs:22). The no_std claim rests on the lib
+      # target, which these lines also cover.
       - name: clippy tau-ports no_std shapes (-D warnings)
         run: just lint-ports-featureless
 
