@@ -588,22 +588,35 @@ pub(crate) fn resolve_agent_prompt_bytes(
 }
 
 /// Read an agent `system_file` prompt's bytes, resolving a relative path
-/// against `project_root` (absolute paths are used as-is).
+/// against `project_root`.
 ///
 /// The single source of truth for prompt-file *path resolution*, shared by
 /// the bundle builder ([`resolve_agent_prompt_bytes`]) and the lowering
 /// `prompt_file` closure (D6-B) so the IR asset hash and the bundle's
 /// `system_prompt_sha256` are computed over identical bytes.
+///
+/// Containment guard: `rel` must be relative and must resolve (after
+/// canonicalization) to a path inside `project_root`. Absolute paths and
+/// `../` escapes are rejected with `ErrorKind::InvalidInput` — a prompt path
+/// is authored data from `tau.toml`, not something that should be able to
+/// read arbitrary files off the host.
 pub fn read_prompt_file(
     rel: &std::path::Path,
     project_root: &std::path::Path,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let abs = if rel.is_absolute() {
-        rel.to_path_buf()
-    } else {
-        project_root.join(rel)
-    };
-    std::fs::read(&abs)
+    let deny = |msg: &str| std::io::Error::new(std::io::ErrorKind::InvalidInput, msg.to_string());
+    if rel.is_absolute() {
+        return Err(deny(
+            "prompt file path must be relative to the project root",
+        ));
+    }
+    let abs = project_root.join(rel);
+    let canon = abs.canonicalize()?;
+    let root = project_root.canonicalize()?;
+    if !canon.starts_with(&root) {
+        return Err(deny("prompt file path escapes the project root"));
+    }
+    std::fs::read(&canon)
 }
 
 /// SHA-256 of `bytes` as lowercase hex. The single source of truth for
@@ -1191,6 +1204,26 @@ generated_at = "2024-01-01T00:00:00Z"
             BuildError::PromptResolveFailed { id, .. } => assert_eq!(id, "r"),
             other => panic!("expected PromptResolveFailed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_prompt_file_rejects_absolute_and_escape() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("p.md"), "ok").unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "no").unwrap();
+
+        assert_eq!(
+            read_prompt_file(std::path::Path::new("p.md"), t.path()).unwrap(),
+            b"ok"
+        );
+        // absolute
+        assert!(read_prompt_file(&outside.path().join("secret.md"), t.path()).is_err());
+        // ../ escape
+        let escape = std::path::Path::new("..")
+            .join(outside.path().file_name().unwrap())
+            .join("secret.md");
+        assert!(read_prompt_file(&escape, t.path()).is_err());
     }
 
     // Helper: parse a Capability from its serialized kind/field JSON
