@@ -48,7 +48,9 @@ tools/github/search.toml    → tool  "github/search"
 References use this full name everywhere — `tool_refs`, `subflow`,
 `[allow.tools]` keys, traces, `tau list`. **Moving a file renames the
 definition**: any reference to the old name becomes dangling and fails the
-build with a did-you-mean hint pointing at the new name.
+build loudly — e.g. `agent "review" references unknown tool "github/search"`
+— rather than resolving silently. There is no suggestion of the new name in
+the error; you have to know what you renamed it to.
 
 Each path segment (directory or file stem) must match `[a-z0-9_-]+` —
 lowercase ASCII, digits, hyphen, underscore; no dots, no spaces, no Unicode.
@@ -162,8 +164,9 @@ separate namespaces today, exactly as with inline definitions.
 - **Moving a file renames the definition.** There is no separate identity —
   the path is the name. Update every `tool_refs` / `subflow` / `[allow.*]`
   reference before (or immediately after) moving a file; a stale reference
-  fails `tau build` loudly, with a did-you-mean suggestion, rather than
-  silently resolving to nothing.
+  fails `tau build` loudly (an `agent "x" references unknown tool "y"`
+  style error) rather than silently resolving to nothing — but the error
+  does not suggest the new name.
 - **CRLF is normalized at build time.** `\r\n` is rewritten to `\n` in both
   the YAML frontmatter and the markdown body before hashing, so a prompt
   authored (or checked out) with Windows line endings hashes identically to

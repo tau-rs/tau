@@ -60,7 +60,10 @@ agent `review/strict`. Names flow through `tool_refs`, `subflow`,
 `[allow.*]` keys, traces, and `tau list` identically to inline names — there
 is no separate "file path" vs. "engine name" concept to keep in sync.
 References use the full name; a stale reference (e.g. after a file move)
-fails the build with a did-you-mean hint rather than resolving silently.
+fails the build loudly — `LowerError::UnknownToolRef` /
+`UnknownSubflowTarget` (`agent "x" references unknown tool "y"` style) —
+rather than resolving silently. The error names the bad reference but does
+not suggest a replacement.
 
 **A stricter charset than inline names.** Each path segment must match
 `[a-z0-9_-]+`. This is deliberately narrower than the unrestricted charset
@@ -130,8 +133,10 @@ same change, not a new mechanism).
 - **Moving a file renames the definition.** There is no identity separate
   from the path. This is the intended, Claude-Code-like DX ("the file *is*
   the thing"), but it means a rename is a breaking change to every reference
-  by default — mitigated by a build-time did-you-mean hint on the dangling
-  reference, not by any kind of alias or redirect mechanism (none exists).
+  by default. The only mitigation today is that it fails loudly at build
+  time (a plain "unknown tool/agent" error, no suggested replacement) rather
+  than resolving silently — there is no alias, redirect, or did-you-mean
+  mechanism.
 - **TS projects cannot declare `[dirs]` yet.** The TS authoring surface
   (ADR-0041) has no `dirs()` factory, so `[dirs]` is unrepresentable from
   `.ts` today. The root-aware merge seam (`parse_str_at`) does not care which

@@ -64,7 +64,8 @@ tools/github/search.toml    → tool  "github/search"
 
 References use the full name everywhere (`tool_refs`, `subflow`,
 `[allow.tools]` keys, traces, `tau list`). Moving a file renames the
-definition; dangling references fail the build with a did-you-mean hint.
+definition; dangling references fail the build loudly (e.g. `agent "x"
+references unknown tool "y"`), not silently.
 
 Segment charset: `[a-z0-9_-]+` per segment (lowercase ASCII; no dots, no
 spaces, no Unicode). Rationale: kills case-insensitive-filesystem collisions
@@ -215,7 +216,7 @@ unrepresentable in dir files by construction (each file is one entry body).
   fields, YAML conformance pins, CRLF normalization idempotence.
 - Integration: dir project lowers; byte-equal vs inline-authored twin;
   `tau verify` green after CRLF-mangled checkout simulation; MCP pin nesting;
-  `tau list`/trace show full path-names; did-you-mean on dangling ref after
-  file move.
+  `tau list`/trace show full path-names; build fails with an unknown-ref
+  error after a referenced definition file is moved.
 - Cross-platform: case-collision fixture rejected by charset rule on Linux
   (where it would otherwise pass).
