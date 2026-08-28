@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Variant A embedding entry (EPIC 7.2): run a built tau component with caller-supplied `EmbedPorts`. Events reach `ports.on_event` live, one serialized `RunEvent` per call; the `Ok` value is the guest’s payload sentinel (empty today, reserved for forward-compat)."><title>run_component_with_ports in tau_wasm_host - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="tau_wasm_host" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">run_component_with_ports</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tau_wasm_host/index.html">tau_<wbr>wasm_<wbr>host</a><span class="version">0.0.0</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">tau_wasm_host</a></div><h1>Function <span class="fn">run_<wbr>component_<wbr>with_<wbr>ports</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tau_wasm_host/lib.rs.html#444-476">Source</a> </span></div><pre class="rust item-decl"><code>pub fn run_component_with_ports(
+    wasm_bytes: &amp;[<a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.u8.html">u8</a>],
+    prompt: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.98.0/std/primitive.str.html">str</a>,
+    ports: <a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="trait.EmbedPorts.html" title="trait tau_wasm_host::EmbedPorts">EmbedPorts</a>&gt;,
+    caps: &amp;[<a class="enum" href="embed/enum.Capability.html" title="enum tau_wasm_host::embed::Capability">Capability</a>],
+    sandbox_root: &amp;<a class="struct" href="https://doc.rust-lang.org/1.98.0/std/path/struct.Path.html" title="struct std::path::Path">Path</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.98.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.98.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>, <a class="enum" href="enum.WasmHostError.html" title="enum tau_wasm_host::WasmHostError">WasmHostError</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Variant A embedding entry (EPIC 7.2): run a built tau component with
+caller-supplied <a href="trait.EmbedPorts.html" title="trait tau_wasm_host::EmbedPorts"><code>EmbedPorts</code></a>. Events reach <code>ports.on_event</code> live, one
+serialized <code>RunEvent</code> per call; the <code>Ok</code> value is the guest’s payload
+sentinel (empty today, reserved for forward-compat).</p>
+<p><strong><code>Ok</code> does not mean the workflow succeeded</strong> — once baked IR decodes,
+the guest’s <code>run</code> always returns its <code>ok</code> arm. A mid-run failure (e.g.
+the LLM port erroring) surfaces only as a <code>RunEvent::FatalError</code> on the
+<code>on_event</code> stream; <code>Err</code> from this function covers load/instantiate/trap
+and the guest’s own load-time error arm. To know whether the run actually
+completed, watch for a terminal <code>RunEvent::RunCompleted</code> on <code>on_event</code>
+(see <code>crates/tau-wasm-embed-example</code>’s <code>completed</code> flag for the pattern).</p>
+<p><code>caps</code> bounds the WASI authority granted to the component (which
+preopens exist, which network egress is allowed); today the only
+supported way to obtain a non-empty, meaningfully-scoped <code>caps</code> slice is
+deserializing it from a package manifest via <code>tau-pkg</code> (the curated
+<code>tau_domain::Capability</code> constructors are behind tau-domain’s
+test-only <code>test-fixtures</code> feature, not part of this crate’s public
+surface). The shipped example (<a href="index.html" title="mod tau_wasm_host"><code>crate</code></a>-level docs;
+<code>crates/tau-wasm-embed-example</code>) deliberately grants none (<code>&amp;[]</code>) — no
+fs/net reaches the workflow.</p>
+<p><code>sandbox_root</code> is security-relevant: every preopen <code>caps</code> authorizes is
+resolved <em>under</em> this path, so it is the ceiling on what the
+component’s filesystem grants can reach even before
+<code>caps</code> narrows further. <code>Path::new(".")</code> is only a safe value when
+<code>caps</code> grants no filesystem access at all — with any fs cap granted, pick
+a real sandbox directory.</p>
+<p>The component and this host must come from compatible tau versions: the
+<code>complete</code> port round-trips <code>tau_ports::llm::CompletionRequest</code> /
+<code>CompletionResponse</code> as JSON across the wasm boundary, and neither type
+has serde defaults. An older component run against a newer host (or vice
+versa) after a field is added fails every <code>complete</code> call — reported as a
+<code>FatalError</code> event carrying a “malformed CompletionRequest” message, not
+as an <code>Err</code> return.</p>
+</div></details></section></div></main></body></html>
