@@ -25,6 +25,7 @@ fn each_subcommand_is_invokable() {
         "plugins",
         "skills",
         "mcp-contracts",
+        "dirs",
     ] {
         let tmp = TempDir::new().unwrap();
         let src = fixture("clean-project");

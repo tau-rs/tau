@@ -197,19 +197,26 @@ mod tests {
         }
         std::fs::write(t.path().join(".gitignore"), "agents/scratch.md\n").unwrap();
         std::fs::create_dir_all(t.path().join("agents")).unwrap();
+        // `model: fast` is required: full `ProjectConfig::validate()` (unlike
+        // the bare `scan_dirs` used in tau-pkg's own tests) rejects an agent
+        // with no resolvable model alias (`MissingAgentModel`), so the
+        // fixture's `tau.toml` below must declare `[models] fast = { .. }`
+        // with `backend` matching this agent's `package` name (`p`).
         std::fs::write(
             t.path().join("agents/scratch.md"),
-            "---\ndisplay_name: A\npackage: p@^1\n---\nbody\n",
+            "---\ndisplay_name: A\npackage: p@^1\nmodel: fast\n---\nbody\n",
         )
         .unwrap();
         std::fs::write(
             t.path().join("agents/kept.md"),
-            "---\ndisplay_name: A\npackage: p@^1\n---\nbody\n",
+            "---\ndisplay_name: A\npackage: p@^1\nmodel: fast\n---\nbody\n",
         )
         .unwrap();
+        // With `[allow]` present, models must live under `[allow.models]`
+        // rather than a top-level `[models]` table (ADR-0057).
         std::fs::write(
             t.path().join("tau.toml"),
-            "[project]\nname = \"p\"\n[allow]\n[dirs]\nagents = \"agents\"\n",
+            "[project]\nname = \"p\"\n[allow]\n[allow.models.fast]\nbackend = \"p\"\nmodel = \"model-v1\"\n[dirs]\nagents = \"agents\"\n",
         )
         .unwrap();
         let ctx = test_ctx(t.path());
