@@ -282,7 +282,7 @@ pub struct CheckFinding {
 
 pub enum CheckCategory { Config, Lockfile, Packages, Sandbox, Plugins, Skills }
 
-pub enum Severity { Error, NeedsSetup, Warning }
+pub enum Severity { Error, NeedsSetup, Warning, Note }
 
 pub struct CheckResult {
     pub category: CheckCategory,
@@ -343,6 +343,15 @@ fn compute_exit(results: &[CheckResult]) -> i32 {
 | `3` | Only setup-needed failures (missing packages); run `tau resolve` and retry |
 | `64` | Usage error (sysexits E_USAGE) |
 | `70` | Internal error / panic (sysexits E_SOFTWARE) |
+
+**A freshly scaffolded project exits 2, by design.** `tau init` writes an
+example agent with empty `package` / `model` for the user to fill in; those
+blanks fail `ProjectConfig` validation, so `config` emits `Severity::Error`.
+Exit 3 is *not* the right code for this: it is scoped above to "missing
+packages; run `tau resolve` and retry" — conditions a **command** resolves.
+Nothing but the user editing the file resolves a blank field. A 2026-08-23 QA
+sweep read this as a defect; it is not one, and
+`cmd_check_exit_codes.rs::fresh_scaffold_exits_2_by_design` pins it.
 
 Runner-level panics → 70 + log to stderr. A check failing *to even run* (e.g., plugin binary crashed during cross-check) → that's a Finding with `Severity::Error` and `rule_id="tau.plugins.cross_check_internal_error"`, NOT exit 70. Runner-level errors are about the orchestrator itself.
 
