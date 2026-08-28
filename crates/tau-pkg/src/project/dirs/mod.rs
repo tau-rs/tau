@@ -1,4 +1,4 @@
-//! Directory-based tool/agent definitions (`[dirs]`, ADR-0067).
+//! Directory-based tool/agent definitions (`[dirs]`, ADR-0068).
 //!
 //! `file` parses individual definition files (`agents/**/*.{md,toml}`,
 //! `tools/**/*.toml`) into the same unchecked shapes the inline

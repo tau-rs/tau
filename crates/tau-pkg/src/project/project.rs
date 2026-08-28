@@ -59,6 +59,11 @@ pub struct UncheckedProjectConfig {
 }
 
 /// `[dirs]` table — opt-in directory-based definition roots (relative paths).
+///
+/// `#[non_exhaustive]`, matching [`ProjectConfig`] and [`ProjectConfigError`]:
+/// a future root kind (`steps`, `goals`, …) must be an additive change, not a
+/// breaking one, for downstream crates that pattern-match or struct-literal it.
+#[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UncheckedDirs {
@@ -71,6 +76,9 @@ pub struct UncheckedDirs {
 }
 
 /// Validated `[dirs]` declaration (paths as declared, relative to project root).
+///
+/// `#[non_exhaustive]` for the same reason as [`UncheckedDirs`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirsEntry {
     /// Agents root, if declared.
@@ -3049,7 +3057,7 @@ impl ProjectConfig {
     /// Parse + validate with a project root, enabling `[dirs]` scanning.
     ///
     /// When `[dirs]` is declared, scans `project_root` for directory-based
-    /// agent/tool definitions (ADR-0067) and merges them into the inline
+    /// agent/tool definitions (ADR-0068) and merges them into the inline
     /// `[agents.*]`/`[tools.*]` tables before validation. A definition name
     /// present in both the inline table and a scanned directory is a hard
     /// error ([`ProjectConfigError::DuplicateDefinition`]) — dirs and inline

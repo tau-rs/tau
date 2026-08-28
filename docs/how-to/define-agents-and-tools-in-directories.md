@@ -52,6 +52,10 @@ build loudly — e.g. `agent "review" references unknown tool "github/search"`
 — rather than resolving silently. There is no suggestion of the new name in
 the error; you have to know what you renamed it to.
 
+> **Today's limit:** nesting works for **tools**, not yet for **agents** —
+> an agent name containing `/` (or `_`) fails `tau build`. See the first
+> entry under [Gotchas](#gotchas).
+
 Each path segment (directory or file stem) must match `[a-z0-9_-]+` —
 lowercase ASCII, digits, hyphen, underscore; no dots, no spaces, no Unicode.
 This is stricter than inline `[agents.X]` naming on purpose: it rules out
@@ -161,6 +165,16 @@ separate namespaces today, exactly as with inline definitions.
 
 ## Gotchas
 
+- **Keep *agent* names flat for now.** A `/` in an **agent** name — what a
+  nested `agents/review/strict.md` produces — cannot currently reach a
+  bundle: `tau build` writes agent ids as a `tau_domain::AgentId`, whose
+  grammar is `[a-z0-9-]` (no `/`, and no `_` either), so the build fails at
+  manifest assembly with exit 2 and `tau resolve` panics. **Tool** names are
+  unaffected — `tools/github/search.toml` builds and runs fine — as are flat
+  agent names like `agents/strict.md`. This is a pre-existing `tau-domain`
+  constraint that an inline `[agents."review/strict"]` hits identically; see
+  the Consequences section of
+  [ADR-0068](../decisions/0068-directory-based-definitions.md).
 - **Moving a file renames the definition.** There is no separate identity —
   the path is the name. Update every `tool_refs` / `subflow` / `[allow.*]`
   reference before (or immediately after) moving a file; a stale reference

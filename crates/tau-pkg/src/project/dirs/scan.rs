@@ -14,6 +14,11 @@ use super::file;
 const OS_JUNK: &[&str] = &["Thumbs.db", "desktop.ini"];
 
 /// Definitions harvested from `[dirs]` roots. Paths are project-root-relative.
+///
+/// `#[non_exhaustive]`: this is public API with public fields, and adding a
+/// third definition kind (steps, goals, …) must stay additive. Matches the
+/// house convention already applied to `ProjectConfig` / `ProjectConfigError`.
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct ScannedDefs {
     /// Full path-name → (entry, source file).

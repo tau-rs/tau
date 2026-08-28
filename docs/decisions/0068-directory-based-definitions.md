@@ -4,16 +4,15 @@
 **Date:** 2026-08-22
 **Deciders:** tau core
 
-> **Numbering note:** the design spec and the implementation's internal
-> comments (`tau-pkg`'s `dirs` module, `ProjectConfig::parse_str_at`, `tau
-> check`'s dirs category) refer to this feature as "ADR-0067" — that was the
+> **Numbering note:** the design spec
+> (`docs/superpowers/specs/2026-08-22-dir-based-definitions-design.md`) and
+> the implementation plan refer to this feature as "ADR-0067" — that was the
 > next free slot when the spec was written. By the time this page landed,
 > [ADR-0067](0067-sandbox-windows-appcontainer-phase2.md) (Windows
 > AppContainer adapter, Phase 2) had already merged to `main` under that
 > number. This document claims **0068**, the next free slot, rather than
-> overwriting an unrelated accepted ADR. The in-code comments citing
-> "ADR-0067" are stale by one digit; fixing them is a follow-up (docs-only
-> changes are out of scope for a docs task that must not touch Rust code).
+> overwriting an unrelated accepted ADR. The in-code doc comments have been
+> corrected to cite 0068; only the historical spec and plan still say 0067.
 
 ## Context
 
@@ -151,8 +150,25 @@ same change, not a new mechanism).
   `.gitignore` builds locally but is silently absent from CI/clones; `tau
   check dirs` warns (does not fail) because a project may legitimately
   gitignore a draft definition on purpose.
-- **The in-code "ADR-0067" comments are stale.** See the numbering note
-  above; a follow-up should update the three doc-comment references
-  (`tau-pkg/src/project/dirs/mod.rs`, `tau-pkg/src/project/project.rs`,
-  `tau-cli/src/cmd/check/result.rs`) to cite 0068 once a Rust-touching change
-  lands on this branch anyway.
+- **Absolute `system_file` paths are now rejected.** Extending the
+  containment guard to `system_file` (above) is a **silent hard break** for
+  any existing config that pointed `system_file` at an absolute path: those
+  paths were previously used as-is, and now fail with an
+  `ErrorKind::InvalidInput` "prompt file path must be relative to the project
+  root". This is deliberate — an absolute prompt path is non-hermetic and
+  unbuildable on any other machine — but it is a behavior change that
+  predates and is independent of `[dirs]`, so it will surface for projects
+  that never adopt directory definitions. Remediation is mechanical: move the
+  prompt inside the project root and reference it relatively.
+- **A `/`-containing *agent* name cannot reach a bundle yet.** `tau build`
+  writes `BundleAgent.id` as a `tau_domain::AgentId`, whose grammar is
+  `[a-z0-9-]` — no `/`, and no `_` either, though the dirs scanner accepts
+  both. A nested `agents/review/strict.md` therefore fails manifest assembly
+  with exit 2, and `tau resolve` panics on it outright. Tool names are
+  unaffected (`tau_ir::ToolId` is an unvalidated newtype), so
+  `tools/github/search.toml` works end to end. This is a pre-existing
+  `tau-domain` identity constraint — an inline `[agents."review/strict"]`
+  hits the same wall — that was invisible until the build pipeline became
+  dirs-aware. Widening the `AgentId` grammar is its own decision and is not
+  taken here; until then, keep dir-defined **agent** names flat and
+  kebab-case. `crates/tau-cli/tests/cmd_build_dirs.rs` pins the boundary.

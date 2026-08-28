@@ -45,6 +45,31 @@ version = "^0.1"
 | `[project]` | exactly one | project identity. |
 | `[allow]` | zero or one | governance ceiling (the project *constitution*). |
 | `[agents.<id>]` | any | one entry per agent the project declares. |
+| `[dirs]` | zero or one | opt-in directory roots scanned for agent/tool definitions. |
+
+### `[dirs]` — directory-based definitions
+
+Optional. Declares project-root-relative directories whose files become
+`[agents.<id>]` / `[tools.<name>]` entries, merged into the inline tables
+before validation:
+
+```toml
+[dirs]
+agents = "agents"   # scans agents/**/*.{md,toml}
+tools  = "tools"    # scans tools/**/*.toml
+```
+
+Both keys are optional; unknown keys are rejected. Each declared root must be
+relative, exist, stay inside the project root, and be disjoint from the other
+root. A definition's engine name is its path below the root with the
+extension stripped (`agents/review/strict.md` → `review/strict`), and a name
+present both inline and in a directory is a hard error.
+
+See the how-to, [Define agents and tools in
+directories](../how-to/define-agents-and-tools-in-directories.md), for the
+file formats, hygiene rules, and gotchas, and
+[ADR-0068](../decisions/0068-directory-based-definitions.md) for the
+rationale.
 
 ## Governance: the `[allow]` ceiling
 
