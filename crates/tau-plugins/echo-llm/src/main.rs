@@ -240,3 +240,79 @@ impl LlmBackend for EchoLlm {
 async fn main() -> Result<(), SdkError> {
     run_llm_backend_with_config::<EchoLlm>(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (a) — additivity guarantee (#631 I4): a config that sets neither
+    /// `tool_calls` nor `canned_tool_call` — every config written before
+    /// this branch — must still produce exactly today's shape: the
+    /// scripted/canned text, no tool calls, `StopReason::EndTurn`. This
+    /// branch's whole premise is that existing configs behave
+    /// byte-identically; this test is what actually checks that premise
+    /// rather than asserting it in a doc comment.
+    #[tokio::test]
+    async fn empty_config_yields_canned_text_no_tools_end_turn() {
+        let echo = EchoLlm::from_config(EchoConfig {
+            canned_text: "hello".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let (turn, text, tool_uses, stop_reason) = echo.next_turn("llm.complete").await.unwrap();
+        assert_eq!(turn, 0);
+        assert_eq!(text, "hello");
+        assert!(tool_uses.is_empty());
+        assert_eq!(stop_reason, StopReason::EndTurn);
+    }
+
+    /// (b) — a scripted turn 0 yields a `ToolUse` with the right
+    /// name/args and `StopReason::ToolUse`.
+    #[tokio::test]
+    async fn scripted_turn_zero_yields_a_tool_use() {
+        let echo = EchoLlm::from_config(EchoConfig {
+            tool_calls: vec![vec![ScriptedToolCall {
+                name: "weather.get_forecast".to_string(),
+                args: serde_json::json!({"location": "Paris"}),
+            }]],
+            ..Default::default()
+        })
+        .unwrap();
+
+        let (turn, text, tool_uses, stop_reason) = echo.next_turn("llm.complete").await.unwrap();
+        assert_eq!(turn, 0);
+        assert_eq!(text, "");
+        assert_eq!(stop_reason, StopReason::ToolUse);
+        assert_eq!(tool_uses.len(), 1);
+        assert_eq!(tool_uses[0].name, "weather.get_forecast");
+        let expected_input: tau_domain::Value =
+            serde_json::from_value(serde_json::json!({"location": "Paris"})).unwrap();
+        assert_eq!(tool_uses[0].input, expected_input);
+    }
+
+    /// (c) — turn 1 falls back to text/`EndTurn`, which is what
+    /// terminates the agent loop (only turn 0 is scripted above).
+    #[tokio::test]
+    async fn turn_after_scripted_call_falls_back_to_text_end_turn() {
+        let echo = EchoLlm::from_config(EchoConfig {
+            tool_calls: vec![vec![ScriptedToolCall {
+                name: "weather.get_forecast".to_string(),
+                args: serde_json::Value::Null,
+            }]],
+            canned_text: "done".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        // Turn 0: consumes the scripted call.
+        let _ = echo.next_turn("llm.complete").await.unwrap();
+        // Turn 1: tool_calls has no entry for this index -> falls back
+        // exactly like a config that never sets tool_calls at all.
+        let (turn, text, tool_uses, stop_reason) = echo.next_turn("llm.complete").await.unwrap();
+        assert_eq!(turn, 1);
+        assert_eq!(text, "done");
+        assert!(tool_uses.is_empty());
+        assert_eq!(stop_reason, StopReason::EndTurn);
+    }
+}
