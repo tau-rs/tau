@@ -399,6 +399,100 @@ jobs:
           fi
           echo "OK: tau-mcp-tokio depends on none of tau-runtime-tokio / tau-pkg / tau-plugin-protocol / tau-sandbox-*"
 
+  wit-bindgen-fixture-pins:
+    name: wasm probe fixtures track the workspace wit-bindgen
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: fixture wit-bindgen pins must equal the workspace pin
+        # Issue #722. Each wasm probe fixture carries its own `[workspace]`
+        # table, making it an independent cargo project. Two consequences:
+        # `wit-bindgen = { workspace = true }` cannot resolve there, and
+        # `.github/dependabot.yml`'s single cargo entry (`directory: /`)
+        # structurally cannot see the manifests. So a workspace bump — #666,
+        # 0.58 -> 0.60 — leaves the fixtures behind silently, and the real
+        # guest (crates/tau-wasm-guest, `workspace = true`) ends up generated
+        # by a different wit-bindgen than the fixtures asserting host<->guest
+        # behaviour.
+        #
+        # Nothing in Tier 0 compiles this path: all 7 tau-wasm-host tests are
+        # #[ignore]d, so the drift only surfaces a day late in the nightly
+        # Tier 2 wasm lane, on an unrelated PR. This grep makes it an
+        # immediate PR failure instead. It is a manifest-text check only —
+        # no toolchain, no wasm32-wasip2, a few seconds.
+        #
+        # Only the VERSION is compared. The feature lists differ ON PURPOSE:
+        # http-probe omits `realloc` because the `wasi` crate owns the
+        # canonical-ABI `cabi_realloc` and emitting a second one is a
+        # duplicate-symbol link error. Do not unify them.
+        run: |
+          set -euo pipefail
+
+          # First `wit-bindgen = ...` pin in a manifest, table or bare-string
+          # form. Empty output means the line moved or was renamed — callers
+          # treat that as a failure rather than a pass.
+          pin() {
+            sed -nE \
+              -e 's/^[[:space:]]*wit-bindgen[[:space:]]*=[[:space:]]*\{.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+              -e 's/^[[:space:]]*wit-bindgen[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+              "$1" | head -n1
+          }
+
+          workspace_pin=$(pin Cargo.toml)
+          if [[ -z "$workspace_pin" ]]; then
+            echo "::error file=Cargo.toml::no wit-bindgen pin found in [workspace.dependencies] — this guard has gone blind, fix the matcher (issue #722)" >&2
+            exit 1
+          fi
+          echo "workspace pin: $workspace_pin"
+
+          status=0
+
+          check() {
+            local manifest=$1 fixture_pin
+            fixture_pin=$(pin "$manifest")
+            if [[ "$fixture_pin" != "$workspace_pin" ]]; then
+              echo "::error file=$manifest::wit-bindgen pinned to ${fixture_pin:-<unparseable>} but the workspace pins $workspace_pin — this fixture is outside the workspace and invisible to dependabot, so a workspace bump must update it by hand (issue #722)" >&2
+              status=1
+            else
+              echo "OK: $manifest -> $fixture_pin"
+            fi
+          }
+
+          # Explicit floor. Discovery alone is not enough: it can only find a
+          # pin that is still there, so a fixture whose pin is renamed or
+          # deleted would silently drop out of the set and the job would pass.
+          # These two must exist and must carry a matching pin. Deleting a
+          # fixture means deleting its line here too — deliberately a manual
+          # step, so the removal is seen.
+          required=(
+            crates/tau-wasm-host/tests/fixtures/fs-probe/Cargo.toml
+            crates/tau-wasm-host/tests/fixtures/http-probe/Cargo.toml
+          )
+          for manifest in "${required[@]}"; do
+            if [[ ! -f "$manifest" ]]; then
+              echo "::error::$manifest is missing — if the fixture was removed on purpose, drop it from this job's \`required\` list (issue #722)" >&2
+              status=1
+              continue
+            fi
+            check "$manifest"
+          done
+
+          # Plus discovery, so a fixture added later is covered without editing
+          # this job. Fixture manifests that do not use wit-bindgen at all
+          # (e.g. tau-mcp-tokio's mock-mcp-server) are correctly skipped.
+          while IFS= read -r manifest; do
+            for known in "${required[@]}"; do
+              [[ "$manifest" == "$known" ]] && continue 2
+            done
+            check "$manifest"
+          done < <(
+            find crates -type f -name Cargo.toml -path '*/tests/fixtures/*' \
+              -exec grep -lE '^[[:space:]]*wit-bindgen[[:space:]]*=' {} + | sort
+          )
+
+          exit $status
+
   # ci-summary moved to its own workflow (ci-summary.yml) so it
   # can fire on docs-only PRs too (where this workflow's
   # paths-ignore skips it entirely). See that file for the
