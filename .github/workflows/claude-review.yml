@@ -244,9 +244,35 @@ jobs:
           # instead of the GitHub App installation token.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # See the model-pin note on the PR-review job.
+          #
+          # The tool list below is evidence-driven, not guessed (#645).
+          # The first green run burned 11 of 18 turns on denied calls;
+          # a repeat run instrumented to dump the SDK's
+          # `permission_denials` records (8 denials / 22 turns) showed
+          # exactly three causes, all addressed here:
+          #
+          #   1. `git fetch --all --tags` — denied 3x (twice as a bare
+          #      retry). The grant below stops the retry loop, and the
+          #      prompt now states the checkout is already complete so
+          #      the call should not be attempted at all.
+          #   2. `Write` — denied 2x. The model needs to stage a long
+          #      markdown body somewhere before creating the issue;
+          #      with no writable tool it fell back to a `cat <<EOF`
+          #      heredoc, which was denied too. `Write` plus
+          #      `gh issue create --body-file` is the clean path.
+          #   3. Text-processing utilities inside pipelines. Claude
+          #      Code authorizes each pipeline segment independently,
+          #      so `git log --oneline | head -100` needs `head` as
+          #      well as `git log`. The utilities below are the ones
+          #      the denial records actually named.
+          #
+          # Everything added is read-only or writes only to the
+          # ephemeral runner filesystem. Notably NOT widened: `gh`
+          # stays pinned to `gh issue create`, so the job's one
+          # outward-facing capability is unchanged.
           claude_args: |
             --model claude-sonnet-5
-            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git tag:*),Bash(git rev-list:*),Bash(gh issue create:*)"
+            --allowedTools "Read,Grep,Glob,Write,Bash(git diff:*),Bash(git log:*),Bash(git tag:*),Bash(git rev-list:*),Bash(git fetch:*),Bash(cat:*),Bash(echo:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(sed:*),Bash(awk:*),Bash(sort:*),Bash(uniq:*),Bash(grep:*),Bash(gh issue create:*)"
           # Both interpolated values are maintainer-controlled (the tag
           # comes from a workflow_dispatch input, which requires write
           # access to set, and is verified to resolve above; the previous
@@ -269,5 +295,9 @@ jobs:
             range and only read full diffs for what looks significant —
             when there is no previous tag the range starts at the root
             commit, so the raw diff is the whole repository.
-            Open the issue with `gh issue create`. Be concise; this is
-            a record, not a full audit.
+            The checkout is already a full clone with all tags fetched,
+            so both refs resolve locally — do not run `git fetch`.
+            Write the issue body to a file and open the issue with
+            `gh issue create --body-file <path>`; the body is long
+            enough that passing it inline with `--body` is unreliable.
+            Be concise; this is a record, not a full audit.
