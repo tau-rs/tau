@@ -65,8 +65,8 @@ unsafe impl Send for OwnedSd {}
 impl Drop for OwnedSd {
     fn drop(&mut self) {
         unsafe {
-            let _ = windows::Win32::Foundation::LocalFree(windows::Win32::Foundation::HLOCAL(
-                self.0 .0,
+            let _ = windows::Win32::Foundation::LocalFree(Some(
+                windows::Win32::Foundation::HLOCAL(self.0 .0),
             ));
         }
     }

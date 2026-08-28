@@ -350,7 +350,7 @@ pub(crate) fn describe_dacl(path: &str) -> std::io::Result<String> {
                     let mut s = PWSTR::null();
                     if ConvertSidToStringSidW(sid, &mut s).is_ok() {
                         let v = s.to_string().unwrap_or_else(|_| "<utf16>".to_string());
-                        let _ = LocalFree(HLOCAL(s.as_ptr() as *mut _));
+                        let _ = LocalFree(Some(HLOCAL(s.as_ptr() as *mut _)));
                         v
                     } else {
                         "<sid?>".to_string()
@@ -365,7 +365,7 @@ pub(crate) fn describe_dacl(path: &str) -> std::io::Result<String> {
             }
         }
         if !sd.0.is_null() {
-            LocalFree(HLOCAL(sd.0));
+            LocalFree(Some(HLOCAL(sd.0)));
         }
         Ok(out)
     }
@@ -384,7 +384,7 @@ pub(crate) fn sid_string(profile: &AppContainerSid) -> std::io::Result<String> {
     let out =
         unsafe { s.to_string() }.map_err(|e| std::io::Error::other(format!("sid utf16: {e}")))?;
     unsafe {
-        let _ = LocalFree(HLOCAL(s.as_ptr() as *mut _));
+        let _ = LocalFree(Some(HLOCAL(s.as_ptr() as *mut _)));
     }
     Ok(out)
 }
@@ -421,7 +421,7 @@ pub(crate) fn current_user_sid_string() -> std::io::Result<String> {
         let out = s
             .to_string()
             .map_err(|e| std::io::Error::other(format!("sid utf16: {e}")))?;
-        let _ = LocalFree(HLOCAL(s.as_ptr() as *mut _));
+        let _ = LocalFree(Some(HLOCAL(s.as_ptr() as *mut _)));
         Ok(out)
     }
 }
