@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["dispatch"],"mod":["export","import","levenshtein","list","render","show"]};

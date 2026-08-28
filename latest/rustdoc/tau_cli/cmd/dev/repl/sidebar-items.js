@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Command"],"fn":["parse_command","run_loop"]};
