@@ -13,7 +13,7 @@ use crate::bundle::manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
     BundlePackage, IrPayload, ProjectInfo,
 };
-use crate::project::project::{PromptEntry, UncheckedProjectConfig};
+use crate::project::project::{ProjectConfig, PromptEntry};
 
 /// Inputs to [`build`].
 #[derive(Debug, Clone)]
@@ -71,20 +71,20 @@ pub struct BundleArtifact {
 /// [`BuildError::PackageNotInstalled`] if the project isn't fully
 /// installed. The function does NOT attempt to install anything.
 pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
-    // Step 1: Load tau.toml. Parse via the typed UncheckedProjectConfig
-    // and then validate — this is the same pipeline `tau run` uses, so
-    // the bundle records exactly what the project config layer would
-    // surface to the runtime.
+    // Step 1: Load tau.toml through `ProjectConfig::parse_str_at`, the
+    // dirs-aware entry point `ProjectConfig::from_path` delegates to — this
+    // is the same pipeline `tau run` / `tau check` use, so the bundle records
+    // exactly what the project config layer would surface to the runtime,
+    // *including* `[dirs]`-scanned agents and tools (ADR-0068). Reading the
+    // raw bytes ourselves rather than calling `from_path` keeps them around
+    // for `tau_toml_sha256` and `extract_project_version` below.
     let tau_toml_path = opts.project_root.join("tau.toml");
     let tau_toml_bytes = std::fs::read(&tau_toml_path)
         .map_err(|e| BuildError::ProjectConfig(format!("read {tau_toml_path:?}: {e}")))?;
     let tau_toml_str = std::str::from_utf8(&tau_toml_bytes)
         .map_err(|e| BuildError::ProjectConfig(format!("tau.toml is not utf-8: {e}")))?;
-    let unchecked: UncheckedProjectConfig = toml::from_str(tau_toml_str)
-        .map_err(|e| BuildError::ProjectConfig(format!("parse {tau_toml_path:?}: {e}")))?;
-    let project_config = unchecked
-        .validate()
-        .map_err(|e| BuildError::ProjectConfig(format!("validate {tau_toml_path:?}: {e}")))?;
+    let project_config = ProjectConfig::parse_str_at(tau_toml_str, &opts.project_root)
+        .map_err(|e| BuildError::ProjectConfig(format!("load {tau_toml_path:?}: {e}")))?;
 
     // Step 2: Load tau.lock. Distinguish missing (run `tau install`)
     // from present-but-invalid (config error).
