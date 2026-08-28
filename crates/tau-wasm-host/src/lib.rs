@@ -40,25 +40,23 @@
 //! `completed` flag for the pattern).
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+use http_body_util::BodyExt;
 
 use tau_ports::llm::{CompletionRequest, CompletionResponse};
 use tau_ports::target::wasi_map::PreopenAccess;
 use tau_ports::target::{resolve_wasi_config, WasiConfiguration};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::{
-    DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
+use wasmtime_wasi::{FsPerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_http::p2::add_only_http_to_linker_sync;
+use wasmtime_wasi_http::{
+    default_send_request, Error as WasiHttpError, RequestOptions, WasiBody, WasiHttpCtx,
+    WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
 };
-use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as WasiHttpErrorCode;
-use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
-use wasmtime_wasi_http::p2::{
-    add_only_http_to_linker_sync, default_send_request, HttpResult, WasiHttpCtxView, WasiHttpHooks,
-    WasiHttpView,
-};
-use wasmtime_wasi_http::WasiHttpCtx;
 
 pub mod embed;
 mod wasi;
@@ -282,9 +280,20 @@ impl WasiHttpView for HostState {
 impl WasiHttpHooks for EgressPolicy {
     fn send_request(
         &mut self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> HttpResult<HostFutureIncomingResponse> {
+        request: http::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        // wasmtime-wasi-http 48 threads a response-processing-error channel
+        // through the hook. The default impl discards it too; the egress gate
+        // has nothing to report on it.
+        _fut: Box<dyn Future<Output = Result<(), WasiHttpError>> + Send>,
+    ) -> Box<
+        dyn Future<
+                Output = wasmtime_wasi_http::Result<(
+                    http::Response<WasiBody>,
+                    Box<dyn Future<Output = Result<(), WasiHttpError>> + Send>,
+                )>,
+            > + Send,
+    > {
         let authority = request
             .uri()
             .authority()
@@ -292,9 +301,19 @@ impl WasiHttpHooks for EgressPolicy {
             .unwrap_or_default();
         let method = request.method().as_str();
         if !self.permits(&authority, method) {
-            return Err(WasiHttpErrorCode::HttpRequestDenied.into());
+            // 48 returns a future rather than a `Result`, so the denial is
+            // an immediately-ready `Err` instead of an early return. The
+            // guest still never gets a socket: `default_send_request` is
+            // only reached on the permitted path below.
+            return Box::new(std::future::ready(Err(WasiHttpError::HttpRequestDenied)));
         }
-        Ok(default_send_request(request, config))
+        Box::new(async move {
+            let (response, io) = default_send_request(request, options).await?;
+            Ok((
+                response.map(BodyExt::boxed_unsync),
+                Box::new(io) as Box<dyn Future<Output = _> + Send>,
+            ))
+        })
     }
 }
 
@@ -328,12 +347,14 @@ fn wasi_ctx_from_config(
         let host_path = sandbox_root.join(p.host_dir.trim_start_matches('/'));
         // Ensure the host dir exists so preopen succeeds.
         std::fs::create_dir_all(&host_path).map_err(|e| WasmHostError::WasiConfig(e.into()))?;
-        let (dir_perms, file_perms) = match p.access {
-            PreopenAccess::ReadOnly => (DirPerms::READ, FilePerms::READ),
-            PreopenAccess::ReadWrite => (DirPerms::all(), FilePerms::all()),
+        // wasmtime-wasi 48 collapsed the separate `DirPerms`/`FilePerms`
+        // bitflags into a single `FsPerms` mode.
+        let perms = match p.access {
+            PreopenAccess::ReadOnly => FsPerms::ReadOnly,
+            PreopenAccess::ReadWrite => FsPerms::ReadWrite,
         };
         builder
-            .preopened_dir(&host_path, &p.host_dir, dir_perms, file_perms)
+            .preopened_dir(&host_path, &p.host_dir, perms)
             .map_err(|e| WasmHostError::WasiConfig(e.into()))?;
     }
     Ok(builder.build())
