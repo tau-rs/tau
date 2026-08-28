@@ -9,6 +9,36 @@
 //!
 //! The layer writes one line per event and `sync_data`s after each write.
 //!
+//! ## Why the write is synchronous
+//!
+//! `on_event` writes the line with blocking `std::fs` I/O rather than
+//! handing it to a `tokio::spawn`ed task (tau-rs/tau#650). The detached
+//! task never ran to completion: `tau workflow run` returns immediately
+//! after the last step, the runtime is dropped, and the task is dropped
+//! at its first `.await` — leaving a missing or zero-byte run log on
+//! *every* invocation, which in turn made `tau workflow resume` replay
+//! nothing and silently re-run already-completed steps.
+//!
+//! Writing inline instead of adding a `flush()` handshake (the
+//! `PluginRecordingLayer` approach) is deliberate:
+//!
+//! - **Correct for every caller.** A `flush()` only works if the caller
+//!   remembers to call it. That is the exact contract #650 broke, and a
+//!   layer that silently discards records unless a specific command
+//!   handler opts in is a footgun.
+//! - **Ordering.** Concurrently-spawned write tasks race on the mutex,
+//!   so lines could land out of step order. `tracing` dispatches events
+//!   in program order, so an inline write is append-ordered by
+//!   construction.
+//! - **Works off-runtime.** A bare `tokio::spawn` panics when no reactor
+//!   is running, making the layer unusable outside a tokio context.
+//! - **The cost is negligible here.** One short line per workflow *step*,
+//!   where a step is an LLM call or tool invocation taking orders of
+//!   magnitude longer than the write. This is the same shape as
+//!   `tracing_subscriber`'s own fmt layer, which writes to its sink
+//!   inline. `PluginRecordingLayer` keeps its async path because it sees
+//!   one event per protocol frame, a far hotter target.
+//!
 //! ## String field handling
 //!
 //! `tracing` dispatches `&str` field values through `Visit::record_str`,
@@ -22,9 +52,9 @@
 //! after `serde_json` re-quotes the value on serialization.
 
 use std::collections::BTreeMap;
+use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tracing::{field::Visit, Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
@@ -53,7 +83,35 @@ pub struct WorkflowRunLogLayer {
 
 struct Inner {
     path: PathBuf,
-    file: Option<tokio::fs::File>,
+    file: Option<std::fs::File>,
+}
+
+impl Inner {
+    /// Append one already-serialized JSONL line, opening (and creating)
+    /// the file plus its parent directory on first use.
+    fn write_line(&mut self, line: &str) -> std::io::Result<()> {
+        if self.file.is_none() {
+            if let Some(parent) = self.path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            self.file = Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.path)?,
+            );
+        }
+        let file = self
+            .file
+            .as_mut()
+            .expect("file is Some after the open branch above");
+        file.write_all(line.as_bytes())?;
+        // `sync_data` (fdatasync on Linux) flushes the record without
+        // forcing a metadata sync on every line. A run log that is only
+        // in the page cache is worthless to `tau workflow resume` after
+        // a crash, which is the log's whole reason to exist.
+        file.sync_data()
+    }
 }
 
 impl WorkflowRunLogLayer {
@@ -90,56 +148,32 @@ where
         let mut visitor = FieldVisitor::default();
         event.record(&mut visitor);
         let line = serialize_step_record(&visitor.fields);
-        let inner = self.inner.clone();
-        // Hand off the write to the runtime so we don't block the
-        // emitting task. Best-effort: errors are logged at WARN to a
-        // *different* target so they don't recursively re-enter this
-        // layer's filter.
-        tokio::spawn(async move {
-            use tokio::io::AsyncWriteExt as _;
-            let mut guard = inner.lock().await;
-            let path = guard.path.clone();
-            if guard.file.is_none() {
-                if let Some(parent) = path.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-                match tokio::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .await
-                {
-                    Ok(f) => {
-                        guard.file = Some(f);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "tau_observe::layers::workflow_run_log",
-                            path = %path.display(),
-                            err = %e,
-                            "workflow run-log open failed; dropping event",
-                        );
-                        return;
-                    }
-                }
-            }
-            let file = guard
-                .file
-                .as_mut()
-                .expect("file is Some after the open branch above");
-            if let Err(e) = file.write_all(line.as_bytes()).await {
-                tracing::warn!(
-                    target: "tau_observe::layers::workflow_run_log",
-                    err = %e,
-                    "workflow run-log write failed",
-                );
-                return;
-            }
-            // `sync_data` (fdatasync on Linux) matches the legacy
-            // `RunLog` writer — flush data without forcing a metadata
-            // sync on every line.
-            let _ = file.sync_data().await;
-        });
+        // Write inline — see the module docstring for why this is not
+        // handed to a background task. A poisoned mutex means a previous
+        // writer panicked mid-line; recover the guard rather than
+        // disabling the run log for the rest of the process.
+        let failure = {
+            let mut guard = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard
+                .write_line(&line)
+                .err()
+                .map(|e| (guard.path.clone(), e))
+        };
+        // Best-effort: report failures at WARN on a *different* target so
+        // they don't recursively re-enter this layer's filter. Emitted
+        // after the guard is dropped so the nested dispatch can never
+        // re-enter the (non-reentrant) mutex.
+        if let Some((path, e)) = failure {
+            tracing::warn!(
+                target: "tau_observe::layers::workflow_run_log",
+                path = %path.display(),
+                err = %e,
+                "workflow run-log write failed; dropping event",
+            );
+        }
     }
 }
 

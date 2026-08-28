@@ -18,9 +18,12 @@ Podman), `passthrough` (identity wrap). See
 [sandboxing](../explanation/sandboxing.md#adapters-how-a-tier-becomes-enforcement).
 
 **Agent** — a configured `(package, llm_backend, system_prompt,
-grant)` tuple that the runtime can instantiate and run. An *agent
-definition* lives in a project's `tau.toml` under
-`[agents.<id>]`. See [project manifest
+grant)` tuple that the runtime can instantiate and run. That tuple is
+the *runtime* shape (`AgentDefinition`); it is not the authoring
+shape. An *agent definition* is written in a project's `tau.toml`
+under `[agents.<id>]`, where the model is named by the `model` alias
+key — there is no `llm_backend` key in `tau.toml`; the runtime derives
+it from the resolved alias. See [project manifest
 schema](project-manifest-schema.md).
 
 ## B
@@ -99,7 +102,7 @@ Compare with **workflow**.
 
 **Override (capability)** — a project-side narrowing of a
 package's declared capability set, declared under
-`[agents.<id>.capability_overrides]`. Must be a subset of the
+`[[agents.<id>.capabilities]]`. Must be a subset of the
 package's declared set; overrides that *expand* fail validation.
 See [project manifest
 schema](project-manifest-schema.md#capability-overrides).
