@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["adapter_satisfies","kind_to_family","registration_for_triple"]};
