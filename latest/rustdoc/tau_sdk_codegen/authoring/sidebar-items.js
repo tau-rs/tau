@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["SURFACE"],"enum":["FieldTy","TomlTarget"],"struct":["AuthField","Factory"]};
