@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["invoke"],"mod":["goal_predicates"]};
