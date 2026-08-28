@@ -434,3 +434,199 @@ async fn ir_run_with_sink_does_not_hijack_virtual_named_tools() {
         "a virtual-named MCP tool must reach the dispatcher, not the kernel intercept"
     );
 }
+
+/// Two-agent module: `parent` calls a `ToolImpl::Subflow` tool that spawns
+/// `child`, and `child` calls the same meet-clamped `net.http` tool as
+/// [`module_with_net_tool`]. The subflow frame's own declared capabilities
+/// are wide enough (`net.http` any-host) that the frame itself never denies
+/// — this fixture isolates the attenuation *pass-through* of trace_sink /
+/// tool_effective_capabilities, not the deny path already covered by
+/// `attenuate.rs`'s unit tests.
+fn module_with_subflow_to_net_tool() -> (IrModule, AgentId) {
+    let parent = AgentId("parent".into());
+    let child = AgentId("child".into());
+    let net_any = test_cap("[cap]\nkind=\"net.http\"\nhosts=\"any\"\n");
+
+    let mut tools = BTreeMap::new();
+    tools.insert(
+        ToolId("fetch".into()),
+        Tool {
+            id: ToolId("fetch".into()),
+            impl_: ToolImpl::Native {
+                fn_ref: NativeFnRef {
+                    name: "fetch".into(),
+                },
+                content_hash: [1u8; 32],
+            },
+            capabilities: CapabilityRequirements {
+                declared: vec![net_any.clone()],
+            },
+            spec: ToolSpec {
+                name: "fetch".into(),
+                description: String::new(),
+                input_schema: Value::Null,
+            },
+        },
+    );
+    tools.insert(
+        ToolId("spawn_child".into()),
+        Tool {
+            id: ToolId("spawn_child".into()),
+            impl_: ToolImpl::Subflow {
+                target: child.clone(),
+            },
+            capabilities: CapabilityRequirements {
+                declared: vec![net_any],
+            },
+            spec: ToolSpec {
+                name: "spawn_child".into(),
+                description: String::new(),
+                input_schema: Value::Null,
+            },
+        },
+    );
+
+    let mut agents = BTreeMap::new();
+    agents.insert(
+        child.clone(),
+        Agent {
+            id: child.clone(),
+            prompt: tau_ir::prompt::PromptSource::Inline(String::new()),
+            model_ref: tau_ir::model_ref::ModelRef {
+                backend: "mock-llm".into(),
+                model_id: "m".into(),
+            },
+            tool_refs: vec![ToolId("fetch".into())],
+            context: None,
+            budget: AgentBudget {
+                max_turns: Some(3),
+                max_tokens: None,
+            },
+            produces: vec![],
+            output_schema: None,
+            durable: None,
+        },
+    );
+    agents.insert(
+        parent.clone(),
+        Agent {
+            id: parent.clone(),
+            prompt: tau_ir::prompt::PromptSource::Inline(String::new()),
+            model_ref: tau_ir::model_ref::ModelRef {
+                backend: "mock-llm".into(),
+                model_id: "m".into(),
+            },
+            tool_refs: vec![ToolId("spawn_child".into())],
+            context: None,
+            budget: AgentBudget {
+                max_turns: Some(3),
+                max_tokens: None,
+            },
+            produces: vec![],
+            output_schema: None,
+            durable: None,
+        },
+    );
+
+    let target = tau_ports::target::registry::list_available()
+        .next()
+        .expect("at least one available target")
+        .triple;
+
+    let module = IrModule {
+        ir_format: IrFormatVersion::current(),
+        tau_version: env!("CARGO_PKG_VERSION").into(),
+        target,
+        workflow: Workflow {
+            agents,
+            tools,
+            steps: BTreeMap::new(),
+            edges: Vec::new(),
+            capability_table: tau_ir::capability::CapabilityTable(BTreeMap::new()),
+            pipeline: None,
+            checks: BTreeMap::new(),
+        },
+        triggers: Vec::new(),
+    };
+
+    (module, parent)
+}
+
+/// I2 (whole-branch review of #631): `AttenuatedDispatcher` (the decorator
+/// wrapping a `ToolImpl::Subflow` child's dispatcher) forwards every OTHER
+/// `ToolDispatcher` method to its inner dispatcher but, before this fix,
+/// silently dropped `trace_sink` and `tool_effective_capabilities` to the
+/// trait default (`None`) — so a subflow child agent emitted no trace
+/// events at all, and a clamped MCP tool called from inside a subflow
+/// rendered `-` instead of `clamp:<to>`. Proves both holes are closed: the
+/// child agent's tool call reaches the collector, and it still carries the
+/// `Clamp` verdict.
+#[tokio::test]
+async fn ir_run_with_sink_emits_clamp_row_for_a_tool_called_inside_a_subflow() {
+    let (module, parent) = module_with_subflow_to_net_tool();
+    let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+    let dispatcher = Arc::new(SinkDispatcher {
+        backend: scripted_backend_for_subflow(),
+        collector: collector.clone(),
+        clamped_id: ToolId("fetch".into()),
+        effective: vec![test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n",
+        )],
+    });
+
+    let stream = run_ir_streaming(Arc::new(module), &parent, dispatcher, Vec::new())
+        .await
+        .expect("stream builds");
+    let _events: Vec<RunEvent> = Box::pin(stream).collect().await;
+
+    let events = collector.0.lock().unwrap().clone();
+    let tool_call = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            tau_ports::TraceEventKind::ToolCall {
+                tool_name,
+                capability,
+                ..
+            } if tool_name == "fetch" => Some(capability.clone()),
+            _ => None,
+        })
+        .expect(
+            "the subflow child's clamped tool call must still emit a ToolCall trace event \
+             (the attenuation decorator must forward trace_sink to its inner dispatcher)",
+        );
+
+    assert_eq!(
+        tool_call,
+        Some(tau_ports::CapabilityVerdict::Clamp {
+            to: "api.weather.com".into()
+        }),
+        "a clamped tool invoked through a subflow frame must still render an amber clamp row \
+         (the attenuation decorator must forward tool_effective_capabilities to its inner \
+         dispatcher)"
+    );
+}
+
+/// Four scripted completions, consumed in call order across BOTH agents
+/// (parent and child share one `Scripted` backend instance, same as every
+/// other dispatcher in this file): parent's tool-use turn, child's
+/// tool-use turn, child's end-turn, parent's end-turn.
+fn scripted_backend_for_subflow() -> Arc<dyn DynLlmBackend> {
+    Arc::new(Scripted {
+        queue: Mutex::new(vec![
+            resp(serde_json::json!({
+                "text":"","tool_uses":[{"id":"t1","name":"spawn_child","input":{}}],
+                "stop_reason":"ToolUse","usage":null
+            })),
+            resp(serde_json::json!({
+                "text":"","tool_uses":[{"id":"t2","name":"fetch","input":{}}],
+                "stop_reason":"ToolUse","usage":null
+            })),
+            resp(serde_json::json!({
+                "text":"child done","tool_uses":[],"stop_reason":"EndTurn","usage":null
+            })),
+            resp(serde_json::json!({
+                "text":"parent done","tool_uses":[],"stop_reason":"EndTurn","usage":null
+            })),
+        ]),
+    })
+}
