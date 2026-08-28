@@ -3,9 +3,9 @@
 **Refreshed:** 2026-08-27 (supersedes the 2026-05-17 refresh, itself
 superseding the 2026-05-13 inventory from PR #71)
 **Workspace state:** based on `origin/main` at `e38f2530`
-**Total `#[ignore]` annotations:** 43
+**Total `#[ignore]` annotations:** 44
 
-43 `#[ignore]` annotations across the workspace, organised into four
+44 `#[ignore]` annotations across the workspace, organised into four
 triage buckets. This file is the canonical reference for what each ignored
 test needs in order to run, and which CI job (existing or future) is
 responsible for lighting it up.
@@ -318,7 +318,7 @@ not an inventory row.
 
 ---
 
-## Bucket 4 — DEFERRED (5 tests)
+## Bucket 4 — DEFERRED (6 tests)
 
 Waiting on a specific helper / fixture / sibling work.
 
@@ -329,6 +329,7 @@ Waiting on a specific helper / fixture / sibling work.
 | `crates/tau-conformance/tests/conformance.rs:67` | `fan_monitor_dev_matches_wasm` | `WasmProfile::run` is still `unimplemented!()` (`crates/tau-conformance/src/profile/wasm.rs`). The β.6 `conformance / linux` job runs `-p tau-conformance` without `--run-ignored`, so it is skipped there by design. **Stated reason is stale — see follow-ups.** |
 | `crates/tau-ir-lower/tests/lower_e2e.rs:143` | `lowering_refuses_on_capability_fit_mismatch` | No `Available` registry entry lacks `NetworkHttp` — all 7 entries use `fs_rw_exec_net`, `fs_rw_net` or `all_shapes`, each of which inserts it. Re-verified 2026-08-27 against `crates/tau-ports/src/target/registry.rs`. Un-ignore when a `no-network` target tier lands. |
 | `crates/tau-mcp-tokio/tests/http_lifecycle.rs:101` | `multi_event_sse_response` | A session-aware wiremock fixture: the single mock serves the same two-event body for every POST, so `recv_response_for` sees a stale `id=0` while waiting for `id=1`. **Stated reason is stale — see follow-ups.** |
+| `crates/tau-sandbox-windows/tests/install_rust_cargo_acceptance.rs:255` | `rust_cargo_install_succeeds_sandboxed_without_unsandboxed_escape` | #726: `CreateProcess` on `rustc.exe` denies even though its DACL carries a correct inherited allow-ACE (`FILE_EXECUTE` included) for the AppContainer's package SID. Windows-only, `integration-tests`-gated; egress chain itself is proven green by `tests/egress_integration.rs`. Un-ignore when #726 lands a fix. |
 
 **CI plan:** revisit each line when its blocker resolves. If a blocker is
 gone but the test is still `#[ignore]`'d, promote in a dedicated PR.
@@ -386,8 +387,8 @@ coverage that does not exist.
 | 2e — tau-cli guest builds (LIT) | 8 | `wasm-lane` `-p tau-cli --run-ignored ignored-only --test-threads 1` |
 | 2f — tau-wasm-host guest builds (LIT) | 10 | `wasm-lane` `-p tau-wasm-host --run-ignored all` |
 | 3 — ENVIRONMENT-SPECIFIC | 0 | Both deleted 2026-08-23 — no runner has the host shape |
-| 4 — DEFERRED | 5 | Promote when blocker resolves (2 of them want the same slow-tier lane) |
-| **Total** | **43** | |
+| 4 — DEFERRED | 6 | Promote when blocker resolves (2 of them want the same slow-tier lane) |
+| **Total** | **44** | |
 
 Numbers updated on each PR that touches an `#[ignore]` annotation — enforced by
 `xtask/tests/ignore_inventory.rs`.
