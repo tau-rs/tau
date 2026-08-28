@@ -92,9 +92,12 @@ tau-runtime-tokio = { workspace = true, features = ["mock-sandbox"] }
 tau-wasm-host    = { path = "../tau-wasm-host" }
 # Task 6 (EPIC 3.2 DoD): decode the built component's world to assert an
 # ungranted capability's WASI interface is absent. Pinned to match the
-# workspace's wit-parser 0.251 pin (see Cargo.lock: wit-component 0.251.0
-# depends on wit-parser 0.251.0 exactly).
-wit-component    = "0.251"
+# workspace's wit-parser 0.257 pin (see Cargo.lock: wit-component 0.257.1
+# depends on wit-parser 0.257.1 exactly). These two MUST move together —
+# `wit_component::decode` returns wit-parser types, so a version skew
+# between them is a hard type mismatch in this crate's tests, not a
+# resolver warning.
+wit-component    = "0.257"
 wit-parser       = { workspace = true }
 
 [features]
