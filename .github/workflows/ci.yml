@@ -105,6 +105,32 @@ jobs:
           }
           rustup target add wasm32-wasip2
           just lint-wasm-guest-net
+      # Lint tau-domain's feature-less + serde-only shapes. `just lint` above is
+      # `--workspace`, which unifies features across members, so some host member
+      # always enables tau-domain's `std` and these two no_std configurations are
+      # never linted — even though the workspace `tau-domain` alias sets
+      # `default-features = false`, so that IS what tau-sandbox-proxy and
+      # tau-wasm-guest compile against. The gap hid a deny-level
+      # `unused_imports` + `dead_code` on symbols declared ungated but used only
+      # under `#[cfg(feature = "serde")]`.
+      - name: clippy tau-domain no_std shapes (-D warnings)
+        run: just lint-domain-featureless
+      # Same gap, one crate over: tau-ports is never linted without `process`
+      # either. That hid a genuine lib-level breakage — `test-fixtures` did not
+      # imply `process`, so `--no-default-features --features test-fixtures`
+      # failed to compile the lib at all (src/fixtures.rs builds
+      # `SessionContext`/`WorkingContext` through `#[cfg(feature = "process")]`
+      # API). Covers the guest's real shape (`--features serde`), the floor, and
+      # the fixtures shape.
+      #
+      # All three shapes run `--all-targets` since #657 gated the in-src
+      # `#[cfg(test)]` callers of that same `process`-only API. That extends the
+      # gate to test-only code, but it does NOT make the test targets
+      # no-std-clean: tau-ports links std unconditionally under cfg(test)
+      # (crates/tau-ports/src/lib.rs:22). The no_std claim rests on the lib
+      # target, which these lines also cover.
+      - name: clippy tau-ports no_std shapes (-D warnings)
+        run: just lint-ports-featureless
 
   cargo-deny:
     name: cargo-deny / linux

@@ -8,7 +8,7 @@ chain.
 
 ```toml
 [agents.assistant]
-llm_backend = "anthropic"
+model = "default"   # a `[models.<alias>]` / `[allow.models.<alias>]` key
 
 [[agents.assistant.credentials]]
 id  = "anthropic_api_key"

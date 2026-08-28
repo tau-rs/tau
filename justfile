@@ -36,6 +36,48 @@ lint:
 lint-wasm-guest-net:
     cargo clippy -p tau-wasm-guest --target wasm32-wasip2 --release -- -D warnings
 
+# Lint tau-domain's two no_std shapes. The workspace `just lint` above unifies
+# features across members, so some host member always turns on tau-domain's
+# `std` and the feature-less configuration is NEVER linted — even though the
+# workspace `tau-domain` alias sets `default-features = false`, which is exactly
+# what tau-sandbox-proxy and tau-wasm-guest build against. That gap hid a
+# deny-level `unused_imports` (alloc::borrow::ToOwned) + `dead_code`
+# (VocabMode::forward_open), both declared ungated but used only from
+# `#[cfg(feature = "serde")]` blocks. `--features serde` is the guest's actual
+# configuration; bare `--no-default-features` is the floor.
+#
+# Deliberately NOT `--all-targets`: tau-domain's own cfg(test) modules exercise
+# the host surface (`MessageId::new` needs uuid/std, `PackageSource::Url` needs
+# `package-source`, `detect_format` needs `skill-md`), so the test targets do
+# not compile without `std` at all. Downstream no_std consumers link the lib
+# only, which is precisely what this gate covers.
+lint-domain-featureless:
+    cargo clippy -p tau-domain --no-default-features -- -D warnings
+    cargo clippy -p tau-domain --no-default-features --features serde -- -D warnings
+
+# Same hole, same crate set: `just lint` never sees tau-ports without `process`,
+# even though the workspace alias is `default-features = false` and the guest
+# links `--no-default-features --features serde`
+# (crates/tau-wasm-guest/Cargo.toml:33). The third shape is the one that was
+# actually broken: `test-fixtures` did not declare its dependency on `process`,
+# so `--no-default-features --features test-fixtures` failed to compile the LIB
+# (E0061 on `SessionContext::new`, E0560 on `WorkingContext.working_dir`, plus a
+# deny-level `unused_imports`) — src/fixtures.rs builds both through
+# `#[cfg(feature = "process")]` API.
+#
+# `--all-targets` (unlike tau-domain above, which stays lib-only): #657 gated
+# tau-ports' in-src `#[cfg(test)]` code off the `process`-only API it was
+# calling, so the test targets now build in every shape here. Note what this
+# does and does not prove — tau-ports links std unconditionally under cfg(test)
+# (`crates/tau-ports/src/lib.rs:22`), so green here means the test code compiles
+# against the feature-less FEATURE SET, not that the test targets are
+# no-std-clean. The lib is the artifact downstream no_std consumers link, and it
+# is covered by the same three lines.
+lint-ports-featureless:
+    cargo clippy -p tau-ports --no-default-features --all-targets -- -D warnings
+    cargo clippy -p tau-ports --no-default-features --features serde --all-targets -- -D warnings
+    cargo clippy -p tau-ports --no-default-features --features test-fixtures --all-targets -- -D warnings
+
 # Measure + gate the wasm-guest bundle size (EPIC 5.6) — mirrors the CI step in
 # the `runtime-core-no-std` job. Reports the shipped-component size (wasm-tools)
 # + the wasm-metadce tree-shaken floor (Binaryen, optional), and fails if the

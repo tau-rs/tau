@@ -76,8 +76,13 @@ jobs:
     # (fuzz-nightly.yml) — it never re-runs against a tagged commit.
     # Re-run each harness here as a bounded crash-regression smoke
     # check: a crash (non-zero exit) is a real correctness bug and
-    # BLOCKS the release. Mirrors fuzz-nightly.yml's setup; the matrix
-    # stays in sync with it by hand (release.yml-only change per scope).
+    # BLOCKS the release. Mirrors fuzz-nightly.yml's setup.
+    #
+    # SIBLING MATRIX: this `matrix.include` is hand-kept identical to
+    # fuzz-nightly.yml's. `xtask/tests/fuzz_matrix.rs` is the gate — it
+    # fails `test-stable` if a `[[bin]]` under `crates/*/fuzz/` is missing
+    # from EITHER file, which is how both tau-domain harnesses sat
+    # unfuzzed from #194/#201 until this change. Add a harness to BOTH.
     name: fuzz ${{ matrix.target }} (${{ matrix.crate }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -91,6 +96,12 @@ jobs:
           - crate: tau-plugin-protocol
             fuzz_dir: crates/tau-plugin-protocol/fuzz
             target: frame_decode
+          - crate: tau-domain
+            fuzz_dir: crates/tau-domain/fuzz
+            target: parse_skill_md
+          - crate: tau-domain
+            fuzz_dir: crates/tau-domain/fuzz
+            target: parse_package_manifest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -138,6 +149,13 @@ jobs:
           # is not an open-ended coverage campaign (that is the nightly
           # lane's job). 5 minutes per target.
           MINUTES: "5"
+          # Mirrors fuzz-nightly.yml — see the long rationale there.
+          # Short version: ASan's per-allocation bookkeeping makes RSS
+          # grow with session length regardless of target cleanliness,
+          # so `-rss_limit_mb` is the wrong release gate;
+          # `-malloc_limit_mb` is the one that catches a real unbounded
+          # allocation. Issue #676.
+          ASAN_OPTIONS: malloc_context_size=5:quarantine_size_mb=16
         run: |
           set -euo pipefail
           SECONDS_BUDGET=$(( MINUTES * 60 ))
@@ -145,6 +163,8 @@ jobs:
           cd "$FUZZ_DIR"
           cargo +nightly fuzz run "$TARGET" -- \
             -max_total_time="$SECONDS_BUDGET" \
+            -malloc_limit_mb=64 \
+            -rss_limit_mb=4096 \
             -print_final_stats=1
 
       - name: Upload crash artifacts on failure

@@ -133,6 +133,12 @@ impl ToolDispatcher for GuestDispatcher {
     fn random(&self) -> Option<Arc<dyn RandomSource>> {
         Some(self.random.clone())
     }
+
+    fn deterministic_registry(
+        &self,
+    ) -> Option<Arc<dyn tau_runtime_core::interpreter::deterministic::DeterministicRegistry>> {
+        Some(Arc::new(crate::goal_registry::GuestGoalRegistry))
+    }
 }
 
 /// Issue one outgoing HTTP request through the generated wasi:http bindings.

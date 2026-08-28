@@ -189,7 +189,7 @@ Run with `tau run` (no flag needed — the scope is already
 
 Capability narrowing isn't a `[sandbox]` concern — see the
 project-side override pattern under
-`[agents.<id>.capability_overrides]` in `crates/tau-cli/src/config/project.rs`.
+`[[agents.<id>.capabilities]]` in `crates/tau-pkg/src/project/`.
 The sandbox tier controls *enforcement*; the override controls
 *grant*. They compose.
 

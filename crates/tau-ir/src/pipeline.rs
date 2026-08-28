@@ -18,6 +18,18 @@ pub struct Pipeline {
     pub steps: Vec<PipelineStep>,
 }
 
+impl Pipeline {
+    /// Id of the last top-level step that records an output — skips
+    /// trailing `Check` and `Suspend` steps. `None` if no step qualifies.
+    pub fn final_leaf_step_id(&self) -> Option<&PipelineStepId> {
+        self.steps
+            .iter()
+            .rev()
+            .find(|s| !matches!(s.run, StepRun::Check(_) | StepRun::Suspend { .. }))
+            .map(|s| &s.id)
+    }
+}
+
 /// One step in a [`Pipeline`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -143,5 +155,45 @@ mod tests {
         let bytes = serde_json::to_vec(&p).expect("serializes");
         let back: Pipeline = serde_json::from_slice(&bytes).expect("deserializes");
         assert_eq!(p, back);
+    }
+
+    #[test]
+    fn final_leaf_skips_trailing_check_and_suspend() {
+        let p = Pipeline {
+            steps: alloc::vec![
+                PipelineStep {
+                    id: PipelineStepId("a".into()),
+                    run: StepRun::Agent(AgentId("x".into())),
+                    input: "${input}".into(),
+                },
+                PipelineStep {
+                    id: PipelineStepId("b".into()),
+                    run: StepRun::Agent(AgentId("y".into())),
+                    input: "${steps.a.output}".into(),
+                },
+                PipelineStep {
+                    id: PipelineStepId("c".into()),
+                    run: StepRun::Check(CheckId("c".into())),
+                    input: "${steps.b.output}".into(),
+                },
+                PipelineStep {
+                    id: PipelineStepId("s".into()),
+                    run: StepRun::Suspend {
+                        resume_signal: "sig".into(),
+                    },
+                    input: "${steps.b.output}".into(),
+                },
+            ],
+        };
+        assert_eq!(p.final_leaf_step_id(), Some(&PipelineStepId("b".into())));
+
+        let checks_only = Pipeline {
+            steps: alloc::vec![PipelineStep {
+                id: PipelineStepId("c".into()),
+                run: StepRun::Check(CheckId("c".into())),
+                input: "${input}".into(),
+            }],
+        };
+        assert_eq!(checks_only.final_leaf_step_id(), None);
     }
 }

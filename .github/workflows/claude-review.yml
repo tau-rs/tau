@@ -25,7 +25,12 @@ name: Claude review
 #   2. Release-summary — when a GitHub release is published, Claude
 #      reads the diff from the previous major-equivalent tag (QG11:
 #      `v[0-9]+.0.0` / `v0.[0-9]+.0`) and opens a release-summary
-#      issue with changelog highlights + notable risks.
+#      issue with changelog highlights + notable risks. The release
+#      event cannot run the action directly (see the
+#      `dispatch-release-summary` job), so it re-fires this workflow as
+#      a workflow_dispatch. To (re)run a summary by hand for any tag:
+#
+#          gh workflow run claude-review.yml -f tag=v0.3.0
 #
 # Distinct from `.github/workflows/claude.yml` (the @claude mention
 # bot): that one is interactive (responds to maintainer @-mentions);
@@ -56,8 +61,21 @@ on:
   # release-summary; you must also publish a GitHub Release for that
   # tag. docs-deploy.yml continues to fire on raw `push: tags:` so the
   # site itself is published on any matching tag push.
+  #
+  # The release event does NOT run the Claude action directly — see the
+  # `dispatch-release-summary` job for why it re-fires as a
+  # workflow_dispatch.
   release:
     types: [published]
+  # Manual/bridged entry point for the release summary. Also useful on
+  # its own: re-run a summary for any tag without republishing a
+  # release (this is how the job is smoke-tested).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to summarize (e.g. v0.3.0)"
+        required: true
+        type: string
 
 concurrency:
   group: claude-review-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
@@ -127,9 +145,45 @@ jobs:
             instead of inventing nits.
             Post the full review in your PR comment.
 
+  # anthropics/claude-code-action does not understand `release` events:
+  # its context parser (src/github/context.ts) switches over a fixed set
+  # — issues, issue_comment, pull_request{,_target,_review,_review_comment},
+  # workflow_dispatch, repository_dispatch, schedule, workflow_run — and
+  # throws "Unsupported event type: release" on anything else. Verified
+  # against the pinned SHA and against the action's main branch on
+  # 2026-08-23; the release-summary job had never actually run.
+  #
+  # So the release event only re-fires this same workflow as a
+  # workflow_dispatch, which the action does support. workflow_dispatch
+  # is one of the two documented exceptions to "events triggered by
+  # GITHUB_TOKEN do not create a new workflow run" (the other being
+  # repository_dispatch), so the default token is enough — no PAT.
+  dispatch-release-summary:
+    name: dispatch release summary
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+
+    permissions:
+      actions: write
+
+    steps:
+      - name: Re-fire as workflow_dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+          # workflow_dispatch can only target a branch, and the workflow
+          # file is read from that branch — the released code itself is
+          # checked out by the summary job via `ref:`.
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          gh workflow run claude-review.yml --ref "$DEFAULT_BRANCH" -f tag="$TAG"
+          echo "Dispatched release summary for $TAG on $DEFAULT_BRANCH"
+
   release-summary:
     name: release summary
-    if: github.event_name == 'release'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     permissions:
@@ -141,16 +195,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ github.event.release.tag_name }}
+          # workflow_dispatch inputs require write access to set, so this
+          # is maintainer-controlled; the step below fails fast if the
+          # tag does not resolve.
+          ref: ${{ inputs.tag }}
 
       - name: Resolve previous tag
         id: prev
         env:
-          CURRENT_TAG: ${{ github.event.release.tag_name }}
+          CURRENT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          if ! git rev-parse -q --verify "refs/tags/${CURRENT_TAG}" >/dev/null; then
+            echo "::error::No such tag: ${CURRENT_TAG}"
+            exit 1
+          fi
+          # grep exits 1 when CURRENT_TAG isn't in the QG11 tag list
+          # (first-ever release, or a non-QG11 tag) — under pipefail
+          # that would kill the step inside the assignment before the
+          # empty-string fallback below can run. Mask the pipeline
+          # status so the fallback handles it.
           previous=$(git tag --list 'v*.0.0' 'v0.*.0' --sort=-v:refname \
-            | grep -A1 "^${CURRENT_TAG}$" | tail -n1)
+            | grep -A1 "^${CURRENT_TAG}$" | tail -n1 || true)
           if [[ -z "$previous" || "$previous" == "$CURRENT_TAG" ]]; then
             previous=$(git rev-list --max-parents=0 HEAD | head -1)
           fi
@@ -158,32 +224,65 @@ jobs:
           echo "Previous tag/commit: $previous"
 
       - uses: anthropics/claude-code-action@dcb57747bfceeaa1fa72638cae52295d1d853d4a  # v1.0.199
-        # `release` events run in bare agent mode (track_progress only
-        # applies to PR/issue events), where no tools are allowlisted by
-        # default — grant exactly what the task needs via --allowedTools
+        # `workflow_dispatch` events run in bare agent mode (track_progress
+        # only applies to PR/issue events), where no tools are allowlisted
+        # by default — grant exactly what the task needs via --allowedTools
         # and give the Bash tool a GH_TOKEN so `gh issue create` works
         # (the job's `issues: write` permission scopes what it can do).
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # When the release event dispatches this run, the actor is
+          # github-actions[bot], and agent mode rejects non-human actors
+          # unless they are allow-listed. Ignored when a human dispatches
+          # manually (the check only consults allowed_bots for non-User
+          # accounts).
+          allowed_bots: "github-actions"
           # See note above on the PR-review job — same reason: survive
           # repo transfers by using the workflow-scoped GITHUB_TOKEN
           # instead of the GitHub App installation token.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # See the model-pin note on the PR-review job.
+          #
+          # The tool list below is evidence-driven, not guessed (#645).
+          # The first green run burned 11 of 18 turns on denied calls;
+          # a repeat run instrumented to dump the SDK's
+          # `permission_denials` records (8 denials / 22 turns) showed
+          # exactly three causes, all addressed here:
+          #
+          #   1. `git fetch --all --tags` — denied 3x (twice as a bare
+          #      retry). The grant below stops the retry loop, and the
+          #      prompt now states the checkout is already complete so
+          #      the call should not be attempted at all.
+          #   2. `Write` — denied 2x. The model needs to stage a long
+          #      markdown body somewhere before creating the issue;
+          #      with no writable tool it fell back to a `cat <<EOF`
+          #      heredoc, which was denied too. `Write` plus
+          #      `gh issue create --body-file` is the clean path.
+          #   3. Text-processing utilities inside pipelines. Claude
+          #      Code authorizes each pipeline segment independently,
+          #      so `git log --oneline | head -100` needs `head` as
+          #      well as `git log`. The utilities below are the ones
+          #      the denial records actually named.
+          #
+          # Everything added is read-only or writes only to the
+          # ephemeral runner filesystem. Notably NOT widened: `gh`
+          # stays pinned to `gh issue create`, so the job's one
+          # outward-facing capability is unchanged.
           claude_args: |
             --model claude-sonnet-5
-            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git tag:*),Bash(git rev-list:*),Bash(gh issue create:*)"
-          # Both interpolated values are GitHub-controlled or
-          # maintainer-controlled (tag name from a published release,
-          # which requires write access; a tag/SHA resolved by the
-          # previous step) — not arbitrary user input.
+            --allowedTools "Read,Grep,Glob,Write,Bash(git diff:*),Bash(git log:*),Bash(git tag:*),Bash(git rev-list:*),Bash(git fetch:*),Bash(cat:*),Bash(echo:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(sed:*),Bash(awk:*),Bash(sort:*),Bash(uniq:*),Bash(grep:*),Bash(gh issue create:*)"
+          # Both interpolated values are maintainer-controlled (the tag
+          # comes from a workflow_dispatch input, which requires write
+          # access to set, and is verified to resolve above; the previous
+          # tag/SHA is resolved by the previous step) — not arbitrary
+          # user input.
           prompt: |
-            A new GitHub release was published: ${{ github.event.release.tag_name }}.
+            A new GitHub release was published: ${{ inputs.tag }}.
             Read the diff between ${{ steps.prev.outputs.previous }} and
-            ${{ github.event.release.tag_name }} and open a GitHub issue
-            titled "Release summary: ${{ github.event.release.tag_name }}"
+            ${{ inputs.tag }} and open a GitHub issue
+            titled "Release summary: ${{ inputs.tag }}"
             containing:
               - Changelog-style highlights of what shipped
                 (grouped: features / fixes / breaking changes /
@@ -192,5 +291,13 @@ jobs:
                 version should know about
               - Recommended manual smoke tests before publishing
                 release notes
-            Open the issue with `gh issue create`. Be concise; this is
-            a record, not a full audit.
+            Start with `git log --oneline` and `git diff --stat` over the
+            range and only read full diffs for what looks significant —
+            when there is no previous tag the range starts at the root
+            commit, so the raw diff is the whole repository.
+            The checkout is already a full clone with all tags fetched,
+            so both refs resolve locally — do not run `git fetch`.
+            Write the issue body to a file and open the issue with
+            `gh issue create --body-file <path>`; the body is long
+            enough that passing it inline with `--body` is unreliable.
+            Be concise; this is a record, not a full audit.
