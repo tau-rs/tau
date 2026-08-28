@@ -2,10 +2,10 @@
 
 **Refreshed:** 2026-08-27 (supersedes the 2026-05-17 refresh, itself
 superseding the 2026-05-13 inventory from PR #71)
-**Workspace state:** based on `origin/main` at `1717f75f`
-**Total `#[ignore]` annotations:** 42
+**Workspace state:** based on `origin/main` at `e38f2530`
+**Total `#[ignore]` annotations:** 43
 
-42 `#[ignore]` annotations across the workspace, organised into four
+43 `#[ignore]` annotations across the workspace, organised into four
 triage buckets. This file is the canonical reference for what each ignored
 test needs in order to run, and which CI job (existing or future) is
 responsible for lighting it up.
@@ -23,6 +23,12 @@ page and place the new annotation in a bucket. It is **not** a lint against
 by deleting an annotation is the wrong fix. For fifteen months the rule was
 unenforced and drifted exactly as you would expect: the header said 22 while
 the workspace held 42, and six crates had no bucket at all.
+
+It works. The gate's first encounter with real drift came hours after it was
+written: #697 landed `decode_does_not_retain_across_many_calls` while the PR
+adding the gate was still in review, and rebasing onto that `main` turned the
+Tier 0 job red until the row below was filled in. Under the old regime the test
+would simply have been the 43rd uninventoried annotation.
 
 What the gate counts: a line whose trimmed form starts with `#[ignore]`,
 `#[ignore =` or `#[ignore(`. Prose mentions in `//` and `//!` comments are
@@ -70,14 +76,31 @@ Newly inventoried (present on `main` for months; never had a bucket):
   arrived with #652 the same day and is covered by the same lane.
 - 1 × `tau-conformance`, 1 × `tau-ir-lower`, 1 × `tau-mcp-tokio` → Bucket 4.
 
-Net: 22 → 42 (−3 resolved, +21 newly inventoried, +2 already-counted rows
-re-derived).
+Landed while this refresh was in review:
+
+- 1 × `tau-plugin-protocol` `decode_does_not_retain_across_many_calls` (#697,
+  2026-08-27) → Bucket 4. Caught by the new gate on rebase, which is the
+  intended behaviour rather than an inconvenience.
+
+Net: 22 → 43 (−3 resolved, +21 newly inventoried, +1 landed mid-review,
++2 already-counted rows re-derived).
 
 A note on counting, because it bit the sweep that produced this refresh: a bare
-`grep -c '#\[ignore' crates/` returns **71**, not 42. The difference is prose —
-module docs and inline comments that mention the annotation while explaining it.
-Only 42 lines are actual attributes. The gate's trim-and-match rule is the
-definition of record.
+`grep -c '#\[ignore' crates/` **overcounts by roughly 40%** — at the 2026-08-27
+sweep it said 71 against 42 real attributes. The excess is prose: module docs
+and inline comments that mention the annotation while explaining it, including
+this page's own subject matter. Only lines whose *trimmed* form opens the
+attribute count; comments start with a slash, so trimming excludes them. That
+rule, not any raw grep, is the definition of record — it is what the gate
+implements. To reproduce the gate's number by hand:
+
+```sh
+grep -rn '#\[ignore' crates/ --include='*.rs' | grep -vE ':[0-9]+: *(//|\*)' | wc -l
+```
+
+Keep the `-n` and the filename (no `-h`): the filter keys on the `file:line:`
+prefix to find the start of the matched text, so dropping either makes it match
+nothing and silently report the raw overcount.
 
 ---
 
@@ -295,13 +318,14 @@ not an inventory row.
 
 ---
 
-## Bucket 4 — DEFERRED (4 tests)
+## Bucket 4 — DEFERRED (5 tests)
 
 Waiting on a specific helper / fixture / sibling work.
 
 | File:line | Test | Waiting on |
 |-----------|------|-----------|
 | `crates/tau-pkg/tests/install_cross_check.rs:222` | `cross_check_fires_and_fails_for_non_protocol_binary` | Full release build + 10s handshake timeout makes this too slow for routine CI. Promote when (a) a slow-tier CI lane exists OR (b) the cross-check timeout becomes configurable. |
+| `crates/tau-plugin-protocol/tests/decode_allocation_bound.rs:215` | `decode_does_not_retain_across_many_calls` | 2,000,000 `Frame::decode` calls — the #676 retention property. Too slow for routine CI; no job runs `-p tau-plugin-protocol --run-ignored`. Same blocker as the row above: promote when a slow-tier lane exists. Added by #697 (2026-08-27). |
 | `crates/tau-conformance/tests/conformance.rs:67` | `fan_monitor_dev_matches_wasm` | `WasmProfile::run` is still `unimplemented!()` (`crates/tau-conformance/src/profile/wasm.rs`). The β.6 `conformance / linux` job runs `-p tau-conformance` without `--run-ignored`, so it is skipped there by design. **Stated reason is stale — see follow-ups.** |
 | `crates/tau-ir-lower/tests/lower_e2e.rs:143` | `lowering_refuses_on_capability_fit_mismatch` | No `Available` registry entry lacks `NetworkHttp` — all 7 entries use `fs_rw_exec_net`, `fs_rw_net` or `all_shapes`, each of which inserts it. Re-verified 2026-08-27 against `crates/tau-ports/src/target/registry.rs`. Un-ignore when a `no-network` target tier lands. |
 | `crates/tau-mcp-tokio/tests/http_lifecycle.rs:101` | `multi_event_sse_response` | A session-aware wiremock fixture: the single mock serves the same two-event body for every POST, so `recv_response_for` sees a stale `id=0` while waiting for `id=1`. **Stated reason is stale — see follow-ups.** |
@@ -362,8 +386,8 @@ coverage that does not exist.
 | 2e — tau-cli guest builds (LIT) | 8 | `wasm-lane` `-p tau-cli --run-ignored ignored-only --test-threads 1` |
 | 2f — tau-wasm-host guest builds (LIT) | 10 | `wasm-lane` `-p tau-wasm-host --run-ignored all` |
 | 3 — ENVIRONMENT-SPECIFIC | 0 | Both deleted 2026-08-23 — no runner has the host shape |
-| 4 — DEFERRED | 4 | Promote when blocker resolves |
-| **Total** | **42** | |
+| 4 — DEFERRED | 5 | Promote when blocker resolves (2 of them want the same slow-tier lane) |
+| **Total** | **43** | |
 
 Numbers updated on each PR that touches an `#[ignore]` annotation — enforced by
 `xtask/tests/ignore_inventory.rs`.
