@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["render_embed_c"],"struct":["EmbedCInput"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["id","secret"],"struct":["BakedProvider","CredentialChain","CredentialRequest","ResolvedCredential"],"trait":["CredentialProvider","DynCredentialProvider"]};

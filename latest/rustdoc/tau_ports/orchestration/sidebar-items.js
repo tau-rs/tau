@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CapabilityVerdict","CheckpointError","RunStatus","TaskStatus","TraceEventKind"],"struct":["PipelineSuspension","RunBudget","RunSnapshot","Task","TaskEvent","TaskListFilter","TraceEvent","TurnCheckpoint"],"trait":["CheckpointStore","SuspensionStore"],"type":["AgentId","RunId","TaskId"]};
