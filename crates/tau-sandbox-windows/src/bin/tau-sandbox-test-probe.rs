@@ -10,6 +10,9 @@
 //!   AppContainers retain bypass-traverse-checking).
 //! - `pipe-open <name>` — open `\\.\pipe\<name>` read+write; exit 0 on
 //!   success. Used by the foreign-container pipe-access control test.
+//! - `spawn <prog> [args...]` — spawn `prog` as a CHILD of this
+//!   already-in-container process (stdio inherited) and report whether
+//!   image activation succeeded. See [`spawn_child`].
 //!
 //! An 8s watchdog hard-exits with code 9 so a broken chain never hangs
 //! the CI job.
@@ -34,9 +37,10 @@ fn main() {
         (Some("http-get"), Some(url)) => http_get(url),
         (Some("read-file"), Some(path)) => read_file(path),
         (Some("pipe-open"), Some(name)) => pipe_open(name),
+        (Some("spawn"), Some(prog)) => spawn_child(prog, &args[2..]),
         _ => {
             eprintln!(
-                "usage: tau-sandbox-test-probe http-get <url> | read-file <path> | pipe-open <name>"
+                "usage: tau-sandbox-test-probe http-get <url> | read-file <path> | pipe-open <name> | spawn <prog> [args...]"
             );
             std::process::exit(2);
         }
@@ -57,6 +61,40 @@ fn pipe_open(name: &str) -> ! {
         }
         Err(e) => {
             println!("PROBE result=err detail=open {path}: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Spawn `prog args...` as a child of *this* process, inheriting stdio,
+/// and report whether the OS could activate it.
+///
+/// # Why this mode exists (#622 FAILURE B)
+///
+/// `install_rust_cargo_acceptance` fails with `CreateProcess` of
+/// `rustc.exe` returning `Access is denied (os error 5)`. That
+/// activation is performed by a process **already inside** the
+/// AppContainer (cargo), so the image-file access check runs against the
+/// AppContainer token. Every other execution in this suite is started by
+/// `tau-appcontainer-launcher`, which runs as the *host user* — for
+/// those, the image access check need not involve the container's SID at
+/// all. So "the launcher could run this exe" does not imply "a process
+/// inside the container can run this exe", and only this mode exercises
+/// the latter.
+///
+/// Markers: `PROBE result=spawn-exit code=Some(N)` on successful
+/// activation (the child's own markers appear on the inherited stdout
+/// just before it), `PROBE result=err detail=spawn <prog>: <e>` if
+/// creation itself failed — which is where an `Access is denied
+/// (os error 5)` would surface.
+fn spawn_child(prog: &str, args: &[String]) -> ! {
+    match std::process::Command::new(prog).args(args).status() {
+        Ok(st) => {
+            println!("PROBE result=spawn-exit code={:?}", st.code());
+            std::process::exit(if st.success() { 0 } else { 1 });
+        }
+        Err(e) => {
+            println!("PROBE result=err detail=spawn {prog}: {e}");
             std::process::exit(1);
         }
     }

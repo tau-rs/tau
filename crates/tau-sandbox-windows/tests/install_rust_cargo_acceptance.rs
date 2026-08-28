@@ -42,7 +42,60 @@ impl InstallSandbox for WinGate {
             .rt
             .block_on(self.gate.wrap_spawn(plan, cmd))
             .map_err(|e| InstallSandboxError::WrapFailed(e.to_string()))?;
+        // AFTER the grant, while it is still live (the handle revokes on
+        // drop): what does the toolchain's DACL actually look like?
+        dump_toolchain_dacls();
         Ok(InstallSandboxGuard::new(handle))
+    }
+}
+
+/// Print the live DACL of the granted `$RUSTUP_HOME` root, the
+/// toolchain `bin` directory, and `rustc.exe` itself.
+///
+/// #622 CI round 3 left exactly one question open. The envelope markers
+/// proved the grant targeted the right tree
+/// (`covers-rustc=true`, `exists=true`) and that `grant_access` returned
+/// success; `dir_grant_reaches_preexisting_nested_file` proved an
+/// inheritable ACE does reach pre-existing nested files. Yet
+/// `CreateProcess` of `rustc.exe` answers `Access is denied`. The file's
+/// own DACL settles it without another inference chain:
+///
+/// - no `S-1-15-2-…` ACE on `rustc.exe` while the root has one ⇒
+///   propagation stopped somewhere in the tree (scale, or a protected
+///   DACL on an intermediate directory);
+/// - an ACE present but with `FILE_EXECUTE` (0x20) missing from `mask` ⇒
+///   the access mask is wrong and the fix is in `acl.rs`;
+/// - an ACE present with the full mask ⇒ the denial is not a file-DACL
+///   problem at all and the search moves off ACLs entirely.
+///
+/// `flags & 0x10` is `INHERITED_ACE`, i.e. "this ACE arrived by
+/// propagation rather than being set directly on this object".
+fn dump_toolchain_dacls() {
+    let Some(rustc) = resolve_rustc() else {
+        eprintln!("ENVELOPE dacl rustc=<unresolved>");
+        return;
+    };
+    let rustup_home = std::env::var("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map(|h| PathBuf::from(h).join(".rustup"))
+                .unwrap_or_default()
+        });
+    let bin = rustc.parent().map(Path::to_path_buf);
+    for (label, path) in [
+        ("rustup-home", Some(rustup_home)),
+        ("toolchain-bin", bin),
+        ("rustc", Some(rustc.clone())),
+    ] {
+        let Some(path) = path.filter(|p| !p.as_os_str().is_empty()) else {
+            continue;
+        };
+        match tau_sandbox_windows::test_support::describe_dacl(&path.to_string_lossy()) {
+            Ok(d) => eprintln!("ENVELOPE dacl {label} {path:?} {d}"),
+            Err(e) => eprintln!("ENVELOPE dacl {label} {path:?} ERR {e}"),
+        }
     }
 }
 

@@ -69,6 +69,17 @@ pub mod test_support {
         crate::acl::grant_access(&sid, path, crate::acl::AccessKind::Read)
     }
 
+    /// Dump `path`'s DACL as `[type/flags/mask/sid]` groups.
+    ///
+    /// Diagnostic only, for #622's `install_rust_cargo_acceptance`: it
+    /// answers "did the `$RUSTUP_HOME` grant actually land on
+    /// `rustc.exe`, and with which rights?" — the one question left
+    /// after the envelope markers showed the right tree was granted and
+    /// the grant call succeeded. See [`crate::acl::describe_dacl`].
+    pub fn describe_dacl(path: &str) -> std::io::Result<String> {
+        crate::acl::describe_dacl(path)
+    }
+
     /// Spawn a pipe proxy DACL'd to `profile` and return the bare pipe
     /// name plus an opaque keep-alive guard (drop aborts the accept
     /// loop). For the foreign-container pipe-access control test, which

@@ -558,6 +558,51 @@ where
     Ok(())
 }
 
+/// One-shot loopback upstream shared by the tests below.
+#[cfg(test)]
+mod test_upstream {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    /// Drain the WHOLE forwarded request head, then write `resp`, then
+    /// half-close so the peer observes a clean FIN.
+    ///
+    /// # Why draining matters (#622 CI round 3)
+    ///
+    /// [`handle_http`](super::handle_http) forwards a request as **two**
+    /// writes — the rewritten request line, then the rest of the head it
+    /// had already buffered. A fixture that issues a single `read()` and
+    /// then drops the socket leaves the second write unread in the
+    /// receive buffer; on Windows, closing a socket with unread received
+    /// data aborts the connection with an **RST** instead of a FIN,
+    /// which destroys the response still in flight the other way. That
+    /// is exactly how `tau-sandbox-windows`'s
+    /// `egress_allowlisted_host_succeeds_through_full_chain` failed
+    /// (`splice remote->client FAILED ... os error 10054`).
+    ///
+    /// These two fixtures had the identical shape and only survived
+    /// because loopback usually coalesces both writes into one read —
+    /// i.e. they were latently flaky on Windows CI, not correct.
+    ///
+    /// Bounded by a byte cap and a per-read timeout: a regression must
+    /// fail the assertion, never hang the job.
+    pub(super) async fn answer_after_draining_head(s: &mut TcpStream, resp: &[u8]) {
+        let mut head = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < 64 * 1024 {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut chunk)).await
+            {
+                Ok(Ok(n)) if n > 0 => head.extend_from_slice(&chunk[..n]),
+                // EOF, read error, or timeout: answer with what we have
+                // and let the test's own assertion report the problem.
+                _ => break,
+            }
+        }
+        s.write_all(resp).await.expect("write resp");
+        s.shutdown().await.expect("shutdown upstream write side");
+    }
+}
+
 #[cfg(unix)]
 #[cfg(test)]
 mod proxy_lifecycle_tests {
@@ -833,12 +878,13 @@ mod splice_logging_tests {
         let port = upstream.local_addr().expect("addr").port();
         let up = tokio::spawn(async move {
             let (mut s, _) = upstream.accept().await.expect("accept");
-            let mut b = [0u8; 1024];
-            let _ = s.read(&mut b).await.expect("read req");
-            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
-                .await
-                .expect("write resp");
-            // drop -> clean close -> EOF on the remote->client copy direction
+            // Drain the whole head before answering, then FIN: see
+            // `test_upstream::answer_after_draining_head`.
+            super::test_upstream::answer_after_draining_head(
+                &mut s,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi",
+            )
+            .await;
         });
 
         let h = spawn_proxy(HostAllow::Exact(vec!["127.0.0.1".to_string()])).expect("spawn");
@@ -965,12 +1011,13 @@ mod generic_handler_tests {
         let port = upstream.local_addr().expect("addr").port();
         let up = tokio::spawn(async move {
             let (mut s, _) = upstream.accept().await.expect("accept");
-            let mut b = [0u8; 1024];
-            let _ = s.read(&mut b).await.expect("read req");
-            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
-                .await
-                .expect("write resp");
-            // drop -> FIN -> EOF on the remote->client direction
+            // Drain the whole head before answering, then FIN: see
+            // `test_upstream::answer_after_draining_head`.
+            super::test_upstream::answer_after_draining_head(
+                &mut s,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi",
+            )
+            .await;
         });
 
         let (mut client, mut server) = tokio::io::duplex(4096);

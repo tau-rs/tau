@@ -271,6 +271,106 @@ pub(crate) fn revoke_access(
     result
 }
 
+/// Human-readable dump of `path`'s DACL: one `[type/flags/mask/sid]`
+/// group per ACE, in order.
+///
+/// Diagnostic only — nothing in the adapter's behaviour depends on it.
+///
+/// # Why (#622 FAILURE B)
+///
+/// `install_rust_cargo_acceptance` grants read on `$RUSTUP_HOME`, the
+/// grant call returns success, `covers-rustc=true`, and yet
+/// `CreateProcess` of `<rustup>\toolchains\…\bin\rustc.exe` answers
+/// `Access is denied`. Every hypothesis left standing is about whether
+/// the inheritable ACE actually **landed on that file** and with what
+/// rights — a question no exit code can answer but that the file's own
+/// DACL answers directly. `AceFlags & 0x10` (`INHERITED_ACE`) says
+/// whether the ACE arrived by propagation; `Mask` says whether
+/// `FILE_EXECUTE` (0x20) and `FILE_READ_DATA` (0x1) survived it.
+///
+/// Errors are returned rather than panicking: a diagnostic must never
+/// be the reason a test fails.
+pub(crate) fn describe_dacl(path: &str) -> std::io::Result<String> {
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::Win32::Security::{
+        AclSizeInformation, GetAce, GetAclInformation, ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION,
+    };
+    let path_w = wide(path);
+    unsafe {
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        let rc = GetNamedSecurityInfoW(
+            PCWSTR(path_w.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(&mut dacl),
+            None,
+            &mut sd,
+        );
+        if rc.is_err() {
+            return Err(std::io::Error::other(format!(
+                "GetNamedSecurityInfoW({path}): {rc:?}"
+            )));
+        }
+
+        let mut out = String::new();
+        if dacl.is_null() {
+            // A NULL DACL means "everyone, everything" — worth saying
+            // out loud rather than rendering as an empty ACE list.
+            out.push_str("<null-dacl>");
+        } else {
+            let mut info = ACL_SIZE_INFORMATION::default();
+            let sized = GetAclInformation(
+                dacl as *const ACL,
+                &mut info as *mut _ as *mut core::ffi::c_void,
+                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            );
+            if sized.is_err() {
+                out.push_str("<GetAclInformation failed>");
+            }
+            for i in 0..info.AceCount {
+                let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+                if GetAce(dacl as *const ACL, i, &mut ace).is_err() || ace.is_null() {
+                    out.push_str("[ace?] ");
+                    continue;
+                }
+                // Only ACCESS_ALLOWED_ACE (0) and ACCESS_DENIED_ACE (1)
+                // are decoded: they share the `header, mask, SidStart`
+                // layout, so `SidStart` really is a SID. Object/callback
+                // ACE types interpose extra fields there, and handing
+                // `ConvertSidToStringSidW` a non-SID would have it walk
+                // a bogus SubAuthorityCount — so those are reported by
+                // their numeric type instead of being mis-decoded.
+                let a = &*(ace as *const ACCESS_ALLOWED_ACE);
+                let sid_str = if a.Header.AceType <= 1 {
+                    let sid = PSID(&a.SidStart as *const u32 as *mut core::ffi::c_void);
+                    let mut s = PWSTR::null();
+                    if ConvertSidToStringSidW(sid, &mut s).is_ok() {
+                        let v = s.to_string().unwrap_or_else(|_| "<utf16>".to_string());
+                        let _ = LocalFree(HLOCAL(s.as_ptr() as *mut _));
+                        v
+                    } else {
+                        "<sid?>".to_string()
+                    }
+                } else {
+                    "<undecoded-ace-type>".to_string()
+                };
+                out.push_str(&format!(
+                    "[type={} flags=0x{:02x} mask=0x{:08x} sid={sid_str}] ",
+                    a.Header.AceType, a.Header.AceFlags, a.Mask
+                ));
+            }
+        }
+        if !sd.0.is_null() {
+            LocalFree(HLOCAL(sd.0));
+        }
+        Ok(out)
+    }
+}
+
 /// String form ("S-1-15-2-…") of an AppContainer profile's package SID.
 /// Called from `pipe_proxy::spawn_pipe_proxy` to build the pipe's DACL
 /// (the "container part" ACE).

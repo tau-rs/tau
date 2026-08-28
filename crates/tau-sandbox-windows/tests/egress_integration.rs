@@ -27,23 +27,70 @@
 #![cfg(all(target_os = "windows", feature = "integration-tests"))]
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use tau_ports::{CapabilityPlan, ProcessCapabilityGate};
 use tau_sandbox_windows::{test_support, WindowsSandbox};
 
-/// One-shot upstream: accepts a single conn, returns 200 "hello".
-/// Returns (port, join-handle).
+/// Upper bound on the request head this fixture will buffer before it
+/// answers regardless — a product bug must fail the assertion, never
+/// grow the fixture's memory without limit.
+const UPSTREAM_HEAD_CAP: usize = 64 * 1024;
+
+/// One-shot upstream: accepts a single conn, drains the WHOLE request
+/// head, answers 200 "hello", then half-closes. Returns (port, handle).
+///
+/// # Why the drain loop (#622 CI round 3)
+///
+/// `tau_sandbox_proxy::handle_http` forwards a request as **two**
+/// writes: the rewritten (origin-form) request line, then the remaining
+/// bytes of the head it had already buffered. An upstream that issues a
+/// single `read()` therefore only reliably sees the first of them, and
+/// the second is still sitting unread in the socket's receive buffer
+/// when the socket is dropped.
+///
+/// On Windows, closing a socket that still holds unread received data
+/// aborts the connection with an **RST** rather than a FIN. That
+/// destroys the response already in flight in the other direction:
+/// round 3's markers showed `PROXY http upstream connect OK` and
+/// `PROXY http forwarded head line=16B rest=44B`, followed by
+/// `PROXY splice remote->client FAILED err=... (os error 10054)` and
+/// zero bytes at the probe. The product chain was working; this fixture
+/// was tearing it down.
+///
+/// The fix belongs here, not in `handle_http`: writing a request in two
+/// segments is legitimate, and any HTTP client that did the same would
+/// hit the identical fixture bug. So read until the `\r\n\r\n` head
+/// terminator — bounded by [`UPSTREAM_HEAD_CAP`] *and* a read timeout so
+/// a regression fails the test instead of hanging CI — then answer, then
+/// `shutdown(Write)` so the peer observes a clean FIN.
 fn spawn_upstream() -> (u16, std::thread::JoinHandle<()>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("upstream bind");
     let port = listener.local_addr().expect("addr").port();
     let h = std::thread::spawn(move || {
         if let Ok((mut s, _)) = listener.accept() {
-            let mut buf = [0u8; 2048];
-            let _ = s.read(&mut buf);
+            // Bounded: a product bug must fail the assertion in the test
+            // body, not wedge this thread (the test `join()`s it).
+            let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut head = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < UPSTREAM_HEAD_CAP {
+                match s.read(&mut chunk) {
+                    Ok(0) => break,  // peer closed
+                    Err(_) => break, // timeout or reset
+                    Ok(n) => head.extend_from_slice(&chunk[..n]),
+                }
+            }
             let _ = s.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
             );
+            let _ = s.flush();
+            // FIN, not RST: tells the proxy's `remote -> client` splice
+            // the response is complete, which is what lets the whole
+            // chain tear down in order.
+            let _ = s.shutdown(std::net::Shutdown::Write);
         }
     });
     (port, h)
@@ -275,6 +322,169 @@ async fn dir_grant_reaches_preexisting_nested_file() {
          — SetNamedSecurityInfoW is not propagating the inheritable ACE, so every \
          directory-shaped grant in the build envelope is inert:\n{}",
         render(&out)
+    );
+}
+
+/// Stage a temp tree that ALREADY contains a nested executable and a
+/// nested data file, both created before any ACL grant touches the tree.
+/// Returns `(base, exe, marker)`; only `base` is ever granted.
+///
+/// The copy is what makes the exe genuinely pre-existing *and* covered
+/// only by the directory grant: `std::fs::copy` gives the new file the
+/// destination directory's inherited ACL, and the grant lands afterwards.
+fn stage_preexisting_exe_tree(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!("tau-egress-{tag}-{}", std::process::id()));
+    let bin = base.join("toolchain/bin");
+    std::fs::create_dir_all(&bin).expect("mkdirs");
+    let exe = bin.join("preexisting-probe.exe");
+    std::fs::copy(env!("CARGO_BIN_EXE_tau-sandbox-test-probe"), &exe).expect("copy probe");
+    let marker = base.join("marker.txt");
+    std::fs::write(&marker, "hello").expect("write marker");
+    (base, exe, marker)
+}
+
+/// Run `program args...` inside the AppContainer `profile` via the
+/// launcher, waiting on the blocking `output()` off-runtime (module doc).
+async fn launch_in_container(profile: &str, program: &str, args: &[&str]) -> std::process::Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tau-appcontainer-launcher"));
+    cmd.args(["--profile", profile, "--", program]);
+    cmd.args(args);
+    tokio::task::spawn_blocking(move || cmd.output())
+        .await
+        .expect("spawn_blocking join")
+        .expect("launcher")
+}
+
+/// A directory grant must confer **EXECUTE** (image activation) on a
+/// pre-existing nested `.exe`, not merely READ.
+///
+/// `dir_grant_reaches_preexisting_nested_file` (above) proved the
+/// inherited ACE reaches a pre-existing nested *data file* for reading.
+/// Nothing proved it permits *image activation* of a pre-existing nested
+/// executable — the property #622's `install_rust_cargo_acceptance`
+/// actually depends on (`rustc.exe` lives inside the `$RUSTUP_HOME/**`
+/// directory grant and is never granted in its own right).
+///
+/// This is the launcher-side half of the experiment: the process is
+/// created by `tau-appcontainer-launcher`, which runs as the host user.
+/// `in_container_spawn_reaches_dir_granted_preexisting_exe` covers the
+/// other half, where the creator is itself inside the container.
+#[tokio::test]
+async fn dir_grant_confers_execute_on_preexisting_nested_exe() {
+    let profile = format!("tau-egress-exe-{}", std::process::id());
+    let (base, exe, marker) = stage_preexisting_exe_tree("exe");
+
+    test_support::create_profile(&profile).expect("profile");
+    // ONLY the ancestor directory is granted. The exe inside it never
+    // receives an ACE of its own — an inherited one is all it can have.
+    test_support::grant_read(&profile, base.to_str().expect("utf8")).expect("grant dir");
+
+    let out = launch_in_container(
+        &profile,
+        exe.to_str().expect("utf8"),
+        &["read-file", marker.to_str().expect("utf8")],
+    )
+    .await;
+    test_support::delete_profile(&profile).ok();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("CreateProcessW"),
+        "the OS refused to ACTIVATE a pre-existing nested .exe covered only by a directory \
+         read grant, even though the same kind of grant makes a nested data file readable \
+         (dir_grant_reaches_preexisting_nested_file) — the inherited ACE's access mask does \
+         not permit image activation, which is exactly #622's `rustc.exe ... Access is \
+         denied (os error 5)`; the fix then belongs in acl.rs:\n{}",
+        render(&out)
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "dir-granted pre-existing exe ran but did not succeed:\n{}",
+        render(&out)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("PROBE result=ok detail=read"),
+        "expected the dir-granted exe to run and read the dir-granted marker:\n{}",
+        render(&out)
+    );
+}
+
+/// The same question, asked from *inside* the container — the shape
+/// #622's FAILURE B actually has.
+///
+/// When `tau-appcontainer-launcher` creates a process it runs as the
+/// host user, so a successful activation there does not prove the
+/// AppContainer's own SID can activate that image. `rustc.exe`, by
+/// contrast, is activated by cargo, which is already inside the
+/// container. This test runs the probe in `spawn` mode so the
+/// `CreateProcess` under test is issued by a container process.
+///
+/// It is a *controlled* experiment, which is why it launches twice:
+///
+/// - **control** — spawn an exe that carries its own explicit grant. If
+///   this fails, in-container process creation is broken for reasons
+///   that have nothing to do with ACL inheritance and the subject result
+///   carries no information.
+/// - **subject** — spawn the pre-existing nested exe covered ONLY by the
+///   directory grant.
+///
+/// control green + subject red ⇒ an inherited ACE does not confer image
+/// activation ⇒ fix in `acl.rs` (mask or ACE shape). Both green ⇒ the
+/// grant mechanism is sound for a small tree and FAILURE B is specific
+/// to the `.rustup` tree itself (scale, protected DACLs, …), which is a
+/// design question, not a bug in this module.
+#[tokio::test]
+async fn in_container_spawn_reaches_dir_granted_preexisting_exe() {
+    let profile = format!("tau-egress-spawn-{}", std::process::id());
+    let (base, exe, marker) = stage_preexisting_exe_tree("spawn");
+    let probe = env!("CARGO_BIN_EXE_tau-sandbox-test-probe");
+    let marker_str = marker.to_str().expect("utf8");
+
+    test_support::create_profile(&profile).expect("profile");
+    // The launcher's target (the *parent* probe) is granted explicitly,
+    // as in every other test here.
+    test_support::grant_read(&profile, probe).expect("grant probe");
+    // The staged tree is granted at the DIRECTORY only.
+    test_support::grant_read(&profile, base.to_str().expect("utf8")).expect("grant dir");
+
+    let control =
+        launch_in_container(&profile, probe, &["spawn", probe, "read-file", marker_str]).await;
+    let subject = launch_in_container(
+        &profile,
+        probe,
+        &[
+            "spawn",
+            exe.to_str().expect("utf8"),
+            "read-file",
+            marker_str,
+        ],
+    )
+    .await;
+    test_support::delete_profile(&profile).ok();
+
+    assert_eq!(
+        control.status.code(),
+        Some(0),
+        "CONTROL failed: a process inside the AppContainer could not spawn an EXPLICITLY \
+         granted exe. In-container process creation is broken for a reason unrelated to ACL \
+         inheritance, so the subject case proves nothing — diagnose this first:\n{}",
+        render(&control)
+    );
+    assert_eq!(
+        subject.status.code(),
+        Some(0),
+        "SUBJECT failed while the CONTROL passed: a process inside the AppContainer can \
+         activate an explicitly-granted exe but NOT a pre-existing nested exe covered only \
+         by a directory grant. The inherited ACE does not confer image activation to the \
+         container SID — that is #622's `rustc.exe ... Access is denied (os error 5)`, and \
+         the fix belongs in acl.rs (access mask / ACE shape):\n{}",
+        render(&subject)
+    );
+    assert!(
+        String::from_utf8_lossy(&subject.stdout).contains("PROBE result=spawn-exit code=Some(0)"),
+        "expected the in-container parent to report a successful child activation:\n{}",
+        render(&subject)
     );
 }
 
