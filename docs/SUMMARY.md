@@ -31,6 +31,7 @@
 - [Build embedding artifacts](how-to/build-embedding-artifacts.md)
 - [Author a conditional branch](how-to/authoring-a-branch.md)
 - [Author a suspend step](how-to/authoring-suspend.md)
+- [Define agents and tools in directories](how-to/define-agents-and-tools-in-directories.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
 - [Run mutation testing](how-to/run-mutation-testing.md)
 - [Quarantine a flaky test](how-to/quarantine-flaky-tests.md)
@@ -151,6 +152,7 @@
 - [ADR-0065 — Unknown-input policy: strict authoring surfaces, versioned interchange](decisions/0065-unknown-input-policy.md)
 - [ADR-0066 — Guest fs-effect descriptor resolution: preopen plumbing, dual cfg, absence-denial](decisions/0066-guest-fs-effect-descriptor-resolution.md)
 - [ADR-0067 — Windows AppContainer adapter — Phase 2 (Strict-tier enforcement)](decisions/0067-sandbox-windows-appcontainer-phase2.md)
+- [ADR-0068 — Directory-based tool & agent definitions](decisions/0068-directory-based-definitions.md)
 
 # Retrospectives
 
