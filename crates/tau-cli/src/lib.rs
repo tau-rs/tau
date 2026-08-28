@@ -140,13 +140,18 @@ struct PreparedWorkflowRun {
 /// `<scope>/.tau/workflow-runs/<name>-<run_id>.jsonl` path the runner
 /// will use. Returns `None` for any other command, or when scope
 /// resolution fails (the workflow handler will re-surface that error).
+///
+/// Note `Workflow(Resume(...))` deliberately gets no layer: the records
+/// a resumed run produces are not appended to the original log, because
+/// `check_drift` treats a log longer than the step list as drift and
+/// would reject every subsequent resume. Tracked separately in #695.
 fn prepare_workflow_run_layer(command: &cli::Command) -> Option<PreparedWorkflowRun> {
     let cli::Command::Workflow(cli::WorkflowSubcommand::Run(run_args)) = command else {
         return None;
     };
     let cwd = std::env::current_dir().ok()?;
     let scope = tau_pkg::Scope::resolve(&cwd).ok()?;
-    let run_id = ulid::Ulid::new().to_string();
+    let run_id = ulid::Ulid::generate().to_string();
     let log_path = tau_workflow::run_log_path(scope.path(), &run_args.name, &run_id);
     let layer = tau_observe::layers::workflow_run_log::WorkflowRunLogLayer::new(log_path);
     Some(PreparedWorkflowRun { run_id, layer })

@@ -81,7 +81,7 @@ name = "my-project"
 [agents.example]
 display_name = "Example Agent"
 package      = ""
-llm_backend  = ""
+model        = ""
 
 [agents.example.prompt]
 system = """
@@ -127,8 +127,22 @@ Two fields are load-bearing:
   default LLM backend, default system prompt. Today, with no
   published-package ecosystem, you'd typically point this at a
   local `file://` URL during development.
-- `llm_backend` — the package providing the model. Either a git URL
-  or, if the agent's package declares one, an explicit override.
+- `model` — a *model alias*, not a vendor model id. The alias is a key
+  into the project's model table: `[allow.models.<alias>]` in a
+  governed project (one with an `[allow]` ceiling), or top-level
+  `[models.<alias>]` in an ungoverned one. Each alias entry names the
+  concrete `backend` package and the vendor `model` string it resolves
+  to, so agent blocks reference a policy ("default", "fast") instead of
+  hard-coding a vendor string in every agent:
+
+  ```toml
+  [allow.models.default]
+  backend = "anthropic"
+  model   = "claude-haiku-4-5"
+
+  [agents.example]
+  model = "default"   # the alias — not "claude-haiku-4-5"
+  ```
 
 The example scaffold leaves both empty so `tau chat example` fails
 loudly with "package must be non-empty" instead of silently picking
@@ -170,6 +184,7 @@ The ones you'll reach for first:
 | `tau install <url>` | install a package from a git URL into the active scope |
 | `tau list` | show installed packages |
 | `tau resolve` | re-derive the lockfile from `tau.toml` |
+| `tau check` | pre-flight validation of the whole project (config, lockfile, packages, sandbox, plugins, skills, MCP contracts, governance) in one CI/IDE-friendly verb |
 | `tau chat <agent-id>` | interactive REPL with the agent |
 | `tau run <agent-id> "<prompt>"` | one-shot invocation |
 | `tau verify` | check installed packages match the lockfile (content hashes) |
@@ -189,8 +204,10 @@ tau resolve    # creates .tau/ and the empty lockfile
 ```
 
 `tau resolve` is the verb that turns `tau.toml`'s declarations into
-a concrete lockfile. It clones every declared `package` /
-`llm_backend` source, walks dependencies, and writes
+a concrete lockfile. It clones every declared package source — each
+agent's `package` plus the project's top-level `packages` list, which
+is where the `backend` named by a model alias comes from — walks
+dependencies, and writes
 `.tau/lockfile.toml` + `.tau/config.toml`. Today, with empty
 `package` fields, it will fail with a guided error — that's
 expected. It tells you exactly what `tau.toml` field is missing.
@@ -272,7 +289,7 @@ You now know the shape. The natural next directions:
 - [`CONSTITUTION.md`](../../CONSTITUTION.md) — G1–G17 explain why the
   project / agent / package separation is the way it is.
 - [Packages](../explanation/packages.md) — the package model the
-  `package` / `llm_backend` fields point at.
+  `package` field and a model alias's `backend` point at.
 - [Capabilities and consent](../explanation/capabilities-and-consent.md)
   — what the agent is actually allowed to do once it loads.
 - [Sandboxing](../explanation/sandboxing.md) — what happens between

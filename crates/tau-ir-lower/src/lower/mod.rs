@@ -14,6 +14,7 @@ pub mod capability_fit;
 pub mod feature_fit;
 pub mod mcp_build_error;
 pub mod parse;
+pub mod predicate_fit;
 pub mod resolve;
 pub mod typecheck;
 
@@ -88,6 +89,8 @@ pub struct ResolvedMcpContract {
 ///    cap_subset is a subset of parent grant.
 /// 4. `capability_fit` — every required shape supported by `target`.
 /// 5. `feature_fit` — every IR feature used is executable on `target`.
+/// 6. `predicate_fit` — every goal predicate/deterministic fn used has a
+///    wasm guest execution path (wasm-only; no-op for native targets).
 ///
 /// # Example
 ///
@@ -122,6 +125,7 @@ pub fn lower_project(
     typecheck::typecheck(&resolved)?;
     capability_fit::check(&resolved, target)?;
     feature_fit::check(&resolved, target)?;
+    predicate_fit::check(&resolved, target)?;
     Ok(build_output(resolved, target))
 }
 

@@ -30,4 +30,12 @@ mod dispatcher;
 #[cfg(target_arch = "wasm32")]
 mod executor;
 #[cfg(target_arch = "wasm32")]
+mod goal_registry;
+#[cfg(target_arch = "wasm32")]
 mod host_ports;
+/// Pure preopen selection (longest-prefix, root-aware) shared by the fs
+/// effect arms. Compiled whenever an fs cfg is on — and in host `cfg(test)`
+/// builds, where its table-driven tests run natively (the rest of this crate
+/// is wasm32-only, so this is the crate's only native test surface).
+#[cfg(any(test, tau_cap_fs_read, tau_cap_fs_write))]
+mod preopen;

@@ -33,6 +33,21 @@ absence of a preopen is absence of capability. The enforcement point is the
 host's preopen set (its `WasiCtx`), which the host populates only from granted
 caps — preserving 3.4's "no in-guest cap gate" invariant.
 
+*Amended (#604):* selection is the LONGEST-prefix, segment-aware match, not
+first-match — with overlapping grants (`/data` RO + `/data/logs` RW) a write
+under `/data/logs` binds the RW preopen instead of being host-denied through
+the RO one — and a `/` (root) preopen (from a `/**` cap) serves every absolute
+path. Selection stays purely lexical: a traversal like `/data/../etc` binds
+`/data` with remainder `../etc`, which the host `open-at` rejects (fail-closed
+even when a broader preopen also matched). The pure selector lives in
+`tau-wasm-guest::preopen` and is table-tested natively.
+
+**D5 — `Write` replaces the file (`CREATE | TRUNCATE`), added by #604.**
+The `Write` tool contract is full-content replace: `open-at` passes
+`open-flags.create | open-flags.truncate`, so overwriting a longer existing
+file leaves no stale tail. Append semantics would be a distinct future tool,
+not a flag on this one.
+
 **D4 — Ungranted-path denial is guest-observed absence, not a host error-code.**
 Net's denial is a host hook returning a `wasi:http` error-code
 (`HttpRequestDenied`), asserted exactly. Fs's no-preopen denial produces no host
@@ -48,5 +63,9 @@ in `get-directories`); only the marker string is guest-emitted.
 - Tests asserting fs denial key on `FsAccessDenied` (guest constant), whereas
   net keys on the host `HttpRequestDenied` — an intentional, documented
   asymmetry, not an inconsistency.
-- The positive/connected fs path is offline-untested by design (as net); the
-  host-side `wasi_fs_enforcement.rs` fs-probe test covers the granted read.
+- The positive fs path is offline-TESTED since #604: `wasi_fs_roundtrip.rs`
+  drives the real guest through granted nested-preopen writes (truncate
+  verified on the host filesystem), a granted read, and a root-preopen read —
+  all against seeded tempdir sandboxes, no network. The host-side
+  `wasi_fs_enforcement.rs` fs-probe test still covers `WasiCtx` enforcement
+  with a std-fs guest.

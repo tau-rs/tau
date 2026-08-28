@@ -276,4 +276,193 @@ don't require rework:
 3. Do control-flow spans (branch/loop/parallel) already reach the jsonl,
    or do they need a projection like reasoning does? (Verify in plan;
    agent/tool/spawn are confirmed present.)
+
+## 12. Clamp rows (M1.5 deferred item 2) — design
+
+M1 shipped `Allow` rows; M1.5 shipped `Drop` rows and deferred `Clamp`
+after finding that `CapabilityVerdict::Clamp` has **no runtime
+producer**. This section is the design for that producer.
+
+### 12.1 What a clamp actually is (finding)
+
+There is no per-call narrowing anywhere in the runtime. The only
+meet-clamp is decided **once, at MCP setup**:
+
+```text
+tau.toml [tools.<entry>].capabilities            (envelope)
+        │
+        ▼  setup_mcp_runtime (tau-cli cmd/ir_dispatcher.rs)
+mcp_capability_plan:
+    net caps ← tau_domain::meet(envelope_net, [allow.mcp.<entry>].hosts)
+        │
+        ▼
+CapabilityPlan ──► mcp_open ──► OS boundary (sandboxed server spawn)
+        │                        ▲ enforcement happens here, once
+        ▼
+McpBackedTool (carries DECLARED st.caps only)
+        │
+        ▼  per call, tau-runtime-core stream.rs
+check_capabilities_for_tool(agent_grant ⊇ declared)   — pass/fail only
+        ▼
+TraceEvent ToolCall { capability: Allow }             — always Allow today
 ```
+
+The kernel's per-call gate compares the *agent's grant* against the
+tool's *declared* caps; the clamped plan never reaches it. Therefore a
+`clamp:<to>` row **means**: "this call executed under authority that was
+narrowed at open time to `<to>`." It surfaces a standing open-time
+decision on each affected per-call row; it is observability only — no
+enforcement change.
+
+**Reachability today, corrected.** The diagram above describes the
+kernel dispatch site (`tau-runtime-core/src/stream.rs`), and that site
+is real and testable — it is what §12.4 instruments. But it is not, in
+fact, where `tau run`'s MCP calls go today. MCP tools are registered
+into `ForwardingDispatcher` (the IR path), and IR agents wrap every
+tool in `DispatcherTool`
+(`tau-runtime-core/src/interpreter/agent_loop.rs`, ~line 482), which
+intentionally advertises **empty** capabilities and does not forward
+`effective_capabilities()` — this is the issue-#581 pinned contract,
+guarded by `tests/ir_dispatch_gate_inert.rs`, and is not something this
+design changes. Separately, IR-interpreter runs never populate
+`options.orchestration_state`, so they emit no `TraceEvent::ToolCall`
+at all, clamped or otherwise. Net effect: the §12 producer is correct
+and covered by its own tests, but it is **dormant infrastructure** for
+the stock `tau run` CLI until both gaps are closed — see the
+reachability-wiring item in §12.6.
+
+Prior-art audit (why this shape): object-capability systems attach
+narrowed authority to the object itself (Capsicum fd rights,
+ocap-attenuated proxies; in-repo precedent `AttenuatedDispatcher` in
+`tau-runtime-core/src/interpreter/attenuate.rs`), and per-operation
+audit records annotate every operation with the standing policy decision
+(Kubernetes audit `authorization.k8s.io/decision` annotations, Envoy
+access-log matched-policy fields). The design below composes exactly
+those two patterns. What it is *not* is enforcement-point logging
+(SELinux-AVC-style "this call tried host X and was blocked") — that
+would require egress events from the sandbox proxy and is future work
+(§12.6).
+
+### 12.2 Authority on the object: `Tool::effective_capabilities()`
+
+Additive, defaulted method on the `Tool` trait (tau-ports):
+
+```rust
+/// The authority this tool actually runs under, when narrower than
+/// `capabilities()` (e.g. an MCP entry meet-clamped by the
+/// `[allow.mcp.<entry>].hosts` ceiling at open time).
+/// `None` (default) = not narrowed; runtime authority == declared.
+fn effective_capabilities(&self) -> Option<&[Capability]> {
+    None
+}
+```
+
+Mirrored on `DynTool` (tau-runtime-core `builder.rs`) with the same
+default, forwarded in the blanket `impl<T: Tool<Session = ()>> DynTool
+for T`. Defaulted method ⇒ additive ⇒ tau-ports 0.7.0 → **0.7.1**
+(cargo-semver-checks classes defaulted-trait-method addition as minor;
+if the ABI job disagrees, bump 0.8.0 + workspace pin instead).
+
+### 12.3 Producer site 1 — compute the per-tool meet (tau-cli)
+
+`setup_mcp_runtime` already holds both sides at registration time. Per
+server-tool `st` of a clamped entry:
+
+```text
+effective_net = tau_domain::meet(st.caps ∩ Network, plan.capabilities ∩ Network)
+clamped       = effective_net ≠ (st.caps ∩ Network)      // lattice inequality
+```
+
+If `clamped`, construct the tool's effective set = non-net declared caps
++ `effective_net`, and pass it into the tool:
+
+```rust
+McpBackedTool::new(id, client, name, st.caps, effective, schema, desc)
+// effective: Option<Vec<Capability>> — None when not narrowed
+```
+
+`McpBackedTool` stores it and overrides `effective_capabilities()`.
+Notes:
+- The meet is **per server-tool**, not per entry: a tool whose declared
+  caps contain no `net.http` is never clamped, even on a clamped entry.
+- The `[allow.mcp]` ceiling narrows hosts only (any-method ceiling), so
+  in practice only hosts narrow; the design still compares full net
+  caps so a future method-carrying ceiling needs no rework.
+- Empty meet (fail-closed host drop in `mcp_capability_plan`) is still
+  a clamp — the tool runs with **no** net authority (§12.5 renders it).
+
+### 12.4 Producer site 2 — verdict mapping at the kernel emit (tau-runtime-core)
+
+The two existing `ToolCall` emit sites in `stream.rs` (success path and
+schema-invalid path) currently inline `required.is_empty() → None else
+Allow`. Extract one shared helper and use it at both:
+
+```rust
+fn capability_verdict(
+    tool: &dyn DynTool,
+    required: &[Capability],
+) -> Option<tau_ports::CapabilityVerdict> {
+    if required.is_empty() {
+        return None;
+    }
+    Some(match tool.effective_capabilities() {
+        Some(eff) => tau_ports::CapabilityVerdict::Clamp {
+            to: render_clamped_to(eff),
+        },
+        None => tau_ports::CapabilityVerdict::Allow,
+    })
+}
+```
+
+The kernel stays the single emit point — no trace sink in
+tau-mcp-tokio, no duplicate rows. The `Drop` path (denial
+early-returns) is untouched. The kernel gate itself is unchanged: it
+still checks agent-grant vs declared caps, and the OS boundary remains
+the enforcer. (Gating against `effective_capabilities()` instead is a
+possible later tightening — conservative direction, per the
+conservatism note in `capability.rs` — but out of scope here.)
+
+### 12.5 The `to` string
+
+`render_clamped_to(eff)` (kernel-side, next to the helper): the sorted,
+comma-joined host list of the effective net caps — e.g.
+`"api.weather.com"` or `"a.com,b.com"`; `HostSet::Any` renders `"any"`
+(possible when a clamp narrows methods-only in the future); **no** net
+cap in `eff` renders `"none"` (the empty-meet fail-closed case).
+Rendering lives in the kernel, not the port — the port carries semantic
+`Capability` values only. The TUI renderer (`capability_badge` /
+`capability_detail`, amber `clamp:<to>`) is already built and tested.
+
+### 12.6 Out of scope / future
+
+- **Reachability wiring**: the clamp row goes live for stock `tau run`
+  when (a) IR-interpreter runs attach an orchestration trace sink and
+  (b) `DispatcherTool`/`ForwardingDispatcher` forward the underlying
+  tool's declared + effective capabilities to the kernel dispatch site.
+  Both touch the issue-#581 pinned contract (`DispatcherTool`
+  intentionally advertises empty caps) and need their own design.
+- **Enforcement observation**: rows record decided authority, not what
+  the call actually touched. Surfacing "blocked egress to evil.com"
+  needs events from the sandbox proxy (tau-sandbox-darwin) — separate
+  feature.
+- **Kernel gating on effective caps** (§12.4 note).
+- **Non-MCP producers**: any future narrowed tool (wasm-hosted, plugin)
+  gets clamp rows by overriding the same defaulted method — no new
+  machinery.
+
+### 12.7 Testing
+
+- **tau-cli**: unit test for the per-tool meet/clamp computation —
+  clamped entry + net-declaring tool ⇒ `Some(effective)` with narrowed
+  hosts; no-net tool ⇒ `None`; empty meet ⇒ `Some` with no net cap
+  (mirrors `governed_clamps_net_hosts_to_allow_mcp_ceiling`).
+- **tau-runtime-core**: producer test mirroring M1.5's
+  `capability_denied_tool_emits_drop_trace_event` — a stub `Tool`
+  overriding `effective_capabilities()`, run through the kernel with a
+  collecting trace subscriber, assert `ToolCall { capability:
+  Some(Clamp { to }) }` with the rendered host list; plus unit tests
+  for `render_clamped_to` (hosts / any / none) and
+  `capability_verdict` (empty-required ⇒ `None`, default ⇒ `Allow`).
+- **Renderer**: `clamp` badge test already exists (M1.5).
+- **Docs**: add the `clamp` badge row to `reference/tau-trace.md`
+  (omitted from the M1.5 table because it had no producer).

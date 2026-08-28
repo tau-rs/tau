@@ -133,6 +133,12 @@ impl ToolDispatcher for GuestDispatcher {
     fn random(&self) -> Option<Arc<dyn RandomSource>> {
         Some(self.random.clone())
     }
+
+    fn deterministic_registry(
+        &self,
+    ) -> Option<Arc<dyn tau_runtime_core::interpreter::deterministic::DeterministicRegistry>> {
+        Some(Arc::new(crate::goal_registry::GuestGoalRegistry))
+    }
 }
 
 /// Issue one outgoing HTTP request through the generated wasi:http bindings.
@@ -234,8 +240,10 @@ fn fetch_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
 /// the `(preopen-descriptor, relative-path)` to `open-at` from. Pure descriptor
 /// plumbing over HOST-provided state — NOT a capability check. `None` means the
 /// host granted no preopen containing `path` (absence of capability); the caller
-/// surfaces `FsAccessDenied`. Does not touch `..` — the host `open-at` rejects
-/// escapes.
+/// surfaces `FsAccessDenied`. Selection is the longest-prefix, root-aware match
+/// of [`crate::preopen::select_preopen`] (#604): overlapping grants bind the
+/// most specific preopen, and a `/` preopen serves every absolute path. Does
+/// not touch `..` — the host `open-at` rejects escapes.
 #[cfg(any(tau_cap_fs_read, tau_cap_fs_write))]
 fn resolve_preopen(
     path: &str,
@@ -244,23 +252,10 @@ fn resolve_preopen(
     alloc::string::String,
 )> {
     use crate::wit_wasi::filesystem::preopens::get_directories;
-    for (desc, guest_path) in get_directories() {
-        // Segment-aware prefix match: `/data` matches `/data` and `/data/x`,
-        // but NOT `/dataX`.
-        let rel = if path == guest_path {
-            "" // the preopen dir itself
-        } else if let Some(stripped) = path.strip_prefix(&guest_path) {
-            if stripped.starts_with('/') {
-                stripped.trim_start_matches('/')
-            } else {
-                continue;
-            }
-        } else {
-            continue;
-        };
-        return Some((desc, rel.to_string()));
-    }
-    None
+    let dirs = get_directories();
+    let (idx, rel) = crate::preopen::select_preopen(path, dirs.iter().map(|(_, g)| g.as_str()))?;
+    let rel = rel.to_string();
+    dirs.into_iter().nth(idx).map(|(desc, _)| (desc, rel))
 }
 
 /// `Read`: `{path} → {content, bytes}`. A no-preopen path → `FsAccessDenied`
@@ -306,6 +301,11 @@ fn fs_read_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
 /// `Write`: `{path, content} → {bytes}`. Requires an fs.write-granted (RW)
 /// preopen; a write to a read-only preopen fails at the host `open-at`. Never
 /// panics.
+///
+/// Write REPLACES the file: `open-at` passes `CREATE | TRUNCATE`, so
+/// overwriting a longer existing file leaves no stale tail (#604). The tool
+/// contract is full-content replace — append semantics would be a distinct
+/// future tool, not a flag on this one.
 #[cfg(tau_cap_fs_write)]
 fn fs_write_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
     use crate::wit_wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
@@ -326,7 +326,7 @@ fn fs_write_via_wasi(args: &Value) -> Result<Value, alloc::string::String> {
         .open_at(
             PathFlags::SYMLINK_FOLLOW,
             &rel,
-            OpenFlags::CREATE,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE,
             DescriptorFlags::WRITE,
         )
         .map_err(|code| format!("{code:?}"))?;

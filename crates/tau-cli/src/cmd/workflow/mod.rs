@@ -72,7 +72,7 @@ pub(crate) fn build_agents_map(
             )
         })?;
         let (agent_def, manifest) =
-            crate::config::build_agent_definition(entry, cwd, scope, &project.models)
+            crate::config::build_agent_definition(entry, cwd, scope, project.effective_models())
                 .with_context(|| format!("resolving agent {:?}", agent_id))?;
         out.insert(agent_id, (agent_def, manifest));
     }
@@ -157,7 +157,7 @@ pub(crate) async fn build_runtime_for_workflow(
     let loaded = crate::cmd::plugin_loader::load_plugins(
         entry,
         scope,
-        &project.models,
+        project.effective_models(),
         trace_context,
         host_options,
     )

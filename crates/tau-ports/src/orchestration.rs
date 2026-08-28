@@ -172,6 +172,13 @@ pub enum TraceEventKind {
         /// `None` for un-gated tools or traces predating this field.
         #[cfg_attr(feature = "serde", serde(default))]
         capability: Option<CapabilityVerdict>,
+        /// Zero-based index of the turn this tool call belongs to, matching
+        /// the sibling [`TraceEventKind::Turn::turn_index`] of the same turn.
+        /// Lets a renderer nest a tool span under the correct turn rather
+        /// than the agent's first turn. `0` for un-indexed / legacy traces
+        /// predating this field (serde-defaulted).
+        #[cfg_attr(feature = "serde", serde(default))]
+        turn_index: u32,
     },
     /// A task was mutated.
     TaskMutation {
@@ -503,6 +510,7 @@ mod tests {
             capability: Some(CapabilityVerdict::Clamp {
                 to: "api.example.com".into(),
             }),
+            turn_index: 0,
         };
         let json = serde_json::to_string(&evt).unwrap();
         assert!(json.contains(r#""kind":"tool_call""#));

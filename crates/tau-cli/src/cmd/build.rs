@@ -651,6 +651,7 @@ pub fn classify_target_for_test(target: Option<&str>) -> &'static str {
         target: target.map(|s| s.to_string()),
         output: None,
         agents: vec![],
+        tau_dep_path: None,
         offline: false,
         emit_trigger: None,
         allow_ungoverned: false,
@@ -671,6 +672,7 @@ pub fn classify_target_for_test(target: Option<&str>) -> &'static str {
 pub fn emit_rust_lib_to(
     project: &std::path::Path,
     out_dir: &std::path::Path,
+    tau_dep: tau_sdk_codegen::TauDep,
 ) -> Result<RustLibArtifact> {
     use crate::cmd::build_wasm::{lower_to_wasm_ir, world_from_module};
     let (module, bytes) = lower_to_wasm_ir(project)?;
@@ -687,7 +689,7 @@ pub fn emit_rust_lib_to(
         ir_bytes: &bytes,
         ir_hash: &ir_hash,
         wit: &wit,
-        tau_version: env!("CARGO_PKG_VERSION"),
+        tau_dep,
     });
 
     let mut written = 0usize;
@@ -757,7 +759,15 @@ async fn dispatch_rust_lib(args: &BuildArgs, output: &mut Output) -> Result<()> 
         .output
         .clone()
         .unwrap_or_else(|| project.join(format!("{stem}-rust-lib")));
-    let artifact = match emit_rust_lib_to(&project, &out_dir) {
+    let dep_path; // owned String kept alive for the borrow below
+    let tau_dep = match &args.tau_dep_path {
+        Some(p) => {
+            dep_path = p.display().to_string().replace('\\', "/");
+            tau_sdk_codegen::TauDep::Path(&dep_path)
+        }
+        None => tau_sdk_codegen::TauDep::Version(env!("CARGO_PKG_VERSION")),
+    };
+    let artifact = match emit_rust_lib_to(&project, &out_dir, tau_dep) {
         Ok(a) => a,
         Err(e) => {
             let _ = output.error(format!("{e}"));
@@ -914,6 +924,7 @@ mod tests {
             target: t.map(|s| s.to_string()),
             output: None,
             agents: vec![],
+            tau_dep_path: None,
             offline: false,
             emit_trigger: None,
             allow_ungoverned: false,

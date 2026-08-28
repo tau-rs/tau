@@ -18,6 +18,7 @@
 - [Overview](tutorials/README.md)
 - [Bootstrap a tau project](tutorials/bootstrap-a-tau-project.md)
 - [Build your first skill](tutorials/build-your-first-skill.md)
+- [The north-star in action](tutorials/the-north-star-in-action.md)
 
 # How-to
 
@@ -29,6 +30,8 @@
 - [Use MCP servers](how-to/mcp-servers.md)
 - [Assert pipeline postconditions](how-to/assert-pipeline-postconditions.md)
 - [Build embedding artifacts](how-to/build-embedding-artifacts.md)
+- [Embed tau in a Rust product](how-to/embed-rust-native.md)
+- [Embed a tau wasm component](how-to/embed-wasm-component.md)
 - [Author a conditional branch](how-to/authoring-a-branch.md)
 - [Author a suspend step](how-to/authoring-suspend.md)
 - [Propose an ADR](how-to/propose-an-adr.md)
@@ -151,6 +154,7 @@
 - [ADR-0065 — Unknown-input policy: strict authoring surfaces, versioned interchange](decisions/0065-unknown-input-policy.md)
 - [ADR-0066 — Guest fs-effect descriptor resolution: preopen plumbing, dual cfg, absence-denial](decisions/0066-guest-fs-effect-descriptor-resolution.md)
 - [ADR-0067 — Windows AppContainer adapter — Phase 2 (Strict-tier enforcement)](decisions/0067-sandbox-windows-appcontainer-phase2.md)
+- [ADR-0068 — Wasm guest executes IR control-flow in-guest](decisions/0068-wasm-guest-control-flow.md)
 
 # Retrospectives
 

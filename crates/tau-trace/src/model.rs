@@ -83,11 +83,20 @@ pub struct TraceModel {
     /// lookup at push time — it must be re-derivable from whatever has
     /// arrived so far, regardless of order.
     owners: Vec<Option<AgentId>>,
+    /// Turn index each span belongs to, index-aligned with `spans`. For an
+    /// `Agent` span this is the `Turn` event's `turn_index`; for a `Tool`
+    /// span it is the `ToolCall` event's `turn_index`. `None` for spans with
+    /// no turn association. Used by `resolve_parents` to nest a tool under
+    /// its *own* turn's agent span rather than the agent's first turn.
+    turns: Vec<Option<u32>>,
     /// child agent id -> parent agent id, populated by `Spawn` events.
     agent_parent: HashMap<AgentId, AgentId>,
     /// Max `ts` seen across every applied event (not just span bounds) —
     /// the upper bound of the time axis while spans are still running.
     max_ts: Option<DateTime<Utc>>,
+    /// Run id, captured from the first event carrying a non-empty one.
+    /// Surfaced to the TUI toolbar; `None` until the first event arrives.
+    run_id: Option<String>,
 }
 
 impl TraceModel {
@@ -102,13 +111,16 @@ impl TraceModel {
             Some(t) if t >= event.ts => t,
             _ => event.ts,
         });
+        if self.run_id.is_none() && !event.run_id.is_empty() {
+            self.run_id = Some(event.run_id.clone());
+        }
 
         match &event.kind {
             TraceEventKind::Turn {
                 agent_id,
+                turn_index,
                 duration_ms,
                 tokens,
-                ..
             } => {
                 let start = event.ts - Duration::milliseconds(*duration_ms as i64);
                 self.push_span(
@@ -124,6 +136,7 @@ impl TraceModel {
                         status: SpanStatus::Ok,
                     },
                     Some(agent_id.clone()),
+                    Some(*turn_index),
                 );
             }
             TraceEventKind::ToolCall {
@@ -131,6 +144,7 @@ impl TraceModel {
                 duration_ms,
                 status,
                 capability,
+                turn_index,
             } => {
                 let start = event.ts - Duration::milliseconds(*duration_ms as i64);
                 self.push_span(
@@ -146,6 +160,7 @@ impl TraceModel {
                         status: status_from_str(status),
                     },
                     event.agent_id.clone(),
+                    Some(*turn_index),
                 );
             }
             TraceEventKind::Spawn { child_id, .. } => {
@@ -183,23 +198,34 @@ impl TraceModel {
         &self.spans
     }
 
+    /// Run id captured from the first applied event, if any.
+    pub fn run_id(&self) -> Option<&str> {
+        self.run_id.as_deref()
+    }
+
     /// The time axis' bounds: `(min start, max end)`.
     ///
     /// A span still running (`end.is_none()`) contributes the max `ts` seen
     /// across every applied event as its provisional end, so the axis keeps
-    /// extending as more events arrive.
+    /// extending while work is in flight. Once every span has completed, the
+    /// axis pins to the latest span *end* — a trailing no-op event (a
+    /// `Completion`/`Spawn` after the last bar) no longer stretches the
+    /// window with dead space to its right.
     pub fn window(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         if self.spans.is_empty() {
             return None;
         }
         let lo = self.spans.iter().map(|s| s.start).min()?;
-        let fallback_hi = self.max_ts.unwrap_or(lo);
-        let hi = self
-            .spans
-            .iter()
-            .map(|s| s.end.unwrap_or(fallback_hi))
-            .max()?
-            .max(fallback_hi);
+        let any_running = self.spans.iter().any(|s| s.end.is_none());
+        let max_end = self.spans.iter().filter_map(|s| s.end).max();
+        let hi = if any_running {
+            // A running span extends the axis to the latest ts observed.
+            let fallback_hi = self.max_ts.unwrap_or(lo);
+            max_end.map_or(fallback_hi, |e| e.max(fallback_hi))
+        } else {
+            // All spans complete: ignore trailing no-op events' ts.
+            max_end.unwrap_or(lo)
+        };
         Some((lo, hi))
     }
 
@@ -245,17 +271,41 @@ impl TraceModel {
         anchors
     }
 
+    /// Each `(agent id, turn index)` pair's `Agent` span — the earliest
+    /// `Agent`-kind span owned by that agent that carries that turn index.
+    /// A tool call nests under the anchor for its *own* turn so a run with
+    /// several turns per agent renders each turn's tools under the right
+    /// turn bar, not all under turn 0.
+    fn turn_anchors(&self) -> HashMap<(&str, u32), usize> {
+        let mut anchors: HashMap<(&str, u32), usize> = HashMap::new();
+        for (i, owner) in self.owners.iter().enumerate() {
+            if self.spans[i].kind != SpanKind::Agent {
+                continue;
+            }
+            if let (Some(owner), Some(turn)) = (owner, self.turns[i]) {
+                anchors.entry((owner.as_str(), turn)).or_insert(i);
+            }
+        }
+        anchors
+    }
+
     /// Recompute `Span::parent` for every span from the current
-    /// `owners`/`agent_parent`/anchor state. A `Tool` span's parent is its
-    /// owning agent's anchor span; an `Agent` span's parent is the anchor
-    /// span of whichever agent spawned it (per `agent_parent`), if known.
+    /// `owners`/`turns`/`agent_parent`/anchor state. A `Tool` span's parent
+    /// is the `Agent` span for its own `(owner, turn)` — falling back to the
+    /// owner's first turn if that turn's span has not arrived yet (mid-turn
+    /// tool calls precede the `Turn` event that summarizes them). An `Agent`
+    /// span's parent is the anchor span of whichever agent spawned it (per
+    /// `agent_parent`), if known.
     fn resolve_parents(&mut self) {
         let anchors = self.agent_anchors();
+        let turn_anchors = self.turn_anchors();
         let mut parents = vec![None; self.spans.len()];
         for (i, owner) in self.owners.iter().enumerate() {
             let Some(owner) = owner else { continue };
             let parent = match self.spans[i].kind {
-                SpanKind::Tool => anchors.get(owner.as_str()).copied(),
+                SpanKind::Tool => self.turns[i]
+                    .and_then(|turn| turn_anchors.get(&(owner.as_str(), turn)).copied())
+                    .or_else(|| anchors.get(owner.as_str()).copied()),
                 SpanKind::Agent => self
                     .agent_parent
                     .get(owner)
@@ -270,11 +320,12 @@ impl TraceModel {
         }
     }
 
-    fn push_span(&mut self, mut span: Span, owner: Option<AgentId>) -> usize {
+    fn push_span(&mut self, mut span: Span, owner: Option<AgentId>, turn: Option<u32>) -> usize {
         let idx = self.spans.len();
         span.id = idx;
         self.spans.push(span);
         self.owners.push(owner);
+        self.turns.push(turn);
         idx
     }
 }
@@ -314,6 +365,7 @@ mod tests {
                 capability: Some(CapabilityVerdict::Drop {
                     reason: "egress".into(),
                 }),
+                turn_index: 0,
             },
         ));
         let s = &m.spans()[0];
@@ -344,6 +396,7 @@ mod tests {
                 duration_ms: 500,
                 status: "ok".into(),
                 capability: None,
+                turn_index: 0,
             },
         ));
         let (lo, hi) = m.window().unwrap();
@@ -422,6 +475,7 @@ mod tests {
                 duration_ms: 10,
                 status: "ok".into(),
                 capability: None,
+                turn_index: 0,
             },
         );
         call_ev.agent_id = Some("a".into());
@@ -437,5 +491,119 @@ mod tests {
         ));
         let tool_span = &m.spans()[0];
         assert_eq!(tool_span.parent, Some(1)); // the turn span; mid-turn tool calls precede it
+    }
+
+    #[test]
+    fn tool_calls_nest_under_their_own_turn_not_turn_zero() {
+        // One agent, two turns, one tool call per turn. Each tool must
+        // anchor to the Agent span for ITS turn, not the agent's turn-0
+        // span (the pre-item-3 `.or_insert` behavior collapsed both onto
+        // turn 0).
+        let mut m = TraceModel::new();
+        // Turn 0 span (index 0).
+        m.apply(&ev(
+            100,
+            TraceEventKind::Turn {
+                agent_id: "a".into(),
+                turn_index: 0,
+                duration_ms: 5,
+                tokens: 10,
+            },
+        ));
+        // Turn 0's tool (index 1).
+        let mut t0 = ev(
+            101,
+            TraceEventKind::ToolCall {
+                tool_name: "tool-0".into(),
+                duration_ms: 1,
+                status: "ok".into(),
+                capability: None,
+                turn_index: 0,
+            },
+        );
+        t0.agent_id = Some("a".into());
+        m.apply(&t0);
+        // Turn 1 span (index 2).
+        m.apply(&ev(
+            110,
+            TraceEventKind::Turn {
+                agent_id: "a".into(),
+                turn_index: 1,
+                duration_ms: 5,
+                tokens: 12,
+            },
+        ));
+        // Turn 1's tool (index 3).
+        let mut t1 = ev(
+            111,
+            TraceEventKind::ToolCall {
+                tool_name: "tool-1".into(),
+                duration_ms: 1,
+                status: "ok".into(),
+                capability: None,
+                turn_index: 1,
+            },
+        );
+        t1.agent_id = Some("a".into());
+        m.apply(&t1);
+
+        assert_eq!(
+            m.spans()[1].parent,
+            Some(0),
+            "turn-0 tool nests under turn-0 span"
+        );
+        assert_eq!(
+            m.spans()[3].parent,
+            Some(2),
+            "turn-1 tool nests under turn-1 span"
+        );
+    }
+
+    #[test]
+    fn run_id_captured_from_first_event() {
+        let mut m = TraceModel::new();
+        assert_eq!(m.run_id(), None);
+        let mut e = ev(
+            100,
+            TraceEventKind::Turn {
+                agent_id: "a".into(),
+                turn_index: 0,
+                duration_ms: 1,
+                tokens: 0,
+            },
+        );
+        e.run_id = "run-xyz".into();
+        m.apply(&e);
+        assert_eq!(m.run_id(), Some("run-xyz"));
+    }
+
+    #[test]
+    fn window_ignores_trailing_completion_event_when_nothing_running() {
+        // A completed Turn (bar ends at t=100), then a Completion event at
+        // t=200 that produces no bar. The axis must pin to the turn's end,
+        // not stretch to the trailing event's ts.
+        let mut m = TraceModel::new();
+        m.apply(&ev(
+            100,
+            TraceEventKind::Turn {
+                agent_id: "a".into(),
+                turn_index: 0,
+                duration_ms: 0,
+                tokens: 0,
+            },
+        ));
+        m.apply(&ev(
+            200,
+            TraceEventKind::Completion {
+                agent_id: "a".into(),
+                status: "completed".into(),
+            },
+        ));
+        let (_lo, hi) = m.window().unwrap();
+        assert_eq!(
+            hi,
+            Utc.timestamp_opt(100, 0).unwrap(),
+            "window must pin to the last span end, not the trailing Completion ts"
+        );
     }
 }

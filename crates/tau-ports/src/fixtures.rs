@@ -23,9 +23,19 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use std::sync::Mutex;
-use std::time::SystemTime;
 
-use tau_domain::{AgentInstanceId, Value};
+use tau_domain::Value;
+
+// `SystemTime` / `AgentInstanceId` / `Uuid` are used only by the
+// `process`-gated `make_session_context` below, so they carry the same gate:
+// otherwise they are deny-level `unused_imports` in the feature-less
+// `cfg(test)` shape, which compiles this module through the bare `test` arm of
+// the module gate in lib.rs (#657).
+#[cfg(feature = "process")]
+use std::time::SystemTime;
+#[cfg(feature = "process")]
+use tau_domain::AgentInstanceId;
+#[cfg(feature = "process")]
 use uuid::Uuid;
 
 use tau_domain::{CapabilityShape, CapabilityShapeSet};
@@ -59,12 +69,7 @@ pub fn make_completion_response(
     stop_reason: StopReason,
     usage: Option<TokenUsage>,
 ) -> CompletionResponse {
-    CompletionResponse {
-        text,
-        tool_uses,
-        stop_reason,
-        usage,
-    }
+    CompletionResponse::new(text, tool_uses, stop_reason, usage)
 }
 
 /// Build a [`ToolUse`] without struct-literal syntax.
@@ -121,6 +126,14 @@ pub fn make_tool_result(content: Vec<ToolContent>, is_error: bool) -> ToolResult
 ///
 /// `granted_capabilities` defaults to empty. To set a grant, use the
 /// builder: `make_session_context(...).with_granted_capabilities(caps)`.
+///
+/// `process`-gated: the `deadline` parameter mirrors `SessionContext`'s
+/// `deadline` field, which only exists under that feature. Every downstream
+/// caller reaches this through `test-fixtures`, which implies `process`
+/// (#658); the gate exists so tau-ports' own feature-less `cfg(test)` build —
+/// which compiles this module through the bare `test` arm of the module gate —
+/// still builds (#657).
+#[cfg(feature = "process")]
 pub fn make_session_context(
     agent_instance_id: AgentInstanceId,
     session_id: Uuid,
@@ -628,6 +641,10 @@ pub fn plan_with_context(
 
 /// Build a [`WorkingContext`](crate::capability_gate::WorkingContext) from a
 /// working directory and environment map.
+///
+/// `process`-gated for the same reason as [`make_session_context`]:
+/// `WorkingContext.working_dir` only exists under `process` (#657).
+#[cfg(feature = "process")]
 pub fn working_context(
     working_dir: impl Into<std::path::PathBuf>,
     env: BTreeMap<String, String>,

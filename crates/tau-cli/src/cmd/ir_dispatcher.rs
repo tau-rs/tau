@@ -46,9 +46,10 @@ use crate::output::Output;
 /// pipeline via [`tau_runtime_core::interpreter::pipeline::run_pipeline`],
 /// threading each step's output to later steps and rendering the LAST
 /// step's output — symmetric with the cwd path's `try_run_pipeline` (see
-/// [`crate::cmd::run`]). Otherwise it picks the first agent in the IR
-/// module's `BTreeMap` (alphabetical order) as the entry per the β.2 v0
-/// contract and runs that single agent's loop unchanged.
+/// [`crate::cmd::run`]). Otherwise it runs the entry agent's single loop,
+/// where the entry is the positional `<agent>` argument resolved against
+/// the module's agents (#623 — matching the dev path's `tau run <agent>`
+/// semantics; an id absent from the module is a hard error).
 ///
 /// Returns `Ok(())` on a `RunOutcome::Completed`, `Err(AgentFailed)` on
 /// `RunOutcome::Failed`, and any other kernel/CLI error as a wrapped
@@ -91,6 +92,24 @@ pub(crate) fn asset_map_from_bundle(
     Ok(map)
 }
 
+/// Every [`ToolId`] the module provides as [`tau_ir::ToolImpl::Native`].
+///
+/// Native bodies are statically linked (`tau-native-tools`), never
+/// installed as plugins, so they never appear in the runtime's tool
+/// registry. Both `ForwardingDispatcher` construction sites (this module's
+/// bundle path and [`crate::cmd::run`]'s cwd pipeline path) pass this set
+/// so a native tool_ref the agent calls is dispatchable rather than a
+/// hard "no tool registered" failure (#639).
+pub(crate) fn native_tool_ids(module: &IrModule) -> std::collections::BTreeSet<ToolId> {
+    module
+        .workflow
+        .tools
+        .iter()
+        .filter(|(_, t)| matches!(t.impl_, tau_ir::ToolImpl::Native { .. }))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 pub(crate) async fn run_via_ir(
     module: IrModule,
     assets: BTreeMap<String, tau_ir::asset::AssetBlob>,
@@ -100,14 +119,25 @@ pub(crate) async fn run_via_ir(
     force_adapter_kind: Option<tau_runtime_tokio::process_gate::registry::RegistryKind>,
     output: &mut Output,
 ) -> anyhow::Result<()> {
-    // 1. Pick the entry agent (first BTreeMap key — alphabetical order).
-    let entry_agent_id = module
-        .workflow
-        .agents
-        .keys()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("IR module has no agents"))?
-        .clone();
+    // 1. Resolve the entry agent from the positional `<agent>` argument,
+    //    validated against the module's agents (#623 — the argument used to
+    //    be silently ignored in favour of the alphabetically-first module
+    //    agent, so the plugin backend was configured from the wrong agent's
+    //    `[agents.<id>.config]`).
+    let entry_agent_id = tau_ir::ids::AgentId(args.agent_id.clone());
+    if !module.workflow.agents.contains_key(&entry_agent_id) {
+        let available: Vec<&str> = module
+            .workflow
+            .agents
+            .keys()
+            .map(|a| a.0.as_str())
+            .collect();
+        return Err(anyhow::anyhow!(
+            "agent id {:?} not found in the bundle's IR module (available \
+             agents: {available:?})",
+            args.agent_id
+        ));
+    }
 
     // 2. Load the project config from the cwd (proven byte-clean by the
     //    bundle verify gate). The IR module names agents using the IR's
@@ -148,7 +178,7 @@ pub(crate) async fn run_via_ir(
     let loaded = plugin_loader::load_plugins(
         agent_entry,
         &scope,
-        &project.models,
+        project.effective_models(),
         trace_context,
         host_options,
     )
@@ -219,6 +249,11 @@ pub(crate) async fn run_via_ir(
     // Dropping them here would abort the pumps immediately.
     let _mcp_lifetime = mcp_setup.inbound_handles;
 
+    // Ids the IR provides natively — exempt from the plugin-install
+    // pre-check below, and served by the dispatcher from the linked
+    // `tau-native-tools` crate at invoke time (#639).
+    let native_ids = native_tool_ids(&module);
+
     // 5b. Pre-check: every ToolId referenced by the entry agent must be
     //     resolvable through the dispatcher. tau's general stance (per
     //     CLAUDE.md / "feedback_tau_rust_like_build_enforcement"): any
@@ -235,6 +270,11 @@ pub(crate) async fn run_via_ir(
         .tool_refs
         .iter()
         .filter(|tid| !tools_by_id.contains_key(*tid))
+        // Native tools (`ToolImpl::Native`) are statically-linked bodies
+        // (see `tau-native-tools`), not plugin-installed binaries — their
+        // absence from the plugin runtime is not an install skew. The
+        // dispatcher serves them from the linked crate instead (#639).
+        .filter(|tid| !native_ids.contains(*tid))
         .collect();
     if !missing.is_empty() {
         let names: Vec<&str> = missing.iter().map(|t| t.0.as_str()).collect();
@@ -280,7 +320,8 @@ pub(crate) async fn run_via_ir(
     //     checkpoints land under `<scope>/.tau/runs/<run_id>/`. On
     //     `--resume <id>` we load the latest committed checkpoint; on a fresh
     //     durable run we mint a run id and tell the operator how to resume.
-    let mut dispatcher = ForwardingDispatcher::new(llm_backends, tools_by_id);
+    let mut dispatcher =
+        ForwardingDispatcher::new(llm_backends, tools_by_id).with_native(native_ids);
     if let Some(durability) = entry_agent.durable.as_ref() {
         let store: Arc<dyn tau_ports::CheckpointStore> = Arc::new(
             tau_runtime_tokio::FileCheckpointStore::new(scope.path().to_path_buf()),
@@ -349,24 +390,21 @@ pub(crate) async fn run_via_ir(
     //    step's output); a bundle with NO pipeline keeps the
     //    single-entry-agent `run_ir` path below BYTE-FOR-BYTE unchanged.
     if module.workflow.pipeline.is_some() {
-        // The id of the LAST NON-CHECK pipeline step — its stored output is
-        // the run's final result. Trailing `StepRun::Check` steps (lowered
-        // from `[goals.*]` / `[deliverables.*]`) evaluate postconditions but
-        // store NO output, so rendering one would hit the "no output" guard
-        // even when all checks pass — skip them and render the last
-        // output-producing step. The parser rejects an empty pipeline (see
-        // `tau_pkg`), but guard anyway rather than index blindly.
+        // The id of the LAST NON-CHECK, NON-SUSPEND pipeline step — its
+        // stored output is the run's final result. Trailing `StepRun::Check`
+        // steps (lowered from `[goals.*]` / `[deliverables.*]`) evaluate
+        // postconditions but store NO output, so rendering one would hit the
+        // "no output" guard even when all checks pass. `Suspend` likewise
+        // records no output. `Pipeline::final_leaf_step_id` skips both and
+        // renders the last output-producing step. The parser rejects an
+        // empty pipeline (see `tau_pkg`), but guard anyway rather than index
+        // blindly.
         let last_step_id = module
             .workflow
             .pipeline
             .as_ref()
-            .and_then(|p| {
-                p.steps
-                    .iter()
-                    .rev()
-                    .find(|s| !matches!(s.run, tau_ir::pipeline::StepRun::Check(_)))
-            })
-            .map(|s| s.id.0.clone())
+            .and_then(|p| p.final_leaf_step_id())
+            .map(|id| id.0.clone())
             .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
 
         let store =
@@ -428,6 +466,11 @@ pub(crate) struct ForwardingDispatcher {
     /// the backend name baked into the agent's resolved `model_ref` at lowering.
     llm_backends: BTreeMap<String, Arc<dyn DynLlmBackend>>,
     tools: BTreeMap<ToolId, Arc<dyn DynTool>>,
+    /// Ids the IR declares as [`tau_ir::ToolImpl::Native`] (#639). Their
+    /// bodies are statically linked in `tau-native-tools`, not installed
+    /// as plugins, so they never appear in `tools`. Consulted only after
+    /// a `tools` miss — a real plugin handle always wins.
+    native: std::collections::BTreeSet<ToolId>,
     /// ADR-0053 durable handles. `None` for non-durable runs. Set via
     /// [`Self::with_durable`] when the entry agent declares `durable`.
     durable_store: Option<Arc<dyn tau_ports::CheckpointStore>>,
@@ -455,7 +498,17 @@ impl ForwardingDispatcher {
             durable_resume: None,
             durable_granularity: None,
             assets: None,
+            native: Default::default(),
         }
+    }
+
+    /// Declare which [`ToolId`]s the IR provides as
+    /// [`tau_ir::ToolImpl::Native`] (#639), so [`ToolDispatcher::invoke`]
+    /// can serve them from `tau-native-tools` instead of failing them as
+    /// unregistered. Build with [`native_tool_ids`].
+    pub(crate) fn with_native(mut self, native: std::collections::BTreeSet<ToolId>) -> Self {
+        self.native = native;
+        self
     }
 
     /// Attach the content-addressed asset store (D6-B) so the interpreter can
@@ -503,6 +556,7 @@ impl ForwardingDispatcher {
             durable_resume: None,
             durable_granularity: None,
             assets: None,
+            native: Default::default(),
         }
     }
 }
@@ -550,8 +604,34 @@ impl ToolDispatcher for ForwardingDispatcher {
         let args_owned = args.clone();
         let tool = self.tools.get(tool_id).cloned();
         let tool_id_str = tool_id.0.clone();
+        // Native fallback (#639): only when no plugin handle serves this id.
+        let is_native = tool.is_none() && self.native.contains(tool_id);
 
         Box::pin(async move {
+            // Native tools resolve from the statically-linked shared crate,
+            // keyed by ToolId — the SAME contract the wasm guest
+            // (`tau-wasm-guest/src/dispatcher.rs`) and the conformance
+            // profile use, so every profile returns byte-identical bodies.
+            // Handled before the domain-args conversion because native
+            // bodies take `serde_json::Value` directly.
+            if is_native {
+                return match tau_native_tools::invoke(&tool_id_str, &args_owned) {
+                    Some(body) => Ok(ToolInvocationResult {
+                        body: Some(body),
+                        error: None,
+                    }),
+                    // Declared Native but absent from the linked crate:
+                    // a build/install skew, not an empty result.
+                    None => Err(RuntimeError::Internal {
+                        message: format!(
+                            "IR declares tool {tool_id_str:?} as native but tau-native-tools \
+                             has no such body — the bundle's IR was built against a different \
+                             tau version than this host binary."
+                        ),
+                    }),
+                };
+            }
+
             let domain_args: tau_domain::Value =
                 serde_json::from_value(args_owned).map_err(|e| RuntimeError::Internal {
                     message: format!("argument conversion failed: {e}"),
@@ -938,6 +1018,44 @@ fn mcp_capability_plan(
     Ok(CapabilityPlan::new(caps, None, None))
 }
 
+/// Per-server-tool narrowed authority (execution-trace TUI spec §12.3).
+///
+/// `Some(effective)` iff the entry's meet-clamped [`CapabilityPlan`]
+/// narrows this tool's declared `net.http` caps — i.e. the declared net
+/// caps are not a subset of the plan's. The effective set is the tool's
+/// non-net declared caps plus `meet(declared_net, plan_net)` (which may
+/// contain no net cap at all after a fail-closed empty meet — still a
+/// clamp; the kernel renders it `none`). `None` = not narrowed: no net
+/// caps declared, ungoverned plan, or the ceiling already covers the
+/// declared hosts. Only hosts narrow today — the `[allow.mcp]` registry
+/// is an any-method host ceiling — but the comparison spans full net
+/// caps so a method-carrying ceiling needs no rework here.
+fn tool_effective_capabilities(
+    declared: &[tau_domain::Capability],
+    plan: &CapabilityPlan,
+) -> Option<Vec<tau_domain::Capability>> {
+    let (declared_net, declared_rest): (Vec<tau_domain::Capability>, Vec<tau_domain::Capability>) =
+        declared
+            .iter()
+            .cloned()
+            .partition(|c| matches!(c, tau_domain::Capability::Network(_)));
+    if declared_net.is_empty() {
+        return None;
+    }
+    let plan_net: Vec<tau_domain::Capability> = plan
+        .capabilities
+        .iter()
+        .filter(|c| matches!(c, tau_domain::Capability::Network(_)))
+        .cloned()
+        .collect();
+    if tau_domain::capability_subset(&declared_net, &plan_net).is_ok() {
+        return None;
+    }
+    let mut effective = declared_rest;
+    effective.extend(tau_domain::meet(&declared_net, &plan_net));
+    Some(effective)
+}
+
 /// Boot the MCP runtime: per-entry handshake + drift check +
 /// `WiredHostHandlers` + inbound dispatch + `McpBackedTool` registration.
 ///
@@ -1019,11 +1137,13 @@ pub(crate) async fn setup_mcp_runtime(
         // Per server-tool in the contract, register one McpBackedTool.
         for st in &arc_client.contract().tools {
             let ir_tool_id = tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
+            let effective = tool_effective_capabilities(&st.caps, &plan);
             let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
                 ir_tool_id.0.clone(),
                 arc_client.clone(),
                 st.name.clone(),
                 st.caps.clone(),
+                effective,
                 st.input_schema.0.clone(),
                 st.description.clone().unwrap_or_default(),
             );
@@ -1120,8 +1240,8 @@ mod sandbox_plan_tests {
     use std::sync::Arc;
 
     use super::{
-        mcp_capability_plan, setup_mcp_runtime, DynLlmBackend, LockFile, LockedMcpEntry,
-        RuntimeError,
+        mcp_capability_plan, setup_mcp_runtime, tool_effective_capabilities, DynLlmBackend,
+        LockFile, LockedMcpEntry, RuntimeError,
     };
 
     fn cap(json: serde_json::Value) -> Capability {
@@ -1312,6 +1432,89 @@ hosts = ["api.weather.com"]
             .expect("net cap present");
         let net_json = serde_json::to_value(net).expect("serialize");
         assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn tool_without_net_caps_is_never_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(
+            serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}),
+        )];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn tool_covered_by_plan_is_not_clamped() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        // This tool only ever declared the allowed host — nothing narrowed.
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com"],
+        }))];
+        assert_eq!(tool_effective_capabilities(&declared, &plan), None);
+    }
+
+    #[test]
+    fn narrowed_tool_reports_effective_with_clamped_hosts() {
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["api.weather.com", "evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let fs = cap(serde_json::json!({"kind": "fs.read", "paths": ["/tmp/**"]}));
+        let declared = vec![
+            fs.clone(),
+            cap(serde_json::json!({
+                "kind": "net.http",
+                "hosts": ["api.weather.com", "evil.example"],
+            })),
+        ];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("narrowed → Some");
+        // Non-net declared caps pass through untouched.
+        assert!(effective.contains(&fs));
+        // Exactly one net cap, meet-clamped to the ceiling host.
+        let nets: Vec<&Capability> = effective
+            .iter()
+            .filter(|c| matches!(c, Capability::Network(_)))
+            .collect();
+        assert_eq!(nets.len(), 1, "one clamped net cap: {effective:?}");
+        let net_json = serde_json::to_value(nets[0]).expect("serialize");
+        assert_eq!(net_json["hosts"], serde_json::json!(["api.weather.com"]));
+    }
+
+    #[test]
+    fn empty_meet_reports_effective_without_net_caps() {
+        // The plan dropped the disjoint net cap entirely (fail-closed) —
+        // the tool is clamped to zero net authority, which must surface as
+        // Some(effective-without-net), not None (kernel renders `none`).
+        let allow = allow_with_hosts("weather", &["api.weather.com"]);
+        let envelope = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let plan = mcp_capability_plan("weather", &envelope, Some(&allow)).expect("plan");
+        let declared = vec![cap(serde_json::json!({
+            "kind": "net.http",
+            "hosts": ["evil.example"],
+        }))];
+        let effective = tool_effective_capabilities(&declared, &plan).expect("clamped → Some");
+        assert!(
+            !effective
+                .iter()
+                .any(|c| matches!(c, Capability::Network(_))),
+            "no net authority survives: {effective:?}"
+        );
     }
 }
 
@@ -1635,6 +1838,77 @@ mod tests {
             .await
             .expect("conversion should succeed on a plain JSON object");
         assert!(res.body.is_some());
+    }
+
+    /// A `ToolImpl::Native` tool_ref is LLM-visible on the IR paths
+    /// (`agent_loop.rs` builds one `DispatcherTool` per `agent.tool_refs`
+    /// entry and its Native arm forwards here), but native bodies live in
+    /// the statically-linked `tau-native-tools` crate rather than the
+    /// plugin registry. The dispatcher must route them by ToolId — the
+    /// same contract the wasm guest and the conformance profile use, so
+    /// all three profiles return byte-identical bodies (#639).
+    #[tokio::test]
+    async fn forwarding_dispatcher_invokes_native_tool_by_tool_id() {
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let disp = ForwardingDispatcher::single(backend, BTreeMap::new())
+            .with_native(std::iter::once(ToolId("read_temp".into())).collect());
+
+        let res = disp
+            .invoke(&ToolId("read_temp".into()), &serde_json::json!({}))
+            .await
+            .expect("declared native tool must dispatch");
+
+        assert!(res.error.is_none(), "unexpected error: {:?}", res.error);
+        assert_eq!(
+            res.body,
+            Some(serde_json::json!(32)),
+            "body must match tau_native_tools::invoke's shared body"
+        );
+    }
+
+    /// A plugin-backed tool of the same id wins: the native arm is a
+    /// fallback for ids the plugin registry cannot serve, never an
+    /// override of a real handle.
+    #[tokio::test]
+    async fn forwarding_dispatcher_prefers_plugin_tool_over_native() {
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
+        tools.insert(ToolId("read_temp".into()), Arc::new(PlainTextTool));
+        let disp = ForwardingDispatcher::single(backend, tools)
+            .with_native(std::iter::once(ToolId("read_temp".into())).collect());
+
+        let res = disp
+            .invoke(&ToolId("read_temp".into()), &serde_json::Value::Null)
+            .await
+            .expect("invoke must succeed");
+        assert_eq!(
+            res.body,
+            Some(serde_json::Value::String("hello".to_string())),
+            "the plugin handle must serve the call, not the native body"
+        );
+    }
+
+    /// Declared `Native` but absent from `tau-native-tools` is a build/
+    /// install skew: surface it as a typed error naming the tool rather
+    /// than returning an empty body the model would treat as a result.
+    #[tokio::test]
+    async fn forwarding_dispatcher_unknown_native_fn_yields_internal_error() {
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("mock-llm"));
+        let disp = ForwardingDispatcher::single(backend, BTreeMap::new())
+            .with_native(std::iter::once(ToolId("no_such_native".into())).collect());
+
+        let err = match disp
+            .invoke(&ToolId("no_such_native".into()), &serde_json::Value::Null)
+            .await
+        {
+            Ok(res) => panic!("unknown native fn must error, got body {:?}", res.body),
+            Err(e) => e,
+        };
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("no_such_native") && msg.contains("tau-native-tools"),
+            "error should name the tool and the crate that lacks it; got {msg}"
+        );
     }
 
     #[tokio::test]

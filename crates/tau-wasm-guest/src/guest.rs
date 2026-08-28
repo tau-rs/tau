@@ -121,7 +121,7 @@ unsafe extern "C" fn memcmp(
 struct Component;
 
 impl Guest for Component {
-    fn run(_prompt: String) -> Result<String, String> {
+    fn run(prompt: String) -> Result<String, String> {
         use alloc::sync::Arc;
         use alloc::vec::Vec;
 
@@ -131,30 +131,51 @@ impl Guest for Component {
         }
         let module = tau_ir::from_canonical_bytes(bytes).map_err(|e| e.to_string())?;
 
-        // The guest drives a single entry agent (run_ir_streaming below), not
-        // the pipeline executor (run_pipeline). Reject any pipeline-bearing IR
-        // — Branch/Parallel/Loop and linear pipelines alike — at load rather
-        // than silently running only the entry agent and skipping the pipeline.
-        // Driving run_pipeline in-wasm is a follow-up slice.
-        if module.workflow.pipeline.is_some() {
-            return Err(
-                "tau-wasm-guest: pipelines (incl. Branch) are not yet executed in-wasm".to_string(),
-            );
+        if let Some(pipeline) = &module.workflow.pipeline {
+            let last_leaf = pipeline
+                .final_leaf_step_id()
+                .ok_or_else(|| "tau-wasm-guest: pipeline has only check/suspend steps".to_string())?
+                .0
+                .clone();
+
+            let backend: Arc<dyn tau_runtime_core::builder::DynLlmBackend> =
+                Arc::new(crate::host_ports::HostLlmBackend);
+            let clock: Arc<dyn tau_ports::Clock> = Arc::new(crate::host_ports::HostClock);
+            let random: Arc<dyn tau_ports::RandomSource> = Arc::new(crate::host_ports::HostRandom);
+            let module = Arc::new(module);
+            let dispatcher = Arc::new(crate::dispatcher::GuestDispatcher::new(
+                backend,
+                clock,
+                random,
+                module.clone(),
+            ));
+
+            // Same contract as the native bundle path (`ir_dispatcher::run_via_ir`
+            // + `render_pipeline_result`): drive the whole pipeline, return the
+            // last leaf's output as the payload. Native pipeline runs stream no
+            // RunEvents; neither does this path (terminal-outcome parity,
+            // ADR-0068).
+            let store = crate::executor::block_on(
+                tau_runtime_core::interpreter::pipeline::run_pipeline(module, prompt, dispatcher),
+            )
+            .map_err(|e| e.to_string())?;
+
+            let value = store.get(&last_leaf).ok_or_else(|| {
+                alloc::format!(
+                    "tau-wasm-guest: pipeline completed but final step {last_leaf:?} recorded no output"
+                )
+            })?;
+            return Ok(match value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            });
         }
 
-        // E2 scope: exactly one agent; it is the entry.
-        if module.workflow.agents.len() != 1 {
-            return Err(alloc::format!(
-                "tau-wasm-guest: E2 supports exactly one agent, found {}",
-                module.workflow.agents.len()
-            ));
-        }
+        // E2 scope: exactly one agent; it is the entry (the shared
+        // Variant B entry-point contract, `IrModule::entry_agent`).
         let entry = module
-            .workflow
-            .agents
-            .keys()
-            .next()
-            .expect("len checked == 1")
+            .entry_agent()
+            .map_err(|e| alloc::format!("tau-wasm-guest: {e}"))?
             .clone();
 
         let backend: Arc<dyn tau_runtime_core::builder::DynLlmBackend> =

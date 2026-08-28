@@ -56,11 +56,6 @@ pub struct App {
     /// character keys append to `ui.search` instead of being reduced as
     /// navigation/filter commands.
     search_mode: bool,
-    /// Toggled by `Enter` (outside search mode). Not yet consumed by
-    /// `draw` (Task 5's `UiState` has no expand flag) — reserved for a
-    /// later milestone's expanded detail view; exposed so it is at least
-    /// observable/testable now.
-    expanded: bool,
     /// `true` (the tail -f default) while the newest span should stay
     /// selected as more events arrive. Cleared by `Up` (the user is
     /// browsing history); restored once `Down` catches back up to the
@@ -87,7 +82,6 @@ impl App {
             model,
             ui: UiState::default(),
             search_mode: false,
-            expanded: false,
             follow: true,
         }
     }
@@ -104,7 +98,7 @@ impl App {
 
     /// Whether the detail/expand toggle (`Enter`) is currently on.
     pub fn expanded(&self) -> bool {
-        self.expanded
+        self.ui.expanded
     }
 
     /// Parse `line` as one jsonl trace event and fold it into the model.
@@ -140,7 +134,7 @@ impl App {
     /// -> All; `/` enters search-input mode (subsequent chars append to
     /// `ui.search`, `Backspace` deletes, `Enter`/`Esc` exits search mode);
     /// `Enter` outside search mode toggles the detail/expand flag; `q`/
-    /// `Esc` outside search mode quits.
+    /// `Q`/`Esc` outside search mode quits.
     pub fn apply_key(&mut self, key: KeyCode) -> Loop {
         if self.search_mode {
             match key {
@@ -176,8 +170,8 @@ impl App {
                 self.clamp_selected();
             }
             KeyCode::Char('/') => self.search_mode = true,
-            KeyCode::Enter => self.expanded = !self.expanded,
-            KeyCode::Char('q') | KeyCode::Esc => return Loop::Quit,
+            KeyCode::Enter => self.ui.expanded = !self.ui.expanded,
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => return Loop::Quit,
             _ => {}
         }
         Loop::Continue
@@ -386,6 +380,7 @@ mod tests {
                     duration_ms: 10,
                     status: status.into(),
                     capability: Some(CapabilityVerdict::Allow),
+                    turn_index: 0,
                 },
             });
         }
@@ -400,6 +395,12 @@ mod tests {
         app.apply_key(KeyCode::Char('f')); // cycle filter All->Errors
         assert!(matches!(app.filter(), Filter::Errors));
         assert!(matches!(app.apply_key(KeyCode::Char('q')), Loop::Quit));
+    }
+
+    #[test]
+    fn uppercase_q_also_quits() {
+        let mut app = App::with_model(three_span_model());
+        assert!(matches!(app.apply_key(KeyCode::Char('Q')), Loop::Quit));
     }
 
     #[test]
@@ -470,6 +471,7 @@ mod tests {
                 duration_ms: 10,
                 status: "ok".into(),
                 capability: None,
+                turn_index: 0,
             },
         };
         let line = serde_json::to_string(&evt).unwrap();
@@ -501,6 +503,7 @@ mod tests {
                 duration_ms: 10,
                 status: "ok".into(),
                 capability: None,
+                turn_index: 0,
             },
         }
     }
@@ -546,6 +549,7 @@ mod tests {
                 duration_ms: 10,
                 status: "ok".into(),
                 capability: None,
+                turn_index: 0,
             },
         };
         let full_line = serde_json::to_string(&evt).unwrap();

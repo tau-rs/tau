@@ -206,7 +206,7 @@ pub async fn run(
     )?;
 
     let (agent_def, manifest) =
-        crate::config::build_agent_definition(entry, &cwd, &scope, &project.models)
+        crate::config::build_agent_definition(entry, &cwd, &scope, project.effective_models())
             .with_context(|| format!("resolving agent {:?}", args.agent_id))?;
 
     let mut options = RunOptions::default();
@@ -258,9 +258,14 @@ pub async fn run(
         force_adapter_kind,
     );
 
-    let loaded =
-        plugin_loader::load_plugins(entry, &scope, &project.models, trace_context, host_options)
-            .await?;
+    let loaded = plugin_loader::load_plugins(
+        entry,
+        &scope,
+        project.effective_models(),
+        trace_context,
+        host_options,
+    )
+    .await?;
 
     let runtime = loaded
         .builder
@@ -589,25 +594,22 @@ async fn try_run_pipeline(
     // caller's existing flow runs unchanged.
     let pipeline = module.workflow.pipeline.as_ref()?;
 
-    // The id of the LAST NON-CHECK pipeline step — its stored output is the
-    // run's final result. Trailing `StepRun::Check` steps (auto-appended by
-    // the lowerer for every `[goals.*]` / `[deliverables.*]` declaration)
-    // evaluate postconditions but store NO output in `OutputStore`. Selecting
-    // one as `last_step_id` would make `render_pipeline_result` call
-    // `store.get(check_step_id) → None` and return the "interpreter invariant
-    // violated" error even when all checks pass. Skip trailing check steps and
-    // find the last step that actually produces output.
+    // The id of the LAST NON-CHECK, NON-SUSPEND pipeline step — its stored
+    // output is the run's final result. Trailing `StepRun::Check` steps
+    // (auto-appended by the lowerer for every `[goals.*]` / `[deliverables.*]`
+    // declaration) evaluate postconditions but store NO output in
+    // `OutputStore`. Selecting one as `last_step_id` would make
+    // `render_pipeline_result` call `store.get(check_step_id) → None` and
+    // return the "interpreter invariant violated" error even when all checks
+    // pass. `Pipeline::final_leaf_step_id` skips trailing `Check`/`Suspend`
+    // steps and finds the last step that actually produces output.
     //
     // An empty `steps` vec cannot reach here (project validation rejects an
     // empty pipeline with `ProjectConfigError::EmptyPipeline`); a pipeline of
-    // ONLY check steps returns `None` to fall back to the single-agent path.
-    let last_step_id = match pipeline.steps.iter().rev().find(|s| {
-        !matches!(
-            s.run,
-            tau_ir::pipeline::StepRun::Check(_) | tau_ir::pipeline::StepRun::Suspend { .. }
-        )
-    }) {
-        Some(s) => s.id.0.clone(),
+    // ONLY check/suspend steps returns `None` to fall back to the
+    // single-agent path.
+    let last_step_id = match pipeline.final_leaf_step_id() {
+        Some(id) => id.0.clone(),
         None => return None,
     };
 
@@ -633,6 +635,9 @@ async fn try_run_pipeline(
     }
     let dispatcher = std::sync::Arc::new(
         crate::cmd::ir_dispatcher::ForwardingDispatcher::new(llm_backends, tools_by_id)
+            // Native tool_refs are served from the statically-linked
+            // `tau-native-tools` crate, never the plugin registry (#639).
+            .with_native(crate::cmd::ir_dispatcher::native_tool_ids(&module))
             .with_assets(assets),
     );
 
@@ -1133,12 +1138,12 @@ fn bundle_verify_exit_code(e: &tau_pkg::bundle::VerifyError) -> i32 {
 ///
 /// A ULID (Crockford base32, 26 chars) — lexicographically sortable and
 /// collision-resistant. Matches `run_main`'s workflow-run-id minting
-/// (`ulid::Ulid::new()`) and replaces the old bespoke `tau-run-<nanos>`
+/// (`ulid::Ulid::generate()`) and replaces the old bespoke `tau-run-<nanos>`
 /// string, which could collide under fast successive runs or a backward
 /// clock adjustment (D8). The only contract is uniqueness within a host
 /// process; the kernel still mints its own `AgentInstanceId`.
 pub(super) fn mint_run_id() -> String {
-    ulid::Ulid::new().to_string()
+    ulid::Ulid::generate().to_string()
 }
 
 /// Project a [`MessagePayload`] to a single text string for display.
