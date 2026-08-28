@@ -308,18 +308,18 @@ pub(super) fn parse(
 /// Build-time CRLF normalization (spec: dir-based definitions, determinism).
 /// Without this, an autocrlf Windows checkout changes prompt asset hashes and
 /// breaks `tau verify` cross-platform (same class as the #553 *.wit incident).
+///
+/// Delegates to `tau_pkg::crlf` — the one implementation — rather than
+/// keeping a private copy. `Caches::prompt_file` is caller-supplied: the CLI
+/// passes `tau_pkg::bundle::read_prompt_file`, which already normalizes, so
+/// this call is a second pass over the same bytes. That is only safe because
+/// the shared helper is idempotent (`\r\r\n` → `\n` in one pass); the two
+/// former copies each folded `\r\r\n` → `\r\n`, so a double pass produced a
+/// different IR asset hash than the bundle's single-pass
+/// `system_prompt_sha256`. Callers with their own reader still need the pass,
+/// so it stays.
 fn normalize_crlf_bytes(input: alloc::vec::Vec<u8>) -> alloc::vec::Vec<u8> {
-    let mut out = alloc::vec::Vec::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        if input[i] == b'\r' && input.get(i + 1) == Some(&b'\n') {
-            i += 1; // skip the \r, keep the \n
-            continue;
-        }
-        out.push(input[i]);
-        i += 1;
-    }
-    out
+    tau_pkg::crlf::normalize_crlf_bytes(input)
 }
 
 /// Test-only stub reader for `parse`: no file prompts. Callers that don't
@@ -838,6 +838,48 @@ system_file  = "prompt.md"
         assert_eq!(
             out_lf.assets.keys().collect::<alloc::vec::Vec<_>>(),
             out_crlf.assets.keys().collect::<alloc::vec::Vec<_>>()
+        );
+    }
+
+    /// The CLI wires `Caches::prompt_file` to
+    /// `tau_pkg::bundle::read_prompt_file`, which normalizes CRLF itself —
+    /// so `parse` normalizes the *already normalized* bytes a second time,
+    /// while the bundle's `system_prompt_sha256` is computed over the
+    /// single-pass output. Those two must agree.
+    ///
+    /// With the old `\r\n` → `\n` rewrite they did not: `\r\r\n` folded to
+    /// `\r\n` on pass 1 and to `\n` on pass 2, so the IR asset hash and the
+    /// bundle hash described different byte strings for the same file. Pin
+    /// the fixed point.
+    #[test]
+    fn second_normalization_pass_is_a_no_op_for_double_cr() {
+        let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "p"
+[models]
+default = { backend = "mock-llm", model = "m" }
+[agents.solo]
+display_name = "Solo"
+package      = "p@^0.1"
+model        = "default"
+[agents.solo.prompt]
+system_file  = "prompt.md"
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+
+        // What `read_prompt_file` hands back — and what the bundle hashes.
+        let single_pass = tau_pkg::crlf::normalize_crlf_bytes(b"a\r\r\nb\r\n".to_vec());
+        assert_eq!(single_pass, b"a\nb\n");
+
+        let reader = |_p: &std::path::Path| -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+            Ok(single_pass.clone())
+        };
+        let out = parse(&config, &reader).expect("lower");
+        let blob = out.assets.values().next().expect("one prompt asset");
+        assert_eq!(
+            blob.bytes, single_pass,
+            "the IR asset must carry the same bytes the bundle hashed",
         );
     }
 

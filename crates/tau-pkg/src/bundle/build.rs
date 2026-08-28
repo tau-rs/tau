@@ -572,8 +572,10 @@ fn effective_to_bundle(
 /// step 8) call it, guaranteeing their hashes can never drift:
 ///
 /// - [`PromptEntry::Inline`] → the inline string's UTF-8 bytes.
-/// - [`PromptEntry::File`] → the file's raw bytes, resolved relative to
-///   `project_root` when the path is relative.
+/// - [`PromptEntry::File`] → the file's bytes with CRLF line endings
+///   normalized to LF (see [`read_prompt_file`]), resolved relative to
+///   `project_root` when the path is relative. *Not* the raw bytes: an
+///   autocrlf checkout must hash the same as a LF checkout.
 /// - [`PromptEntry::None`] → empty bytes (hashes to the SHA-256 of the
 ///   empty string), matching §C.2's "no prompt ⇒ hash empty" rule.
 pub(crate) fn resolve_agent_prompt_bytes(
@@ -600,6 +602,10 @@ pub(crate) fn resolve_agent_prompt_bytes(
 /// `../` escapes are rejected with `ErrorKind::InvalidInput` — a prompt path
 /// is authored data from `tau.toml`, not something that should be able to
 /// read arbitrary files off the host.
+///
+/// Returns CRLF-normalized bytes, not raw bytes — see
+/// [`crate::crlf::normalize_crlf_bytes`], which is idempotent precisely
+/// because `tau_ir_lower` normalizes this function's output a second time.
 pub fn read_prompt_file(
     rel: &std::path::Path,
     project_root: &std::path::Path,
@@ -616,27 +622,11 @@ pub fn read_prompt_file(
     if !canon.starts_with(&root) {
         return Err(deny("prompt file path escapes the project root"));
     }
-    std::fs::read(&canon).map(normalize_crlf)
-}
-
-/// Build-time CRLF normalization, mirroring `tau-ir-lower`'s
-/// `normalize_crlf_bytes` (parse.rs). Applied here — at the single read
-/// point `resolve_agent_prompt_bytes` and the lowering `prompt_file` closure
-/// both go through — so an autocrlf Windows checkout can't desync the
-/// bundle's `system_prompt_sha256` from the IR asset hash: both are computed
-/// over these same normalized bytes.
-fn normalize_crlf(input: Vec<u8>) -> Vec<u8> {
-    let mut out = Vec::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        if input[i] == b'\r' && input.get(i + 1) == Some(&b'\n') {
-            i += 1; // skip the \r, keep the \n
-            continue;
-        }
-        out.push(input[i]);
-        i += 1;
-    }
-    out
+    // Applied at the single read point `resolve_agent_prompt_bytes` and the
+    // lowering `prompt_file` closure both go through, so an autocrlf Windows
+    // checkout can't desync the bundle's `system_prompt_sha256` from the IR
+    // asset hash: both are computed over these same normalized bytes.
+    std::fs::read(&canon).map(crate::crlf::normalize_crlf_bytes)
 }
 
 /// SHA-256 of `bytes` as lowercase hex. The single source of truth for
@@ -1267,6 +1257,25 @@ generated_at = "2024-01-01T00:00:00Z"
             sha256_hex(&crlf_bytes),
             sha256_hex(&lf_bytes),
             "system_prompt_sha256 must be CRLF-invariant, matching the IR asset hash"
+        );
+    }
+
+    /// `tau_ir_lower` normalizes this function's output a *second* time (the
+    /// CLI's `prompt_file` closure is `read_prompt_file`). So a single
+    /// `read_prompt_file` pass must already be at the fixed point, or the
+    /// bundle's `system_prompt_sha256` and the IR asset hash describe
+    /// different bytes for the same file. `\r\r\n` is the input that broke
+    /// the old non-idempotent rewrite.
+    #[test]
+    fn read_prompt_file_output_is_already_normalized() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("p.md"), b"a\r\r\nb\r\n").unwrap();
+        let once = read_prompt_file(std::path::Path::new("p.md"), t.path()).unwrap();
+        assert_eq!(once, b"a\nb\n");
+        assert_eq!(
+            crate::crlf::normalize_crlf_bytes(once.clone()),
+            once,
+            "a second normalization pass must not change the bytes",
         );
     }
 

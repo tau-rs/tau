@@ -5,9 +5,13 @@ use std::path::PathBuf;
 
 use super::super::project::{UncheckedAgent, UncheckedPrompt, UncheckedTool};
 
-/// Replace every `\r\n` with `\n` (spec: build-time CRLF normalization).
+/// Build-time CRLF normalization (spec). Delegates to the shared,
+/// idempotent [`crate::crlf`] helper rather than a local `str::replace`, so
+/// a definition file's body folds to exactly the same bytes the bundle's
+/// `system_prompt_sha256` and the IR asset hash see. A local
+/// `replace("\r\n", "\n")` disagreed with them on `\r\r\n`.
 pub(crate) fn normalize_crlf(s: &str) -> String {
-    s.replace("\r\n", "\n")
+    crate::crlf::normalize_crlf_str(s)
 }
 
 /// Split `---`-fenced YAML frontmatter from the markdown body.
