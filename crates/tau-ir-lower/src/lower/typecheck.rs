@@ -642,6 +642,8 @@ fn validate_step_run(
             }
         }
         StepRun::Dynamic {
+            owner,
+            spawns,
             max_spawns,
             max_concurrency,
             ..
@@ -663,6 +665,25 @@ fn validate_step_run(
                     max_spawns: *max_spawns,
                     max_concurrency: *max_concurrency,
                 });
+            }
+            // EPIC 4.5: the region's owner must be a real coordinator agent,
+            // and every spawn template's tool allow-list must resolve
+            // against `workflow.tools` — mirrors StepRun::Agent/Tool above.
+            if !wf.agents.contains_key(owner) {
+                return Err(LowerError::UnknownPipelineRun {
+                    step: outer_step_id.into(),
+                    target: alloc::format!("agent:{}", owner.0),
+                });
+            }
+            for spawn in spawns {
+                for tool_id in &spawn.tool_refs {
+                    if !wf.tools.contains_key(tool_id) {
+                        return Err(LowerError::UnknownPipelineRun {
+                            step: outer_step_id.into(),
+                            target: alloc::format!("tool:{}", tool_id.0),
+                        });
+                    }
+                }
             }
         }
     }
@@ -1196,6 +1217,7 @@ mod tests {
                     steps: alloc::vec![PipelineStep {
                         id: PipelineStepId("fanout-step".to_string()),
                         run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
                             envelope: empty_caps(),
                             spawns: alloc::vec![],
                             max_spawns: 0, // invalid
@@ -1236,6 +1258,7 @@ mod tests {
                     steps: alloc::vec![PipelineStep {
                         id: PipelineStepId("fanout-step".to_string()),
                         run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
                             envelope: empty_caps(),
                             spawns: alloc::vec![],
                             max_spawns: 2,
@@ -1257,6 +1280,109 @@ mod tests {
                 max_concurrency: 5,
             } if step == "fanout-step"),
             "expected DynamicConcurrencyInvalid; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_owner_not_in_agents_fails_typecheck() {
+        // EPIC 4.5: a Dynamic region's `owner` must name a real coordinator
+        // agent in `workflow.agents` — an unresolved owner is a typecheck
+        // error, mirroring StepRun::Agent's own-id check.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents: BTreeMap::new(), // no "coordinator" agent
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![],
+                            max_spawns: 1,
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject unknown owner");
+        assert!(
+            matches!(err, LowerError::UnknownPipelineRun {
+                ref step,
+                ref target,
+            } if step == "fanout-step" && target == "agent:coordinator"),
+            "expected UnknownPipelineRun; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_spawn_tool_ref_not_in_tools_fails_typecheck() {
+        // EPIC 4.5: a Dynamic region spawn template's `tool_refs` must all
+        // resolve against `workflow.tools`, mirroring an Agent's tool_refs.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::{PipelineStepId, ToolId};
+        use tau_ir::pipeline::{DynamicSpawn, Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("coordinator".to_string()),
+            agent_with_tool_refs("coordinator", &[]),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(), // no "probe" tool
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![DynamicSpawn {
+                                kind: "researcher".to_string(),
+                                capabilities: empty_caps(),
+                                description: String::new(),
+                                prompt: tau_ir::prompt::PromptSource::inline(""),
+                                model_ref: tau_ir::model_ref::ModelRef {
+                                    backend: String::new(),
+                                    model_id: String::new(),
+                                },
+                                tool_refs: alloc::vec![ToolId("probe".to_string())],
+                            }],
+                            max_spawns: 1,
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject unknown spawn tool ref");
+        assert!(
+            matches!(err, LowerError::UnknownPipelineRun {
+                ref step,
+                ref target,
+            } if step == "fanout-step" && target == "tool:probe"),
+            "expected UnknownPipelineRun; got {err:?}"
         );
     }
 

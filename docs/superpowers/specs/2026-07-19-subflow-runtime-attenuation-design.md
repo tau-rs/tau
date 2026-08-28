@@ -162,7 +162,9 @@ gate into the kernel `stream.rs` loop — larger, and rejected here.)
 - add `narrowing_frame: Option<String>` (defaults `None`; set via a
   `with_narrowing_frame(tool_id)` builder method so the existing `new()` signature
   and all current callers are untouched);
-- `Display` appends `" (narrowed by subflow \`<frame>\`)"` when present.
+- `Display` appends `" (narrowed by \`<frame>\`)"` when present (shipped wording — the
+  earlier `"narrowed by subflow \`<frame>\`"` was changed because dynamic-region
+  frames are not subflows).
 
 The denial `msg` names the tool, the missing capability kind/detail, and the
 narrowing frame — satisfying the amendment's "name tool, missing caps, and the

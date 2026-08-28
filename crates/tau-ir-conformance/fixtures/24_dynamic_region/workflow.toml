@@ -1,0 +1,35 @@
+packages = ["mock-llm"]
+
+[project]
+name = "fixture-24"
+
+[models.mock-1]
+backend = "mock-llm"
+model = "mock-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "demo@^0.1"
+model        = "mock-1"
+max_turns    = 3
+
+[agent.kinds.researcher]
+description = "Researches one topic."
+prompt      = "You are a researcher."
+model       = "mock-1"
+
+# A single Dynamic region (EPIC 4.5): the `coordinator` agent may spawn up
+# to `max_spawns` = 1 `researcher` children. The mock script (see
+# mock_llm.jsonl) has the coordinator attempt TWO spawns in its first turn
+# so the fixture pins both the admitted spawn (first) and the bounds
+# soft-denial (second) in one run.
+[[pipeline.steps]]
+id    = "fanout"
+input = "${input}"
+
+[pipeline.steps.dynamic]
+spawns          = ["researcher"]
+ceiling         = {}
+max_spawns      = 1
+max_concurrency = 1
+agent           = "coordinator"

@@ -40,6 +40,15 @@ name = "demo"
 [allow]
 "net.http" = { hosts = "any" }
 
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "demo@^0.1"
+model        = "fast"
+
 [agent.kinds.greedy]
 capabilities = { "net.http" = { hosts = "any" } }
 
@@ -51,6 +60,7 @@ spawns = ["greedy"]
 ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
 max_spawns = 4
 max_concurrency = 2
+agent = "coordinator"
 "#,
     )
     .unwrap();
