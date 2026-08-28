@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["from_canonical_bytes","to_canonical_bytes"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["closest_match"]};

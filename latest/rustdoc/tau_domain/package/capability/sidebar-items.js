@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["KNOWN_VOCAB"],"enum":["AgentCapability","Capability","CapabilityShape","FsCapability","NetCapability","ProcessCapability","SkillCapability","VocabMode"],"mod":["lattice"],"struct":["CapabilityShapeSet"]};

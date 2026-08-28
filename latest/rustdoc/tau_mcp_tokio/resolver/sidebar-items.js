@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["LiveResolverError"],"fn":["resolve_all"],"struct":["LiveResolved","McpEntryInput"]};
