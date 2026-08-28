@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["assert_conform","fixture_deterministic_registry"],"mod":["bundle_mode","dev_mode"],"struct":["ConformanceReport","MapBackedDeterministicRegistry","SuspendedSummary"],"trait":["ExecutionMode"]};

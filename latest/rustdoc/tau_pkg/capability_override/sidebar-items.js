@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["capability_set_subset","compute_effective"],"mod":["subset"],"struct":["CapabilityOverride","CeilingViolation","EffectiveCapability","OverrideExpandError"]};
