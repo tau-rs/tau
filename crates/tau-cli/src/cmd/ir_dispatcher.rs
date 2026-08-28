@@ -447,44 +447,45 @@ pub(crate) async fn run_via_ir(
 /// interpreter's synthetic `RunState` is `!Send` (spec §13.3), and moving
 /// it to another task would violate that.
 ///
-/// Error precedence matches `run.rs:389-411`: when `fut` itself fails,
-/// that is the error the operator needs to act on, so it is returned
-/// unchanged (a concurrent TUI failure is only logged as extra context);
-/// a TUI failure is surfaced as an error only when `fut` succeeded.
+/// Error precedence matches `run.rs:389-411` LITERALLY (not just in spirit):
+/// when `fut` itself fails, that `RuntimeError` is what the operator needs
+/// to act on, so it becomes the returned error's root cause — but a
+/// concurrent TUI failure/panic is chained onto it via `anyhow::Context`
+/// rather than only logged, so it survives in the rendered error chain
+/// (`--debug` / the default one-line render both see it) instead of only a
+/// `tracing::warn!` line that may not be visible at the active log level.
+/// A TUI failure with no run failure is still surfaced as the sole error.
 async fn drive_with_optional_tui<F, T>(
     fut: F,
     tui_rx: Option<tokio::sync::mpsc::UnboundedReceiver<tau_ports::TraceEvent>>,
-) -> Result<T, RuntimeError>
+) -> anyhow::Result<T>
 where
     F: Future<Output = Result<T, RuntimeError>>,
 {
     let Some(rx) = tui_rx else {
-        return fut.await;
+        return fut.await.map_err(anyhow::Error::new);
     };
     let tui_task =
         tokio::task::spawn_blocking(move || crate::tui::run_tui(crate::tui::TraceSource::Live(rx)));
     let (run_res, tui_res) = tokio::join!(fut, tui_task);
     match run_res {
         Err(run_err) => {
-            match tui_res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!("execution-trace TUI also errored: {e}");
-                }
-                Err(join_err) => {
-                    tracing::warn!("execution-trace TUI task also panicked: {join_err}");
-                }
-            }
-            Err(run_err)
+            let err = anyhow::Error::new(run_err);
+            let err = match tui_res {
+                Ok(Ok(())) => err,
+                Ok(Err(e)) => err.context(format!("execution-trace TUI also errored: {e}")),
+                Err(join_err) => err.context(format!(
+                    "execution-trace TUI task also panicked: {join_err}"
+                )),
+            };
+            Err(err)
         }
         Ok(value) => match tui_res {
             Ok(Ok(())) => Ok(value),
-            Ok(Err(e)) => Err(RuntimeError::Internal {
-                message: format!("execution-trace TUI: {e}"),
-            }),
-            Err(join_err) => Err(RuntimeError::Internal {
-                message: format!("execution-trace TUI task panicked: {join_err}"),
-            }),
+            Ok(Err(e)) => Err(e.context("execution-trace TUI")),
+            Err(join_err) => Err(anyhow::anyhow!(
+                "execution-trace TUI task panicked: {join_err}"
+            )),
         },
     }
 }
