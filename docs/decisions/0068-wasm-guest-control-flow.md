@@ -74,8 +74,28 @@ Load-bearing facts established during design:
   embedder keeps providing only `complete`/`now-millis`/`next-u64`/
   `emit-event`.
 - The guest gains a regex engine (`regex-automata`, alloc-only config).
-  Obligation: measure the component size delta when the dependency lands;
-  fall back to a leaner engine configuration if unacceptable.
+  **Measured** (release, `wasm32-wasip2`, same fixture IR, `goal-predicates`
+  on vs stubbed off): 2,558,423 B vs 2,015,233 B — **+543,190 B (~530 KiB,
+  ~27%)**, paid by every component including ones whose IR uses no goal
+  predicates. Accepted: the alternative (a leaner engine) costs cross-target
+  parity, see below. Reducing it by cfg-gating the registry on the baked IR
+  is tracked in #689.
+- **The engine's feature list is a parity contract, not a size knob.** The
+  predicate source is shared, but cargo feature unification decides the
+  accepted regex language per graph: in the `tau-cli` graph
+  `jsonschema → fancy-regex` pulls `regex-automata` up to full Unicode,
+  while the guest links only what `tau-native-tools` declares. The initial
+  `unicode-case`/`unicode-perl` pair was NARROWER, so `\b` and `\p{…}`
+  patterns compiled natively and failed to compile in-guest — and a compile
+  failure was reported as `met: false`, silently flipping a Branch to its
+  `otherwise` arm on wasm only. Fixed by declaring `unicode` +
+  `unicode-word-boundary` (so the guest is a superset of what authoring
+  accepts) and by making an uncompilable pattern an error rather than a
+  verdict. `goal_predicates::matches_parses_the_same_language_the_native_
+  graph_does` fails if the list is trimmed again.
+- Note that the `TAU_WASM_SIZE_BUDGET` gate does NOT bound this cost: it
+  builds the guest with no `TAU_IR_BYTES`, so the empty-IR early return
+  makes the interpreter and the predicate registry dead code.
 - Obligation: the north-star fixture (#461) extends to a wasm execution leg
   (build succeeds; `tau_wasm_host::run_component` yields the same terminal
   sentinel as the dev leg); the build-refusal witness retargets to a

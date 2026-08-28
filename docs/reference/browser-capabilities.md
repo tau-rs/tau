@@ -51,6 +51,15 @@ default IR — deterministic with no environment variables (the same build CI's
 link-gate runs). A real workflow scales above this floor with its baked IR and
 declared tools (the 5.4 `streaming-demo` fixture is ~1.6 MB).
 
+**This floor measures the component shell, not a workflow.** That build sets no
+`TAU_IR_BYTES`, so `BAKED_IR` is empty, the guest's empty-IR early return
+const-folds, and LTO drops everything behind it — the pipeline interpreter, the
+agent loop and the goal-predicate registry (with its regex engine) are all dead
+code in this number. It is a useful regression tripwire for the shell and the
+capability world; it bounds nothing about a component that carries real IR. The
+in-guest control-flow work (ADR-0068) added ~530 KiB to components that do
+(measured there), and this gate did not move.
+
 | Measurement | Bytes | KiB | Tool |
 |---|--:|--:|---|
 | Shipped component (browser download) | 15,686 | 15.3 | `wasm-tools` |

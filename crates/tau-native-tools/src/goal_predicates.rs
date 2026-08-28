@@ -15,7 +15,7 @@
 
 use alloc::format;
 use alloc::string::String;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 pub const FN_EXISTS: &str = "__tau::goal::exists";
 pub const FN_NON_EMPTY: &str = "__tau::goal::non_empty";
@@ -87,14 +87,17 @@ fn matches_(args: &Value) -> Result<Value, String> {
     };
     match regex_automata::meta::Regex::new(pattern) {
         Ok(re) => Ok(Value::Bool(re.is_match(content))),
-        Err(e) => {
-            // Defensive: bad pattern at runtime → met=false with rationale.
-            // Build-time validation (Task 6) should have caught this earlier.
-            Ok(json!({
-                "met": false,
-                "rationale": format!("regex compile error for pattern {pattern:?}: {e}")
-            }))
-        }
+        // A pattern that fails to compile HERE already compiled at authoring
+        // time (project validation uses the full `regex` crate), so this is a
+        // bug — an engine/feature mismatch between this graph and the native
+        // one — not a verdict about the content. Reporting `met: false` would
+        // silently send a Branch down its `otherwise` arm on one target only
+        // (ADR-0068 cross-target parity); surface it as an error instead.
+        Err(e) => Err(format!(
+            "regex compile error for pattern {pattern:?}: {e} — the pattern \
+             compiled at build time, so this build's regex-automata feature \
+             set is narrower than the authoring one"
+        )),
     }
 }
 
@@ -202,19 +205,66 @@ mod tests {
         );
     }
 
+    /// Cross-target parity guard (ADR-0068, #621).
+    ///
+    /// This crate is the SINGLE source of the `matches` predicate for both
+    /// the native registry (`tau-cli`) and the wasm guest — but the engine's
+    /// language is decided by cargo FEATURE UNIFICATION, not by this file.
+    /// In the `tau-cli` graph, `jsonschema → fancy-regex` (and `regex`) pull
+    /// `regex-automata` up to the full Unicode feature set; the wasm guest
+    /// links only what THIS crate declares. So a pattern class that is
+    /// enabled there and not here compiles natively and fails to compile
+    /// in-guest — and a compile failure used to be swallowed as
+    /// `met: false`, silently flipping a Branch to its `otherwise` arm on
+    /// wasm only.
+    ///
+    /// These cases are exactly the ones that need a feature beyond the
+    /// original `unicode-case`/`unicode-perl` pair (`\b` needs
+    /// `unicode-word-boundary`; `\p{…}` needs `unicode-gencat`/
+    /// `unicode-script`). Running under `-p tau-native-tools`, the graph is
+    /// this crate's own declaration — so trimming the feature list again
+    /// fails HERE rather than diverging in production.
     #[test]
-    fn matches_bad_pattern_is_met_false_with_rationale() {
+    fn matches_parses_the_same_language_the_native_graph_does() {
+        for (pattern, content) in [
+            (r"\b\w+\b", "two words"),
+            (r"\p{L}+", "abc"),
+            (r"\p{Greek}", "λ"),
+            (r"(?i)\p{Lu}", "a"),
+            (r"\d+", "42"),
+            (r"\s", " "),
+        ] {
+            let got = invoke(
+                FN_MATCHES,
+                &json!({"present": true, "content": content, "pattern": pattern}),
+            )
+            .unwrap_or_else(|| panic!("matches must answer for {pattern:?}"));
+            assert_eq!(
+                got,
+                Ok(json!(true)),
+                "pattern {pattern:?} must compile AND match {content:?} under this \
+                 crate's own feature set — otherwise the wasm guest silently \
+                 disagrees with the native registry"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_bad_pattern_is_err() {
+        // A pattern that reaches here uncompilable is a BUG, not a verdict:
+        // project validation already compiled it with the full `regex` crate
+        // at authoring time. Reporting `met: false` would silently take a
+        // Branch's `otherwise` arm; an error surfaces the mismatch instead.
         let got = invoke(
             FN_MATCHES,
             &json!({"present": true, "content": "x", "pattern": "("}),
         )
-        .unwrap()
-        .unwrap();
-        assert_eq!(got["met"], json!(false));
-        assert!(got["rationale"]
-            .as_str()
-            .unwrap()
-            .contains("regex compile error"));
+        .expect("matches answers");
+        let msg = got.expect_err("an uncompilable pattern must be an error, not met:false");
+        assert!(
+            msg.contains("regex compile error"),
+            "error must name the compile failure; got {msg:?}"
+        );
     }
 
     #[test]

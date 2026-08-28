@@ -1,9 +1,15 @@
 //! Built-in goal predicate registry and `StdFsArtifactReader`.
 //!
-//! Implements all six `FN_BUILTIN_*` predicates from
+//! Answers all six `FN_BUILTIN_*` predicates from
 //! `tau_runtime_core::vocabulary` and exposes a [`BuiltinDeterministicRegistry`]
 //! that the production [`super::ir_dispatcher::ForwardingDispatcher`] wires in
 //! via `ToolDispatcher::deterministic_registry()`.
+//!
+//! Only `schema_valid` is implemented HERE — it needs `jsonschema`, which is
+//! std-only. The other five live in `tau_native_tools::goal_predicates` so
+//! the wasm guest can answer the same predicates from the same source
+//! (ADR-0068, #621); this registry delegates to them first and falls through
+//! to the local `schema_valid`.
 //!
 //! The builtins are checked FIRST. Their names are `__tau::`-prefixed which
 //! makes collision with user-registered fns structurally impossible.

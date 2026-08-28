@@ -460,9 +460,12 @@ fn north_star_governed_bundle_roundtrip() {
 /// body ran), and template resolution hard-errors on unresolved refs. So
 /// a returned payload proves both ran IN-GUEST, via `run_pipeline`.
 ///
-/// The payload equals `SENTINEL` — the same value the dev leg asserts as
-/// `final_message` (see `assert_completed_pipeline_outcome`): both paths
-/// render the last leaf step's output through the same contract.
+/// The cassette gives each turn a DISTINCT text (the dev leg's echo-llm
+/// replays one canned text for every agent, which cannot distinguish which
+/// step's output came back). Here the payload identifies the step: only
+/// `report`'s turn returns `WASM-FINAL-REPORT`, so the assertion pins the
+/// last-leaf selection (`Pipeline::final_leaf_step_id` + the store lookup in
+/// the guest) and the step ORDER, on top of the control-flow proof.
 #[test]
 #[ignore = "builds a wasm component; run with --run-ignored"]
 fn north_star_wasm_guest_executes_same_workflow_same_terminal_outcome() {
@@ -474,27 +477,39 @@ fn north_star_wasm_guest_executes_same_workflow_same_terminal_outcome() {
         .expect("wasm lowering admits Branch+Loop (ADR-0068)");
     let component = common::wasm_component::build_component_with_ir(&ir_bytes);
 
-    // Host cassette stands in for the echo-llm plugin: the guest's
-    // `HostLlmBackend` pops one canned completion per agent turn. Four
-    // agents run (triage, escalate, draft, report); surplus entries stay
-    // unconsumed, and running short would surface as a host error.
-    let response = serde_json::json!({
-        "text": SENTINEL,
-        "tool_uses": [],
-        "stop_reason": "EndTurn",
-        "usage": null,
-    })
-    .to_string();
+    // The host cassette stands in for the echo-llm plugin: the guest's
+    // `HostLlmBackend` pops one canned completion per agent turn, in order
+    // (`VecDeque::pop_front`). Four agent turns run — triage, escalate
+    // (Branch then-arm), draft (Loop body), report (last leaf) — and each
+    // gets its own text. The markers are load-bearing: "URGENT" drives the
+    // Branch's `matches` predicate onto the then-arm, and "APPROVED"
+    // satisfies the Loop's `until` on the first iteration (exhaustion would
+    // hard-error). Running short of responses surfaces as a host error.
+    let response = |text: &str| {
+        serde_json::json!({
+            "text": text,
+            "tool_uses": [],
+            "stop_reason": "EndTurn",
+            "usage": null,
+        })
+        .to_string()
+    };
     let (payload, _events) = tau_wasm_host::run_component(
         &component,
         "incident: coolant temperature rising",
-        vec![response; 8],
+        vec![
+            response("URGENT: coolant temperature rising - fan engaged"),
+            response("escalated to the on-call rotation"),
+            response("incident summary drafted - APPROVED"),
+            response("WASM-FINAL-REPORT"),
+        ],
     )
     .expect("guest executes the Branch+Loop pipeline");
 
     assert_eq!(
-        payload, SENTINEL,
-        "guest payload must be the last leaf step's output — the same \
-         terminal outcome the dev leg asserts as final_message"
+        payload, "WASM-FINAL-REPORT",
+        "guest payload must be the LAST leaf step's output (report's turn), \
+         not an earlier step's — same last-leaf contract the dev leg renders \
+         as final_message"
     );
 }

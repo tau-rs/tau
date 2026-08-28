@@ -1,9 +1,20 @@
 //! The WASI 0.2 component body (wasm32 only).
 //!
-//! PR-C milestone: `run` returns a hardcoded `Ok` to prove the
-//! `wit-bindgen` + component toolchain end to end, including the release
-//! profile (where the `_rdl_*` allocator-symbol LTO bug would surface).
-//! Driving the baked IR through `run_ir_streaming` lands in a follow-up.
+//! `run` drives the IR baked in at build time (`crate::baked::BAKED_IR`),
+//! on the crate's own single-threaded executor, down one of two paths:
+//!
+//! - **pipeline IR** (ADR-0068, #621) → `run_pipeline`, the SAME control-flow
+//!   interpreter the native path uses, so Branch/Parallel/Loop cannot diverge
+//!   between targets. The `run` payload is the last leaf step's rendered
+//!   output, matching the CLI's `render_pipeline_result` contract.
+//! - **pipeline-less IR** (ADR-0053, β.7.5 PR-E2) → `run_ir_streaming` for the
+//!   single entry agent, emitting each `RunEvent` through the `emit-event`
+//!   host import.
+//!
+//! Suspend and Dynamic never reach here: feature-fit refuses them for
+//! `any-wasi-strict` at build time (the guest has no `SuspensionStore`
+//! channel), as does `predicate_fit` for goal predicates the in-guest
+//! registry cannot answer.
 
 extern crate alloc;
 

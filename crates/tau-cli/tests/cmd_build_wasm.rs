@@ -75,13 +75,15 @@ fn project_using_suspend_is_refused() {
 
 #[test]
 fn project_using_dynamic_region_is_refused() {
-    // EPIC 4.4: a `StepRun::Dynamic` region is control-flow the wasm guest's
-    // `run_ir_streaming` path cannot execute, same as Branch/Parallel/Loop/
-    // Suspend — `tau build wasm` must refuse it (feature-fit, Task 8
-    // conformance Fixture C). Unit-level coverage of the same refusal
-    // already lives in `tau-ir-lower`'s `feature_fit::wasm_target_rejects_
-    // dynamic_region`; this test exercises the CLI-facing `lower_to_wasm_ir`
-    // entry point, mirroring `project_using_control_flow_is_refused` above.
+    // EPIC 4.4: a `StepRun::Dynamic` region has no execution path on ANY
+    // target yet (the interpreter returns DynamicRegionRequiresRuntimeGate,
+    // pending EPIC 4.5), so `any-wasi-strict` keeps it out of
+    // `supported_features` and `tau build wasm` refuses it — unlike
+    // Branch/Parallel/Loop, which ADR-0068 (#621) made executable in-guest.
+    // Unit-level coverage of the same refusal already lives in
+    // `tau-ir-lower`'s `feature_fit::wasm_target_rejects_dynamic_region`;
+    // this test exercises the CLI-facing `lower_to_wasm_ir` entry point,
+    // mirroring `project_using_suspend_is_refused` above.
     let err = lower_to_wasm_ir(&fixture("needs-dynamic-region")).unwrap_err();
     let msg = format!("{err:#}");
     assert!(

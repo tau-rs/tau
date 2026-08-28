@@ -1,0 +1,67 @@
+packages = ["anthropic"]
+
+# ADR-0068 (#621): `any-wasi-strict` declares Parallel supported, so the
+# guest must actually EXECUTE a fan-out — not merely lower one. The guest
+# drives branches as a bounded cooperative fork-join on its single-threaded
+# noop-waker executor (ADR-0059 Decision 2: `buffered(8)`, no spawn port),
+# which is the one construct in the interpreter that parks children on
+# FuturesUnordered's wakers. `join` reads BOTH branches' outputs, and
+# template resolution hard-errors on unresolved refs, so a completed run
+# proves both branches ran in-guest.
+
+[project]
+name = "parallel-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.weather]
+display_name = "Weather"
+package = "parallel-wasm@^0.1"
+model = "claude"
+
+[agents.weather.prompt]
+system = "Report the weather."
+
+[agents.news]
+display_name = "News"
+package = "parallel-wasm@^0.1"
+model = "claude"
+
+[agents.news.prompt]
+system = "Report the news."
+
+[agents.join]
+display_name = "Join"
+package = "parallel-wasm@^0.1"
+model = "claude"
+
+[agents.join.prompt]
+system = "Combine both reports."
+
+[pipeline]
+
+[[pipeline.steps]]
+id = "fanout"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "weather"
+    run = "agent:weather"
+    input = "${input}"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "news"
+    run = "agent:news"
+    input = "${input}"
+
+# Leaf final step: Parallel itself stores no output, so this is what the
+# renderer returns. Referencing both branch outputs makes completion the
+# proof that the fork-join joined.
+[[pipeline.steps]]
+id = "join"
+run = "agent:join"
+input = "weather: ${steps.weather.output} / news: ${steps.news.output}"

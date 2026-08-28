@@ -71,3 +71,41 @@ fn build_wasm_linear_pipeline_runs_in_guest_and_returns_last_leaf() {
         "payload must be the LAST leaf step's rendered output"
     );
 }
+
+/// #621 review follow-up: `any-wasi-strict` declares `Parallel` supported,
+/// so prove the guest EXECUTES a fan-out rather than merely lowering one.
+///
+/// This is the only in-guest exercise of `buffered(PARALLEL_CAP)` (ADR-0059
+/// Decision 2) — the one interpreter construct that parks child futures on
+/// `FuturesUnordered`'s wakers rather than completing on first poll. The
+/// guest's executor is a noop-waker busy-poll loop
+/// (`tau-wasm-guest/src/executor.rs`), so this test also pins the invariant
+/// that the fork-join makes progress there; a regression shows up as a hang
+/// (nextest's per-test timeout), not a wrong answer.
+///
+/// The assertion is the JOIN step's output, and the join's input template
+/// reads BOTH branches' outputs — template resolution hard-errors on
+/// unresolved refs, so completion proves both branches ran and merged.
+#[test]
+#[ignore = "builds a wasm component; run with --run-ignored"]
+fn build_wasm_parallel_pipeline_runs_in_guest() {
+    let (_module, bytes) =
+        tau_cli::cmd::build_wasm::lower_to_wasm_ir(&fixture("parallel")).expect("lowers");
+    let component = common::wasm_component::build_component_with_ir(&bytes);
+    let response = |text: &str| {
+        format!(r#"{{"text":"{text}","tool_uses":[],"stop_reason":"EndTurn","usage":null}}"#)
+    };
+    // Distinct per-turn texts: the payload can only be "joined" if the guest
+    // ran the fan-out and then the join leaf, in that order.
+    let (payload, _events) = tau_wasm_host::run_component(
+        &component,
+        "today",
+        vec![response("sunny"), response("quiet"), response("joined")],
+    )
+    .expect("guest runs the Parallel fan-out");
+    assert_eq!(
+        payload, "joined",
+        "payload must be the join leaf's output, which is reachable only if \
+         BOTH parallel branches produced their outputs in-guest"
+    );
+}

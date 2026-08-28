@@ -91,6 +91,26 @@ run = "agent:a"
 input = "${input}"
 "#;
 
+    const PARALLEL_TOML: &str = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "fanout"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "weather"
+    run = "agent:weather"
+    input = "${input}"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "news"
+    run = "agent:news"
+    input = "${input}"
+"#;
+
     const DYNAMIC_TOML: &str = r#"
 [project]
 name = "demo"
@@ -136,6 +156,18 @@ run = "suspend:human"
     fn wasm_target_accepts_branch() {
         let t: TargetTriple = "any-wasi-strict".parse().unwrap();
         assert!(check(&parsed(BRANCH_TOML), &t).is_ok());
+    }
+
+    /// `Parallel` is declared in `supported_features` alongside Branch/Loop,
+    /// so the gate must admit it too. The guest runs branches as a bounded
+    /// cooperative fork-join on its own single-threaded executor (ADR-0059
+    /// Decision 2: `buffered(8)`, no spawn), which is why this is executable
+    /// in-guest at all; `build_wasm_parallel_pipeline_runs_in_guest` in
+    /// `tau-cli/tests/build_wasm_e2e.rs` proves it actually executes.
+    #[test]
+    fn wasm_target_accepts_parallel() {
+        let t: TargetTriple = "any-wasi-strict".parse().unwrap();
+        assert!(check(&parsed(PARALLEL_TOML), &t).is_ok());
     }
 
     #[test]
