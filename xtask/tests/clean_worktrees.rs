@@ -265,6 +265,56 @@ fn never_reclaims_the_worktree_it_was_invoked_from() {
 }
 
 #[test]
+fn an_unreadable_timestamp_fails_closed_instead_of_deleting_everything() {
+    // Regression for the portability crack this PR shipped with and CI caught.
+    // The two `stat` dialects do not fail cleanly for each other: on GNU
+    // coreutils `-f` means `--file-system`, so a BSD-style `stat -f '%m'`
+    // there SUCCEEDS with a non-numeric value. Every worktree then got an
+    // unusable mtime, no branch had an identifiable newest copy, and every
+    // duplicate — keeper included — was marked for removal. That is the
+    // mass-deletion behaviour of #719 arriving through the back door.
+    //
+    // A `stat` that yields garbage stands in for any future version of that
+    // bug, whatever its cause. The requirement is not "parse it anyway", it is
+    // "never guess": refuse loudly and leave the disk untouched.
+    let fx = Fixture::new("badstat");
+    fx.worktree("alpha-old", "feat/alpha", "202601010000");
+    fx.worktree("alpha-new", "feat/alpha", "202606010000");
+
+    let shim_dir = fx.root.join("shim");
+    fs::create_dir_all(&shim_dir).expect("create shim dir");
+    let shim = shim_dir.join("stat");
+    fs::write(&shim, "#!/bin/sh\necho '?'\n").expect("write stat shim");
+    run_ok(Command::new("chmod").arg("+x").arg(&shim));
+
+    let path = format!(
+        "{}:{}",
+        shim_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new(script())
+        .arg("--root")
+        .arg(&fx.root)
+        .arg("--yes")
+        .env("PATH", path)
+        .env("TAU_CLEAN_SKIP_BUILD_GUARD", "1")
+        .env("TAU_CLEAN_SKIP_GH", "1")
+        .output()
+        .expect("run clean-worktrees.sh");
+
+    assert!(
+        !out.status.success(),
+        "an unreadable mtime must abort the sweep, not proceed on a guess"
+    );
+    for name in ["alpha-old", "alpha-new"] {
+        assert!(
+            fx.target_exists(name),
+            "{name}/target must survive when timestamps cannot be read"
+        );
+    }
+}
+
+#[test]
 fn script_is_executable() {
     // The justfile and the docs both invoke it directly; a lost exec bit turns
     // the documented recovery path into a permission error at the worst moment.

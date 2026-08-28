@@ -130,6 +130,28 @@ free_kib() { df -k "$ROOT" | tail -1 | awk '{print $4}'; }
 
 human() { du -sh "$1" 2>/dev/null | cut -f1 | tr -d ' \t'; }
 
+# Modification time of a path, in seconds since the epoch.
+#
+# GNU is tried FIRST and the result is validated as a number, because the two
+# stat dialects do not fail cleanly for each other. On GNU coreutils `-f` means
+# `--file-system`, so a BSD-style `stat -f '%m'` there does not error out -- it
+# succeeds and prints something non-numeric. That silently gave every worktree
+# an unusable timestamp, so no branch had an identifiable newest copy and
+# *every* duplicate was marked for removal, keeper included. Exactly the
+# mass-deletion behaviour of #719, reintroduced through a portability crack.
+# A timestamp that cannot be read is therefore fatal, never a default.
+mtime_of() {
+    local t
+    t=$(stat -c '%Y' "$1" 2>/dev/null) || t=$(stat -f '%m' "$1" 2>/dev/null) || t=""
+    case "$t" in
+        '' | *[!0-9]*)
+            echo "error: cannot read a numeric mtime for $1 (got '${t}')" >&2
+            exit 1
+            ;;
+    esac
+    printf '%s' "$t"
+}
+
 # --- enumerate worktrees ---------------------------------------------------
 
 # Parallel arrays: worktree path, its branch, its target/ mtime.
@@ -145,7 +167,7 @@ for dir in "$ROOT"/*/; do
     br=$(worktree_branch "$dir")
     paths+=("$dir")
     branches+=("$br")
-    mtimes+=("$(stat -f '%m' "$dir/target" 2>/dev/null || stat -c '%Y' "$dir/target" 2>/dev/null || echo 0)")
+    mtimes+=("$(mtime_of "$dir/target")")
 done
 
 if [ "${#paths[@]}" -eq 0 ]; then
@@ -199,8 +221,14 @@ for i in "${!paths[@]}"; do
         verdicts+=("KEEP")
     elif branch_is_merged "$br"; then
         verdicts+=("MERGED")
-    elif [ "$(count_for_branch "$br")" -gt 1 ] \
-        && [ "$(newest_for_branch "$br")" != "${paths[$i]}" ]; then
+    elif keeper=$(newest_for_branch "$br"); [ -n "$keeper" ] \
+        && [ "$(count_for_branch "$br")" -gt 1 ] \
+        && [ "$keeper" != "${paths[$i]}" ]; then
+        # `-n "$keeper"` is load-bearing, not a tidy-up. Without it, any future
+        # failure to identify the newest copy degrades into "no path matches
+        # the keeper", which marks EVERY copy of the branch DUPLICATE and
+        # deletes the lot. The verdict must fail closed: no identifiable
+        # keeper means keep everything.
         verdicts+=("DUPLICATE")
     else
         verdicts+=("KEEP")
