@@ -189,7 +189,7 @@ impl core::fmt::Display for CapabilityDenial {
             self.tool_name,
         )?;
         if let Some(frame) = &self.narrowing_frame {
-            write!(f, " (narrowed by subflow `{frame}`)")?;
+            write!(f, " (narrowed by `{frame}`)")?;
         }
         Ok(())
     }
@@ -372,15 +372,6 @@ pub enum RuntimeError {
         step: String,
         /// The signal name the resumer must supply.
         resume_signal: String,
-    },
-
-    /// Hit a `StepRun::Dynamic` region, whose runtime gate (membership,
-    /// attenuation, bounds counters) lands in EPIC 4.5. Build-time envelope
-    /// verification already ran at `tau check`; execution is not yet wired.
-    #[error("dynamic region '{step_id}' requires the EPIC 4.5 runtime gate (not yet implemented)")]
-    DynamicRegionRequiresRuntimeGate {
-        /// The pipeline-step id of the dynamic region.
-        step_id: String,
     },
 }
 
@@ -714,7 +705,7 @@ mod tests {
         let s = d.to_string();
         assert!(s.contains("page"), "{s}");
         assert!(s.contains("net.http"), "{s}");
-        assert!(s.contains("narrowed by subflow `notify`"), "{s}");
+        assert!(s.contains("narrowed by `notify`"), "{s}");
         assert_eq!(d.narrowing_frame.as_deref(), Some("notify"));
     }
 
@@ -722,6 +713,6 @@ mod tests {
     fn denial_without_frame_is_unchanged() {
         let d = CapabilityDenial::new("a", "p", "t", "k", "detail");
         assert_eq!(d.narrowing_frame, None);
-        assert!(!d.to_string().contains("narrowed by subflow"));
+        assert!(!d.to_string().contains("narrowed by"));
     }
 }

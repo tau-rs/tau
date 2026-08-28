@@ -124,8 +124,20 @@ their observable behavior agree:
   so the interleave is causal with no timestamp heuristics — directly avoiding
   the flakiness a merge-by-timestamp gate would reintroduce.
 - **Two assertions.** `dev == golden` (a blessed golden file — the stable,
-  crate-owned contract) and `dev == wasm` (cross-profile parity). The gate
-  runs in CI as `conformance (linux)`.
+  crate-owned contract) and `dev == wasm` (cross-profile parity).
+
+> **Implementation status.** Of those two assertions, only `dev == golden`
+> currently runs. `dev == wasm` is `#[ignore]`d because `WasmProfile` is
+> still a stub (`crates/tau-conformance/src/profile/wasm.rs`), so
+> cross-profile parity is **described by this gate but not yet asserted by a
+> running test**. Everything below describes the gate's design contract, not
+> today's enforcement. Tracked in
+> [#691](https://github.com/tau-rs/tau/issues/691); see
+> [Testing strategy](testing-strategy.md#caveat-g3s-cross-profile-assertion-is-not-yet-live).
+>
+> The live `dev == golden` leg runs in Tier 0 (`test-stable / linux`, every
+> PR) and in the Tier 2 job `conformance / linux`, which is non-blocking for
+> merge.
 
 This is the gate that proves the philosophy holds: *the same engine, the same
 IR, exercised both ways, must produce the same behavior.* Types and `tau

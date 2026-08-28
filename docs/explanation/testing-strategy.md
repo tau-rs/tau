@@ -54,6 +54,43 @@ flowchart TB
 The four-layer model is the design contract; this page reflects
 where the actual tests live in the workspace.
 
+## The three gates — where their tests live
+
+The four sandbox layers above answer *"is enforcement wired correctly?"*.
+A different axis — [the three-gate guarantee](three-gate-guarantee.md) —
+answers *"is this workflow well-formed, permitted, and identical
+everywhere?"*. The two taxonomies are not the same and do not nest: L1–L4
+are about the sandbox, G1–G3 are about a workflow's journey from author to
+artifact. This table is the gate-to-test map.
+
+| Gate | Where tests live | Runs in |
+|---|---|---|
+| **G1 — Compile-time types** | `crates/tau-ir-lower/src/lower/typecheck.rs::tests` (29 unit tests: nested scope, id uniqueness, `max_iters > 0`, template refs) and `crates/tau-ir-lower/tests/{lower_e2e,lower_triggers,canonical_cosmetics_insensitive}.rs`. TOML↔TS byte-equal IR: `crates/tau-ts-extract/tests/*_conformance.rs` (5). Strict unknown-input authoring: `crates/tau-pkg/src/project/`. | Tier 0 `test-stable / linux`, every PR. IR JSON-schema drift is a separate Tier 2 job (`cargo test -p tau-ir --features schema`). |
+| **G2 — `tau check`** | `crates/tau-cli/tests/cmd_check_*.rs` (13 files — governance, lattice, target, models, packages, config, deliverable, dynamic-region, MCP contracts, agent-spawn lattice) with shared helpers in `check_common.rs`. Category logic: `crates/tau-cli/src/cmd/check/categories/*.rs::tests`. Subset/meet algebra: `crates/tau-domain/src/package/capability/lattice/` (19 unit tests). | Tier 0 `test-stable / linux`, every PR. |
+| **G3 — Conformance** | `crates/tau-conformance/tests/conformance.rs` — `dev == golden` and dev-profile determinism. Cross-target IR kit: `crates/tau-ir-conformance/fixtures/` (23 scenarios, incl. the control-flow set `20_branch_route` / `21_parallel_fanout` / `22_loop_refine` / `23_suspend_pause`). Plugin suites: `crates/tau-plugin-conformance`. | `dev == golden` runs in Tier 0 via `just test` (`--workspace --all-targets`) **and** in the dedicated Tier 2 job `conformance / linux`. See the caveat below. |
+
+### Caveat: G3's cross-profile assertion is not yet live
+
+[The three-gate guarantee](three-gate-guarantee.md#gate-3--conformance-does-it-behave-identically-everywhere)
+describes two G3 assertions: `dev == golden` and `dev == wasm`. **Only the
+first currently runs.**
+
+`fan_monitor_dev_matches_wasm` in `crates/tau-conformance/tests/conformance.rs`
+is `#[ignore]`d because `WasmProfile::run()`
+(`crates/tau-conformance/src/profile/wasm.rs`) is still a stub that calls
+`unimplemented!()`. So the cross-profile parity claim — the one that
+actually backs *"proven identical across targets"* — is asserted by no
+running test today.
+
+The stub's `TODO` cites β.7.5 / `tau build wasm` as its blocker; that has
+since shipped (`crates/tau-cli/src/cmd/build_wasm.rs`), so the profile is
+implementable now rather than blocked. Tracked in
+[#691](https://github.com/tau-rs/tau/issues/691).
+
+Note also that the Tier 2 `conformance / linux` job is **non-blocking for
+PR merge** — Tier 2 runs on a nightly cron or via the opt-in `full-matrix`
+label, and auto-merge fires on Tier 0 (`ci-summary`) alone.
+
 ## Where to put a test for a new feature
 
 Think about what your feature could break at each layer:

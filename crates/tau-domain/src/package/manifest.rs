@@ -4,6 +4,10 @@
 //! owns only the data type, the typestate around validation, and serde
 //! derives (under the `serde` feature).
 
+// Only the `serde` Deserialize impl below needs `ToOwned` (`v.to_owned()`), so
+// the import tracks that gate — an ungated `use` is a deny-level
+// `unused_imports` in the feature-less build.
+#[cfg(feature = "serde")]
 use alloc::borrow::ToOwned;
 use alloc::string::String;
 use alloc::vec::Vec;

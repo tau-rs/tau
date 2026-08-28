@@ -30,6 +30,13 @@
 //!   never sets this field — the default is an empty `Vec`) are exactly
 //!   today's text-only behavior. Each entry is `{ name, args }`; `args`
 //!   defaults to `null`.
+//! - `canned_tool_call: Option<{ name, input }>` — on the FIRST
+//!   `llm.complete` call only, emit a tool-use block for `name` with
+//!   `input` and `StopReason::ToolUse`. The agent loop dispatches the
+//!   tool and calls back; turn 2 returns text as usual, ending the run.
+//!   Lets a test drive a real tool round trip without a live provider.
+//!   Checked only when `tool_calls` has no scripted entry for that turn
+//!   (`tool_calls` takes precedence when both are configured).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -40,8 +47,10 @@ use std::time::Duration;
 use serde::Deserialize;
 use tau_plugin_sdk::{run_llm_backend_with_config, ConfigError, Configure, SdkError};
 use tau_ports::{
-    batch_to_stream, fixtures::make_completion_response, CompletionRequest, CompletionResponse,
-    CompletionStream, LlmBackend, LlmError, StopReason, ToolUse,
+    batch_to_stream,
+    fixtures::{make_completion_response, make_tool_use},
+    CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, StopReason,
+    ToolUse,
 };
 
 /// One scripted tool call for a turn (config-driven).
@@ -80,6 +89,25 @@ struct EchoConfig {
     /// existing config.
     #[serde(default)]
     tool_calls: Vec<Vec<ScriptedToolCall>>,
+    /// Emit this tool call on the first `llm.complete` turn (checked only
+    /// when `tool_calls` has no scripted entry for that turn).
+    #[serde(default)]
+    canned_tool_call: Option<CannedToolCall>,
+}
+
+/// A tool-use block for the plugin to emit on its first completion turn.
+#[derive(Debug, Deserialize)]
+struct CannedToolCall {
+    /// Tool name — must match a `ToolSpec::name` the agent was given.
+    name: String,
+    /// Arguments passed to the tool. Defaults to `null`.
+    #[serde(default = "null_value")]
+    input: tau_domain::Value,
+}
+
+/// `tau_domain::Value` has no `Default` impl; serde needs one for `input`.
+fn null_value() -> tau_domain::Value {
+    tau_domain::Value::Null
 }
 
 /// Toy `LlmBackend` plugin.
@@ -102,8 +130,8 @@ impl Configure for EchoLlm {
 impl EchoLlm {
     /// Apply the test-only side effects (`crash_after_handshake`,
     /// `error_on_method`, `delay_response_ms`) and produce the next
-    /// turn's response shape: `(text, tool_uses, stop_reason)`. Shared
-    /// by `complete` and `stream`.
+    /// turn's response shape: `(turn_index, text, tool_uses, stop_reason)`.
+    /// Shared by `complete` and `stream` via [`Self::next_response`].
     ///
     /// Reads the turn counter exactly ONCE (`fetch_add`) so the
     /// `tool_calls` and `script` lookups for this turn stay
@@ -119,7 +147,7 @@ impl EchoLlm {
     async fn next_turn(
         &self,
         method: &str,
-    ) -> Result<(String, Vec<ToolUse>, StopReason), LlmError> {
+    ) -> Result<(usize, String, Vec<ToolUse>, StopReason), LlmError> {
         if self.config.crash_after_handshake {
             panic!("echo-llm crash_after_handshake = true (test-only mode)");
         }
@@ -134,25 +162,61 @@ impl EchoLlm {
         let i = self.turn.fetch_add(1, Ordering::Relaxed);
 
         let scripted_calls = self.config.tool_calls.get(i).cloned().unwrap_or_default();
+        let text = self
+            .config
+            .script
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| self.config.canned_text.clone());
         if scripted_calls.is_empty() {
-            let text = self
-                .config
-                .script
-                .get(i)
-                .cloned()
-                .unwrap_or_else(|| self.config.canned_text.clone());
-            Ok((text, Vec::new(), StopReason::EndTurn))
+            Ok((i, text, Vec::new(), StopReason::EndTurn))
         } else {
             let tool_uses = scripted_calls
                 .into_iter()
                 .enumerate()
                 .map(|(j, call)| {
-                    let input =
-                        serde_json::from_value(call.args).unwrap_or(tau_domain::Value::Null);
+                    let tool_name = call.name.clone();
+                    let input = serde_json::from_value::<tau_domain::Value>(call.args)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "echo-llm: tool_calls[{i}][{j}] for tool {tool_name:?} has \
+                                 args that failed to deserialize into tau_domain::Value: {e}"
+                            )
+                        });
                     ToolUse::new(format!("echo_tool_{i}_{j}"), call.name, input)
                 })
                 .collect();
-            Ok((String::new(), tool_uses, StopReason::ToolUse))
+            Ok((i, String::new(), tool_uses, StopReason::ToolUse))
+        }
+    }
+
+    /// The full canned response for one turn. `complete` and `stream`
+    /// MUST share this: the runtime drives `stream`
+    /// (`tau-runtime-core/src/stream.rs`), so a tool call wired only into
+    /// `complete` would never reach an agent loop.
+    ///
+    /// `canned_tool_call` fires on the first turn only — the agent loop
+    /// dispatches the tool and calls back, and turn 2 returns plain text
+    /// to end the run. Emitting it every turn would spin to the turn cap.
+    /// Checked only when `tool_calls` produced no scripted call for that
+    /// turn — `tool_calls` takes precedence when both are configured.
+    async fn next_response(&self, method: &str) -> Result<CompletionResponse, LlmError> {
+        let (turn, text, tool_uses, stop_reason) = self.next_turn(method).await?;
+        if !tool_uses.is_empty() {
+            return Ok(make_completion_response(text, tool_uses, stop_reason, None));
+        }
+        match (turn, self.config.canned_tool_call.as_ref()) {
+            (0, Some(call)) => Ok(make_completion_response(
+                text,
+                vec![make_tool_use(
+                    "echo-llm-tool-use-0".to_string(),
+                    call.name.clone(),
+                    call.input.clone(),
+                )],
+                StopReason::ToolUse,
+                None,
+            )),
+            _ => Ok(make_completion_response(text, Vec::new(), stop_reason, None)),
         }
     }
 }
@@ -163,13 +227,11 @@ impl LlmBackend for EchoLlm {
     }
 
     async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
-        let (text, tool_uses, stop_reason) = self.next_turn("llm.complete").await?;
-        Ok(make_completion_response(text, tool_uses, stop_reason, None))
+        self.next_response("llm.complete").await
     }
 
     async fn stream(&self, _req: CompletionRequest) -> Result<CompletionStream, LlmError> {
-        let (text, tool_uses, stop_reason) = self.next_turn("llm.stream").await?;
-        let resp = make_completion_response(text, tool_uses, stop_reason, None);
+        let resp = self.next_response("llm.stream").await?;
         Ok(batch_to_stream(resp))
     }
 }

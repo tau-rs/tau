@@ -385,12 +385,14 @@ mod tests {
         tracing::subscriber::set_default(subscriber)
     }
 
-    /// Wait until the `WorkflowRunLogLayer`'s detached writer has flushed
-    /// at least `expected_records` complete JSONL lines to `path`. Polls
-    /// every 10ms up to `timeout`, then panics with a diagnostic. The
-    /// layer's writes are fire-and-forget `tokio::spawn` tasks, so
-    /// deterministic observation requires polling — a fixed sleep races
-    /// under CI load + slow fsync.
+    /// Wait until at least `expected_records` complete JSONL lines are
+    /// readable from `path`. Polls every 10ms up to `timeout`, then
+    /// panics with a diagnostic.
+    ///
+    /// Since tau-rs/tau#650 the layer writes inline from `on_event`, so
+    /// the first poll normally succeeds; the loop is retained as a
+    /// cheap guard against slow fsync on loaded CI runners and so these
+    /// tests stay honest if the write path ever goes async again.
     async fn await_layer_flush(path: &Path, expected_records: usize, timeout: std::time::Duration) {
         let start = std::time::Instant::now();
         loop {
