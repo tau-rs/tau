@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["PROTOCOL_VERSION"],"mod":["meta"],"struct":["HandshakeRequest","HandshakeResponse","MethodSchema","TraceContext"]};

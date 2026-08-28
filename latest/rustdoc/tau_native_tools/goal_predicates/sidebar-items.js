@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["FN_EQUALS","FN_EXISTS","FN_MATCHES","FN_MIN_COUNT","FN_NON_EMPTY","SUPPORTED"],"fn":["invoke"]};
