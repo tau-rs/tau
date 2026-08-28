@@ -69,9 +69,10 @@ fn equals(args: &Value) -> Result<Value, String> {
 
 /// `__tau::goal::matches` → `present && Regex::new(pattern)?.is_match(content)`.
 ///
-/// Build-time proves the pattern compiles (Task 6), but if somehow a bad
-/// pattern reaches here, return `{"met": false, "rationale": "<err>"}` rather
-/// than surfacing an error that aborts the run.
+/// An uncompilable pattern is an ERROR, not a verdict. Reporting `met: false`
+/// (the behaviour before #621's review) let an engine/feature mismatch between
+/// this graph and the native one masquerade as "the content did not match",
+/// silently sending a Branch down its `otherwise` arm on one target only.
 fn matches_(args: &Value) -> Result<Value, String> {
     let present = args["present"].as_bool().unwrap_or(false);
     if !present {
