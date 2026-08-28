@@ -411,21 +411,30 @@ no annotation to count — so this table is the only control for the class.
 | `tau-sandbox-native` | `tests/{strict_bridge,strict_proxy,strict_seccomp,strict_exec_gating,light_landlock}.rs` | `test-tau-sandbox-native-e2e` (both steps) |
 | `tau-plugin-compat` | `tests/{layer3_check_sandbox,layer4_native,layer4_container}.rs` | `test-tau-plugin-compat` + the layer4-ignored matrix |
 | `tau-runtime-tokio` | `tests/{sandbox_container,sandbox_native}.rs` | `test-tau-runtime-e2e` (both steps) |
-| `tau-workflow` | `tests/integration.rs` | ⚠️ **nothing** — see below |
 
-⚠️ `tau-workflow` declares `integration-tests = []` and gates its only
-integration test behind it, and **no CI job or `just` recipe passes
-`--features integration-tests` for that crate.** The test has never run in CI.
-Unlike the sandbox lanes it needs no special host: it drives the real `Runner`
-against `MockLlmBackend` from `tau_ports::fixtures`, with no subprocess and no
-network, so the gate buys nothing. Follow-up candidate — either drop the
-`#![cfg]` so Tier 0 picks it up, or add the step. Not fixed here (this is a
-docs + guard change).
+`tau-workflow` was on this table until 2026-08-28 and is now **un-gated**
+(#716): `tests/integration.rs` lost its `#![cfg(feature =
+"integration-tests")]` and the crate's `integration-tests = []` declaration
+was deleted, so Tier 0's `--workspace --all-targets` runs it. Unlike the
+sandbox lanes it needed no special host — it drives the real `Runner` against
+`MockLlmBackend` from `tau_ports::fixtures`, with no subprocess and no
+network, so the gate bought nothing.
 
-⚠️ `tau-sandbox-container` declares `integration-tests = []` with **zero
-consumers** — no `tests/` directory and no `cfg(feature = "integration-tests")`
-anywhere in the crate. A dead feature flag reads as coverage that exists.
-Follow-up candidate.
+Un-gating exposed exactly the rot the gate was hiding, the #648 class: the
+test still asserted the pre-Sub-project-D contract in which `RunLog::append`
+wrote the JSONL directly. It is now a `tracing::event!` emitter materialized
+by `WorkflowRunLogLayer`, so with no subscriber installed the log file was
+never created and `replay` failed with `NotFound`. #716 fixed the test — it
+pins `run_id`, derives the path with `run_log_path`, and installs the layer
+via `set_default` for the run — rather than weakening the persistence
+assertions, which are the only end-to-end coverage of the property #650 broke.
+
+`tau-sandbox-container`'s `integration-tests = []` declaration had **zero
+consumers** — no `tests/` directory and no `cfg(feature =
+"integration-tests")` anywhere in the crate. A dead feature flag reads as
+coverage that exists, so #716 deleted the declaration. If that crate ever
+grows integration tests, re-add the feature *and* its CI step together, per
+the rule below.
 
 Before 2026-08-23 `tau-sandbox-darwin` declared the
 `integration-tests` feature but **no** CI job enabled it, so macOS

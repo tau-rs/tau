@@ -7,7 +7,6 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-integration-tests = []
 
 [dependencies]
 tau-domain  = { workspace = true }
@@ -30,9 +29,10 @@ tokio       = { workspace = true, features = ["fs", "io-util", "time", "macros",
 tokio-test  = "0.4"
 tau-domain  = { workspace = true, features = ["test-fixtures"] }
 tau-ports   = { workspace = true, features = ["test-fixtures"] }
-# Persistence unit tests install `WorkflowRunLogLayer` as the
-# thread-local subscriber so `RunLog::append` (a `tracing::event!`
-# emitter post-Sub-project-D Task 3) actually materializes JSONL lines.
+# The persistence unit tests and `tests/integration.rs` install
+# `WorkflowRunLogLayer` as the thread-local subscriber so
+# `RunLog::append` (a `tracing::event!` emitter post-Sub-project-D
+# Task 3) actually materializes JSONL lines.
 tracing-subscriber = { workspace = true, features = ["registry"] }
 
 [lints]
