@@ -11,8 +11,25 @@
 //! Triage signals:
 //!   - Process abort → libFuzzer reports a crash. Treat as a bug.
 //!   - Timeout (default 25s/run) → potential exponential parse path. Bug.
-//!   - Memory blowup (default 2 GiB) → unbounded allocation
-//!     (rmpv decoding a huge integer-prefixed array, for instance). Bug.
+//!   - `-malloc_limit_mb` exceeded → a *single* allocation ran away.
+//!     This is the real unbounded-allocation signal, and the workflows
+//!     set the limit explicitly because it otherwise defaults to
+//!     `-rss_limit_mb` (2048 MB), i.e. effectively off.
+//!   - `-rss_limit_mb` exceeded, with no single large allocation →
+//!     **not** necessarily a target bug. Process RSS under ASan grows
+//!     with cumulative executions (redzones, quarantine, and the
+//!     append-only stack depot), and this target runs >20k exec/s, so it
+//!     reaches that ceiling on session length alone. Issue #676 was
+//!     first misdiagnosed this way: the saved artifact was simply the
+//!     input executing when the limit tripped, not its cause. Before
+//!     concluding "unbounded allocation", replay the artifact under a
+//!     tight `-malloc_limit_mb`; if it passes, the growth is the
+//!     harness, not the decoder.
+//!
+//! `Frame::decode`'s own bounds — recursion capped at `MAX_DECODE_DEPTH`,
+//! peak allocation proportional to input length, zero retention — are
+//! pinned by `tests/decode_allocation_bound.rs` in the parent crate,
+//! which is where a regression in them should surface first.
 //!
 //! Run locally:
 //!     rustup toolchain install nightly

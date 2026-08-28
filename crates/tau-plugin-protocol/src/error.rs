@@ -44,6 +44,33 @@ pub enum ProtocolError {
     #[error("body decode failed: {0}")]
     BodyDecodeFailed(#[from] rmp_serde::decode::Error),
 
+    /// The frame body nested MessagePack containers more deeply than
+    /// [`crate::MAX_DECODE_DEPTH`].
+    ///
+    /// The decoder recurses once per container level, so nesting depth
+    /// is a *stack* budget, and the bytes that set it come from an
+    /// untrusted plugin: roughly one input byte buys one stack frame.
+    /// This is a distinct variant rather than a
+    /// [`ProtocolError::BodyDecodeFailed`] because it reports a limit
+    /// tau chose, not malformed input — a host may reasonably log or
+    /// alert on it differently.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tau_plugin_protocol::{Frame, ProtocolError, MAX_DECODE_DEPTH};
+    /// // MAX_DECODE_DEPTH + 1 nested one-element arrays, then nil.
+    /// let mut body = vec![0x91_u8; MAX_DECODE_DEPTH + 1];
+    /// body.push(0xc0);
+    /// let err = Frame::decode(&body).unwrap_err();
+    /// assert!(matches!(err, ProtocolError::BodyTooDeep { .. }));
+    /// ```
+    #[error("frame body nests containers more than {max} deep")]
+    BodyTooDeep {
+        /// The configured maximum nesting depth.
+        max: usize,
+    },
+
     /// Body encoding failed.
     #[error("body encode failed: {0}")]
     BodyEncodeFailed(#[from] rmp_serde::encode::Error),
