@@ -400,39 +400,37 @@ fn check_dynamic_regions(
                 agent,
                 ..
             } => {
-                // L4a: region ceiling ⊆ owner. `agent = Some(a)` where `a` is
-                // not defined in [agents.*] at all (a typo) is a dedicated
-                // error rather than a silent widen to the root [allow]
-                // ceiling — that would defeat owner-narrowing with no
-                // diagnostic. An agent that IS defined but unresolved
-                // (NotInstalled etc.) is separately flagged by the per-agent
-                // loop above; falling back to [allow] for L4a in that case
-                // is acceptable and preserved below.
-                let owner: Option<(Vec<Capability>, String)> = match agent {
-                    Some(a) => match project.agents.get(a) {
-                        None => {
-                            out.push(lattice_error(
-                                "unknown_owner_agent",
-                                "tau.governance.unknown_owner_agent",
-                                &format!(
-                                    "dynamic region '{}': owner agent '{a}' is not defined in [agents.*]",
-                                    step.id
-                                ),
-                                &tau_toml,
-                            ));
-                            None
+                // L4a: region ceiling ⊆ owner. `agent` naming an id not
+                // defined in [agents.*] at all (a typo) is a dedicated error
+                // rather than a silent widen to the root [allow] ceiling —
+                // that would defeat owner-narrowing with no diagnostic. An
+                // agent that IS defined but unresolved (NotInstalled etc.)
+                // is separately flagged by the per-agent loop above; falling
+                // back to [allow] for L4a in that case is acceptable and
+                // preserved below. `agent` is required (EPIC 4.5), so the
+                // lookup is unconditional — no more `None` fallback arm.
+                let owner: Option<(Vec<Capability>, String)> = match project.agents.get(agent) {
+                    None => {
+                        out.push(lattice_error(
+                            "unknown_owner_agent",
+                            "tau.governance.unknown_owner_agent",
+                            &format!(
+                                "dynamic region '{}': owner agent '{agent}' is not defined in [agents.*]",
+                                step.id
+                            ),
+                            &tau_toml,
+                        ));
+                        None
+                    }
+                    Some(ag) => match resolve_agent_caps(ag, ctx) {
+                        AgentCaps::Resolved { effective, .. } => {
+                            Some((effective, format!("agent '{agent}' effective grant")))
                         }
-                        Some(ag) => match resolve_agent_caps(ag, ctx) {
-                            AgentCaps::Resolved { effective, .. } => {
-                                Some((effective, format!("agent '{a}' effective grant")))
-                            }
-                            _ => Some((
-                                allow.ceiling.clone(),
-                                format!("agent '{a}' (unresolved; falling back to [allow])"),
-                            )),
-                        },
+                        _ => Some((
+                            allow.ceiling.clone(),
+                            format!("agent '{agent}' (unresolved; falling back to [allow])"),
+                        )),
                     },
-                    None => Some((allow.ceiling.clone(), "[allow] ceiling".to_string())),
                 };
                 if let Some((owner_caps, owner_desc)) = owner {
                     if let Err(v) = capability_set_subset(ceiling, &owner_caps) {
@@ -1054,6 +1052,15 @@ name = "demo"
 [allow]
 "net.http" = { hosts = "any" }
 
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "demo@^0.1"
+model        = "fast"
+
 [agent.kinds.greedy]
 capabilities = { "net.http" = { hosts = "any" } }
 
@@ -1064,6 +1071,7 @@ spawns = ["greedy"]
 ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
 max_spawns = 4
 max_concurrency = 2
+agent = "coordinator"
 "#,
         );
         let ctx = ctx_for(&dir);
@@ -1090,6 +1098,15 @@ name = "demo"
 [allow]
 "net.http" = { hosts = ["api.crawler.test"] }
 
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "demo@^0.1"
+model        = "fast"
+
 [agent.kinds.researcher]
 capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
 
@@ -1100,6 +1117,7 @@ spawns = ["researcher"]
 ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
 max_spawns = 4
 max_concurrency = 2
+agent = "coordinator"
 "#,
         );
         let ctx = ctx_for(&dir);
@@ -1128,6 +1146,15 @@ name = "demo"
 [allow]
 "net.http" = { hosts = ["api.crawler.test"] }
 
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "demo@^0.1"
+model        = "fast"
+
 [[pipeline.steps]]
 id = "fanout"
 [pipeline.steps.dynamic]
@@ -1135,6 +1162,7 @@ spawns = ["ghost"]
 ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
 max_spawns = 4
 max_concurrency = 2
+agent = "coordinator"
 "#,
         );
         let ctx = ctx_for(&dir);
@@ -1162,6 +1190,15 @@ name = "demo"
 [allow]
 "net.http" = { hosts = ["api.crawler.test"] }
 
+[allow.models.fast]
+backend = "demo"
+model = "m-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "demo@^0.1"
+model        = "fast"
+
 [agent.kinds.researcher]
 capabilities = { "net.http" = { hosts = ["evil.example"] } }
 
@@ -1172,6 +1209,7 @@ spawns = ["researcher"]
 ceiling = { "net.http" = { hosts = ["evil.example"] } }
 max_spawns = 4
 max_concurrency = 2
+agent = "coordinator"
 "#,
         );
         let ctx = ctx_for(&dir);

@@ -438,6 +438,7 @@ fn prepare_agent_run<D>(
     agent: &Agent,
     dispatcher: Arc<D>,
     initial_messages: Vec<Message>,
+    spawn_tools: Vec<crate::interpreter::dynamic::SpawnTool<D>>,
 ) -> Result<
     (
         Runtime,
@@ -487,6 +488,13 @@ where
             tool_impl: ir_tool.impl_.clone(),
             dispatcher: dispatcher.clone(),
         });
+    }
+
+    // 3b. EPIC 4.5: register one `SpawnTool` per offered kind of a
+    //     `StepRun::Dynamic` region's coordinator (empty for every ordinary
+    //     agent — only `run_agent_with_spawn_tools` passes a non-empty Vec).
+    for st in spawn_tools {
+        builder = builder.with_tool(st);
     }
 
     // 4. Build the Runtime.
@@ -680,7 +688,32 @@ where
     D: ToolDispatcher + Send + Sync + 'static,
 {
     let (rt, agent_def, manifest, history, initial_message, run_options) =
-        prepare_agent_run(module, agent, dispatcher, initial_messages)?;
+        prepare_agent_run(module, agent, dispatcher, initial_messages, alloc::vec![])?;
+    rt.run_with_history(agent_def, manifest, history, initial_message, run_options)
+        .await
+}
+
+/// Execute one `Agent` node with additional per-kind spawn tools registered
+/// into its tool registry, alongside its ordinary `tool_refs`.
+///
+/// EPIC 4.5: the sole caller is `pipeline.rs`'s `StepRun::Dynamic` arm, which
+/// runs the region's coordinator agent with one [`crate::interpreter::dynamic::SpawnTool`]
+/// per offered kind. Construction is shared with [`run_agent`] via
+/// [`prepare_agent_run`] so the two entries cannot drift on backend wiring,
+/// `AgentDefinition` synthesis, or `RunOptions` injection — only the tool
+/// registry differs.
+pub(crate) async fn run_agent_with_spawn_tools<D>(
+    module: alloc::sync::Arc<IrModule>,
+    agent: &Agent,
+    dispatcher: Arc<D>,
+    initial_messages: Vec<Message>,
+    spawn_tools: Vec<crate::interpreter::dynamic::SpawnTool<D>>,
+) -> Result<RunOutcome, RuntimeError>
+where
+    D: ToolDispatcher + Send + Sync + 'static,
+{
+    let (rt, agent_def, manifest, history, initial_message, run_options) =
+        prepare_agent_run(module, agent, dispatcher, initial_messages, spawn_tools)?;
     rt.run_with_history(agent_def, manifest, history, initial_message, run_options)
         .await
 }
@@ -707,7 +740,7 @@ where
     D: ToolDispatcher + Send + Sync + 'static,
 {
     let (rt, agent_def, manifest, history, initial_message, run_options) =
-        prepare_agent_run(module, agent, dispatcher, initial_messages)?;
+        prepare_agent_run(module, agent, dispatcher, initial_messages, alloc::vec![])?;
     rt.run_streaming_with_history(agent_def, manifest, history, initial_message, run_options)
         .await
 }
