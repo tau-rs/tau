@@ -475,4 +475,25 @@ mod tests {
             "toolbar must show the run id:\n{text}"
         );
     }
+
+    #[test]
+    fn clamp_verdict_renders_amber_badge_with_host_list() {
+        // Spec §13.6: the amber `clamp:<to>` arm shipped in M1.5 without a
+        // test; #631 makes it reachable, so pin the rendering.
+        let (label, style) = capability_badge(Some(&CapabilityVerdict::Clamp {
+            to: "api.weather.com".into(),
+        }));
+        assert_eq!(label, "clamp:api.weather.com");
+        assert_eq!(style.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn clamp_verdict_detail_pane_shows_an_arrow() {
+        assert_eq!(
+            capability_detail(Some(&CapabilityVerdict::Clamp {
+                to: "a.com,b.com".into()
+            })),
+            "clamp -> a.com,b.com"
+        );
+    }
 }

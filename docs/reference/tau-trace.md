@@ -56,7 +56,7 @@ call, colored by outcome:
 | `allow` (green) | The call's required capability was granted; it ran as requested. |
 | `clamp:<to>` (amber) | The call ran, but under authority narrowed at MCP open time: the entry's `net.http` hosts were meet-clamped against the `[allow.mcp.<entry>].hosts` ceiling. `<to>` is the effective host list (`any` = host-unbounded; `none` = no net authority survived the clamp). Observability only — enforcement happens at the OS boundary. |
 | `drop:<reason>` (red) | Fail-closed: the required capability was denied, so the call never ran. A denied call still gets a row — the waterfall shows exactly where authority stopped the run. |
-| `-` | The tool is un-gated, or the trace predates capability recording. |
+| `-` | The tool is un-gated, or the trace predates capability recording. Bundle (IR) runs report `-` for every un-clamped tool: those tools dispatch through the interpreter's wrapper, which deliberately presents no declared capabilities to the kernel gate (issue #581), so there is no `allow` decision to record. A clamped tool still shows `clamp:<to>` on that path. |
 
 The toolbar shows the run id, and the waterfall `Bar` column widens or
 narrows to fill the terminal, so resizing the window re-flows the timeline.
