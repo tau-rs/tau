@@ -149,6 +149,13 @@ jobs:
           # is not an open-ended coverage campaign (that is the nightly
           # lane's job). 5 minutes per target.
           MINUTES: "5"
+          # Mirrors fuzz-nightly.yml — see the long rationale there.
+          # Short version: ASan's per-allocation bookkeeping makes RSS
+          # grow with session length regardless of target cleanliness,
+          # so `-rss_limit_mb` is the wrong release gate;
+          # `-malloc_limit_mb` is the one that catches a real unbounded
+          # allocation. Issue #676.
+          ASAN_OPTIONS: malloc_context_size=5:quarantine_size_mb=16
         run: |
           set -euo pipefail
           SECONDS_BUDGET=$(( MINUTES * 60 ))
@@ -156,6 +163,8 @@ jobs:
           cd "$FUZZ_DIR"
           cargo +nightly fuzz run "$TARGET" -- \
             -max_total_time="$SECONDS_BUDGET" \
+            -malloc_limit_mb=64 \
+            -rss_limit_mb=4096 \
             -print_final_stats=1
 
       - name: Upload crash artifacts on failure

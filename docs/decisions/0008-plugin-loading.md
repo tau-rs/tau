@@ -113,6 +113,16 @@ authors can read N bytes deterministically; (3) defensive resync if the
 wire is ever corrupted. Max body size 64 MiB, configurable via
 `PluginHostOptions`.
 
+A body-size cap alone is not sufficient, because frame bodies are
+decoded recursively: nesting depth is a *stack* budget, and a plugin
+buys one level of it per byte (`0x91`, a one-element array, is a
+one-byte container header). Frame bodies are therefore additionally
+capped at `tau_plugin_protocol::MAX_DECODE_DEPTH` (128) nested
+containers, matching `serde_json`'s recursion limit; deeper bodies are
+rejected with `ProtocolError::BodyTooDeep`. Without that cap a ~1 KiB
+frame could abort the host process with a stack overflow — see
+issue #676.
+
 The MessagePack-RPC frame shapes are:
 
 | Frame | Shape |
