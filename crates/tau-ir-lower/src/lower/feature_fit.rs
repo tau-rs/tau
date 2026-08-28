@@ -91,11 +91,18 @@ input = "${input}"
 "#;
 
     const DYNAMIC_TOML: &str = r#"
+packages = ["mock-llm"]
+
 [project]
 name = "demo"
 
+[models]
+fast = { backend = "mock-llm", model = "mock-model" }
+
 [agent.kinds.researcher]
 capabilities = {}
+prompt = "You are a researcher."
+model = "fast"
 
 [[pipeline.steps]]
 id = "fanout"
@@ -104,6 +111,7 @@ spawns = ["researcher"]
 ceiling = {}
 max_spawns = 1
 max_concurrency = 1
+agent = "coordinator"
 "#;
 
     fn parsed(toml: &str) -> Parsed {

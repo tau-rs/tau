@@ -147,16 +147,24 @@ mod tests {
     #[test]
     fn dynamic_region_collects_dynamic_feature() {
         use crate::capability::CapabilityRequirements;
-        use crate::ids::PipelineStepId;
+        use crate::ids::{AgentId, PipelineStepId, ToolId};
         use crate::pipeline::{DynamicSpawn, PipelineStep, StepRun};
 
         let step = PipelineStep {
             id: PipelineStepId("fanout".into()),
             run: StepRun::Dynamic {
+                owner: AgentId("coordinator".into()),
                 envelope: CapabilityRequirements::default(),
                 spawns: alloc::vec![DynamicSpawn {
                     kind: "researcher".into(),
                     capabilities: CapabilityRequirements::default(),
+                    description: "Deep-dives one topic.".into(),
+                    prompt: crate::prompt::PromptSource::inline("Research one topic."),
+                    model_ref: crate::model_ref::ModelRef {
+                        backend: "anthropic".into(),
+                        model_id: "claude-haiku-4-5".into(),
+                    },
+                    tool_refs: alloc::vec![ToolId("probe".into())],
                 }],
                 max_spawns: 8,
                 max_concurrency: 4,

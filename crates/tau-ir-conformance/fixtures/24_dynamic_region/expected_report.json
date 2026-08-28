@@ -1,0 +1,5 @@
+{
+  "run_outcome_kind": "Completed",
+  "tool_calls": {},
+  "_note": "Dynamic region 'fanout' (EPIC 4.5): the coordinator's first turn issues TWO `agent.researcher.spawn` tool_uses (topic A, topic B) against max_spawns=1. RegionCounters admits the first (topic A): a researcher child agent actually runs, consuming the next scripted LLM turn and returning 'REPORT A' as a successful tool result. The second (topic B) is soft-denied before any child is constructed -- an is_error tool result containing 'max_spawns exhausted (1/1)', no LLM turn consumed. The coordinator's own next turn ('SUMMARY') only fires if both tool results were delivered without desynchronizing the scripted LLM queue, so run_outcome_kind=Completed with final text 'SUMMARY' pins BOTH the admission and the denial. SpawnTool bypasses ToolDispatcher::invoke entirely (same as a subflow tool in fixture 04/19), so tool_calls stays empty."
+}
