@@ -297,6 +297,51 @@ only reason about from documentation:
   therefore needs no ancestor-grant code; it is covered by positive-FS
   acceptance tests in the egress EPIC.
 
+### Shipped outcome (PR #653)
+
+Both deferred items are resolved, proven by Windows CI (tier-2
+`nextest / windows`, `--features integration-tests`):
+
+- **Egress works.** The full chain — plugin → `tau-net-bridge-win`
+  (ephemeral loopback port, in-container) → per-spawn named pipe →
+  host-side `tau-sandbox-proxy` → upstream — carries an allowlisted
+  request end-to-end, and an unlisted host receives the proxy's `403`.
+  The container is granted **no network capability SIDs**.
+- **The pipe is the boundary.** A *foreign* AppContainer cannot open
+  another container's proxy pipe (`foreign_container_cannot_open_pipe`),
+  which is what makes the per-spawn SID ACE load-bearing rather than
+  decorative.
+- **Item 2 is settled empirically.** Leaf-only grants are readable at
+  nested paths, directory grants reach files that already existed inside
+  them, and they confer execute — so no `FILE_TRAVERSE` ancestor-grant
+  code was written.
+
+Two Windows behaviours worth recording, both found the hard way:
+
+- **`shutdown()` is a no-op on tokio named pipes** (`poll_shutdown` just
+  flushes). A `join!` of both splice directions can therefore never
+  complete over a pipe; the proxy terminates on the **response**
+  direction instead.
+- **A synchronous file object serialises all I/O**, even across
+  `try_clone`d handles. The bridge's first implementation spliced a
+  `std::fs`-opened pipe with two threads and deadlocked silently — no
+  bytes, no error. It uses tokio overlapped I/O for this reason.
+
+**Known gap (tracked in #726):** a sandboxed `kind = "rust-cargo"` build
+still cannot execute `rustc.exe` from `$RUSTUP_HOME` — `CreateProcess`
+returns `ERROR_ACCESS_DENIED` even though a DACL dump taken while the
+grant is held shows an inherited `ACCESS_ALLOWED` ACE for the container's
+package SID carrying `FILE_EXECUTE`. Path resolution, ACE propagation,
+execute rights, and in-container image activation are each individually
+proven working, so the cause is specific to the `.rustup` tree and is not
+yet explained. `install_rust_cargo_acceptance` is `#[ignore]`d against
+#726. This is **not a security regression**: before this EPIC such an
+install failed closed at `wrap_spawn`; it now fails closed later. #726
+also carries the open design question of whether per-build ACL mutation
+of the user's shared `~/.rustup` / `~/.cargo` trees is the right model at
+all, given Linux and macOS achieve the same envelope without touching the
+filesystem.
+
 ## References
 
 - Spec: `docs/superpowers/specs/2026-08-09-sandbox-windows-appcontainer-phase2-design.md`

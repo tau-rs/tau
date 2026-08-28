@@ -1,6 +1,9 @@
 # Windows AppContainer network egress + FILE_TRAVERSE positive FS grants
 
-Status: approved design, spike-confirmed (2026-08-22, two CI rounds)
+Status: **shipped** — PR #633 (proxy genericization) + PR #653 (pipe proxy,
+bridge, adapter rewire, tests). Design spike-confirmed 2026-08-22; implementation
+verified on Windows CI 2026-08-28. One acceptance case is deferred to #726 — see
+"Shipped outcome" at the end.
 Tracking: issue #622 · Spike: PR #626 · Amends: ADR-0067 §"Network egress: deferred, fail-closed"
 Prior art: #587/#610 (Phase 2 adapter), #617 (stdio-after-wrap invariant), ADR-0014 (fail-closed), ADR-0020 (egress proxy model)
 
@@ -226,3 +229,34 @@ Crates touched: `tau-sandbox-proxy`, `tau-sandbox-windows`, possibly
 `tau-cli` (install acceptance test) and `tau-runtime-tokio` (tier/registry
 strings). `tau-domain`/`tau-ports` untouched — no new shapes, no port
 changes, no semver bumps expected.
+
+## Shipped outcome (2026-08-28)
+
+Shipped as designed, in the PR sequence above (#633, then #653). Six Windows
+CI rounds were needed; what the design did not anticipate:
+
+- **Two Windows I/O facts the transport hinges on.** A *synchronous* file
+  object serialises all I/O even across `try_clone`d handles, so the bridge's
+  first implementation — a `std::fs`-opened pipe spliced by two threads —
+  deadlocked with zero bytes and zero errors. And tokio's `poll_shutdown` is a
+  no-op for named pipes, so a `join!` of both splice directions can never
+  complete; the proxy now terminates on the **response** direction. Both were
+  found only because the data path was instrumented end-to-end.
+- **`wrap_spawn` must create directory-shaped write grants.**
+  `SetNamedSecurityInfoW` cannot ACL a path that does not exist, and
+  `build_envelope` grants `<package>/target/**` before cargo creates it. Bare
+  file-shaped paths still fail closed.
+- **Actual crate deps drift under a long-lived PR.** `windows` 0.58 → 0.62
+  landed on main mid-flight and changed `LocalFree` to take `Option<HLOCAL>`;
+  local gates resolve the branch's own lockfile and cannot see this.
+
+Deferred to **#726**: a sandboxed `rust-cargo` build still cannot execute
+`rustc.exe` from `$RUSTUP_HOME` (`ERROR_ACCESS_DENIED`) even though the DACL
+on that file provably carries `FILE_EXECUTE` for the container's package SID,
+and directory-grant read, directory-grant execute, ACE propagation to
+pre-existing files, and in-container image activation are each separately
+proven green. `install_rust_cargo_acceptance` is `#[ignore]`d against it. #726
+also carries the design question this exposed: per-build ACL mutation of the
+user's shared `~/.rustup` / `~/.cargo` trees is slow, mutates shared state, and
+races across concurrent builds — unlike landlock/SBPL, which never touch the
+filesystem. That may argue for one-time host setup over per-build granting.
