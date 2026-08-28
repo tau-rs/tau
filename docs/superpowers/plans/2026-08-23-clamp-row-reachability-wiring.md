@@ -2017,6 +2017,8 @@ timeout 300 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/agent-cli \
 
 Expected: PASS. This is the #631 DoD.
 
+**Post-hoc note (whole-branch review):** it does not pass — the test ships `#[ignore]`d, gated on two pre-existing upstream bugs outside #631's scope (#712 empty MCP handshake capabilities, #714 bundle re-lowering rejects MCP projects). See the test's own doc comment for the full account; un-ignore once both are fixed.
+
 - [ ] **Step 4: Full-suite regression sweep**
 
 ```bash

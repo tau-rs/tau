@@ -749,9 +749,9 @@ pub fn run_streaming_inner(
                 // MCP tool whose IR id collides with a virtual name (e.g.
                 // `[tools.task]` + server tool `create` => `task.create`) be
                 // hijacked in-kernel on a bundle run.
-                if let (Some(state_arc), true) = (
+                if let (Some(state_arc), Some(_)) = (
                     options.orchestration_state.as_ref(),
-                    options.orchestration_runtime.is_some(),
+                    options.orchestration_runtime.as_ref(),
                 ) {
                     if crate::orchestration::is_virtual(&tool_use.name) {
                         // ADR-0006 §3.9: dispatch.tool_resolved fires after

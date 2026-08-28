@@ -640,7 +640,12 @@ impl ForwardingDispatcher {
     ///
     /// `run_id` is the id stamped on every event and the
     /// `.tau/runs/<run_id>.jsonl` filename; `subscribers` is typically the
-    /// JSONL writer plus, under `--tui`, a live channel.
+    /// JSONL writer plus, under `--tui`, a live channel. An empty
+    /// `subscribers` vec is elided (`trace_sink()` stays `None`) — `run_id`
+    /// is silently discarded along with it, so a caller that means to trace
+    /// but forgets to push at least one subscriber gets exactly today's
+    /// no-tracing behavior with no error, mirroring [`Self::with_assets`]'s
+    /// empty-map elision above.
     pub(crate) fn with_trace(
         mut self,
         run_id: String,
