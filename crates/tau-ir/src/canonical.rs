@@ -108,7 +108,7 @@ mod pipeline_canonical_tests {
             workflow: wf,
             triggers: alloc::vec::Vec::new(),
         };
-        assert_eq!(m.ir_format.0, "v2.6.0");
+        assert_eq!(m.ir_format.0, "v2.7.0");
         let bytes = to_canonical_bytes(&m);
         let back = from_canonical_bytes(&bytes).expect("round-trips");
         assert_eq!(m, back);

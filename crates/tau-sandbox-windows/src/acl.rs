@@ -205,13 +205,13 @@ fn set_entry(sid: PSID, path: &str, mode: ACCESS_MODE, mask: u32) -> std::io::Re
         let mut new_dacl: *mut ACL = std::ptr::null_mut();
         let rc = SetEntriesInAclW(Some(&[ea]), Some(old_dacl as *const ACL), &mut new_dacl);
         if !sd.0.is_null() {
-            LocalFree(HLOCAL(sd.0));
+            LocalFree(Some(HLOCAL(sd.0)));
         }
         if rc.is_err() {
             // MSDN: on failure, *newAcl is undefined — only free it if
             // the call happened to leave a non-null value behind.
             if !new_dacl.is_null() {
-                LocalFree(HLOCAL(new_dacl as *mut _));
+                LocalFree(Some(HLOCAL(new_dacl as *mut _)));
             }
             return Err(std::io::Error::other(format!("SetEntriesInAclW: {rc:?}")));
         }
@@ -226,7 +226,7 @@ fn set_entry(sid: PSID, path: &str, mode: ACCESS_MODE, mask: u32) -> std::io::Re
             None,
         );
         if !new_dacl.is_null() {
-            LocalFree(HLOCAL(new_dacl as *mut _));
+            LocalFree(Some(HLOCAL(new_dacl as *mut _)));
         }
         rc.ok()
             .map_err(|e| std::io::Error::other(format!("SetNamedSecurityInfoW: {e}")))?;

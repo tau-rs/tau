@@ -266,6 +266,16 @@ pub enum LowerError {
         step: String,
     },
 
+    /// A dynamic region references an agent kind that has no `prompt` or no
+    /// `model` set, so it cannot actually be spawned at runtime (EPIC 4.5).
+    #[error("dynamic region in step '{step}' offers kind '{kind}' which is not runnable — [agent.kinds.{kind}] must declare `prompt` and `model`")]
+    DynamicKindNotRunnable {
+        /// The kind name that is missing `prompt` and/or `model`.
+        kind: String,
+        /// The pipeline-step id of the region.
+        step: String,
+    },
+
     /// A `StepRun::Dynamic` has `max_spawns == 0`, which would never spawn a
     /// region member. The bound must be at least 1. Defense-in-depth: mirrors
     /// `LoopMaxItersZero` — tau-pkg validates this at author time, but
