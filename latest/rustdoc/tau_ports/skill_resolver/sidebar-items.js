@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["SkillResolveError"],"struct":["NoSkillResolver","ResolvedSkill"],"trait":["SkillResolver"]};

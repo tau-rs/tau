@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["http_get","main","pipe_open","read_file","spawn_child"]};
