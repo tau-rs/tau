@@ -31,14 +31,36 @@
 //! two directions are genuinely independent. The TCP side moves to
 //! tokio for the same reason (one reactor, no blocking threads).
 //!
+//! ## Why the relay ends on the response direction (CI round 2)
+//!
+//! `AsyncWriteExt::shutdown()` cannot half-close a named pipe: tokio's
+//! `NamedPipeClient::poll_shutdown` / `NamedPipeServer::poll_shutdown`
+//! are **no-ops** that just `poll_flush` and always return `Ready`
+//! (`tokio-1.53.1/src/net/windows/named_pipe.rs:922` and `:1711`). So
+//! neither end of the pipe can signal "I am done sending" — only closing
+//! the handle does that. The relay therefore ends when the **response**
+//! direction (`pipe -> tcp`) finishes: the host proxy closes its pipe
+//! instance once the upstream has answered, `down` sees EOF, and the
+//! plugin's socket is FIN'd so its own read can return. The `up`
+//! direction is then aborted rather than awaited — it is parked on a
+//! client read that will never complete, and awaiting it would deadlock
+//! the relay task (and leak the pipe instance) for the plugin's whole
+//! remaining lifetime.
+//!
 //! ## Observability
 //!
-//! Every step of the data path prints a `BRIDGE ` marker to stderr.
-//! This binary runs inside an AppContainer with no tracing subscriber
-//! and no log sink; stderr (inherited through the launcher) is the only
-//! channel that reaches CI. Errors are never swallowed: an unreadable
-//! pipe, a failed relay direction, or a listener that cannot register
-//! with the reactor all print, with the raw OS error code.
+//! Every step of the data path prints a `BRIDGE ` marker to stderr,
+//! prefixed with `t=<ms>` since process start. This binary runs inside
+//! an AppContainer with no tracing subscriber and no log sink; stderr
+//! (inherited through the launcher) is the only channel that reaches CI.
+//! Errors are never swallowed: an unreadable pipe, a failed relay
+//! direction, or a listener that cannot register with the reactor all
+//! print, with the raw OS error code. Both directions report their
+//! first bytes (`first-bytes`) and running totals, so "nothing was ever
+//! written" is distinguishable from "written but never delivered", and
+//! the wall-clock stamps distinguish "returned immediately" from
+//! "returned after the peer timed out" — the exact ambiguity that made
+//! CI round 2 undiagnosable.
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
@@ -69,6 +91,9 @@ fn main() {
 #[cfg(target_os = "windows")]
 mod win {
     use std::ffi::OsString;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -84,12 +109,22 @@ mod win {
     /// How long to keep retrying a busy pipe before giving up.
     const PIPE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+    /// Milliseconds since the bridge started. Every `BRIDGE ` marker
+    /// carries this: without it, markers from three different streams
+    /// (this process's stderr, the plugin's stdout, the host test's own
+    /// stderr) get interleaved by the harness in an order that says
+    /// nothing about when anything actually happened.
+    fn t() -> u128 {
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_millis()
+    }
+
     pub fn run(pipe: String, program: OsString, args: Vec<OsString>) -> std::io::Result<i32> {
         // Bind before anything else: the child's proxy env needs the port.
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         listener.set_nonblocking(true)?;
-        eprintln!("BRIDGE listen port={port} pipe={pipe}");
+        eprintln!("BRIDGE t={} listen port={port} pipe={pipe}", t());
 
         // Multi-thread ON PURPOSE: this thread blocks in `child.wait()`
         // for the whole life of the plugin, so the accept loop must run
@@ -104,7 +139,7 @@ mod win {
         {
             Ok(rt) => rt,
             Err(e) => {
-                eprintln!("BRIDGE runtime-build FAILED err={e}");
+                eprintln!("BRIDGE t={} runtime-build FAILED err={e}", t());
                 return Err(e);
             }
         };
@@ -123,17 +158,22 @@ mod win {
             Ok(c) => c,
             Err(e) => {
                 eprintln!(
-                    "BRIDGE child-spawn FAILED program={} err={e} os={:?}",
+                    "BRIDGE t={} child-spawn FAILED program={} err={e} os={:?}",
+                    t(),
                     program.to_string_lossy(),
                     e.raw_os_error()
                 );
                 return Err(e);
             }
         };
-        eprintln!("BRIDGE child pid={} proxy={proxy_url}", child.id());
+        eprintln!(
+            "BRIDGE t={} child pid={} proxy={proxy_url}",
+            t(),
+            child.id()
+        );
 
         let status = child.wait()?;
-        eprintln!("BRIDGE child exit code={:?}", status.code());
+        eprintln!("BRIDGE t={} child exit code={:?}", t(), status.code());
         Ok(status.code().unwrap_or(1))
     }
 
@@ -142,7 +182,7 @@ mod win {
     async fn accept_loop(listener: std::net::TcpListener, pipe_path: String) {
         let listener = match TcpListener::from_std(listener) {
             Ok(l) => {
-                eprintln!("BRIDGE listener-ready");
+                eprintln!("BRIDGE t={} listener-ready", t());
                 l
             }
             Err(e) => {
@@ -161,11 +201,15 @@ mod win {
             match listener.accept().await {
                 Ok((conn, peer)) => {
                     n += 1;
-                    eprintln!("BRIDGE conn={n} accepted peer={peer}");
+                    eprintln!("BRIDGE t={} conn={n} accepted peer={peer}", t());
                     tokio::spawn(relay(n, conn, pipe_path.clone()));
                 }
                 Err(e) => {
-                    eprintln!("BRIDGE accept FAILED err={e} os={:?}", e.raw_os_error());
+                    eprintln!(
+                        "BRIDGE t={} accept FAILED err={e} os={:?}",
+                        t(),
+                        e.raw_os_error()
+                    );
                     return;
                 }
             }
@@ -173,16 +217,23 @@ mod win {
     }
 
     /// Splice one plugin TCP connection against one fresh pipe
-    /// connection to the host proxy, both directions, to EOF.
+    /// connection to the host proxy.
+    ///
+    /// Terminates on the **response** direction (`down`, pipe -> tcp) —
+    /// see the module docs. `up` is aborted, not awaited: over a pipe it
+    /// can never reach EOF (no half-close), so awaiting it would park
+    /// this task forever and hold the pipe instance open. Its byte count
+    /// is still reported, via a shared counter that survives the abort.
     async fn relay(id: u64, tcp: tokio::net::TcpStream, pipe_path: String) {
         let pipe = match open_pipe(&pipe_path).await {
             Ok(p) => {
-                eprintln!("BRIDGE conn={id} pipe-open ok");
+                eprintln!("BRIDGE t={} conn={id} pipe-open ok", t());
                 p
             }
             Err(e) => {
                 eprintln!(
-                    "BRIDGE conn={id} pipe-open FAILED path={pipe_path} err={e} os={:?}",
+                    "BRIDGE t={} conn={id} pipe-open FAILED path={pipe_path} err={e} os={:?}",
+                    t(),
                     e.raw_os_error()
                 );
                 return;
@@ -190,17 +241,31 @@ mod win {
         };
         let (tcp_r, tcp_w) = tcp.into_split();
         let (pipe_r, pipe_w) = tokio::io::split(pipe);
-        let up = tokio::spawn(pump(id, "up", tcp_r, pipe_w));
-        let down = pump(id, "down", pipe_r, tcp_w).await;
-        let up = up.await.unwrap_or(0);
-        eprintln!("BRIDGE conn={id} closed up={up}B down={down}B");
+        let up_count = Arc::new(AtomicU64::new(0));
+        let down_count = Arc::new(AtomicU64::new(0));
+        let up = tokio::spawn(pump(id, "up", tcp_r, pipe_w, Arc::clone(&up_count)));
+        pump(id, "down", pipe_r, tcp_w, Arc::clone(&down_count)).await;
+        // The response is delivered and the plugin's socket is FIN'd.
+        // Anything still parked on the request direction is dead weight.
+        let up_done = up.is_finished();
+        up.abort();
+        eprintln!(
+            "BRIDGE t={} conn={id} closed up={}B down={}B up_finished={up_done}",
+            t(),
+            up_count.load(Ordering::Relaxed),
+            down_count.load(Ordering::Relaxed),
+        );
     }
 
     /// Copy `r` into `w` until EOF or error, then half-close `w`.
-    /// Returns the byte count; every failure prints its direction and
-    /// raw OS error (the round-1 diagnosis gap: this used to `break` on
-    /// `Err(_)` with no output at all).
-    async fn pump<R, W>(id: u64, dir: &'static str, mut r: R, mut w: W) -> u64
+    ///
+    /// `total` is mirrored into `counter` as it goes so the caller can
+    /// report the byte count even for a direction it had to abort.
+    /// Every outcome prints its direction, running total, and raw OS
+    /// error; the first bytes to move in each direction print too, so a
+    /// direction that was never fed is distinguishable from one whose
+    /// bytes were dropped downstream.
+    async fn pump<R, W>(id: u64, dir: &'static str, mut r: R, mut w: W, counter: Arc<AtomicU64>)
     where
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -210,36 +275,48 @@ mod win {
         loop {
             let n = match r.read(&mut buf).await {
                 Ok(0) => {
-                    eprintln!("BRIDGE conn={id} {dir} eof after={total}B");
+                    eprintln!("BRIDGE t={} conn={id} {dir} eof after={total}B", t());
                     break;
                 }
                 Ok(n) => n,
                 Err(e) => {
                     eprintln!(
-                        "BRIDGE conn={id} {dir} read FAILED after={total}B err={e} os={:?}",
+                        "BRIDGE t={} conn={id} {dir} read FAILED after={total}B err={e} os={:?}",
+                        t(),
                         e.raw_os_error()
                     );
                     break;
                 }
             };
+            if total == 0 {
+                eprintln!("BRIDGE t={} conn={id} {dir} first-bytes n={n}", t());
+            }
             if let Err(e) = w.write_all(&buf[..n]).await {
                 eprintln!(
-                    "BRIDGE conn={id} {dir} write FAILED after={total}B err={e} os={:?}",
+                    "BRIDGE t={} conn={id} {dir} write FAILED after={total}B err={e} os={:?}",
+                    t(),
                     e.raw_os_error()
                 );
                 break;
             }
             total += n as u64;
+            counter.store(total, Ordering::Relaxed);
+            if total == n as u64 {
+                eprintln!("BRIDGE t={} conn={id} {dir} first-write ok n={n}", t());
+            }
         }
         // Half-close so the peer sees EOF instead of hanging on its own
-        // read (no-op on the pipe half; a real FIN on the TCP half).
+        // read. This is a REAL FIN on the TCP half and a documented
+        // NO-OP on the pipe half (tokio named_pipe.rs:922 / :1711) —
+        // which is precisely why `relay` must not wait for the pipe
+        // direction to EOF.
         if let Err(e) = w.shutdown().await {
             eprintln!(
-                "BRIDGE conn={id} {dir} shutdown FAILED err={e} os={:?}",
+                "BRIDGE t={} conn={id} {dir} shutdown FAILED err={e} os={:?}",
+                t(),
                 e.raw_os_error()
             );
         }
-        total
     }
 
     /// Open the host proxy's pipe, retrying only `ERROR_PIPE_BUSY`.

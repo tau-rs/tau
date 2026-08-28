@@ -91,10 +91,37 @@ fn http_get(url: &str) -> ! {
         println!("PROBE result=err detail=write: {e}");
         std::process::exit(1);
     }
+    // Read incrementally rather than `read_to_end` so the *reason* the
+    // read ended is reportable. `read_to_end` returns `Err` on the
+    // socket's read timeout and drops whatever the failing iteration had
+    // buffered, which made "the proxy answered nothing" and "the proxy
+    // answered but never closed" produce the identical, useless
+    // `PROBE result=status detail=` (empty) seen in #622 CI round 2.
     let mut resp = Vec::new();
-    let _ = conn.read_to_end(&mut resp);
+    let mut chunk = [0u8; 4096];
+    let read_end;
+    loop {
+        match conn.read(&mut chunk) {
+            Ok(0) => {
+                read_end = "eof".to_string();
+                break;
+            }
+            Ok(n) => resp.extend_from_slice(&chunk[..n]),
+            Err(e) => {
+                read_end = format!("err:{e}");
+                break;
+            }
+        }
+    }
     let head = String::from_utf8_lossy(&resp);
     let status = head.lines().next().unwrap_or("");
+    // Diagnostics on stderr; the stdout marker below stays byte-stable
+    // because the integration tests match it literally.
+    eprintln!(
+        "PROBE http bytes={} read-end={read_end} raw={:?}",
+        resp.len(),
+        head.chars().take(200).collect::<String>()
+    );
     println!("PROBE result=status detail={status}");
     if status.contains(" 200 ") {
         std::process::exit(0);

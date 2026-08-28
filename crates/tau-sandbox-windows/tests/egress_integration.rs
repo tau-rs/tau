@@ -77,6 +77,14 @@ async fn run_probe_wrapped(plan: &CapabilityPlan, probe_args: &[&str]) -> std::p
         "TAU_NET_BRIDGE_WIN_PATH",
         env!("CARGO_BIN_EXE_tau-net-bridge-win"),
     );
+    // The host-side proxy has no tracing subscriber in these tests, so
+    // its `tracing` events are invisible exactly when the data path
+    // breaks. This opt-in flag mirrors every decision point to stderr as
+    // a `PROXY ` marker (parsed host/port, allowlist verdict, port gate,
+    // upstream connect, forwarded head size, per-direction splice byte
+    // counts) — the missing third hop next to `BRIDGE ` and `PIPEPROXY `.
+    // nextest runs one process per test, so this cannot leak between tests.
+    std::env::set_var("TAU_SANDBOX_PROXY_TRACE", "1");
     let gate = WindowsSandbox::new("windows");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tau-sandbox-test-probe"));
     cmd.args(probe_args);
@@ -205,6 +213,67 @@ async fn ungranted_sibling_path_still_denied() {
     assert!(
         stdout.contains("PROBE result=err detail=read"),
         "expected the probe to run and report a denied read, got:\n{}",
+        render(&out)
+    );
+}
+
+/// A grant on a DIRECTORY must reach files that already existed inside
+/// it — the property the whole ACL design rests on, and the one nothing
+/// tested until now.
+///
+/// `leaf_only_grant_readable_at_nested_path` grants on the leaf *file*
+/// itself, so it proves bypass-traverse, not inheritance.
+/// `wrap_spawn` however grants on directories (`<pkg>/**`,
+/// `$CARGO_HOME/**`, `$RUSTUP_HOME/**` from `tau-pkg`'s build envelope)
+/// and relies on `SetNamedSecurityInfoW` propagating the inheritable ACE
+/// to the files that are ALREADY there — a toolchain, a source tree.
+/// If that propagation does not happen, every such grant is inert and
+/// the container sees `Access is denied` on pre-existing files, which is
+/// precisely the shape of #622's `install_rust_cargo_acceptance` failure
+/// (`rustc.exe ... Access is denied (os error 5)` with the `.rustup`
+/// grant reported as successful).
+///
+/// So: create the file FIRST, grant on the ancestor directory SECOND,
+/// then read the file from inside the container. Red here localises that
+/// failure to ACL propagation and rules the `tau-pkg` path resolution
+/// out; green rules propagation out and sends the search elsewhere.
+#[tokio::test]
+async fn dir_grant_reaches_preexisting_nested_file() {
+    let profile = format!("tau-egress-inh-{}", std::process::id());
+    let base = std::env::temp_dir().join(format!("tau-egress-inherit-{}", std::process::id()));
+    let nested = base.join("x/y");
+    std::fs::create_dir_all(&nested).expect("mkdirs");
+    let leaf = nested.join("preexisting.txt");
+    // Written BEFORE the grant: this is the whole point of the test.
+    std::fs::write(&leaf, "hello").expect("write");
+
+    test_support::create_profile(&profile).expect("profile");
+    let probe = env!("CARGO_BIN_EXE_tau-sandbox-test-probe");
+    test_support::grant_read(&profile, probe).expect("grant probe");
+    // Grant on the ANCESTOR DIRECTORY only — never on the leaf.
+    test_support::grant_read(&profile, base.to_str().expect("utf8")).expect("grant dir");
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tau-appcontainer-launcher"));
+    cmd.args([
+        "--profile",
+        &profile,
+        "--",
+        probe,
+        "read-file",
+        leaf.to_str().expect("utf8"),
+    ]);
+    let out = tokio::task::spawn_blocking(move || cmd.output())
+        .await
+        .expect("spawn_blocking join")
+        .expect("launcher");
+    test_support::delete_profile(&profile).ok();
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a read grant on a directory did NOT reach a file that already existed inside it \
+         — SetNamedSecurityInfoW is not propagating the inheritable ACE, so every \
+         directory-shaped grant in the build envelope is inert:\n{}",
         render(&out)
     );
 }

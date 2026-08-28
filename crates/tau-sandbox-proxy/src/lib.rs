@@ -31,6 +31,44 @@ pub use connect::{parse_connect_request, peek_sni, ConnectRequest};
 pub use http::{parse_http_request, rewrite_request_line, HttpParseError, HttpRequest};
 pub use validate::{validate_hosts, ValidationError};
 
+/// Opt-in stderr tracing for the proxy's data path.
+///
+/// `tracing` events are the primary instrument, but the Windows
+/// AppContainer egress chain (`tau-sandbox-windows`) runs with **no
+/// subscriber installed** — the events are invisible exactly when the
+/// data path breaks, which cost #622 a full 20-minute CI round. Setting
+/// `TAU_SANDBOX_PROXY_TRACE` to a non-empty, non-`0` value additionally
+/// prints each decision point to stderr with a `PROXY ` prefix, matching
+/// the `BRIDGE ` / `PIPEPROXY ` markers on the other two hops so a stall
+/// can be localised to one hop from one log.
+///
+/// Read once and cached: off by default, so nothing about the Unix /
+/// container proxy path changes unless a caller opts in.
+fn trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("TAU_SANDBOX_PROXY_TRACE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+macro_rules! ptrace {
+    ($($arg:tt)*) => {
+        if $crate::trace_enabled() {
+            eprintln!("PROXY {}", format_args!($($arg)*));
+        }
+    };
+}
+
+/// Escape a request-head slice for a single-line stderr marker.
+fn head_preview(buf: &[u8]) -> String {
+    let cut = buf.len().min(120);
+    String::from_utf8_lossy(&buf[..cut])
+        .escape_debug()
+        .to_string()
+}
+
 /// Host egress policy for the proxy. `Any` = pass-all (reachable only from a
 /// `HostSet::Any` capability); `Exact` = only these (pre-validated, lowercase)
 /// hosts. Case-insensitive matching at runtime.
@@ -222,6 +260,7 @@ where
 {
     let mut buf = [0u8; 4096];
     let n = conn.read(&mut buf).await?;
+    ptrace!("head read n={n} bytes head={:?}", head_preview(&buf[..n]));
     let first_line: &[u8] = match buf[..n].iter().position(|&b| b == b'\n') {
         Some(idx) => &buf[..idx],
         None => &buf[..n],
@@ -244,25 +283,30 @@ where
     let req = match parse_connect_request(initial) {
         Ok(r) => r,
         Err(_) => {
+            ptrace!("connect parse FAILED -> 400");
             plugin_sock
                 .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
                 .await?;
             return Ok(());
         }
     };
+    ptrace!("connect parsed host={} port={}", req.host, req.port);
     if !hosts.permits(&req.host) {
+        ptrace!("connect host DENIED host={} -> 403", req.host);
         plugin_sock
             .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             .await?;
         return Ok(());
     }
     if req.port != 443 {
+        ptrace!("connect port-gate REJECT port={} -> 400", req.port);
         plugin_sock
             .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
             .await?;
         return Ok(());
     }
     let mut remote = TcpStream::connect((req.host.as_str(), req.port)).await?;
+    ptrace!("connect upstream connect OK {}:{}", req.host, req.port);
     plugin_sock
         .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
         .await?;
@@ -281,21 +325,54 @@ where
     }
     // Forward the peeked bytes onward, then splice
     remote.write_all(&peek_buf[..n]).await?;
+    ptrace!("connect tunnel established host={} peek={n}B", req.host);
     let (pr, pw) = tokio::io::split(&mut *plugin_sock);
     let (rr, rw) = remote.split();
     splice_bidirectional(pr, pw, rr, rw, &req.host).await;
+    ptrace!("connect splice returned host={}", req.host);
     Ok(())
 }
 
 /// Splice both directions of a proxied connection and log each direction's
 /// outcome under target `tau::proxy`.
 ///
-/// Uses [`tokio::join!`] rather than `try_join!` so a failure in one direction
-/// does not discard the other direction's byte count — both data-path outcomes
-/// are always recorded. On success the transferred byte count is logged at
-/// debug; on error a `warn!` carries the destination `host` and the io error,
-/// so a mid-stream truncation (reset, upstream drop, partial transfer) is no
-/// longer silent (audit O3).
+/// # Termination: response-direction-driven, NOT `join!` (#622 CI round 2)
+///
+/// This used to be a [`tokio::join!`] of the two copies, which only
+/// completes when **both** directions reach EOF. That is unreachable
+/// whenever the client stream cannot express a half-close, and one of
+/// this function's two callers is exactly that case: on Windows the
+/// client is a `NamedPipeServer`, and tokio's
+/// `NamedPipeServer::poll_shutdown` / `NamedPipeClient::poll_shutdown`
+/// are **no-ops** — they just `poll_flush` and always return `Ready`
+/// (verified in `tokio-1.53.1/src/net/windows/named_pipe.rs:922` and
+/// `:1711`). So `AsyncWriteExt::shutdown()` never signals half-close over
+/// a pipe: the in-container bridge keeps its pipe handle open while it
+/// waits for the response, the `client -> remote` copy therefore never
+/// sees EOF, `join!` never returns, the handler never returns, the pipe
+/// server instance is never closed — and the bridge, in turn, never sees
+/// EOF on its own read. Circular non-termination: one stuck task and one
+/// leaked pipe instance per request, and the plugin gets its response
+/// only if it happens to be flushed before its own read timeout.
+///
+/// The rule now is: **the exchange is over when the response direction
+/// (`remote -> client`) completes.** At that point the upstream has
+/// closed (HTTP/1.1 `Connection: close`, or the far end of a CONNECT
+/// tunnel went away), so nothing more can arrive for the client and the
+/// connection is torn down — which is what closes the pipe handle and
+/// releases the peer. The request direction completing is *not* a
+/// termination signal: a client that half-closes after sending its
+/// request is still waiting for the response, so an `Ok` there is
+/// recorded and we keep waiting. An *error* there does end the splice —
+/// the client is gone, there is nobody left to deliver a response to.
+///
+/// CONNECT tunnels keep working: they are long-lived precisely because
+/// neither side EOFs, and this only ends them when the remote closes (or
+/// the client connection breaks), which is exactly when a tunnel is over.
+///
+/// Both directions' outcomes are still recorded (the audit-O3 property):
+/// the abandoned direction is logged as `incomplete` with no byte count
+/// rather than being silently dropped.
 async fn splice_bidirectional<CR, CW, RR, RW>(
     mut client_r: CR,
     mut client_w: CW,
@@ -308,41 +385,69 @@ async fn splice_bidirectional<CR, CW, RR, RW>(
     RR: tokio::io::AsyncRead + Unpin,
     RW: tokio::io::AsyncWrite + Unpin,
 {
-    let (up, down) = tokio::join!(
-        tokio::io::copy(&mut client_r, &mut remote_w),
-        tokio::io::copy(&mut remote_r, &mut client_w),
-    );
-    match up {
-        Ok(bytes) => tracing::debug!(
-            target: "tau::proxy",
-            host = %host,
-            bytes,
-            direction = "client->remote",
-            "proxy splice direction complete"
-        ),
-        Err(e) => tracing::warn!(
-            target: "tau::proxy",
-            host = %host,
-            error = %e,
-            direction = "client->remote",
-            "proxy splice direction failed mid-stream"
-        ),
+    let up = tokio::io::copy(&mut client_r, &mut remote_w);
+    let down = tokio::io::copy(&mut remote_r, &mut client_w);
+    tokio::pin!(up, down);
+
+    let mut up_res: Option<std::io::Result<u64>> = None;
+    let mut down_res: Option<std::io::Result<u64>> = None;
+    loop {
+        tokio::select! {
+            // Disabled once it has produced a value: a completed future
+            // must never be polled again.
+            r = &mut up, if up_res.is_none() => {
+                let client_gone = r.is_err();
+                up_res = Some(r);
+                if client_gone {
+                    break;
+                }
+            }
+            r = &mut down => {
+                down_res = Some(r);
+                break;
+            }
+        }
     }
-    match down {
-        Ok(bytes) => tracing::debug!(
-            target: "tau::proxy",
-            host = %host,
-            bytes,
-            direction = "remote->client",
-            "proxy splice direction complete"
-        ),
-        Err(e) => tracing::warn!(
-            target: "tau::proxy",
-            host = %host,
-            error = %e,
-            direction = "remote->client",
-            "proxy splice direction failed mid-stream"
-        ),
+
+    log_direction(host, "client->remote", up_res);
+    log_direction(host, "remote->client", down_res);
+}
+
+/// Emit the `tau::proxy` event for one splice direction.
+///
+/// `None` means the direction was still in flight when the connection was
+/// torn down (see [`splice_bidirectional`]) — recorded rather than dropped.
+fn log_direction(host: &str, direction: &'static str, res: Option<std::io::Result<u64>>) {
+    match res {
+        Some(Ok(bytes)) => {
+            ptrace!("splice {direction} host={host} bytes={bytes}");
+            tracing::debug!(
+                target: "tau::proxy",
+                host = %host,
+                bytes,
+                direction,
+                "proxy splice direction complete"
+            )
+        }
+        Some(Err(e)) => {
+            ptrace!("splice {direction} host={host} FAILED err={e}");
+            tracing::warn!(
+                target: "tau::proxy",
+                host = %host,
+                error = %e,
+                direction,
+                "proxy splice direction failed mid-stream"
+            )
+        }
+        None => {
+            ptrace!("splice {direction} host={host} incomplete (torn down)");
+            tracing::debug!(
+                target: "tau::proxy",
+                host = %host,
+                direction,
+                "proxy splice direction abandoned when the peer direction finished"
+            )
+        }
     }
 }
 
@@ -373,14 +478,24 @@ where
 {
     let req = match parse_http_request(initial) {
         Ok(r) => r,
-        Err(_) => {
+        Err(e) => {
+            ptrace!("http parse FAILED err={e} -> 400");
             plugin_sock
                 .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")
                 .await?;
             return Ok(());
         }
     };
+    ptrace!(
+        "http parsed method={} host={} port={} path={} line_end={}",
+        req.method,
+        req.host,
+        req.port,
+        req.path_and_query,
+        req.line_end
+    );
     if !hosts.permits(&req.host) {
+        ptrace!("http host DENIED host={} -> 403", req.host);
         plugin_sock
             .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             .await?;
@@ -390,6 +505,11 @@ where
     // remote allowlisted host is reachable over plaintext only on port 80;
     // loopback hosts may use any port (local servers).
     if !http_port_allowed(&req.host, req.port) {
+        ptrace!(
+            "http port-gate REJECT host={} port={} -> 400",
+            req.host,
+            req.port
+        );
         tracing::warn!(
             host = %req.host,
             port = req.port,
@@ -402,8 +522,16 @@ where
     }
     // Open TCP to the destination host:port.
     let mut remote = match TcpStream::connect((req.host.as_str(), req.port)).await {
-        Ok(s) => s,
+        Ok(s) => {
+            ptrace!("http upstream connect OK {}:{}", req.host, req.port);
+            s
+        }
         Err(e) => {
+            ptrace!(
+                "http upstream connect FAILED {}:{} err={e} -> 502",
+                req.host,
+                req.port
+            );
             plugin_sock
                 .write_all(
                     format!("HTTP/1.1 502 Bad Gateway\r\n\r\nupstream connect: {e}\r\n").as_bytes(),
@@ -417,10 +545,16 @@ where
     let rewritten = rewrite_request_line(&req);
     remote.write_all(rewritten.as_bytes()).await?;
     remote.write_all(&initial[req.line_end..]).await?;
+    ptrace!(
+        "http forwarded head line={}B rest={}B",
+        rewritten.len(),
+        initial.len().saturating_sub(req.line_end)
+    );
     // Splice both directions for the rest of the conversation.
     let (pr, pw) = tokio::io::split(&mut *plugin_sock);
     let (rr, rw) = remote.split();
     splice_bidirectional(pr, pw, rr, rw, &req.host).await;
+    ptrace!("http splice returned host={}", req.host);
     Ok(())
 }
 
@@ -804,6 +938,73 @@ mod generic_handler_tests {
         let s = std::str::from_utf8(&buf[..n]).unwrap();
         assert!(s.starts_with("HTTP/1.1 403"), "got: {s}");
         task.await.unwrap().unwrap();
+    }
+
+    // #622 CI round 2 regression: the handler MUST return once the
+    // upstream has answered and closed, even though the client never
+    // half-closes its write side.
+    //
+    // This is the shape the Windows named-pipe front end always has —
+    // tokio's `NamedPipe{Server,Client}::poll_shutdown` are no-ops
+    // (tokio-1.53.1 named_pipe.rs:922 / :1711), so the in-container
+    // bridge cannot signal EOF on the request direction while it waits
+    // for the response. Under the old `join!` splice that made
+    // `handle_connection` unreturnable, which left the pipe instance
+    // open and starved the bridge of its own EOF.
+    //
+    // `tokio::io::duplex` reproduces it on every platform: the client
+    // half is held open for the whole test, so the `client -> remote`
+    // copy can never reach EOF. A timeout, not a hang, is the failure
+    // mode we want if this ever regresses.
+    #[tokio::test]
+    async fn handler_returns_when_upstream_closes_without_client_half_close() {
+        // One-shot upstream: read the forwarded request, answer, close.
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream");
+        let port = upstream.local_addr().expect("addr").port();
+        let up = tokio::spawn(async move {
+            let (mut s, _) = upstream.accept().await.expect("accept");
+            let mut b = [0u8; 1024];
+            let _ = s.read(&mut b).await.expect("read req");
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+                .await
+                .expect("write resp");
+            // drop -> FIN -> EOF on the remote->client direction
+        });
+
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let hosts = HostAllow::Exact(vec!["127.0.0.1".to_string()]);
+        let handler = tokio::spawn(async move { handle_connection(&mut server, &hosts).await });
+
+        let req =
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+        client.write_all(req.as_bytes()).await.expect("write req");
+        // Deliberately NO `client.shutdown()`: the client keeps its write
+        // side open while it waits, exactly like the bridge over a pipe.
+
+        // The response must arrive...
+        let mut resp = [0u8; 256];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut resp))
+            .await
+            .expect("client must receive the response, not time out")
+            .expect("read response");
+        assert!(
+            std::str::from_utf8(&resp[..n])
+                .unwrap()
+                .starts_with("HTTP/1.1 200"),
+            "got: {:?}",
+            String::from_utf8_lossy(&resp[..n])
+        );
+
+        // ...and the handler must then RETURN (this is what closes the
+        // pipe instance on Windows and releases the bridge).
+        tokio::time::timeout(std::time::Duration::from_secs(5), handler)
+            .await
+            .expect("handle_connection must return once the upstream closed")
+            .expect("handler task")
+            .expect("handler ok");
+        up.await.expect("upstream task");
     }
 
     #[tokio::test]

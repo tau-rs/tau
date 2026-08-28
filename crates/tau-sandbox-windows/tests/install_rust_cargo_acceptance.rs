@@ -37,12 +37,81 @@ impl InstallSandbox for WinGate {
         cmd: &mut std::process::Command,
     ) -> Result<InstallSandboxGuard, InstallSandboxError> {
         use tau_ports::ProcessCapabilityGate;
+        dump_envelope(plan);
         let handle = self
             .rt
             .block_on(self.gate.wrap_spawn(plan, cmd))
             .map_err(|e| InstallSandboxError::WrapFailed(e.to_string()))?;
         Ok(InstallSandboxGuard::new(handle))
     }
+}
+
+/// Print the envelope this build is actually running under, plus the
+/// env it was derived from and whether it covers the real toolchain.
+///
+/// #622 CI round 2 failed with `rustc.exe ... Access is denied (os error
+/// 5)` and two incompatible explanations: either `tau-pkg`'s
+/// `build_envelope` resolved `$RUSTUP_HOME` to the wrong place (it falls
+/// back to `$HOME`, which Windows does not set by convention), or the
+/// paths were right and the ACL grant did not reach the toolchain files.
+/// The two are indistinguishable from the failure text, so print the
+/// evidence: every granted path with `exists=`, the four env vars the
+/// resolution reads, the real `rustc.exe` location, and whether any
+/// granted read path is an ancestor of it (`covers-rustc`).
+///
+/// `covers-rustc=false` ⇒ path-resolution bug (the envelope never named
+/// the toolchain). `covers-rustc=true` ⇒ the grant was on the right tree
+/// and the denial is an ACL-application problem — which
+/// `dir_grant_reaches_preexisting_nested_file` in `egress_integration`
+/// then localises to inheritance propagation.
+fn dump_envelope(plan: &tau_ports::capability_gate::CapabilityPlan) {
+    for var in ["HOME", "USERPROFILE", "CARGO_HOME", "RUSTUP_HOME"] {
+        eprintln!(
+            "ENVELOPE env {var}={:?}",
+            std::env::var(var).unwrap_or_else(|_| "<unset>".into())
+        );
+    }
+    let rustc = resolve_rustc();
+    eprintln!("ENVELOPE rustc={rustc:?}");
+    let json = serde_json::to_value(&plan.capabilities).unwrap_or(serde_json::Value::Null);
+    for capability in json.as_array().into_iter().flatten() {
+        let kind = capability
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .unwrap_or("?");
+        let Some(paths) = capability.get("paths").and_then(|p| p.as_array()) else {
+            continue;
+        };
+        for raw in paths.iter().filter_map(|p| p.as_str()) {
+            let cleaned = raw
+                .trim_end_matches("/**")
+                .trim_end_matches("/*")
+                .trim_end_matches('/');
+            let path = Path::new(cleaned);
+            let covers = rustc.as_ref().map(|r| r.starts_with(path)).unwrap_or(false);
+            eprintln!(
+                "ENVELOPE {kind} path={cleaned:?} absolute={} exists={} covers-rustc={covers}",
+                path.is_absolute(),
+                path.exists(),
+            );
+        }
+    }
+}
+
+/// The `rustc.exe` cargo will actually spawn, as `rustup which rustc`
+/// reports it. `None` if rustup is not on PATH (then `covers-rustc` is
+/// simply unknown, not false-negative — the marker says so by printing
+/// `rustc=None`).
+fn resolve_rustc() -> Option<PathBuf> {
+    let out = StdCommand::new("rustup")
+        .args(["which", "rustc"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then(|| PathBuf::from(s))
 }
 
 // ── fixture helpers (mirrored from tau-pkg/tests/install_builds_rust_cargo_plugin.rs) ──

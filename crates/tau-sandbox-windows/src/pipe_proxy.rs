@@ -14,12 +14,26 @@
 #![allow(unsafe_code)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 use tau_sandbox_proxy::HostAllow;
 
 use crate::acl;
+
+/// Milliseconds since the first `PIPEPROXY` marker. The host markers,
+/// the in-container `BRIDGE ` markers and the plugin's own stdout reach
+/// CI on three different streams and are printed by the harness in
+/// stream order, not time order — without a stamp, "the handler returned
+/// immediately" and "the handler returned after the plugin timed out"
+/// are indistinguishable, which is exactly what stalled #622's CI round
+/// 2 diagnosis.
+fn t() -> u128 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis()
+}
 
 /// Handle to a running pipe-proxy accept loop. Drop aborts the task;
 /// open pipe instances close with it (mirrors the unix `ProxyHandle`).
@@ -111,7 +125,7 @@ pub(crate) fn spawn_pipe_proxy(
     // Create the first instance before returning so a racing name-squat
     // fails HERE (fail-closed) rather than inside the task.
     let first = make_instance(&path, &sd, true)?;
-    eprintln!("PIPEPROXY listening name={name}");
+    eprintln!("PIPEPROXY t={} listening name={name}", t());
 
     let task = tokio::spawn(accept_loop(path, sd, first, hosts));
     Ok(PipeProxyHandle { name, task })
@@ -132,13 +146,14 @@ async fn accept_loop(path: String, sd: OwnedSd, first: NamedPipeServer, hosts: H
         if let Err(e) = server.connect().await {
             tracing::warn!(error = %e, "pipe proxy accept failed");
             eprintln!(
-                "PIPEPROXY accept FAILED path={path} err={e} os={:?}",
+                "PIPEPROXY t={} accept FAILED path={path} err={e} os={:?}",
+                t(),
                 e.raw_os_error()
             );
             return;
         }
         n += 1;
-        eprintln!("PIPEPROXY conn={n} connected");
+        eprintln!("PIPEPROXY t={} conn={n} connected", t());
         // Next instance must exist before we serve this one, or a
         // second bridge conn would get ERROR_FILE_NOT_FOUND.
         let next = match make_instance(&path, &sd, false) {
@@ -146,7 +161,8 @@ async fn accept_loop(path: String, sd: OwnedSd, first: NamedPipeServer, hosts: H
             Err(e) => {
                 tracing::warn!(error = %e, "pipe proxy re-listen failed");
                 eprintln!(
-                    "PIPEPROXY re-listen FAILED path={path} err={e} os={:?}",
+                    "PIPEPROXY t={} re-listen FAILED path={path} err={e} os={:?}",
+                    t(),
                     e.raw_os_error()
                 );
                 return;
@@ -155,16 +171,37 @@ async fn accept_loop(path: String, sd: OwnedSd, first: NamedPipeServer, hosts: H
         let mut conn = std::mem::replace(&mut server, next);
         let hosts = hosts.clone();
         tokio::spawn(async move {
+            let started = t();
+            // The handler's Result IS the diagnosis on this hop: an Ok
+            // that lands in the same millisecond as `connected` means an
+            // early answer (400/403/502 written, connection closed),
+            // whereas an Ok several seconds later means the splice ran
+            // to completion. Print both the outcome and the elapsed
+            // window so the two cannot be confused; the per-decision
+            // detail (parsed host, allowlist verdict, upstream connect,
+            // per-direction byte counts) comes from `tau-sandbox-proxy`'s
+            // `PROXY ` markers, enabled here by TAU_SANDBOX_PROXY_TRACE.
             match tau_sandbox_proxy::handle_connection(&mut conn, &hosts).await {
-                Ok(()) => eprintln!("PIPEPROXY conn={n} handler done"),
+                Ok(()) => eprintln!(
+                    "PIPEPROXY t={} conn={n} handler done result=Ok started={started}",
+                    t()
+                ),
                 Err(e) => {
                     tracing::warn!(error = %e, "pipe proxy connection failed");
                     eprintln!(
-                        "PIPEPROXY conn={n} handler FAILED err={e} os={:?}",
+                        "PIPEPROXY t={} conn={n} handler done result=Err started={started} err={e} os={:?}",
+                        t(),
                         e.raw_os_error()
                     );
                 }
             }
+            // Close the pipe instance NOW rather than at the end of the
+            // task's drop glue: on Windows this is the only way to
+            // signal EOF to the bridge (poll_shutdown on a named pipe is
+            // a no-op), so it is the event that lets the bridge finish
+            // its response direction and FIN the plugin's socket.
+            drop(conn);
+            eprintln!("PIPEPROXY t={} conn={n} pipe-closed", t());
         });
     }
 }
