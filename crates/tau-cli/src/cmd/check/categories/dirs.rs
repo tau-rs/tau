@@ -16,33 +16,46 @@ use tau_pkg::project::dirs::definition_files;
 
 /// Run the `dirs` category. `Ok`-status (findings may still be non-empty —
 /// gitignored definitions are warnings, not failures) when the project has
-/// no `[dirs]`, git is unavailable, or nothing is ignored. Parse errors are
-/// silently skipped here; the `config` category owns reporting those.
+/// no `[dirs]`, git is unavailable, or nothing is ignored. When tau.toml
+/// can't be parsed/scanned at all, this category didn't actually run, so
+/// it reports `Skipped` — matching sibling categories (`packages`,
+/// `sandbox`, `governance`) — rather than a misleading `Ok`. The `config`
+/// category owns reporting the parse error itself; we don't double-report
+/// the error text, only the fact that we skipped.
 pub fn run_dirs(ctx: &CheckCtx) -> CheckResult {
-    let empty = || CheckResult {
+    const MALFORMED: &str = "tau.toml malformed (see config check)";
+    let ok_empty = || CheckResult {
         category: CheckCategory::Dirs,
         status: CheckStatus::Ok,
         findings: Vec::new(),
         duration: std::time::Duration::ZERO,
     };
+    let skipped = |reason: &str| CheckResult {
+        category: CheckCategory::Dirs,
+        status: CheckStatus::Skipped {
+            reason: reason.to_string(),
+        },
+        findings: Vec::new(),
+        duration: std::time::Duration::ZERO,
+    };
 
-    // `ctx.project` is `None` when tau.toml failed to parse; the `config`
-    // category already reports that error, so we don't double-report here.
+    // `ctx.project` is `None` when tau.toml failed to parse.
     let Some(project) = &ctx.project else {
-        return empty();
+        return skipped(MALFORMED);
     };
     let Some(dirs) = &project.dirs else {
-        return empty();
+        return ok_empty();
     };
 
     let files = match definition_files(&ctx.project_root, dirs) {
         Ok(files) => files,
         // Scanning can fail for the same reasons `ProjectConfig::from_path`
-        // would (hygiene violations etc.); `config` already surfaces those.
-        Err(_) => return empty(),
+        // would (hygiene violations etc.); `config` already surfaces the
+        // error text, but this category still didn't run, so: Skipped.
+        Err(_) => return skipped(MALFORMED),
     };
     if files.is_empty() {
-        return empty();
+        return ok_empty();
     }
 
     let ignored = gitignored_files(&ctx.project_root, &files);
@@ -171,14 +184,30 @@ mod tests {
     }
 
     #[test]
-    fn run_dirs_ok_when_project_failed_to_parse() {
+    fn run_dirs_skipped_when_project_failed_to_parse() {
+        use tau_pkg::Scope;
         let t = tempfile::TempDir::new().unwrap();
-        // ctx.project is None (as if tau.toml was malformed); config
-        // category owns reporting that, dirs must stay silent.
-        let mut ctx = test_ctx(t.path());
-        ctx.project = None;
+        // No tau.toml on disk at all — simulates a malformed/missing
+        // project file. Built directly (not via `test_ctx`, which now
+        // panics loudly on an unparseable fixture) since `ctx.project =
+        // None` is exactly the state under test here, not a fixture bug.
+        // config category owns reporting the error text, but dirs itself
+        // did not run, so it must report Skipped (not a misleading Ok) —
+        // matches packages/sandbox/governance precedent.
+        let ctx = CheckCtx {
+            project_root: t.path().to_path_buf(),
+            scope: Scope::resolve(t.path()).expect("resolve scope"),
+            project: None,
+            fast: false,
+            target: None,
+        };
         let result = run_dirs(&ctx);
-        assert_eq!(result.status, CheckStatus::Ok);
+        assert_eq!(
+            result.status,
+            CheckStatus::Skipped {
+                reason: "tau.toml malformed (see config check)".into()
+            }
+        );
         assert!(result.findings.is_empty());
     }
 
@@ -228,10 +257,22 @@ mod tests {
         assert!(result.findings[0].summary.contains("agents/scratch.md"));
     }
 
+    /// Builds a `CheckCtx` from a real `tau.toml` on disk. Fails loudly
+    /// (`panic!` with the real `ProjectConfigError`) rather than silently
+    /// degrading to `ctx.project = None` on a bad fixture — a prior version
+    /// used `.ok()` here, which turned an invalid test fixture into a
+    /// silent `None` and cost a full debugging cycle chasing a
+    /// `left: 0, right: 1` failure that was actually "the fixture doesn't
+    /// parse." Callers that specifically want the `None` case (simulating a
+    /// malformed tau.toml) construct `CheckCtx` directly instead of going
+    /// through this helper — see `run_dirs_skipped_when_project_failed_to_parse`.
     fn test_ctx(project_root: &Path) -> CheckCtx {
         use tau_pkg::{project::ProjectConfig, Scope};
         let tau_toml = project_root.join("tau.toml");
-        let project = ProjectConfig::from_path(&tau_toml).ok();
+        let project = Some(
+            ProjectConfig::from_path(&tau_toml)
+                .unwrap_or_else(|e| panic!("test fixture failed to parse: {e}")),
+        );
         let scope = Scope::resolve(project_root).expect("resolve scope");
         CheckCtx {
             project_root: project_root.to_path_buf(),
