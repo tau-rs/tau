@@ -5426,6 +5426,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tau-domain",
+ "tau-pkg",
  "tau-ports",
  "tau-sandbox-proxy",
  "tempfile",

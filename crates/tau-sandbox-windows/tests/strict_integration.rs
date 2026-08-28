@@ -53,14 +53,13 @@ fn empty_plan_denies_arbitrary_read() {
 /// Positive control: the `echo` markers prove the child actually ran, so a
 /// denied/empty read cannot pass vacuously.
 ///
-/// NOTE: this does NOT assert positive readability of the *granted* path.
-/// Making an arbitrary nested granted path reachable requires FILE_TRAVERSE
-/// grants on every ancestor directory (AppContainers get no access via the
-/// usual Everyone/Users ACEs). That "functional positive grant" work is
-/// deferred to the Windows sandbox network-egress follow-on, where real
-/// `cargo` builds first need to read granted paths. The security-relevant
-/// property — deny-by-default isolation — is proven by
-/// `empty_plan_denies_arbitrary_read` and by this test's sibling denial.
+/// NOTE: this does NOT assert positive readability of the *granted* path;
+/// `egress_integration::leaf_only_grant_readable_at_nested_path` does
+/// (spike #626 H3 refuted ADR-0067's FILE_TRAVERSE premise — AppContainer
+/// tokens keep `SeChangeNotifyPrivilege`, so a leaf-only grant is already
+/// reachable at a nested path and no ancestor grants are needed). The
+/// security-relevant property here — deny-by-default isolation — is proven
+/// by `empty_plan_denies_arbitrary_read` and by this test's sibling denial.
 #[test]
 fn grant_does_not_leak_ungranted_sibling() {
     let dir = tempfile::tempdir().unwrap();
@@ -91,19 +90,71 @@ fn grant_does_not_leak_ungranted_sibling() {
     assert!(!s.contains("topsecret"), "un-granted sibling leaked: {s:?}");
 }
 
-/// HTTP plans fail closed.
+/// HTTP plans are ACCEPTED since #622 and routed through the pipe bridge.
+///
+/// This test used to assert the opposite (`must refuse http`) — that was
+/// ADR-0067's network-fail-closed phase, which #622 supersedes:
+/// `supported_shapes()` now carries `NetworkHttp` and the adapter
+/// enforces egress with a per-container SID-ACL'd named pipe instead of
+/// refusing the plan. Kept (not deleted) and re-pointed at the new
+/// contract, so the plan-shape decision stays covered: an HTTP plan must
+/// wrap successfully AND the rebuilt command must actually go through
+/// `launcher -- <bridge> --pipe <name> -- <orig program>`. A regression
+/// that dropped the bridge from the rebuild would leave the plugin with
+/// `HTTP_PROXY` unset and no egress at all, which no other unit test
+/// would catch.
 #[test]
-fn http_plan_is_refused() {
+fn http_plan_is_accepted_and_routed_through_bridge() {
     let sandbox = WindowsSandbox::new("native");
     let mut cmd = with_launcher(Command::new("cmd"));
     let p = plan(json!([{ "kind": "net.http", "hosts": ["example.com"], "methods": ["GET"] }]));
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let err = rt
+    // `_handle` owns the pipe proxy + the AppContainer profile; holding
+    // it to the end of the test keeps cleanup (ACL revoke, profile
+    // delete, accept-loop abort) on the normal drop path.
+    let _handle = rt
         .block_on(sandbox.wrap_spawn(&p, &mut cmd))
-        .expect_err("must refuse http");
-    let msg = format!("{err:?}");
+        .expect("http plans are supported since #622");
+
+    let program = cmd.get_program().to_string_lossy().into_owned();
     assert!(
-        msg.contains("egress") || msg.contains("ShapeUnsupported"),
-        "got {msg}"
+        program.contains("tau-appcontainer-launcher"),
+        "rebuilt program must be the launcher, got {program}"
+    );
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        args.first().map(String::as_str),
+        Some("--profile"),
+        "{args:?}"
+    );
+    let sep = args
+        .iter()
+        .position(|a| a == "--")
+        .expect("launcher payload separator");
+    assert!(
+        args[sep + 1].contains("tau-net-bridge-win"),
+        "payload must start with the in-container bridge: {args:?}"
+    );
+    assert_eq!(
+        args.get(sep + 2).map(String::as_str),
+        Some("--pipe"),
+        "{args:?}"
+    );
+    assert!(
+        args[sep + 3].starts_with("tau-proxy-"),
+        "bridge must be handed this spawn's pipe name: {args:?}"
+    );
+    assert_eq!(
+        args.get(sep + 4).map(String::as_str),
+        Some("--"),
+        "{args:?}"
+    );
+    assert_eq!(
+        args.get(sep + 5).map(String::as_str),
+        Some("cmd"),
+        "{args:?}"
     );
 }
