@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["UpdateError"],"fn":["update_package"],"struct":["UpdateResult"]};

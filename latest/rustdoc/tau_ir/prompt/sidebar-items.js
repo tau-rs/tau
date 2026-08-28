@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PromptSource"],"fn":["is_well_formed_asset_hash"],"struct":["AssetRef"]};

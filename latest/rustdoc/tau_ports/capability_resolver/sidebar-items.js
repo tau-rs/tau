@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["CapabilityResolverError","ResolvedGrants"],"trait":["CapabilityResolver"]};
