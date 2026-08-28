@@ -1,0 +1,55 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="tau-net-bridge-win — first process inside a Windows AppContainer."><title>tau_net_bridge_win - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="tau_net_bridge_win" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tau_net_bridge_win</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tau_net_bridge_win/index.html">tau_<wbr>net_<wbr>bridge_<wbr>win</a><span class="version">0.0.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-tokio-and-not-stdfsfile-for-the-pipe-ci-round-1" title="Why tokio and not `std::fs::File` for the pipe (CI round 1)">Why tokio and not <code>std::fs::File</code> for the pipe (CI round 1)</a></li><li><a href="#why-the-relay-ends-on-the-response-direction-ci-round-2" title="Why the relay ends on the response direction (CI round 2)">Why the relay ends on the response direction (CI round 2)</a></li><li><a href="#observability" title="Observability">Observability</a></li></ul><h3><a href="#functions">Crate Items</a></h3><ul class="block"><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>tau_<wbr>net_<wbr>bridge_<wbr>win</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tau_net_bridge_win/tau-net-bridge-win.rs.html#1-337">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>tau-net-bridge-win — first process inside a Windows AppContainer.</p>
+<p>Windows twin of Linux’s <code>tau-net-bridge</code> (netns variant): binds an
+EPHEMERAL loopback port (AppContainers share the host TCP port
+space, so a fixed port would collide across concurrent spawns),
+spawns the real plugin as its child with HTTPS_PROXY/HTTP_PROXY
+pointing at that port, and relays every accepted TCP connection
+over <code>\\.\pipe\&lt;name&gt;</code> to the host-side allowlist proxy.</p>
+<p>Same-package-SID loopback and SID-DACL’d pipe access were measured
+on windows-latest (spike #626): the plugin can reach this listener,
+the pipe reaches the host, and nothing else in or out.</p>
+<h3 id="why-tokio-and-not-stdfsfile-for-the-pipe-ci-round-1"><a class="doc-anchor" href="#why-tokio-and-not-stdfsfile-for-the-pipe-ci-round-1">§</a>Why tokio and not <code>std::fs::File</code> for the pipe (CI round 1)</h3>
+<p>The first implementation opened the pipe with <code>std::fs::OpenOptions</code>
+and spliced it with two threads (one per direction) over
+<code>File::try_clone</code> handles. On Windows that <strong>deadlocks</strong>: a handle
+opened without <code>FILE_FLAG_OVERLAPPED</code> is a <em>synchronous</em> file object,
+and the I/O manager serialises every operation on a file object —
+<code>try_clone</code> duplicates the handle but not the file object, so the
+blocking <code>ReadFile</code> waiting for the host’s response holds the file
+object’s lock and the sibling thread’s <code>WriteFile</code> (the request!)
+never issues. Nothing errors: both threads simply wait forever, the
+plugin gets zero bytes, and the bridge prints nothing — exactly the
+signature CI round 1 produced (<code>PROBE result=status detail=</code> after
+the probe’s 5s read timeout, empty bridge stderr).</p>
+<p><code>tokio::net::windows::named_pipe::ClientOptions</code> opens the client
+side with <code>FILE_FLAG_OVERLAPPED</code> and drives it through IOCP, so the
+two directions are genuinely independent. The TCP side moves to
+tokio for the same reason (one reactor, no blocking threads).</p>
+<h3 id="why-the-relay-ends-on-the-response-direction-ci-round-2"><a class="doc-anchor" href="#why-the-relay-ends-on-the-response-direction-ci-round-2">§</a>Why the relay ends on the response direction (CI round 2)</h3>
+<p><code>AsyncWriteExt::shutdown()</code> cannot half-close a named pipe: tokio’s
+<code>NamedPipeClient::poll_shutdown</code> / <code>NamedPipeServer::poll_shutdown</code>
+are <strong>no-ops</strong> that just <code>poll_flush</code> and always return <code>Ready</code>
+(<code>tokio-1.53.1/src/net/windows/named_pipe.rs:922</code> and <code>:1711</code>). So
+neither end of the pipe can signal “I am done sending” — only closing
+the handle does that. The relay therefore ends when the <strong>response</strong>
+direction (<code>pipe -&gt; tcp</code>) finishes: the host proxy closes its pipe
+instance once the upstream has answered, <code>down</code> sees EOF, and the
+plugin’s socket is FIN’d so its own read can return. The <code>up</code>
+direction is then aborted rather than awaited — it is parked on a
+client read that will never complete, and awaiting it would deadlock
+the relay task (and leak the pipe instance) for the plugin’s whole
+remaining lifetime.</p>
+<h3 id="observability"><a class="doc-anchor" href="#observability">§</a>Observability</h3>
+<p>Every step of the data path prints a <code>BRIDGE </code> marker to stderr,
+prefixed with <code>t=&lt;ms&gt;</code> since process start. This binary runs inside
+an AppContainer with no tracing subscriber and no log sink; stderr
+(inherited through the launcher) is the only channel that reaches CI.
+Errors are never swallowed: an unreadable pipe, a failed relay
+direction, or a listener that cannot register with the reactor all
+print, with the raw OS error code. Both directions report their
+first bytes (<code>first-bytes</code>) and running totals, so “nothing was ever
+written” is distinguishable from “written but never delivered”, and
+the wall-clock stamps distinguish “returned immediately” from
+“returned after the peer timed out” — the exact ambiguity that made
+CI round 2 undiagnosable.</p>
+</div></details><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.main.html" title="fn tau_net_bridge_win::main">main</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl></section></div></main></body></html>

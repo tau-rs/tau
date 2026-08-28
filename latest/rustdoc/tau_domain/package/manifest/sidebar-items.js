@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PackageKind"],"mod":["kinds"],"struct":["PackageDep","PackageId","PackageManifest","UncheckedManifest"]};
