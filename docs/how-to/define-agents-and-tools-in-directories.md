@@ -174,7 +174,7 @@ separate namespaces today, exactly as with inline definitions.
   agent names like `agents/strict.md`. This is a pre-existing `tau-domain`
   constraint that an inline `[agents."review/strict"]` hits identically; see
   the Consequences section of
-  [ADR-0068](../decisions/0068-directory-based-definitions.md).
+  [ADR-0069](../decisions/0069-directory-based-definitions.md).
 - **Moving a file renames the definition.** There is no separate identity —
   the path is the name. Update every `tool_refs` / `subflow` / `[allow.*]`
   reference before (or immediately after) moving a file; a stale reference
@@ -200,5 +200,5 @@ separate namespaces today, exactly as with inline definitions.
 
 ## See also
 
-- [ADR-0068 — Directory-based tool & agent definitions](../decisions/0068-directory-based-definitions.md)
+- [ADR-0069 — Directory-based tool & agent definitions](../decisions/0069-directory-based-definitions.md)
 - [Project manifest schema](../reference/project-manifest-schema.md)

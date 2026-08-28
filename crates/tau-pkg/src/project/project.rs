@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use tau_domain::{AgentKind, Capability};
+use tau_domain::Capability;
 
 /// Unchecked deserialization shape — fields are typed but no semantic
 /// validation has run. Use [`UncheckedProjectConfig::validate`] to
@@ -203,6 +203,18 @@ pub struct UncheckedAgentKind {
     /// The kind's capability grant (kind-as-key raw caps, same shape as `[allow]`).
     #[serde(default)]
     pub capabilities: BTreeMap<String, toml::Value>,
+    /// LLM-visible spawn-tool description (EPIC 4.5).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Child system prompt (inline only in 4.5).
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// `[models]` alias, resolved at lowering like `[agents.*].model`.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Tool ids the kind may call (each must exist in `[tools.*]`, typechecked).
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 /// Raw `[agent]` container holding the `kinds` sub-table.
@@ -436,8 +448,10 @@ pub struct UncheckedPipelineStep {
 #[serde(deny_unknown_fields)]
 pub struct UncheckedDynamic {
     /// Kinds this region may spawn (each must be an `[agent.kinds.<name>]`).
+    /// Absent = "the whole store" (every declared `[agent.kinds.*]`,
+    /// expanded at validation time in `BTreeMap` order).
     #[serde(default)]
-    pub spawns: Vec<String>,
+    pub spawns: Option<Vec<String>>,
     /// Region capability envelope (kind-as-key raw caps).
     #[serde(default)]
     pub ceiling: BTreeMap<String, toml::Value>,
@@ -550,11 +564,13 @@ pub enum PipelineRunRef {
         /// Mandatory iteration cap (`> 0`).
         max_iters: u64,
     },
-    /// Dynamic region (EPIC 4.4). `spawns` are kind names resolved to caps
-    /// during lowering; `ceiling` is the region envelope; `agent` is the
-    /// optional owner for the `agent ⊇ region` link.
+    /// Dynamic region (EPIC 4.5). `spawns` are kind names resolved to caps
+    /// during lowering (defaulted, when absent on the region, to every
+    /// `[agent.kinds.*]` in the store — see validation); `ceiling` is the
+    /// region envelope; `agent` is the required owner for the
+    /// `agent ⊇ region` link and the coordinator that runs the region.
     Dynamic {
-        /// Spawnable kind names (`[agent.kinds.<name>]`).
+        /// Spawnable kind names (`[agent.kinds.<name>]`), always non-empty.
         spawns: Vec<String>,
         /// Region capability envelope.
         ceiling: Vec<Capability>,
@@ -562,8 +578,8 @@ pub enum PipelineRunRef {
         max_spawns: u64,
         /// Hard concurrency cap (`0 < n <= max_spawns`).
         max_concurrency: u64,
-        /// Optional owning agent id.
-        agent: Option<String>,
+        /// Owning agent id (required, EPIC 4.5).
+        agent: String,
     },
 }
 
@@ -964,6 +980,28 @@ pub struct ModelEntry {
     pub model: String,
 }
 
+/// Validated `[agent.kinds.<name>]` per-kind agent definition (EPIC 4.5):
+/// a store-backed, spawnable agent kind carrying its own capability grant,
+/// spawn-tool description, prompt, model alias, and tool allow-list.
+/// Replaces `tau_domain::AgentKind` as the value type of
+/// [`ProjectConfig::agent_kinds`] — `AgentKind` only ever carried
+/// `name`/`capabilities`, too thin to author a runnable kind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectAgentKind {
+    /// The kind name (referenced by spawn allow-lists and dynamic regions).
+    pub name: String,
+    /// The kind's capability grant.
+    pub capabilities: Vec<Capability>,
+    /// LLM-visible spawn-tool description (defaults to `""`).
+    pub description: String,
+    /// Child system prompt (inline only in 4.5).
+    pub prompt: Option<String>,
+    /// `[models]` alias, resolved at lowering like `[agents.*].model`.
+    pub model: Option<String>,
+    /// Tool ids the kind may call.
+    pub tools: Vec<String>,
+}
+
 /// Validated project config. Constructed via
 /// [`UncheckedProjectConfig::validate`] only.
 #[non_exhaustive]
@@ -995,8 +1033,8 @@ pub struct ProjectConfig {
     /// Validated root `[allow]` constitution (ADR-0057). `None` = no
     /// constitution declared (opt-in governance).
     pub allow: Option<crate::project::allow::AllowConfig>,
-    /// Map of kind name → validated per-kind agent definition (EPIC 4.4).
-    pub agent_kinds: BTreeMap<String, AgentKind>,
+    /// Map of kind name → validated per-kind agent definition (EPIC 4.5).
+    pub agent_kinds: BTreeMap<String, ProjectAgentKind>,
     /// Validated `[dirs]` declaration, if present.
     pub dirs: Option<DirsEntry>,
 }
@@ -1603,8 +1641,28 @@ impl UncheckedProjectConfig {
             triggers.insert(name.clone(), validate_trigger(name, raw)?);
         }
 
+        let agent_kinds = self
+            .agent
+            .kinds
+            .into_iter()
+            .map(|(name, k)| {
+                let capabilities = crate::project::allow::bridge_caps_any(&k.capabilities)?;
+                Ok((
+                    name.clone(),
+                    ProjectAgentKind {
+                        name,
+                        capabilities,
+                        description: k.description.clone().unwrap_or_default(),
+                        prompt: k.prompt.clone(),
+                        model: k.model.clone(),
+                        tools: k.tools.clone(),
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
+
         let pipeline = match &self.pipeline {
-            Some(p) => Some(validate_pipeline(p)?),
+            Some(p) => Some(validate_pipeline(p, &agent_kinds)?),
             None => None,
         };
 
@@ -1645,16 +1703,6 @@ impl UncheckedProjectConfig {
             Some(raw) => Some(crate::project::allow::validate_allow(raw)?),
             None => None,
         };
-
-        let agent_kinds = self
-            .agent
-            .kinds
-            .into_iter()
-            .map(|(name, k)| {
-                let capabilities = crate::project::allow::bridge_caps_any(&k.capabilities)?;
-                Ok((name.clone(), AgentKind::new(name, capabilities)))
-            })
-            .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
 
         let dirs = match &self.dirs {
             None => None,
@@ -2147,7 +2195,10 @@ fn validate_trigger(
     })
 }
 
-fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectConfigError> {
+fn validate_pipeline(
+    raw: &UncheckedPipeline,
+    agent_kinds: &BTreeMap<String, ProjectAgentKind>,
+) -> Result<PipelineConfig, ProjectConfigError> {
     if raw.steps.is_empty() {
         return Err(ProjectConfigError::EmptyPipeline);
     }
@@ -2160,7 +2211,7 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
                 message: format!("step id {:?} declared more than once", s.id),
             });
         }
-        steps.push(validate_pipeline_step(s)?);
+        steps.push(validate_pipeline_step(s, agent_kinds)?);
     }
     Ok(PipelineConfig { steps })
 }
@@ -2172,6 +2223,7 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
 /// nested blocks.
 fn validate_pipeline_step(
     s: &UncheckedPipelineStep,
+    agent_kinds: &BTreeMap<String, ProjectAgentKind>,
 ) -> Result<PipelineStepConfig, ProjectConfigError> {
     let has_run = s.run.is_some();
     let has_branch = s.branch.is_some();
@@ -2230,12 +2282,12 @@ fn validate_pipeline_step(
         let then = s
             .then
             .iter()
-            .map(validate_pipeline_step)
+            .map(|st| validate_pipeline_step(st, agent_kinds))
             .collect::<Result<Vec<_>, _>>()?;
         let otherwise = s
             .otherwise
             .iter()
-            .map(validate_pipeline_step)
+            .map(|st| validate_pipeline_step(st, agent_kinds))
             .collect::<Result<Vec<_>, _>>()?;
         PipelineRunRef::Branch {
             on,
@@ -2254,16 +2306,30 @@ fn validate_pipeline_step(
                 }
                 b.steps
                     .iter()
-                    .map(validate_pipeline_step)
+                    .map(|st| validate_pipeline_step(st, agent_kinds))
                     .collect::<Result<Vec<_>, _>>()
             })
             .collect::<Result<Vec<_>, _>>()?;
         PipelineRunRef::Parallel { branches }
     } else if has_dynamic {
         let d = s.dynamic.as_ref().unwrap();
-        if d.spawns.is_empty() {
+        let agent = d.agent.clone().ok_or_else(|| {
+            bad(
+                "dynamic region requires `agent` — name the [agents.<id>] coordinator that runs it"
+                    .into(),
+            )
+        })?;
+        // Store-default expansion (EPIC 4.5): an absent `spawns` key means
+        // "every kind in the [agent.kinds.*] store", expanded here — the
+        // single expansion point governance and lowering both see.
+        let spawns: Vec<String> = match &d.spawns {
+            Some(list) => list.clone(),
+            None => agent_kinds.keys().cloned().collect(),
+        };
+        if spawns.is_empty() {
             return Err(bad(
-                "a dynamic region must list at least one `spawns` kind".into()
+                "dynamic region has no spawnable kinds — declare [agent.kinds.*] or list `spawns`"
+                    .into(),
             ));
         }
         if d.max_spawns == 0 {
@@ -2279,11 +2345,11 @@ fn validate_pipeline_step(
         let ceiling = crate::project::allow::bridge_caps_any(&d.ceiling)
             .map_err(|e| bad(format!("dynamic region `ceiling`: {e}")))?;
         PipelineRunRef::Dynamic {
-            spawns: d.spawns.clone(),
+            spawns,
             ceiling,
             max_spawns: d.max_spawns,
             max_concurrency: d.max_concurrency,
-            agent: d.agent.clone(),
+            agent,
         }
     } else {
         // Loop form. Enforce the mandatory bound and exit condition at author
@@ -2309,7 +2375,7 @@ fn validate_pipeline_step(
         let body = s
             .body
             .iter()
-            .map(validate_pipeline_step)
+            .map(|st| validate_pipeline_step(st, agent_kinds))
             .collect::<Result<Vec<_>, _>>()?;
         PipelineRunRef::Loop {
             body,
@@ -3057,7 +3123,7 @@ impl ProjectConfig {
     /// Parse + validate with a project root, enabling `[dirs]` scanning.
     ///
     /// When `[dirs]` is declared, scans `project_root` for directory-based
-    /// agent/tool definitions (ADR-0068) and merges them into the inline
+    /// agent/tool definitions (ADR-0069) and merges them into the inline
     /// `[agents.*]`/`[tools.*]` tables before validation. A definition name
     /// present in both the inline table and a scanned directory is a hard
     /// error ([`ProjectConfigError::DuplicateDefinition`]) — dirs and inline
@@ -3092,6 +3158,24 @@ impl ProjectConfig {
             }
         }
         unchecked.validate()
+    }
+
+    /// The effective model-alias table: `[allow.models]` when a
+    /// constitution is declared, else the top-level `[models]`.
+    ///
+    /// ADR-0057 §3 makes `[allow.models]` the sole home for aliases in a
+    /// governed project — [`UncheckedProjectConfig::validate`] rejects a
+    /// coexisting `[models]` — so at most one of the two tables is
+    /// populated and this selection equals the `[models] ∪ [allow.models]`
+    /// union that `validate_models` resolves references against. Every
+    /// alias lookup outside validation (plugin loading, agent-definition
+    /// building, `tau check` probes) MUST go through this accessor rather
+    /// than reading `self.models` directly (#620).
+    pub fn effective_models(&self) -> &BTreeMap<String, ModelEntry> {
+        match &self.allow {
+            Some(allow) => &allow.models,
+            None => &self.models,
+        }
     }
 
     /// Load and validate from a path. The project root (the manifest's
@@ -3206,6 +3290,124 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
             .expect("researcher kind present");
         assert_eq!(k.name, "researcher");
         assert_eq!(k.capabilities.len(), 1);
+    }
+
+    #[test]
+    fn agent_kind_parses_runnable_fields() {
+        let cfg = parse(
+            r#"
+[project]
+name = "p"
+
+[agent.kinds.researcher]
+description  = "Deep-dives one topic."
+prompt       = "Research one topic."
+model        = "fast"
+tools        = ["probe"]
+capabilities = { "net.http" = { hosts = ["crates.io"] } }
+"#,
+        )
+        .expect("parses");
+        let k = cfg.agent_kinds.get("researcher").expect("kind present");
+        assert_eq!(k.description, "Deep-dives one topic.");
+        assert_eq!(k.prompt.as_deref(), Some("Research one topic."));
+        assert_eq!(k.model.as_deref(), Some("fast"));
+        assert_eq!(k.tools, vec!["probe".to_string()]);
+    }
+
+    #[test]
+    fn dynamic_region_without_agent_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "p"
+
+[agent.kinds.researcher]
+capabilities = {}
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = {}
+max_spawns = 1
+max_concurrency = 1
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("dynamic region"), "{err}");
+        assert!(err.to_string().contains("agent"), "{err}");
+    }
+
+    #[test]
+    fn dynamic_region_spawns_omitted_expands_to_whole_store() {
+        // Two kinds declared, `spawns` key ABSENT on the region — expands to
+        // the whole store, in BTreeMap (alphabetical) order.
+        let cfg = parse(
+            r#"
+[project]
+name = "p"
+
+[models]
+default = { backend = "coordbackend", model = "model-v1" }
+
+[agents.coord]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "default"
+
+[agent.kinds.a]
+capabilities = {}
+
+[agent.kinds.b]
+capabilities = {}
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+agent = "coord"
+ceiling = {}
+max_spawns = 4
+max_concurrency = 2
+"#,
+        )
+        .expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Dynamic { spawns, .. } => {
+                assert_eq!(spawns, &vec!["a".to_string(), "b".to_string()]);
+            }
+            other => panic!("expected Dynamic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_region_empty_spawns_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "p"
+
+[models]
+default = { backend = "coordbackend", model = "model-v1" }
+
+[agents.coord]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "default"
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+agent = "coord"
+spawns = []
+ceiling = {}
+max_spawns = 1
+max_concurrency = 1
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no spawnable kinds"), "{err}");
     }
 
     #[test]
@@ -4619,6 +4821,7 @@ tools  = "defs/tools"
             ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
             max_spawns = 8
             max_concurrency = 4
+            agent = "coordinator"
         "#;
         let cfg = ProjectConfig::parse_str(toml).expect("dynamic region parses");
         let pipe = cfg.pipeline.expect("pipeline present");
@@ -4634,7 +4837,7 @@ tools  = "defs/tools"
                 assert_eq!(ceiling.len(), 1);
                 assert_eq!(*max_spawns, 8);
                 assert_eq!(*max_concurrency, 4);
-                assert!(agent.is_none());
+                assert_eq!(agent, "coordinator");
             }
             other => panic!("expected Dynamic, got {other:?}"),
         }
@@ -4652,6 +4855,7 @@ tools  = "defs/tools"
             ceiling = {}
             max_spawns = 0
             max_concurrency = 1
+            agent = "coordinator"
         "#;
         let err = ProjectConfig::parse_str(toml).expect_err("zero max_spawns rejected");
         assert!(format!("{err}").contains("max_spawns"));
@@ -5757,6 +5961,51 @@ fast = { backend = "anthropic", model = "claude-haiku-4-5" }
         let allow = cfg.allow.expect("allow present");
         assert_eq!(allow.ceiling.len(), 1);
         assert_eq!(allow.models["fast"].model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn effective_models_selects_allow_models_when_governed() {
+        let governed = r#"
+packages = ["anthropic@^1"]
+
+[project]
+name = "demo"
+
+[allow]
+"fs.read" = { paths = ["/proj/**"] }
+
+[allow.models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(governed)
+            .unwrap()
+            .validate()
+            .expect("validate");
+        assert!(cfg.models.is_empty(), "governed: top-level [models] empty");
+        assert_eq!(
+            cfg.effective_models()["fast"].backend,
+            "anthropic",
+            "governed: aliases resolve via [allow.models]"
+        );
+
+        let ungoverned = r#"
+packages = ["anthropic@^1"]
+
+[project]
+name = "demo"
+
+[models]
+fast = { backend = "anthropic", model = "claude-haiku-4-5" }
+"#;
+        let cfg = toml::from_str::<UncheckedProjectConfig>(ungoverned)
+            .unwrap()
+            .validate()
+            .expect("validate");
+        assert_eq!(
+            cfg.effective_models()["fast"].backend,
+            "anthropic",
+            "ungoverned: aliases resolve via [models]"
+        );
     }
 
     #[test]

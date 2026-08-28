@@ -4,3 +4,7 @@
 target/
 artifacts/
 coverage/
+
+# Generated on first standalone build (each fuzz project is its own workspace
+# root). Matches how the repo treats other out-of-workspace lockfiles.
+Cargo.lock

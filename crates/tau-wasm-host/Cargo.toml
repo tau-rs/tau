@@ -1,6 +1,6 @@
 [package]
 name = "tau-wasm-host"
-description = "β.7.5 wasm host: a std wasmtime embedder that loads the tau-wasm-guest WASI 0.2 component, satisfies the three tau:host/host imports with deterministic stubs, applies a determinism Config, and drives the guest's exported `run`. Host-only (std + wasmtime); never built for wasm32."
+description = "β.7.5 wasm host: a std wasmtime embedder for the tau-wasm-guest WASI 0.2 component. Products supply the four tau:host/runner imports via the EmbedPorts trait (EPIC 7.2); the deterministic conformance entrypoints run the same machinery with canned ports. Host-only (std + wasmtime); never built for wasm32."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -10,12 +10,15 @@ authors.workspace      = true
 
 [dependencies]
 wasmtime           = { workspace = true }
-wasmtime-wasi      = "47"
-wasmtime-wasi-http = "47"
-# Only needed to name the `hyper::Request<HyperOutgoingBody>` type in the
-# `WasiHttpHooks::send_request` override signature (EPIC 3.3); no client
-# features required.
-hyper              = { version = "1", default-features = false }
+wasmtime-wasi      = "48"
+wasmtime-wasi-http = "48"
+# Needed to name the `http::Request<WasiBody>` type in the
+# `WasiHttpHooks::send_request` override signature (EPIC 3.3), and to box the
+# permitted response body back into `WasiBody` (an `UnsyncBoxBody`) — which is
+# what wasmtime-wasi-http 48's hook returns. Replaces the `hyper` dep: 48's
+# hook signature is stated in `http`/`http-body` types, not hyper ones.
+http               = "1"
+http-body-util     = "0.1"
 tau-ports     = { workspace = true, features = ["serde"] }
 tau-domain    = { workspace = true }
 serde_json    = { workspace = true }

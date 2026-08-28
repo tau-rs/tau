@@ -22,7 +22,7 @@ pub enum CheckCategory {
     McpContracts,
     /// `[allow]` constitution enforcement (ADR-0057).
     Governance,
-    /// `[dirs]` gitignored-definition lint (ADR-0068).
+    /// `[dirs]` gitignored-definition lint (ADR-0069).
     Dirs,
 }
 

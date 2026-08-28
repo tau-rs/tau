@@ -109,7 +109,7 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
 ///
 /// The cwd's `tau.toml` was already proven byte-clean in step 6, so we
 /// load it through the SAME pipeline `build.rs` step 1 used
-/// ([`ProjectConfig::parse_str_at`], which is dirs-aware — see ADR-0068;
+/// ([`ProjectConfig::parse_str_at`], which is dirs-aware — see ADR-0069;
 /// loading through the non-scanning `UncheckedProjectConfig` → `validate()`
 /// path here would make every `[dirs]`-defined agent look like an
 /// `AgentSetMismatch`). Prompt bytes are resolved via the shared

@@ -12,7 +12,12 @@ fn rust_lib_emits_shape_checked_crate() {
     let out = tempfile::tempdir().unwrap();
     let dir = out.path().join("gen");
     // Public seam used by the CLI dispatch — same as the wasm path's seams.
-    tau_cli::cmd::build::emit_rust_lib_to(&fixture("trivial"), &dir).unwrap();
+    tau_cli::cmd::build::emit_rust_lib_to(
+        &fixture("trivial"),
+        &dir,
+        tau_sdk_codegen::TauDep::Version(env!("CARGO_PKG_VERSION")),
+    )
+    .unwrap();
 
     for f in ["Cargo.toml", "src/lib.rs", "tau.wit", "README.md"] {
         assert!(dir.join(f).exists(), "missing {f}");

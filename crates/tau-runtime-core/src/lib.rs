@@ -28,6 +28,8 @@ pub mod ids;
 pub mod interpreter;
 #[cfg(feature = "wasm-interpreter")]
 pub use interpreter::run_ir;
+#[cfg(feature = "wasm-interpreter")]
+pub mod embed;
 pub mod run;
 pub use builder::{DynCapabilityGate, DynLlmBackend, DynStorage, DynTool, Runtime, RuntimeBuilder};
 

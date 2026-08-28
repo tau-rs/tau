@@ -1635,21 +1635,13 @@ pub fn run_streaming_inner(
                             // call still deserves a waterfall row (status
                             // "error") — mirrors the success-path emit
                             // below, just without an invoke/teardown
-                            // duration beyond dispatch_start_ms. See the
-                            // success-path comment for why `capability` is
-                            // `None` only when `required` is empty: the
-                            // capability check above already passed (a
-                            // denial returns before dispatch entirely), so
-                            // a non-empty requirement is always `Allow`
-                            // here too.
+                            // duration beyond dispatch_start_ms. See
+                            // `capability_verdict` for the Allow/Clamp
+                            // mapping.
                             if let Some(state_arc) = options.orchestration_state.as_ref() {
                                 let duration_ms = (clock_ref(&options).now() - dispatch_start_ms)
                                     .max(0) as u64;
-                                let capability = if required.is_empty() {
-                                    None
-                                } else {
-                                    Some(tau_ports::CapabilityVerdict::Allow)
-                                };
+                                let capability = capability_verdict(&*tool, required);
                                 let s = state_arc.borrow();
                                 s.trace.emit(tau_ports::TraceEvent {
                                     id: crate::ids::ulid(clock_ref(&options), random_ref(&options)),
@@ -1792,17 +1784,11 @@ pub fn run_streaming_inner(
                     let duration_ms =
                         (clock_ref(&options).now() - dispatch_start_ms).max(0) as u64;
                     // The `missing.is_some()` branch above already returned
-                    // before dispatch, so reaching here means every required
-                    // capability was satisfied: a non-empty requirement maps
-                    // to `Allow`. `Clamp`/`Drop` are produced by other
-                    // capability-decision sites (e.g. the MCP sandbox's
-                    // egress meet-clamp — PR-5.1), never by this in-kernel
-                    // dispatch-site check, which is a pass/fail gate.
-                    let capability = if required.is_empty() {
-                        None
-                    } else {
-                        Some(tau_ports::CapabilityVerdict::Allow)
-                    };
+                    // before dispatch, so reaching here means the kernel gate
+                    // passed: the verdict is `Allow`, or `Clamp` when the tool
+                    // reports open-time-narrowed authority (spec §12.4).
+                    // `Drop` rows come from `emit_capability_drop`.
+                    let capability = capability_verdict(&*tool, required);
                     let s = state_arc.borrow();
                     s.trace.emit(tau_ports::TraceEvent {
                         id: crate::ids::ulid(clock_ref(&options), random_ref(&options)),
@@ -1883,6 +1869,54 @@ pub fn run_streaming_inner(
 // ---------------------------------------------------------------------------
 // Outcome helpers
 // ---------------------------------------------------------------------------
+
+/// Render the `to` of a clamp verdict: the sorted, comma-joined host list
+/// of the effective net authority. `any` when any effective net cap is
+/// host-unbounded; `none` when no net cap survived the open-time meet
+/// (fail-closed empty meet). Execution-trace TUI spec §12.5 — rendering
+/// lives kernel-side so the port carries semantic `Capability` values only.
+fn render_clamped_to(effective: &[Capability]) -> String {
+    use tau_domain::{HostSet, NetCapability};
+    let mut any = false;
+    let mut hosts: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
+    for cap in effective {
+        if let Capability::Network(NetCapability::Http { hosts: h, .. }) = cap {
+            match h {
+                HostSet::Any => any = true,
+                HostSet::Exact(set) => {
+                    hosts.extend(set.iter().map(|hn| String::from(hn.as_str())));
+                }
+            }
+        }
+    }
+    if any {
+        String::from("any")
+    } else if hosts.is_empty() {
+        String::from("none")
+    } else {
+        hosts.into_iter().collect::<Vec<String>>().join(",")
+    }
+}
+
+/// Map a dispatch-completed call's capability posture to the trace verdict
+/// (execution-trace TUI spec §12.4). `None` for un-gated tools; `Clamp`
+/// when the tool reports open-time-narrowed authority; `Allow` otherwise.
+/// Denials never reach this — they abort dispatch earlier and are recorded
+/// by `emit_capability_drop`.
+fn capability_verdict(
+    tool: &dyn DynTool,
+    required: &[Capability],
+) -> Option<tau_ports::CapabilityVerdict> {
+    if required.is_empty() {
+        return None;
+    }
+    Some(match tool.effective_capabilities() {
+        Some(eff) => tau_ports::CapabilityVerdict::Clamp {
+            to: render_clamped_to(eff),
+        },
+        None => tau_ports::CapabilityVerdict::Allow,
+    })
+}
 
 /// Emit `runtime.failed` with `failure_kind = PolicyDenied` under the given
 /// turn span. Dedupes two byte-identical warn! sites (orchestration
@@ -3971,6 +4005,110 @@ paths = ["/etc/**"]
         })
     }
 
+    /// Build a Capability from its canonical TOML form (variants are
+    /// #[non_exhaustive] outside tau-domain). Same pattern as capability.rs.
+    fn test_cap(toml_str: &str) -> tau_domain::Capability {
+        #[derive(serde::Deserialize)]
+        struct CapWrapper {
+            cap: tau_domain::Capability,
+        }
+        toml::from_str::<CapWrapper>(toml_str).unwrap().cap
+    }
+
+    /// A tool whose runtime authority was narrowed at open time (e.g. an
+    /// MCP entry meet-clamped by `[allow.mcp.<entry>].hosts`):
+    /// `capabilities()` returns the full declared set,
+    /// `effective_capabilities()` the narrower runtime set. Shared by the
+    /// clamp-verdict tests (success path and schema-invalid path).
+    struct ClampedTool {
+        inner: tau_ports::fixtures::MockTool,
+        required: Vec<tau_domain::Capability>,
+        effective: Vec<tau_domain::Capability>,
+    }
+
+    impl tau_ports::Tool for ClampedTool {
+        type Session = ();
+
+        fn name(&self) -> &str {
+            tau_ports::Tool::name(&self.inner)
+        }
+
+        fn schema(&self) -> tau_ports::ToolSpec {
+            tau_ports::Tool::schema(&self.inner)
+        }
+
+        fn capabilities(&self) -> &[tau_domain::Capability] {
+            &self.required
+        }
+
+        fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+            Some(&self.effective)
+        }
+
+        async fn init(
+            &self,
+            ctx: tau_ports::SessionContext,
+        ) -> Result<Self::Session, tau_ports::ToolError> {
+            tau_ports::Tool::init(&self.inner, ctx).await
+        }
+
+        async fn invoke(
+            &self,
+            session: &mut Self::Session,
+            args: tau_domain::Value,
+        ) -> Result<tau_ports::ToolResult, tau_ports::ToolError> {
+            tau_ports::Tool::invoke(&self.inner, session, args).await
+        }
+
+        async fn teardown(&self, session: Self::Session) -> Result<(), tau_ports::ToolError> {
+            tau_ports::Tool::teardown(&self.inner, session).await
+        }
+    }
+
+    #[test]
+    fn render_clamped_to_joins_sorted_hosts() {
+        let eff = vec![test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"b.example\", \"a.example\"]\n",
+        )];
+        assert_eq!(super::render_clamped_to(&eff), "a.example,b.example");
+    }
+
+    #[test]
+    fn render_clamped_to_any_hosts() {
+        let eff = vec![test_cap("[cap]\nkind = \"net.http\"\nhosts = \"any\"\n")];
+        assert_eq!(super::render_clamped_to(&eff), "any");
+    }
+
+    #[test]
+    fn render_clamped_to_without_net_caps_is_none() {
+        // Empty-meet fail-closed case: no net authority survived the clamp.
+        let eff = vec![test_cap(
+            "[cap]\nkind = \"fs.read\"\npaths = [\"/tmp/**\"]\n",
+        )];
+        assert_eq!(super::render_clamped_to(&eff), "none");
+        assert_eq!(super::render_clamped_to(&[]), "none");
+    }
+
+    #[test]
+    fn capability_verdict_empty_required_is_none_default_is_allow() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+        let tool = MockTool::new(
+            "plain",
+            make_tool_spec("plain".into(), "plain".into(), Value::Null),
+        );
+        let tool: Arc<dyn DynTool> = Arc::new(tool);
+        // Un-gated tool → no verdict at all.
+        assert_eq!(super::capability_verdict(&*tool, &[]), None);
+        // Gated tool without narrowing → Allow.
+        let req = vec![test_cap(
+            "[cap]\nkind = \"fs.read\"\npaths = [\"/tmp/**\"]\n",
+        )];
+        assert_eq!(
+            super::capability_verdict(&*tool, &req),
+            Some(tau_ports::CapabilityVerdict::Allow)
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_emits_toolcall_trace_event_with_verdict() {
         use tau_ports::fixtures::{make_tool_spec, MockTool};
@@ -4108,6 +4246,91 @@ paths = ["/etc/**"]
         );
     }
 
+    #[tokio::test]
+    async fn clamped_tool_emits_clamp_trace_event() {
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+
+        // A tool whose runtime authority was narrowed at open time (an MCP
+        // entry meet-clamped by [allow.mcp.<entry>].hosts): declared caps
+        // request two hosts, effective caps carry one. The grant covers the
+        // DECLARED caps — kernel gate semantics unchanged — so dispatch
+        // succeeds, but the ToolCall verdict must be Clamp, not Allow.
+        // `ClampedTool` is defined at module scope (shared with
+        // `schema_invalid_call_from_clamped_tool_emits_clamp_trace_event`).
+        let declared = test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\", \"evil.example\"]\n",
+        );
+        let effective = test_cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+
+        let spec = make_tool_spec("echo".into(), "echo tool".into(), Value::Null);
+        let tool = ClampedTool {
+            inner: MockTool::new("echo", spec),
+            required: vec![declared.clone()],
+            effective: vec![effective],
+        };
+        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
+        let (tools, validators, tool_specs_list) = make_tool_entry("echo", tool_arc);
+
+        let (state_arc, collector) = collecting_trace_state("run-clamp-trace");
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // Two-turn script: ToolUse("echo") then a plain-text final turn —
+        // same shape as dispatch_emits_toolcall_trace_event_with_verdict.
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use("call_1".into(), "echo".into(), Value::Null),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: Some(PortsTokenUsage::new(10, 5)),
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Done!".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: Some(PortsTokenUsage::new(5, 3)),
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![declared.clone()], // grant covers DECLARED → kernel gate passes
+            tool_specs_list,
+            vec![],
+            vec![declared],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call =
+            first_tool_call(&trace_events).expect("a ToolCall trace event must be emitted");
+
+        assert_eq!(tool_call.0, "echo");
+        assert_eq!(tool_call.2, "ok");
+        match tool_call.3 {
+            Some(tau_ports::CapabilityVerdict::Clamp { ref to }) => {
+                assert_eq!(to, "api.weather.com");
+            }
+            ref other => panic!("expected Clamp verdict, got {other:?}"),
+        }
+    }
+
     /// FIX 1 (final-review fix wave, M1 execution-trace TUI): a tool call
     /// whose args fail schema validation must still get a waterfall row.
     /// Combines `dispatch_emits_toolcall_trace_event_with_verdict`'s
@@ -4216,6 +4439,133 @@ paths = ["/etc/**"]
             tool_call.2, "error",
             "validation-failed call must report status \"error\""
         );
+    }
+
+    /// Final-review fix wave (M1.5 clamp rows): the schema-invalid emit
+    /// site (§12.4) shares its `capability_verdict` call with the
+    /// success-path emit, but only the success path had a covering test
+    /// for `Clamp`. Combines
+    /// `dispatch_emits_toolcall_trace_event_with_error_status_on_validation_failure`'s
+    /// strict-schema bad-args scenario with `clamped_tool_emits_clamp_trace_event`'s
+    /// `ClampedTool` (declared caps wider than effective caps) to assert the
+    /// schema-invalid row still carries a `Clamp` verdict, not `Allow`.
+    #[tokio::test]
+    async fn schema_invalid_call_from_clamped_tool_emits_clamp_trace_event() {
+        use tau_ports::fixtures::make_tool_spec;
+
+        let strict_schema = {
+            use tau_domain::Value;
+            let j = serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": "string" } },
+                "required": ["x"],
+                "additionalProperties": false
+            });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let declared = test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\", \"evil.example\"]\n",
+        );
+        let effective = test_cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+
+        let spec = make_tool_spec(
+            "clamped-strict-tool".into(),
+            "clamped strict args".into(),
+            strict_schema.clone(),
+        );
+        let tool = ClampedTool {
+            inner: tau_ports::fixtures::MockTool::new("clamped-strict-tool", spec),
+            required: vec![declared.clone()],
+            effective: vec![effective],
+        };
+        let tool_arc: Arc<dyn DynTool> = Arc::new(tool);
+
+        let mut tools: HashMap<String, Arc<dyn DynTool>> = HashMap::new();
+        let mut validators: HashMap<String, ToolArgsValidator> = HashMap::new();
+        let tool_specs_list = vec![tool_arc.schema()];
+        tools.insert("clamped-strict-tool".to_string(), tool_arc);
+        validators.insert(
+            "clamped-strict-tool".to_string(),
+            crate::tool_args::ToolArgsValidator::compile(&strict_schema)
+                .expect("strict schema must compile"),
+        );
+
+        // Wire an orchestration_state with a collecting trace subscriber so
+        // we can inspect emitted TraceEvents after the run.
+        let (state_arc, collector) = collecting_trace_state("run-clamp-trace-badargs");
+
+        let options = {
+            let mut o = test_run_options();
+            o.orchestration_state = Some(state_arc.clone());
+            o
+        };
+
+        // LLM sends invalid args (missing required "x" field), then
+        // self-corrects with plain text.
+        let bad_args = {
+            let j = serde_json::json!({ "y": 42 });
+            let s = serde_json::to_string(&j).unwrap();
+            serde_json::from_str::<Value>(&s).unwrap()
+        };
+
+        let llm: Arc<dyn DynLlmBackend> = Arc::new(ScriptedLlm::multi_turn(vec![
+            vec![
+                Ok(CompletionChunk::ToolUse(
+                    tau_ports::fixtures::make_tool_use(
+                        "call_1".into(),
+                        "clamped-strict-tool".into(),
+                        bad_args,
+                    ),
+                )),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::ToolUse,
+                    usage: None,
+                }),
+            ],
+            vec![
+                Ok(CompletionChunk::Text {
+                    delta: "Corrected".into(),
+                }),
+                Ok(CompletionChunk::Finish {
+                    stop_reason: PortsStopReason::EndTurn,
+                    usage: None,
+                }),
+            ],
+        ]));
+
+        let stream = run_streaming_inner(
+            llm,
+            agent_def(),
+            manifest_with_no_capabilities(),
+            vec![],
+            user_msg("hi"),
+            options,
+            tools,
+            validators,
+            vec![declared.clone()], // grant covers DECLARED → kernel gate passes
+            tool_specs_list,
+            vec![],
+            vec![declared],
+        );
+        let _events = collect_events(Box::pin(stream)).await;
+
+        let trace_events = collector.0.lock().unwrap();
+        let tool_call = first_tool_call(&trace_events)
+            .expect("a ToolCall trace event must be emitted for a validation-failed call");
+
+        assert_eq!(tool_call.0, "clamped-strict-tool");
+        assert_eq!(
+            tool_call.2, "error",
+            "validation-failed call must report status \"error\""
+        );
+        match tool_call.3 {
+            Some(tau_ports::CapabilityVerdict::Clamp { ref to }) => {
+                assert_eq!(to, "api.weather.com");
+            }
+            ref other => panic!("expected Clamp verdict, got {other:?}"),
+        }
     }
 
     /// Item 1 (M1.5): a capability-DENIED tool aborts the run before the

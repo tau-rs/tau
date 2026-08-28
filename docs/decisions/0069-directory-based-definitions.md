@@ -1,4 +1,4 @@
-# ADR-0068: Directory-based tool & agent definitions
+# ADR-0069: Directory-based tool & agent definitions
 
 **Status:** Accepted
 **Date:** 2026-08-22

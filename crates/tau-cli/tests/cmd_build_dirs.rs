@@ -1,5 +1,5 @@
 //! End-to-end CLI coverage for `[dirs]` directory-based definitions
-//! (ADR-0068) through the real `tau` binary.
+//! (ADR-0069) through the real `tau` binary.
 //!
 //! The unit/integration tests that shipped with the feature all stop at
 //! `ProjectConfig::from_path`. That left the build pipeline itself

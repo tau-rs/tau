@@ -42,9 +42,14 @@ pub(crate) struct AttenuatedDispatcher {
     module: Arc<IrModule>,
     /// `dyn` so recursive nesting does not create unbounded monomorphized types.
     inner: Arc<dyn ToolDispatcher + Send + Sync>,
+    /// Tracing event name emitted on denial — lets distinct call sites
+    /// (subflow spawn vs. EPIC 4.5 dynamic-region spawn) distinguish their
+    /// denial events without duplicating this decorator.
+    event: &'static str,
 }
 
 impl AttenuatedDispatcher {
+    /// Subflow-frame constructor: denials emit `runtime.subflow.attenuation_denied`.
     pub(crate) fn new(
         grant: CapabilityRequirements,
         frame: ToolId,
@@ -52,12 +57,33 @@ impl AttenuatedDispatcher {
         module: Arc<IrModule>,
         inner: Arc<dyn ToolDispatcher + Send + Sync>,
     ) -> Self {
+        Self::new_with_event(
+            grant,
+            frame,
+            agent_id,
+            module,
+            inner,
+            "runtime.subflow.attenuation_denied",
+        )
+    }
+
+    /// General constructor: caller picks the tracing event name emitted on
+    /// denial (EPIC 4.5's `SpawnTool` uses `runtime.dynamic.attenuation_denied`).
+    pub(crate) fn new_with_event(
+        grant: CapabilityRequirements,
+        frame: ToolId,
+        agent_id: String,
+        module: Arc<IrModule>,
+        inner: Arc<dyn ToolDispatcher + Send + Sync>,
+        event: &'static str,
+    ) -> Self {
         Self {
             grant,
             frame,
             agent_id,
             module,
             inner,
+            event,
         }
     }
 }
@@ -94,7 +120,7 @@ impl ToolDispatcher for AttenuatedDispatcher {
             )
             .with_narrowing_frame(self.frame.0.clone());
             tracing::warn!(
-                name = "runtime.subflow.attenuation_denied",
+                name = %self.event,
                 tool = %tool_id.0,
                 missing = %kind,
                 frame = %self.frame.0,
@@ -262,7 +288,7 @@ mod tests {
         assert!(res.error.is_some(), "expected denial");
         let msg = res.error.unwrap();
         assert!(msg.contains("page") && msg.contains("net.http"), "{msg}");
-        assert!(msg.contains("narrowed by subflow `notify`"), "{msg}");
+        assert!(msg.contains("narrowed by `notify`"), "{msg}");
         assert!(
             !reached.load(Ordering::SeqCst),
             "inner.invoke must NOT run on denial"

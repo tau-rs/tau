@@ -41,7 +41,10 @@ impl IrFormatVersion {
     // for the content-addressed asset store (D6-B). `Inline` serializes as a bare
     // string, so pre-2.5 modules parse and re-serialize byte-identically.
     // MINOR v2.6.0: StepRun gains Dynamic (bounded dynamic region; additive; EPIC 4.4).
-    pub const CURRENT: &'static str = "v2.6.0";
+    // MINOR v2.7.0: Dynamic gains owner + runnable spawn templates (EPIC 4.5). v2.6
+    // Dynamic-bearing modules (never executable — interpreter unconditionally errored)
+    // fail decode; rebuild.
+    pub const CURRENT: &'static str = "v2.7.0";
 
     /// Major component of `CURRENT`. Kept as a literal (const string
     /// parsing is awkward) and pinned to `CURRENT` by
@@ -128,12 +131,45 @@ pub struct Workflow {
     pub checks: alloc::collections::BTreeMap<crate::ids::CheckId, crate::check::Check>,
 }
 
+/// Failure of the Variant B embedding entry-point contract
+/// ([`IrModule::entry_agent`]).
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum EntryAgentError {
+    /// The module contains no agents at all.
+    #[error("IR module contains no agents")]
+    NoAgents,
+    /// More than one agent: the embedder must pick explicitly.
+    #[error("IR module contains {} agents ({available:?}); pass an explicit entry AgentId to run_ir", available.len())]
+    Ambiguous {
+        /// Every agent id in the module, in `BTreeMap` (lexicographic) order.
+        available: Vec<AgentId>,
+    },
+}
+
+impl IrModule {
+    /// Variant B embedding entry-point contract (EPIC 7.1): a module is
+    /// directly runnable iff it contains exactly one agent — that agent
+    /// is the entry point. Multi-agent modules must select explicitly
+    /// via `run_ir`'s `entry` parameter. (The wasm guest enforces the
+    /// same rule at load.)
+    pub fn entry_agent(&self) -> Result<&AgentId, EntryAgentError> {
+        let mut keys = self.workflow.agents.keys();
+        match (keys.next(), keys.next()) {
+            (Some(only), None) => Ok(only),
+            (None, _) => Err(EntryAgentError::NoAgents),
+            (Some(_), Some(_)) => Err(EntryAgentError::Ambiguous {
+                available: self.workflow.agents.keys().cloned().collect(),
+            }),
+        }
+    }
+}
+
 #[cfg(all(test, feature = "schema"))]
 mod schema_tests {
     use super::*;
     #[test]
     fn ir_module_schema_builds_and_is_object() {
-        let v = serde_json::to_value(&schemars::schema_for!(IrModule)).unwrap();
+        let v = serde_json::to_value(schemars::schema_for!(IrModule)).unwrap();
         assert_eq!(v["type"], "object");
         // ir_format is a required top-level property
         let req = v["required"].as_array().expect("required present");
@@ -146,9 +182,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_6_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.6.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.6.0");
+    fn ir_format_version_is_v2_7_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.7.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.7.0");
     }
 
     #[test]
@@ -173,6 +209,66 @@ mod tests {
             IrFormatVersion::current().major(),
             Ok(IrFormatVersion::CURRENT_MAJOR)
         );
+    }
+
+    fn module_with_agents(ids: &[&str]) -> IrModule {
+        let target = tau_ports::target::registry::list_available()
+            .next()
+            .unwrap()
+            .triple;
+        let mut agents = BTreeMap::new();
+        for id in ids {
+            agents.insert(
+                AgentId((*id).into()),
+                Agent {
+                    id: AgentId((*id).into()),
+                    prompt: crate::prompt::PromptSource::Inline("p".into()),
+                    model_ref: crate::model_ref::ModelRef {
+                        backend: "anthropic".into(),
+                        model_id: "m".into(),
+                    },
+                    tool_refs: Vec::new(),
+                    context: None,
+                    budget: crate::budget::AgentBudget {
+                        max_turns: None,
+                        max_tokens: None,
+                    },
+                    produces: Vec::new(),
+                    output_schema: None,
+                    durable: None,
+                },
+            );
+        }
+        IrModule {
+            ir_format: IrFormatVersion::current(),
+            tau_version: "0.0.0".into(),
+            target,
+            workflow: Workflow {
+                agents,
+                ..Workflow::default()
+            },
+            triggers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn entry_agent_ok_when_exactly_one() {
+        let m = module_with_agents(&["main"]);
+        assert_eq!(m.entry_agent().unwrap(), &AgentId("main".into()));
+    }
+
+    #[test]
+    fn entry_agent_err_when_empty() {
+        let m = module_with_agents(&[]);
+        assert!(matches!(m.entry_agent(), Err(EntryAgentError::NoAgents)));
+    }
+
+    #[test]
+    fn entry_agent_err_lists_candidates_when_ambiguous() {
+        let m = module_with_agents(&["a", "b"]);
+        let err = m.entry_agent().unwrap_err();
+        let msg = alloc::format!("{err}");
+        assert!(msg.contains('a') && msg.contains('b'), "{msg}");
     }
 
     #[test]

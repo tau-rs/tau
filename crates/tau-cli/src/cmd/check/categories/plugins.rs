@@ -171,7 +171,7 @@ pub async fn run_plugins(ctx: &CheckCtx) -> CheckResult {
 fn check_models_backends(ctx: &CheckCtx, lockfile: &LockFile, findings: &mut Vec<CheckFinding>) {
     let Some(project) = &ctx.project else { return };
     let mut seen = std::collections::BTreeSet::new();
-    for (alias, model) in &project.models {
+    for (alias, model) in project.effective_models() {
         if !seen.insert(model.backend.clone()) {
             continue;
         }

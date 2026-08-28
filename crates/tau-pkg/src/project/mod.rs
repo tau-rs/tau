@@ -18,6 +18,7 @@ pub use agent::{build_agent_definition, AgentResolutionError};
 pub use allow::{AllowConfig, McpAllowEntry, ToolAllowEntry, ToolBinding, UncheckedAllow};
 pub use project::{
     AgentEntry, ConditionConfig, DeliverableEntry, GoalEntry, GoalPredicateConfig, JudgeConfig,
-    LocusConfig, OnFailConfig, PipelineConfig, PipelineRunRef, PipelineStepConfig, ProjectConfig,
-    ProjectConfigError, PromptEntry, RequiresEntry, StepEntry, ToolBody, ToolEntry,
+    LocusConfig, OnFailConfig, PipelineConfig, PipelineRunRef, PipelineStepConfig,
+    ProjectAgentKind, ProjectConfig, ProjectConfigError, PromptEntry, RequiresEntry, StepEntry,
+    ToolBody, ToolEntry,
 };

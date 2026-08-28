@@ -11,15 +11,11 @@
 use std::sync::Arc;
 
 use jsonschema::{Draft, Validator};
-use regex::Regex;
 use serde_json::{json, Value};
 use tau_runtime_core::error::RuntimeError;
 use tau_runtime_core::interpreter::artifact::ArtifactReader;
 use tau_runtime_core::interpreter::deterministic::DeterministicRegistry;
-use tau_runtime_core::vocabulary::{
-    FN_BUILTIN_EQUALS, FN_BUILTIN_EXISTS, FN_BUILTIN_MATCHES, FN_BUILTIN_MIN_COUNT,
-    FN_BUILTIN_NON_EMPTY, FN_BUILTIN_SCHEMA_VALID,
-};
+use tau_runtime_core::vocabulary::FN_BUILTIN_SCHEMA_VALID;
 
 // ---------------------------------------------------------------------------
 // StdFsArtifactReader
@@ -60,14 +56,10 @@ pub(crate) struct BuiltinDeterministicRegistry;
 
 impl DeterministicRegistry for BuiltinDeterministicRegistry {
     fn invoke(&self, fn_name: &str, args: &Value) -> Result<Value, RuntimeError> {
-        // Builtins are checked first — their `__tau::` prefix makes collision
-        // with user fns structurally impossible.
+        if let Some(result) = tau_native_tools::goal_predicates::invoke(fn_name, args) {
+            return result.map_err(|message| RuntimeError::Internal { message });
+        }
         match fn_name {
-            _ if fn_name == FN_BUILTIN_EXISTS => builtin_exists(args),
-            _ if fn_name == FN_BUILTIN_NON_EMPTY => builtin_non_empty(args),
-            _ if fn_name == FN_BUILTIN_EQUALS => builtin_equals(args),
-            _ if fn_name == FN_BUILTIN_MATCHES => builtin_matches(args),
-            _ if fn_name == FN_BUILTIN_MIN_COUNT => builtin_min_count(args),
             _ if fn_name == FN_BUILTIN_SCHEMA_VALID => builtin_schema_valid(args),
             other => Err(RuntimeError::Internal {
                 message: format!("BuiltinDeterministicRegistry: unknown fn {other:?}"),
@@ -79,88 +71,6 @@ impl DeterministicRegistry for BuiltinDeterministicRegistry {
 // ---------------------------------------------------------------------------
 // Predicate implementations
 // ---------------------------------------------------------------------------
-
-/// `__tau::goal::exists` → `present`.
-fn builtin_exists(args: &Value) -> Result<Value, RuntimeError> {
-    let present = args["present"].as_bool().unwrap_or(false);
-    Ok(Value::Bool(present))
-}
-
-/// `__tau::goal::non_empty` → `present && !content.trim().is_empty()`.
-///
-/// `content` null or absent → false.
-fn builtin_non_empty(args: &Value) -> Result<Value, RuntimeError> {
-    let present = args["present"].as_bool().unwrap_or(false);
-    let content = args["content"].as_str().unwrap_or("");
-    Ok(Value::Bool(present && !content.trim().is_empty()))
-}
-
-/// `__tau::goal::equals` → `present && content == args["equals"]`.
-fn builtin_equals(args: &Value) -> Result<Value, RuntimeError> {
-    let present = args["present"].as_bool().unwrap_or(false);
-    let content = args["content"].as_str();
-    let expected = args["equals"].as_str();
-    Ok(Value::Bool(
-        present && content.is_some() && content == expected,
-    ))
-}
-
-/// `__tau::goal::matches` → `present && Regex::new(pattern)?.is_match(content)`.
-///
-/// Build-time proved the pattern compiles (Task 6), but if somehow a bad
-/// pattern reaches here, return `{"met": false, "rationale": "<err>"}` rather
-/// than surfacing a `RuntimeError` that aborts the run.
-fn builtin_matches(args: &Value) -> Result<Value, RuntimeError> {
-    let present = args["present"].as_bool().unwrap_or(false);
-    if !present {
-        return Ok(Value::Bool(false));
-    }
-    let content = match args["content"].as_str() {
-        Some(c) => c,
-        None => return Ok(Value::Bool(false)),
-    };
-    let pattern = match args["pattern"].as_str() {
-        Some(p) => p,
-        None => {
-            return Err(RuntimeError::Internal {
-                message: "FN_BUILTIN_MATCHES: missing \"pattern\" field in args".into(),
-            })
-        }
-    };
-    match Regex::new(pattern) {
-        Ok(re) => Ok(Value::Bool(re.is_match(content))),
-        Err(e) => {
-            // Defensive: bad pattern at runtime → met=false with rationale.
-            // Build-time validation (Task 6) should have caught this earlier.
-            Ok(json!({
-                "met": false,
-                "rationale": format!("regex compile error for pattern {pattern:?}: {e}")
-            }))
-        }
-    }
-}
-
-/// `__tau::goal::min_count` → count of non-empty lines in `content >= min_count`.
-///
-/// "Items" are non-empty lines (lines that are non-whitespace after trim).
-/// `content` absent → false.
-fn builtin_min_count(args: &Value) -> Result<Value, RuntimeError> {
-    let present = args["present"].as_bool().unwrap_or(false);
-    if !present {
-        return Ok(Value::Bool(false));
-    }
-    let content = match args["content"].as_str() {
-        Some(c) => c,
-        None => return Ok(Value::Bool(false)),
-    };
-    let min_count = args["min_count"]
-        .as_u64()
-        .ok_or_else(|| RuntimeError::Internal {
-            message: "FN_BUILTIN_MIN_COUNT: missing or non-integer \"min_count\" field".into(),
-        })?;
-    let count = content.lines().filter(|l| !l.trim().is_empty()).count();
-    Ok(Value::Bool(count as u64 >= min_count))
-}
 
 /// `__tau::goal::schema_valid` — validate `content` (parsed as JSON) against
 /// `args["schema"]` using the `jsonschema` crate (already a workspace dep in

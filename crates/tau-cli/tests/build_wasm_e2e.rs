@@ -3,7 +3,8 @@
 //! stream. Requires `wasm32-wasip2` installed.
 
 use std::path::PathBuf;
-use std::process::Command;
+
+mod common;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -16,60 +17,7 @@ fn fixture(name: &str) -> PathBuf {
 fn build_trivial_component() -> Vec<u8> {
     let (_module, bytes) =
         tau_cli::cmd::build_wasm::lower_to_wasm_ir(&fixture("trivial")).expect("lowers");
-
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(std::path::Path::parent)
-        .unwrap()
-        .to_path_buf();
-    let target_dir = workspace_root.join("target/tau-build-wasm-e2e");
-
-    let ir_file = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(ir_file.path(), &bytes).unwrap();
-
-    let output = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root)
-        .args([
-            "build",
-            "-p",
-            "tau-wasm-guest",
-            "--target",
-            "wasm32-wasip2",
-            "--release",
-            "--message-format=json",
-        ])
-        .env("CARGO_INCREMENTAL", "0")
-        .env("CARGO_TARGET_DIR", &target_dir)
-        .env("TAU_IR_BYTES", ir_file.path())
-        .output()
-        .expect("cargo spawn");
-    assert!(
-        output.status.success(),
-        "guest build failed (is wasm32-wasip2 installed?):\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let wasm_path = stdout
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter(|m| m["reason"] == "compiler-artifact")
-        .filter(|m| {
-            m["target"]["name"]
-                .as_str()
-                .is_some_and(|n| n == "tau-wasm-guest" || n == "tau_wasm_guest")
-        })
-        .flat_map(|m| {
-            m["filenames"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|f| f.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .find(|f| f.ends_with(".wasm"))
-        .expect("a .wasm artifact for tau-wasm-guest");
-    std::fs::read(wasm_path).unwrap()
+    common::wasm_component::build_component_with_ir(&bytes)
 }
 
 #[test]
@@ -94,5 +42,32 @@ fn build_wasm_then_run_returns_typed_stream() {
         ),
         "stream must end with RunCompleted; got {:?}",
         events.last()
+    );
+}
+
+/// #621 PR-2: a linear (agent → agent) pipeline already passes wasm
+/// feature-fit today, but until `run_pipeline` landed in-guest, such a
+/// build produced a component that errored at runtime with "pipelines are
+/// not yet executed in-wasm". This proves the gap is closed end to end:
+/// the guest drives the whole pipeline and the `run` export payload is the
+/// LAST leaf step's rendered output (not the first agent's).
+#[test]
+#[ignore = "builds a wasm component; run with --run-ignored"]
+fn build_wasm_linear_pipeline_runs_in_guest_and_returns_last_leaf() {
+    let (_module, bytes) =
+        tau_cli::cmd::build_wasm::lower_to_wasm_ir(&fixture("pipeline")).expect("lowers");
+    let component = common::wasm_component::build_component_with_ir(&bytes);
+    let response = |text: &str| {
+        format!(r#"{{"text":"{text}","tool_uses":[],"stop_reason":"EndTurn","usage":null}}"#)
+    };
+    let (payload, _events) = tau_wasm_host::run_component(
+        &component,
+        "hello",
+        vec![response("the draft"), response("the polished reply")],
+    )
+    .expect("guest runs the pipeline");
+    assert_eq!(
+        payload, "the polished reply",
+        "payload must be the LAST leaf step's rendered output"
     );
 }

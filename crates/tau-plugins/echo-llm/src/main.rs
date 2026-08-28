@@ -21,6 +21,11 @@
 //! - `error_on_method: Option<String>` — return `Err(LlmError::Internal)`
 //!   when this method is called (e.g. `"llm.complete"` or
 //!   `"llm.stream"`).
+//! - `canned_tool_call: Option<{ name, input }>` — on the FIRST
+//!   `llm.complete` call only, emit a tool-use block for `name` with
+//!   `input` and `StopReason::ToolUse`. The agent loop dispatches the
+//!   tool and calls back; turn 2 returns text as usual, ending the run.
+//!   Lets a test drive a real tool round trip without a live provider.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -31,8 +36,9 @@ use std::time::Duration;
 use serde::Deserialize;
 use tau_plugin_sdk::{run_llm_backend_with_config, ConfigError, Configure, SdkError};
 use tau_ports::{
-    batch_to_stream, fixtures::make_completion_response, CompletionRequest, CompletionResponse,
-    CompletionStream, LlmBackend, LlmError, StopReason,
+    batch_to_stream,
+    fixtures::{make_completion_response, make_tool_use},
+    CompletionRequest, CompletionResponse, CompletionStream, LlmBackend, LlmError, StopReason,
 };
 
 /// Static configuration consumed from the handshake `config` field.
@@ -54,6 +60,24 @@ struct EchoConfig {
     /// Return `Err(LlmError::Internal)` when this method is called.
     #[serde(default)]
     error_on_method: Option<String>,
+    /// Emit this tool call on the first `llm.complete` turn.
+    #[serde(default)]
+    canned_tool_call: Option<CannedToolCall>,
+}
+
+/// A tool-use block for the plugin to emit on its first completion turn.
+#[derive(Debug, Deserialize)]
+struct CannedToolCall {
+    /// Tool name — must match a `ToolSpec::name` the agent was given.
+    name: String,
+    /// Arguments passed to the tool. Defaults to `null`.
+    #[serde(default = "null_value")]
+    input: tau_domain::Value,
+}
+
+/// `tau_domain::Value` has no `Default` impl; serde needs one for `input`.
+fn null_value() -> tau_domain::Value {
+    tau_domain::Value::Null
 }
 
 /// Toy `LlmBackend` plugin.
@@ -76,8 +100,9 @@ impl Configure for EchoLlm {
 impl EchoLlm {
     /// Apply the test-only side effects (`crash_after_handshake`,
     /// `error_on_method`, `delay_response_ms`) and produce the next
-    /// canned text. Shared by `complete` and `stream`.
-    async fn next_text(&self, method: &str) -> Result<String, LlmError> {
+    /// canned text plus the 0-based turn index it consumed. Shared by
+    /// `complete` and `stream` via [`Self::next_response`].
+    async fn next_text(&self, method: &str) -> Result<(usize, String), LlmError> {
         if self.config.crash_after_handshake {
             panic!("echo-llm crash_after_handshake = true (test-only mode)");
         }
@@ -96,7 +121,37 @@ impl EchoLlm {
             .get(i)
             .cloned()
             .unwrap_or_else(|| self.config.canned_text.clone());
-        Ok(text)
+        Ok((i, text))
+    }
+
+    /// The full canned response for one turn. `complete` and `stream`
+    /// MUST share this: the runtime drives `stream`
+    /// (`tau-runtime-core/src/stream.rs`), so a tool call wired only into
+    /// `complete` would never reach an agent loop.
+    ///
+    /// `canned_tool_call` fires on the first turn only — the agent loop
+    /// dispatches the tool and calls back, and turn 2 returns plain text
+    /// to end the run. Emitting it every turn would spin to the turn cap.
+    async fn next_response(&self, method: &str) -> Result<CompletionResponse, LlmError> {
+        let (turn, text) = self.next_text(method).await?;
+        match (turn, self.config.canned_tool_call.as_ref()) {
+            (0, Some(call)) => Ok(make_completion_response(
+                text,
+                vec![make_tool_use(
+                    "echo-llm-tool-use-0".to_string(),
+                    call.name.clone(),
+                    call.input.clone(),
+                )],
+                StopReason::ToolUse,
+                None,
+            )),
+            _ => Ok(make_completion_response(
+                text,
+                Vec::new(),
+                StopReason::EndTurn,
+                None,
+            )),
+        }
     }
 }
 
@@ -106,18 +161,11 @@ impl LlmBackend for EchoLlm {
     }
 
     async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
-        let text = self.next_text("llm.complete").await?;
-        Ok(make_completion_response(
-            text,
-            Vec::new(),
-            StopReason::EndTurn,
-            None,
-        ))
+        self.next_response("llm.complete").await
     }
 
     async fn stream(&self, _req: CompletionRequest) -> Result<CompletionStream, LlmError> {
-        let text = self.next_text("llm.stream").await?;
-        let resp = make_completion_response(text, Vec::new(), StopReason::EndTurn, None);
+        let resp = self.next_response("llm.stream").await?;
         Ok(batch_to_stream(resp))
     }
 }

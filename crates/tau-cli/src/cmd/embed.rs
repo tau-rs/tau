@@ -39,6 +39,7 @@ pub fn emit_host_to(
     host: &str,
     project: &std::path::Path,
     out_root: &std::path::Path,
+    tau_dep: tau_sdk_codegen::TauDep,
 ) -> Result<EmbedArtifact> {
     use crate::cmd::build::{hex_lower, sanitize_crate_name};
     use crate::cmd::build_wasm::{lower_to_wasm_ir, world_from_module};
@@ -64,7 +65,7 @@ pub fn emit_host_to(
                 lib_crate_name: &lib,
                 ir_hash: &ir_hash,
                 wit: &wit,
-                tau_version: env!("CARGO_PKG_VERSION"),
+                tau_dep,
             });
             ("embed-rust", map, Some(ir_hash))
         }
@@ -117,7 +118,15 @@ pub async fn run(args: &EmbedArgs, output: &mut Output) -> Result<()> {
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    let artifact = emit_host_to(&args.host, &project, &out_root)?;
+    let dep_path; // owned String kept alive for the borrow below
+    let tau_dep = match &args.tau_dep_path {
+        Some(p) => {
+            dep_path = p.display().to_string().replace('\\', "/");
+            tau_sdk_codegen::TauDep::Path(&dep_path)
+        }
+        None => tau_sdk_codegen::TauDep::Version(env!("CARGO_PKG_VERSION")),
+    };
+    let artifact = emit_host_to(&args.host, &project, &out_root, tau_dep)?;
 
     if output.is_json() {
         let mut obj = serde_json::json!({

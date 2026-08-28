@@ -33,6 +33,7 @@ members = [
     "crates/tau-sandbox-native",
     "crates/tau-sandbox-proxy",
     "crates/tau-sandbox-windows",
+    "crates/tau-embed-example",
     "crates/tau-sdk-codegen",
     "crates/tau-ts-extract",
     "crates/tau-workflow",
@@ -40,6 +41,7 @@ members = [
     "crates/tau-conformance",
     "crates/tau-wasm-guest",
     "crates/tau-wasm-host",
+    "crates/tau-wasm-embed-example",
     "xtask",
 ]
 exclude = [
@@ -82,13 +84,13 @@ all = "warn"
 
 [workspace.dependencies]
 # β.7.5 wasm guest (wasm32-wasip2 only)
-wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
-wit-parser  = "0.251"
+wit-bindgen = { version = "0.60", default-features = false, features = ["macros", "realloc"] }
+wit-parser  = "0.257"
 dlmalloc    = { version = "0.2", features = ["global"] }
 # β.7.5 wasm host (std embedder; host targets only)
-wasmtime    = "47"
+wasmtime    = "48"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
-tau-ports           = { path = "crates/tau-ports",  version = "0.7.0", default-features = false }
+tau-ports           = { path = "crates/tau-ports",  version = "0.7.1", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
 tau-ir-lower        = { path = "crates/tau-ir-lower", version = "0.0.0" }
 tau-trace           = { path = "crates/tau-trace", version = "0.0.0" }
@@ -136,7 +138,8 @@ rstest          = "0.26"
 walkdir         = "2"
 globset         = "0.4"
 regex           = "1"
-jsonschema      = "0.49"
+regex-automata  = { version = "0.4.18", default-features = false }
+jsonschema      = "0.50"
 schemars        = { version = "1", default-features = false }
 foldhash     = { version = "0.2", default-features = false }
 futures-core    = { version = "0.3", default-features = false, features = ["alloc"] }

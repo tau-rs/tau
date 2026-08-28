@@ -32,6 +32,7 @@
 
 pub mod echo_plugins;
 pub mod mock_llm;
+pub mod wasm_component;
 pub use mock_llm::MockLlmBackend;
 
 use std::path::{Path, PathBuf};

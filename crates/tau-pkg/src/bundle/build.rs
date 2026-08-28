@@ -75,7 +75,7 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     // dirs-aware entry point `ProjectConfig::from_path` delegates to — this
     // is the same pipeline `tau run` / `tau check` use, so the bundle records
     // exactly what the project config layer would surface to the runtime,
-    // *including* `[dirs]`-scanned agents and tools (ADR-0068). Reading the
+    // *including* `[dirs]`-scanned agents and tools (ADR-0069). Reading the
     // raw bytes ourselves rather than calling `from_path` keeps them around
     // for `tau_toml_sha256` and `extract_project_version` below.
     let tau_toml_path = opts.project_root.join("tau.toml");
