@@ -73,13 +73,28 @@ Load-bearing facts established during design:
 - The wasm artifact stays fully self-executing (β.7.5 contract): every
   embedder keeps providing only `complete`/`now-millis`/`next-u64`/
   `emit-event`.
-- The guest gains a regex engine (`regex-automata`, alloc-only config).
-  **Measured** (release, `wasm32-wasip2`, same fixture IR, `goal-predicates`
-  on vs stubbed off): 2,558,423 B vs 2,015,233 B — **+543,190 B (~530 KiB,
-  ~27%)**, paid by every component including ones whose IR uses no goal
-  predicates. Accepted: the alternative (a leaner engine) costs cross-target
-  parity, see below. Reducing it by cfg-gating the registry on the baked IR
-  is tracked in #689.
+- The guest gains a regex engine (`regex-automata`, alloc-only config), paid
+  by every component including ones whose IR uses no goal predicates.
+  Two separate measurements, different methods — do NOT add them into a
+  single headline:
+
+  | What | Method | Result |
+  |---|---|---|
+  | The registry itself | `goal_predicates::matches_` body stubbed out, narrow (`unicode-case`+`unicode-perl`) feature set | 2,558,423 B vs 2,015,233 B → **+543,190 B (~530 KiB)** |
+  | Widening the features to restore parity | `tau build wasm` on `fixtures/wasm-build/pipeline`, narrow vs `unicode`+`unicode-word-boundary` | 2,550,340 B vs 2,786,007 B → **+235,667 B (~230 KiB, +9.2%)** |
+
+  The two used different fixtures and different toggles, so the honest
+  statement is "roughly 0.5 MiB for the registry, plus ~230 KiB to make its
+  accepted language match the native graph" — not a single summed figure.
+  Accepted: the alternative (a leaner engine) costs cross-target parity, see
+  below.
+
+  Reducing this is tracked in **#689**, and it is a CODE change, not a
+  feature flip: `tau-wasm-guest/src/goal_registry.rs` calls
+  `tau_native_tools::goal_predicates::invoke` unconditionally, so building
+  the guest with `goal-predicates` off does not compile today (verified).
+  Cfg-gating the registry on whether the baked IR actually references a
+  predicate has to make that call site conditional first.
 - **The engine's feature list is a parity contract, not a size knob.** The
   predicate source is shared, but cargo feature unification decides the
   accepted regex language per graph: in the `tau-cli` graph

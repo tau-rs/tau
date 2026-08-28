@@ -60,8 +60,13 @@ const-folds, and LTO drops everything behind it — the pipeline interpreter, th
 agent loop and the goal-predicate registry (with its regex engine) are all dead
 code in this number. It is a useful regression tripwire for the shell and the
 capability world; it bounds nothing about a component that carries real IR. The
-in-guest control-flow work (ADR-0068) added ~530 KiB to components that do
-(measured there), and this gate did not move.
+in-guest control-flow work (ADR-0068) added roughly 0.5 MiB for the goal-predicate
+registry plus ~230 KiB to widen its regex feature set to match the native graph —
+all of it to components that carry real IR, and this gate did not move for any
+of it.
+
+Note the table below predates that regex widening: the same `pipeline` fixture
+built today is 2,786,007 bytes. The step-change conclusion is unchanged.
 
 | Measurement | Bytes | KiB | Tool |
 |---|--:|--:|---|
