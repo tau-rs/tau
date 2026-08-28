@@ -1,10 +1,12 @@
 //! Gates that keep the cargo-fuzz harnesses from becoming silent no-ops.
 //!
-//! Two independent invariants, each corresponding to a way the fuzzing setup
+//! Three independent invariants, each corresponding to a way the fuzzing setup
 //! has already failed in this repo while looking healthy:
 //!
-//!   1. every fuzz `[[bin]]` is listed in BOTH workflow matrices, and
-//!   2. every fuzz manifest is its own workspace root (or it will not build).
+//!   1. every fuzz `[[bin]]` is listed in BOTH workflow matrices,
+//!   2. every fuzz manifest is its own workspace root (or it will not build), and
+//!   3. both lanes bound AddressSanitizer's bookkeeping (or a long run dies on
+//!      libFuzzer's RSS ceiling for a non-defect).
 //!
 //! Fuzz harnesses live in standalone (non-workspace) Cargo projects under
 //! `crates/<crate>/fuzz/`, and the jobs that actually RUN them enumerate their
@@ -203,6 +205,106 @@ fn every_fuzz_manifest_is_its_own_workspace_root() {
          Add an empty `[workspace]` table to each. The root Cargo.toml `exclude` \
          entry does not cover a package nested under a member crate's directory.",
         unmarked.join("\n  ")
+    );
+}
+
+/// The `ASAN_OPTIONS:` value set in a workflow, if any.
+///
+/// Plain-text scan, consistent with the rest of this file: xtask is
+/// intentionally dependency-light, so there is no YAML parser here. Returns
+/// the raw right-hand side, trimmed and unquoted.
+fn asan_options(workflow: &str) -> Option<String> {
+    workflow.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("ASAN_OPTIONS:")?;
+        Some(rest.trim().trim_matches(['"', '\'']).to_owned())
+    })
+}
+
+/// Both fuzz lanes must bound ASan bookkeeping AND set an explicit malloc limit.
+///
+/// libFuzzer's `-rss_limit_mb` counts the sanitizer's metadata, not just the
+/// target's own allocations, and that metadata is per-allocation and mostly
+/// never released. On a fast target it therefore grows for the whole session
+/// regardless of how clean the target is: `frame_decode` accumulates
+/// ~570 B/exec under default options, peaking at 933 MB by 1M execs and
+/// 3598 MB by 3M. That red-lined the nightly ~5m40s into its 10-minute budget
+/// and blocked release tagging (#676). The same binary and corpus built with
+/// `-s none` peaks at 38 MB over 13.4M execs, so nothing in the decoder leaks
+/// — the RSS ceiling was measuring the sanitizer. Bounding the quarantine and
+/// the recorded allocation-stack depth flattens it (measured on the fix:
+/// 199 MB at 1M, 223 MB at 3M).
+///
+/// `-malloc_limit_mb` is gated separately because libFuzzer defaults it to
+/// `-rss_limit_mb`. Dropping the explicit flag silently disables the detector
+/// that catches a genuine single-allocation blowup, leaving only the RSS
+/// ceiling — which is the one that fires on sanitizer overhead. That is the
+/// exact inversion #676 spent a nightly and a release gate on.
+///
+/// Values are deliberately NOT pinned — tuning them is a legitimate change.
+/// What is gated is that the knobs are present in both lanes, because the
+/// failure mode is silent: dropping them re-arms a time bomb that only fires
+/// on a long nightly run or at release-tag time, months later. This repo has
+/// already lost months to exactly that (see the two tests above).
+#[test]
+fn both_fuzz_workflows_bound_sanitizer_bookkeeping() {
+    let root = repo_root();
+    let mut problems = Vec::new();
+
+    for rel in MATRIX_WORKFLOWS {
+        let body = std::fs::read_to_string(root.join(rel))
+            .unwrap_or_else(|e| panic!("{rel} is readable: {e}"));
+
+        match asan_options(&body) {
+            None => problems.push(format!("{rel} sets no ASAN_OPTIONS")),
+            Some(value) => {
+                for knob in ["quarantine_size_mb=", "malloc_context_size="] {
+                    if !value.contains(knob) {
+                        problems.push(format!(
+                            "{rel} ASAN_OPTIONS does not bound `{knob}` (got `{value}`)"
+                        ));
+                    }
+                }
+            }
+        }
+
+        if !body.contains("-malloc_limit_mb=") {
+            problems.push(format!(
+                "{rel} does not pass `-malloc_limit_mb` (libFuzzer then defaults it to \
+                 `-rss_limit_mb`, disabling single-allocation detection)"
+            ));
+        }
+    }
+
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "fuzz lanes no longer bound the sanitizer / no longer set a real malloc \
+         detector:\n  {}\n\n\
+         On the fuzz-run step of EACH workflow listed above, keep both:\n\
+         \x20 env:\n\
+         \x20   ASAN_OPTIONS: malloc_context_size=5:quarantine_size_mb=16\n\
+         \x20 args: -malloc_limit_mb=64\n\n\
+         Without the first, sanitizer bookkeeping alone crosses the RSS ceiling on a \
+         long run and fails the lane for a non-defect. Without the second, the \
+         allocation-blowup detector is silently off. See #676.",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn asan_options_reads_the_value_and_strips_quotes() {
+    assert_eq!(
+        asan_options("        env:\n          ASAN_OPTIONS: \"quarantine_size_mb=64\"\n")
+            .as_deref(),
+        Some("quarantine_size_mb=64")
+    );
+    assert_eq!(
+        asan_options("        env:\n          ASAN_OPTIONS: quarantine_size_mb=64\n").as_deref(),
+        Some("quarantine_size_mb=64")
+    );
+    assert_eq!(
+        asan_options("        env:\n          MINUTES: \"5\"\n"),
+        None
     );
 }
 
