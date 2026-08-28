@@ -179,6 +179,12 @@ struct SpawnTool<D> {
    call's `tool_result`. Child run failure ⇒ `is_error` tool result (coordinator
    recovers), not a run abort.
 
+   **Erratum (#731):** `:` and `#` are illegal in a domain agent id, so this id
+   shape made every child fall back to `agent_id = "ir-agent"`. The shipped id
+   is `<region-step>-<kind>-<entry>-<n>`, sanitized into `[a-z0-9-]` and capped
+   at 64 characters, where `<entry>` is a run-scoped region-execution counter —
+   see `docs/explanation/dynamic-regions.md`.
+
 Denial payloads are typed (`DynamicSpawnDenial { region_step, kind, reason }`,
 `reason ∈ { BoundsExhausted{spawned,max}, ConcurrencyExceeded{in_flight,max} }`;
 attenuation reuses `CapabilityDenial` with `narrowing_frame` = spawn tool name) and

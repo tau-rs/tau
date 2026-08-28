@@ -144,6 +144,96 @@ pub(crate) fn child_grant(
 }
 
 // ---------------------------------------------------------------------------
+// Child agent ids
+// ---------------------------------------------------------------------------
+
+/// Upper bound on a child id, matching `tau_domain::AgentId::MAX_LEN` and
+/// `tau_domain::PackageName::MAX_LEN` (both 64). Hard-coded rather than
+/// referenced so this module stays buildable on the `no_std` guest profile
+/// where `tau_domain`'s id types are still in scope but the constant is not
+/// re-exported through `tau_ir`; the `child_id_length_matches_domain_max`
+/// test pins the two together.
+const CHILD_ID_MAX_LEN: usize = 64;
+
+/// Rewrite one child-id component into the domain id charset: ASCII
+/// uppercase folds to lowercase, `[a-z0-9-]` passes through, every other
+/// byte becomes `-`.
+///
+/// Pipeline step ids and agent kinds come straight from `tau.toml` and are
+/// **not** charset-validated anywhere in `tau-pkg`, so this is load-bearing,
+/// not defensive.
+fn sanitize_component(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            let c = c.to_ascii_lowercase();
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// The id a dynamic-region child agent runs under.
+///
+/// Shape: `{region_step}-{kind}-{entry}-{index}`, components sanitized into
+/// the `[a-z0-9-]` charset, prefixed `x-` if the result would not start with
+/// `[a-z]`, and truncated to [`CHILD_ID_MAX_LEN`].
+///
+/// This id must satisfy `tau_domain::AgentId::from_str` /
+/// `PackageName::from_str`: `agent_loop::run_agent` converts it to both, and
+/// its `unwrap_or_else` fallbacks collapse a malformed id to `"ir-agent"`,
+/// which is what silently defeated per-child token attribution (#538) and
+/// per-child run spans before #731.
+///
+/// # Uniqueness
+///
+/// `index` is unique only within one `RegionCounters` — that is, within one
+/// *execution* of the `Dynamic` step, since `RegionCounters::new` runs per
+/// execution (`pipeline.rs`). A region inside a `Loop`, or one re-entered by
+/// a check rewind, restarts it at 0. `entry` closes that gap: it is a
+/// run-scoped counter bumped once per `Dynamic` step execution, so
+/// `{entry}-{index}` alone is unique across a run.
+///
+/// That property is also what makes truncation safe: only the human-readable
+/// `region_step`/`kind` prefix is ever cut, never the `-{entry}-{index}`
+/// suffix, so two long-named regions that truncate to the same prefix still
+/// get distinct ids. Truncation costs legibility, never correctness.
+///
+/// Uniqueness is per run: `entry` is not persisted, so a suspend/resume pair
+/// restarts it at 0. Child ids are a within-run attribution key, not a
+/// durable identity.
+pub(crate) fn child_agent_id(region_step: &str, kind: &str, entry: u64, index: u64) -> String {
+    let suffix = alloc::format!("-{entry}-{index}");
+    let step = sanitize_component(region_step);
+    let kind = sanitize_component(kind);
+
+    // Reserve the suffix, then split what is left evenly between the two
+    // readable components (plus the `-` that joins them). Ceil-divide the
+    // first share so an odd budget favours the region step, which is the
+    // more discriminating of the two.
+    let mut prefix = {
+        let budget = CHILD_ID_MAX_LEN.saturating_sub(suffix.len() + 1);
+        let step_budget = budget.div_ceil(2);
+        let kind_budget = budget - step_budget;
+        let step = &step[..step.len().min(step_budget)];
+        let kind = &kind[..kind.len().min(kind_budget)];
+        alloc::format!("{step}-{kind}")
+    };
+
+    // A leading digit, `-`, or empty component is legal in the charset but
+    // not as a *leading* character, so re-anchor the whole id. Cheaper to
+    // always check than to special-case the empty-step case separately.
+    if !prefix.starts_with(|c: char| c.is_ascii_lowercase()) {
+        prefix.insert_str(0, "x-");
+        prefix.truncate(CHILD_ID_MAX_LEN.saturating_sub(suffix.len()));
+    }
+
+    prefix + &suffix
+}
+
+// ---------------------------------------------------------------------------
 // ToolSpec constructor (bypasses #[non_exhaustive] via serde) — mirrors
 // agent_loop.rs::make_tool_spec (private to that module, so duplicated here
 // rather than exposed cross-module for a two-line helper).
@@ -183,6 +273,9 @@ pub(crate) struct SpawnTool<D> {
     envelope: CapabilityRequirements,
     counters: Arc<RegionCounters>,
     region_step: String,
+    /// Run-scoped sequence number of the `Dynamic` step execution this tool
+    /// belongs to — see [`child_agent_id`]'s uniqueness note.
+    entry: u64,
     module: Arc<IrModule>,
     dispatcher: Arc<D>,
     tool_name: String,
@@ -197,6 +290,7 @@ where
         envelope: CapabilityRequirements,
         counters: Arc<RegionCounters>,
         region_step: String,
+        entry: u64,
         module: Arc<IrModule>,
         dispatcher: Arc<D>,
     ) -> Self {
@@ -206,6 +300,7 @@ where
             envelope,
             counters,
             region_step,
+            entry,
             module,
             dispatcher,
             tool_name,
@@ -314,7 +409,7 @@ where
         let _release_guard = ReleaseOnDrop(&self.counters);
 
         // 3-5. Child id, meet-attenuated grant, child Agent node.
-        let child_id = alloc::format!("{}:{}#{n}", self.region_step, self.spawn.kind);
+        let child_id = child_agent_id(&self.region_step, &self.spawn.kind, self.entry, n);
         let grant = child_grant(&self.envelope, &self.spawn.capabilities);
         let child_agent = tau_ir::node::Agent {
             id: tau_ir::ids::AgentId(child_id.clone()),
@@ -439,6 +534,107 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------
+    // child_agent_id (#731)
+    // -----------------------------------------------------------------
+
+    /// Assert an id is accepted by BOTH domain validators `run_agent`
+    /// applies to it. Either rejection silently collapses the child to
+    /// `"ir-agent"` — the whole point of #731.
+    #[track_caller]
+    fn assert_legal(id: &str) {
+        use core::str::FromStr;
+        tau_domain::PackageName::from_str(id)
+            .unwrap_or_else(|e| panic!("{id:?} is not a legal PackageName: {e:?}"));
+        tau_domain::AgentId::from_str(id)
+            .unwrap_or_else(|e| panic!("{id:?} is not a legal AgentId: {e:?}"));
+    }
+
+    #[test]
+    fn child_id_has_the_documented_shape() {
+        assert_eq!(
+            child_agent_id("spawn-region", "researcher", 0, 0),
+            "spawn-region-researcher-0-0"
+        );
+        assert_legal(&child_agent_id("spawn-region", "researcher", 0, 0));
+    }
+
+    #[test]
+    fn child_id_length_matches_domain_max() {
+        assert_eq!(CHILD_ID_MAX_LEN, tau_domain::PackageName::MAX_LEN);
+        assert_eq!(CHILD_ID_MAX_LEN, tau_domain::AgentId::MAX_LEN);
+    }
+
+    /// Step ids and kinds are unvalidated `tau.toml` strings; every one of
+    /// these would produce an `ir-agent` fallback if passed through raw.
+    #[test]
+    fn child_id_sanitizes_illegal_components() {
+        for (step, kind) in [
+            ("Fan Out", "Deep Researcher"),
+            ("fan.out", "web:search"),
+            ("fan_out", "résumé"),
+            ("FANOUT", "R2D2"),
+            ("", ""),
+        ] {
+            let id = child_agent_id(step, kind, 3, 7);
+            assert_legal(&id);
+            assert!(id.ends_with("-3-7"), "{id} must keep its counter suffix");
+        }
+    }
+
+    /// A component that sanitizes to a leading digit, `-`, or nothing at all
+    /// is in-charset but not a legal *leading* character.
+    #[test]
+    fn child_id_reanchors_a_non_alphabetic_leading_character() {
+        assert_eq!(child_agent_id("9lives", "cat", 0, 0), "x-9lives-cat-0-0");
+        assert_eq!(child_agent_id("_x", "cat", 0, 0), "x--x-cat-0-0");
+        assert_eq!(child_agent_id("", "cat", 0, 0), "x--cat-0-0");
+        for id in [
+            child_agent_id("9lives", "cat", 0, 0),
+            child_agent_id("_x", "cat", 0, 0),
+            child_agent_id("", "cat", 0, 0),
+        ] {
+            assert_legal(&id);
+        }
+    }
+
+    /// Long step/kind names must truncate to `MAX_LEN` without ever eating
+    /// the `-{entry}-{index}` suffix that carries uniqueness.
+    #[test]
+    fn child_id_truncates_the_readable_prefix_not_the_counters() {
+        let step = "a".repeat(200);
+        let kind = "b".repeat(200);
+        let id = child_agent_id(&step, &kind, 12, 345);
+        assert_eq!(id.len(), CHILD_ID_MAX_LEN);
+        assert!(id.ends_with("-12-345"), "{id}");
+        assert_legal(&id);
+
+        // ...including when the over-long name also needs re-anchoring.
+        let id = child_agent_id(&"9".repeat(200), &kind, 12, 345);
+        assert_eq!(id.len(), CHILD_ID_MAX_LEN);
+        assert!(id.starts_with("x-9"), "{id}");
+        assert!(id.ends_with("-12-345"), "{id}");
+        assert_legal(&id);
+    }
+
+    /// The property the run-scoped `entry` counter buys: two executions of
+    /// the same region (a `Loop` pass, a check rewind) both restart their
+    /// admission index at 0 yet still yield distinct ids — and so do two
+    /// distinct regions whose long names truncate to the same prefix.
+    #[test]
+    fn child_id_is_unique_across_region_re_entry_and_truncation() {
+        assert_ne!(
+            child_agent_id("fanout", "researcher", 0, 0),
+            child_agent_id("fanout", "researcher", 1, 0),
+        );
+        let long_a = alloc::format!("{}-alpha", "z".repeat(60));
+        let long_b = alloc::format!("{}-beta", "z".repeat(60));
+        assert_ne!(
+            child_agent_id(&long_a, "researcher", 0, 0),
+            child_agent_id(&long_b, "researcher", 1, 0),
+        );
+    }
+
     fn test_spawn(kind: &str) -> tau_ir::pipeline::DynamicSpawn {
         tau_ir::pipeline::DynamicSpawn {
             kind: kind.into(),
@@ -505,6 +701,7 @@ mod tests {
             CapabilityRequirements::default(),
             counters,
             "fanout".into(),
+            0,
             test_module(),
             Arc::new(PanicDispatcher),
         );
@@ -554,6 +751,7 @@ mod tests {
             CapabilityRequirements::default(),
             counters,
             "fanout".into(),
+            0,
             test_module(),
             Arc::new(PanicDispatcher),
         );
@@ -683,6 +881,7 @@ mod tests {
             CapabilityRequirements::default(),
             counters,
             "fanout".into(),
+            0,
             test_module(),
             Arc::new(PanicDispatcher),
         );
@@ -730,6 +929,7 @@ mod tests {
             CapabilityRequirements::default(),
             counters,
             "fanout".into(),
+            0,
             test_module(),
             Arc::new(PanicDispatcher),
         );
