@@ -328,8 +328,19 @@ design changes. Separately, IR-interpreter runs never populate
 `options.orchestration_state`, so they emit no `TraceEvent::ToolCall`
 at all, clamped or otherwise. Net effect: the §12 producer is correct
 and covered by its own tests, but on its own it is dormant for the
-stock `tau run` CLI. Both gaps are closed by the reachability wiring
-designed in §13 (issue #631).
+stock `tau run` CLI. Both gaps — no capability forwarding on the IR
+path, no trace sink on IR runs — are closed by the reachability wiring
+designed in §13 (issue #631). That wiring is fully shipped, but the
+clamp row is still not observable end-to-end, because of two
+pre-existing production bugs entirely upstream of #631:
+
+- **#712** — the real MCP handshake always reports empty declared
+  capabilities (`ServerContract::from_handshake` is called with a
+  hardcoded `|_| Vec::new()` extractor), so `tool_effective_capabilities`
+  always returns `None` and no clamp can ever be computed outside a test.
+- **#714** — `tau run --bundle` re-lowers with an empty MCP contract
+  cache and fails `IrSourceDivergence` before reaching the interpreter,
+  so it cannot run any MCP-tool project at all, clamped or not.
 
 Prior-art audit (why this shape): object-capability systems attach
 narrowed authority to the object itself (Capsicum fd rights,
@@ -683,9 +694,15 @@ depend on tau-runtime-tokio): parse leniently —
 
 The envelope shape is mirrored locally in `tau-trace` (a private
 struct, serde-tagged the same way) with a round-trip test against a
-literal line produced by `RunLogLine` serialization, so drift between
-the two definitions fails a test rather than silently rendering
-nothing.
+hand-built literal line, deliberately not a `RunLogLine` value —
+`tau-trace` must stay pure and must not depend on `tau-runtime-tokio`,
+so there is no code-level tie to the writer's actual type. That means
+the unit test pins the reader's own handling (it would still pass if
+the writer silently drifted), not a genuine writer↔reader contract.
+The real cross-crate tie is the e2e in
+`crates/tau-cli/tests/clamp_row_e2e.rs`, which parses a file the
+writer actually produced through this same `parse_line`; that tie is
+currently dormant because the e2e is `#[ignore]`d (§13.6).
 
 ### 13.6 Testing
 
@@ -702,16 +719,32 @@ nothing.
   unit test (present / absent / non-MCP tool); envelope-parse
   round-trip per §13.5; the missing `Clamp` badge render test in
   `tui/render.rs` (amber `clamp:<to>` cell + detail pane).
-- **e2e (DoD anchor)**: a governed cassette-MCP project — `[allow]` +
-  `[allow.mcp.<entry>]` host ceiling narrower than the tool's declared
-  hosts, `cassette:` URL pin (no sandbox needed), scripted LLM —
-  driven through `tau run --bundle`; assert `.tau/runs/<run_id>.jsonl`
-  exists and, parsed through `tau_trace::parse_line` (the real reader),
-  contains a `ToolCall` with `capability: Some(Clamp { to })` matching
-  the ceiling hosts. Builds on `mcp_dispatch.rs`'s
-  `setup_project_with_pin` and `cmd_build_mcp.rs` scaffolding. The TUI
-  hop is covered by the render unit tests (a real-TTY e2e is not
-  attempted).
+- **e2e (DoD anchor)**: `crates/tau-cli/tests/clamp_row_e2e.rs` — a
+  governed cassette-MCP project — `[allow]` + `[allow.mcp.<entry>]`
+  host ceiling narrower than the tool's declared hosts, `cassette:`
+  URL pin (no sandbox needed), scripted LLM — driven through `tau run
+  --bundle`; asserts `.tau/runs/<run_id>.jsonl` exists and, parsed
+  through `tau_trace::parse_line` (the real reader), contains a
+  `ToolCall` with `capability: Some(Clamp { to })` matching the
+  ceiling hosts. Builds on `mcp_dispatch.rs`'s `setup_project_with_pin`
+  and `cmd_build_mcp.rs` scaffolding. The TUI hop is covered by the
+  render unit tests (a real-TTY e2e is not attempted). The test is
+  written, complete, and correct, but `#[ignore]`d pending **#712** and
+  **#714** (§12.1) — both pre-existing production bugs upstream of
+  #631; un-ignoring it is their acceptance test, and it should pass
+  unchanged once both land.
+
+  Two findings surfaced while building it, otherwise lost:
+  - a pipeline `StepRun::Tool` step can never produce a `ToolCall`
+    trace row — `pipeline.rs` calls `dispatcher.invoke` directly and
+    has zero trace references anywhere in the file; only the
+    agent-turn kernel loop (`stream.rs`, reached via `run_ir`'s
+    single-entry-agent path or a pipeline's `StepRun::Agent` arm)
+    emits those rows. Any clamp-row e2e must therefore drive a real
+    agent whose LLM decides to call the tool, not a bare tool step.
+  - `echo-llm` was extended with an additive, defaulted `tool_calls`
+    config field, because before that no subprocess-spawnable LLM
+    backend plugin could emit a `ToolUse` at all.
 
 ### 13.7 Out of scope
 
@@ -720,3 +753,8 @@ nothing.
 - A capability field on `RunEvent` (`--stream` / chat surfaces).
 - Everything already listed in §12.6 (enforcement observation, kernel
   gating on effective caps, non-MCP producers).
+- **Observability blockers #712 and #714** (§12.1, §13.6): fixing the
+  MCP handshake's empty capability extraction and the bundle
+  re-lowering's empty MCP cache are both pre-existing production bugs,
+  not part of this design — they are what stands between the shipped
+  producer chain and an observable clamp row.
