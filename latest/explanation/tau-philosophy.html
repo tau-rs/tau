@@ -1,0 +1,643 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Philosophy - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./explanation/tau-philosophy.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="the-tau-philosophy"><a class="header" href="#the-tau-philosophy">The tau philosophy</a></h1>
+<p><strong>Status:</strong> Canonical vision document. Supersedes the forward-looking parts of
+<a href="tau-as-language.html"><code>tau-as-language.md</code></a>, which remains in-tree as the
+historical lineage (referenced by ADRs 0014–0023).</p>
+<p><strong>Date:</strong> 2026-05-29.</p>
+<p><strong>Audience:</strong> project contributors, ADR authors, users deciding whether tau
+fits their problem.</p>
+<hr />
+<h2 id="in-one-breath"><a class="header" href="#in-one-breath">In one breath</a></h2>
+<blockquote>
+<p><strong>tau is a workflow compiler for portable, capability-safe AI agents and
+workflow automation.</strong> You declare an agent or workflow once — composing
+native tools, contracted MCP servers, and imported skills with explicit
+capabilities. <code>tau dev</code> runs it instantly against a prebuilt engine.
+<code>tau build</code> compiles the same declaration to a portable, capability-enforced
+artifact that runs where other harnesses can't — server, edge, browser
+(wasm), or embedded. Inference is always delegated to a pluggable endpoint.
+Credentials are always delegated to a provider chain. tau is the <strong>harness
+and the compiler</strong>; it owns no inference, no registry, no secret store, and
+packages no external tool code.</p>
+</blockquote>
+<pre><code>                          ONE DECLARATION
+                                │
+                ┌───────────────┴───────────────┐
+                ▼                               ▼
+            tau dev                         tau build --target …
+       (interpreted, instant)            (IR → portable artifact)
+       prebuilt engine on host           wasm primary; C-ABI / firmware
+       hot reload, Vercel-DX feel        secondary; capability-enforced
+                │                               │
+                └───────────────┬───────────────┘
+                                ▼
+                       SAME engine, SAME IR
+                       (no dev/prod drift)
+
+       inference  ──────▶  pluggable endpoint (local | LAN | cloud)
+       credentials ─────▶  provider chain (env | file | vault | device id | broker)
+       external tools ──▶  contracted MCP servers (never packaged)
+       local tools   ──▶  native, compiled in, capability-gated
+</code></pre>
+<hr />
+<h2 id="three-convictions"><a class="header" href="#three-convictions">Three convictions</a></h2>
+<p>These are the load-bearing beliefs. Everything in tau follows from them.</p>
+<h3 id="1-tau-is-a-compiler-not-a-framework"><a class="header" href="#1-tau-is-a-compiler-not-a-framework">1. tau is a <em>compiler</em>, not a framework</a></h3>
+<p>The agent ecosystem is saturated with frameworks: LangChain, CrewAI, Mastra,
+AutoGen, Semantic Kernel, OpenAI Agents SDK, Claude Agent SDK, Vercel AI SDK.
+Every one of them is an <em>interpreted server process</em>. Each ships your workflow
+as a runtime call graph, lives in your application process or beside it, and
+locks you to one execution environment.</p>
+<p>tau treats an agent/workflow as a <strong>source language</strong> with a <strong>canonical
+intermediate representation (IR)</strong>. <code>tau build</code> lowers the IR to a
+<strong>portable, content-hashed artifact</strong> that runs in many environments.
+The discipline is borrowed from cargo + Bazel: declare once, compile per
+target, ship the artifact.</p>
+<p>The consequence: an agent isn't <em>running code calling a library</em>. It's <em>a
+program with a frozen capability set and a target triple</em>, the way a Rust
+binary is.</p>
+<blockquote>
+<p><strong>Implementation status (2026-06-01):</strong> The workflow IR shipped in β.2 (PRs #263–#271).
+See <a href="../decisions/0037-workflow-ir.html">ADR-0037</a> and the
+<a href="../superpowers/specs/2026-05-31-workflow-ir-design.html">design spec</a>.
+v0 uses partial-interpret lowering; AOT lands in β.7. Conformance suite + <code>tau run --bundle</code>
+interpreter dispatch deferred to β.2.6.1.</p>
+</blockquote>
+<h3 id="2-tau-is-a-harness-everywhere-inference-and-credentials-are-always-delegated"><a class="header" href="#2-tau-is-a-harness-everywhere-inference-and-credentials-are-always-delegated">2. tau is a <em>harness everywhere</em>; inference and credentials are <em>always</em> delegated</a></h3>
+<p>The harness — the loop, tool dispatch, capability enforcement, context
+management — is what runs in the artifact. <strong>Inference is always a remote
+call</strong> to a pluggable endpoint, even from a microcontroller. <strong>Credentials
+are always resolved through a provider chain</strong>, never baked into the client.</p>
+<p>This dissolves the conflicts that broke earlier framings:</p>
+<ul>
+<li>"Self-contained" doesn't mean "owns the model." The model is delegated.</li>
+<li>"Portable" doesn't mean "carries credentials." Credentials are delegated.</li>
+<li>The browser case isn't a special exception: a wasm-resident harness in
+Angular still delegates inference (to a gateway) and credentials (to a
+broker). Same shape as every other target.</li>
+</ul>
+<p>The result is one model — <em>harness everywhere, inference + credentials
+delegated</em> — that covers server, edge, browser, and embedded without forking.</p>
+<h3 id="3-tau-is-capability-safe-by-construction-portability-is-the-dividend"><a class="header" href="#3-tau-is-capability-safe-by-construction-portability-is-the-dividend">3. tau is <em>capability-safe by construction</em>; portability is the dividend</a></h3>
+<p>Every tool — native or contracted — declares its capabilities <strong>once</strong>, in
+the root <code>tau.toml</code> constitution. Capabilities are uniform in <em>declaration</em>,
+not in <em>mechanism</em>: <code>tau build</code> <strong>lowers the same declaration per target</strong> to
+whatever that target enforces with:</p>
+<ul>
+<li><strong>wasm (the primary target):</strong> generated <strong>WIT imports</strong> + host config. A
+capability the workflow never declared produces no import; an un-imported
+host function is <strong>unreachable by construction</strong> — there is nothing to
+sandbox at runtime because the capability was never wired in. Enforcement is
+structural, not a runtime check.</li>
+<li><strong>host / native:</strong> an OS sandbox — landlock / seccomp (Linux),
+sandbox-exec (macOS), AppContainer (Windows) — gates the declared
+capabilities at the process boundary.</li>
+<li><strong>bare-metal firmware:</strong> <strong>passthrough</strong> — advisory only, and <strong>honestly
+labeled</strong> as such. The declaration is recorded and surfaced, but the chip
+provides no enforcement boundary; tau does not pretend otherwise.</li>
+</ul>
+<p><code>tau check</code> refuses to build a workflow that requires enforcement a target
+can't provide. A workflow that demands <code>strict</code> cannot ship as <code>passthrough</code>
+without an explicit declaration.</p>
+<p>This is the gap that MCP itself leaves open: MCP's "capabilities" are
+protocol-feature negotiation; its authorization is OAuth-scoped remote access.
+<strong>Neither sandboxes a tool's filesystem, network, or exec at runtime.</strong> tau
+fills exactly that gap, lowering one declaration to each target's native
+mechanism.</p>
+<p>Portability falls out of capability-correctness: if every tool's declared
+capability shape can be lowered onto the target, the artifact runs there. The
+target triple is the contract.</p>
+<hr />
+<h2 id="the-architecture-in-one-picture"><a class="header" href="#the-architecture-in-one-picture">The architecture, in one picture</a></h2>
+<pre><code>                            tau artifact (compiled)
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                                                                 │
+  │   AGENT HARNESS — loop · dispatch · context manager · cap gate   │
+  │       │                                                         │
+  │       ├─ NATIVE TOOLS  (compiled in)                            │
+  │       │     gpio · file · sensor · custom Rust                  │
+  │       │     enforced at OS / wasm level (landlock / WASI caps)  │
+  │       │     WORKS OFFLINE                                       │
+  │       │                                                         │
+  │       └─ MCP CONTRACTS  (typed interface, NOT packaged)         │
+  │             reach external MCP servers at runtime               │
+  │             capability-bounded at contract boundary             │
+  │                                                                 │
+  │   MCP FACILITATOR — built-in handlers for MCP primitives        │
+  │     tools/call · resources/read · sampling ★ · roots ★ ·         │
+  │     elicitation · prompts/get · notifications · cancellation    │
+  │       ★ where capability gate + delegated inference attach      │
+  │                                                                 │
+  │   CONTEXT MANAGER — stateful container + per-turn pipeline       │
+  │     state: history · summaries cache · memory ref (cross-turn)  │
+  │     pipeline: trim → compact → summarize → retrieve → dedup →    │
+  │               fit_budget   (pure, ordered, debuggable)          │
+  │                                                                 │
+  └─────────────────────────────────────────────────────────────────┘
+              │                          │                   │
+              ▼                          ▼                   ▼
+       INFERENCE ENDPOINT          MCP SERVERS         CREDENTIAL CHAIN
+       local / LAN / cloud         (external, ind.    Strategy +
+       (pluggable via              owned, contracted) Chain-of-Responsibility
+        LlmBackend port)                              baked · env · file ·
+                                                      SecretMgr · WorkloadId ·
+                                                      DeviceId · TokenBroker
+</code></pre>
+<p>The hexagonal structure is unchanged from tau's existing design. The
+philosophy <em>narrows</em> what tau builds versus integrates, not the architecture.</p>
+<hr />
+<h2 id="what-you-author-a-manifest-not-a-language"><a class="header" href="#what-you-author-a-manifest-not-a-language">What you author: a manifest, not a language</a></h2>
+<p>tau is a manifest plus a small amount of native tool code. A typical agent in
+TOML:</p>
+<pre><code class="language-toml">[agent.fan-monitor]
+prompt = "Watch the temperature; run the fan if it rises above 30°C."
+model  = "claude-haiku-4-5"
+
+[agent.fan-monitor.tools]
+read_temp = { native = "ReadTemp" }            # local, compiled in
+set_fan   = { native = "SetFan"  }              # local, compiled in
+weather   = { mcp = "weather" }                 # external, contracted
+
+[mcp.weather]
+url = "https://mcp.weather.com"
+capabilities = { network = ["api.weather.com"] }   # ◀ bounded
+
+[agent.fan-monitor.context]
+budget = { tokens = 16000, headroom = 0.2 }
+pipeline = [ "trim_old", "compact_tool_outputs",
+             "summarize_oldest", "fit_budget" ]
+</code></pre>
+<p>The eventual TS sugar layer (post-IR) emits the same IR, type-checked:</p>
+<pre><code class="language-ts">import { agent, tool, mcp, contextManager } from "tau";
+
+const readTemp = tool({
+  description: "Read the temperature sensor",
+  capabilities: { hardware: ["i2c:0x48"] },
+  run: async () =&gt; readSensor(),
+});
+
+const weather = mcp("https://mcp.weather.com", {
+  capabilities: { network: ["api.weather.com"] },
+});
+
+export const fanMonitor = agent({
+  model: "claude-haiku-4-5",
+  prompt: "Watch the temperature; run the fan if it rises above 30°C.",
+  tools: { readTemp, weather },
+  context: contextManager({
+    budget: { tokens: 16_000 },
+    pipeline: ["trimOld", "compactToolOutputs", "summarizeOldest", "fitBudget"],
+  }),
+});
+</code></pre>
+<p><strong>The TS surface is sugar over the IR, not a parallel runtime.</strong> The IR is
+canonical; both surfaces lower to it.</p>
+<hr />
+<h2 id="two-tool-kinds-one-rule"><a class="header" href="#two-tool-kinds-one-rule">Two tool kinds, one rule</a></h2>
+<p>The rule for deciding between native and contracted:</p>
+<blockquote>
+<p><em>Can I implement it directly, and does it touch local resources that need
+offline capability? → <strong>native tool</strong>. Is it external, owned by someone
+else, or impractical to reimplement? → <strong>MCP contract</strong>.</em></p>
+</blockquote>
+<div class="table-wrapper"><table><thead><tr><th></th><th>native tool</th><th>MCP contract</th></tr></thead><tbody>
+<tr><td>code lives in</td><td>tau artifact</td><td>external MCP server</td></tr>
+<tr><td>reached via</td><td>in-process call</td><td>MCP wire (stdio / HTTP / SSE)</td></tr>
+<tr><td>capability gate at</td><td>OS / wasm boundary</td><td>contract boundary</td></tr>
+<tr><td>works offline</td><td>yes</td><td>only when reachable</td></tr>
+<tr><td>who owns the code</td><td>you</td><td>the server author</td></tr>
+<tr><td>installed where</td><td>nowhere — it's <em>in</em> the artifact</td><td>independently distributed</td></tr>
+</tbody></table>
+</div>
+<p>tau is the <strong>facilitator</strong> for the MCP side: it ships built-in handlers for
+every standard MCP interaction, capability-bounds each one, and presents a
+typed, ergonomic surface to the harness. tau <strong>does not package MCP server
+code</strong>, ever. The server's distribution model stays intact; tau owns the
+interface to it.</p>
+<p>This is "contract, don't contain" applied uniformly: tau aggregates
+ecosystems, it doesn't replace them.</p>
+<hr />
+<h2 id="two-profiles-one-engine"><a class="header" href="#two-profiles-one-engine">Two profiles, one engine</a></h2>
+<pre><code>DEV — tau dev                          RELEASE — tau build --target …
+====================================   ====================================
+prebuilt engine on host                IR lowered to portable artifact
+your tools as callbacks                 your tools linked statically
+hot reload                              tree-shake unused tools (wasm-metadce)
+introspection on                        stripped, debug info dropped
+no toolchain required                   per-target compile (cargo / wasm tooling)
+~Vercel AI SDK feel                     wasm-primary, C-ABI / firmware secondary
+</code></pre>
+<p>The discipline is <strong>one engine, two modes</strong> — the prebuilt engine driving
+<code>tau dev</code> is the same Rust core that's lowered to wasm by <code>tau build</code>. Your
+tools are the only thing that changes shape: callbacks in dev, statically
+linked in release. There is no second runtime.</p>
+<p>This is how tau answers "works in dev, breaks in prod": there is one
+behavioral specification, exercised both ways, and a <strong>cross-target
+conformance gate</strong> that runs the same scenarios against both profiles and
+demands agreement.</p>
+<hr />
+<h2 id="context-management-is-first-class"><a class="header" href="#context-management-is-first-class">Context management is first-class</a></h2>
+<p>Context engineering is the dominant agent-quality lever in 2026.
+tau treats it as a baked-in primitive, not a library you bolt on per workflow.</p>
+<p>The shape is a <strong>stateful manager containing a per-turn pipeline of pure
+transformers</strong> (Shape 1 ⊕ Shape 2 hybrid):</p>
+<pre><code>ContextManager  — owns long-lived state across turns
+ ┌──────────────────────────────────────────────────────────────┐
+ │ STATE: full history · summaries cache · memory store ref    │
+ │                                                              │
+ │ each turn:                                                   │
+ │   PIPELINE (pure, ordered, debuggable)                       │
+ │   trim_old → compact_tool_outputs → summarize_oldest →       │
+ │   retrieve_relevant → dedup → fit_budget (always last)       │
+ │                                                              │
+ │ on response: update summaries cache, persist memory items    │
+ └──────────────────────────────────────────────────────────────┘
+</code></pre>
+<p>Four discipline rules keep the boundary clean:</p>
+<ol>
+<li>Pipeline steps are <em>pure</em> transforms over <code>(messages, ctx_state)</code>. They
+read state through the manager, never directly hold it.</li>
+<li>State updates happen only at named hook points (<code>before_turn</code>,
+<code>after_response</code>, <code>on_tool_result</code>).</li>
+<li><code>fit_budget</code> is always the last step — the defense-in-depth guarantee that
+the produced prompt fits the model window.</li>
+<li>The same hybrid runs on every target. On wasm/edge/embedded, you configure
+cheaper steps (or skip retrieval if no vector store is reachable). The
+engine doesn't fork.</li>
+</ol>
+<p>v1 ships windowing + tool-output compaction (universal, no infrastructure
+needed, works on every target). Retrieval / long-term memory comes as v2,
+backed by a contracted vector-store MCP — no built-in vector DB.</p>
+<hr />
+<h2 id="credentials-a-provider-chain-never-a-vault"><a class="header" href="#credentials-a-provider-chain-never-a-vault">Credentials: a provider chain, never a vault</a></h2>
+<p>tau resolves credentials through a <strong>provider chain</strong> modeled on AWS / GCP /
+Azure default credential chains, Dapr secret stores, and SPIFFE / Kubernetes
+workload identity. Each provider is a Strategy; the chain is tried in
+configured order until one resolves:</p>
+<pre><code>CredentialProvider chain
+  Baked            (compile-time constant — trusted/offline)
+  Env              (TAU_LLM_KEY=…)
+  File             (mounted secret, k8s volume)
+  SecretManager    (Vault / AWS / GCP / Azure KV)
+  WorkloadIdentity (SPIFFE / IRSA / GKE Workload Identity — no static secret)
+  DeviceIdentity   (per-device non-extractable key in a secure element)
+  TokenBroker      (OIDC / OAuth2 short-lived token exchange — BFF)
+  → first one that resolves wins; deployment configures the order.
+</code></pre>
+<p>tau ships the chain mechanism plus the standard providers; it does <strong>not</strong>
+operate a secret store. For the embedded case, the recommended pattern is
+<strong>per-device identity</strong> (non-extractable key in a secure element — ESP32-S3
+eFuse + flash encryption, or ATECC608) used to mint short-lived scoped
+tokens for inference and tool backends. Shared bearer keys on a fleet are
+explicitly discouraged.</p>
+<p>For the browser: the <strong>Backend-for-Frontend (BFF) pattern</strong> is the only
+sanctioned shape — the browser never sees a provider key. Either a tiny
+token broker mints short-lived scoped tokens, or a thin AI gateway proxies
+calls (Cloudflare AI Gateway, Portkey, LiteLLM, Kong). tau supports both via
+the same <code>TokenBroker</code> provider.</p>
+<hr />
+<h2 id="what-tau-is-not"><a class="header" href="#what-tau-is-not">What tau is NOT</a></h2>
+<p>The boundaries are part of the philosophy. They keep tau focused on what's
+genuinely unoccupied.</p>
+<ul>
+<li><strong>Not an inference engine.</strong> Inference is delegated through <code>LlmBackend</code>.
+tau will never bundle a model.</li>
+<li><strong>Not a credential vault.</strong> tau resolves; it doesn't store. Operators choose
+Vault, SPIFFE, k8s secrets, etc.</li>
+<li><strong>Not an MCP registry or marketplace.</strong> tau aggregates the existing MCP
+registry; it does not host servers, and packages no MCP server code.</li>
+<li><strong>Not a codegen backend.</strong> <code>tau build</code> is a <strong>front-end transform</strong> —
+workflow IR → emitted code — handed off to <code>cargo</code> + the wasm component
+toolchain. tau is not reimplementing LLVM.</li>
+<li><strong>Not the easy server-agent SDK.</strong> Vercel AI SDK wins that market. tau is
+for workflows that need to <strong>be a portable artifact</strong> — where ship-and-run
+somewhere unusual is the requirement.</li>
+<li><strong>Not authored in Python or TypeScript as canonical source.</strong> A TS sugar
+layer is supported, but the IR is the source of truth. Authoring in a host
+language would invert the compiler thesis.</li>
+<li><strong>Not a walled package registry.</strong> tau is a <strong>polyglot resolver +
+content-hashed lockfile</strong> over crates.io, npm, the MCP registry, Anthropic
+skills, and git URLs. tau-native units distribute via git (the Go-modules
+model), not a tau-operated store.</li>
+</ul>
+<hr />
+<h2 id="the-wedge"><a class="header" href="#the-wedge">The wedge</a></h2>
+<p>The 2026 field has filled in around tau — Cloudflare a portable MCP host
+(vendor-locked), wasmCloud wasm sandboxing (a mesh you operate), LangGraph a
+durable agent graph (Python, no artifact), BAML a prompt compiler
+(host-language glue), Temporal durable execution (your infra), esp-claw an
+on-MCU agent (no sandbox). Each owns one slice. Nobody ships tau's
+combination:</p>
+<blockquote>
+<p>declare what agents are <em>allowed</em> in a root constitution, author workflows
+beautifully in any language (generated, typed), and compile to one
+hardware-agnostic, capability-bounded component proven identical across
+local / edge / browser / embedded — with build-time enforcement and no
+runtime surprises.</p>
+</blockquote>
+<p>The moat is the <strong>combination + conformance + vendor-independence +
+root-governed capability safety</strong> — not novelty of any one piece.</p>
+<p>Concretely, "build-time enforcement and no runtime surprises" is three
+independent gates — compile-time types, <code>tau check</code>, and the conformance gate
+— each proving a property the other two cannot. See
+<a href="three-gate-guarantee.html">The three-gate guarantee</a>.</p>
+<hr />
+<h2 id="acknowledged-risks"><a class="header" href="#acknowledged-risks">Acknowledged risks</a></h2>
+<p>The vision contains three pieces with no map. They are surfaced here so the
+philosophy is honest about what's hard.</p>
+<p><strong>(D) Declarative agent / workflow IR → portable artifact compiler.</strong>
+<em>Genuinely unprecedented.</em> LangGraph compiles to in-memory graphs; Cloudflare
+Workflows persists JS step state; n8n is JSON-interpreted at runtime. Nobody
+lowers an agent/workflow IR to a portable wasm component today. This is the
+foundational research bet. Framed before engine implementation in a separate
+scoping doc.</p>
+<p><strong>(G) Polyglot resolver across crates.io / npm / MCP registry / git /
+Anthropic skills.</strong> <em>Hard, scope-discipline required.</em> No tool spans this
+combination today. Phase-1 scope is deliberately narrow: tau-native units via
+git + content-hash lockfile (Go-modules pattern, proven), delegate to host
+ecosystems for crates.io / npm (call <code>cargo</code> / <code>npm</code>), contract MCP at
+runtime. tau is not the cross-ecosystem solver. Framed in a scoping doc
+before any resolver work begins.</p>
+<p><strong>(C″) WASI 0.2 Component Model on microcontrollers.</strong> <em>Runtime not yet
+available.</em> WAMR on ESP32 is production but still on WASI Preview 1. The
+honest framing: wasm component is the primary self-contained target for
+server / edge / browser; the embedded path uses WAMR / Preview-1 wasm or
+native firmware (<code>bare-metal-*-passthrough</code>) until the component-model
+runtime ships on MCU. Framed in a scoping doc.</p>
+<p>These three are first-class line items in the roadmap. Phase 0 of the
+post-philosophy roadmap is framing them; no engine implementation work
+begins until they are scoped.</p>
+<hr />
+<h2 id="audience-and-adoption-posture"><a class="header" href="#audience-and-adoption-posture">Audience and adoption posture</a></h2>
+<p>tau is not for everyone, on purpose. The audience self-selects to the
+problem.</p>
+<p><strong>For:</strong> developers shipping agents to environments where running a tau
+daemon and calling a hosted service is not an option — embedded products,
+on-premises / regulated, edge / IoT, browser apps with no backend, software
+that ships an agent as a library to its end users.</p>
+<p><strong>Not for:</strong> "I want a chatbot in my web app." Vercel AI SDK or calling the
+API directly is lighter and better suited. tau <strong>should not</strong> chase that
+market.</p>
+<p>The progressive-disclosure principle keeps the on-ramp gentle: <code>tau dev</code> is
+instant and toolchain-free; rigor (capabilities, target triples, hermetic
+builds) turns on as you move toward release. You don't pay the build-system
+ceremony until you ask for portability.</p>
+<hr />
+<h2 id="lineage"><a class="header" href="#lineage">Lineage</a></h2>
+<p>This document supersedes the forward-looking parts of
+<a href="tau-as-language.html"><code>tau-as-language.md</code></a> (2026-05-02). That document
+introduced the "tau as a compiled language" framing and the target-triple
+discipline, which both survive. What this document adds, and where it
+diverges:</p>
+<ul>
+<li><strong>adds</strong> the harness-everywhere / inference-always-delegated principle.</li>
+<li><strong>adds</strong> the two-tool-kinds rule (native vs MCP contract) and tau as MCP
+facilitator.</li>
+<li><strong>adds</strong> the context manager as a first-class baked-in primitive.</li>
+<li><strong>adds</strong> the credential provider chain.</li>
+<li><strong>adds</strong> the polyglot resolver / no-walled-registry posture.</li>
+<li><strong>adds</strong> the dev/release one-engine discipline and TS sugar layer.</li>
+<li><strong>narrows</strong> what tau builds: the engine, the capability gate, the IR, the
+facilitator, the portability machinery. Everything else is integrated.</li>
+<li><strong>acknowledges</strong> the three load-bearing risks (D, G, C″) that
+<code>tau-as-language.md</code> did not flag as research bets.</li>
+</ul>
+<p>ADRs referencing the older vision remain valid as historical record; new
+ADRs should reference this document.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../explanation/index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../explanation/three-gate-guarantee.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../explanation/index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../explanation/three-gate-guarantee.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

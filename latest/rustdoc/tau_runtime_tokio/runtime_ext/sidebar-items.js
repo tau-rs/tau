@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["spawn_root_agent_with_scope"]};
