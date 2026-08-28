@@ -11,6 +11,10 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
+# Must equal the workspace pin in the root `Cargo.toml` — this manifest is its
+# own cargo root (see `[workspace]` below), so `workspace = true` cannot resolve
+# and dependabot cannot see it. CI's `wasm probe fixtures track the workspace
+# wit-bindgen` job enforces the equality (issue #722).
+wit-bindgen = { version = "0.60", default-features = false, features = ["macros", "realloc"] }
 
 [workspace]
