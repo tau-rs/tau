@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["build_filter","install","install_with_extra_layers"]};
