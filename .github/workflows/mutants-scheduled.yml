@@ -97,7 +97,7 @@ jobs:
           # is authoritative for `linux-stable`. Read-only cache use.
           save-if: "false"
 
-      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f  # nextest
+      - uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7  # nextest
         if: steps.precheck.outputs.skip != 'true'
 
       - name: Install cargo-mutants
