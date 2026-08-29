@@ -114,10 +114,7 @@ fn bundle_run_writes_a_readable_run_log_with_a_turn_event() {
         .expect("a run log jsonl must have been written");
 
     let contents = std::fs::read_to_string(&log).expect("read run log");
-    assert!(
-        !contents.trim().is_empty(),
-        "the run log must be non-empty"
-    );
+    assert!(!contents.trim().is_empty(), "the run log must be non-empty");
 
     let events: Vec<tau_ports::TraceEvent> = contents
         .lines()

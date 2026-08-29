@@ -377,14 +377,23 @@ pub(crate) async fn run_via_ir(
     // channel) so the interpreter's agent loop emits TraceEvents. Reuses the
     // same writer + file namespace as the multi-agent path, so
     // `tau trace --last` picks up bundle runs with no reader changes.
+    //
+    // Built inline (not via `trace_mpsc::channel_with_writer`) so this call
+    // site keeps the writer's `JoinHandle`: that handle is what
+    // `flush_jsonl_writer` below awaits, closing a #650-shaped race where a
+    // detached `tokio::spawn` writer task is never scheduled again before
+    // the CLI process exits, leaving `.tau/runs/<id>.jsonl` truncated to
+    // zero bytes even though the run completed successfully.
     let mut trace_subscribers: Vec<
         Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber>,
     > = Vec::new();
-    trace_subscribers.push(
-        tau_runtime_tokio::orchestration::trace_mpsc::channel_with_writer(
-            tau_runtime_tokio::orchestration::persistence::run_log_path(scope.path(), &run_id),
-        ),
+    let (jsonl_subscriber, jsonl_rx) =
+        tau_runtime_tokio::orchestration::trace_mpsc::MpscTraceSubscriber::channel();
+    let jsonl_writer_handle = tau_runtime_tokio::orchestration::persistence::spawn_writer(
+        tau_runtime_tokio::orchestration::persistence::run_log_path(scope.path(), &run_id),
+        jsonl_rx,
     );
+    trace_subscribers.push(Arc::new(jsonl_subscriber));
     let tui_rx = if args.tui {
         let (subscriber, rx) =
             tau_runtime_tokio::orchestration::trace_mpsc::MpscTraceSubscriber::channel();
@@ -437,6 +446,14 @@ pub(crate) async fn run_via_ir(
         )
         .await;
 
+        // `dispatcher` (and every trace_subscribers clone it carried,
+        // including `jsonl_subscriber`'s sender) is fully dropped by now —
+        // `run_pipeline` owned it and has returned. Awaiting the writer
+        // handle here guarantees every already-queued TraceEvent is
+        // fsync'd to `.tau/runs/<run_id>.jsonl` before this function
+        // reports the outcome.
+        flush_jsonl_writer(jsonl_writer_handle).await;
+
         // Drop runtime + flush recorders before rendering, identical to
         // the single-agent path's discipline below so plugin processes are
         // reaped and recording files are flushed before the process exits.
@@ -462,6 +479,11 @@ pub(crate) async fn run_via_ir(
     )
     .await;
 
+    // `dispatcher` is fully dropped by now (see the pipeline branch's
+    // identical comment above) — flush the run-log writer before anything
+    // else observes the run as finished.
+    flush_jsonl_writer(jsonl_writer_handle).await;
+
     // 9. Drop runtime + flush recorders before rendering, identical to
     //    the cwd path's discipline so plugin processes are reaped and
     //    recording files are flushed before the process exits.
@@ -470,6 +492,27 @@ pub(crate) async fn run_via_ir(
 
     let outcome = run_outcome.context("running agent via IR interpreter")?;
     render_outcome(outcome, output)
+}
+
+/// Await the run-log JSONL writer's task to completion.
+///
+/// [`tau_runtime_tokio::orchestration::persistence::spawn_writer`] is a
+/// detached `tokio::spawn`: nothing else in the process joins it, so
+/// without this call the writer can still be sitting on its first
+/// `rx.recv().await` when `main` returns and the tokio runtime is torn
+/// down — the process exits with `.tau/runs/<run_id>.jsonl` created
+/// (via `OpenOptions::create`) but zero bytes long, even though the run
+/// itself completed successfully. This is the same shape of bug as #650
+/// (a detached `tokio::spawn` writer dropped at runtime shutdown), just in
+/// this newer §13.5 writer rather than `WorkflowRunLogLayer`. Call sites
+/// await this only after every `Arc<dyn TraceSubscriber>` clone (the
+/// `ForwardingDispatcher` and its `RunState`) has gone out of scope, so
+/// the writer's channel is already closed and this simply waits for the
+/// backlog to drain and fsync rather than blocking forever.
+async fn flush_jsonl_writer(handle: tokio::task::JoinHandle<()>) {
+    if let Err(e) = handle.await {
+        tracing::warn!("run-log writer task panicked: {e}");
+    }
 }
 
 /// Drive `fut` to completion, joining the blocking execution-trace TUI
