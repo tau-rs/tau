@@ -1078,30 +1078,45 @@ async fn run_streaming_path(
 /// as `recomputed_ir_hash: None`, which verify_bundle turns into a
 /// fail-closed `IrSourceUnverifiable` for a v2 bundle.
 ///
-/// MCP caveat (fail-closed): re-lowering here uses an **empty** MCP
-/// contract cache, whereas `tau build` resolves MCP contracts (live or
-/// pinned) and embeds the expanded server-tool nodes. A v2 bundle built
-/// from a project that uses MCP tools therefore re-lowers to a *different*
-/// hash and is conservatively rejected with `IrSourceDivergence` — it
-/// cannot currently be run via `--bundle`. This is the same limitation
-/// `tau verify --bundle` has (see `cmd::verify::run_reproducibility_check`)
-/// and is safe (fail-closed, never fail-open). Wiring the pinned MCP cache
-/// (`build::resolve_mcp_cache(cwd, /*offline=*/true)`) into this re-lowering
-/// so honest MCP bundles verify is a tracked follow-up.
+/// MCP handling (#714): `tau build` resolves MCP contracts (live or
+/// pinned) and embeds the expanded server-tool nodes, so re-lowering with
+/// an empty cache would produce a different hash and reject *every* honest
+/// MCP bundle with `IrSourceDivergence`. This re-lowering therefore feeds
+/// in the **pinned** cache read from `.tau/mcp/<entry>.contract.json`
+/// (`build::resolve_pinned_mcp_cache`). Pinned-only is deliberate: an
+/// integrity gate must not depend on a live handshake, whose answer could
+/// vary between the build and this check.
+///
+/// A project with no MCP entries resolves to an empty cache, so the
+/// non-MCP path is byte-for-byte what it was before.
+///
+/// If a pin is missing or corrupt, the cache cannot be reconstructed and
+/// the source cannot be authenticated, so this fails **closed**: the
+/// resolve error collapses to `recomputed_ir_hash: None`, which
+/// verify_bundle turns into `IrSourceUnverifiable` for a v2 bundle. A
+/// missing pin is a rejection, never a verification bypass.
 fn verify_bundle_against_source(
     cwd: &std::path::Path,
     bundle_path: &std::path::Path,
 ) -> Result<tau_pkg::bundle::VerifyReport, tau_pkg::bundle::VerifyError> {
-    // Empty MCP cache — see the "MCP caveat" in this fn's doc-comment.
-    let empty_mcp_cache = std::collections::BTreeMap::new();
-    let recomputed_ir_hash = crate::cmd::build::lower_ir(
-        cwd,
-        &tau_ports::target::TargetTriple::host(),
-        &empty_mcp_cache,
-        None,
-    )
-    .payload
-    .map(|p| p.canonical_ir_hash);
+    // Pinned MCP cache — see the "MCP handling" note in this fn's
+    // doc-comment. `Err` (missing/corrupt pin) deliberately degrades to a
+    // `None` hash below, i.e. fail-closed `IrSourceUnverifiable`.
+    let mcp_cache = match crate::cmd::build::resolve_pinned_mcp_cache(cwd) {
+        Ok((_locked, cache)) => Some(cache),
+        Err(e) => {
+            tracing::warn!(
+                "bundle source cross-check: MCP pins unreadable, \
+                 the source cannot be authenticated: {e}"
+            );
+            None
+        }
+    };
+    let recomputed_ir_hash = mcp_cache.and_then(|cache| {
+        crate::cmd::build::lower_ir(cwd, &tau_ports::target::TargetTriple::host(), &cache, None)
+            .payload
+            .map(|p| p.canonical_ir_hash)
+    });
 
     tau_pkg::bundle::verify_bundle(tau_pkg::bundle::VerifyOptions {
         bundle_path: bundle_path.to_path_buf(),
@@ -1393,5 +1408,177 @@ capabilities = {caps}
         write_project(a.path(), "proj", "[]");
         let bundle = build_bundle(a.path(), None);
         verify_bundle_against_source(a.path(), &bundle).expect("v1 bundle must verify");
+    }
+
+    // ---- MCP projects (#714) --------------------------------------------
+    //
+    // `tau build` embeds MCP server-tool nodes expanded from a resolved
+    // contract, so the source cross-check must re-lower with the same
+    // (pinned) contract cache or every honest MCP bundle is rejected.
+
+    const MCP_URL: &str = "https://mcp.weather.example.com";
+
+    /// Write a project whose single tool is an MCP server entry.
+    fn write_mcp_project(root: &std::path::Path) {
+        std::fs::write(
+            root.join("tau.toml"),
+            format!(
+                r#"
+packages = ["anthropic"]
+
+[project]
+name = "proj"
+version = "0.1.0"
+
+[models.default]
+backend = "anthropic"
+model = "claude-haiku-4-5"
+
+[agents.solo]
+display_name = "Solo"
+package = "proj@^0.1"
+model = "default"
+
+[agents.solo.prompt]
+system = "hi"
+
+[tools.weather]
+mcp = "{MCP_URL}"
+description = "weather server"
+capabilities = []
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("tau.lock"),
+            "schema_version = 6\ngenerated_by_tau_version = \"0.1.0\"\ngenerated_at = \"2024-01-01T00:00:00Z\"\n",
+        )
+        .unwrap();
+    }
+
+    /// Pin a contract for the `weather` entry at
+    /// `.tau/mcp/weather.contract.json`, advertising one tool named
+    /// `tool_name`. Two different names produce two different contract
+    /// hashes, and therefore two different lowered IR hashes.
+    fn write_pinned_contract(root: &std::path::Path, tool_name: &str) {
+        use tau_mcp::contract::pinned::PinnedContract;
+        use tau_mcp::contract::server_contract::{ContractTool, ServerContract};
+        use tau_mcp::protocol::initialize::ServerInfo;
+        use tau_mcp::protocol::tools::McpToolInputSchema;
+
+        let contract = ServerContract {
+            protocol_version: "2025-03-26".to_string(),
+            server_info: ServerInfo {
+                name: "weather".to_string(),
+                version: "1.0".to_string(),
+                additional: Default::default(),
+            },
+            tools: vec![ContractTool {
+                name: tool_name.to_string(),
+                description: None,
+                input_schema: McpToolInputSchema(serde_json::json!({"type": "object"})),
+                caps: Vec::new(),
+            }],
+        };
+        let pinned = PinnedContract::from_parts(MCP_URL.to_string(), contract)
+            .expect("pinned contract must hash");
+
+        let dir = root.join(".tau").join("mcp");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("weather.contract.json"),
+            serde_json::to_vec_pretty(&pinned).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Lower with the pinned MCP cache — what `tau build --offline` does.
+    fn lower_with_pins(root: &std::path::Path) -> IrPayload {
+        let (_locked, cache) = crate::cmd::build::resolve_pinned_mcp_cache(root)
+            .expect("pinned contracts must resolve");
+        crate::cmd::build::lower_ir(root, &TargetTriple::host(), &cache, None)
+            .payload
+            .expect("MCP project must lower to Some(IrPayload) with its pins")
+    }
+
+    /// The capability #714 restores: a bundle built from an MCP project,
+    /// with its contract pinned on disk, now passes the source
+    /// cross-check instead of being rejected with `IrSourceDivergence`.
+    #[test]
+    fn run_bundle_accepts_genuine_mcp_ir() {
+        let a = tempfile::tempdir().unwrap();
+        write_mcp_project(a.path());
+        write_pinned_contract(a.path(), "get_forecast");
+
+        let ir_a = lower_with_pins(a.path());
+        let bundle = build_bundle(a.path(), Some(ir_a));
+
+        verify_bundle_against_source(a.path(), &bundle)
+            .expect("honest MCP bundle must verify against its pinned source");
+    }
+
+    /// The gate stays fail-closed for MCP projects: an IR lowered from a
+    /// *different* server contract is still divergent from the source.
+    #[test]
+    fn run_bundle_rejects_mcp_ir_lowered_from_a_different_contract() {
+        // A: the source the user ships + inspects.
+        let a = tempfile::tempdir().unwrap();
+        write_mcp_project(a.path());
+        write_pinned_contract(a.path(), "get_forecast");
+        // B: same tau.toml, but the server advertises a different tool.
+        let b = tempfile::tempdir().unwrap();
+        write_mcp_project(b.path());
+        write_pinned_contract(b.path(), "exfiltrate");
+
+        let ir_b = lower_with_pins(b.path());
+        assert_ne!(
+            ir_b.canonical_ir_hash,
+            lower_with_pins(a.path()).canonical_ir_hash,
+            "the two contracts must lower to different IR for this test to mean anything"
+        );
+
+        // Bundle records A's tau.toml hash, but carries B's IR.
+        let bundle = build_bundle(a.path(), Some(ir_b.clone()));
+
+        let err = verify_bundle_against_source(a.path(), &bundle).unwrap_err();
+        match err {
+            VerifyError::IrSourceDivergence {
+                bundle_hash,
+                source_hash,
+            } => {
+                assert_eq!(bundle_hash, ir_b.canonical_ir_hash, "bundle carries B's IR");
+                assert_ne!(source_hash, bundle_hash, "A's re-lowered hash must differ");
+            }
+            other => panic!("expected IrSourceDivergence, got {other:?}"),
+        }
+    }
+
+    /// A missing pin must be a rejection, not a verification bypass: the
+    /// source can no longer be re-lowered to authenticate the IR, so the
+    /// gate fails closed with `IrSourceUnverifiable`.
+    #[test]
+    fn run_bundle_missing_mcp_pin_is_unverifiable_not_a_bypass() {
+        let a = tempfile::tempdir().unwrap();
+        write_mcp_project(a.path());
+        write_pinned_contract(a.path(), "get_forecast");
+
+        let ir_a = lower_with_pins(a.path());
+        let bundle = build_bundle(a.path(), Some(ir_a));
+
+        // Operator (or attacker) removes the pinned contract.
+        std::fs::remove_file(
+            a.path()
+                .join(".tau")
+                .join("mcp")
+                .join("weather.contract.json"),
+        )
+        .unwrap();
+
+        let err = verify_bundle_against_source(a.path(), &bundle).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::IrSourceUnverifiable),
+            "a missing MCP pin must fail closed, got {err:?}"
+        );
     }
 }
