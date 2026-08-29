@@ -8,11 +8,12 @@
 //! `supported_features`. **No override flag** — matches the Rust-like
 //! build-time enforcement principle.
 //!
-//! Today the only target that lists no features is `any-wasi-strict`: the wasm
-//! guest drives `run_ir_streaming`, which has no `run_pipeline` control-flow
-//! execution path, so a control-flow workflow (`Branch`/`Parallel`/`Loop`/
-//! `Suspend`) is refused for wasm here. Every native/host target supports all
-//! features, so this check is a no-op for them.
+//! As of ADR-0068 (#621), `any-wasi-strict` lists `[Branch, Parallel, Loop]`:
+//! the wasm guest executes these in-guest via `run_pipeline`. `Suspend` (no
+//! `SuspensionStore` channel in the WIT world) and `Dynamic` (EPIC 4.5
+//! pending) stay absent from `supported_features`, so a workflow using either
+//! is refused for wasm here. Every native/host target supports all features,
+//! so this check is a no-op for them.
 
 use alloc::vec::Vec;
 use tau_domain::IrFeature;
@@ -90,6 +91,26 @@ run = "agent:a"
 input = "${input}"
 "#;
 
+    const PARALLEL_TOML: &str = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "fanout"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "weather"
+    run = "agent:weather"
+    input = "${input}"
+
+  [[pipeline.steps.branches]]
+    [[pipeline.steps.branches.steps]]
+    id = "news"
+    run = "agent:news"
+    input = "${input}"
+"#;
+
     const DYNAMIC_TOML: &str = r#"
 packages = ["mock-llm"]
 
@@ -114,6 +135,20 @@ max_concurrency = 1
 agent = "coordinator"
 "#;
 
+    const SUSPEND_TOML: &str = r#"
+[project]
+name = "demo"
+
+[[pipeline.steps]]
+id = "a"
+run = "agent:a"
+input = "${input}"
+
+[[pipeline.steps]]
+id = "pause"
+run = "suspend:human"
+"#;
+
     fn parsed(toml: &str) -> Parsed {
         let config = ProjectConfig::parse_str(toml).expect("toml parses");
         parse::parse(&config, &no_prompt_files).expect("parse stage")
@@ -126,22 +161,40 @@ agent = "coordinator"
     }
 
     #[test]
-    fn wasm_target_rejects_control_flow() {
+    fn wasm_target_accepts_branch() {
         let t: TargetTriple = "any-wasi-strict".parse().unwrap();
-        let err = check(&parsed(BRANCH_TOML), &t).expect_err("wasm must refuse control-flow");
-        match err {
-            LowerError::FeatureUnsupported { missing, target } => {
-                assert_eq!(missing, alloc::vec![IrFeature::Branch]);
-                assert_eq!(target, t);
-            }
-            other => panic!("expected FeatureUnsupported, got {other:?}"),
-        }
+        assert!(check(&parsed(BRANCH_TOML), &t).is_ok());
+    }
+
+    /// `Parallel` is declared in `supported_features` alongside Branch/Loop,
+    /// so the gate must admit it too. The guest runs branches as a bounded
+    /// cooperative fork-join on its own single-threaded executor (ADR-0059
+    /// Decision 2: `buffered(8)`, no spawn), which is why this is executable
+    /// in-guest at all; `build_wasm_parallel_pipeline_runs_in_guest` in
+    /// `tau-cli/tests/build_wasm_e2e.rs` proves it actually executes.
+    #[test]
+    fn wasm_target_accepts_parallel() {
+        let t: TargetTriple = "any-wasi-strict".parse().unwrap();
+        assert!(check(&parsed(PARALLEL_TOML), &t).is_ok());
     }
 
     #[test]
     fn wasm_target_accepts_leaf_only_pipeline() {
         let t: TargetTriple = "any-wasi-strict".parse().unwrap();
         assert!(check(&parsed(LEAF_TOML), &t).is_ok());
+    }
+
+    #[test]
+    fn wasm_target_rejects_suspend() {
+        let t: TargetTriple = "any-wasi-strict".parse().unwrap();
+        let err = check(&parsed(SUSPEND_TOML), &t).expect_err("wasm must refuse Suspend");
+        match err {
+            LowerError::FeatureUnsupported { missing, target } => {
+                assert_eq!(missing, alloc::vec![IrFeature::Suspend]);
+                assert_eq!(target, t);
+            }
+            other => panic!("expected FeatureUnsupported, got {other:?}"),
+        }
     }
 
     #[test]

@@ -77,26 +77,30 @@ fn project_using_an_mcp_tool_is_refused() {
 }
 
 #[test]
-fn project_using_control_flow_is_refused() {
-    // A `Parallel` pipeline is control-flow; wasm guests drive run_ir_streaming,
-    // not run_pipeline, so `tau build wasm` must refuse it (feature-fit, EPIC 4.2).
-    let err = lower_to_wasm_ir(&fixture("needs-control-flow")).unwrap_err();
+fn project_using_suspend_is_refused() {
+    // ADR-0068 (#621): Branch/Parallel/Loop now execute in-guest via
+    // run_pipeline, so `tau build wasm` accepts them. `Suspend` has no
+    // `SuspensionStore` channel in the guest, so it stays refused
+    // (feature-fit, EPIC 4.2 / ADR-0068).
+    let err = lower_to_wasm_ir(&fixture("needs-suspend")).unwrap_err();
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("feature-fit") && msg.contains("control-flow") && msg.contains("Parallel"),
-        "expected a feature-fit control-flow refusal naming Parallel, got: {msg}"
+        msg.contains("feature-fit") && msg.contains("Suspend"),
+        "expected a feature-fit refusal naming Suspend, got: {msg}"
     );
 }
 
 #[test]
 fn project_using_dynamic_region_is_refused() {
-    // EPIC 4.4: a `StepRun::Dynamic` region is control-flow the wasm guest's
-    // `run_ir_streaming` path cannot execute, same as Branch/Parallel/Loop/
-    // Suspend — `tau build wasm` must refuse it (feature-fit, Task 8
-    // conformance Fixture C). Unit-level coverage of the same refusal
-    // already lives in `tau-ir-lower`'s `feature_fit::wasm_target_rejects_
-    // dynamic_region`; this test exercises the CLI-facing `lower_to_wasm_ir`
-    // entry point, mirroring `project_using_control_flow_is_refused` above.
+    // EPIC 4.4: a `StepRun::Dynamic` region has no execution path on ANY
+    // target yet (the interpreter returns DynamicRegionRequiresRuntimeGate,
+    // pending EPIC 4.5), so `any-wasi-strict` keeps it out of
+    // `supported_features` and `tau build wasm` refuses it — unlike
+    // Branch/Parallel/Loop, which ADR-0068 (#621) made executable in-guest.
+    // Unit-level coverage of the same refusal already lives in
+    // `tau-ir-lower`'s `feature_fit::wasm_target_rejects_dynamic_region`;
+    // this test exercises the CLI-facing `lower_to_wasm_ir` entry point,
+    // mirroring `project_using_suspend_is_refused` above.
     let err = lower_to_wasm_ir(&fixture("needs-dynamic-region")).unwrap_err();
     let msg = format!("{err:#}");
     assert!(

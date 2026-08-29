@@ -134,8 +134,10 @@ pub static REGISTRY: &[TargetTripleEntry] = &[
             tier: CapabilityTier::Strict,
         },
         shapes_fn: fs_rw_net,
-        // Wasm guests cannot execute control-flow steps (no run_pipeline path).
-        supported_features: &[],
+        // Guest control-flow (ADR-0068, #621): Branch/Parallel/Loop execute
+        // in-guest via run_pipeline. Suspend (no SuspensionStore channel in
+        // the WIT world) and Dynamic (EPIC 4.5 pending) stay build-refused.
+        supported_features: &[IrFeature::Branch, IrFeature::Parallel, IrFeature::Loop],
         status: TripleStatus::Available,
     },
     TargetTripleEntry {
@@ -249,15 +251,14 @@ mod tests {
     }
 
     #[test]
-    fn any_wasi_strict_supports_no_control_flow_features() {
-        // Wasm guests drive run_ir_streaming, not run_pipeline; control-flow
-        // has no wasm execution path, so the profile must list no features.
+    fn any_wasi_strict_supports_exactly_branch_parallel_loop() {
+        // ADR-0068: in-guest run_pipeline executes Branch/Parallel/Loop.
+        // Suspend and Dynamic must stay absent (build-time refusal).
         let t: TargetTriple = "any-wasi-strict".parse().unwrap();
         let e = lookup(&t).expect("any-wasi-strict must be registered");
-        assert!(
-            e.supported_features.is_empty(),
-            "wasi target must support no IR control-flow features, got {:?}",
-            e.supported_features
+        assert_eq!(
+            e.supported_features,
+            &[IrFeature::Branch, IrFeature::Parallel, IrFeature::Loop],
         );
     }
 

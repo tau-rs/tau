@@ -71,3 +71,30 @@ pub fn build_component_with_ir(ir_bytes: &[u8]) -> Vec<u8> {
         .expect("a .wasm artifact for tau-wasm-guest");
     std::fs::read(wasm_path).unwrap()
 }
+
+/// Does this component still link the regex engine? (#689)
+///
+/// Reaching `__tau::goal::matches` pulls in `regex-automata`, `regex_syntax`
+/// and regex's Unicode tables — ~770 KiB of a ~2.8 MB component. The guest
+/// cfg-gates the predicate registry on what the baked IR can reach, and
+/// wasm-ld then garbage-collects the engine; this is how a test observes
+/// whether that actually happened.
+///
+/// Detection is a substring search over the component's name section, the
+/// same signal `#679`'s per-crate size attribution used. That makes the
+/// NEGATIVE result (no hits) meaningless on its own — a build that stripped
+/// names would report "no regex" for every component, including one that
+/// links it. Every caller asserting absence must therefore be paired with a
+/// caller asserting PRESENCE, so a stripped name section fails the pair
+/// instead of silently passing the suite;
+/// `north_star_wasm_guest_executes_same_workflow_same_terminal_outcome` is
+/// that positive control.
+pub fn links_regex_engine(component: &[u8]) -> bool {
+    [b"regex_automata".as_slice(), b"regex_syntax".as_slice()]
+        .iter()
+        .any(|needle| {
+            component
+                .windows(needle.len())
+                .any(|window| window == *needle)
+        })
+}

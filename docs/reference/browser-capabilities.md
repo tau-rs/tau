@@ -54,6 +54,32 @@ runtime out of the build entirely. See
 [What the floor does *not* include](#what-the-floor-does-not-include) before
 using this number to size anything.
 
+**This floor measures the component shell, not a workflow.** That build sets no
+`TAU_IR_BYTES`, so `BAKED_IR` is empty, the guest's empty-IR early return
+const-folds, and LTO drops everything behind it — the pipeline interpreter, the
+agent loop and the goal-predicate registry (with its regex engine) are all dead
+code in this number. It is a useful regression tripwire for the shell and the
+capability world; it bounds nothing about a component that carries real IR. The
+in-guest control-flow work (ADR-0068) added roughly 0.5 MiB for the goal-predicate
+registry plus ~230 KiB to widen its regex feature set to match the native graph —
+all of it to components that carry real IR, and this gate did not move for any
+of it.
+
+**#689 gave most of that back, and this gate did not move for that either.** The
+guest now links the goal-predicate registry only when the baked IR can reach a
+predicate, and the regex engine only when it can reach `matches`. The
+`wasm-build/pipeline` fixture (two agents, no control flow) went from 2,777,914
+to 1,988,452 bytes — **789,462 B, ~771 KiB, 28.4%**. A component that does use
+`matches` is unchanged, by design: narrowing the engine instead would split
+in-guest `matches` semantics from the native registry, which is the parity
+property ADR-0068 exists to guarantee.
+
+Because this gate cannot see any of that, #689's saving is guarded by its own
+tests in `tau-cli/tests/build_wasm_e2e.rs` — see ADR-0068's Consequences.
+
+Note the table below predates the regex widening: the same `pipeline` fixture
+built at that point was 2,786,007 bytes. The step-change conclusion is unchanged.
+
 | Measurement | Bytes | KiB | Tool |
 |---|--:|--:|---|
 | Shipped component (browser download) | 15,686 | 15.3 | `wasm-tools` |

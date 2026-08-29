@@ -10,9 +10,19 @@ authors.workspace      = true
 
 [dependencies]
 serde_json = { workspace = true, default-features = false, features = ["alloc"] }
-# Feature list is the starting set for a no_std meta::Regex with (?i) support
-# (per task-1 brief). Adjust only if compilation demands it; do not enable "std".
-regex-automata = { workspace = true, optional = true, features = ["alloc", "meta", "syntax", "nfa-pikevm", "unicode-case", "unicode-perl"] }
+# The feature list is a CROSS-TARGET PARITY contract, not a size knob
+# (ADR-0068, #621). This crate is the single source of the `matches` goal
+# predicate for both the native registry and the wasm guest, but the engine's
+# accepted language is decided by cargo feature unification: in the `tau-cli`
+# graph `jsonschema → fancy-regex` (and `regex`) pull `regex-automata` up to
+# the full Unicode set, while the guest links only what is declared HERE.
+# Anything enabled there and missing here compiles natively and fails to
+# compile in-guest — a silent wrong-branch on wasm only. So this list must
+# stay a superset of what the native graph accepts: `unicode` (age, bool,
+# case, gencat, perl, script, segment) plus `unicode-word-boundary` for `\b`.
+# `goal_predicates::matches_parses_the_same_language_the_native_graph_does`
+# fails if this is trimmed. Never enable "std".
+regex-automata = { workspace = true, optional = true, features = ["alloc", "meta", "syntax", "nfa-pikevm", "unicode", "unicode-word-boundary"] }
 
 [features]
 goal-predicates = ["dep:regex-automata"]

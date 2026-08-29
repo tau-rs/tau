@@ -217,22 +217,23 @@ fn host_guest_roundtrip_is_deterministic() {
     );
 }
 
-/// A Branch pipeline is rejected at **lowering** for `any-wasi-strict`, not at
-/// guest load. The wasm guest drives `run_ir_streaming` and has no control-flow
-/// path, so #535's `IrFeature` feature-fit gate refuses the build up front
-/// (`FeatureUnsupported { missing: [Branch], .. }`) rather than deferring the
-/// rejection to guest load. Native `tau run` still executes the branch fully;
-/// driving `run_pipeline` in-wasm is a follow-up slice.
+/// A Suspend pipeline is rejected at **lowering** for `any-wasi-strict`, not
+/// at guest load. ADR-0068 (#621) flipped the wasm guest to execute
+/// Branch/Parallel/Loop in-guest via `run_pipeline`, but the guest has no
+/// `SuspensionStore` channel, so the `IrFeature` feature-fit gate still
+/// refuses `Suspend` up front (`FeatureUnsupported { missing: [Suspend],
+/// .. }`) rather than deferring the rejection to guest load. Native `tau
+/// run` still executes the suspend fully.
 ///
 /// This test is **not** `#[ignore]`d: asserting the lowering `Err` needs no
 /// wasm build, so it runs on the default unit-test lane and can't silently rot.
 #[test]
-fn authored_branch_rejected_at_lowering() {
+fn authored_suspend_rejected_at_lowering() {
     let toml = r#"
 packages = ["anthropic"]
 
 [project]
-name = "branch-wasm"
+name = "suspend-wasm"
 version = "0.1.0"
 
 [models.claude]
@@ -241,16 +242,9 @@ model = "claude-sonnet-4-6"
 
 [agents.triage]
 display_name = "Triage"
-package = "branch-wasm@^0.1"
+package = "suspend-wasm@^0.1"
 model = "claude"
 [agents.triage.prompt]
-system = "Reply and stop."
-
-[agents.arm]
-display_name = "Arm"
-package = "branch-wasm@^0.1"
-model = "claude"
-[agents.arm.prompt]
 system = "Reply and stop."
 
 [[pipeline.steps]]
@@ -259,13 +253,8 @@ run = "agent:triage"
 input = "${input}"
 
 [[pipeline.steps]]
-id = "route"
-branch = { evaluates = "steps.triage.output", check = "non_empty" }
-
-  [[pipeline.steps.then]]
-  id = "arm"
-  run = "agent:arm"
-  input = "${steps.triage.output}"
+id = "pause"
+run = "suspend:human"
 "#;
     let config = tau_pkg::project::ProjectConfig::parse_str(toml).expect("fixture parses");
     let target: tau_ports::target::TargetTriple = "any-wasi-strict".parse().unwrap();
@@ -278,10 +267,10 @@ branch = { evaluates = "steps.triage.output", check = "non_empty" }
 
     match tau_ir_lower::lower_project(&config, &target, &caches) {
         Err(tau_ir_lower::LowerError::FeatureUnsupported { missing, .. }) => assert!(
-            missing.contains(&tau_domain::IrFeature::Branch),
-            "expected Branch among the unsupported features, got {missing:?}"
+            missing.contains(&tau_domain::IrFeature::Suspend),
+            "expected Suspend among the unsupported features, got {missing:?}"
         ),
         Err(other) => panic!("expected FeatureUnsupported, got {other:?}"),
-        Ok(_) => panic!("wasm-strict must reject a Branch pipeline at lowering"),
+        Ok(_) => panic!("wasm-strict must reject a Suspend pipeline at lowering"),
     }
 }

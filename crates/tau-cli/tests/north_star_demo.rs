@@ -17,10 +17,12 @@
 //!   ungoverned variant (`ungoverned_variant()` — the SAME pipeline with
 //!   `[allow.models.default]` rewritten to `[models]`, driven with
 //!   `--allow-ungoverned` to keep that escape hatch covered),
-//! - wasm: `tau build --target wasm-guest` REFUSES the workflow at
-//!   feature-fit (ADR-0059 — the guest drives `run_ir_streaming`, which has
-//!   no control-flow execution path; #621 tracks guest control-flow). The
-//!   refusal IS part of the demo: enforcement happens at build time.
+//! - wasm: `tau build --target wasm-guest` BUILDS this fixture — ADR-0068
+//!   (#621) flipped `any-wasi-strict` to execute Branch/Parallel/Loop
+//!   in-guest via `run_pipeline`. The build-refusal witness moved to the
+//!   Suspend twin (`tests/fixtures/north-star-suspend/tau.toml`, ONLY
+//!   delta: one `suspend:human-signoff` step before `report`), refused at
+//!   feature-fit because the guest has no `SuspensionStore` channel.
 //!
 //! ## Control-flow proof without inspecting internals
 //!
@@ -276,15 +278,12 @@ fn north_star_builds_governed_bundle() {
     );
 }
 
-/// Wasm path: `tau build --target wasm-guest` refuses the workflow at
-/// feature-fit — Branch/Loop have no execution path in the wasm guest
-/// (`run_ir_streaming`), so the build is rejected BEFORE any artifact
-/// exists (ADR-0059; #621 tracks guest control-flow execution). This runs
-/// the real binary: the refusal happens at lowering, well before any
-/// `cargo build` of the guest, so the test needs no wasm toolchain.
+/// Wasm path: control-flow now executes in-guest (ADR-0068), so the
+/// refusal witness moves to the Suspend twin — the guest has no durable
+/// suspend channel, and feature-fit refuses BEFORE any artifact exists.
 #[test]
 fn north_star_wasm_guest_build_is_refused_at_feature_fit() {
-    let dir = setup_project(&fixture_toml("north-star"));
+    let dir = setup_project(&fixture_toml("north-star-suspend"));
     let tau_home = dir.path().join("global");
     std::fs::create_dir_all(&tau_home).unwrap();
 
@@ -296,8 +295,7 @@ fn north_star_wasm_guest_build_is_refused_at_feature_fit() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("feature-fit"))
-        .stderr(predicate::str::contains("Branch"))
-        .stderr(predicate::str::contains("Loop"));
+        .stderr(predicate::str::contains("Suspend"));
 }
 
 /// Dev path, execution witness on the ungoverned variant of the SAME
@@ -450,4 +448,85 @@ fn north_star_governed_bundle_roundtrip() {
         String::from_utf8_lossy(&output.stdout),
     );
     assert_completed_pipeline_outcome(&String::from_utf8(output.stdout).unwrap());
+}
+
+/// Wasm execution leg (#621 DoD, ADR-0068): the SAME Branch+Loop fixture
+/// builds for wasm AND the guest executes it to the SAME terminal outcome
+/// as the dev leg.
+///
+/// Completion is itself the control-flow witness — `report`'s input
+/// template reads `${steps.escalate.output}` (produced only if the
+/// Branch's then-arm ran) and `${steps.draft.output}` (only if the Loop
+/// body ran), and template resolution hard-errors on unresolved refs. So
+/// a returned payload proves both ran IN-GUEST, via `run_pipeline`.
+///
+/// The cassette gives each turn a DISTINCT text (the dev leg's echo-llm
+/// replays one canned text for every agent, which cannot distinguish which
+/// step's output came back). Here the payload identifies the step: only
+/// `report`'s turn returns `WASM-FINAL-REPORT`, so the assertion pins the
+/// last-leaf selection (`Pipeline::final_leaf_step_id` + the store lookup in
+/// the guest) and the step ORDER, on top of the control-flow proof.
+#[test]
+#[ignore = "builds a wasm component; run with --run-ignored"]
+fn north_star_wasm_guest_executes_same_workflow_same_terminal_outcome() {
+    let dir = setup_project(&fixture_toml("north-star"));
+
+    // Lowering now ADMITS Branch+Loop for any-wasi-strict (the flip this
+    // issue is about); before ADR-0068 this returned FeatureUnsupported.
+    let (_module, ir_bytes) = tau_cli::cmd::build_wasm::lower_to_wasm_ir(dir.path())
+        .expect("wasm lowering admits Branch+Loop (ADR-0068)");
+    let component = common::wasm_component::build_component_with_ir(&ir_bytes);
+
+    // The host cassette stands in for the echo-llm plugin: the guest's
+    // `HostLlmBackend` pops one canned completion per agent turn, in order
+    // (`VecDeque::pop_front`). Four agent turns run — triage, escalate
+    // (Branch then-arm), draft (Loop body), report (last leaf) — and each
+    // gets its own text. The markers are load-bearing: "URGENT" drives the
+    // Branch's `matches` predicate onto the then-arm, and "APPROVED"
+    // satisfies the Loop's `until` on the first iteration (exhaustion would
+    // hard-error). Running short of responses surfaces as a host error.
+    let response = |text: &str| {
+        serde_json::json!({
+            "text": text,
+            "tool_uses": [],
+            "stop_reason": "EndTurn",
+            "usage": null,
+        })
+        .to_string()
+    };
+    let (payload, _events) = tau_wasm_host::run_component(
+        &component,
+        "incident: coolant temperature rising",
+        vec![
+            response("URGENT: coolant temperature rising - fan engaged"),
+            response("escalated to the on-call rotation"),
+            response("incident summary drafted - APPROVED"),
+            response("WASM-FINAL-REPORT"),
+        ],
+    )
+    .expect("guest executes the Branch+Loop pipeline");
+
+    assert_eq!(
+        payload, "WASM-FINAL-REPORT",
+        "guest payload must be the LAST leaf step's output (report's turn), \
+         not an earlier step's — same last-leaf contract the dev leg renders \
+         as final_message"
+    );
+
+    // #689 positive control. This fixture reaches `matches` from BOTH the
+    // Branch condition and the Loop's `until`, so it is the shape that must
+    // still link the full engine after the goal-predicate gate — the run
+    // above already proves the predicate evaluated correctly.
+    //
+    // It also keeps the gate's NEGATIVE assertions honest: those search the
+    // name section for regex symbols, which would find nothing in a build
+    // that stripped names, passing vacuously. This assertion fails first in
+    // that case, so the pair cannot silently stop testing anything.
+    assert!(
+        common::wasm_component::links_regex_engine(&component),
+        "a component whose IR reaches `matches` must still link the regex \
+         engine; finding none here means either the #689 gate over-pruned or \
+         the build stopped emitting a name section (which would make every \
+         `!links_regex_engine` assertion vacuous)"
+    );
 }

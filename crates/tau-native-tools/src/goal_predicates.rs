@@ -15,7 +15,7 @@
 
 use alloc::format;
 use alloc::string::String;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 pub const FN_EXISTS: &str = "__tau::goal::exists";
 pub const FN_NON_EMPTY: &str = "__tau::goal::non_empty";
@@ -33,10 +33,37 @@ pub const SUPPORTED: &[&str; 5] = &[FN_EXISTS, FN_NON_EMPTY, FN_EQUALS, FN_MATCH
 /// "min_count").
 pub fn invoke(fn_name: &str, args: &Value) -> Option<Result<Value, String>> {
     match fn_name {
+        FN_MATCHES => Some(matches_(args)),
+        // Deliberately defined in terms of `invoke_alloc_only` rather than
+        // repeating the four arms: one dispatch table, so the two entry
+        // points cannot drift as predicates are added.
+        _ => invoke_alloc_only(fn_name, args),
+    }
+}
+
+/// [`invoke`] minus `matches` — the four predicates that need only `alloc`.
+///
+/// Exists so a caller that has PROVEN `matches` unreachable can dispatch
+/// without naming `matches_`, leaving `regex-automata` unreferenced for
+/// wasm-ld to garbage-collect (#689). That is worth ~770 KiB on a ~2.8 MB
+/// component, because dropping the reference drops `regex_syntax` (the
+/// parser) and the Unicode tables too, not just the matcher.
+///
+/// This is NOT a narrower regex dialect — the semantics of the four
+/// predicates it does answer are byte-identical to [`invoke`]'s. `matches`
+/// is absent, not redefined, so ADR-0068's cross-target parity holds: a
+/// build that can reach `matches` links the identical engine the native
+/// `BuiltinDeterministicRegistry` uses.
+///
+/// Returns `None` for `FN_MATCHES` exactly as it does for an unknown fn.
+/// The caller is responsible for only routing here when the fn cannot
+/// occur; in the wasm guest that proof is `build.rs`'s scan of the baked
+/// IR, backstopped by the registry's loud "no wasm execution path" error.
+pub fn invoke_alloc_only(fn_name: &str, args: &Value) -> Option<Result<Value, String>> {
+    match fn_name {
         FN_EXISTS => Some(exists(args)),
         FN_NON_EMPTY => Some(non_empty(args)),
         FN_EQUALS => Some(equals(args)),
-        FN_MATCHES => Some(matches_(args)),
         FN_MIN_COUNT => Some(min_count(args)),
         _ => None,
     }
@@ -69,9 +96,10 @@ fn equals(args: &Value) -> Result<Value, String> {
 
 /// `__tau::goal::matches` → `present && Regex::new(pattern)?.is_match(content)`.
 ///
-/// Build-time proves the pattern compiles (Task 6), but if somehow a bad
-/// pattern reaches here, return `{"met": false, "rationale": "<err>"}` rather
-/// than surfacing an error that aborts the run.
+/// An uncompilable pattern is an ERROR, not a verdict. Reporting `met: false`
+/// (the behaviour before #621's review) let an engine/feature mismatch between
+/// this graph and the native one masquerade as "the content did not match",
+/// silently sending a Branch down its `otherwise` arm on one target only.
 fn matches_(args: &Value) -> Result<Value, String> {
     let present = args["present"].as_bool().unwrap_or(false);
     if !present {
@@ -87,14 +115,17 @@ fn matches_(args: &Value) -> Result<Value, String> {
     };
     match regex_automata::meta::Regex::new(pattern) {
         Ok(re) => Ok(Value::Bool(re.is_match(content))),
-        Err(e) => {
-            // Defensive: bad pattern at runtime → met=false with rationale.
-            // Build-time validation (Task 6) should have caught this earlier.
-            Ok(json!({
-                "met": false,
-                "rationale": format!("regex compile error for pattern {pattern:?}: {e}")
-            }))
-        }
+        // A pattern that fails to compile HERE already compiled at authoring
+        // time (project validation uses the full `regex` crate), so this is a
+        // bug — an engine/feature mismatch between this graph and the native
+        // one — not a verdict about the content. Reporting `met: false` would
+        // silently send a Branch down its `otherwise` arm on one target only
+        // (ADR-0068 cross-target parity); surface it as an error instead.
+        Err(e) => Err(format!(
+            "regex compile error for pattern {pattern:?}: {e} — the pattern \
+             compiled at build time, so this build's regex-automata feature \
+             set is narrower than the authoring one"
+        )),
     }
 }
 
@@ -202,19 +233,66 @@ mod tests {
         );
     }
 
+    /// Cross-target parity guard (ADR-0068, #621).
+    ///
+    /// This crate is the SINGLE source of the `matches` predicate for both
+    /// the native registry (`tau-cli`) and the wasm guest — but the engine's
+    /// language is decided by cargo FEATURE UNIFICATION, not by this file.
+    /// In the `tau-cli` graph, `jsonschema → fancy-regex` (and `regex`) pull
+    /// `regex-automata` up to the full Unicode feature set; the wasm guest
+    /// links only what THIS crate declares. So a pattern class that is
+    /// enabled there and not here compiles natively and fails to compile
+    /// in-guest — and a compile failure used to be swallowed as
+    /// `met: false`, silently flipping a Branch to its `otherwise` arm on
+    /// wasm only.
+    ///
+    /// These cases are exactly the ones that need a feature beyond the
+    /// original `unicode-case`/`unicode-perl` pair (`\b` needs
+    /// `unicode-word-boundary`; `\p{…}` needs `unicode-gencat`/
+    /// `unicode-script`). Running under `-p tau-native-tools`, the graph is
+    /// this crate's own declaration — so trimming the feature list again
+    /// fails HERE rather than diverging in production.
     #[test]
-    fn matches_bad_pattern_is_met_false_with_rationale() {
+    fn matches_parses_the_same_language_the_native_graph_does() {
+        for (pattern, content) in [
+            (r"\b\w+\b", "two words"),
+            (r"\p{L}+", "abc"),
+            (r"\p{Greek}", "λ"),
+            (r"(?i)\p{Lu}", "a"),
+            (r"\d+", "42"),
+            (r"\s", " "),
+        ] {
+            let got = invoke(
+                FN_MATCHES,
+                &json!({"present": true, "content": content, "pattern": pattern}),
+            )
+            .unwrap_or_else(|| panic!("matches must answer for {pattern:?}"));
+            assert_eq!(
+                got,
+                Ok(json!(true)),
+                "pattern {pattern:?} must compile AND match {content:?} under this \
+                 crate's own feature set — otherwise the wasm guest silently \
+                 disagrees with the native registry"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_bad_pattern_is_err() {
+        // A pattern that reaches here uncompilable is a BUG, not a verdict:
+        // project validation already compiled it with the full `regex` crate
+        // at authoring time. Reporting `met: false` would silently take a
+        // Branch's `otherwise` arm; an error surfaces the mismatch instead.
         let got = invoke(
             FN_MATCHES,
             &json!({"present": true, "content": "x", "pattern": "("}),
         )
-        .unwrap()
-        .unwrap();
-        assert_eq!(got["met"], json!(false));
-        assert!(got["rationale"]
-            .as_str()
-            .unwrap()
-            .contains("regex compile error"));
+        .expect("matches answers");
+        let msg = got.expect_err("an uncompilable pattern must be an error, not met:false");
+        assert!(
+            msg.contains("regex compile error"),
+            "error must name the compile failure; got {msg:?}"
+        );
     }
 
     #[test]
@@ -241,6 +319,57 @@ mod tests {
             ),
             Some(Ok(json!(false)))
         );
+    }
+
+    /// `invoke_alloc_only` is the regex-free half of the SAME dispatch
+    /// table, not a narrower dialect (#689). For every fn it answers, its
+    /// verdict must be byte-identical to `invoke`'s — otherwise gating
+    /// `matches` out of a wasm build would silently change what the other
+    /// four predicates mean, which is exactly the cross-target split
+    /// ADR-0068 exists to prevent.
+    #[test]
+    fn invoke_alloc_only_agrees_with_invoke_on_the_four() {
+        for (fn_name, args) in [
+            (FN_EXISTS, json!({"present": true})),
+            (FN_EXISTS, json!({"present": false})),
+            (FN_NON_EMPTY, json!({"present": true, "content": "hi"})),
+            (FN_NON_EMPTY, json!({"present": true, "content": "  "})),
+            (
+                FN_EQUALS,
+                json!({"present": true, "content": "a", "equals": "a"}),
+            ),
+            (
+                FN_EQUALS,
+                json!({"present": true, "content": "a", "equals": "b"}),
+            ),
+            (
+                FN_MIN_COUNT,
+                json!({"present": true, "content": "a\n\nb", "min_count": 2}),
+            ),
+            (
+                FN_MIN_COUNT,
+                json!({"present": true, "content": "a", "min_count": 2}),
+            ),
+        ] {
+            assert_eq!(
+                invoke_alloc_only(fn_name, &args),
+                invoke(fn_name, &args),
+                "invoke_alloc_only must agree with invoke for {fn_name} on {args}"
+            );
+        }
+    }
+
+    /// `matches` is ABSENT from the alloc-only table, not redefined — it
+    /// declines exactly the way an unknown fn does. The wasm guest turns
+    /// that `None` into its loud "no wasm execution path" error rather than
+    /// a wrong verdict, so a build.rs scan that under-detected `matches`
+    /// fails visibly instead of silently taking a Branch's other arm.
+    #[test]
+    fn invoke_alloc_only_declines_matches() {
+        let args = json!({"present": true, "content": "URGENT", "pattern": "(?i)urgent"});
+        assert_eq!(invoke_alloc_only(FN_MATCHES, &args), None);
+        // ...while the full table still answers it.
+        assert_eq!(invoke(FN_MATCHES, &args), Some(Ok(json!(true))));
     }
 
     #[test]

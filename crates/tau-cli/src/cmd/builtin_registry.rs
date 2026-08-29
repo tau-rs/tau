@@ -1,9 +1,15 @@
 //! Built-in goal predicate registry and `StdFsArtifactReader`.
 //!
-//! Implements all six `FN_BUILTIN_*` predicates from
+//! Answers all six `FN_BUILTIN_*` predicates from
 //! `tau_runtime_core::vocabulary` and exposes a [`BuiltinDeterministicRegistry`]
 //! that the production [`super::ir_dispatcher::ForwardingDispatcher`] wires in
 //! via `ToolDispatcher::deterministic_registry()`.
+//!
+//! Only `schema_valid` is implemented HERE — it needs `jsonschema`, which is
+//! std-only. The other five live in `tau_native_tools::goal_predicates` so
+//! the wasm guest can answer the same predicates from the same source
+//! (ADR-0068, #621); this registry delegates to them first and falls through
+//! to the local `schema_valid`.
 //!
 //! The builtins are checked FIRST. Their names are `__tau::`-prefixed which
 //! makes collision with user-registered fns structurally impossible.
@@ -291,9 +297,21 @@ mod tests {
         assert_eq!(v, json!(false));
     }
 
+    /// An uncompilable pattern is an ERROR, not a verdict.
+    ///
+    /// This test previously asserted the opposite (`met: false` + rationale).
+    /// #621's review showed why that was unsafe: the guest and the `tau-cli`
+    /// graph can link DIFFERENT `regex-automata` feature sets, so a pattern
+    /// that compiles natively may fail to compile in-guest — and swallowing
+    /// that as `met: false` turns an engine mismatch into a silent Branch
+    /// re-route on wasm only. Failing loudly makes the mismatch a run error
+    /// instead of a wrong answer. Cross-target parity of the accepted regex
+    /// LANGUAGE is pinned separately by
+    /// `tau_native_tools::goal_predicates`'s
+    /// `matches_parses_the_same_language_the_native_graph_does`.
     #[test]
-    fn matches_bad_pattern_returns_met_false_with_rationale() {
-        let v = reg()
+    fn matches_bad_pattern_is_an_error_not_a_false_verdict() {
+        let err = reg()
             .invoke(
                 FN_BUILTIN_MATCHES,
                 &json!({
@@ -302,11 +320,11 @@ mod tests {
                     "pattern": "(?P<x>unclosed"
                 }),
             )
-            .unwrap();
-        // Should be an object with met=false (not an error).
-        let obj = v.as_object().expect("expected object for bad pattern");
-        assert_eq!(obj["met"].as_bool(), Some(false));
-        assert!(obj.contains_key("rationale"));
+            .expect_err("an uncompilable pattern must not be reported as a verdict");
+        assert!(
+            err.to_string().contains("pattern"),
+            "error must name the offending pattern; got {err}"
+        );
     }
 
     // -----------------------------------------------------------------------

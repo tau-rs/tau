@@ -19,9 +19,12 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
 prompt = "You are a researcher."
 model = "fast"
 
-# A bounded dynamic region (EPIC 4.4) — control-flow the wasm guest cannot
-# execute (run_ir_streaming has no run_pipeline path), so `tau build wasm`
-# must refuse it, same as Branch/Parallel/Loop/Suspend.
+# A bounded dynamic region (EPIC 4.4) — no target executes one yet (the
+# interpreter returns DynamicRegionRequiresRuntimeGate, pending EPIC 4.5), so
+# `any-wasi-strict` omits it from supported_features and `tau build wasm`
+# must refuse it. Branch/Parallel/Loop, by contrast, now run in-guest via
+# run_pipeline (ADR-0068, #621); Suspend stays refused for want of a
+# SuspensionStore channel.
 [[pipeline.steps]]
 id = "fanout"
 

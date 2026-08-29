@@ -1,10 +1,10 @@
-# The cross-epic north-star demo (issue #461, slicing-policy rule 5):
-# ONE [allow]-governed workflow using Branch + Loop, capability-bounded,
-# runnable in dev (`tau run`) and as a built artifact (`tau run --bundle`).
-# `tau build --target wasm-guest` BUILDS it: ADR-0068 (#621) flipped the
-# wasm guest to execute Branch/Parallel/Loop in-guest via `run_pipeline`.
-# The build-refusal witness lives in the Suspend twin
-# (`../north-star-suspend/tau.toml`).
+# The wasm build-refusal twin of the north-star demo (issue #461, #621):
+# identical to ../north-star/tau.toml plus one `suspend:human-signoff` step.
+# ADR-0068 flipped `any-wasi-strict` to execute Branch/Parallel/Loop
+# in-guest via run_pipeline, so the suspend-free original now BUILDS for
+# wasm. This twin keeps the build-refusal witness alive: the guest has no
+# `SuspensionStore` channel, so `tau build --target wasm-guest` refuses
+# THIS workflow at feature-fit, citing the missing `Suspend` feature.
 #
 # Exercised by crates/tau-cli/tests/north_star_demo.rs, which supplies the
 # echo-llm plugin scaffold (.tau/config.toml, package manifest, lockfile).
@@ -135,6 +135,13 @@ max_iters = 3
   id = "draft"
   run = "agent:reviewer"
   input = "${steps.triage.output}"
+
+# Suspend twin: identical workflow plus a human pause. Wasm builds must
+# refuse THIS at feature-fit (ADR-0068: no SuspensionStore channel in the
+# guest); the suspend-free original builds and runs in-guest.
+[[pipeline.steps]]
+id = "pause"
+run = "suspend:human-signoff"
 
 # Leaf final step (Branch/Loop store no output; the pipeline renderer
 # renders the LAST leaf step). A top-level step may reference nested

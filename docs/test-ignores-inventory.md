@@ -3,9 +3,9 @@
 **Refreshed:** 2026-08-27 (supersedes the 2026-05-17 refresh, itself
 superseding the 2026-05-13 inventory from PR #71)
 **Workspace state:** based on `origin/main` at `e38f2530`
-**Total `#[ignore]` annotations:** 42
+**Total `#[ignore]` annotations:** 46
 
-42 `#[ignore]` annotations across the workspace, organised into four
+46 `#[ignore]` annotations across the workspace, organised into four
 triage buckets. This file is the canonical reference for what each ignored
 test needs in order to run, and which CI job (existing or future) is
 responsible for lighting it up.
@@ -217,7 +217,7 @@ masking environments where the test never runs.
 the prereqs, so both tests are LIT in CI but stay opt-in for local
 developer runs (where landlock support is unknown).
 
-### 2e — `tau-cli` wasm guest-build tests (8, LIT 2026-08-23)
+### 2e — `tau-cli` wasm guest-build tests (12, LIT 2026-08-23)
 
 Every `#[ignore]`d test in `tau-cli` shells
 `cargo build -p tau-wasm-guest --target wasm32-wasip2` from the CLI's own
@@ -235,6 +235,10 @@ all** until the 2026-08-23 QA sweep.
 | `crates/tau-cli/tests/wasi_fs_roundtrip.rs:171` | `nested_preopens_bind_longest_prefix_and_write_truncates` | #604 preopen hardening |
 | `crates/tau-cli/tests/wasi_fs_roundtrip.rs:227` | `root_preopen_serves_subpaths` | #604 — `/`-root preopen |
 | `crates/tau-cli/tests/embed_wasm_e2e.rs:77` | `example_product_loads_and_runs_component` | EPIC 7.2 (#414) — product runtime loads + runs |
+| `crates/tau-cli/tests/build_wasm_e2e.rs:90` | `build_wasm_parallel_pipeline_runs_in_guest` | #621 PR-2 — guest executes a `Parallel` pipeline |
+| `crates/tau-cli/tests/build_wasm_e2e.rs:132` | `goal_free_component_links_no_regex_engine` | #689 — an IR reaching no goal predicate links no regex engine |
+| `crates/tau-cli/tests/build_wasm_e2e.rs:171` | `predicate_without_matches_runs_in_guest_without_the_regex_engine` | #689 — the middle arm: predicates linked, regex not, and the run still evaluates them |
+| `crates/tau-cli/tests/north_star_demo.rs:470` | `north_star_wasm_guest_executes_same_workflow_same_terminal_outcome` | ADR-0068 / #621 — wasm leg reaches the same terminal outcome as the dev leg; also #689's positive control |
 
 **CI plan:** LIT since 2026-08-23. The `wasm-lane` job in `tier2.yml` grew
 a second step,
@@ -251,7 +255,14 @@ compile. **If a new ignored tau-cli test is added, give it its own guest
 target dir** — the serialization keeps the lane honest but costs
 wall-clock. First green CI run: 7/7 in 430s, job total 15m22s. The step
 selects by crate rather than by name, so #652's eighth test joined the lane
-without a CI edit.
+without a CI edit, as did #621's two (`build_wasm_parallel_…`,
+`north_star_wasm_…`) and #689's two.
+
+All four of those share `target/tau-build-wasm-e2e` through
+`common::wasm_component::build_component_with_ir` rather than deriving a
+per-fixture dir, so the `--test-threads 1` above is what keeps them honest —
+they bake different IR into the same guest target dir and would race
+otherwise.
 
 ### 2f — `tau-wasm-host` guest-build tests (10, LIT)
 
@@ -413,11 +424,11 @@ reason should name the stub, not the shipped dependency. It stays in Bucket 4.
 | 2b — layer4 container (LIT) | 5 | `test-tau-plugin-compat-layer4-ignored` / container |
 | 2c — runtime-tokio container (LIT) | 2 | `test-tau-runtime-e2e` `--run-ignored only` step |
 | 2d — sandbox-native landlock (LIT) | 2 | `test-tau-sandbox-native-e2e` `--run-ignored only` step |
-| 2e — tau-cli guest builds (LIT) | 8 | `wasm-lane` `-p tau-cli --run-ignored ignored-only --test-threads 1` |
+| 2e — tau-cli guest builds (LIT) | 12 | `wasm-lane` `-p tau-cli --run-ignored ignored-only --test-threads 1` |
 | 2f — tau-wasm-host guest builds (LIT) | 10 | `wasm-lane` `-p tau-wasm-host --run-ignored all` |
 | 3 — ENVIRONMENT-SPECIFIC | 0 | Both deleted 2026-08-23 — no runner has the host shape |
 | 4 — DEFERRED | 4 | Promote when blocker resolves (2 of them want the same slow-tier lane) |
-| **Total** | **42** | |
+| **Total** | **46** | |
 
 Numbers updated on each PR that touches an `#[ignore]` annotation — enforced by
 `xtask/tests/ignore_inventory.rs`.
