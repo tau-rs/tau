@@ -254,7 +254,17 @@ mod tests {
         assert_eq!(result.findings.len(), 1);
         assert_eq!(result.findings[0].severity, Severity::Warning);
         assert_eq!(result.findings[0].rule_id, "tau.dirs.gitignored");
-        assert!(result.findings[0].summary.contains("agents/scratch.md"));
+        // The summary embeds a natively-joined path, so build the expected
+        // rendering the same way rather than hardcoding a separator — on
+        // Windows this is `agents\scratch.md`. See #741.
+        let expected = std::path::Path::new("agents").join("scratch.md");
+        assert!(
+            result.findings[0]
+                .summary
+                .contains(&expected.display().to_string()),
+            "{}",
+            result.findings[0].summary
+        );
     }
 
     /// Builds a `CheckCtx` from a real `tau.toml` on disk. Fails loudly

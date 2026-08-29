@@ -85,9 +85,11 @@ fn from_path_malformed_toml_reports_parse_with_path() {
         matches!(&err, ProjectConfigError::Parse { path, .. } if path == &tau_toml),
         "{err:?}"
     );
+    // The error renders the path with `{path:?}` (the repo-wide idiom for
+    // paths in `#[error(...)]`), so assert against the Debug rendering.
+    // Asserting `path.display()` only held on Unix: on Windows `{:?}`
+    // escapes the separators, so `C:\\Users\\...` never contains the
+    // single-backslash Display form. See #741.
     let display = err.to_string();
-    assert!(
-        display.contains(&tau_toml.display().to_string()),
-        "{display}"
-    );
+    assert!(display.contains(&format!("{tau_toml:?}")), "{display}");
 }
