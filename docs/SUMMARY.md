@@ -157,6 +157,7 @@
 - [ADR-0067 — Windows AppContainer adapter — Phase 2 (Strict-tier enforcement)](decisions/0067-sandbox-windows-appcontainer-phase2.md)
 - [ADR-0068 — Wasm guest executes IR control-flow in-guest](decisions/0068-wasm-guest-control-flow.md)
 - [ADR-0069 — Directory-based tool & agent definitions](decisions/0069-directory-based-definitions.md)
+- [ADR-0070 — `AgentId` grammar: namespaced authored names, sanitized generated ones](decisions/0070-agent-id-grammar.md)
 
 # Retrospectives
 
