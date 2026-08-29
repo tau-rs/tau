@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["parse_bridge_args"],"struct":["BridgeArgs"]};
