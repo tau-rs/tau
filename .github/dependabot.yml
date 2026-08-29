@@ -30,6 +30,16 @@ updates:
   # advisory needs faster turnaround than a workflow action bump. Limit
   # of 10 open PRs caps noise; group lockfile-only updates so each is a
   # single PR per direct-dep family.
+  #
+  # `directory: /` covers the workspace only. Eight tracked manifests carry
+  # their own `[workspace]` table and are therefore independent cargo
+  # projects Dependabot cannot see from here. That is deliberate (issue
+  # #733): every one of their pins is a loose caret on a stable crate with
+  # no coupling invariant, so six extra PR streams would buy noise rather
+  # than signal. The real gap was advisory coverage, and that is closed by
+  # scripts/audit-out-of-workspace.sh running in security-daily.yml. The one
+  # pin that IS coupled — wit-bindgen in the two wasm probe fixtures, which
+  # must equal the workspace pin — has a Tier 0 equality guard (issue #722).
   - package-ecosystem: cargo
     directory: /
     schedule:

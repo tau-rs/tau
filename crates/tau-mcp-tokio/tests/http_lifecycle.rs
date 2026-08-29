@@ -93,60 +93,83 @@ async fn handshake_happy_path_via_wiremock() {
     assert_eq!(client.contract().tools.len(), 0);
 }
 
-// Known issue (PR-5): the single wiremock mock serves the same two-event
-// body for EVERY POST (including the tools/list request), so recv_response_for
-// sees a stale id=0 response when waiting for id=1 and times out. The
-// handshake driver's skip-loop works correctly; this is a test fixture
-// limitation. Fix in PR-5 when McpBridge gets a richer session-aware fixture.
-#[ignore = "wiremock fixture limitation: second POST gets stale id=0 response, times out waiting for id=1"]
+/// Session-aware wiremock responder: dispatches on the JSON-RPC `id` of the
+/// POSTed request so every POST gets *its own* response body.
+///
+/// The naive fixture (one `Mock` with one canned body for every POST) cannot
+/// serve a two-event `initialize` response, because the `tools/list` POST then
+/// replays the same body and `recv_response_for` sees the stale `id=0` while
+/// waiting for `id=1` — it skips it, finds nothing else, and the handshake
+/// times out. Keying on the request id is the "richer session-aware fixture"
+/// the old `#[ignore]` was waiting on.
+struct ByRequestId;
+
+impl wiremock::Respond for ByRequestId {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value =
+            serde_json::from_slice(&request.body).expect("POST body is a JSON-RPC message");
+        let base = ResponseTemplate::new(200).insert_header("Content-Type", "text/event-stream");
+        match body.get("id").and_then(serde_json::Value::as_i64) {
+            // initialize — TWO events: a notification THEN the response, so the
+            // handshake driver's skip-loop is what makes this pass.
+            Some(0) => base
+                .insert_header("Mcp-Session-Id", "session-xyz")
+                .set_body_string(format!(
+                    "{}{}",
+                    sse_event(json!({
+                        "jsonrpc": "2.0",
+                        "method": "notifications/progress",
+                        "params": {"progress": 50}
+                    })),
+                    sse_event(json!({
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "result": {
+                            "protocolVersion": "2025-03-26",
+                            "serverInfo": {"name": "mock", "version": "0.0.0"}
+                        }
+                    })),
+                )),
+            // tools/list
+            Some(1) => base.set_body_string(sse_event(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"tools": []}
+            }))),
+            other => panic!("unexpected JSON-RPC id in POST: {other:?}"),
+        }
+    }
+}
+
+/// A leading notification inside the `initialize` SSE body must not derail the
+/// handshake: `recv_response_for` skips non-matching messages until it sees the
+/// response whose id it is waiting for.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_event_sse_response() {
     let server = MockServer::start().await;
     let url = server.uri();
 
-    // initialize — two events: a notification THEN the response.
-    let body = format!(
-        "{}{}",
-        sse_event(json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/progress",
-            "params": {"progress": 50}
-        })),
-        sse_event(json!({
-            "jsonrpc": "2.0",
-            "id": 0,
-            "result": {
-                "protocolVersion": "2025-03-26",
-                "serverInfo": {"name": "mock", "version": "0.0.0"}
-            }
-        })),
-    );
     Mock::given(method("POST"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Type", "text/event-stream")
-                .set_body_string(body),
-        )
+        .respond_with(ByRequestId)
         .mount(&server)
         .await;
 
-    let result = open(
+    let client = open(
         &url,
         &empty_plan(),
         passthrough_gate(),
         McpClientOptions {
             handshake: HandshakeOptions {
-                handshake_timeout: Duration::from_secs(2),
+                handshake_timeout: Duration::from_secs(5),
                 ..HandshakeOptions::default()
             },
             ..McpClientOptions::default()
         },
     )
-    .await;
-    // The handshake should still complete despite the leading notification.
-    // (handshake.rs skips non-response messages while awaiting the matching id.)
-    let client = result.expect("open succeeds despite leading notification");
+    .await
+    .expect("open succeeds despite leading notification");
     assert_eq!(client.contract().server_info.name, "mock");
+    assert_eq!(client.contract().tools.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

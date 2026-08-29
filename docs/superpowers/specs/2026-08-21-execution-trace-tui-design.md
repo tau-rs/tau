@@ -377,12 +377,30 @@ if the ABI job disagrees, bump 0.8.0 + workspace pin instead).
 ### 12.3 Producer site 1 — compute the per-tool meet (tau-cli)
 
 `setup_mcp_runtime` already holds both sides at registration time. Per
-server-tool `st` of a clamped entry:
+server-tool `st` of a clamped entry, where `envelope` is the entry's
+author-declared `[tools.<entry>].capabilities`:
 
 ```text
-effective_net = tau_domain::meet(st.caps ∩ Network, plan.capabilities ∩ Network)
-clamped       = effective_net ≠ (st.caps ∩ Network)      // lattice inequality
+effective_net = tau_domain::meet(envelope ∩ Network, plan.capabilities ∩ Network)
+clamped       = effective_net ≠ (envelope ∩ Network)     // lattice inequality
 ```
+
+**The comparison basis is the author envelope, not `st.caps` (#712).**
+This spec originally specified `st.caps`, the server contract's per-tool
+declaration. That can never work in production: MCP does not standardize
+per-tool capability declaration, and `McpTool` carries no extension field
+to hold a tau-specific one, so `ServerContract::from_handshake`'s
+`caps_extractor` has nothing to read and every real handshake yields
+`caps == []`. Clamping against an always-empty set made
+`tool_effective_capabilities` return `None` for every tool of every real
+server — the clamp row was unreachable outside tests.
+
+The envelope is also the sounder basis. The server is the untrusted
+party, so *"the server said it needs X"* is a weak footing for a
+governance display; *"you declared hosts X, governance clamped you to Y"*
+is what an operator can act on. Should MCP later standardize per-tool
+caps, `st.caps` becomes a second, independent narrowing input — an
+intersection with the envelope, not a replacement for it.
 
 If `clamped`, construct the tool's effective set = non-net declared caps
 + `effective_net`, and pass it into the tool:
