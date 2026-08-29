@@ -1,14 +1,17 @@
-//! Integration test: `tau build` on a well-formed EPIC 4.4 dynamic region
+//! Integration test: `tau build` on a well-formed EPIC 4.5 dynamic region
 //! (Task 8 conformance Fixture A).
 //!
 //! Mirrors `cmd_build.rs`'s `write_minimal_project`/`make_tau_home` harness
 //! (isolated project tempdir + sibling `TAU_HOME` tempdir + minimal
 //! schema-v6 lockfile) and reuses the exact well-formed-region TOML shape
 //! from `governance.rs::well_formed_region_is_clean_and_note_is_gone`
-//! (spawn kind's caps ⊆ region ceiling ⊆ root `[allow]`): a zero-agent
-//! project whose only pipeline step is a `[pipeline.steps.dynamic]` region.
-//! Zero-agent projects are valid per the parser (see `clean-project`
-//! fixture in `tests/fixtures/check`).
+//! (spawn kind's caps ⊆ region ceiling ⊆ root `[allow]`): a zero-*locked*-
+//! package project whose only pipeline step is a `[pipeline.steps.dynamic]`
+//! region. A dynamic region's owner agent is required (EPIC 4.5), so the
+//! project declares one `[agents.coordinator]` — its package is never
+//! materialized (no capability overrides on it), so `tau build`'s "verify
+//! every locked package is materialized" step (driven by the lockfile, not
+//! `[agents.*]`) is still a no-op against the empty lockfile below.
 //!
 //! Asserts `tau build` succeeds and the bundle's embedded IR payload
 //! decodes to a module whose sole pipeline step is `StepRun::Dynamic`.
@@ -26,8 +29,19 @@ version = "0.1.0"
 [allow]
 "net.http" = { hosts = ["api.crawler.test"] }
 
+[allow.models.fast]
+backend = "coordbackend"
+model = "m-1"
+
+[agents.coordinator]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "fast"
+
 [agent.kinds.researcher]
 capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+prompt       = "You are a researcher."
+model        = "fast"
 
 [[pipeline.steps]]
 id = "fanout"
@@ -37,11 +51,13 @@ spawns = ["researcher"]
 ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
 max_spawns = 4
 max_concurrency = 2
+agent = "coordinator"
 "#,
     )
     .unwrap();
-    // Empty schema-v6 lockfile: zero real agents/packages, so `tau build`'s
-    // "verify every locked package is materialized" step is a no-op.
+    // Empty schema-v6 lockfile: zero locked packages, so `tau build`'s
+    // "verify every locked package is materialized" step is a no-op (it
+    // walks `_lockfile.packages`, not `[agents.*]`).
     std::fs::write(
         root.join("tau.lock"),
         r#"schema_version = 6

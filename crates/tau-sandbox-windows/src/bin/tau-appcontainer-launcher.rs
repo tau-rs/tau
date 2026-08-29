@@ -71,9 +71,15 @@ mod win {
             let sid: PSID = DeriveAppContainerSidFromAppContainerName(PCWSTR(profile_w.as_ptr()))
                 .map_err(|e| format!("DeriveAppContainerSid: {e}"))?;
 
-            // 2. SECURITY_CAPABILITIES (Phase 2: no capability SIDs; net deferred).
-            //    If a.caps is non-empty, build a SID_AND_ATTRIBUTES array here.
-            let caps_array: Vec<SID_AND_ATTRIBUTES> = Vec::new(); // net deferred -> empty
+            // 2. SECURITY_CAPABILITIES. No capability SIDs are granted, by
+            //    design (#622): network egress is enforced by the SID-ACL'd
+            //    named pipe (see `pipe_proxy.rs`), not by a well-known
+            //    capability SID like internetClient — that would let the
+            //    AppContainer reach the network directly, bypassing the
+            //    HostAllow proxy. `--cap` plumbing (`a.caps`) stays
+            //    available for a future capability that genuinely needs a
+            //    Win32 capability SID, but nothing currently populates it.
+            let caps_array: Vec<SID_AND_ATTRIBUTES> = Vec::new(); // intentionally empty (#622)
             let sec_caps = SECURITY_CAPABILITIES {
                 AppContainerSid: sid,
                 Capabilities: if caps_array.is_empty() {
@@ -90,15 +96,10 @@ mod win {
             // First call is expected to fail with ERROR_INSUFFICIENT_BUFFER; it
             // still writes the required buffer size into `size`, which is the
             // documented two-call pattern for this API.
-            let _ = InitializeProcThreadAttributeList(
-                LPPROC_THREAD_ATTRIBUTE_LIST(std::ptr::null_mut()),
-                1,
-                0,
-                &mut size,
-            );
+            let _ = InitializeProcThreadAttributeList(None, 1, Some(0), &mut size);
             let mut attr_buf = vec![0u8; size];
             let attr_list = LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr() as *mut _);
-            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut size)
+            InitializeProcThreadAttributeList(Some(attr_list), 1, Some(0), &mut size)
                 .map_err(|e| format!("InitializeProcThreadAttributeList: {e}"))?;
             UpdateProcThreadAttribute(
                 attr_list,
@@ -133,7 +134,7 @@ mod win {
             let mut pi = PROCESS_INFORMATION::default();
             CreateProcessW(
                 PCWSTR::null(),
-                PWSTR(cmdline.as_mut_ptr()),
+                Some(PWSTR(cmdline.as_mut_ptr())),
                 None,
                 None,
                 true, // bInheritHandles
@@ -151,7 +152,7 @@ mod win {
             // AppContainer token during process creation). Free it now per
             // MSDN (DeriveAppContainerSidFromAppContainerName's PSID must be
             // released with LocalFree).
-            let _ = LocalFree(HLOCAL(sid.0));
+            let _ = LocalFree(Some(HLOCAL(sid.0)));
 
             // From here on the child exists (suspended). Any failure in this
             // block must not leak a suspended zombie process: terminate +

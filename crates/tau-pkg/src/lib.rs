@@ -20,6 +20,7 @@
 
 pub mod bundle;
 pub mod capability_override;
+pub mod crlf;
 pub mod error;
 pub(crate) mod git;
 pub mod install;
@@ -57,8 +58,8 @@ pub use link::{LinkError, LinkOutcome, LinkRecord, LinkedPlugin, LinkedSkill};
 pub use lockfile::{LockFile, LockedPackage, LockedPlugin, LockedVersion, SynthesizedSource};
 pub use manifest::read_manifest;
 pub use project::{
-    build_agent_definition, AgentEntry, AgentResolutionError, ProjectConfig, ProjectConfigError,
-    PromptEntry, RequiresEntry, StepEntry, ToolBody, ToolEntry,
+    build_agent_definition, AgentEntry, AgentResolutionError, ProjectAgentKind, ProjectConfig,
+    ProjectConfigError, PromptEntry, RequiresEntry, StepEntry, ToolBody, ToolEntry,
 };
 pub use registry::{get, list};
 pub use resolve::{

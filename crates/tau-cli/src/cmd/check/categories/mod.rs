@@ -1,6 +1,7 @@
 //! Per-category check implementations.
 
 pub mod config;
+pub mod dirs;
 pub mod governance;
 pub mod lockfile;
 pub mod mcp_contracts;

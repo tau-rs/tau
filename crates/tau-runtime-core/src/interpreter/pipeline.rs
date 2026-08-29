@@ -9,6 +9,7 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
@@ -19,8 +20,9 @@ use tau_ir::IrModule;
 use tracing::{info_span, Instrument};
 
 use crate::error::RuntimeError;
-use crate::interpreter::agent_loop::{last_assistant_text, run_agent};
+use crate::interpreter::agent_loop::{last_assistant_text, run_agent, run_agent_with_spawn_tools};
 use crate::interpreter::check::{evaluate_deliverable, evaluate_goal};
+use crate::interpreter::dynamic::{RegionCounters, SpawnTool};
 use crate::interpreter::output_store::OutputStore;
 use crate::interpreter::tool_dispatch::ToolDispatcher;
 use crate::outcome::RunOutcome;
@@ -110,11 +112,15 @@ struct SuspendCtx<'a> {
 ///
 /// [`StepRun::Agent`], [`StepRun::Tool`], [`StepRun::Deterministic`],
 /// [`StepRun::Check`], [`StepRun::Branch`], [`StepRun::Loop`],
-/// [`StepRun::Parallel`], and [`StepRun::Suspend`] steps are all supported.
-/// [`StepRun::Dynamic`] is recognized but not yet executed: it errors
-/// [`RuntimeError::DynamicRegionRequiresRuntimeGate`] pending the EPIC 4.5
-/// runtime gate (membership, attenuation, bounds counters). A
-/// `Check` step evaluates a postcondition (goal or deliverable) against the
+/// [`StepRun::Parallel`], [`StepRun::Suspend`], and [`StepRun::Dynamic`]
+/// steps are all supported. A `Dynamic` region runs its `owner` coordinator
+/// agent with one [`crate::interpreter::dynamic::SpawnTool`] registered per
+/// offered kind (`agent.<kind>.spawn`); each spawn is admitted against the
+/// region's `max_spawns`/`max_concurrency` bounds counters and attenuated to
+/// the meet of the region's `envelope` and the kind's declared capabilities
+/// before the child agent runs — a spawn past bounds is soft-denied (the
+/// coordinator sees a denial `ToolResult`, the run itself still completes).
+/// A `Check` step evaluates a postcondition (goal or deliverable) against the
 /// accumulated outputs. A `Branch` evaluates its condition and recurses into
 /// the chosen arm (`then`/`otherwise`) against the same shared store; it
 /// stores no output of its own. A `Loop` runs its `body` up to `max_iters`
@@ -189,6 +195,15 @@ where
         ir_digest: &ir_digest,
         store: suspend.store.as_ref(),
     };
+    // Run-scoped `Dynamic`-step entry counter (#731). Bumped once per
+    // execution of a `Dynamic` step — including each `Loop` pass and each
+    // check rewind — and folded into every child agent id so ids stay unique
+    // across a run, which per-region `RegionCounters` alone cannot achieve
+    // (it is rebuilt per execution). Owned here, borrowed by every nested
+    // `run_steps` slice; `&AtomicU64` is `Copy + Sync`, so the `Parallel`
+    // arm's concurrent branches share the one counter without a lock (there
+    // is no `Mutex` on the `no_std` guest profile).
+    let region_entries = AtomicU64::new(0);
     let flow = run_steps(
         &module,
         &pipeline.steps,
@@ -199,6 +214,7 @@ where
         Some(&ctx),
         start_at,
         initial_attempts,
+        &region_entries,
     )
     .await?;
     Ok(match flow {
@@ -280,6 +296,10 @@ where
 ///
 /// See [`run_pipeline`]'s docs for the abort / rewind-to-gate retry model —
 /// the loop body lives here.
+///
+/// `region_entries` is the run-scoped `Dynamic`-step entry counter; every
+/// nested slice borrows the top-level one so dynamic-region child ids stay
+/// unique across the whole run (#731).
 #[allow(clippy::too_many_arguments)]
 async fn run_steps<D>(
     module: &Arc<IrModule>,
@@ -291,6 +311,7 @@ async fn run_steps<D>(
     suspend: Option<&SuspendCtx<'_>>,
     start_at: usize,
     initial_attempts: BTreeMap<String, u32>,
+    region_entries: &AtomicU64,
 ) -> Result<StepsFlow, RuntimeError>
 where
     D: ToolDispatcher + Send + Sync + 'static,
@@ -488,6 +509,7 @@ where
                 None,
                 0,
                 BTreeMap::new(),
+                region_entries,
             ))
             .await?
             {
@@ -533,6 +555,7 @@ where
                     None,
                     0,
                     BTreeMap::new(),
+                    region_entries,
                 ))
                 .await?
                 {
@@ -611,17 +634,6 @@ where
             }
         }
 
-        // `Dynamic` regions have their own early dispatch, mirroring
-        // `Branch`/`Loop`/`Suspend` above. Real execution (membership,
-        // attenuation, bounds counters) lands in EPIC 4.5; until then the
-        // interpreter meets a `Dynamic` region with a named error rather
-        // than executing or silently skipping it.
-        if let StepRun::Dynamic { .. } = &step.run {
-            return Err(RuntimeError::DynamicRegionRequiresRuntimeGate {
-                step_id: step.id.0.clone(),
-            });
-        }
-
         // `Parallel` blocks have their own early dispatch, mirroring `Branch`
         // and `Loop` above: they store no output of their own. Each branch
         // forks a read-only snapshot of `store` (branches are read-isolated
@@ -650,6 +662,7 @@ where
                         None,
                         0,
                         BTreeMap::new(),
+                        region_entries,
                     )
                     .await?
                     {
@@ -750,6 +763,93 @@ where
                     _ => Value::String(last_assistant_text(&outcome)),
                 }
             }
+            // EPIC 4.5: run the region's coordinator (`owner`) with one
+            // `SpawnTool` registered per offered kind. Mirrors the `Agent`
+            // arm immediately above for `user_message` construction, span
+            // instrumentation, and `RunOutcome::Failed` error mapping — the
+            // only difference is the coordinator's tool registry gains the
+            // per-kind spawn tools. `retry_from`/`retry.gate` accepts ANY
+            // step id (tau-pkg validation only requires gate_index <=
+            // producer_index and that some agent step exists in the rewound
+            // range) — a `Dynamic` step id is a legal rewind gate, so both
+            // `pending_initial_feedback` (loop prior-iteration rationale)
+            // and `feedback.get(&step.id.0)` (check-retry rationale) are
+            // injected here exactly like the `Agent` arm, so a check that
+            // rewinds to a `Dynamic` gate doesn't burn its whole
+            // `max_attempts` budget re-running the coordinator with an
+            // identical prompt and no rationale.
+            StepRun::Dynamic {
+                owner,
+                envelope,
+                spawns,
+                max_spawns,
+                max_concurrency,
+            } => {
+                let agent = module
+                    .workflow
+                    .agents
+                    .get(owner)
+                    .ok_or_else(|| RuntimeError::Internal {
+                        message: format!(
+                            "dynamic region '{}' owner '{}' not in workflow.agents (typecheck should reject)",
+                            step.id.0, owner.0
+                        ),
+                    })?
+                    .clone();
+                let counters = Arc::new(RegionCounters::new(*max_spawns, *max_concurrency));
+                // One bump per *execution* of this step, taken before the
+                // coordinator runs. `counters` is rebuilt here too, so its
+                // admission index restarts at 0 on a `Loop` pass or a check
+                // rewind; `entry` is what keeps the resulting child ids
+                // distinct across those re-entries (#731).
+                let entry = region_entries.fetch_add(1, Ordering::SeqCst);
+                let spawn_tools: alloc::vec::Vec<SpawnTool<D>> = spawns
+                    .iter()
+                    .map(|s| {
+                        SpawnTool::new(
+                            s.clone(),
+                            envelope.clone(),
+                            counters.clone(),
+                            step.id.0.clone(),
+                            entry,
+                            module.clone(),
+                            dispatcher.clone(),
+                        )
+                    })
+                    .collect();
+                let mut initial: alloc::vec::Vec<Message> = alloc::vec::Vec::new();
+                if let Some(fb) = pending_initial_feedback.take() {
+                    initial.push(user_message(&format!("Previous attempt rejected: {fb}")));
+                }
+                if let Some(inner) = feedback.get(&step.id.0) {
+                    for (cid, fb) in inner {
+                        initial.push(user_message(&format!(
+                            "Previous attempt rejected: (check '{cid}') {fb}"
+                        )));
+                    }
+                }
+                initial.push(user_message(&rendered));
+                let outcome = Box::pin(run_agent_with_spawn_tools(
+                    module.clone(),
+                    &agent,
+                    dispatcher.clone(),
+                    initial,
+                    spawn_tools,
+                ))
+                .instrument(step_span.clone())
+                .await?;
+                match outcome {
+                    RunOutcome::Failed { status, .. } => {
+                        return Err(RuntimeError::Internal {
+                            message: format!(
+                                "pipeline step {} (dynamic region owner {}) failed: {status:?}",
+                                step.id.0, owner.0
+                            ),
+                        })
+                    }
+                    _ => Value::String(last_assistant_text(&outcome)),
+                }
+            }
             StepRun::Tool(tool_id) => {
                 let args = rendered_to_args(&rendered);
                 let result = dispatcher
@@ -791,16 +891,16 @@ where
             // `Check` steps are dispatched at the top of the loop and never
             // reach this `match` (they store no output of their own).
             StepRun::Check(_) => unreachable!("check steps are handled before this match"),
-            // `Branch`, `Parallel`, `Loop`, `Suspend`, and `Dynamic` are all
+            // `Branch`, `Parallel`, `Loop`, and `Suspend` are all
             // early-dispatched above (each either stores no output of its
-            // own, or — for `Suspend`/`Dynamic` — returns
-            // `StepsFlow::Suspended`/errors before reaching here), so none of
-            // these ever reach this `match`.
+            // own, or — for `Suspend` — returns `StepsFlow::Suspended` before
+            // reaching here), so none of these ever reach this `match`.
+            // `Dynamic` is NOT early-dispatched — it's a real arm above,
+            // like `Agent` — so it is deliberately absent from this group.
             StepRun::Branch { .. }
             | StepRun::Parallel { .. }
             | StepRun::Loop { .. }
-            | StepRun::Suspend { .. }
-            | StepRun::Dynamic { .. } => {
+            | StepRun::Suspend { .. } => {
                 unreachable!("control-flow blocks are early-dispatched")
             }
         };

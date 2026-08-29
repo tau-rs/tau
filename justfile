@@ -114,6 +114,13 @@ fix:
 # layer4 matrix. WRAPS xtask — never reimplements image logic. Needs
 # podman/docker on PATH.
 
+# Reclaim `target/` across sibling worktrees (DRY RUN — pass `--yes` to apply).
+# Conductor spawns several worktrees per lane and each builds its own multi-GB
+# target/; nothing reclaims them until the disk fills (#719). Never touches
+# sccache — that is what keeps the following rebuild warm.
+clean-worktrees *ARGS:
+    scripts/clean-worktrees.sh {{ARGS}}
+
 # Heavy tier — build per-plugin images via xtask, then run the e2e suites.
 heavy:
     cargo run -p xtask -- build-plugin-images

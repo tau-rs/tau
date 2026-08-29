@@ -85,10 +85,10 @@ all = "warn"
 [workspace.dependencies]
 # β.7.5 wasm guest (wasm32-wasip2 only)
 wit-bindgen = { version = "0.60", default-features = false, features = ["macros", "realloc"] }
-wit-parser  = "0.251"
+wit-parser  = "0.257"
 dlmalloc    = { version = "0.2", features = ["global"] }
 # β.7.5 wasm host (std embedder; host targets only)
-wasmtime    = "47"
+wasmtime    = "48"
 tau-domain          = { path = "crates/tau-domain", version = "0.0.0", default-features = false }
 tau-ports           = { path = "crates/tau-ports",  version = "0.7.1", default-features = false }
 tau-ir              = { path = "crates/tau-ir", version = "0.0.0", default-features = false }
@@ -129,6 +129,7 @@ uuid            = { version = "1", default-features = false, features = ["v7"] }
 url             = "2"
 serde           = { version = "1", default-features = false, features = ["derive"] }
 serde_json      = { version = "1", default-features = false, features = ["alloc"] }
+serde_yaml      = "0.9"
 sha2            = { version = "0.11", default-features = false }
 base64          = { version = "0.23", default-features = false, features = ["alloc"] }
 proptest        = "1"

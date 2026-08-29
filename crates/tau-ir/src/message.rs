@@ -5,8 +5,6 @@
 //! - Conservative migration: includes EVERY semantic field from
 //!   `tau_domain::Message`; the only permitted change is type
 //!   normalization (`SystemTime` → `i64`-ms).
-//! - Bidirectional `From` adapters in both directions, behind the
-//!   `with-std-adapters` feature (default-on).
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -155,46 +153,5 @@ impl From<MessagePayload> for DomainMessagePayload {
             MessagePayload::Lifecycle(status) => Self::Lifecycle(status),
             MessagePayload::Custom { kind, body } => Self::Custom { kind, body },
         }
-    }
-}
-
-// === Message envelope adapters — gated because SystemTime requires std ===
-
-#[cfg(feature = "with-std-adapters")]
-impl From<tau_domain::Message> for Message {
-    fn from(d: tau_domain::Message) -> Self {
-        let created_at_ms = d
-            .created_at
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|dur| dur.as_millis() as i64)
-            .unwrap_or(0); // pre-1970 timestamps clamp to epoch; documented edge case
-        Self {
-            id: d.id,
-            sender: d.sender,
-            recipient: d.recipient,
-            parent_id: d.parent_id,
-            created_at_ms,
-            headers: d.headers,
-            payload: d.payload.into(),
-        }
-    }
-}
-
-#[cfg(feature = "with-std-adapters")]
-impl From<Message> for tau_domain::Message {
-    fn from(i: Message) -> Self {
-        // Construct via tau_domain::Message::new and overwrite the
-        // generated fields; #[non_exhaustive] forbids struct-literal
-        // construction.
-        let mut m = tau_domain::Message::new(i.sender, i.recipient, i.payload.into());
-        m.id = i.id;
-        m.parent_id = i.parent_id;
-        m.created_at = if i.created_at_ms >= 0 {
-            std::time::UNIX_EPOCH + core::time::Duration::from_millis(i.created_at_ms as u64)
-        } else {
-            std::time::UNIX_EPOCH
-        };
-        m.headers = i.headers;
-        m
     }
 }

@@ -13,7 +13,7 @@ use crate::bundle::manifest::{
     BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
     BundlePackage, IrPayload, ProjectInfo,
 };
-use crate::project::project::{PromptEntry, UncheckedProjectConfig};
+use crate::project::project::{ProjectConfig, PromptEntry};
 
 /// Inputs to [`build`].
 #[derive(Debug, Clone)]
@@ -71,20 +71,20 @@ pub struct BundleArtifact {
 /// [`BuildError::PackageNotInstalled`] if the project isn't fully
 /// installed. The function does NOT attempt to install anything.
 pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
-    // Step 1: Load tau.toml. Parse via the typed UncheckedProjectConfig
-    // and then validate — this is the same pipeline `tau run` uses, so
-    // the bundle records exactly what the project config layer would
-    // surface to the runtime.
+    // Step 1: Load tau.toml through `ProjectConfig::parse_str_at`, the
+    // dirs-aware entry point `ProjectConfig::from_path` delegates to — this
+    // is the same pipeline `tau run` / `tau check` use, so the bundle records
+    // exactly what the project config layer would surface to the runtime,
+    // *including* `[dirs]`-scanned agents and tools (ADR-0069). Reading the
+    // raw bytes ourselves rather than calling `from_path` keeps them around
+    // for `tau_toml_sha256` and `extract_project_version` below.
     let tau_toml_path = opts.project_root.join("tau.toml");
     let tau_toml_bytes = std::fs::read(&tau_toml_path)
         .map_err(|e| BuildError::ProjectConfig(format!("read {tau_toml_path:?}: {e}")))?;
     let tau_toml_str = std::str::from_utf8(&tau_toml_bytes)
         .map_err(|e| BuildError::ProjectConfig(format!("tau.toml is not utf-8: {e}")))?;
-    let unchecked: UncheckedProjectConfig = toml::from_str(tau_toml_str)
-        .map_err(|e| BuildError::ProjectConfig(format!("parse {tau_toml_path:?}: {e}")))?;
-    let project_config = unchecked
-        .validate()
-        .map_err(|e| BuildError::ProjectConfig(format!("validate {tau_toml_path:?}: {e}")))?;
+    let project_config = ProjectConfig::parse_str_at(tau_toml_str, &opts.project_root)
+        .map_err(|e| BuildError::ProjectConfig(format!("load {tau_toml_path:?}: {e}")))?;
 
     // Step 2: Load tau.lock. Distinguish missing (run `tau install`)
     // from present-but-invalid (config error).
@@ -572,8 +572,10 @@ fn effective_to_bundle(
 /// step 8) call it, guaranteeing their hashes can never drift:
 ///
 /// - [`PromptEntry::Inline`] → the inline string's UTF-8 bytes.
-/// - [`PromptEntry::File`] → the file's raw bytes, resolved relative to
-///   `project_root` when the path is relative.
+/// - [`PromptEntry::File`] → the file's bytes with CRLF line endings
+///   normalized to LF (see [`read_prompt_file`]), resolved relative to
+///   `project_root` when the path is relative. *Not* the raw bytes: an
+///   autocrlf checkout must hash the same as a LF checkout.
 /// - [`PromptEntry::None`] → empty bytes (hashes to the SHA-256 of the
 ///   empty string), matching §C.2's "no prompt ⇒ hash empty" rule.
 pub(crate) fn resolve_agent_prompt_bytes(
@@ -588,22 +590,43 @@ pub(crate) fn resolve_agent_prompt_bytes(
 }
 
 /// Read an agent `system_file` prompt's bytes, resolving a relative path
-/// against `project_root` (absolute paths are used as-is).
+/// against `project_root`.
 ///
 /// The single source of truth for prompt-file *path resolution*, shared by
 /// the bundle builder ([`resolve_agent_prompt_bytes`]) and the lowering
 /// `prompt_file` closure (D6-B) so the IR asset hash and the bundle's
 /// `system_prompt_sha256` are computed over identical bytes.
+///
+/// Containment guard: `rel` must be relative and must resolve (after
+/// canonicalization) to a path inside `project_root`. Absolute paths and
+/// `../` escapes are rejected with `ErrorKind::InvalidInput` — a prompt path
+/// is authored data from `tau.toml`, not something that should be able to
+/// read arbitrary files off the host.
+///
+/// Returns CRLF-normalized bytes, not raw bytes — see
+/// [`crate::crlf::normalize_crlf_bytes`], which is idempotent precisely
+/// because `tau_ir_lower` normalizes this function's output a second time.
 pub fn read_prompt_file(
     rel: &std::path::Path,
     project_root: &std::path::Path,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let abs = if rel.is_absolute() {
-        rel.to_path_buf()
-    } else {
-        project_root.join(rel)
-    };
-    std::fs::read(&abs)
+    let deny = |msg: &str| std::io::Error::new(std::io::ErrorKind::InvalidInput, msg.to_string());
+    if rel.is_absolute() {
+        return Err(deny(
+            "prompt file path must be relative to the project root",
+        ));
+    }
+    let abs = project_root.join(rel);
+    let canon = abs.canonicalize()?;
+    let root = project_root.canonicalize()?;
+    if !canon.starts_with(&root) {
+        return Err(deny("prompt file path escapes the project root"));
+    }
+    // Applied at the single read point `resolve_agent_prompt_bytes` and the
+    // lowering `prompt_file` closure both go through, so an autocrlf Windows
+    // checkout can't desync the bundle's `system_prompt_sha256` from the IR
+    // asset hash: both are computed over these same normalized bytes.
+    std::fs::read(&canon).map(crate::crlf::normalize_crlf_bytes)
 }
 
 /// SHA-256 of `bytes` as lowercase hex. The single source of truth for
@@ -1191,6 +1214,69 @@ generated_at = "2024-01-01T00:00:00Z"
             BuildError::PromptResolveFailed { id, .. } => assert_eq!(id, "r"),
             other => panic!("expected PromptResolveFailed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_prompt_file_rejects_absolute_and_escape() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("p.md"), "ok").unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "no").unwrap();
+
+        assert_eq!(
+            read_prompt_file(std::path::Path::new("p.md"), t.path()).unwrap(),
+            b"ok"
+        );
+        // absolute
+        assert!(read_prompt_file(&outside.path().join("secret.md"), t.path()).is_err());
+        // ../ escape
+        let escape = std::path::Path::new("..")
+            .join(outside.path().file_name().unwrap())
+            .join("secret.md");
+        assert!(read_prompt_file(&escape, t.path()).is_err());
+    }
+
+    #[test]
+    fn read_prompt_file_normalizes_crlf() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("p.md"), b"line one\r\nline two\r\n").unwrap();
+        let bytes = read_prompt_file(std::path::Path::new("p.md"), t.path()).unwrap();
+        assert_eq!(bytes, b"line one\nline two\n");
+    }
+
+    #[test]
+    fn read_prompt_file_crlf_and_lf_hash_equal() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("crlf.md"), b"line one\r\nline two\r\n").unwrap();
+        std::fs::write(t.path().join("lf.md"), b"line one\nline two\n").unwrap();
+
+        let crlf_bytes = read_prompt_file(std::path::Path::new("crlf.md"), t.path()).unwrap();
+        let lf_bytes = read_prompt_file(std::path::Path::new("lf.md"), t.path()).unwrap();
+
+        assert_eq!(
+            sha256_hex(&crlf_bytes),
+            sha256_hex(&lf_bytes),
+            "system_prompt_sha256 must be CRLF-invariant, matching the IR asset hash"
+        );
+    }
+
+    /// `tau_ir_lower` normalizes this function's output a *second* time (the
+    /// CLI's `prompt_file` closure is `read_prompt_file`). So a single
+    /// `read_prompt_file` pass must already be at the fixed point, or the
+    /// bundle's `system_prompt_sha256` and the IR asset hash describe
+    /// different bytes for the same file. `\r\r\n` is the input that broke
+    /// the old non-idempotent rewrite.
+    #[test]
+    fn read_prompt_file_output_is_already_normalized() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(t.path().join("p.md"), b"a\r\r\nb\r\n").unwrap();
+        let once = read_prompt_file(std::path::Path::new("p.md"), t.path()).unwrap();
+        assert_eq!(once, b"a\nb\n");
+        assert_eq!(
+            crate::crlf::normalize_crlf_bytes(once.clone()),
+            once,
+            "a second normalization pass must not change the bytes",
+        );
     }
 
     // Helper: parse a Capability from its serialized kind/field JSON

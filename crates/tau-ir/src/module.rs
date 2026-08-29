@@ -41,7 +41,10 @@ impl IrFormatVersion {
     // for the content-addressed asset store (D6-B). `Inline` serializes as a bare
     // string, so pre-2.5 modules parse and re-serialize byte-identically.
     // MINOR v2.6.0: StepRun gains Dynamic (bounded dynamic region; additive; EPIC 4.4).
-    pub const CURRENT: &'static str = "v2.6.0";
+    // MINOR v2.7.0: Dynamic gains owner + runnable spawn templates (EPIC 4.5). v2.6
+    // Dynamic-bearing modules (never executable — interpreter unconditionally errored)
+    // fail decode; rebuild.
+    pub const CURRENT: &'static str = "v2.7.0";
 
     /// Major component of `CURRENT`. Kept as a literal (const string
     /// parsing is awkward) and pinned to `CURRENT` by
@@ -166,7 +169,7 @@ mod schema_tests {
     use super::*;
     #[test]
     fn ir_module_schema_builds_and_is_object() {
-        let v = serde_json::to_value(&schemars::schema_for!(IrModule)).unwrap();
+        let v = serde_json::to_value(schemars::schema_for!(IrModule)).unwrap();
         assert_eq!(v["type"], "object");
         // ir_format is a required top-level property
         let req = v["required"].as_array().expect("required present");
@@ -179,9 +182,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_format_version_is_v2_6_0() {
-        assert_eq!(IrFormatVersion::CURRENT, "v2.6.0");
-        assert_eq!(IrFormatVersion::current().0, "v2.6.0");
+    fn ir_format_version_is_v2_7_0() {
+        assert_eq!(IrFormatVersion::CURRENT, "v2.7.0");
+        assert_eq!(IrFormatVersion::current().0, "v2.7.0");
     }
 
     #[test]

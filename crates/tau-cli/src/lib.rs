@@ -48,7 +48,21 @@ pub async fn run_main() -> std::process::ExitCode {
         >,
     > = Vec::new();
     let workflow_run_id = if let Some(prep) = prepared_workflow_run {
-        extra_layers.push(Box::new(prep.layer));
+        use ::tracing_subscriber::filter::LevelFilter;
+        use ::tracing_subscriber::layer::Layer as _;
+        // `extra_layers` sit OUTSIDE the `EnvFilter` (see
+        // `InstallOptions::extra_layers`), which is what keeps the run
+        // log intact under `--quiet` / `RUST_LOG=error` — the log is the
+        // artifact `tau workflow resume` replays, so console verbosity
+        // must not decide whether it exists. The price is that the layer
+        // sees every event in the process unless it filters itself, so
+        // narrow it to its own target here. INFO is the level
+        // `RunLog::append` emits at.
+        let filtered = prep.layer.with_filter(tau_observe::layers::only_target(
+            tau_observe::layers::workflow_run_log::TARGET,
+            LevelFilter::INFO,
+        ));
+        extra_layers.push(Box::new(filtered));
         Some(prep.run_id)
     } else {
         None
@@ -60,24 +74,28 @@ pub async fn run_main() -> std::process::ExitCode {
     // describe) can call `flush()` on exit to ensure pending writes
     // reach disk before the process terminates.
     //
-    // The layer is wrapped with a per-layer `FilterFn` that always
-    // enables the `tau::plugin::frame` target regardless of the
-    // global `EnvFilter`, and pins its `max_level_hint` to TRACE so
-    // the tracing macros don't short-circuit recording events when
-    // the user's filter is more restrictive than INFO (e.g.
-    // `--quiet` → `tau=warn`). Protocol recording is opt-in via the
-    // explicit `--record-protocol` flag — gating it behind any
-    // particular log-level directive would surprise users who
-    // reasonably expect "the flag is set, ergo frames are recorded".
+    // Protocol recording is opt-in via the explicit `--record-protocol`
+    // flag — gating it behind any particular log-level directive would
+    // surprise users who reasonably expect "the flag is set, ergo frames
+    // are recorded". What makes that hold is that `extra_layers` are
+    // composed outside the `EnvFilter` rather than under it; see
+    // `InstallOptions::extra_layers` and tau-rs/tau#694, where a
+    // per-layer filter alone was (wrongly) believed to be enough.
+    //
+    // The per-layer filter below is therefore a narrowing filter, not a
+    // bypass: without it the layer would be called for every event in
+    // the process. Its `max_level_hint` is INFO — the level
+    // `Recorder::record` emits frames at — which keeps `tracing`'s
+    // process-wide max level from being pinned to TRACE.
     if let Some(path) = cli.record_protocol.clone() {
-        use tracing_subscriber::filter::{filter_fn, LevelFilter};
+        use tracing_subscriber::filter::LevelFilter;
         use tracing_subscriber::layer::Layer as _;
         let layer = tau_observe::layers::plugin_recording::PluginRecordingLayer::new(path);
         crate::cmd::plugin_loader::set_plugin_recording_layer(layer.clone());
-        let per_layer_filter =
-            filter_fn(|meta| meta.target() == tau_observe::layers::plugin_recording::TARGET)
-                .with_max_level_hint(LevelFilter::TRACE);
-        let filtered = layer.with_filter(per_layer_filter);
+        let filtered = layer.with_filter(tau_observe::layers::only_target(
+            tau_observe::layers::plugin_recording::TARGET,
+            LevelFilter::INFO,
+        ));
         extra_layers.push(Box::new(filtered));
     }
     tracing::install_with_extra_layers(&cli, extra_layers);

@@ -124,6 +124,7 @@ pub(super) fn parse(
                     path: p.to_string_lossy().into_owned(),
                     reason: e.0,
                 })?;
+                let bytes = normalize_crlf_bytes(bytes);
                 let hash = tau_ir::asset::asset_hash(&bytes);
                 // Identical content across agents dedupes to one blob.
                 assets
@@ -270,18 +271,13 @@ pub(super) fn parse(
     }
 
     // --- Pipeline ---------------------------------------------------------
-    let kinds: BTreeMap<alloc::string::String, alloc::vec::Vec<tau_domain::Capability>> = config
-        .agent_kinds
-        .iter()
-        .map(|(name, kind)| (name.clone(), kind.capabilities.clone()))
-        .collect();
     let mut pipeline = match &config.pipeline {
         None => None,
         Some(p) => Some(Pipeline {
             steps: p
                 .steps
                 .iter()
-                .map(|s| lower_step(s, &kinds))
+                .map(|s| lower_step(s, config))
                 .collect::<Result<_, _>>()?,
         }),
     };
@@ -302,6 +298,23 @@ pub(super) fn parse(
         triggers,
         assets,
     })
+}
+
+/// Build-time CRLF normalization (spec: dir-based definitions, determinism).
+/// Without this, an autocrlf Windows checkout changes prompt asset hashes and
+/// breaks `tau verify` cross-platform (same class as the #553 *.wit incident).
+///
+/// Delegates to `tau_pkg::crlf` — the one implementation — rather than
+/// keeping a private copy. `Caches::prompt_file` is caller-supplied: the CLI
+/// passes `tau_pkg::bundle::read_prompt_file`, which already normalizes, so
+/// this call is a second pass over the same bytes. That is only safe because
+/// the shared helper is idempotent (`\r\r\n` → `\n` in one pass); the two
+/// former copies each folded `\r\r\n` → `\r\n`, so a double pass produced a
+/// different IR asset hash than the bundle's single-pass
+/// `system_prompt_sha256`. Callers with their own reader still need the pass,
+/// so it stays.
+fn normalize_crlf_bytes(input: alloc::vec::Vec<u8>) -> alloc::vec::Vec<u8> {
+    tau_pkg::crlf::normalize_crlf_bytes(input)
 }
 
 /// Test-only stub reader for `parse`: no file prompts. Callers that don't
@@ -537,86 +550,101 @@ fn lower_durable(entry: &tau_pkg::project::AgentEntry) -> Option<tau_ir::durable
 /// Lower one validated pipeline step to an IR [`PipelineStep`], recursing
 /// into `Branch`/`Parallel`/`Loop` arms. Reference/scope integrity is
 /// validated separately by the IR typecheck (`check_pipeline`). `Dynamic`
-/// regions resolve their `spawns` kind names against `kinds` here (EPIC
-/// 4.4), which is the one way this mapping can fail — an unknown kind
-/// yields `LowerError::UnknownAgentKind`.
+/// regions resolve their `spawns` kind names against `config.agent_kinds`
+/// here (EPIC 4.4/4.5), which is the one way kind resolution can fail — an
+/// unknown kind yields `LowerError::UnknownAgentKind`, and a kind missing
+/// `prompt`/`model` (declared but not runnable) yields
+/// `LowerError::DynamicKindNotRunnable`.
 fn lower_step(
     s: &tau_pkg::project::PipelineStepConfig,
-    kinds: &BTreeMap<alloc::string::String, alloc::vec::Vec<tau_domain::Capability>>,
+    config: &ProjectConfig,
 ) -> Result<PipelineStep, LowerError> {
-    let run = match &s.run {
-        PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
-        PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
-        PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
-        PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
-        PipelineRunRef::Suspend { resume_signal } => StepRun::Suspend {
-            resume_signal: resume_signal.clone(),
-        },
-        PipelineRunRef::Branch {
-            on,
-            then,
-            otherwise,
-        } => StepRun::Branch {
-            on: lower_condition(on),
-            then: then
-                .iter()
-                .map(|st| lower_step(st, kinds))
-                .collect::<Result<_, _>>()?,
-            otherwise: otherwise
-                .iter()
-                .map(|st| lower_step(st, kinds))
-                .collect::<Result<_, _>>()?,
-        },
-        PipelineRunRef::Parallel { branches } => StepRun::Parallel {
-            branches: branches
-                .iter()
-                .map(|b| b.iter().map(|st| lower_step(st, kinds)).collect())
-                .collect::<Result<_, _>>()?,
-        },
-        PipelineRunRef::Loop {
-            body,
-            until,
-            max_iters,
-        } => StepRun::Loop {
-            body: body
-                .iter()
-                .map(|st| lower_step(st, kinds))
-                .collect::<Result<_, _>>()?,
-            until: lower_condition(until),
-            max_iters: *max_iters,
-        },
-        PipelineRunRef::Dynamic {
-            spawns,
-            ceiling,
-            max_spawns,
-            max_concurrency,
-            agent: _,
-        } => {
-            let mut resolved = alloc::vec::Vec::with_capacity(spawns.len());
-            for kind in spawns {
-                let caps = kinds
-                    .get(kind)
-                    .ok_or_else(|| LowerError::UnknownAgentKind {
-                        kind: kind.clone(),
-                        step: s.id.clone(),
+    let run =
+        match &s.run {
+            PipelineRunRef::Agent(id) => StepRun::Agent(AgentId(id.clone())),
+            PipelineRunRef::Tool(id) => StepRun::Tool(ToolId(id.clone())),
+            PipelineRunRef::Deterministic(id) => StepRun::Deterministic(StepId(id.clone())),
+            PipelineRunRef::Check(id) => StepRun::Check(CheckId(id.clone())),
+            PipelineRunRef::Suspend { resume_signal } => StepRun::Suspend {
+                resume_signal: resume_signal.clone(),
+            },
+            PipelineRunRef::Branch {
+                on,
+                then,
+                otherwise,
+            } => StepRun::Branch {
+                on: lower_condition(on),
+                then: then
+                    .iter()
+                    .map(|st| lower_step(st, config))
+                    .collect::<Result<_, _>>()?,
+                otherwise: otherwise
+                    .iter()
+                    .map(|st| lower_step(st, config))
+                    .collect::<Result<_, _>>()?,
+            },
+            PipelineRunRef::Parallel { branches } => StepRun::Parallel {
+                branches: branches
+                    .iter()
+                    .map(|b| b.iter().map(|st| lower_step(st, config)).collect())
+                    .collect::<Result<_, _>>()?,
+            },
+            PipelineRunRef::Loop {
+                body,
+                until,
+                max_iters,
+            } => StepRun::Loop {
+                body: body
+                    .iter()
+                    .map(|st| lower_step(st, config))
+                    .collect::<Result<_, _>>()?,
+                until: lower_condition(until),
+                max_iters: *max_iters,
+            },
+            PipelineRunRef::Dynamic {
+                spawns,
+                ceiling,
+                max_spawns,
+                max_concurrency,
+                agent,
+            } => {
+                let mut resolved: alloc::vec::Vec<tau_ir::pipeline::DynamicSpawn> =
+                    alloc::vec::Vec::with_capacity(spawns.len());
+                for kind in spawns {
+                    let k = config.agent_kinds.get(kind).ok_or_else(|| {
+                        LowerError::UnknownAgentKind {
+                            kind: kind.clone(),
+                            step: s.id.clone(),
+                        }
                     })?;
-                resolved.push(tau_ir::pipeline::DynamicSpawn {
-                    kind: kind.clone(),
-                    capabilities: CapabilityRequirements {
-                        declared: caps.clone(),
+                    let (Some(prompt), Some(model)) = (&k.prompt, &k.model) else {
+                        return Err(LowerError::DynamicKindNotRunnable {
+                            kind: kind.clone(),
+                            step: s.id.clone(),
+                        });
+                    };
+                    resolved.push(tau_ir::pipeline::DynamicSpawn {
+                        kind: kind.clone(),
+                        capabilities: CapabilityRequirements {
+                            declared: k.capabilities.clone(),
+                        },
+                        description: k.description.clone(),
+                        prompt: PromptSource::inline(prompt.clone()),
+                        model_ref: resolve_model_ref(config, model)?,
+                        tool_refs: k.tools.iter().cloned().map(ToolId).collect(),
+                    });
+                }
+                StepRun::Dynamic {
+                    owner: AgentId(agent.clone()),
+                    envelope: CapabilityRequirements {
+                        declared: ceiling.clone(),
                     },
-                });
+                    spawns: resolved,
+                    max_spawns: *max_spawns,
+                    max_concurrency: *max_concurrency,
+                }
             }
-            StepRun::Dynamic {
-                envelope: CapabilityRequirements {
-                    declared: ceiling.clone(),
-                },
-                spawns: resolved,
-                max_spawns: *max_spawns,
-                max_concurrency: *max_concurrency,
-            }
-        }
-    };
+        };
     Ok(PipelineStep {
         id: PipelineStepId(s.id.clone()),
         run,
@@ -794,6 +822,78 @@ deterministic = "parse_celsius"
     }
 
     #[test]
+    fn prompt_asset_hash_is_crlf_invariant() {
+        let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "p"
+[models]
+default = { backend = "mock-llm", model = "m" }
+[agents.solo]
+display_name = "Solo"
+package      = "p@^0.1"
+model        = "default"
+[agents.solo.prompt]
+system_file  = "prompt.md"
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let lf = |_p: &std::path::Path| -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+            Ok(b"line one\nline two\n".to_vec())
+        };
+        let crlf = |_p: &std::path::Path| -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+            Ok(b"line one\r\nline two\r\n".to_vec())
+        };
+        let out_lf = parse(&config, &lf).expect("lf");
+        let out_crlf = parse(&config, &crlf).expect("crlf");
+        assert_eq!(
+            out_lf.assets.keys().collect::<alloc::vec::Vec<_>>(),
+            out_crlf.assets.keys().collect::<alloc::vec::Vec<_>>()
+        );
+    }
+
+    /// The CLI wires `Caches::prompt_file` to
+    /// `tau_pkg::bundle::read_prompt_file`, which normalizes CRLF itself —
+    /// so `parse` normalizes the *already normalized* bytes a second time,
+    /// while the bundle's `system_prompt_sha256` is computed over the
+    /// single-pass output. Those two must agree.
+    ///
+    /// With the old `\r\n` → `\n` rewrite they did not: `\r\r\n` folded to
+    /// `\r\n` on pass 1 and to `\n` on pass 2, so the IR asset hash and the
+    /// bundle hash described different byte strings for the same file. Pin
+    /// the fixed point.
+    #[test]
+    fn second_normalization_pass_is_a_no_op_for_double_cr() {
+        let toml = r#"
+packages = ["mock-llm"]
+[project]
+name = "p"
+[models]
+default = { backend = "mock-llm", model = "m" }
+[agents.solo]
+display_name = "Solo"
+package      = "p@^0.1"
+model        = "default"
+[agents.solo.prompt]
+system_file  = "prompt.md"
+"#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+
+        // What `read_prompt_file` hands back — and what the bundle hashes.
+        let single_pass = tau_pkg::crlf::normalize_crlf_bytes(b"a\r\r\nb\r\n".to_vec());
+        assert_eq!(single_pass, b"a\nb\n");
+
+        let reader = |_p: &std::path::Path| -> Result<alloc::vec::Vec<u8>, crate::PromptFileError> {
+            Ok(single_pass.clone())
+        };
+        let out = parse(&config, &reader).expect("lower");
+        let blob = out.assets.values().next().expect("one prompt asset");
+        assert_eq!(
+            blob.bytes, single_pass,
+            "the IR asset must carry the same bytes the bundle hashed",
+        );
+    }
+
+    #[test]
     fn lowers_suspend_leaf() {
         // EPIC 4.3: a top-level `run = "suspend:<signal>"` step lowers to
         // `StepRun::Suspend { resume_signal }`.
@@ -818,23 +918,38 @@ deterministic = "parse_celsius"
 
     #[test]
     fn dynamic_region_lowers_with_resolved_kind_caps() {
-        // EPIC 4.4: a dynamic region's `spawns` kind names resolve, at
-        // lowering, against `[agent.kinds.<name>]` to embed each kind's
-        // capability grant directly in the emitted `DynamicSpawn`.
+        // EPIC 4.5: a dynamic region's `spawns` kind names resolve, at
+        // lowering, against `[agent.kinds.<name>]` to a *runnable*
+        // `DynamicSpawn` — capability grant, description, prompt,
+        // resolved model, and tool allow-list all embedded so the runtime
+        // gate is self-contained (no re-resolution against `tau.toml`).
         let toml = r#"
-            [project]
-            name = "p"
+packages = ["mock-llm"]
 
-            [agent.kinds.researcher]
-            capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+[project]
+name = "p"
 
-            [[pipeline.steps]]
-            id = "fanout"
-            [pipeline.steps.dynamic]
-            spawns = ["researcher"]
-            ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
-            max_spawns = 8
-            max_concurrency = 4
+[models]
+fast = { backend = "mock-llm", model = "mock-model" }
+
+[agent.kinds.researcher]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+description = "Deep-dives one topic."
+prompt = "You are a researcher."
+model = "fast"
+tools = ["probe"]
+
+[tools.probe]
+native = "noop"
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+max_spawns = 8
+max_concurrency = 4
+agent = "coordinator"
         "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
         let researcher_caps = config
@@ -848,14 +963,24 @@ deterministic = "parse_celsius"
         let pipeline = parsed.workflow.pipeline.expect("pipeline lowered");
         match &pipeline.steps[0].run {
             StepRun::Dynamic {
+                owner,
                 envelope,
                 spawns,
                 max_spawns,
                 max_concurrency,
             } => {
+                assert_eq!(owner.0, "coordinator");
                 assert_eq!(spawns.len(), 1);
                 assert_eq!(spawns[0].kind, "researcher");
                 assert_eq!(spawns[0].capabilities.declared, researcher_caps);
+                assert_eq!(spawns[0].description, "Deep-dives one topic.");
+                assert_eq!(
+                    spawns[0].prompt,
+                    PromptSource::inline("You are a researcher.")
+                );
+                assert_eq!(spawns[0].model_ref.backend, "mock-llm");
+                assert_eq!(spawns[0].model_ref.model_id, "mock-model");
+                assert_eq!(spawns[0].tool_refs, alloc::vec![ToolId("probe".into())]);
                 assert_eq!(envelope.declared.len(), 1);
                 assert_eq!(*max_spawns, 8);
                 assert_eq!(*max_concurrency, 4);
@@ -880,6 +1005,7 @@ deterministic = "parse_celsius"
             ceiling = {}
             max_spawns = 1
             max_concurrency = 1
+            agent = "coordinator"
         "#;
         let config = ProjectConfig::parse_str(toml).expect("parse");
         let err = parse(&config, &no_prompt_files).expect_err("unknown kind rejected");
@@ -889,6 +1015,74 @@ deterministic = "parse_celsius"
                 assert_eq!(step, "fanout");
             }
             other => panic!("expected UnknownAgentKind, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_region_kind_missing_prompt_is_not_runnable_error() {
+        // A kind with capabilities but no `prompt`/`model` cannot actually
+        // be spawned at runtime (EPIC 4.5) — lowering must reject it rather
+        // than emit a `DynamicSpawn` with an empty prompt/model_ref.
+        let toml = r#"
+            [project]
+            name = "p"
+
+            [agent.kinds.researcher]
+            capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["researcher"]
+            ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+            max_spawns = 1
+            max_concurrency = 1
+            agent = "coordinator"
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let err = parse(&config, &no_prompt_files).expect_err("kind not runnable rejected");
+        match err {
+            LowerError::DynamicKindNotRunnable { kind, step } => {
+                assert_eq!(kind, "researcher");
+                assert_eq!(step, "fanout");
+            }
+            other => panic!("expected DynamicKindNotRunnable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_region_kind_unknown_model_alias_is_lower_error() {
+        // A kind naming a `model` alias that isn't in `[models]`/
+        // `[allow.models]` fails lowering via the same
+        // `resolve_model_ref` path agents use.
+        let toml = r#"
+            [project]
+            name = "p"
+
+            [agent.kinds.researcher]
+            capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+            prompt = "You are a researcher."
+            model = "ghost-alias"
+
+            [[pipeline.steps]]
+            id = "fanout"
+            [pipeline.steps.dynamic]
+            spawns = ["researcher"]
+            ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
+            max_spawns = 1
+            max_concurrency = 1
+            agent = "coordinator"
+        "#;
+        let config = ProjectConfig::parse_str(toml).expect("parse");
+        let err = parse(&config, &no_prompt_files).expect_err("unknown model alias rejected");
+        match err {
+            LowerError::Parse(msg) => {
+                assert!(
+                    msg.contains("ghost-alias"),
+                    "expected message naming the unresolved alias, got {msg:?}"
+                );
+            }
+            other => panic!("expected LowerError::Parse (unresolved model alias), got {other:?}"),
         }
     }
 
