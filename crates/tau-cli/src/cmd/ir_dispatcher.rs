@@ -166,10 +166,12 @@ pub(crate) async fn run_via_ir(
     )?;
 
     // 4. Build plugin host options + spawn plugins (same flow the cwd path uses).
-    // Trace-context id for log grouping; prefix kept for log filtering, suffix
-    // is a collision-resistant ULID (was `<nanos>`).
-    let run_id = format!("tau-run-bundle-{}", crate::cmd::run::mint_run_id());
-    let trace_context = TraceContext::new(run_id, entry_agent_id.0.clone(), "root".to_string());
+    // One ULID per run, shared by the plugin TraceContext (log grouping) and
+    // the orchestration trace sink (spec §13.5), so `.tau/runs/<id>.jsonl`,
+    // `tau trace <id>` and the plugin logs all agree on the run's identity.
+    let run_id = crate::cmd::run::mint_run_id();
+    let trace_context =
+        TraceContext::new(run_id.clone(), entry_agent_id.0.clone(), "root".to_string());
     let host_options = plugin_loader::build_host_options(
         record_protocol.as_deref(),
         force_passthrough,
@@ -369,7 +371,38 @@ pub(crate) async fn run_via_ir(
     }
     // D6-B: hand the interpreter the content-addressed asset store so it can
     // resolve `PromptSource::Asset` prompt references (empty map => no-op).
-    let dispatcher = Arc::new(dispatcher.with_assets(assets));
+    let dispatcher = dispatcher.with_assets(assets);
+
+    // Spec §13.5: attach the run-log writer (and, under --tui, a live
+    // channel) so the interpreter's agent loop emits TraceEvents. Reuses the
+    // same writer + file namespace as the multi-agent path, so
+    // `tau trace --last` picks up bundle runs with no reader changes.
+    //
+    // Built inline (not via `trace_mpsc::channel_with_writer`) so this call
+    // site keeps the writer's `JoinHandle`: that handle is what
+    // `flush_jsonl_writer` below awaits, closing a #650-shaped race where a
+    // detached `tokio::spawn` writer task is never scheduled again before
+    // the CLI process exits, leaving `.tau/runs/<id>.jsonl` truncated to
+    // zero bytes even though the run completed successfully.
+    let mut trace_subscribers: Vec<
+        Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber>,
+    > = Vec::new();
+    let (jsonl_subscriber, jsonl_rx) =
+        tau_runtime_tokio::orchestration::trace_mpsc::MpscTraceSubscriber::channel();
+    let jsonl_writer_handle = tau_runtime_tokio::orchestration::persistence::spawn_writer(
+        tau_runtime_tokio::orchestration::persistence::run_log_path(scope.path(), &run_id),
+        jsonl_rx,
+    );
+    trace_subscribers.push(Arc::new(jsonl_subscriber));
+    let tui_rx = if args.tui {
+        let (subscriber, rx) =
+            tau_runtime_tokio::orchestration::trace_mpsc::MpscTraceSubscriber::channel();
+        trace_subscribers.push(Arc::new(subscriber));
+        Some(rx)
+    } else {
+        None
+    };
+    let dispatcher = Arc::new(dispatcher.with_trace(run_id.clone(), trace_subscribers));
 
     // 6. Build the initial prompt text from --prompt / stdin.
     let prompt_text = match &args.prompt {
@@ -407,9 +440,19 @@ pub(crate) async fn run_via_ir(
             .map(|id| id.0.clone())
             .ok_or_else(|| anyhow::anyhow!("IR pipeline has no steps"))?;
 
-        let store =
-            tau_runtime_core::interpreter::pipeline::run_pipeline(module, prompt_text, dispatcher)
-                .await;
+        let store = drive_with_optional_tui(
+            tau_runtime_core::interpreter::pipeline::run_pipeline(module, prompt_text, dispatcher),
+            tui_rx,
+        )
+        .await;
+
+        // `dispatcher` (and every trace_subscribers clone it carried,
+        // including `jsonl_subscriber`'s sender) is fully dropped by now —
+        // `run_pipeline` owned it and has returned. Awaiting the writer
+        // handle here guarantees every already-queued TraceEvent is
+        // fsync'd to `.tau/runs/<run_id>.jsonl` before this function
+        // reports the outcome.
+        flush_jsonl_writer(jsonl_writer_handle).await;
 
         // Drop runtime + flush recorders before rendering, identical to
         // the single-agent path's discipline below so plugin processes are
@@ -429,8 +472,17 @@ pub(crate) async fn run_via_ir(
         },
     );
 
-    // 8. Drive the single entry agent (today's path, unchanged).
-    let run_outcome = run_ir(module, &entry_agent_id, dispatcher, vec![initial]).await;
+    // 8. Drive the single entry agent.
+    let run_outcome = drive_with_optional_tui(
+        run_ir(module, &entry_agent_id, dispatcher, vec![initial]),
+        tui_rx,
+    )
+    .await;
+
+    // `dispatcher` is fully dropped by now (see the pipeline branch's
+    // identical comment above) — flush the run-log writer before anything
+    // else observes the run as finished.
+    flush_jsonl_writer(jsonl_writer_handle).await;
 
     // 9. Drop runtime + flush recorders before rendering, identical to
     //    the cwd path's discipline so plugin processes are reaped and
@@ -440,6 +492,83 @@ pub(crate) async fn run_via_ir(
 
     let outcome = run_outcome.context("running agent via IR interpreter")?;
     render_outcome(outcome, output)
+}
+
+/// Await the run-log JSONL writer's task to completion.
+///
+/// [`tau_runtime_tokio::orchestration::persistence::spawn_writer`] is a
+/// detached `tokio::spawn`: nothing else in the process joins it, so
+/// without this call the writer can still be sitting on its first
+/// `rx.recv().await` when `main` returns and the tokio runtime is torn
+/// down — the process exits with `.tau/runs/<run_id>.jsonl` created
+/// (via `OpenOptions::create`) but zero bytes long, even though the run
+/// itself completed successfully. This is the same shape of bug as #650
+/// (a detached `tokio::spawn` writer dropped at runtime shutdown), just in
+/// this newer §13.5 writer rather than `WorkflowRunLogLayer`. Call sites
+/// await this only after every `Arc<dyn TraceSubscriber>` clone (the
+/// `ForwardingDispatcher` and its `RunState`) has gone out of scope, so
+/// the writer's channel is already closed and this simply waits for the
+/// backlog to drain and fsync rather than blocking forever.
+async fn flush_jsonl_writer(handle: tokio::task::JoinHandle<()>) {
+    if let Err(e) = handle.await {
+        tracing::warn!("run-log writer task panicked: {e}");
+    }
+}
+
+/// Drive `fut` to completion, joining the blocking execution-trace TUI
+/// alongside it when `tui_rx` is `Some` (spec §13.5). Shared by both of
+/// `run_via_ir`'s drive sites (`run_pipeline` and `run_ir`) so `--tui`
+/// covers pipeline bundles as well as single-agent ones — wiring only one
+/// site would leave `--tui` silently inert for pipeline bundles.
+///
+/// Mirrors `cmd/run.rs`'s multi-agent `--tui` join (`run.rs:366-411`):
+/// `run_tui` is a blocking raw-mode loop, so it moves to the blocking pool
+/// while `fut` keeps driving concurrently on the current task via
+/// `tokio::join!`. `fut` is deliberately never `tokio::spawn`ed — the
+/// interpreter's synthetic `RunState` is `!Send` (spec §13.3), and moving
+/// it to another task would violate that.
+///
+/// Error precedence matches `run.rs:389-411` LITERALLY (not just in spirit):
+/// when `fut` itself fails, that `RuntimeError` is what the operator needs
+/// to act on, so it becomes the returned error's root cause — but a
+/// concurrent TUI failure/panic is chained onto it via `anyhow::Context`
+/// rather than only logged, so it survives in the rendered error chain
+/// (`--debug` / the default one-line render both see it) instead of only a
+/// `tracing::warn!` line that may not be visible at the active log level.
+/// A TUI failure with no run failure is still surfaced as the sole error.
+async fn drive_with_optional_tui<F, T>(
+    fut: F,
+    tui_rx: Option<tokio::sync::mpsc::UnboundedReceiver<tau_ports::TraceEvent>>,
+) -> anyhow::Result<T>
+where
+    F: Future<Output = Result<T, RuntimeError>>,
+{
+    let Some(rx) = tui_rx else {
+        return fut.await.map_err(anyhow::Error::new);
+    };
+    let tui_task =
+        tokio::task::spawn_blocking(move || crate::tui::run_tui(crate::tui::TraceSource::Live(rx)));
+    let (run_res, tui_res) = tokio::join!(fut, tui_task);
+    match run_res {
+        Err(run_err) => {
+            let err = anyhow::Error::new(run_err);
+            let err = match tui_res {
+                Ok(Ok(())) => err,
+                Ok(Err(e)) => err.context(format!("execution-trace TUI also errored: {e}")),
+                Err(join_err) => err.context(format!(
+                    "execution-trace TUI task also panicked: {join_err}"
+                )),
+            };
+            Err(err)
+        }
+        Ok(value) => match tui_res {
+            Ok(Ok(())) => Ok(value),
+            Ok(Err(e)) => Err(e.context("execution-trace TUI")),
+            Err(join_err) => Err(anyhow::anyhow!(
+                "execution-trace TUI task panicked: {join_err}"
+            )),
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +612,11 @@ pub(crate) struct ForwardingDispatcher {
     /// interpreter through [`ToolDispatcher::assets`] to resolve
     /// `PromptSource::Asset` prompt references.
     assets: Option<Arc<BTreeMap<String, tau_ir::asset::AssetBlob>>>,
+    /// Trace sink for this run (execution-trace TUI spec §13.3). `None`
+    /// unless [`Self::with_trace`] was called, which keeps IR runs that
+    /// don't want tracing byte-identical to their pre-§13 behavior.
+    trace_run_id: Option<String>,
+    trace_subscribers: Vec<Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber>>,
 }
 
 impl ForwardingDispatcher {
@@ -499,6 +633,8 @@ impl ForwardingDispatcher {
             durable_granularity: None,
             assets: None,
             native: Default::default(),
+            trace_run_id: None,
+            trace_subscribers: Vec::new(),
         }
     }
 
@@ -541,6 +677,30 @@ impl ForwardingDispatcher {
         self
     }
 
+    /// Attach the run's trace sink (spec §13.3). The interpreter reads it
+    /// via [`ToolDispatcher::trace_sink`] and builds a synthetic `RunState`
+    /// so the kernel's `TraceEvent` emit sites fire for this IR run.
+    ///
+    /// `run_id` is the id stamped on every event and the
+    /// `.tau/runs/<run_id>.jsonl` filename; `subscribers` is typically the
+    /// JSONL writer plus, under `--tui`, a live channel. An empty
+    /// `subscribers` vec is elided (`trace_sink()` stays `None`) — `run_id`
+    /// is silently discarded along with it, so a caller that means to trace
+    /// but forgets to push at least one subscriber gets exactly today's
+    /// no-tracing behavior with no error, mirroring [`Self::with_assets`]'s
+    /// empty-map elision above.
+    pub(crate) fn with_trace(
+        mut self,
+        run_id: String,
+        subscribers: Vec<Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber>>,
+    ) -> Self {
+        if !subscribers.is_empty() {
+            self.trace_run_id = Some(run_id);
+            self.trace_subscribers = subscribers;
+        }
+        self
+    }
+
     /// Test-only convenience: build a dispatcher from a single backend,
     /// keyed by its `name()`. Production code passes the whole name-keyed
     /// registry via [`Self::new`].
@@ -557,6 +717,8 @@ impl ForwardingDispatcher {
             durable_granularity: None,
             assets: None,
             native: Default::default(),
+            trace_run_id: None,
+            trace_subscribers: Vec::new(),
         }
     }
 }
@@ -806,6 +968,27 @@ impl ToolDispatcher for ForwardingDispatcher {
             resume: self.durable_resume.clone(),
             checkpoint: self.durable_granularity?,
         })
+    }
+
+    /// Spec §13.2: surface the meet-clamped authority `setup_mcp_runtime`
+    /// computed at MCP open time. The `McpBackedTool` in our map carries it;
+    /// every other tool reports `None` (the `DynTool` default).
+    fn tool_effective_capabilities(&self, tool_id: &ToolId) -> Option<Vec<tau_domain::Capability>> {
+        self.tools
+            .get(tool_id)?
+            .effective_capabilities()
+            .map(<[tau_domain::Capability]>::to_vec)
+    }
+
+    /// Spec §13.3: hand the interpreter this run's trace sink, if the host
+    /// attached one via [`Self::with_trace`].
+    fn trace_sink(&self) -> Option<tau_runtime_core::interpreter::tool_dispatch::TraceSinkConfig> {
+        Some(
+            tau_runtime_core::interpreter::tool_dispatch::TraceSinkConfig {
+                run_id: self.trace_run_id.clone()?,
+                subscribers: self.trace_subscribers.clone(),
+            },
+        )
     }
 }
 
@@ -2120,5 +2303,118 @@ mod tests {
             .expect("dispatcher call succeeds (the tool semantically errors)");
         assert!(res.body.is_none(), "body must be None on is_error=true");
         assert_eq!(res.error.as_deref(), Some("tool said no"));
+    }
+
+    /// Deserializes a single capability from a `[cap] ...` TOML fragment.
+    /// `Capability` is `#[non_exhaustive]`, so tests construct it via the
+    /// same serde escape hatch `sandbox_plan_tests::cap` uses for JSON —
+    /// this is the TOML equivalent, needed because `narrowed_tool_reports_*`
+    /// style fixtures read more naturally as TOML capability blocks.
+    fn cap_toml(toml_str: &str) -> tau_domain::Capability {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            cap: tau_domain::Capability,
+        }
+        toml::from_str::<Wrapper>(toml_str)
+            .expect("test capability TOML must be valid")
+            .cap
+    }
+
+    /// Stand-in for `McpBackedTool` exercising the identical dispatcher
+    /// code path (`self.tools.get(id)?.effective_capabilities()`) without
+    /// a live MCP client handle. Constructing a real `McpBackedTool` needs
+    /// an `Arc<McpClient>`, which itself needs a real `Arc<dyn Transport>`
+    /// and a `ServerContract` from a completed handshake, impractical to
+    /// stand up in a `tau-cli` unit test. The dispatcher only ever sees a
+    /// `dyn DynTool`, so a stub that overrides `effective_capabilities()`
+    /// exercises the same production code as the real MCP-backed tool.
+    struct ClampedStub {
+        effective: Vec<tau_domain::Capability>,
+    }
+
+    impl Tool for ClampedStub {
+        type Session = ();
+
+        fn name(&self) -> &str {
+            "clamped"
+        }
+
+        fn schema(&self) -> ToolSpec {
+            serde_json::from_value(serde_json::json!({
+                "name": "clamped",
+                "description": "test stub carrying a meet-clamped authority",
+                "input_schema": tau_domain::Value::Object(Default::default()),
+            }))
+            .expect("ToolSpec must deserialize")
+        }
+
+        fn effective_capabilities(&self) -> Option<&[tau_domain::Capability]> {
+            Some(&self.effective)
+        }
+
+        async fn init(&self, _ctx: SessionContext) -> Result<Self::Session, ToolError> {
+            Ok(())
+        }
+
+        async fn invoke(
+            &self,
+            _session: &mut Self::Session,
+            _args: tau_domain::Value,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult::new(Vec::new(), false))
+        }
+
+        async fn teardown(&self, _session: Self::Session) -> Result<(), ToolError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dispatcher_reports_effective_caps_from_its_tool_map() {
+        use tau_runtime_core::interpreter::tool_dispatch::ToolDispatcher as _;
+
+        // A ClampedStub-backed handle carrying a narrowed authority — see
+        // `ClampedStub`'s doc comment for why this substitutes for a real
+        // `McpBackedTool` here.
+        let effective = cap_toml("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+        let clamped: Arc<dyn DynTool> = Arc::new(ClampedStub {
+            effective: vec![effective.clone()],
+        });
+
+        let mut tools: BTreeMap<ToolId, Arc<dyn DynTool>> = BTreeMap::new();
+        tools.insert(ToolId("weather.get_forecast".into()), clamped);
+
+        let dispatcher = ForwardingDispatcher::new(BTreeMap::new(), tools);
+
+        assert_eq!(
+            dispatcher.tool_effective_capabilities(&ToolId("weather.get_forecast".into())),
+            Some(vec![effective]),
+            "the dispatcher must surface the tool's meet-clamped authority"
+        );
+        assert_eq!(
+            dispatcher.tool_effective_capabilities(&ToolId("not-registered".into())),
+            None,
+            "unknown ids report no clamp rather than panicking"
+        );
+    }
+
+    #[test]
+    fn dispatcher_reports_no_trace_sink_until_with_trace_is_called() {
+        use tau_runtime_core::interpreter::tool_dispatch::ToolDispatcher as _;
+
+        let dispatcher = ForwardingDispatcher::new(BTreeMap::new(), BTreeMap::new());
+        assert!(
+            dispatcher.trace_sink().is_none(),
+            "a dispatcher without with_trace must not enable trace emission"
+        );
+
+        let collector: Arc<dyn tau_runtime_core::orchestration::trace::TraceSubscriber> =
+            Arc::new(tau_runtime_core::orchestration::trace::NoopTraceSubscriber);
+        let dispatcher = ForwardingDispatcher::new(BTreeMap::new(), BTreeMap::new())
+            .with_trace("run-abc".to_string(), vec![collector]);
+
+        let sink = dispatcher.trace_sink().expect("sink after with_trace");
+        assert_eq!(sink.run_id, "run-abc");
+        assert_eq!(sink.subscribers.len(), 1);
     }
 }

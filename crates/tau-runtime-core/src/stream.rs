@@ -742,7 +742,17 @@ pub fn run_streaming_inner(
                 // crate::orchestration instead of forwarding to a plugin host.
                 // v1: task.* + run.* fully wired; agent.<kind>.spawn returns
                 // an is_error=true ToolResult noting deferred-to-follow-up.
-                if let Some(state_arc) = options.orchestration_state.as_ref() {
+                // Spec §13.4: the intercept requires BOTH pieces of
+                // orchestration context. `spawn_root_agent_inner` sets state
+                // AND runtime; IR-interpreter runs (§13.3) set state ONLY,
+                // to carry a trace sink. Gating on state alone would let an
+                // MCP tool whose IR id collides with a virtual name (e.g.
+                // `[tools.task]` + server tool `create` => `task.create`) be
+                // hijacked in-kernel on a bundle run.
+                if let (Some(state_arc), Some(_)) = (
+                    options.orchestration_state.as_ref(),
+                    options.orchestration_runtime.as_ref(),
+                ) {
                     if crate::orchestration::is_virtual(&tool_use.name) {
                         // ADR-0006 §3.9: dispatch.tool_resolved fires after
                         // resolution succeeds. Virtual tools resolve to the
@@ -1899,23 +1909,31 @@ fn render_clamped_to(effective: &[Capability]) -> String {
 }
 
 /// Map a dispatch-completed call's capability posture to the trace verdict
-/// (execution-trace TUI spec §12.4). `None` for un-gated tools; `Clamp`
-/// when the tool reports open-time-narrowed authority; `Allow` otherwise.
-/// Denials never reach this — they abort dispatch earlier and are recorded
-/// by `emit_capability_drop`.
+/// (execution-trace TUI spec §12.4, spec §13.1). Returns `Clamp { to }`
+/// when the tool reports open-time-narrowed authority (regardless of gate
+/// participation); `Allow` when gated (non-empty required) and not narrowed;
+/// `None` only when un-gated AND un-narrowed. Denials never reach this —
+/// they abort dispatch earlier and are recorded by `emit_capability_drop`.
 fn capability_verdict(
     tool: &dyn DynTool,
     required: &[Capability],
 ) -> Option<tau_ports::CapabilityVerdict> {
+    // Spec §13.1. Narrowed authority is a property of the object (§12.1's
+    // ocap framing), so it surfaces whether or not the in-kernel grant gate
+    // looked at this tool. IR-authored tools always present `required = []`
+    // (issue #581's pinned contract) yet can still be meet-clamped at MCP
+    // open time, so this check MUST precede the empty-required early return.
+    if let Some(eff) = tool.effective_capabilities() {
+        return Some(tau_ports::CapabilityVerdict::Clamp {
+            to: render_clamped_to(eff),
+        });
+    }
+    // Un-gated AND un-narrowed: no verdict. Matches the port contract
+    // ("`None` for un-gated tools", tau-ports orchestration.rs).
     if required.is_empty() {
         return None;
     }
-    Some(match tool.effective_capabilities() {
-        Some(eff) => tau_ports::CapabilityVerdict::Clamp {
-            to: render_clamped_to(eff),
-        },
-        None => tau_ports::CapabilityVerdict::Allow,
-    })
+    Some(tau_ports::CapabilityVerdict::Allow)
 }
 
 /// Emit `runtime.failed` with `failure_kind = PolicyDenied` under the given
@@ -4106,6 +4124,61 @@ paths = ["/etc/**"]
         assert_eq!(
             super::capability_verdict(&*tool, &req),
             Some(tau_ports::CapabilityVerdict::Allow)
+        );
+    }
+
+    #[test]
+    fn capability_verdict_clamps_even_when_required_is_empty() {
+        // Spec §13.1: IR-authored tools present `required = []` at the gate
+        // (issue #581's pinned contract), but a clamp on one of those must
+        // still surface — narrowed authority is a property of the object,
+        // not of gate participation. Before §13.1 this returned None.
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+        let effective = test_cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+        let tool = ClampedTool {
+            inner: MockTool::new(
+                "narrowed",
+                make_tool_spec("narrowed".into(), "narrowed".into(), Value::Null),
+            ),
+            // Declared caps are irrelevant here: the gate sees `required`,
+            // which the caller passes as `&[]` for an IR-wrapped tool.
+            required: vec![],
+            effective: vec![effective],
+        };
+        let tool: Arc<dyn DynTool> = Arc::new(tool);
+
+        assert_eq!(
+            super::capability_verdict(&*tool, &[]),
+            Some(tau_ports::CapabilityVerdict::Clamp {
+                to: "api.weather.com".into()
+            }),
+            "a narrowed tool must report Clamp even with an empty required set"
+        );
+    }
+
+    #[test]
+    fn capability_verdict_clamps_when_required_is_non_empty() {
+        // The pre-§13.1 behavior for gated tools is unchanged.
+        use tau_ports::fixtures::{make_tool_spec, MockTool};
+        let declared = test_cap(
+            "[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\", \"evil.example\"]\n",
+        );
+        let effective = test_cap("[cap]\nkind = \"net.http\"\nhosts = [\"api.weather.com\"]\n");
+        let tool = ClampedTool {
+            inner: MockTool::new(
+                "narrowed",
+                make_tool_spec("narrowed".into(), "narrowed".into(), Value::Null),
+            ),
+            required: vec![declared.clone()],
+            effective: vec![effective],
+        };
+        let tool: Arc<dyn DynTool> = Arc::new(tool);
+
+        assert_eq!(
+            super::capability_verdict(&*tool, &[declared]),
+            Some(tau_ports::CapabilityVerdict::Clamp {
+                to: "api.weather.com".into()
+            })
         );
     }
 

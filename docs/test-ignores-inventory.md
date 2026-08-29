@@ -3,7 +3,7 @@
 **Refreshed:** 2026-08-27 (supersedes the 2026-05-17 refresh, itself
 superseding the 2026-05-13 inventory from PR #71)
 **Workspace state:** based on `origin/main` at `e38f2530`
-**Total `#[ignore]` annotations:** 42
+**Total `#[ignore]` annotations:** 43
 
 42 `#[ignore]` annotations across the workspace, organised into four
 triage buckets. This file is the canonical reference for what each ignored
@@ -81,8 +81,12 @@ Landed while this refresh was in review:
 - 1 × `tau-plugin-protocol` `decode_does_not_retain_across_many_calls` (#697,
   2026-08-27) → Bucket 4. Caught by the new gate on rebase, which is the
   intended behaviour rather than an inconvenience.
+- 1 × `tau-cli` `clamp_row_e2e.rs::governed_clamped_mcp_run_writes_a_clamp_row`
+  (#631, 2026-08-28) → Bucket 4. The #631 clamp-row definition-of-done e2e is
+  gated on two pre-existing upstream bugs (#712, #714), not on this branch's
+  own work — see that bucket's row for detail.
 
-Net: 22 → 43 (−3 resolved, +21 newly inventoried, +1 landed mid-review,
+Net: 22 → 44 (−3 resolved, +21 newly inventoried, +2 landed mid-review,
 +2 already-counted rows re-derived).
 
 **Since that refresh:** 44 → 42. #717 promoted the two Bucket 4 rows whose
@@ -333,6 +337,7 @@ Waiting on a specific helper / fixture / sibling work.
 | `crates/tau-plugin-protocol/tests/decode_allocation_bound.rs:215` | `decode_does_not_retain_across_many_calls` | 2,000,000 `Frame::decode` calls — the #676 retention property. Too slow for routine CI; no job runs `-p tau-plugin-protocol --run-ignored`. Same blocker as the row above: promote when a slow-tier lane exists. Added by #697 (2026-08-27). |
 | `crates/tau-conformance/tests/conformance.rs:67` | `fan_monitor_dev_matches_wasm` | `WasmProfile::run` is still `unimplemented!()` (`crates/tau-conformance/src/profile/wasm.rs`). The β.6 `conformance / linux` job runs `-p tau-conformance` without `--run-ignored`, so it is skipped there by design. **Stated reason is stale — see follow-ups.** |
 | `crates/tau-sandbox-windows/tests/install_rust_cargo_acceptance.rs:255` | `rust_cargo_install_succeeds_sandboxed_without_unsandboxed_escape` | #726: `CreateProcess` on `rustc.exe` denies even though its DACL carries a correct inherited allow-ACE (`FILE_EXECUTE` included) for the AppContainer's package SID. Windows-only, `integration-tests`-gated; egress chain itself is proven green by `tests/egress_integration.rs`. Un-ignore when #726 lands a fix. |
+| `crates/tau-cli/tests/clamp_row_e2e.rs:152` | `governed_clamped_mcp_run_writes_a_clamp_row` | The #631 execution-trace-TUI clamp-row definition-of-done e2e: a governed run with a meet-clamped MCP tool must write a `Clamp` row to `.tau/runs/<id>.jsonl`. Blocked on two pre-existing upstream bugs, not on #631's own code: #712 (the MCP handshake fixture returns empty tool capabilities, so the test's server-tool never carries a `net.http` cap to clamp) and #714 (bundle re-lowering rejects MCP-backed projects, so `tau build` fails before the run can start). Promote when both are fixed. |
 
 **CI plan:** revisit each line when its blocker resolves. If a blocker is
 gone but the test is still `#[ignore]`'d, promote in a dedicated PR.

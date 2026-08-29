@@ -28,6 +28,13 @@
 //! seeing non-empty `required` for IR tools, revisit issue #581: either a
 //! grant concept was added to the IR (fine — update this contract) or the
 //! change is about to break every capable bundle run.
+//!
+//! Execution-trace TUI spec §13.2 layers observability on top of this
+//! contract WITHOUT weakening it: `DispatcherTool` forwards the host's
+//! meet-clamped `effective_capabilities()` so a clamped MCP tool renders an
+//! amber `clamp:<to>` waterfall row, while `capabilities()` stays
+//! un-overridden so `required` at the gate remains `[]`. The second test
+//! below pins exactly that split.
 #![cfg(feature = "test-fixtures")]
 
 use std::collections::BTreeMap;
@@ -233,5 +240,135 @@ async fn ir_declared_caps_do_not_gate_root_dispatch() {
         seen.lock().unwrap().as_slice(),
         ["fetch"],
         "the net.http-declaring tool must reach the dispatcher un-gated"
+    );
+}
+
+/// Spec §13.2 + §13.6: forwarding *effective* capabilities must not
+/// re-activate the dispatch gate. The tool still reaches the dispatcher
+/// un-gated (issue #581), and its ToolCall row carries `Clamp`.
+#[tokio::test]
+async fn forwarded_effective_caps_do_not_gate_but_do_label_the_row() {
+    use tau_ports::TraceEvent;
+    use tau_runtime_core::interpreter::tool_dispatch::TraceSinkConfig;
+    use tau_runtime_core::orchestration::trace::TraceSubscriber;
+
+    struct Collector(Mutex<Vec<TraceEvent>>);
+    impl TraceSubscriber for Collector {
+        fn emit(&self, event: TraceEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    /// `Recording`, plus a trace sink and a clamped authority for `fetch`.
+    struct RecordingClamped {
+        seen: Arc<Mutex<Vec<String>>>,
+        backend: Arc<dyn DynLlmBackend>,
+        collector: Arc<Collector>,
+    }
+
+    impl ToolDispatcher for RecordingClamped {
+        fn invoke<'a>(
+            &'a self,
+            tool_id: &'a ToolId,
+            _args: &'a Value,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<ToolInvocationResult, RuntimeError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            self.seen.lock().unwrap().push(tool_id.0.clone());
+            Box::pin(async {
+                Ok(ToolInvocationResult {
+                    body: Some(Value::String("ok".into())),
+                    error: None,
+                })
+            })
+        }
+
+        fn llm_backend_for(&self, _b: &str) -> Result<Arc<dyn DynLlmBackend>, RuntimeError> {
+            Ok(self.backend.clone())
+        }
+
+        fn trace_sink(&self) -> Option<TraceSinkConfig> {
+            Some(TraceSinkConfig {
+                run_id: "run-581-sibling".into(),
+                subscribers: vec![Arc::clone(&self.collector) as Arc<dyn TraceSubscriber>],
+            })
+        }
+
+        fn tool_effective_capabilities(
+            &self,
+            tool_id: &ToolId,
+        ) -> Option<Vec<tau_domain::Capability>> {
+            #[derive(serde::Deserialize)]
+            struct W {
+                cap: tau_domain::Capability,
+            }
+            (tool_id.0 == "fetch").then(|| {
+                vec![
+                    toml::from_str::<W>("[cap]\nkind=\"net.http\"\nhosts=[\"api.weather.com\"]\n")
+                        .unwrap()
+                        .cap,
+                ]
+            })
+        }
+    }
+
+    let (module, entry) = module_with_net_tool();
+    let backend: Arc<dyn DynLlmBackend> = Arc::new(Scripted {
+        queue: Mutex::new(vec![
+            resp(serde_json::json!({
+                "text":"","tool_uses":[{"id":"t1","name":"fetch","input":{}}],
+                "stop_reason":"ToolUse","usage":null
+            })),
+            resp(serde_json::json!({
+                "text":"done","tool_uses":[],"stop_reason":"EndTurn","usage":null
+            })),
+        ]),
+    });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+    let dispatcher = Arc::new(RecordingClamped {
+        seen: seen.clone(),
+        backend,
+        collector: collector.clone(),
+    });
+
+    let stream = run_ir_streaming(Arc::new(module), &entry, dispatcher, Vec::new())
+        .await
+        .expect("stream builds");
+    let events: Vec<RunEvent> = Box::pin(stream).collect().await;
+
+    // (1) The #581 contract still holds: no PolicyDenied, tool dispatched.
+    match events.last() {
+        Some(RunEvent::RunCompleted {
+            outcome: RunOutcome::Completed { .. },
+        }) => {}
+        other => panic!("expected RunCompleted/Completed, got {other:?}"),
+    }
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        ["fetch"],
+        "forwarding effective caps must NOT gate the tool (#581)"
+    );
+
+    // (2) …and the row is labelled with the clamp.
+    let verdict = collector
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|e| match &e.kind {
+            tau_ports::TraceEventKind::ToolCall { capability, .. } => Some(capability.clone()),
+            _ => None,
+        })
+        .expect("a ToolCall trace event");
+    assert_eq!(
+        verdict,
+        Some(tau_ports::CapabilityVerdict::Clamp {
+            to: "api.weather.com".into()
+        })
     );
 }

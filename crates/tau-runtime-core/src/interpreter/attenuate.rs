@@ -162,6 +162,15 @@ impl ToolDispatcher for AttenuatedDispatcher {
     fn checkpointing(&self) -> Option<crate::interpreter::tool_dispatch::DurableHandles> {
         self.inner.checkpointing()
     }
+    fn tool_effective_capabilities(
+        &self,
+        tool_id: &ToolId,
+    ) -> Option<alloc::vec::Vec<tau_domain::Capability>> {
+        self.inner.tool_effective_capabilities(tool_id)
+    }
+    fn trace_sink(&self) -> Option<crate::interpreter::tool_dispatch::TraceSinkConfig> {
+        self.inner.trace_sink()
+    }
 }
 
 #[cfg(test)]

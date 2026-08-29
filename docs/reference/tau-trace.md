@@ -54,9 +54,9 @@ call, colored by outcome:
 | Badge | Meaning |
 |---|---|
 | `allow` (green) | The call's required capability was granted; it ran as requested. |
-| `clamp:<to>` (amber) | The call ran, but under authority narrowed at MCP open time: the entry's `net.http` hosts were meet-clamped against the `[allow.mcp.<entry>].hosts` ceiling. `<to>` is the effective host list (`any` = host-unbounded; `none` = no net authority survived the clamp). Observability only — enforcement happens at the OS boundary. |
+| `clamp:<to>` (amber) | The call ran, but under authority narrowed at MCP open time: the entry's `net.http` hosts were meet-clamped against the `[allow.mcp.<entry>].hosts` ceiling. `<to>` is the effective host list (`any` = host-unbounded; `none` = no net authority survived the clamp). Observability only — enforcement happens at the OS boundary. Not yet reachable from a real MCP handshake: `ServerContract::from_handshake` extracts capabilities with a hardcoded empty capability list, so a live-server tool never carries the declared `net.http` set this badge is computed from (issue #712). The badge is fully wired and tested end-to-end via a synthetic capability set; only the handshake's capability extraction is the gap. |
 | `drop:<reason>` (red) | Fail-closed: the required capability was denied, so the call never ran. A denied call still gets a row — the waterfall shows exactly where authority stopped the run. |
-| `-` | The tool is un-gated, or the trace predates capability recording. |
+| `-` | The tool is un-gated, or the trace predates capability recording. Bundle (IR) runs report `-` for every un-clamped tool: those tools dispatch through the interpreter's wrapper, which deliberately presents no declared capabilities to the kernel gate (issue #581), so there is no `allow` decision to record. A clamped tool still shows `clamp:<to>` on that path. |
 
 The toolbar shows the run id, and the waterfall `Bar` column widens or
 narrows to fill the terminal, so resizing the window re-flows the timeline.
