@@ -1,5 +1,7 @@
 //! End-to-end lowering test against a minimal tau.toml.
 
+use tau_domain::CapabilityShape;
+use tau_ir::ids::ToolId;
 use tau_ir::IrFormatVersion;
 use tau_ir_lower::LowerError;
 use tau_ir_lower::{lower_project, Caches};
@@ -53,24 +55,24 @@ fn lookup_first_available() -> TargetTriple {
         .triple
 }
 
-/// Return a target triple that does NOT include `NetworkHttp` in its
-/// `required_shapes`. As of β.2 start, every Available entry in the
-/// registry includes NetworkHttp (all use `fs_rw_exec_net` or
-/// `all_shapes`). We therefore use a synthetic triple not in the
-/// registry — `registry::lookup` returns `None`, and
-/// `capability_fit::check` returns `CapabilityFitFailed` with an empty
-/// `missing` list. The test is marked `#[ignore]` because there is no
-/// real registry entry that exercises the shape-miss path; a future PR
-/// adding a `no-network` target tier should un-ignore this test.
+/// Return an Available registry entry whose `required_shapes` genuinely
+/// omits a shape a workflow can require.
 ///
-/// IGNORE-REASON: no Available registry entry exists without NetworkHttp;
-/// the second test is a design placeholder for when such an entry lands.
-#[allow(dead_code)]
-fn lookup_target_excluding_network() -> TargetTriple {
-    // Synthetic triple not in the registry → registry::lookup returns None
-    // → capability_fit::check returns CapabilityFitFailed { missing: [], tools: [] }.
-    // The assert `matches!(err, LowerError::CapabilityFitFailed { .. })` passes.
-    "darwin-container-strict".parse().unwrap()
+/// `any-wasi-strict` uses `fs_rw_net` — `{FilesystemRead, FilesystemWrite,
+/// NetworkHttp}` — so it lacks `ProcessExec` and `AgentSpawn`. That is a real
+/// shape miss against a real entry, which is what the capability-fit refusal
+/// test needs to be worth anything.
+///
+/// Note the earlier framing of this helper ("no Available entry lacks
+/// `NetworkHttp`, so use a synthetic triple") was true about `NetworkHttp` and
+/// wrong about the conclusion: the shape-miss path was always drivable, just
+/// not with that shape. A synthetic triple misses the registry entirely, so
+/// `capability_fit::check` returns `CapabilityFitFailed { missing: [] }` — the
+/// unknown-target arm, not the shape-miss arm. That case is still worth
+/// covering, but under its own name: see
+/// `lowering_refuses_on_unknown_target_triple` below.
+fn target_without_process_exec() -> TargetTriple {
+    "any-wasi-strict".parse().expect("valid triple")
 }
 
 // ---------------------------------------------------------------------------
@@ -135,14 +137,59 @@ fn lowering_passes_minimal_workflow() {
 }
 
 #[test]
-// IGNORE-REASON: no Available registry entry exists without NetworkHttp;
-// this test is a design placeholder for when a `no-network` target tier
-// lands in the registry. The capability_fit logic is already exercised
-// via the synthetic-triple path, but the semantic "shape miss" path
-// requires a real entry with a constrained shape set.
-#[ignore]
 fn lowering_refuses_on_capability_fit_mismatch() {
-    // Workflow declares network; build for a target without NetworkHttp shape.
+    // A tool declares `fs.exec` (shape: ProcessExec); the target is
+    // `any-wasi-strict`, a real Available entry whose shape set is
+    // {FilesystemRead, FilesystemWrite, NetworkHttp}. Lowering must refuse,
+    // naming both the missing shape and the tool that required it.
+    let toml = r#"
+        packages = ["mock-llm"]
+
+        [project]
+        name = "exec-workflow"
+
+        [models]
+        default = { backend = "mock-llm", model = "mock-model" }
+
+        [agents.x]
+        display_name = "X"
+        package      = "x@^0.1"
+        model        = "default"
+        tool_refs    = ["shell"]
+
+        [tools.shell]
+        native = "Shell"
+        capabilities = [{ kind = "fs.exec", paths = ["/usr/bin/env"] }]
+    "#;
+    let config = ProjectConfig::parse_str(toml).expect("parse config");
+    let target = target_without_process_exec();
+    let caches = caches_with(vec!["Shell".into()], vec![]);
+    let err = lower_project(&config, &target, &caches).unwrap_err();
+    match err {
+        LowerError::CapabilityFitFailed { missing, tools } => {
+            assert_eq!(
+                missing,
+                vec![CapabilityShape::ProcessExec],
+                "expected exactly the ProcessExec shape to be missing"
+            );
+            assert_eq!(
+                tools,
+                vec![ToolId("shell".into())],
+                "expected the offending tool to be blamed"
+            );
+        }
+        other => panic!("expected CapabilityFitFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn lowering_refuses_on_unknown_target_triple() {
+    // A triple that parses but is not in the registry takes
+    // `capability_fit::check`'s *unknown-target* arm, which reports an EMPTY
+    // `missing` list. Asserting that emptiness is the whole point: it is what
+    // distinguishes this arm from the shape-miss arm above. A bare
+    // `matches!(err, CapabilityFitFailed { .. })` would conflate the two and
+    // pass without exercising either.
     let toml = r#"
         packages = ["mock-llm"]
 
@@ -163,13 +210,23 @@ fn lowering_refuses_on_capability_fit_mismatch() {
         capabilities = [{ kind = "net.http", hosts = "any" }]
     "#;
     let config = ProjectConfig::parse_str(toml).expect("parse config");
-    // Use a target triple that EXCLUDES NetworkHttp from required_shapes.
-    // Currently no such Available entry exists in the registry; the test
-    // is #[ignore] until one is added.
-    let target = lookup_target_excluding_network();
+    let target: TargetTriple = "darwin-container-strict".parse().expect("valid triple");
+    assert!(
+        tau_ports::target::registry::lookup(&target).is_none(),
+        "fixture assumes `darwin-container-strict` is absent from the registry; \
+         if it lands, pick another absent triple rather than deleting this test"
+    );
     let caches = caches_with(vec![], vec!["https://example.com".into()]);
     let err = lower_project(&config, &target, &caches).unwrap_err();
-    assert!(matches!(err, LowerError::CapabilityFitFailed { .. }));
+    match err {
+        LowerError::CapabilityFitFailed { missing, tools } => {
+            assert!(
+                missing.is_empty() && tools.is_empty(),
+                "unknown target reports no specific miss, got {missing:?} / {tools:?}"
+            );
+        }
+        other => panic!("expected CapabilityFitFailed, got {other:?}"),
+    }
 }
 
 #[test]

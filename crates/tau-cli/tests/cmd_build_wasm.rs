@@ -60,6 +60,23 @@ fn project_needing_process_exec_is_refused() {
 }
 
 #[test]
+fn project_using_an_mcp_tool_is_refused() {
+    // #735: the wasm guest's dispatcher resolves only `ToolImpl::Native`
+    // (`crates/tau-wasm-guest/src/dispatcher.rs`), so an MCP tool used to
+    // build cleanly and then die mid-run with "unknown native tool" — the
+    // failure the #691 spike hit on the `fan_monitor` conformance fixture.
+    // Tool-impl-fit must refuse it at build time instead. Unit-level
+    // coverage of the same refusal lives in `tau-ir-lower`'s
+    // `tool_impl_fit::wasm_rejects_mcp_tool`; this pins the CLI diagnostic.
+    let err = lower_to_wasm_ir(&fixture("needs-mcp")).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("tool-impl-fit") && msg.contains("weather"),
+        "expected a tool-impl-fit refusal naming the MCP tool, got: {msg}"
+    );
+}
+
+#[test]
 fn project_using_control_flow_is_refused() {
     // A `Parallel` pipeline is control-flow; wasm guests drive run_ir_streaming,
     // not run_pipeline, so `tau build wasm` must refuse it (feature-fit, EPIC 4.2).

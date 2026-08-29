@@ -16,6 +16,7 @@ pub mod mcp_build_error;
 pub mod parse;
 pub mod predicate_fit;
 pub mod resolve;
+pub mod tool_impl_fit;
 pub mod typecheck;
 
 pub use mcp_build_error::McpBuildError;
@@ -126,6 +127,7 @@ pub fn lower_project(
     capability_fit::check(&resolved, target)?;
     feature_fit::check(&resolved, target)?;
     predicate_fit::check(&resolved, target)?;
+    tool_impl_fit::check(&resolved, target)?;
     Ok(build_output(resolved, target))
 }
 
