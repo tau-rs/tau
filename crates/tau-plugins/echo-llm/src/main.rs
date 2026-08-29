@@ -216,7 +216,12 @@ impl EchoLlm {
                 StopReason::ToolUse,
                 None,
             )),
-            _ => Ok(make_completion_response(text, Vec::new(), stop_reason, None)),
+            _ => Ok(make_completion_response(
+                text,
+                Vec::new(),
+                stop_reason,
+                None,
+            )),
         }
     }
 }
