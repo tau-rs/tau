@@ -1,0 +1,23 @@
+packages = ["anthropic"]
+
+[project]
+name = "needs-mcp-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.main]
+display_name = "Main"
+package = "needs-mcp-wasm@^0.1"
+model = "claude"
+tool_refs = ["weather"]
+
+[agents.main.prompt]
+system = "Uses an MCP-backed tool."
+
+[tools.weather]
+mcp = "cassette:./weather.cassette.jsonl"
+description = "Look up current weather via cassette replay."
+capabilities = [{ kind = "net.http", hosts = "any" }]
