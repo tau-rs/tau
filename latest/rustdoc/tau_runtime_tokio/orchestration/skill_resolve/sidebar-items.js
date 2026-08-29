@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["apply_scope_paths","resolve_skill_for_spawn","substitute_skill_dir"],"struct":["SkillSpawnArgs","SkillSpawnRequest"]};
