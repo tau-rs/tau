@@ -227,6 +227,85 @@ async fn evaluate_build_governance(
     }
 }
 
+/// Discover the `[tools.<entry>] mcp = "<url>"` entries declared by the
+/// project's `tau.toml`.
+///
+/// Every failure to get at the entries — no `tau.toml`, unparseable TOML,
+/// a config that fails validation — degrades to "no MCP entries" rather
+/// than an error: `lower_ir` re-reads the same file and warns about those
+/// cases on its own, and callers must not report them twice.
+fn mcp_entries_from_project(project_root: &std::path::Path) -> Vec<(String, String)> {
+    use tau_pkg::project::project::{ToolBody, UncheckedProjectConfig};
+
+    let tau_toml_path = project_root.join("tau.toml");
+    let Ok(tau_toml_str) = std::fs::read_to_string(&tau_toml_path) else {
+        return Vec::new();
+    };
+    let Ok(unchecked) = toml::from_str::<UncheckedProjectConfig>(&tau_toml_str) else {
+        return Vec::new();
+    };
+    let Ok(config) = unchecked.validate() else {
+        return Vec::new();
+    };
+
+    config
+        .tools
+        .iter()
+        .filter_map(|(name, t)| match &t.body {
+            ToolBody::Mcp(url) => Some((name.clone(), url.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Resolve every declared MCP contract from its **pinned** file at
+/// `.tau/mcp/<entry>.contract.json` — the `--offline` half of
+/// [`resolve_mcp_cache`], with no network access and no `async`.
+///
+/// Split out so the integrity gates can reuse it: both
+/// `cmd::run::verify_bundle_against_source` and
+/// `cmd::verify::run_reproducibility_check` must re-lower a project with
+/// the *same* MCP cache `tau build` used, and both are sync.
+/// Pinned-only is not merely convenient there, it is the correct input: a
+/// verification gate whose answer depended on a live handshake would be
+/// non-deterministic and network-dependent (#714).
+///
+/// Returns `(Vec<LockedMcpEntry>, BTreeMap<url, ResolvedMcpContract>)`, the
+/// same pair as [`resolve_mcp_cache`]. A project with no MCP entries yields
+/// two empty collections. A **missing or corrupt pin is an error**, never a
+/// silently-empty cache — see each gate for how it stays fail-closed.
+pub(crate) fn resolve_pinned_mcp_cache(
+    project_root: &std::path::Path,
+) -> anyhow::Result<(
+    Vec<LockedMcpEntry>,
+    BTreeMap<String, tau_ir_lower::ResolvedMcpContract>,
+)> {
+    use tau_mcp::contract::McpContractResolver as _;
+
+    let mcp_entries = mcp_entries_from_project(project_root);
+    if mcp_entries.is_empty() {
+        return Ok((Vec::new(), BTreeMap::new()));
+    }
+
+    let pin_base = project_root.join(".tau").join("mcp");
+    let resolver = tau_mcp::contract::resolver::PinnedResolver::new(&pin_base);
+    let mut ir_cache: BTreeMap<String, tau_ir_lower::ResolvedMcpContract> = BTreeMap::new();
+    let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
+    for (entry, url) in &mcp_entries {
+        let resolved = resolver
+            .resolve(entry, url)
+            .map_err(|e| anyhow::anyhow!("MCP pin resolve failed for {entry:?}: {e}"))?;
+        locked_entries.push(mcp_entry_to_locked(
+            entry,
+            url,
+            &resolved,
+            Some(format!(".tau/mcp/{entry}.contract.json")),
+        ));
+        ir_cache.insert(url.clone(), to_ir_shape(resolved));
+    }
+    Ok((locked_entries, ir_cache))
+}
+
 /// Discover all MCP entries from tau.toml and resolve their contracts.
 ///
 /// Returns:
@@ -234,8 +313,9 @@ async fn evaluate_build_governance(
 /// - `BTreeMap<String, tau_ir_lower::ResolvedMcpContract>` — URL-keyed
 ///   cache for `Caches::mcp_contract`.
 ///
-/// On `--offline`, reads `.tau/mcp/<entry>.contract.json` (error if missing).
-/// On the live path, performs MCP handshakes and writes pinned files.
+/// On `--offline`, delegates to [`resolve_pinned_mcp_cache`], which reads
+/// `.tau/mcp/<entry>.contract.json` (error if missing). On the live path,
+/// performs MCP handshakes and writes pinned files.
 async fn resolve_mcp_cache(
     project_root: &std::path::Path,
     offline: bool,
@@ -243,108 +323,57 @@ async fn resolve_mcp_cache(
     Vec<LockedMcpEntry>,
     BTreeMap<String, tau_ir_lower::ResolvedMcpContract>,
 )> {
-    use tau_pkg::project::project::{ToolBody, UncheckedProjectConfig};
+    if offline {
+        return resolve_pinned_mcp_cache(project_root);
+    }
 
-    // Parse tau.toml to find MCP entries.
-    let tau_toml_path = project_root.join("tau.toml");
-    let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
-        Ok(s) => s,
-        Err(_) => {
-            // No tau.toml → no MCP entries. lower_ir will warn separately.
-            return Ok((Vec::new(), BTreeMap::new()));
-        }
-    };
-    let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
-        Ok(u) => u,
-        Err(_) => {
-            // Parse failure → no MCP entries. lower_ir will warn separately.
-            return Ok((Vec::new(), BTreeMap::new()));
-        }
-    };
-    let config = match unchecked.validate() {
-        Ok(c) => c,
-        Err(_) => {
-            return Ok((Vec::new(), BTreeMap::new()));
-        }
-    };
-
-    // Collect all MCP entries.
-    let mcp_entries: Vec<(String, String)> = config
-        .tools
-        .iter()
-        .filter_map(|(name, t)| match &t.body {
-            ToolBody::Mcp(url) => Some((name.clone(), url.clone())),
-            _ => None,
-        })
-        .collect();
-
+    let mcp_entries = mcp_entries_from_project(project_root);
     if mcp_entries.is_empty() {
         return Ok((Vec::new(), BTreeMap::new()));
     }
 
     let pin_base = project_root.join(".tau").join("mcp");
 
-    if offline {
-        // Pinned path: read `.tau/mcp/<entry>.contract.json`.
-        use tau_mcp::contract::McpContractResolver as _;
-        let resolver = tau_mcp::contract::resolver::PinnedResolver::new(&pin_base);
-        let mut ir_cache: BTreeMap<String, tau_ir_lower::ResolvedMcpContract> = BTreeMap::new();
-        let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
-        for (entry, url) in &mcp_entries {
-            let resolved = resolver
-                .resolve(entry, url)
-                .map_err(|e| anyhow::anyhow!("MCP pin resolve failed for {entry:?}: {e}"))?;
+    // Live path: perform MCP handshakes.
+    let inputs: Vec<tau_mcp_tokio::resolver::McpEntryInput> = mcp_entries
+        .iter()
+        .map(|(entry, url)| tau_mcp_tokio::resolver::McpEntryInput {
+            entry: entry.clone(),
+            url: url.clone(),
+            plan: tau_ports::CapabilityPlan::new(Vec::new(), None, None),
+        })
+        .collect();
+    let live = tau_mcp_tokio::resolver::resolve_all(inputs)
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP live resolve failed: {e}"))?;
+
+    // Write pinned files for next-time --offline.
+    std::fs::create_dir_all(&pin_base)
+        .map_err(|e| anyhow::anyhow!("failed to create .tau/mcp/: {e}"))?;
+    for (entry, url) in &mcp_entries {
+        if let Some(lr) = live.get(url) {
+            let path = pin_base.join(format!("{entry}.contract.json"));
+            let bytes = serde_json::to_vec_pretty(&lr.pinned)
+                .map_err(|e| anyhow::anyhow!("serialize pinned contract for {entry:?}: {e}"))?;
+            std::fs::write(&path, bytes)
+                .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+        }
+    }
+
+    let mut ir_cache: BTreeMap<String, tau_ir_lower::ResolvedMcpContract> = BTreeMap::new();
+    let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
+    for (entry, url) in &mcp_entries {
+        if let Some(lr) = live.get(url) {
             locked_entries.push(mcp_entry_to_locked(
                 entry,
                 url,
-                &resolved,
+                &lr.resolved,
                 Some(format!(".tau/mcp/{entry}.contract.json")),
             ));
-            ir_cache.insert(url.clone(), to_ir_shape(resolved));
+            ir_cache.insert(url.clone(), to_ir_shape(lr.resolved.clone()));
         }
-        Ok((locked_entries, ir_cache))
-    } else {
-        // Live path: perform MCP handshakes.
-        let inputs: Vec<tau_mcp_tokio::resolver::McpEntryInput> = mcp_entries
-            .iter()
-            .map(|(entry, url)| tau_mcp_tokio::resolver::McpEntryInput {
-                entry: entry.clone(),
-                url: url.clone(),
-                plan: tau_ports::CapabilityPlan::new(Vec::new(), None, None),
-            })
-            .collect();
-        let live = tau_mcp_tokio::resolver::resolve_all(inputs)
-            .await
-            .map_err(|e| anyhow::anyhow!("MCP live resolve failed: {e}"))?;
-
-        // Write pinned files for next-time --offline.
-        std::fs::create_dir_all(&pin_base)
-            .map_err(|e| anyhow::anyhow!("failed to create .tau/mcp/: {e}"))?;
-        for (entry, url) in &mcp_entries {
-            if let Some(lr) = live.get(url) {
-                let path = pin_base.join(format!("{entry}.contract.json"));
-                let bytes = serde_json::to_vec_pretty(&lr.pinned)
-                    .map_err(|e| anyhow::anyhow!("serialize pinned contract for {entry:?}: {e}"))?;
-                std::fs::write(&path, bytes)
-                    .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
-            }
-        }
-
-        let mut ir_cache: BTreeMap<String, tau_ir_lower::ResolvedMcpContract> = BTreeMap::new();
-        let mut locked_entries: Vec<LockedMcpEntry> = Vec::new();
-        for (entry, url) in &mcp_entries {
-            if let Some(lr) = live.get(url) {
-                locked_entries.push(mcp_entry_to_locked(
-                    entry,
-                    url,
-                    &lr.resolved,
-                    Some(format!(".tau/mcp/{entry}.contract.json")),
-                ));
-                ir_cache.insert(url.clone(), to_ir_shape(lr.resolved.clone()));
-            }
-        }
-        Ok((locked_entries, ir_cache))
     }
+    Ok((locked_entries, ir_cache))
 }
 
 /// Convert a `tau_mcp` resolver output to tau-ir's structurally-identical type.
