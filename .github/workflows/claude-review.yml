@@ -100,7 +100,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@dcb57747bfceeaa1fa72638cae52295d1d853d4a  # v1.0.199
+      - uses: anthropics/claude-code-action@1f291e1cfe0f5fc21db2aef19af844591600ade7  # v1.0.206
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Pass the workflow's auto-injected GITHUB_TOKEN so the action's
@@ -223,7 +223,7 @@ jobs:
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "Previous tag/commit: $previous"
 
-      - uses: anthropics/claude-code-action@dcb57747bfceeaa1fa72638cae52295d1d853d4a  # v1.0.199
+      - uses: anthropics/claude-code-action@1f291e1cfe0f5fc21db2aef19af844591600ade7  # v1.0.206
         # `workflow_dispatch` events run in bare agent mode (track_progress
         # only applies to PR/issue events), where no tools are allowlisted
         # by default — grant exactly what the task needs via --allowedTools
