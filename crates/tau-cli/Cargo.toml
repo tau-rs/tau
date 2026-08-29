@@ -97,7 +97,7 @@ tau-wasm-host    = { path = "../tau-wasm-host" }
 # `wit_component::decode` returns wit-parser types, so a version skew
 # between them is a hard type mismatch in this crate's tests, not a
 # resolver warning.
-wit-component    = "0.257"
+wit-component    = "0.258"
 wit-parser       = { workspace = true }
 
 [features]
