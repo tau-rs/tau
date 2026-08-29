@@ -2332,6 +2332,24 @@ fn validate_pipeline_step(
                     .into(),
             ));
         }
+        // A kind offered twice lowers to two `DynamicSpawn`s, which build two
+        // `SpawnTool`s both named `agent.<kind>.spawn`, which the runtime
+        // builder rejects as a name collision — aborting the run with an
+        // `Internal` error naming a tool the author never wrote. Catch the
+        // typo here, where the message can name the kind. Only this arm needs
+        // the check: the store-default arm above expands `BTreeMap` keys,
+        // which are unique by construction.
+        {
+            let mut seen = std::collections::BTreeSet::new();
+            for kind in &spawns {
+                if !seen.insert(kind.as_str()) {
+                    return Err(bad(format!(
+                        "dynamic region lists kind {kind:?} more than once — \
+                         each kind may be offered once"
+                    )));
+                }
+            }
+        }
         if d.max_spawns == 0 {
             return Err(bad(
                 "a dynamic region's `max_spawns` must be greater than 0".into(),
@@ -3408,6 +3426,90 @@ max_concurrency = 1
         )
         .unwrap_err();
         assert!(err.to_string().contains("no spawnable kinds"), "{err}");
+    }
+
+    #[test]
+    fn dynamic_region_duplicate_spawns_is_rejected() {
+        // A kind offered twice would build two `SpawnTool`s both named
+        // `agent.researcher.spawn`, which the runtime builder rejects as a
+        // name collision — a plausible tau.toml typo aborting the run with an
+        // `Internal` error. Rejected here instead, naming the kind.
+        let err = parse(
+            r#"
+[project]
+name = "p"
+
+[models]
+default = { backend = "coordbackend", model = "model-v1" }
+
+[agents.coord]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "default"
+
+[agent.kinds.researcher]
+capabilities = {}
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+agent = "coord"
+spawns = ["researcher", "researcher"]
+ceiling = {}
+max_spawns = 2
+max_concurrency = 1
+"#,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("more than once"), "{msg}");
+        assert!(msg.contains("researcher"), "{msg}");
+    }
+
+    /// Sibling of the duplicate check: two *distinct* kinds are the ordinary
+    /// fan-out shape and must keep parsing.
+    #[test]
+    fn dynamic_region_distinct_spawns_are_accepted() {
+        let cfg = parse(
+            r#"
+[project]
+name = "p"
+
+[models]
+default = { backend = "coordbackend", model = "model-v1" }
+
+[agents.coord]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "default"
+
+[agent.kinds.researcher]
+capabilities = {}
+
+[agent.kinds.reviewer]
+capabilities = {}
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+agent = "coord"
+spawns = ["researcher", "reviewer"]
+ceiling = {}
+max_spawns = 2
+max_concurrency = 1
+"#,
+        )
+        .expect("distinct kinds parse");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Dynamic { spawns, .. } => {
+                assert_eq!(
+                    spawns,
+                    &vec!["researcher".to_string(), "reviewer".to_string()]
+                );
+            }
+            other => panic!("expected Dynamic, got {other:?}"),
+        }
     }
 
     #[test]

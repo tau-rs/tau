@@ -299,6 +299,45 @@ pub enum LowerError {
         max_concurrency: u64,
     },
 
+    /// A `StepRun::Dynamic` offers no kinds at all, so the region would
+    /// register no spawn tools and its coordinator could never fan out.
+    /// Defense-in-depth: mirrors `DynamicMaxSpawnsZero` — tau-pkg validates
+    /// this at author time, but hand-constructed IR that bypasses tau-pkg
+    /// must still be rejected.
+    #[error("pipeline step '{step}': Dynamic.spawns must offer at least one kind")]
+    DynamicSpawnsEmpty {
+        /// The pipeline step id containing the offending Dynamic region.
+        step: String,
+    },
+
+    /// A `StepRun::Dynamic` offers the same kind twice, which would build two
+    /// `SpawnTool`s named `agent.<kind>.spawn` and abort the run with a
+    /// runtime name collision. Defense-in-depth: mirrors
+    /// `DynamicMaxSpawnsZero` — tau-pkg validates this at author time, but
+    /// hand-constructed IR that bypasses tau-pkg must still be rejected.
+    #[error("pipeline step '{step}': Dynamic.spawns lists kind '{kind}' more than once")]
+    DynamicSpawnKindDuplicate {
+        /// The pipeline step id containing the offending Dynamic region.
+        step: String,
+        /// The kind name offered more than once.
+        kind: String,
+    },
+
+    /// A `StepRun::Dynamic`'s coordinator already carries a tool whose name is
+    /// exactly the `agent.<kind>.spawn` name the region would register for one
+    /// of its offered kinds. Unlike its two siblings this is *not* merely
+    /// defense-in-depth: tau-pkg does not constrain `[tools.<name>]` keys, so
+    /// an ordinary `tau.toml` reaches it and typecheck is the only gate.
+    #[error("dynamic region in step '{step}' offers kind '{kind}', but its coordinator already has a tool named '{tool}' — rename the [tools.*] entry or remove it from that agent's `tools`")]
+    DynamicSpawnToolNameCollision {
+        /// The pipeline step id containing the offending Dynamic region.
+        step: String,
+        /// The offered kind whose spawn-tool name is taken.
+        kind: String,
+        /// The colliding tool name (`agent.<kind>.spawn`).
+        tool: String,
+    },
+
     /// A context step declares a determinism class string that lowering does
     /// not recognize (D7-B / ADR-0065). Replaces the former silent
     /// `_ => DeterminismClass::Pure` default, which downgraded an unknown
