@@ -106,11 +106,26 @@ pub struct InstallOptions {
     /// `WorkflowRunLogLayer`, `PluginRecordingLayer`).
     ///
     /// Each layer must implement `Layer<Registry>` so it composes against
-    /// the raw registry before the `EnvFilter` is layered on top. The
-    /// installer applies these via a fold BEFORE the `EnvFilter`, so the
-    /// `EnvFilter`'s global-filter effect still gates them — layer impls
-    /// that need to bypass the env filter should attach their own
-    /// per-layer filter via `Layer::with_filter`.
+    /// the raw registry. [`Self::filter`] is attached as a *per-layer*
+    /// filter on the console sinks (fmt + OTLP), NOT as a global filter,
+    /// so these extras genuinely sit outside it: they are called for
+    /// every event the process emits, whatever `-v` / `--quiet` /
+    /// `RUST_LOG` say.
+    ///
+    /// That is the point. These layers write files the user asked for
+    /// explicitly (`--record-protocol <path>`, the `tau workflow resume`
+    /// run log); console verbosity must not decide whether those files
+    /// get written. tau-rs/tau#694 is what happens otherwise — the
+    /// `EnvFilter` used to be layered on top of the registry as a global
+    /// filter, `--quiet` (`tau=warn`) short-circuited the INFO-level
+    /// artifact events before these layers ever saw them, and `tau
+    /// workflow run --quiet` exited 0 having written nothing.
+    ///
+    /// The flip side is that each extra layer owns its own filtering.
+    /// Attach a per-layer filter with `Layer::with_filter` — see
+    /// [`crate::layers::only_target`], which also pins the
+    /// `max_level_hint` so the process-wide max level stays bounded.
+    /// A layer without one is called for every event in every crate.
     pub extra_layers: Vec<
         Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static>,
     >,
@@ -311,6 +326,7 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
     }
 
     use tracing_subscriber::fmt;
+    use tracing_subscriber::layer::Layer as _;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -318,32 +334,53 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
     // `Vec<Box<dyn Layer<Registry> + Send + Sync>>` implements `Layer<S>`
     // via tracing-subscriber's blanket impl for `Vec<L>`. We wrap the
     // vec in `Option` so it disappears entirely when empty — the Vec
-    // impl's `max_level_hint` returns `LevelFilter::OFF` for an empty
-    // vec, which would otherwise suppress all events at the registry
-    // level (see tracing-subscriber v0.3 `Vec<L>::max_level_hint`).
+    // impl's `enabled` is `iter().any(…)`, which is `false` for an empty
+    // vec and would suppress every event process-wide.
     let extras = if opts.extra_layers.is_empty() {
         None
     } else {
         Some(opts.extra_layers)
     };
-    let base = tracing_subscriber::registry()
-        .with(extras)
-        .with(opts.filter);
 
-    // Optional OpenTelemetry layer goes BELOW the fmt layer so that its
-    // `Layer<S>` impl resolves against the stable `Layered<EnvFilter,
-    // Registry>` subscriber type (independent of which fmt branch the
-    // match selects below). `Option<Layer>` is itself a `Layer`, so
-    // `None` is a zero-cost no-op.
+    // The `EnvFilter` is a PER-LAYER filter on the console sinks, not a
+    // global one (tau-rs/tau#694). Layering it onto the registry made it
+    // a global filter, and a global filter gates every layer in the
+    // stack — including layers carrying their own per-layer filter. A
+    // per-layer filter can only narrow what its layer sees; it can never
+    // widen past a global filter. That made `--quiet` silently drop the
+    // workflow run log and the `--record-protocol` recording, both of
+    // which are on-disk artifacts the user asked for by name.
+    //
+    // The optional OpenTelemetry layer is an operator-facing sink too,
+    // so it rides under the same filter. `Layer::and_then` folds it and
+    // the fmt layer into a single `Layer<Registry>`, which lets one
+    // `EnvFilter` cover both — `EnvFilter` is not `Clone`, so filtering
+    // them separately would mean re-parsing the directives. `None` is a
+    // zero-cost no-op because `Option<Layer>` is itself a `Layer`.
     #[cfg(feature = "otlp")]
-    let base = base.with(opts.otlp.as_ref().map(build_otel_layer));
+    let console_extra = opts.otlp.as_ref().map(build_otel_layer);
+    #[cfg(not(feature = "otlp"))]
+    let console_extra: Option<tracing_subscriber::layer::Identity> = None;
+
+    let filter = opts.filter;
+    let base = tracing_subscriber::registry().with(extras);
 
     let result = match (opts.format, opts.writer) {
         (Format::Human, Writer::Stderr) => base
-            .with(fmt::layer().with_writer(std::io::stderr))
+            .with(
+                fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .and_then(console_extra)
+                    .with_filter(filter),
+            )
             .try_init(),
         (Format::Human, Writer::Stdout) => base
-            .with(fmt::layer().with_writer(std::io::stdout))
+            .with(
+                fmt::layer()
+                    .with_writer(std::io::stdout)
+                    .and_then(console_extra)
+                    .with_filter(filter),
+            )
             .try_init(),
         (Format::Json, Writer::Stderr) => base
             .with(
@@ -351,7 +388,9 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
                     .json()
                     .with_writer(std::io::stderr)
                     .with_current_span(true)
-                    .with_span_list(false),
+                    .with_span_list(false)
+                    .and_then(console_extra)
+                    .with_filter(filter),
             )
             .try_init(),
         (Format::Json, Writer::Stdout) => base
@@ -360,7 +399,9 @@ pub fn install(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
                     .json()
                     .with_writer(std::io::stdout)
                     .with_current_span(true)
-                    .with_span_list(false),
+                    .with_span_list(false)
+                    .and_then(console_extra)
+                    .with_filter(filter),
             )
             .try_init(),
     };
@@ -413,6 +454,7 @@ fn resolve_appender_paths(path: &std::path::Path) -> (std::path::PathBuf, String
 fn install_non_blocking_inner(opts: InstallOptions) -> Result<InstallGuard, InstallError> {
     use tracing_appender::rolling;
     use tracing_subscriber::fmt;
+    use tracing_subscriber::layer::Layer as _;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -429,16 +471,23 @@ fn install_non_blocking_inner(opts: InstallOptions) -> Result<InstallGuard, Inst
     };
     let (writer, worker_guard) = tracing_appender::non_blocking(file_appender);
 
-    let registry = tracing_subscriber::registry().with(opts.filter);
+    // Per-layer filter on the fmt layer, matching the blocking path —
+    // see the `install` body for why the `EnvFilter` must not be a
+    // global filter (tau-rs/tau#694). This path does not compose
+    // `extra_layers` or the OTLP layer at all yet; that gap is #699.
+    let registry = tracing_subscriber::registry();
     let result = match opts.format {
-        Format::Human => registry.with(fmt::layer().with_writer(writer)).try_init(),
+        Format::Human => registry
+            .with(fmt::layer().with_writer(writer).with_filter(opts.filter))
+            .try_init(),
         Format::Json => registry
             .with(
                 fmt::layer()
                     .json()
                     .with_writer(writer)
                     .with_current_span(true)
-                    .with_span_list(false),
+                    .with_span_list(false)
+                    .with_filter(opts.filter),
             )
             .try_init(),
     };

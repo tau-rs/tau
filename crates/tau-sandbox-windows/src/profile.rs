@@ -5,15 +5,6 @@
 use tau_domain::{Capability, FsCapability, NetCapability};
 use tau_ports::CapabilityPlan;
 
-/// TCP port the host-side `tau-sandbox-proxy` task listens on. Plugins
-/// reach it via `HTTPS_PROXY=http://127.0.0.1:8443`.
-//
-// `dead_code` allow: on non-Windows builds the lib.rs's `wrap_spawn_windows`
-// is cfg-gated out, so the const has no runtime use, but the unit test
-// below still references it as a cross-platform invariant assertion.
-#[allow(dead_code)]
-pub(crate) const PROXY_PORT: u16 = 8443;
-
 /// Result of [`build_appcontainer_caps`]: the AppContainer-shape inputs that
 /// the spawn layer turns into Win32 calls.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,13 +16,14 @@ pub struct AppContainerCaps {
     /// Filesystem paths the plugin needs to write. Spawn layer adds an ACL
     /// grant on each (the AppContainer SID + GENERIC_READ + GENERIC_WRITE).
     pub fs_write_paths: Vec<String>,
-    /// Whether the plan requests outbound HTTP. When true, spawn layer:
-    ///   - adds the `lpacPnpNotifications` + `privateNetworkClientServer`
-    ///     well-known capability SIDs to the AppContainer (loopback only;
-    ///     **NOT** `internetClient` so direct internet is blocked);
-    ///   - sets `HTTPS_PROXY=http://127.0.0.1:PROXY_PORT` env so reqwest
-    ///     routes via the host-side proxy task;
-    ///   - spawns the proxy task before `CreateProcessAsUserW`.
+    /// Whether the plan requests outbound HTTP. When true, the spawn layer
+    /// spawns a per-container named-pipe proxy and routes the command
+    /// through `tau-net-bridge-win` (`launcher -- bridge --pipe <name> --
+    /// <orig> <args...>`); the bridge dials the pipe and relays the
+    /// plugin's traffic to the host-side `tau_sandbox_proxy` allowlist
+    /// enforcement. **No capability SIDs are added** (spike #626:
+    /// same-package loopback and SID-ACL'd pipes need none, and
+    /// `internetClient` would allow bypassing the allowlist).
     pub has_http: bool,
     /// Whether the plan grants process-spawn. AppContainer children inherit
     /// the same security context, so this doesn't widen the sandbox; we
@@ -75,6 +67,41 @@ pub fn build_appcontainer_caps(plan: &CapabilityPlan) -> AppContainerCaps {
         has_http,
         has_process_spawn,
     }
+}
+
+/// The write paths of `plan` whose *raw* capability spelling was a
+/// directory subtree (`<dir>/**`, `<dir>/*`, or a trailing `/`),
+/// normalised exactly like [`build_appcontainer_caps`] normalises them.
+///
+/// The Windows spawn layer creates these directories when they are
+/// missing, before granting the AppContainer SID write access on them.
+/// Two facts make that necessary rather than optional:
+///
+/// - `SetNamedSecurityInfoW` fails with `ERROR_FILE_NOT_FOUND`
+///   (`WIN32_ERROR(2)`) on a path that does not exist, so the grant —
+///   and with it the whole `wrap_spawn` — fails closed. `tau-pkg`'s
+///   build envelope grants write on `<package>/target/**`, which cargo
+///   has not created yet at wrap time; #622's CI round 1 failed exactly
+///   there.
+/// - The container cannot create the directory itself: the *parent* is
+///   not write-granted, by design.
+///
+/// Only glob-shaped entries qualify. A bare path (`C:\out\report.txt`)
+/// may well name a file the plan wants created, and silently turning it
+/// into a directory would be worse than the current loud failure — so
+/// those still fail closed.
+pub fn dir_shaped_write_paths(plan: &CapabilityPlan) -> Vec<String> {
+    let mut out = Vec::new();
+    for cap in &plan.capabilities {
+        if let Capability::Filesystem(FsCapability::Write { paths, .. }) = cap {
+            for p in paths {
+                if p.ends_with("/**") || p.ends_with("/*") || p.ends_with('/') {
+                    out.push(clean_glob_suffix(p));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Strip trailing glob suffixes from a path. AppContainer ACLs are
@@ -152,6 +179,44 @@ mod tests {
     }
 
     #[test]
+    fn dir_shaped_write_paths_only_matches_globs() {
+        let plan = plan_from(json!([
+            { "kind": "fs.write", "paths": [
+                "C:\\pkg\\target/**", "/var/cache/*", "/srv/out/", "C:\\out\\report.txt"
+            ] },
+            // Read globs must NOT be included: only write grants are
+            // allowed to materialise a directory.
+            { "kind": "fs.read", "paths": ["/etc/cfg/**"] }
+        ]));
+        assert_eq!(
+            dir_shaped_write_paths(&plan),
+            vec![
+                "C:\\pkg\\target".to_string(),
+                "/var/cache".to_string(),
+                "/srv/out".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn dir_shaped_write_paths_normalises_like_build_caps() {
+        // Whatever this returns must be comparable against
+        // `AppContainerCaps::fs_write_paths` entry-for-entry — the spawn
+        // layer looks paths up in a set built from it.
+        let plan = plan_from(json!([
+            { "kind": "fs.write", "paths": ["/a/b/**", "/c/d"] }
+        ]));
+        let caps = build_appcontainer_caps(&plan);
+        let dirs = dir_shaped_write_paths(&plan);
+        assert_eq!(
+            caps.fs_write_paths,
+            vec!["/a/b".to_string(), "/c/d".to_string()]
+        );
+        assert_eq!(dirs, vec!["/a/b".to_string()]);
+        assert!(caps.fs_write_paths.contains(&dirs[0]));
+    }
+
+    #[test]
     fn http_capability_sets_flag() {
         let plan = plan_from(json!([
             { "kind": "net.http", "hosts": ["api.example.com"], "methods": ["GET"] }
@@ -167,13 +232,5 @@ mod tests {
         ]));
         let caps = build_appcontainer_caps(&plan);
         assert!(caps.has_process_spawn);
-    }
-
-    #[test]
-    fn proxy_port_is_8443() {
-        // Cross-platform invariant: the proxy port matches what the
-        // Linux native + macOS darwin adapters use, so the same
-        // tau-sandbox-proxy crate works for all three.
-        assert_eq!(PROXY_PORT, 8443);
     }
 }

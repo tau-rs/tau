@@ -174,6 +174,20 @@ podman machine set --disk-size 100
 podman machine start
 ```
 
+**Host disk fills up (many worktrees)**: Conductor spawns several worktrees per lane and each builds its own multi-GB `target/`; nothing reclaims them. A sweep across 42 worktrees freed 199 GiB ([#719](https://github.com/tau-rs/tau/issues/719)). Reclaim them with:
+
+```bash
+just clean-worktrees          # DRY RUN — reports what it would free
+just clean-worktrees --yes    # apply
+```
+
+It removes a `target/` only when the lane's PR is merged, or when several worktrees share one branch (keeping the most recently built copy). Source, git state, and uncommitted changes are never touched. It refuses to run while a build is active, because deleting a `target/` mid-build corrupts it.
+
+It deliberately leaves `~/Library/Caches/Mozilla.sccache` (~20G) alone: that cache is what makes the rebuild after a sweep warm instead of cold, so dropping `target/` while keeping sccache is the better trade. Two gotchas worth knowing when measuring by hand:
+
+- `df /` reports the **sealed system volume** on macOS and will happily claim 95% free while you are out of space. Read `df /System/Volumes/Data`.
+- `du -sch */target` overcounts badly on APFS because of clone-block sharing — it claimed 426G inside a 208G workspace. Trust `df` deltas, not `du` sums.
+
 **QEMU `rustc` SIGSEGV during compilation**: the Podman container is running aarch64 Linux natively (not x86_64 emulation), so this shouldn't happen. If you've added `--platform linux/amd64` somewhere and hit rustc crashes, remove it — Apple Silicon QEMU x86_64 emulation is unstable for rustc workloads.
 
 ## What this enables

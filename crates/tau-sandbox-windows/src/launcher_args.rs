@@ -8,7 +8,11 @@ use std::ffi::OsString;
 pub struct LauncherArgs {
     /// AppContainer profile name (the adapter already created it).
     pub profile: String,
-    /// Well-known capability SID names (empty in Phase 2 — net deferred).
+    /// Well-known capability SID names. No network capability SIDs are
+    /// granted, by design (#622): the SID-ACL'd egress pipe is the
+    /// enforcement point, not a capability-SID grant like internetClient.
+    /// This plumbing stays available for a future capability that
+    /// genuinely needs one; nothing currently populates it.
     pub caps: Vec<String>,
     /// The real program to run inside the AppContainer.
     pub program: OsString,

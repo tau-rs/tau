@@ -151,3 +151,89 @@ fn plugin_protocol_decode_json_emits_structured_lines() {
     assert!(line_count > 0, "decoded transcript was empty");
     assert!(saw_complete, "decoded transcript missing llm.stream");
 }
+
+/// How the caller silenced the console for the tau-rs/tau#694 regression
+/// tests: `--quiet` (flag path, `tau=warn`) or `RUST_LOG=error` (env path,
+/// which overrides the flags entirely).
+enum Silencer {
+    QuietFlag,
+    RustLogError,
+}
+
+/// tau-rs/tau#694: `--record-protocol` is an explicit request for a file.
+/// Console verbosity must not decide whether that file gets frames.
+///
+/// This is the second half of #694. `PluginRecordingLayer` was already
+/// wrapped in a per-layer `filter_fn` + `max_level_hint(TRACE)` commented
+/// as bypassing the global `EnvFilter` — it never did. `install()` layered
+/// the `EnvFilter` on top of the registry, where it is a *global* filter,
+/// and a global filter still gates layers that carry their own per-layer
+/// filter. Under `--quiet` (`tau=warn`) the INFO-level `tau::plugin::frame`
+/// events were dropped before the recording layer saw them, leaving an
+/// empty recording and a silently useless `tau plugin protocol decode`.
+fn assert_protocol_recording_survives(silencer: Silencer) {
+    let dir = common::setup_echo_project("echo", "canned_text = \"quiet frames\"\n", &[]);
+    let log_path = dir.path().join("wire.log");
+
+    let mut cmd = AssertCmd::cargo_bin("tau").unwrap();
+    cmd.current_dir(dir.path())
+        .env("TAU_HOME", dir.path().join("global"));
+    match silencer {
+        Silencer::QuietFlag => {
+            cmd.arg("--quiet");
+            cmd.env_remove("RUST_LOG");
+        }
+        Silencer::RustLogError => {
+            cmd.env("RUST_LOG", "error");
+        }
+    }
+    cmd.args([
+        "--record-protocol",
+        log_path.to_str().unwrap(),
+        "run",
+        "--allow-ungoverned",
+        "echo",
+        "ping",
+    ])
+    .assert()
+    .success();
+
+    let recorded = std::fs::read_to_string(&log_path).unwrap_or_else(|e| {
+        panic!(
+            "recording {} must exist with the console silenced: {e}",
+            log_path.display()
+        )
+    });
+    let frames: Vec<serde_json::Value> = recorded
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("each recorded line is JSON"))
+        .collect();
+    assert!(
+        !frames.is_empty(),
+        "recording must not be empty; contents:\n{recorded}"
+    );
+    // Both directions of a real turn, not just the opening frame.
+    assert!(
+        frames.iter().any(|f| f["dir"] == "h2p"),
+        "recording missing a host->plugin frame; contents:\n{recorded}"
+    );
+    assert!(
+        frames.iter().any(|f| f["dir"] == "p2h"),
+        "recording missing a plugin->host frame; contents:\n{recorded}"
+    );
+    assert!(
+        frames.iter().any(|f| f["method"] == "llm.stream"),
+        "recording missing the llm.stream call; contents:\n{recorded}"
+    );
+}
+
+#[test]
+fn record_protocol_writes_frames_even_when_quiet() {
+    assert_protocol_recording_survives(Silencer::QuietFlag);
+}
+
+#[test]
+fn record_protocol_writes_frames_under_rust_log_error() {
+    assert_protocol_recording_survives(Silencer::RustLogError);
+}

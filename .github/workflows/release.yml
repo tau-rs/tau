@@ -213,7 +213,7 @@ jobs:
         with:
           shared-key: linux-stable
           save-if: "false"
-      - uses: taiki-e/install-action@fa8484446eeba15720aa701ffc5dcb6dfa092ff1  # nextest
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f  # nextest
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --locked --version =27.1.0
       - name: Run mutation testing

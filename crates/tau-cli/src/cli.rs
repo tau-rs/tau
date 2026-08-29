@@ -181,7 +181,7 @@ pub enum Command {
     /// Start serve mode: accept JSON-RPC requests over stdio.
     Serve(ServeArgs),
     /// Run pre-flight validation against the project (config, lockfile,
-    /// packages, sandbox, plugins, skills, mcp-contracts, governance).
+    /// packages, sandbox, plugins, skills, mcp-contracts, governance, dirs).
     /// Aggregates existing validators into one CI/IDE-friendly verb.
     Check(CheckArgs),
     /// Build a deployment bundle from this project (Phase 2 §C.2),
@@ -995,8 +995,8 @@ pub struct TargetShowArgs {
 pub struct CheckArgs {
     /// Optional category — runs only the named check (one of:
     /// config, lockfile, packages, sandbox, plugins, skills,
-    /// mcp-contracts, governance). When omitted, runs all 8 categories.
-    #[arg(value_name = "CATEGORY", value_parser = ["config", "lockfile", "packages", "sandbox", "plugins", "skills", "mcp-contracts", "governance"])]
+    /// mcp-contracts, governance, dirs). When omitted, runs all 9 categories.
+    #[arg(value_name = "CATEGORY", value_parser = ["config", "lockfile", "packages", "sandbox", "plugins", "skills", "mcp-contracts", "governance", "dirs"])]
     pub category: Option<String>,
 
     /// Reduce per-check I/O where a fast variant exists.

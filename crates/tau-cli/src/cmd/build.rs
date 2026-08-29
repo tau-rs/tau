@@ -243,27 +243,17 @@ async fn resolve_mcp_cache(
     Vec<LockedMcpEntry>,
     BTreeMap<String, tau_ir_lower::ResolvedMcpContract>,
 )> {
-    use tau_pkg::project::project::{ToolBody, UncheckedProjectConfig};
+    use tau_pkg::project::project::ToolBody;
 
-    // Parse tau.toml to find MCP entries.
+    // Load tau.toml to find MCP entries. Goes through the dirs-aware
+    // `from_path` (ADR-0069) so a `tools/**/*.toml` MCP definition gets its
+    // contract resolved and pinned exactly like an inline `[tools.X]` one.
     let tau_toml_path = project_root.join("tau.toml");
-    let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
-        Ok(s) => s,
-        Err(_) => {
-            // No tau.toml → no MCP entries. lower_ir will warn separately.
-            return Ok((Vec::new(), BTreeMap::new()));
-        }
-    };
-    let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
-        Ok(u) => u,
-        Err(_) => {
-            // Parse failure → no MCP entries. lower_ir will warn separately.
-            return Ok((Vec::new(), BTreeMap::new()));
-        }
-    };
-    let config = match unchecked.validate() {
+    let config = match tau_pkg::project::ProjectConfig::from_path(&tau_toml_path) {
         Ok(c) => c,
         Err(_) => {
+            // Missing / unparseable / invalid tau.toml → no MCP entries.
+            // lower_ir warns separately.
             return Ok((Vec::new(), BTreeMap::new()));
         }
     };
@@ -283,6 +273,7 @@ async fn resolve_mcp_cache(
     }
 
     let pin_base = project_root.join(".tau").join("mcp");
+    let rel_pin_base = std::path::Path::new(".tau/mcp");
 
     if offline {
         // Pinned path: read `.tau/mcp/<entry>.contract.json`.
@@ -298,7 +289,7 @@ async fn resolve_mcp_cache(
                 entry,
                 url,
                 &resolved,
-                Some(format!(".tau/mcp/{entry}.contract.json")),
+                Some(contract_pin_path(rel_pin_base, entry).display().to_string()),
             ));
             ir_cache.insert(url.clone(), to_ir_shape(resolved));
         }
@@ -317,12 +308,17 @@ async fn resolve_mcp_cache(
             .await
             .map_err(|e| anyhow::anyhow!("MCP live resolve failed: {e}"))?;
 
-        // Write pinned files for next-time --offline.
-        std::fs::create_dir_all(&pin_base)
-            .map_err(|e| anyhow::anyhow!("failed to create .tau/mcp/: {e}"))?;
+        // Write pinned files for next-time --offline. Path-named entries
+        // (`github/search`) nest, so the parent must be created per-entry
+        // rather than just the flat `.tau/mcp/` base.
         for (entry, url) in &mcp_entries {
             if let Some(lr) = live.get(url) {
-                let path = pin_base.join(format!("{entry}.contract.json"));
+                let path = contract_pin_path(&pin_base, entry);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        anyhow::anyhow!("failed to create {}: {e}", parent.display())
+                    })?;
+                }
                 let bytes = serde_json::to_vec_pretty(&lr.pinned)
                     .map_err(|e| anyhow::anyhow!("serialize pinned contract for {entry:?}: {e}"))?;
                 std::fs::write(&path, bytes)
@@ -338,13 +334,20 @@ async fn resolve_mcp_cache(
                     entry,
                     url,
                     &lr.resolved,
-                    Some(format!(".tau/mcp/{entry}.contract.json")),
+                    Some(contract_pin_path(rel_pin_base, entry).display().to_string()),
                 ));
                 ir_cache.insert(url.clone(), to_ir_shape(lr.resolved.clone()));
             }
         }
         Ok((locked_entries, ir_cache))
     }
+}
+
+/// Pin path for an MCP tool entry. Path-named tools (`github/search`) nest —
+/// safe against a sibling `github.contract.json` because the file name always
+/// carries the `.contract.json` suffix.
+fn contract_pin_path(pin_base: &std::path::Path, entry: &str) -> std::path::PathBuf {
+    pin_base.join(format!("{entry}.contract.json"))
 }
 
 /// Convert a `tau_mcp` resolver output to tau-ir's structurally-identical type.
@@ -454,41 +457,21 @@ pub(crate) fn lower_ir(
     mcp_cache: &BTreeMap<String, tau_ir_lower::ResolvedMcpContract>,
     preloaded_config: Option<&tau_pkg::project::ProjectConfig>,
 ) -> LowerIrResult {
-    use tau_pkg::project::project::UncheckedProjectConfig;
-
     let config_owned;
     let config = if let Some(c) = preloaded_config {
         c
     } else {
+        // `from_path` → `parse_str_at`, the dirs-aware load (ADR-0069). It
+        // MUST stay this way: `run::verify_bundle_against_source` and
+        // `verify::run_reproducibility_check` re-lower through this very
+        // function to recompute the source IR hash, so if this load and
+        // `tau build`'s bundle load ever disagree about the agent set, every
+        // `[dirs]` project fails with `IrSourceDivergence`.
         let tau_toml_path = project_root.join("tau.toml");
-        let tau_toml_str = match std::fs::read_to_string(&tau_toml_path) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("IR lowering: failed to read tau.toml: {e}");
-                return LowerIrResult {
-                    payload: None,
-                    triggers: Vec::new(),
-                    lower_error: None,
-                    assets: BTreeMap::new(),
-                };
-            }
-        };
-        let unchecked: UncheckedProjectConfig = match toml::from_str(&tau_toml_str) {
-            Ok(u) => u,
-            Err(e) => {
-                tracing::warn!("IR lowering: failed to parse tau.toml: {e}");
-                return LowerIrResult {
-                    payload: None,
-                    triggers: Vec::new(),
-                    lower_error: None,
-                    assets: BTreeMap::new(),
-                };
-            }
-        };
-        config_owned = match unchecked.validate() {
+        config_owned = match tau_pkg::project::ProjectConfig::from_path(&tau_toml_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("IR lowering: project config validation failed: {e}");
+                tracing::warn!("IR lowering: failed to load tau.toml: {e}");
                 return LowerIrResult {
                     payload: None,
                     triggers: Vec::new(),
@@ -1140,5 +1123,18 @@ capabilities = []
         let payload = payload.unwrap();
         assert!(!payload.canonical_ir_hash.is_empty());
         assert!(!payload.canonical_ir_bytes_hex.is_empty());
+    }
+
+    #[test]
+    fn contract_pin_path_nests_slash_names() {
+        let base = std::path::Path::new(".tau/mcp");
+        assert_eq!(
+            contract_pin_path(base, "github/search"),
+            std::path::Path::new(".tau/mcp/github/search.contract.json")
+        );
+        assert_eq!(
+            contract_pin_path(base, "plain"),
+            std::path::Path::new(".tau/mcp/plain.contract.json")
+        );
     }
 }

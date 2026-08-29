@@ -14,7 +14,13 @@ crate-type = ["cdylib"]
 # `runner` world bindings (host imports + the `run` export). No `realloc`
 # feature: the `wasi` crate below owns the canonical-ABI `cabi_realloc`, so
 # emitting a second one here would be a duplicate-symbol link error.
-wit-bindgen = { version = "0.58", default-features = false, features = ["macros"] }
+#
+# The VERSION must equal the workspace pin in the root `Cargo.toml` — this
+# manifest is its own cargo root (see `[workspace]` below), so `workspace = true`
+# cannot resolve and dependabot cannot see it. CI's `wasm probe fixtures track
+# the workspace wit-bindgen` job enforces the version equality only; the feature
+# list above stays deliberately different (issue #722).
+wit-bindgen = { version = "0.60", default-features = false, features = ["macros"] }
 # Pre-generated wasi:http/0.2 bindings — std has no HTTP client, so the probe
 # issues its outgoing request through these.
 wasi = "0.14"

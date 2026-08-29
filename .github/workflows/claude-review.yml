@@ -270,6 +270,15 @@ jobs:
           # ephemeral runner filesystem. Notably NOT widened: `gh`
           # stays pinned to `gh issue create`, so the job's one
           # outward-facing capability is unchanged.
+          #
+          # One class of denial is deliberately absent from this list
+          # because it cannot be expressed here (#707). Shell output
+          # redirection defeats a prefix grant: `Bash(git log:*)` does
+          # NOT authorise `git log --pretty=... <range> > /tmp/f.txt`,
+          # measured as an isolated denial with no pipe and no `&&`.
+          # `>` is a shell construct, not a command prefix, so there is
+          # no rule to add — the fix is in the prompt, which steers file
+          # creation to the Write tool granted above.
           claude_args: |
             --model claude-sonnet-5
             --allowedTools "Read,Grep,Glob,Write,Bash(git diff:*),Bash(git log:*),Bash(git tag:*),Bash(git rev-list:*),Bash(git fetch:*),Bash(cat:*),Bash(echo:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(sed:*),Bash(awk:*),Bash(sort:*),Bash(uniq:*),Bash(grep:*),Bash(gh issue create:*)"
@@ -297,7 +306,14 @@ jobs:
             commit, so the raw diff is the whole repository.
             The checkout is already a full clone with all tags fetched,
             so both refs resolve locally — do not run `git fetch`.
-            Write the issue body to a file and open the issue with
+            Create files only with the Write tool, and only at paths
+            directly under the workspace root or /tmp. Shell file-I/O is
+            refused and will cost you a turn: do not use output
+            redirection (`>` / `>>`), heredocs (`cat <<EOF`), `mkdir`,
+            or `rm`. To collect command output, read the tool result
+            directly rather than redirecting it to a file. The runner is
+            ephemeral, so do not clean anything up afterwards.
+            Stage the issue body with Write, then open the issue with
             `gh issue create --body-file <path>`; the body is long
             enough that passing it inline with `--body` is unreliable.
             Be concise; this is a record, not a full audit.

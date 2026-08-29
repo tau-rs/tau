@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use tau_domain::{AgentKind, Capability};
+use tau_domain::Capability;
 
 /// Unchecked deserialization shape — fields are typed but no semantic
 /// validation has run. Use [`UncheckedProjectConfig::validate`] to
@@ -53,6 +53,71 @@ pub struct UncheckedProjectConfig {
     /// `[agent.kinds.*]` per-kind agent definitions (EPIC 4.4).
     #[serde(default)]
     pub agent: UncheckedAgentContainer,
+    /// Optional `[dirs]` table declaring directory-based definition roots.
+    #[serde(default)]
+    pub dirs: Option<UncheckedDirs>,
+}
+
+/// `[dirs]` table — opt-in directory-based definition roots (relative paths).
+///
+/// `#[non_exhaustive]`, matching [`ProjectConfig`] and [`ProjectConfigError`]:
+/// a future root kind (`steps`, `goals`, …) must be an additive change, not a
+/// breaking one, for downstream crates that pattern-match or struct-literal it.
+#[non_exhaustive]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UncheckedDirs {
+    /// Root scanned for `agents/**/*.{md,toml}` definitions.
+    #[serde(default)]
+    pub agents: Option<String>,
+    /// Root scanned for `tools/**/*.toml` definitions.
+    #[serde(default)]
+    pub tools: Option<String>,
+}
+
+/// Validated `[dirs]` declaration (paths as declared, relative to project root).
+///
+/// `#[non_exhaustive]` for the same reason as [`UncheckedDirs`].
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirsEntry {
+    /// Agents root, if declared.
+    pub agents: Option<PathBuf>,
+    /// Tools root, if declared.
+    pub tools: Option<PathBuf>,
+}
+
+/// Syntactic validation of one `[dirs]` declaration: relative, no `..`/`.`
+/// components, no component starting with `.` or `_`. Existence, containment,
+/// and overlap need the filesystem and run in `dirs::scan_dirs`.
+pub(crate) fn validate_dirs_decl(
+    kind: &'static str,
+    decl: &str,
+) -> Result<PathBuf, ProjectConfigError> {
+    let err = |reason: &str| ProjectConfigError::DirsRoot {
+        kind,
+        path: decl.to_string(),
+        reason: reason.to_string(),
+    };
+    if decl.is_empty() {
+        return Err(err("must not be empty"));
+    }
+    let p = std::path::Path::new(decl);
+    if p.is_absolute() {
+        return Err(err("must be a relative path inside the project root"));
+    }
+    for comp in p.components() {
+        match comp {
+            std::path::Component::Normal(s) => {
+                let s = s.to_str().ok_or_else(|| err("must be UTF-8"))?;
+                if s.starts_with('.') || s.starts_with('_') {
+                    return Err(err("components must not start with `.` or `_`"));
+                }
+            }
+            _ => return Err(err("`..` and `.` components are not allowed")),
+        }
+    }
+    Ok(p.to_path_buf())
 }
 
 /// `[project]` table.
@@ -138,6 +203,18 @@ pub struct UncheckedAgentKind {
     /// The kind's capability grant (kind-as-key raw caps, same shape as `[allow]`).
     #[serde(default)]
     pub capabilities: BTreeMap<String, toml::Value>,
+    /// LLM-visible spawn-tool description (EPIC 4.5).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Child system prompt (inline only in 4.5).
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// `[models]` alias, resolved at lowering like `[agents.*].model`.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Tool ids the kind may call (each must exist in `[tools.*]`, typechecked).
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 /// Raw `[agent]` container holding the `kinds` sub-table.
@@ -371,8 +448,10 @@ pub struct UncheckedPipelineStep {
 #[serde(deny_unknown_fields)]
 pub struct UncheckedDynamic {
     /// Kinds this region may spawn (each must be an `[agent.kinds.<name>]`).
+    /// Absent = "the whole store" (every declared `[agent.kinds.*]`,
+    /// expanded at validation time in `BTreeMap` order).
     #[serde(default)]
-    pub spawns: Vec<String>,
+    pub spawns: Option<Vec<String>>,
     /// Region capability envelope (kind-as-key raw caps).
     #[serde(default)]
     pub ceiling: BTreeMap<String, toml::Value>,
@@ -485,11 +564,13 @@ pub enum PipelineRunRef {
         /// Mandatory iteration cap (`> 0`).
         max_iters: u64,
     },
-    /// Dynamic region (EPIC 4.4). `spawns` are kind names resolved to caps
-    /// during lowering; `ceiling` is the region envelope; `agent` is the
-    /// optional owner for the `agent ⊇ region` link.
+    /// Dynamic region (EPIC 4.5). `spawns` are kind names resolved to caps
+    /// during lowering (defaulted, when absent on the region, to every
+    /// `[agent.kinds.*]` in the store — see validation); `ceiling` is the
+    /// region envelope; `agent` is the required owner for the
+    /// `agent ⊇ region` link and the coordinator that runs the region.
     Dynamic {
-        /// Spawnable kind names (`[agent.kinds.<name>]`).
+        /// Spawnable kind names (`[agent.kinds.<name>]`), always non-empty.
         spawns: Vec<String>,
         /// Region capability envelope.
         ceiling: Vec<Capability>,
@@ -497,8 +578,8 @@ pub enum PipelineRunRef {
         max_spawns: u64,
         /// Hard concurrency cap (`0 < n <= max_spawns`).
         max_concurrency: u64,
-        /// Optional owning agent id.
-        agent: Option<String>,
+        /// Owning agent id (required, EPIC 4.5).
+        agent: String,
     },
 }
 
@@ -899,6 +980,28 @@ pub struct ModelEntry {
     pub model: String,
 }
 
+/// Validated `[agent.kinds.<name>]` per-kind agent definition (EPIC 4.5):
+/// a store-backed, spawnable agent kind carrying its own capability grant,
+/// spawn-tool description, prompt, model alias, and tool allow-list.
+/// Replaces `tau_domain::AgentKind` as the value type of
+/// [`ProjectConfig::agent_kinds`] — `AgentKind` only ever carried
+/// `name`/`capabilities`, too thin to author a runnable kind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectAgentKind {
+    /// The kind name (referenced by spawn allow-lists and dynamic regions).
+    pub name: String,
+    /// The kind's capability grant.
+    pub capabilities: Vec<Capability>,
+    /// LLM-visible spawn-tool description (defaults to `""`).
+    pub description: String,
+    /// Child system prompt (inline only in 4.5).
+    pub prompt: Option<String>,
+    /// `[models]` alias, resolved at lowering like `[agents.*].model`.
+    pub model: Option<String>,
+    /// Tool ids the kind may call.
+    pub tools: Vec<String>,
+}
+
 /// Validated project config. Constructed via
 /// [`UncheckedProjectConfig::validate`] only.
 #[non_exhaustive]
@@ -930,8 +1033,10 @@ pub struct ProjectConfig {
     /// Validated root `[allow]` constitution (ADR-0057). `None` = no
     /// constitution declared (opt-in governance).
     pub allow: Option<crate::project::allow::AllowConfig>,
-    /// Map of kind name → validated per-kind agent definition (EPIC 4.4).
-    pub agent_kinds: BTreeMap<String, AgentKind>,
+    /// Map of kind name → validated per-kind agent definition (EPIC 4.5).
+    pub agent_kinds: BTreeMap<String, ProjectAgentKind>,
+    /// Validated `[dirs]` declaration, if present.
+    pub dirs: Option<DirsEntry>,
 }
 
 /// Validated context-pipeline step.
@@ -1441,6 +1546,55 @@ pub enum ProjectConfigError {
         /// The agent id that had no model.
         agent: String,
     },
+
+    // --- [dirs] directory-based definitions ---
+    /// `[dirs]` present but parsing had no project root to scan from.
+    #[error(
+        "[dirs] requires a project root; load via `ProjectConfig::from_path` or `parse_str_at` (`parse_str` cannot scan directories)"
+    )]
+    DirsRequireRoot,
+
+    /// A `[dirs]` root declaration is invalid.
+    #[error("[dirs] {kind} = {path:?}: {reason}")]
+    DirsRoot {
+        /// Which key (`"agents"` | `"tools"`).
+        kind: &'static str,
+        /// Declared value.
+        path: String,
+        /// Why the declaration was rejected.
+        reason: String,
+    },
+
+    /// Two `[dirs]` roots overlap (equal or nested).
+    #[error("[dirs] roots overlap: {a:?} and {b:?} — roots must be disjoint")]
+    DirsRootsOverlap {
+        /// First root.
+        a: String,
+        /// Second root.
+        b: String,
+    },
+
+    /// A scanned definition file is invalid (hygiene, parse, or naming).
+    #[error("definition file {file}: {reason}")]
+    DefFile {
+        /// Project-root-relative path.
+        file: String,
+        /// Why the file was rejected.
+        reason: String,
+    },
+
+    /// The same definition name arrived from two sources.
+    #[error(
+        "duplicate {kind} definition {name:?} (from {file}); already defined in tau.toml or another definition file"
+    )]
+    DuplicateDefinition {
+        /// `"agent"` | `"tool"`.
+        kind: &'static str,
+        /// Full path-name.
+        name: String,
+        /// Offending file.
+        file: String,
+    },
 }
 
 // ----- Validation logic -----
@@ -1487,8 +1641,28 @@ impl UncheckedProjectConfig {
             triggers.insert(name.clone(), validate_trigger(name, raw)?);
         }
 
+        let agent_kinds = self
+            .agent
+            .kinds
+            .into_iter()
+            .map(|(name, k)| {
+                let capabilities = crate::project::allow::bridge_caps_any(&k.capabilities)?;
+                Ok((
+                    name.clone(),
+                    ProjectAgentKind {
+                        name,
+                        capabilities,
+                        description: k.description.clone().unwrap_or_default(),
+                        prompt: k.prompt.clone(),
+                        model: k.model.clone(),
+                        tools: k.tools.clone(),
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
+
         let pipeline = match &self.pipeline {
-            Some(p) => Some(validate_pipeline(p)?),
+            Some(p) => Some(validate_pipeline(p, &agent_kinds)?),
             None => None,
         };
 
@@ -1530,15 +1704,21 @@ impl UncheckedProjectConfig {
             None => None,
         };
 
-        let agent_kinds = self
-            .agent
-            .kinds
-            .into_iter()
-            .map(|(name, k)| {
-                let capabilities = crate::project::allow::bridge_caps_any(&k.capabilities)?;
-                Ok((name.clone(), AgentKind::new(name, capabilities)))
-            })
-            .collect::<Result<BTreeMap<_, _>, ProjectConfigError>>()?;
+        let dirs = match &self.dirs {
+            None => None,
+            Some(d) => Some(DirsEntry {
+                agents: d
+                    .agents
+                    .as_deref()
+                    .map(|s| validate_dirs_decl("agents", s))
+                    .transpose()?,
+                tools: d
+                    .tools
+                    .as_deref()
+                    .map(|s| validate_dirs_decl("tools", s))
+                    .transpose()?,
+            }),
+        };
 
         let mut result = ProjectConfig {
             project_name: self.project.name,
@@ -1554,6 +1734,7 @@ impl UncheckedProjectConfig {
             packages: self.packages,
             allow,
             agent_kinds,
+            dirs,
         };
 
         validate_postconditions(&mut result)?;
@@ -2014,7 +2195,10 @@ fn validate_trigger(
     })
 }
 
-fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectConfigError> {
+fn validate_pipeline(
+    raw: &UncheckedPipeline,
+    agent_kinds: &BTreeMap<String, ProjectAgentKind>,
+) -> Result<PipelineConfig, ProjectConfigError> {
     if raw.steps.is_empty() {
         return Err(ProjectConfigError::EmptyPipeline);
     }
@@ -2027,7 +2211,7 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
                 message: format!("step id {:?} declared more than once", s.id),
             });
         }
-        steps.push(validate_pipeline_step(s)?);
+        steps.push(validate_pipeline_step(s, agent_kinds)?);
     }
     Ok(PipelineConfig { steps })
 }
@@ -2039,6 +2223,7 @@ fn validate_pipeline(raw: &UncheckedPipeline) -> Result<PipelineConfig, ProjectC
 /// nested blocks.
 fn validate_pipeline_step(
     s: &UncheckedPipelineStep,
+    agent_kinds: &BTreeMap<String, ProjectAgentKind>,
 ) -> Result<PipelineStepConfig, ProjectConfigError> {
     let has_run = s.run.is_some();
     let has_branch = s.branch.is_some();
@@ -2097,12 +2282,12 @@ fn validate_pipeline_step(
         let then = s
             .then
             .iter()
-            .map(validate_pipeline_step)
+            .map(|st| validate_pipeline_step(st, agent_kinds))
             .collect::<Result<Vec<_>, _>>()?;
         let otherwise = s
             .otherwise
             .iter()
-            .map(validate_pipeline_step)
+            .map(|st| validate_pipeline_step(st, agent_kinds))
             .collect::<Result<Vec<_>, _>>()?;
         PipelineRunRef::Branch {
             on,
@@ -2121,16 +2306,30 @@ fn validate_pipeline_step(
                 }
                 b.steps
                     .iter()
-                    .map(validate_pipeline_step)
+                    .map(|st| validate_pipeline_step(st, agent_kinds))
                     .collect::<Result<Vec<_>, _>>()
             })
             .collect::<Result<Vec<_>, _>>()?;
         PipelineRunRef::Parallel { branches }
     } else if has_dynamic {
         let d = s.dynamic.as_ref().unwrap();
-        if d.spawns.is_empty() {
+        let agent = d.agent.clone().ok_or_else(|| {
+            bad(
+                "dynamic region requires `agent` — name the [agents.<id>] coordinator that runs it"
+                    .into(),
+            )
+        })?;
+        // Store-default expansion (EPIC 4.5): an absent `spawns` key means
+        // "every kind in the [agent.kinds.*] store", expanded here — the
+        // single expansion point governance and lowering both see.
+        let spawns: Vec<String> = match &d.spawns {
+            Some(list) => list.clone(),
+            None => agent_kinds.keys().cloned().collect(),
+        };
+        if spawns.is_empty() {
             return Err(bad(
-                "a dynamic region must list at least one `spawns` kind".into()
+                "dynamic region has no spawnable kinds — declare [agent.kinds.*] or list `spawns`"
+                    .into(),
             ));
         }
         if d.max_spawns == 0 {
@@ -2146,11 +2345,11 @@ fn validate_pipeline_step(
         let ceiling = crate::project::allow::bridge_caps_any(&d.ceiling)
             .map_err(|e| bad(format!("dynamic region `ceiling`: {e}")))?;
         PipelineRunRef::Dynamic {
-            spawns: d.spawns.clone(),
+            spawns,
             ceiling,
             max_spawns: d.max_spawns,
             max_concurrency: d.max_concurrency,
-            agent: d.agent.clone(),
+            agent,
         }
     } else {
         // Loop form. Enforce the mandatory bound and exit condition at author
@@ -2176,7 +2375,7 @@ fn validate_pipeline_step(
         let body = s
             .body
             .iter()
-            .map(validate_pipeline_step)
+            .map(|st| validate_pipeline_step(st, agent_kinds))
             .collect::<Result<Vec<_>, _>>()?;
         PipelineRunRef::Loop {
             body,
@@ -2915,6 +3114,49 @@ impl ProjectConfig {
     pub fn parse_str(toml: &str) -> Result<Self, ProjectConfigError> {
         let unchecked: UncheckedProjectConfig =
             toml::from_str(toml).map_err(|source| ProjectConfigError::ParseStr { source })?;
+        if unchecked.dirs.is_some() {
+            return Err(ProjectConfigError::DirsRequireRoot);
+        }
+        unchecked.validate()
+    }
+
+    /// Parse + validate with a project root, enabling `[dirs]` scanning.
+    ///
+    /// When `[dirs]` is declared, scans `project_root` for directory-based
+    /// agent/tool definitions (ADR-0069) and merges them into the inline
+    /// `[agents.*]`/`[tools.*]` tables before validation. A definition name
+    /// present in both the inline table and a scanned directory is a hard
+    /// error ([`ProjectConfigError::DuplicateDefinition`]) — dirs and inline
+    /// tables must not disagree about identity.
+    pub fn parse_str_at(
+        toml_str: &str,
+        project_root: &std::path::Path,
+    ) -> Result<Self, ProjectConfigError> {
+        let mut unchecked: UncheckedProjectConfig =
+            toml::from_str(toml_str).map_err(|source| ProjectConfigError::ParseStr { source })?;
+        if let Some(dirs) = unchecked.dirs.clone() {
+            let scanned = crate::project::dirs::scan_dirs(project_root, &dirs)?;
+            for (name, (agent, file)) in scanned.agents {
+                if unchecked.agents.contains_key(&name) {
+                    return Err(ProjectConfigError::DuplicateDefinition {
+                        kind: "agent",
+                        name,
+                        file: file.display().to_string(),
+                    });
+                }
+                unchecked.agents.insert(name, agent);
+            }
+            for (name, (tool, file)) in scanned.tools {
+                if unchecked.tools.contains_key(&name) {
+                    return Err(ProjectConfigError::DuplicateDefinition {
+                        kind: "tool",
+                        name,
+                        file: file.display().to_string(),
+                    });
+                }
+                unchecked.tools.insert(name, tool);
+            }
+        }
         unchecked.validate()
     }
 
@@ -2936,8 +3178,9 @@ impl ProjectConfig {
         }
     }
 
-    /// Load and validate from a path. Convenience wrapper around the
-    /// deserialize-then-validate pipeline.
+    /// Load and validate from a path. The project root (the manifest's
+    /// parent directory) is passed to [`Self::parse_str_at`], so `[dirs]`
+    /// scanning is available from every `from_path` call site.
     pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, ProjectConfigError> {
         let path = path.as_ref();
         let bytes = std::fs::read_to_string(path).map_err(|source| {
@@ -2950,12 +3193,20 @@ impl ProjectConfig {
                 }
             }
         })?;
-        let unchecked: UncheckedProjectConfig =
-            toml::from_str(&bytes).map_err(|source| ProjectConfigError::Parse {
+        let project_root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        Self::parse_str_at(&bytes, project_root).map_err(|err| match err {
+            // `parse_str_at` has no path to report (it also serves the
+            // in-memory `parse_str` caller), so it always reports a TOML
+            // syntax error as `ParseStr`. Callers of `from_path` — and the
+            // `tau check` "kind" contract — expect the file-based `Parse`
+            // variant, which carries the path. Restore it here rather than
+            // pushing path-formatting onto every `from_path` call site.
+            ProjectConfigError::ParseStr { source } => ProjectConfigError::Parse {
                 path: path.to_path_buf(),
                 source,
-            })?;
-        unchecked.validate()
+            },
+            other => other,
+        })
     }
 }
 
@@ -3042,6 +3293,124 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
     }
 
     #[test]
+    fn agent_kind_parses_runnable_fields() {
+        let cfg = parse(
+            r#"
+[project]
+name = "p"
+
+[agent.kinds.researcher]
+description  = "Deep-dives one topic."
+prompt       = "Research one topic."
+model        = "fast"
+tools        = ["probe"]
+capabilities = { "net.http" = { hosts = ["crates.io"] } }
+"#,
+        )
+        .expect("parses");
+        let k = cfg.agent_kinds.get("researcher").expect("kind present");
+        assert_eq!(k.description, "Deep-dives one topic.");
+        assert_eq!(k.prompt.as_deref(), Some("Research one topic."));
+        assert_eq!(k.model.as_deref(), Some("fast"));
+        assert_eq!(k.tools, vec!["probe".to_string()]);
+    }
+
+    #[test]
+    fn dynamic_region_without_agent_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "p"
+
+[agent.kinds.researcher]
+capabilities = {}
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+spawns = ["researcher"]
+ceiling = {}
+max_spawns = 1
+max_concurrency = 1
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("dynamic region"), "{err}");
+        assert!(err.to_string().contains("agent"), "{err}");
+    }
+
+    #[test]
+    fn dynamic_region_spawns_omitted_expands_to_whole_store() {
+        // Two kinds declared, `spawns` key ABSENT on the region — expands to
+        // the whole store, in BTreeMap (alphabetical) order.
+        let cfg = parse(
+            r#"
+[project]
+name = "p"
+
+[models]
+default = { backend = "coordbackend", model = "model-v1" }
+
+[agents.coord]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "default"
+
+[agent.kinds.a]
+capabilities = {}
+
+[agent.kinds.b]
+capabilities = {}
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+agent = "coord"
+ceiling = {}
+max_spawns = 4
+max_concurrency = 2
+"#,
+        )
+        .expect("parses");
+        let pipe = cfg.pipeline.expect("pipeline present");
+        match &pipe.steps[0].run {
+            PipelineRunRef::Dynamic { spawns, .. } => {
+                assert_eq!(spawns, &vec!["a".to_string(), "b".to_string()]);
+            }
+            other => panic!("expected Dynamic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_region_empty_spawns_is_rejected() {
+        let err = parse(
+            r#"
+[project]
+name = "p"
+
+[models]
+default = { backend = "coordbackend", model = "model-v1" }
+
+[agents.coord]
+display_name = "Coordinator"
+package      = "coordbackend@^0.1"
+model        = "default"
+
+[[pipeline.steps]]
+id = "fanout"
+[pipeline.steps.dynamic]
+agent = "coord"
+spawns = []
+ceiling = {}
+max_spawns = 1
+max_concurrency = 1
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no spawnable kinds"), "{err}");
+    }
+
+    #[test]
     fn parse_minimal_project_only_succeeds() {
         let cfg = parse("[project]\nname = \"x\"\n").unwrap();
         assert_eq!(cfg.project_name, "x");
@@ -3087,6 +3456,53 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
     fn validate_rejects_empty_project_name() {
         let result = parse("[project]\nname = \"\"\n");
         assert!(matches!(result, Err(ProjectConfigError::EmptyProjectName)));
+    }
+
+    // ----- [dirs] table (dir-based tool/agent definitions) -----
+
+    #[test]
+    fn dirs_table_parses_and_validates() {
+        let toml = r#"
+[project]
+name = "p"
+[dirs]
+agents = "agents"
+tools  = "defs/tools"
+"#;
+        // parse_str must REJECT [dirs] (no root available to scan).
+        let err = ProjectConfig::parse_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ProjectConfigError::DirsRequireRoot),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dirs_unknown_key_rejected() {
+        let toml = "[project]\nname = \"p\"\n[dirs]\nskils = \"x\"\n";
+        assert!(ProjectConfig::parse_str(toml).is_err());
+    }
+
+    #[test]
+    fn dirs_syntactic_validation_rejects_bad_roots() {
+        // Validation helper is exercised directly (fs checks live in scan, Task 3).
+        for bad in [
+            "/abs/agents",
+            "",
+            "../up",
+            "./agents",
+            ".tau/agents",
+            "_agents",
+            "a/.hidden/b",
+        ] {
+            let err = validate_dirs_decl("agents", bad).unwrap_err();
+            assert!(
+                matches!(err, ProjectConfigError::DirsRoot { .. }),
+                "{bad}: {err:?}"
+            );
+        }
+        assert!(validate_dirs_decl("agents", "agents").is_ok());
+        assert!(validate_dirs_decl("tools", "defs/tools").is_ok());
     }
 
     #[test]
@@ -4405,6 +4821,7 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
             ceiling = { "net.http" = { hosts = ["api.crawler.test"] } }
             max_spawns = 8
             max_concurrency = 4
+            agent = "coordinator"
         "#;
         let cfg = ProjectConfig::parse_str(toml).expect("dynamic region parses");
         let pipe = cfg.pipeline.expect("pipeline present");
@@ -4420,7 +4837,7 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
                 assert_eq!(ceiling.len(), 1);
                 assert_eq!(*max_spawns, 8);
                 assert_eq!(*max_concurrency, 4);
-                assert!(agent.is_none());
+                assert_eq!(agent, "coordinator");
             }
             other => panic!("expected Dynamic, got {other:?}"),
         }
@@ -4438,6 +4855,7 @@ capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
             ceiling = {}
             max_spawns = 0
             max_concurrency = 1
+            agent = "coordinator"
         "#;
         let err = ProjectConfig::parse_str(toml).expect_err("zero max_spawns rejected");
         assert!(format!("{err}").contains("max_spawns"));
@@ -5785,6 +6203,7 @@ mod proptests {
                 packages: Vec::new(),
                 allow: None,
                 agent: UncheckedAgentContainer::default(),
+                dirs: None,
             };
 
             let toml_str = toml::to_string(&original).unwrap();
