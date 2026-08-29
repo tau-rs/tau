@@ -10,8 +10,8 @@ use tau_ports::target::TargetTriple;
 
 use crate::bundle::build_error::BuildError;
 use crate::bundle::manifest::{
-    BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest, BundleMeta,
-    BundlePackage, IrPayload, ProjectInfo,
+    needs_schema_v6, BackendRef, BundleAgent, BundleEffectiveCapabilities, BundleManifest,
+    BundleMeta, BundlePackage, IrPayload, ProjectInfo,
 };
 use crate::project::project::{ProjectConfig, PromptEntry};
 
@@ -364,10 +364,14 @@ pub fn build(opts: BuildOptions) -> Result<BundleArtifact, BuildError> {
     let mut assets = opts.assets;
     assets.sort_by(|a, b| a.hash.cmp(&b.hash));
 
-    // schema_version: an asset store forces v5 (highest); else a governance
-    // record forces v4; else a trigger-bearing bundle is v3 and a plain
-    // bundle is v2.
-    let schema_version = if !assets.is_empty() {
+    // schema_version: a namespaced agent id forces v6 (highest, ADR-0070);
+    // else an asset store forces v5; else a governance record forces v4;
+    // else a trigger-bearing bundle is v3 and a plain bundle is v2. A
+    // project whose agent ids all predate the widening keeps its existing
+    // version, so ordinary bundles see no churn.
+    let schema_version = if agents.iter().any(|a| needs_schema_v6(a.id.as_str())) {
+        6
+    } else if !assets.is_empty() {
         5
     } else if opts.governance.is_some() {
         4

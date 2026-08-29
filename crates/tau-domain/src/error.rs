@@ -75,7 +75,8 @@ pub enum AgentIdError {
         /// Actual length of the input.
         got: usize,
     },
-    /// A character outside `[a-z0-9-]` was found mid-string.
+    /// A character outside `[a-z0-9_-]` was found inside a segment. `/` is
+    /// the segment separator and is never reported here.
     #[error("agent id contains invalid character {ch:?} at byte {pos}")]
     InvalidCharacter {
         /// The offending character.
@@ -83,11 +84,21 @@ pub enum AgentIdError {
         /// Byte position in the input string.
         pos: usize,
     },
-    /// The leading character was not an ASCII lowercase letter.
-    #[error("agent id must start with a letter, got {ch:?}")]
+    /// A segment's leading character was not an ASCII lowercase letter or
+    /// digit. Unlike [`PackageNameError::InvalidLeadingCharacter`] this
+    /// admits digits (ADR-0070); a leading `-` stays illegal so an id can
+    /// never be mistaken for a CLI flag.
+    #[error("agent id segment must start with a letter or digit, got {ch:?}")]
     InvalidLeadingCharacter {
-        /// The first character of the input.
+        /// The first character of the offending segment.
         ch: char,
+    },
+    /// A `/`-separated segment was empty — a leading, trailing, or doubled
+    /// separator (`/a`, `a/`, `a//b`).
+    #[error("agent id has an empty segment at byte {pos}")]
+    EmptySegment {
+        /// Byte position where the empty segment starts.
+        pos: usize,
     },
 }
 

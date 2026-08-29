@@ -48,6 +48,21 @@ pub enum BundleParseError {
         /// The bundle's declared schema_version.
         schema_version: u32,
     },
+    /// A bundle carries an agent id outside the pre-ADR-0070 charset
+    /// (`[a-z][a-z0-9-]*`) but its `schema_version` is below 6.
+    ///
+    /// Unlike the three mismatches above, this one is about *error quality*,
+    /// not soundness: `BundleAgent.id` is not `#[serde(default)]`, so an old
+    /// tau cannot silently drop it — it reaches `AgentId::deserialize` and
+    /// hard-fails with a charset complaint either way. Declaring v6 turns
+    /// that into a legible version refusal. See ADR-0070.
+    #[error("bundle declares a namespaced agent id ({id:?}) but schema_version is {schema_version} (namespaced agent ids require schema_version >= 6)")]
+    AgentIdSchemaVersionMismatch {
+        /// The bundle's declared schema_version.
+        schema_version: u32,
+        /// The first agent id that requires v6.
+        id: String,
+    },
 }
 
 /// Errors raised when reading + parsing a bundle from disk.

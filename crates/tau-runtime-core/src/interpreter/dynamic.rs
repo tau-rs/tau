@@ -225,6 +225,15 @@ pub(crate) fn child_agent_id(region_step: &str, kind: &str, entry: u64, index: u
     // A leading digit, `-`, or empty component is legal in the charset but
     // not as a *leading* character, so re-anchor the whole id. Cheaper to
     // always check than to special-case the empty-step case separately.
+    //
+    // LOAD-BEARING FOR `PackageName` ONLY, since ADR-0070. `AgentId` now
+    // admits a leading digit (`2fa`) and would accept an unanchored id;
+    // `PackageName` still requires a leading letter, and `assert_legal`
+    // asserts BOTH. Do not delete this on the grounds that `AgentId` no
+    // longer needs it — `agent_loop::run_agent` converts a child id into a
+    // `PackageName` too, and its `unwrap_or_else` collapses a rejected one
+    // to `"ir-agent"`, silently losing the per-child attribution #731 was
+    // filed to restore.
     if !prefix.starts_with(|c: char| c.is_ascii_lowercase()) {
         prefix.insert_str(0, "x-");
         prefix.truncate(CHILD_ID_MAX_LEN.saturating_sub(suffix.len()));

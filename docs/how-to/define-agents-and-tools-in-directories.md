@@ -52,9 +52,9 @@ build loudly — e.g. `agent "review" references unknown tool "github/search"`
 — rather than resolving silently. There is no suggestion of the new name in
 the error; you have to know what you renamed it to.
 
-> **Today's limit:** nesting works for **tools**, not yet for **agents** —
-> an agent name containing `/` (or `_`) fails `tau build`. See the first
-> entry under [Gotchas](#gotchas).
+Nesting works for both kinds. (It did not until
+[ADR-0070](../decisions/0070-agent-id-grammar.md) widened the agent-id
+grammar — before that a `/` or `_` in an *agent* name failed `tau build`.)
 
 Each path segment (directory or file stem) must match `[a-z0-9_-]+` —
 lowercase ASCII, digits, hyphen, underscore; no dots, no spaces, no Unicode.
@@ -64,6 +64,14 @@ NFD/NFC drift, and clashes with the `skill.<name>.spawn` virtual-tool
 namespace (`.`) and the `__tau::goal::*` reserved ids (`::`). A Windows `\` in
 a path is normalized to `/` before the name is derived, so names are portable
 across platforms.
+
+**Agent** names carry one extra rule, checked at scan time against
+`tau_domain::AgentId`: every segment must start with a letter or digit (so
+`agents/-draft.md` is refused — an id must never be mistakable for a CLI
+flag), and the whole `/`-joined name must be at most 64 bytes. That length
+cap is also the only bound on nesting depth; there is no separate depth
+limit. Tool names have neither rule — an agent name becomes a typed
+identity in the bundle, a tool name stays a free-form string.
 
 Names containing `/` are also legal for **inline** definitions, using a
 quoted TOML key — required so a dir-authored and an inline-authored entry can
@@ -165,16 +173,16 @@ separate namespaces today, exactly as with inline definitions.
 
 ## Gotchas
 
-- **Keep *agent* names flat for now.** A `/` in an **agent** name — what a
-  nested `agents/review/strict.md` produces — cannot currently reach a
-  bundle: `tau build` writes agent ids as a `tau_domain::AgentId`, whose
-  grammar is `[a-z0-9-]` (no `/`, and no `_` either), so the build fails at
-  manifest assembly with exit 2 and `tau resolve` panics. **Tool** names are
-  unaffected — `tools/github/search.toml` builds and runs fine — as are flat
-  agent names like `agents/strict.md`. This is a pre-existing `tau-domain`
-  constraint that an inline `[agents."review/strict"]` hits identically; see
-  the Consequences section of
-  [ADR-0069](../decisions/0069-directory-based-definitions.md).
+- **A bundle carrying a namespaced agent id declares `schema_version = 6`.**
+  Nested and underscored *agent* names (`review/strict`, `my_agent`) work end
+  to end since [ADR-0070](../decisions/0070-agent-id-grammar.md), but a
+  bundle that contains one cannot be read by a tau older than that change —
+  it refuses with `unsupported schema_version: 6` rather than a charset
+  complaint. A project whose agent names are all plain kebab-case keeps its
+  previous bundle version, so this only bites once you adopt the wider
+  charset. (Before ADR-0070 such a name failed `tau build` with exit 2 and
+  made `tau resolve` panic; if you are reading an older copy of this page,
+  that is the limitation it describes.)
 - **Moving a file renames the definition.** There is no separate identity —
   the path is the name. Update every `tool_refs` / `subflow` / `[allow.*]`
   reference before (or immediately after) moving a file; a stale reference

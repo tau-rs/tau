@@ -175,12 +175,22 @@ Each admitted spawn runs the kind's own agent definition
 tool result. The region step's output is the coordinator's final
 text.
 
-That id is a legal agent id — lowercase ASCII, `[a-z0-9-]`, at most
-64 characters — because it becomes the child's `agent_id`, the key
-the per-agent token surface and the run span are recorded under. The
-`<region-step>` and `<kind>` components are sanitized into that
-charset (any other character becomes `-`) and truncated if the whole
-id would exceed 64 characters. `<entry>` is the run-scoped sequence
+That id is kept to lowercase ASCII `[a-z0-9-]`, starting with a
+letter, at most 64 characters — because it becomes the child's
+`agent_id`, the key the per-agent token surface and the run span are
+recorded under, and the runtime converts it into a
+`tau_domain::PackageName` as well as an `AgentId`. `AgentId` itself
+admits more than this (`/`, `_`, and a leading digit — see
+[ADR-0070](../decisions/0070-agent-id-grammar.md)); the narrower shape
+here is what `PackageName` still requires. The `<region-step>` and
+`<kind>` components are sanitized into that charset (any other
+character becomes `-`) and truncated if the whole id would exceed 64
+characters.
+
+Sanitizing is safe *here* precisely because `<entry>-<n>` supplies
+uniqueness independently of the name. Authored agent names have no
+such counter, which is why ADR-0070 widened the grammar for them
+instead of folding `/` away. `<entry>` is the run-scoped sequence
 number of the region execution and `<n>` the 0-based admission index
 within it, so `<entry>-<n>` is unique across a run even when a `Loop`
 pass or a check rewind restarts `<n>` at 0, and even when two long
