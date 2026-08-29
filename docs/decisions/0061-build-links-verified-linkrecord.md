@@ -28,6 +28,13 @@ empty MCP contract cache, which produces a *different* IR hash for MCP
 projects and is conservatively rejected as `IrSourceDivergence`. An MCP
 project therefore cannot run from its own bundle — a confirmed bug.
 
+> **Update (2026-08-28, issue #714):** that specific bug has since been
+> fixed independently of this ADR — the re-lowering now feeds in the pinned
+> MCP cache read from `.tau/mcp/<entry>.contract.json`, so honest MCP
+> bundles verify while a missing pin still fails closed. The wider
+> motivation below — re-lowering the whole project on every run — is
+> unchanged.
+
 This binding work is knowable statically, from the lockfile, package
 manifests, and on-disk `SKILL.md` files, without spawning any plugin
 process. Doing it once, at build time, and recording the outcome removes

@@ -1,0 +1,126 @@
+name: Daily gate keeper
+
+# Keeps the three daily gates (Tier 2, Fuzz nightly, Security CVE scan)
+# running at least once a day WITHOUT depending on GitHub's `schedule`
+# event for timing.
+#
+# Why (#736): from 2026-08-26 GitHub applied an escalating, repo-wide
+# backoff to `schedule` events here. Every cron in this repo — `*/10`,
+# `*/30` and the three `0 4 * * *` dailies alike — converged on the same
+# ~10-12h effective period regardless of its declared expression:
+#
+#   auto-rerun-flaky  (*/10, 144/day expected):  49 -> 47 -> 22 -> 3 -> 2
+#   auto-update-prs   (*/30,  48/day expected):  41 -> 41 -> 21 -> 2 -> 3
+#
+# Every drifted run had `created_at == run_started_at`, so this is late
+# DISPATCH, not runner queueing. Restaggering the cron minute does not
+# help — our own crons already span every minute of the hour and are
+# throttled identically (community discussions 201738 and 196910 report
+# the same after moving :00 -> :07 and 00:40 -> 14:37).
+#
+# The insight this workflow is built on: the backoff cost us
+# PUNCTUALITY, not existence — a throttled cron still fires 1-2x/day. So
+# instead of trusting any single trigger to be on time, react to
+# whichever trigger fires first and repair whatever is stale:
+#
+#   push to main    - the reliable trigger; not subject to the backoff
+#   schedule        - best-effort; covers stretches where main is idle
+#   workflow_dispatch - manual
+#
+# `workflow_dispatch` is one of the two documented exceptions to "events
+# triggered by GITHUB_TOKEN do not create a new workflow run", so the
+# default token plus `actions: write` is enough — no PAT. See the
+# dispatch-release-summary job in claude-review.yml for the same pattern.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  # Never cancel: a cancelled keeper is a skipped repair. Serialising is
+  # what makes the freshness check safe under a burst of pushes to main —
+  # once the first run dispatches a gate, later runs see it as fresh.
+  group: daily-gate-keeper
+  cancel-in-progress: false
+
+jobs:
+  keep-fresh:
+    name: keep daily gates fresh
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch stale daily gates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # A gate that has not run in this long gets dispatched.
+          DISPATCH_AFTER_HOURS: '20'
+          # A gate still stale past this means the repair path itself is
+          # broken — that is worth a red run. It cannot fire spuriously:
+          # reaching it requires two dispatch attempts to have failed.
+          ALARM_AFTER_HOURS: '48'
+        run: |
+          set -euo pipefail
+          export DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+          now=$(date -u +%s)
+          alarm=0
+
+          for wf in fuzz-nightly.yml tier2.yml security-daily.yml; do
+            # A run only counts as a daily gate run if it BOTH arrived on a
+            # daily-capable event AND ran against the default branch.
+            #
+            # The branch filter is load-bearing, not defensive: these
+            # workflows are routinely hand-dispatched against feature
+            # branches while debugging (observed on 2026-08-29 —
+            # security-daily on `fix/733-out-of-workspace-audit`,
+            # fuzz-nightly on `fix-frame-decode-oom`). Counting those would
+            # mark the gate fresh while main went unscanned, which is the
+            # same silent gap this keeper exists to close. `pull_request`
+            # Tier 2 runs are excluded for the same reason.
+            last=$(gh api "repos/$GH_REPO/actions/workflows/$wf/runs?per_page=100" \
+              --jq '[ .workflow_runs[]
+                      | select((.event == "schedule" or .event == "workflow_dispatch")
+                               and .head_branch == $ENV.DEFAULT_BRANCH)
+                      | .created_at ] | max // empty')
+
+            if [ -z "$last" ]; then
+              echo "::warning::$wf has no schedule/workflow_dispatch run on record"
+              age_h=999999
+              last="(never)"
+            else
+              age_h=$(( (now - $(date -u -d "$last" +%s)) / 3600 ))
+            fi
+            echo "$wf: last daily run $last (${age_h}h ago)"
+
+            if [ "$age_h" -lt "$DISPATCH_AFTER_HOURS" ]; then
+              echo "  fresh (< ${DISPATCH_AFTER_HOURS}h) — nothing to do"
+              continue
+            fi
+
+            # tier2 reports nightly failures (rolling regression issue +
+            # regression range) only for runs it believes are nightly.
+            # Tell it so, or a dispatched red goes unreported.
+            if [ "$wf" = "tier2.yml" ]; then
+              gh workflow run "$wf" --ref "$DEFAULT_BRANCH" -f nightly=true
+            else
+              gh workflow run "$wf" --ref "$DEFAULT_BRANCH"
+            fi
+            echo "  stale — dispatched against $DEFAULT_BRANCH"
+
+            if [ "$age_h" -ge "$ALARM_AFTER_HOURS" ]; then
+              echo "::error::$wf has not run in ${age_h}h (alarm threshold ${ALARM_AFTER_HOURS}h) — dispatching is not repairing it"
+              alarm=1
+            fi
+          done
+
+          if [ "$alarm" -ne 0 ]; then
+            echo "One or more daily gates are stale beyond the alarm threshold."
+            exit 1
+          fi

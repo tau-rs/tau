@@ -83,6 +83,13 @@ pub fn lower_to_wasm_ir(project: &Path) -> Result<(tau_ir::IrModule, Vec<u8>)> {
                  implementation; use exists/non_empty/equals/matches/min_count, or build for \
                  a native target.",
             ),
+            LowerError::WasmToolImplUnsupported { ref tools, .. } => anyhow::anyhow!(
+                "tool-impl-fit refused for {WASM_TARGET}: the wasm guest dispatcher resolves \
+                 only native tools, so it has no dispatch path for MCP tool(s) {tools:?}. \
+                 MCP needs a live transport (a spawned stdio server or an HTTP session) that \
+                 a wasm guest cannot own. Replace these with native tools, or build for a \
+                 native target.",
+            ),
             other => anyhow::anyhow!("lowering for {WASM_TARGET} failed: {other}"),
         })?;
     // NOTE(D6-B PR3): embedding the content-addressed asset store into the

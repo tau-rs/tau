@@ -3,9 +3,9 @@
 **Refreshed:** 2026-08-27 (supersedes the 2026-05-17 refresh, itself
 superseding the 2026-05-13 inventory from PR #71)
 **Workspace state:** based on `origin/main` at `e38f2530`
-**Total `#[ignore]` annotations:** 48
+**Total `#[ignore]` annotations:** 46
 
-48 `#[ignore]` annotations across the workspace, organised into four
+46 `#[ignore]` annotations across the workspace, organised into four
 triage buckets. This file is the canonical reference for what each ignored
 test needs in order to run, and which CI job (existing or future) is
 responsible for lighting it up.
@@ -84,6 +84,11 @@ Landed while this refresh was in review:
 
 Net: 22 → 43 (−3 resolved, +21 newly inventoried, +1 landed mid-review,
 +2 already-counted rows re-derived).
+
+**Since that refresh:** 44 → 42. #717 promoted the two Bucket 4 rows whose
+stated blockers had gone stale (`multi_event_sse_response`,
+`lowering_refuses_on_capability_fit_mismatch`) — both are now live tests, not
+deleted annotations. See "Stale-reason follow-ups" under Bucket 4.
 
 A note on counting, because it bit the sweep that produced this refresh: a bare
 `grep -c '#\[ignore' crates/` **overcounts by roughly 40%** — at the 2026-08-27
@@ -329,7 +334,7 @@ not an inventory row.
 
 ---
 
-## Bucket 4 — DEFERRED (6 tests)
+## Bucket 4 — DEFERRED (4 tests)
 
 Waiting on a specific helper / fixture / sibling work.
 
@@ -338,8 +343,6 @@ Waiting on a specific helper / fixture / sibling work.
 | `crates/tau-pkg/tests/install_cross_check.rs:222` | `cross_check_fires_and_fails_for_non_protocol_binary` | Full release build + 10s handshake timeout makes this too slow for routine CI. Promote when (a) a slow-tier CI lane exists OR (b) the cross-check timeout becomes configurable. |
 | `crates/tau-plugin-protocol/tests/decode_allocation_bound.rs:215` | `decode_does_not_retain_across_many_calls` | 2,000,000 `Frame::decode` calls — the #676 retention property. Too slow for routine CI; no job runs `-p tau-plugin-protocol --run-ignored`. Same blocker as the row above: promote when a slow-tier lane exists. Added by #697 (2026-08-27). |
 | `crates/tau-conformance/tests/conformance.rs:67` | `fan_monitor_dev_matches_wasm` | `WasmProfile::run` is still `unimplemented!()` (`crates/tau-conformance/src/profile/wasm.rs`). The β.6 `conformance / linux` job runs `-p tau-conformance` without `--run-ignored`, so it is skipped there by design. **Stated reason is stale — see follow-ups.** |
-| `crates/tau-ir-lower/tests/lower_e2e.rs:143` | `lowering_refuses_on_capability_fit_mismatch` | No `Available` registry entry lacks `NetworkHttp` — all 7 entries use `fs_rw_exec_net`, `fs_rw_net` or `all_shapes`, each of which inserts it. Re-verified 2026-08-27 against `crates/tau-ports/src/target/registry.rs`. Un-ignore when a `no-network` target tier lands. |
-| `crates/tau-mcp-tokio/tests/http_lifecycle.rs:101` | `multi_event_sse_response` | A session-aware wiremock fixture: the single mock serves the same two-event body for every POST, so `recv_response_for` sees a stale `id=0` while waiting for `id=1`. **Stated reason is stale — see follow-ups.** |
 | `crates/tau-sandbox-windows/tests/install_rust_cargo_acceptance.rs:255` | `rust_cargo_install_succeeds_sandboxed_without_unsandboxed_escape` | #726: `CreateProcess` on `rustc.exe` denies even though its DACL carries a correct inherited allow-ACE (`FILE_EXECUTE` included) for the AppContainer's package SID. Windows-only, `integration-tests`-gated; egress chain itself is proven green by `tests/egress_integration.rs`. Un-ignore when #726 lands a fix. |
 
 **CI plan:** revisit each line when its blocker resolves. If a blocker is
@@ -356,32 +359,58 @@ test (`workflow_run_emits_step_record_and_succeeds`) asserts the emitted
 pointing at #650. A `#[ignore]`d stub is the cheapest place for a bug this
 size to hide.
 
-### Stale-reason follow-ups (flagged 2026-08-27, not fixed here)
+### Stale-reason follow-ups — resolved by #717 (2026-08-29)
 
-Two Bucket 4 reasons name a prerequisite that has since landed, which is the
-same failure class #648 found in 2c — a test whose stated blocker no longer
-describes reality:
+Three Bucket 4 reasons were flagged on 2026-08-27 as naming a prerequisite that
+had since landed — the same failure class #648 found in 2c, a test whose stated
+blocker no longer describes reality. Two of them were #717's scope; both are now
+**promoted out of the bucket**, which is why the total dropped 44 → 42.
 
-- **`fan_monitor_dev_matches_wasm`** — reason reads
-  "TODO(β.7.5): WasmProfile needs `tau build wasm`". β.7.5 shipped;
-  `tau build wasm` exists and the `wasm-lane` job exercises it. The *actual*
-  remaining blocker is that `WasmProfile::run` was never written — it is still
-  a stub that panics `unimplemented!()`. The row is correct to stay
-  `#[ignore]`d; the reason should name the stub, not the shipped dependency.
-- **`multi_event_sse_response`** — comment reads "Fix in PR-5 when McpBridge
-  gets a richer session-aware fixture". PR-5 is #287, merged 2026-06-09,
-  without the fixture. The forward-reference now points at closed work, so the
-  row reads as pending when it is in fact unowned.
+- **`multi_event_sse_response`** (`tau-mcp-tokio`) — the comment read "Fix in
+  PR-5 when McpBridge gets a richer session-aware fixture". PR-5 is #287, merged
+  2026-06-09, without the fixture, so the row pointed at closed work and read as
+  owned when it was unowned. **#717 wrote the fixture**: a `wiremock::Respond`
+  impl that dispatches on the POSTed request's JSON-RPC `id`, serving the
+  two-event `initialize` body for `id=0` and a distinct `tools/list` body for
+  `id=1`. The stale-`id=0` timeout is structurally impossible now, and the test
+  is live — it is the only coverage of `recv_response_for`'s skip-loop over a
+  leading notification.
 
-A third, weaker signal, recorded so the next sweep does not re-derive it:
-**`lowering_refuses_on_capability_fit_mismatch`**'s stated reason still holds,
-but its body would pass today for the wrong reason — `lookup_target_excluding_network()`
-returns a synthetic triple that misses the registry entirely, so
-`capability_fit::check` returns `CapabilityFitFailed { missing: [] }` and the
-test's `matches!(err, LowerError::CapabilityFitFailed { .. })` succeeds without
-ever exercising the shape-miss path it is named for. The file says as much
-inline. Un-ignoring it would be worse than leaving it: it would read as
-coverage that does not exist.
+- **`lowering_refuses_on_capability_fit_mismatch`** (`tau-ir-lower`) — recorded
+  in 2026-08-27 as the weaker, third signal: the reason ("no `Available` entry
+  lacks `NetworkHttp`") was *true*, but the body would have passed for the wrong
+  reason, because `lookup_target_excluding_network()` returned a synthetic triple
+  that missed the registry entirely and so took `capability_fit::check`'s
+  unknown-target arm (`missing: []`), never the shape-miss arm it is named for.
+
+  **#717 found the reason's conclusion wrong, not just its body.** The premise
+  generalised "no entry lacks `NetworkHttp`" into "no entry lacks any shape a
+  workflow can require" — but `any-wasi-strict` is an `Available` entry built
+  from `fs_rw_net` (`{FilesystemRead, FilesystemWrite, NetworkHttp}`), so it
+  lacks `ProcessExec` **and** `AgentSpawn`. The shape-miss path was drivable all
+  along, just not with the shape the test happened to pick. The test now declares
+  an `fs.exec` tool against `any-wasi-strict` and asserts
+  `missing == [ProcessExec]` plus the blamed tool — a real miss against a real
+  entry, no registry change needed. The unknown-triple case was split out as
+  `lowering_refuses_on_unknown_target_triple`, which asserts `missing.is_empty()`
+  explicitly; asserting the emptiness is what keeps the two arms distinguishable,
+  where the old `matches!(err, CapabilityFitFailed { .. })` conflated them. No
+  `no-network` target tier is needed, and that speculative registry work should
+  not be scheduled on this test's behalf.
+
+  Lesson for the next sweep: an `#[ignore]` reason can be *factually correct and
+  still wrong*, when the fact is narrower than the conclusion drawn from it. Both
+  the 2026-08-27 sweep and #717's own issue text repeated the generalisation
+  without re-reading the shape constructors. Check the claim, then check that the
+  claim implies the conclusion.
+
+The third flagged reason — **`fan_monitor_dev_matches_wasm`** (`tau-conformance`)
+— was deliberately **out of #717's scope** and is tracked in #691. Its reason
+reads "TODO(β.7.5): WasmProfile needs `tau build wasm`"; β.7.5 shipped and the
+`wasm-lane` job exercises `tau build wasm`, so that dependency is met. The
+*actual* remaining blocker is that `WasmProfile::run` was never written — still a
+stub that panics `unimplemented!()`. The row is correct to stay `#[ignore]`d; the
+reason should name the stub, not the shipped dependency. It stays in Bucket 4.
 
 ---
 
@@ -398,8 +427,8 @@ coverage that does not exist.
 | 2e — tau-cli guest builds (LIT) | 12 | `wasm-lane` `-p tau-cli --run-ignored ignored-only --test-threads 1` |
 | 2f — tau-wasm-host guest builds (LIT) | 10 | `wasm-lane` `-p tau-wasm-host --run-ignored all` |
 | 3 — ENVIRONMENT-SPECIFIC | 0 | Both deleted 2026-08-23 — no runner has the host shape |
-| 4 — DEFERRED | 6 | Promote when blocker resolves (2 of them want the same slow-tier lane) |
-| **Total** | **48** | |
+| 4 — DEFERRED | 4 | Promote when blocker resolves (2 of them want the same slow-tier lane) |
+| **Total** | **46** | |
 
 Numbers updated on each PR that touches an `#[ignore]` annotation — enforced by
 `xtask/tests/ignore_inventory.rs`.
