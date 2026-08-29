@@ -31,9 +31,6 @@ jsonschema  = { workspace = true }
 # Pure no_std by default — `tau-runtime-core` and the wasm guest link this.
 # Lowering (std + tau-pkg) lives in the separate `tau-ir-lower` crate.
 default            = []
-# When on, enables Message↔tau_domain::Message bidirectional adapters
-# that require std (SystemTime ↔ i64-ms conversion through UNIX_EPOCH).
-with-std-adapters  = []
 schema             = ["dep:schemars", "tau-domain/schema", "tau-ports/schema"]
 test-fixtures      = []
 

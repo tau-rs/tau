@@ -30,6 +30,7 @@ use std::boxed::Box;
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -1137,13 +1138,27 @@ async fn dynamic_region_spawns_child_and_completes() {
     let (region_step, kind, child_id, index, max_spawns) = spawned[0].clone();
     assert_eq!(region_step.as_deref(), Some("spawn-region"));
     assert_eq!(kind.as_deref(), Some("researcher"));
-    assert_eq!(child_id.as_deref(), Some("spawn-region:researcher#0"));
+    // `{region-step}-{kind}-{entry}-{index}` — `entry` is the run-scoped
+    // `Dynamic`-step execution counter (0 for this region's only execution).
+    assert_eq!(child_id.as_deref(), Some("spawn-region-researcher-0-0"));
     assert_eq!(index, Some(0), "index must be the 0-based admission index");
     assert_eq!(
         max_spawns,
         Some(1),
         "max_spawns must echo the region's configured bound"
     );
+
+    // #731 regression — the id the child actually ran under must satisfy
+    // BOTH domain validators `agent_loop::run_agent` applies to it. Either
+    // rejection makes its `unwrap_or_else` collapse the child to
+    // `agent_id = "ir-agent"`, which silently defeats per-child token
+    // attribution (#538) and per-child run spans. This is the assertion
+    // that must never be lost, not the literal string above.
+    let child_id = child_id.expect("spawned event carries a child_id");
+    tau_domain::PackageName::from_str(&child_id)
+        .unwrap_or_else(|e| panic!("child id {child_id:?} is not a legal PackageName: {e:?}"));
+    tau_domain::AgentId::from_str(&child_id)
+        .unwrap_or_else(|e| panic!("child id {child_id:?} is not a legal AgentId: {e:?}"));
 }
 
 /// A coordinator's single turn emits TWO spawn requests against a region
@@ -1346,6 +1361,75 @@ async fn dynamic_region_check_retry_delivers_feedback_to_coordinator() {
         second.contains("goal predicate Equals(\"GO\") returned false"),
         "{second}"
     );
+}
+
+/// #731: a region that runs TWICE (a check rewinds to its own step id, per
+/// the test above) and spawns on each attempt must not re-issue the same
+/// child id. `RegionCounters` is rebuilt per execution, so both children
+/// take admission `index` 0 — the run-scoped `entry` counter is the only
+/// thing separating them. Without it, both children run under one id, and
+/// per-child token attribution (#538) silently merges two agents into one.
+#[tokio::test]
+async fn dynamic_region_child_ids_are_unique_across_a_check_rewind() {
+    let captured = CapturedSpawned::default();
+    let _tracing_guard = tracing_subscriber::registry()
+        .with(captured.clone())
+        .set_default();
+
+    let module = dynamic_check_retry_module(); // max_spawns: 5, gate rewinds here
+    let spawn_turn = || {
+        make_completion_response(
+            String::new(),
+            vec![make_tool_use(
+                "s1".into(),
+                "agent.researcher.spawn".into(),
+                domain_args(json!({"message": "topic"})),
+            )],
+            StopReason::ToolUse,
+            None,
+        )
+    };
+    let responses = vec![
+        // Attempt 1: spawn, child answers, coordinator fails the gate check.
+        spawn_turn(),
+        make_completion_response("CHILD 1".into(), vec![], StopReason::EndTurn, None),
+        make_completion_response("NOTGO".into(), vec![], StopReason::EndTurn, None),
+        // Attempt 2 (after the rewind): spawn again, then pass the check.
+        spawn_turn(),
+        make_completion_response("CHILD 2".into(), vec![], StopReason::EndTurn, None),
+        make_completion_response("GO".into(), vec![], StopReason::EndTurn, None),
+    ];
+    let seq_backend = Arc::new(SeqBackend::new(responses));
+
+    let out = run_pipeline(
+        Arc::new(module),
+        "x".into(),
+        dispatcher_with(seq_backend.clone()),
+    )
+    .await
+    .expect("check converges on attempt 2");
+    assert_eq!(store_output(&out, "spawn-region"), "GO");
+
+    let spawned = captured.0.lock().expect("poisoned").clone();
+    assert_eq!(
+        spawned.len(),
+        2,
+        "expected one spawn per region execution; got: {spawned:?}"
+    );
+    // Both admissions are index 0 — this is the collision `entry` fixes.
+    assert_eq!(spawned[0].3, Some(0));
+    assert_eq!(spawned[1].3, Some(0));
+    assert_eq!(spawned[0].2.as_deref(), Some("spawn-region-researcher-0-0"));
+    assert_eq!(spawned[1].2.as_deref(), Some("spawn-region-researcher-1-0"));
+    assert_ne!(
+        spawned[0].2, spawned[1].2,
+        "two executions of one region must not reuse a child id"
+    );
+    for (_, _, child_id, _, _) in &spawned {
+        let id = child_id.as_deref().expect("child_id recorded");
+        tau_domain::AgentId::from_str(id)
+            .unwrap_or_else(|e| panic!("child id {id:?} is not a legal AgentId: {e:?}"));
+    }
 }
 
 /// Build `[dynamic:spawn-region]` with TWO offered kinds ("researcher" and

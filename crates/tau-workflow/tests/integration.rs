@@ -8,19 +8,23 @@
 //! `tau_ports::fixtures`: it returns a canned "hello" text reply for
 //! every completion request, mimicking the behaviour of the echo-llm
 //! subprocess plugin without requiring a real binary.
-
-#![cfg(feature = "integration-tests")]
+//!
+//! Runs on Tier 0 (`just test` → `--workspace --all-targets`): it needs
+//! no host shape, so it carries no feature gate. See tau-rs/tau#716.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use tau_observe::layers::workflow_run_log::WorkflowRunLogLayer;
 use tau_ports::fixtures::{make_completion_response, make_token_usage, MockLlmBackend};
 use tau_ports::StopReason;
 use tau_workflow::{
-    persistence::{replay, StepStatus},
+    persistence::{replay, run_log_path, StepStatus},
     RunOpts, Runner, Workflow,
 };
+use tracing::subscriber::DefaultGuard;
+use tracing_subscriber::layer::SubscriberExt;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,6 +65,23 @@ fn agent_def(llm_backend_name: &str) -> tau_domain::AgentDefinition {
         ),
         tau_domain::PackageName::from_str(llm_backend_name).expect("valid llm backend name"),
     )
+}
+
+/// Install a `WorkflowRunLogLayer` pointed at `path` as the
+/// thread-local subscriber for the duration of the returned guard.
+///
+/// `RunLog::append` is a thin `tracing::event!` emitter, so the JSONL is
+/// materialized by this layer rather than by a direct write. `tau
+/// workflow run` attaches it via `tau_observe::install`; a test that
+/// installs no subscriber writes nothing at all and the log file is
+/// never created. Mirrors `install_run_log_layer` in
+/// `src/persistence.rs`, including `set_default` (not
+/// `set_global_default`) so concurrent tests don't fight over one
+/// global subscriber.
+fn install_run_log_layer(path: &Path) -> DefaultGuard {
+    let layer = WorkflowRunLogLayer::new(path.to_path_buf());
+    let subscriber = tracing_subscriber::registry().with(layer);
+    tracing::subscriber::set_default(subscriber)
 }
 
 // ---------------------------------------------------------------------------
@@ -125,14 +146,23 @@ input = "${steps.first.output}"
     let wf = Workflow::from_str(wf_src, &PathBuf::from("workflows/echo.toml"))
         .expect("workflow must parse");
 
-    // 5. Run.
+    // 5. Install the run-log layer *before* the run.
+    //    The layer needs the destination path up front, but
+    //    `outcome.log_path` is only known afterwards — so pin `run_id`
+    //    instead of letting the runner generate a ULID, and derive the
+    //    same path the runner will compute via `run_log_path`.
+    let run_id = "test-run";
+    let expected_log_path = run_log_path(scope.path(), &wf.name, run_id);
+    let _log_guard = install_run_log_layer(&expected_log_path);
+
+    // 6. Run.
     let runner = Runner::new(runtime, scope.path().to_path_buf());
     let outcome = runner
         .run(
             &wf,
             RunOpts {
                 input: "hello".into(),
-                run_id: None,
+                run_id: Some(run_id.into()),
                 completed: vec![],
                 agents,
             },
@@ -152,7 +182,15 @@ input = "${steps.first.output}"
         "last step output should be 'hello' (MockLlmBackend canned response)"
     );
 
-    // 6. Replay the JSONL log and assert 2 records with status Ok.
+    // 7. The runner must have written to exactly the path the layer was
+    //    installed on — otherwise the replay below would be asserting
+    //    against a file nothing produced.
+    assert_eq!(
+        outcome.log_path, expected_log_path,
+        "runner log path must match the path derived from run_log_path"
+    );
+
+    // 8. Replay the JSONL log and assert 2 records with status Ok.
     let records = replay(&outcome.log_path)
         .await
         .expect("replay must succeed");
@@ -173,7 +211,7 @@ input = "${steps.first.output}"
         "second step output should be 'hello'"
     );
 
-    // 7. Verify log path is inside the scope.
+    // 9. Verify log path is inside the scope.
     assert!(
         outcome.log_path.starts_with(scope.path()),
         "log path must be inside the temp scope"

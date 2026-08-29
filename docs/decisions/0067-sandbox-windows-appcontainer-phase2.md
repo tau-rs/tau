@@ -260,9 +260,92 @@ New obligations this decision creates:
   predates this EPIC, used by the `Container` adapter registration), so
   adding a new variant with identical semantics would just be duplication.
 
+## Amendment (2026-08-22): egress follow-on design decided, one premise corrected
+
+The follow-on EPIC deferred above is now designed (issue #622, spec
+`docs/superpowers/specs/2026-08-22-windows-egress-design.md`). A
+throwaway Windows-CI spike (PR #626, two measurement rounds on
+`windows-latest`) settled the open behavior questions this ADR could
+only reason about from documentation:
+
+- **Same-package-SID loopback works.** Two processes inside the same
+  AppContainer (bare `CreateAppContainerProfile` profile, no UWP
+  package) complete a TCP round-trip over `127.0.0.1`, while
+  container→host loopback stays blocked. The "named-pipe alternative is
+  circular" finding in §"Network egress" was written assuming the proxy
+  endpoint had to cross the container boundary over TCP; an
+  in-container bridge (the Linux `tau-net-bridge` topology) breaks that
+  circularity.
+- **A named pipe whose DACL grants the container's package SID is
+  usable from inside** — in the plain `\\.\pipe\` namespace. `LOCAL\`
+  names are NOT visible from inside (error 2: that prefix remaps to a
+  per-container object namespace). Without the package-SID ACE the open
+  is denied, so a per-spawn pipe is reachable by exactly one container.
+- **Decision:** egress ships as a named-pipe broker + in-container
+  loopback bridge (`tau-net-bridge-win`, ephemeral port — AppContainers
+  share the host TCP port space, so fixed `8443` would collide). The
+  container receives **no network capability SIDs**; the SID-ACL'd pipe
+  into the host-side `HostAllow` proxy is the only egress path.
+  `internetClient` was rejected because it grants direct egress,
+  reducing the allowlist to advisory.
+- **Premise corrected:** "an AppContainer needs `FILE_TRAVERSE` on
+  every ancestor directory to reach a nested granted path"
+  (§"Network egress", positive-FS paragraph) is **wrong**. Measured: a
+  leaf-only ACL grant on `…\a\b\c\leaf.txt` is readable from inside the
+  container with no ancestor grants — AppContainer tokens retain
+  `SeChangeNotifyPrivilege` (bypass traverse checking). Deferred item 2
+  therefore needs no ancestor-grant code; it is covered by positive-FS
+  acceptance tests in the egress EPIC.
+
+### Shipped outcome (PR #653)
+
+Both deferred items are resolved, proven by Windows CI (tier-2
+`nextest / windows`, `--features integration-tests`):
+
+- **Egress works.** The full chain — plugin → `tau-net-bridge-win`
+  (ephemeral loopback port, in-container) → per-spawn named pipe →
+  host-side `tau-sandbox-proxy` → upstream — carries an allowlisted
+  request end-to-end, and an unlisted host receives the proxy's `403`.
+  The container is granted **no network capability SIDs**.
+- **The pipe is the boundary.** A *foreign* AppContainer cannot open
+  another container's proxy pipe (`foreign_container_cannot_open_pipe`),
+  which is what makes the per-spawn SID ACE load-bearing rather than
+  decorative.
+- **Item 2 is settled empirically.** Leaf-only grants are readable at
+  nested paths, directory grants reach files that already existed inside
+  them, and they confer execute — so no `FILE_TRAVERSE` ancestor-grant
+  code was written.
+
+Two Windows behaviours worth recording, both found the hard way:
+
+- **`shutdown()` is a no-op on tokio named pipes** (`poll_shutdown` just
+  flushes). A `join!` of both splice directions can therefore never
+  complete over a pipe; the proxy terminates on the **response**
+  direction instead.
+- **A synchronous file object serialises all I/O**, even across
+  `try_clone`d handles. The bridge's first implementation spliced a
+  `std::fs`-opened pipe with two threads and deadlocked silently — no
+  bytes, no error. It uses tokio overlapped I/O for this reason.
+
+**Known gap (tracked in #726):** a sandboxed `kind = "rust-cargo"` build
+still cannot execute `rustc.exe` from `$RUSTUP_HOME` — `CreateProcess`
+returns `ERROR_ACCESS_DENIED` even though a DACL dump taken while the
+grant is held shows an inherited `ACCESS_ALLOWED` ACE for the container's
+package SID carrying `FILE_EXECUTE`. Path resolution, ACE propagation,
+execute rights, and in-container image activation are each individually
+proven working, so the cause is specific to the `.rustup` tree and is not
+yet explained. `install_rust_cargo_acceptance` is `#[ignore]`d against
+#726. This is **not a security regression**: before this EPIC such an
+install failed closed at `wrap_spawn`; it now fails closed later. #726
+also carries the open design question of whether per-build ACL mutation
+of the user's shared `~/.rustup` / `~/.cargo` trees is the right model at
+all, given Linux and macOS achieve the same envelope without touching the
+filesystem.
+
 ## References
 
 - Spec: `docs/superpowers/specs/2026-08-09-sandbox-windows-appcontainer-phase2-design.md`
 - Supersedes (Phase 2 of): [ADR-0023 — Windows AppContainer scaffold](0023-sandbox-windows-scaffold.md)
-- Follow-on (network egress, not yet filed as its own ADR): tracked in the
-  spec above under "Network egress: deferred" and "Out of scope"
+- Follow-on (network egress): issue #622, spec
+  `docs/superpowers/specs/2026-08-22-windows-egress-design.md`, spike
+  measurements in PR #626 (see Amendment above)

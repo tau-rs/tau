@@ -93,7 +93,47 @@ fn variant_kind(err: &ProjectConfigError) -> &'static str {
         ProjectConfigError::ModelBackendNotDeclared { .. } => "ModelBackendNotDeclared",
         ProjectConfigError::UnknownModelAlias { .. } => "UnknownModelAlias",
         ProjectConfigError::MissingAgentModel { .. } => "MissingAgentModel",
+        ProjectConfigError::DirsRequireRoot => "DirsRequireRoot",
+        ProjectConfigError::DirsRoot { .. } => "DirsRoot",
+        ProjectConfigError::DirsRootsOverlap { .. } => "DirsRootsOverlap",
+        ProjectConfigError::DefFile { .. } => "DefFile",
+        ProjectConfigError::DuplicateDefinition { .. } => "DuplicateDefinition",
         // tau-pkg uses #[non_exhaustive] — surface unknown variants without panicking.
         _ => "Other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `[dirs]` present with no filesystem root to scan (`parse_str` path)
+    /// must map to the typed `"DirsRequireRoot"` kind, not the `"Other"`
+    /// catch-all. Guards the per-variant `variant_kind` mapping against
+    /// regressing back to the wildcard (companion to the `DirsRoot` case
+    /// covered below via `from_path`).
+    #[test]
+    fn variant_kind_maps_dirs_require_root() {
+        let toml = "[project]\nname = \"p\"\n[dirs]\nagents = \"agents\"\n";
+        let err = ProjectConfig::parse_str(toml).unwrap_err();
+        assert!(matches!(err, ProjectConfigError::DirsRequireRoot));
+        assert_eq!(variant_kind(&err), "DirsRequireRoot");
+    }
+
+    /// A syntactically invalid `[dirs]` root (absolute path) maps to the
+    /// typed `"DirsRoot"` kind. Exercised via `from_path`, the same entry
+    /// point `run_config` uses, so this reflects the reachable CLI path.
+    #[test]
+    fn variant_kind_maps_dirs_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tau_toml = tmp.path().join("tau.toml");
+        std::fs::write(
+            &tau_toml,
+            "[project]\nname = \"p\"\n[dirs]\nagents = \"/abs/agents\"\n",
+        )
+        .unwrap();
+        let err = ProjectConfig::from_path(&tau_toml).unwrap_err();
+        assert!(matches!(err, ProjectConfigError::DirsRoot { .. }));
+        assert_eq!(variant_kind(&err), "DirsRoot");
     }
 }

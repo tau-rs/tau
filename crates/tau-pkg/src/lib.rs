@@ -20,6 +20,7 @@
 
 pub mod bundle;
 pub mod capability_override;
+pub mod crlf;
 pub mod error;
 pub(crate) mod git;
 pub mod install;
