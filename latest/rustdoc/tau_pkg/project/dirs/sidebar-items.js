@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["definition_files","scan_dirs"],"struct":["ScannedDefs"]};

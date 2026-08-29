@@ -1,0 +1,487 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0070 — AgentId grammar: namespaced authored names, sanitized generated ones - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0070-agent-id-grammar.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0070-agentid-grammar--namespaced-authored-names-sanitized-generated-ones"><a class="header" href="#adr-0070-agentid-grammar--namespaced-authored-names-sanitized-generated-ones">ADR-0070: <code>AgentId</code> grammar — namespaced authored names, sanitized generated ones</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-08-29
+<strong>Deciders:</strong> tau core</p>
+<blockquote>
+<p><strong>Numbering note:</strong> ADR numbers in this repo are claimed by <em>merge</em> order,
+not branch-start order — 0067 and 0068 were both taken mid-flight while
+<a href="0069-directory-based-definitions.html">ADR-0069</a> was in review, forcing two
+renumbers. This document claimed 0070 when its PR opened; re-verify before
+merge.</p>
+</blockquote>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p><code>tau_domain::AgentId</code> and <code>tau_domain::PackageName</code> share one grammar: an
+ASCII identifier of 1..=64 bytes, leading character <code>[a-z]</code>, remainder
+<code>[a-z0-9-]</code>. <code>AgentId</code> has enforced that since the first <code>tau-domain</code> commit,
+when the only agent names in existence were inline <code>[agents.researcher]</code>
+table keys.</p>
+<p><a href="0069-directory-based-definitions.html">ADR-0069</a> introduced <code>[dirs]</code>, where an
+entry's engine name <strong>is</strong> its path relative to the kind root:
+<code>agents/review/strict.md</code> names agent <code>review/strict</code>. The scanner's own
+charset is <code>[a-z0-9_-]+</code> per path segment, joined with <code>/</code>. Those two
+grammars disagree: the scanner accepts <code>/</code> and <code>_</code>, the domain type accepts
+neither.</p>
+<p>The disagreement was invisible until #725 made the build pipeline
+<code>[dirs]</code>-aware, at which point it produced three distinct failures:</p>
+<ul>
+<li><strong><code>tau build</code> exits 2.</strong> <code>bundle/build.rs</code> parses each project agent id
+into a <code>tau_domain::AgentId</code> for <code>BundleAgent.id</code>; <code>review/strict</code> fails
+manifest assembly.</li>
+<li><strong><code>tau resolve</code> panics.</strong> <code>cmd/resolve_helpers.rs</code> called
+<code>AgentId::from_str(&amp;entry.id).expect("AgentId from validated entry")</code> on
+the same string — a panic on user-authored input.</li>
+<li><strong>The interpreter silently mis-attributes.</strong> <code>agent_loop.rs</code> converts the
+IR agent id to both <code>PackageName</code> and <code>AgentId</code> with
+<code>.unwrap_or_else(|_| … "ir-agent" …)</code>. An id the grammar rejects does not
+fail; it collapses to a phantom agent named <code>ir-agent</code>, taking that
+agent's token accounting (#538) and run span (#731) with it.</li>
+</ul>
+<p>The third failure is the same defect #731 / #734 fixed from the other end.
+<code>_</code> is rejected too, so even a flat <code>agents/my_agent.md</code> — a name the scanner
+explicitly permits — dies at the bundle boundary.</p>
+<p>ADR-0069 documented the gap in its Consequences and deferred the decision;
+<code>crates/tau-cli/tests/cmd_build_dirs.rs::nested_agent_name_is_a_known_bundle_gap</code>
+pinned the boundary so it could not shift silently. This ADR takes the
+deferred decision.</p>
+<h3 id="the-precedent-this-adr-declines-to-follow"><a class="header" href="#the-precedent-this-adr-declines-to-follow">The precedent this ADR declines to follow</a></h3>
+<p>Commit <code>b91366c59</code> (#734, "make dynamic-region child ids legal domain agent
+ids") hit the same wall two commits earlier and resolved it by <strong>sanitizing
+into the existing grammar</strong>: <code>dynamic.rs::sanitize_component</code> folds every
+character outside <code>[a-z0-9-]</code> to <code>-</code>, and <code>child_agent_id</code> assembles
+<code>{region_step}-{kind}-{entry}-{index}</code>, re-anchoring with an <code>x-</code> prefix when
+the result would not start with a letter.</p>
+<p>That is correct <strong>for generated ids</strong> and wrong <strong>for authored ones</strong>, and
+the distinction is not stylistic:</p>
+<ul>
+<li>
+<p>A generated child id is assembled from opaque <code>tau.toml</code> step names that no
+user ever expects to read back. Sanitizing destroys information, but the
+<code>-{entry}-{index}</code> suffix independently guarantees uniqueness, so nothing
+observable is lost. Truncation, as <code>child_agent_id</code>'s own doc comment puts
+it, "costs legibility, never correctness."</p>
+</li>
+<li>
+<p>An authored name has no such suffix. The <code>[dirs]</code> contract, stated verbatim
+in its how-to, is that distinct paths yield distinct names:</p>
+<pre><code>agents/review/strict.md     -&gt; agent "review/strict"
+agents/perf/strict.md       -&gt; agent "perf/strict"     (distinct; never ambiguous)
+</code></pre>
+<p>Applying <code>sanitize_component</code> to those gives <code>review-strict</code> and
+<code>perf-strict</code> — which then collide with an authored <code>agents/review-strict.md</code>
+and <code>agents/perf-strict.md</code>. Sanitizing an authored name is not lossy-but-safe;
+it is <strong>non-injective</strong>, and injectivity is the property the whole feature
+was designed to provide.</p>
+</li>
+</ul>
+<p>Sanitizing is right where uniqueness is supplied by a counter and wrong where
+uniqueness is supplied by the name itself. #734 is the first case, this is the
+second, and the two coexist without contradiction.</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<p><strong>1. Widen <code>AgentId</code> — and only <code>AgentId</code> — to a <code>/</code>-separated namespaced
+grammar.</strong></p>
+<pre><code>AgentId  := segment ( '/' segment )*        1..=64 bytes total
+segment  := [a-z0-9] [a-z0-9_-]*
+</code></pre>
+<p><code>review/strict</code>, <code>perf/strict</code>, <code>my_agent</code>, <code>a/b/c</code>, and <code>2fa</code> are all
+legal. <code>""</code>, <code>/a</code>, <code>a/</code>, <code>a//b</code>, <code>-foo</code>, <code>a/-b</code>, <code>A/b</code>, and anything over 64
+bytes are not. Empty segments are reported as a new
+<code>AgentIdError::EmptySegment { pos }</code> variant; the enum is <code>#[non_exhaustive]</code>,
+so this is a minor change.</p>
+<p>The leading-character rule relaxes from <code>[a-z]</code> to <code>[a-z0-9]</code> so that the
+domain grammar accepts every segment shape the <code>[dirs]</code> scanner can produce,
+rather than agreeing with it on three characters out of four. A leading <code>-</code>
+stays illegal: <code>tau build --agent -foo</code> must not be ambiguous with a flag.</p>
+<p><strong>2. <code>PackageName</code> is not touched.</strong> A package name is a registry identity
+(<code>fs-tools@1.2.0</code>) resolved against a lockfile and a package index, not a
+project-local namespace. It keeps <code>[a-z]</code> + <code>[a-z0-9-]</code>. This is the first
+point at which the two grammars diverge, and the divergence is deliberate:
+they answer different questions.</p>
+<p>Consequently <code>dynamic.rs::child_agent_id</code>'s <code>x-</code> re-anchor
+(<code>dynamic.rs:225-231</code>) becomes <strong><code>PackageName</code>-load-bearing only</strong> — <code>AgentId</code>
+would now accept a digit-leading child id, <code>PackageName</code> still would not, and
+<code>assert_legal</code> asserts both. It must not be simplified away on the grounds
+that <code>AgentId</code> no longer needs it.</p>
+<p><strong>3. The <code>[dirs]</code> scanner validates agent names through the domain type, not
+through a second charset.</strong> At the point where <code>scan.rs</code> joins path segments
+into a name, the agents root calls <code>tau_domain::AgentId::from_str</code> and reports
+a <code>ProjectConfigError::DefFile</code> naming the offending <strong>file</strong>:</p>
+<pre><code>error: agents/-foo.md: invalid agent name "-foo": agent id must start with a
+       letter or digit, got '-'
+error: agents/a/b/c/d/e/f/g/verylongname.md: invalid agent name "a/b/c/…":
+       agent id exceeds 64 characters: got 71
+</code></pre>
+<p>There is now exactly one implementation of the agent-name grammar, and the
+authoring surface cannot accept a name the bundle boundary will later refuse.
+The length cap doubles as the nesting-depth bound; no separate depth limit is
+introduced, because a second bound is a third grammar to keep in sync.</p>
+<p><strong>Tool names are unchanged</strong> — the tools root keeps <code>[a-z0-9_-]+</code> per segment
+with no leading-character rule. The asymmetry is principled: an agent name
+becomes a typed identity in the bundle (<code>BundleAgent.id: AgentId</code>), a tool
+name stays a free-form string (<code>tau_ir::ToolId</code> is an unvalidated newtype by
+design, per ADR-0069). Agents are validated at the scan because there is a
+downstream type to satisfy; tools are not because there is not.</p>
+<p><strong>4. <code>resolve_helpers.rs</code> returns an error instead of panicking.</strong> Both
+<code>expect("AgentId from validated entry")</code> sites become typed failures. This
+holds independently of the grammar: a panic on user-authored input is a bug
+under every grammar, wide or narrow.</p>
+<p><strong>5. A bundle carrying a widened agent id declares <code>schema_version = 6</code>.</strong>
+<code>BundleManifest::parse_str</code> accepts 1..=6 and enforces the invariant that any
+agent id outside the pre-widening charset requires <code>&gt;= 6</code>. A bundle whose
+agent ids are all still <code>[a-z][a-z0-9-]*</code> continues to be emitted at its
+existing version, so ordinary projects see no version churn.</p>
+<p>This is an error-quality measure, not a correctness one, and the ADR is
+explicit about the difference from the <code>[[trigger]]</code> (v3) and <code>[governance]</code>
+(v4) bumps. Those fields are <code>#[serde(default)]</code>, so an old tau would
+<strong>silently drop</strong> them — the version gate is the only thing standing between
+a stale binary and a wrong answer. <code>BundleAgent.id</code> cannot be dropped: an old
+tau reaches <code>AgentId::deserialize</code> and hard-fails regardless. The bump only
+converts</p>
+<pre><code>Error: TOML parse error … agent id contains invalid character '/' at byte 6
+</code></pre>
+<p>into</p>
+<pre><code>Error: unsupported bundle schema_version: 6
+</code></pre>
+<p>It is adopted because the discipline is established at this boundary and a
+reader of <code>parse_str</code> will expect to find it, not because anything is unsound
+without it.</p>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<p><strong>Positive</strong></p>
+<ul>
+<li>
+<p><code>[dirs]</code>' headline example works. <code>agents/review/strict.md</code> builds, slices
+(<code>tau build --agent review/strict</code>), verifies, and runs.</p>
+</li>
+<li>
+<p>The silent <code>ir-agent</code> collapse of the <strong>agent id</strong> in <code>agent_loop.rs</code>
+becomes unreachable for authored names, closing the #715 half of the defect
+#731 closed from the generated-id side. Per-agent token attribution and run
+spans key on that id, so they are now correct for namespaced agents.</p>
+<p>The adjacent <code>pkg_name</code> conversion on the same lines still falls back:
+<code>PackageName</code> stays narrow by Decision 2, so a namespaced id yields the
+synthetic <code>PackageId("ir-agent", 0.0.0)</code> that <code>AgentDefinition::new</code>
+requires. That is not a regression — it was already the behaviour for every
+id <code>PackageName</code> rejects, and it was the behaviour for <code>review/strict</code>
+before this change — and it is not an attribution surface. It is called out
+here so the asymmetry on those five lines reads as deliberate.</p>
+</li>
+<li>
+<p><code>tau resolve</code> no longer panics on any project it can parse.</p>
+</li>
+<li>
+<p>The scanner and the domain type share one grammar with one implementation.
+The class of bug this ADR fixes — an authoring surface accepting a name a
+later stage rejects — is structurally eliminated for agents, not merely made
+rarer.</p>
+</li>
+</ul>
+<p><strong>Negative</strong></p>
+<ul>
+<li><code>AgentId</code> now accepts digit-leading names (<code>2fa</code>, <code>123</code>). The existing
+<code>rejects_invalid_leading</code> case for <code>"1agent"</code> is deleted. Nothing depends on
+an agent id being non-numeric, but it is a real relaxation of a rule that
+held since the first commit.</li>
+<li><code>AgentId</code> and <code>PackageName</code> no longer share a grammar, so
+<code>agent_loop.rs</code>'s paired conversion can now succeed for one and fail for the
+other. Both call sites already fall back independently; the <code>x-</code> re-anchor
+in <code>dynamic.rs</code> is annotated as <code>PackageName</code>-load-bearing so it is not
+removed by a later reader who checks only <code>AgentId</code>.</li>
+<li>Bundles with namespaced agent ids are unreadable by any tau older than this
+change. That is unavoidable in either direction — such a bundle was
+unbuildable before — and <code>schema_version = 6</code> makes the refusal legible.</li>
+</ul>
+<p><strong>Neutral / bounded</strong></p>
+<ul>
+<li>Blast radius is smaller than <code>AgentId</code>'s file count suggests. Six crates
+reference <code>tau_domain::AgentId</code>; four sites construct one from user input.
+Both downstream identifier types are unvalidated — <code>tau_ports::AgentId</code> is
+<code>pub type AgentId = String</code> and <code>tau_ir::ids::AgentId</code> is a transparent
+newtype whose doc comment already says "validation is the lowering pass's
+responsibility, not the type's". No <code>.wit</code> file names an agent id. Traces,
+session and suspension state, the plugin protocol, and the wasm guest
+boundary are all untouched.</li>
+</ul>
+<p><strong>New obligations</strong></p>
+<ul>
+<li><code>nested_agent_name_is_a_known_bundle_gap</code> is deleted, as its own doc comment
+instructs, and <code>build_ships_dir_defined_agent_and_verify_agrees</code> is extended
+to a nested name.</li>
+<li>ADR-0069's Consequences bullet and the <code>[dirs]</code> how-to's <code>Today's limit</code>
+blockquote and first Gotcha are rewritten from "known gap" to the shipped
+rule.</li>
+<li>Inline <code>[agents."review/strict"]</code> was always legal TOML and always failed at
+the bundle boundary; it now works, so the inline and directory surfaces stay
+interchangeable as ADR-0069 requires.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<p><strong>Narrow the <code>[dirs]</code> scanner to <code>[a-z0-9-]</code> and forbid nested agent
+directories.</strong> Cheapest option (~20 lines), needs no schema bump, and is
+consistent with #734's "make the name fit the grammar" instinct. Rejected on
+three counts. It fixes one surface, not the bug: inline
+<code>[agents."review/strict"]</code> is legal at the project-config layer and would
+still exit 2 at manifest assembly and still panic <code>tau resolve</code>, so #715's
+title would remain accurate after the fix. It makes <code>agents/</code> and <code>tools/</code>
+obey different rules inside one feature with no principle behind the
+difference beyond which one happens to have a validating type downstream —
+tools would keep nesting and keep <code>_</code> while agents lost both. And it deletes
+the headline capability of a feature that shipped the previous day, turning
+ADR-0069's "this decision is deferred" into "this decision is declined"
+without new information.</p>
+<p><strong>Split identity: keep <code>AgentId</code> narrow, carry the authored path as a display
+name, derive the engine id by sanitizing.</strong> Rejected because
+<code>sanitize_component</code> is not injective: <code>review/strict</code> and <code>review-strict</code> map
+to the same id, so a project containing both either fails with a confusing
+collision or silently merges two agents. A hash suffix restores uniqueness at
+the cost of ids no human can type, which breaks <code>tau build --agent</code>. The
+deeper defect is that every reference site — <code>tool_refs</code>, <code>subflow</code>,
+<code>[allow.*]</code> keys, <code>--agent</code>, traces, <code>tau list</code> — must name either the display
+form (requiring a fallible reverse lookup, ambiguous exactly when it matters)
+or the engine form (making "the path is the name" false). ADR-0069 chose one
+name precisely to avoid a path/name pair to keep in sync.</p>
+<p><strong>Widen <code>PackageName</code> alongside <code>AgentId</code>, keeping them identical.</strong> Rejected:
+it would let a package name contain <code>/</code>, which collides with registry and
+path conventions for no benefit — no package is authored by directory
+position. The two types were identical by coincidence of implementation, not
+by requirement; #734's <code>assert_legal</code> asserts both only because a dynamic
+child id is used as both.</p>
+<p><strong>Adopt <code>AgentId::MAX_LEN</code> per segment plus an explicit nesting-depth cap.</strong>
+Rejected: a third bound to keep in sync with the other two, which is the
+failure mode this ADR exists to remove. The 64-byte total already bounds
+depth, enforced once, with an error that names the file.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0069-directory-based-definitions.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../retrospectives/phase-0.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0069-directory-based-definitions.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../retrospectives/phase-0.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

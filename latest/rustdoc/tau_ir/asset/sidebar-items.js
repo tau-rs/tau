@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AssetKind"],"fn":["asset_hash"],"struct":["AssetBlob"]};
