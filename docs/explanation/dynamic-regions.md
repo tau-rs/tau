@@ -153,7 +153,10 @@ call; the admission gate runs inside it:
 
 1. **Membership** — by construction: only offered kinds are
    registered as tools.
-2. **Bounds** — one pooled counter per region instance, shared across
+2. **Bounds** — one pooled counter per region *execution* (the counter
+   is rebuilt each time the step runs, so a region inside a `Loop`, or
+   one re-entered by a check rewind, starts each pass with a full
+   `max_spawns` budget), shared across
    every kind: past `max_spawns`, the call is **soft-denied** — an
    error tool-result the coordinator sees and must adapt to (e.g.
    "spawn denied: region `fanout` max_spawns exhausted (8/8)"); the
@@ -167,9 +170,22 @@ call; the admission gate runs inside it:
    sound, including against hand-crafted IR.
 
 Each admitted spawn runs the kind's own agent definition
-(`prompt`/`model`/`tools`) as child `<region-step>:<kind>#<n>`; its
-final text returns as the tool result. The region step's output is
-the coordinator's final text.
+(`prompt`/`model`/`tools`) as child
+`<region-step>-<kind>-<entry>-<n>`; its final text returns as the
+tool result. The region step's output is the coordinator's final
+text.
+
+That id is a legal agent id — lowercase ASCII, `[a-z0-9-]`, at most
+64 characters — because it becomes the child's `agent_id`, the key
+the per-agent token surface and the run span are recorded under. The
+`<region-step>` and `<kind>` components are sanitized into that
+charset (any other character becomes `-`) and truncated if the whole
+id would exceed 64 characters. `<entry>` is the run-scoped sequence
+number of the region execution and `<n>` the 0-based admission index
+within it, so `<entry>-<n>` is unique across a run even when a `Loop`
+pass or a check rewind restarts `<n>` at 0, and even when two long
+region names truncate to the same prefix. Uniqueness is per run:
+`<entry>` is not persisted, so a suspend/resume pair restarts it.
 
 If a check rewinds to a dynamic-region step as its gate, outstanding
 rationales are injected into the coordinator's next run (labelled

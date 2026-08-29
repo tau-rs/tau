@@ -3,15 +3,15 @@ source: crates/tau-cli/tests/help_snapshots.rs
 assertion_line: 64
 expression: s
 ---
-Run pre-flight validation against the project (config, lockfile, packages, sandbox, plugins, skills, mcp-contracts, governance). Aggregates existing validators into one CI/IDE-friendly verb
+Run pre-flight validation against the project (config, lockfile, packages, sandbox, plugins, skills, mcp-contracts, governance, dirs). Aggregates existing validators into one CI/IDE-friendly verb
 
 Usage: tau check [OPTIONS] [CATEGORY]
 
 Arguments:
   [CATEGORY]
-          Optional category — runs only the named check (one of: config, lockfile, packages, sandbox, plugins, skills, mcp-contracts, governance). When omitted, runs all 8 categories
+          Optional category — runs only the named check (one of: config, lockfile, packages, sandbox, plugins, skills, mcp-contracts, governance, dirs). When omitted, runs all 9 categories
           
-          [possible values: config, lockfile, packages, sandbox, plugins, skills, mcp-contracts, governance]
+          [possible values: config, lockfile, packages, sandbox, plugins, skills, mcp-contracts, governance, dirs]
 
 Options:
       --fast

@@ -25,7 +25,6 @@ tau-ports  = { workspace = true, features = ["serde"] }
 
 [features]
 default = []
-integration-tests = []
 
 [lints]
 workspace = true
