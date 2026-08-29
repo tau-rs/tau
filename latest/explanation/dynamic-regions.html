@@ -1,0 +1,429 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Dynamic regions - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./explanation/dynamic-regions.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="dynamic-regions"><a class="header" href="#dynamic-regions">Dynamic regions</a></h1>
+<p>A <strong>dynamic region</strong> is a pipeline step whose exact set of spawned
+agents isn't known until runtime — a fan-out over search results, a
+crawl frontier, a worker pool sized by input. Unlike a <code>Branch</code> or a
+<code>Parallel</code> (both statically enumerated at authoring time), a dynamic
+region <em>spawns per-kind agents on demand</em>, bounded by a build-time
+envelope tau checks before the workflow ever runs, and gated again at
+runtime when spawns actually happen (EPIC 4.5).</p>
+<p>This page explains the capability lattice a dynamic region sits in,
+the <code>tau.toml</code> authoring syntax, the build-time check that enforces
+the envelope (EPIC 4.4, ADR-0024), and how the region actually
+executes (EPIC 4.5). It assumes you've read
+<a href="capabilities-and-consent.html">Capabilities and consent</a> and
+<a href="multi-agent-orchestration.html">Multi-agent orchestration</a>.</p>
+<h2 id="the-lattice"><a class="header" href="#the-lattice">The lattice</a></h2>
+<p>Every capability grant in tau narrows as it flows outward to inward.
+Dynamic regions add two links to that chain: the <strong>region</strong> (the
+bounded envelope a <code>[pipeline.steps.dynamic]</code> block declares) and the
+<strong>spawn</strong> (the per-kind agent actually spawned inside it).</p>
+<pre class="mermaid">flowchart LR
+    Root[&quot;root [allow]&lt;br/&gt;&lt;i&gt;the constitution&lt;/i&gt;&quot;]
+    Agent[&quot;agent&lt;br/&gt;&lt;i&gt;[agents.&amp;lt;id&amp;gt;] effective grant&lt;/i&gt;&quot;]
+    Region[&quot;region&lt;br/&gt;&lt;i&gt;[pipeline.steps.dynamic].ceiling&lt;/i&gt;&quot;]
+    Spawn[&quot;spawn&lt;br/&gt;&lt;i&gt;[agent.kinds.&amp;lt;kind&amp;gt;].capabilities&lt;/i&gt;&quot;]
+    Tool[&quot;tool&lt;br/&gt;&lt;i&gt;a kind's tool_refs&lt;/i&gt;&quot;]
+    Root --&gt;|&quot;⊇&quot;| Agent
+    Agent --&gt;|&quot;⊇&quot;| Region
+    Region --&gt;|&quot;⊇&quot;| Spawn
+    Spawn --&gt;|&quot;⊇&quot;| Tool
+</pre>
+<p>Read the arrows as "must be a superset of": the root <code>[allow]</code>
+ceiling bounds every agent's effective grant, an agent's effective
+grant bounds any region it owns, a region's own ceiling bounds every
+kind it's allowed to spawn, and a spawned kind's capabilities bound
+the tools it can reach. Each link narrows or stays equal — it never
+widens moving outward to inward. A region's <code>agent</code> (its owning
+coordinator) is <strong>required</strong> — every dynamic region is owned by a
+named <code>[agents.&lt;id&gt;]</code> entry; there is no root-owned form.</p>
+<p>The spawn <em>permission</em> itself — an agent's <code>agent.spawn { allowed_kinds }</code> (or <code>skill.spawn</code>) capability — is <strong>ceiling-exempt</strong>. Root <code>[allow]</code>
+structurally cannot list <code>agent.spawn</code> as a ceiling entry (it "flows
+through the lattice's spawn link, not a raw ceiling entry"), so the L1
+check (package manifest ⊆ root) <em>excludes</em> spawn caps rather than
+demanding a matching ceiling key that can never exist. Bounding happens
+one link inward instead: the spawn link (L3) requires each spawned
+kind's capabilities ⊆ the agent's effective grant, and the agent's
+<em>non-spawn</em> effective grant is already ⊆ root via L1 — so a spawned kind
+stays transitively bounded by root. <code>Custom</code>/<code>Forward</code> caps are not
+spawn caps and remain subject to L1's deny-by-default ceiling.</p>
+<h2 id="per-kind-agent-definitions"><a class="header" href="#per-kind-agent-definitions">Per-kind agent definitions</a></h2>
+<p>A dynamic region doesn't spawn <code>[agents.&lt;id&gt;]</code> entries (those are
+fixed, named agents wired into the pipeline at authoring time). It
+spawns <strong>kinds</strong> — reusable agent templates declared once and
+instantiated by name, any number of times, at runtime:</p>
+<pre><code class="language-toml">[agent.kinds.researcher]
+description  = "Researches a single sub-question and reports back."
+prompt       = "You are a focused researcher. Investigate the given question."
+model        = "fast"
+tools        = ["web_search"]
+capabilities = { "net.http" = { hosts = ["api.crawler.test"] } }
+</code></pre>
+<ul>
+<li><code>capabilities</code> uses the same inline-table map grammar as <code>[allow]</code>
+and <code>[tools.&lt;id&gt;]</code> — one entry per capability kind, keyed by the
+kind's dotted name (<code>"net.http"</code>, <code>"fs.read"</code>, …), each value shaped
+per that kind's fields.</li>
+<li><code>description</code> — optional, LLM-visible. It becomes the tool
+description the coordinator's LLM sees for <code>agent.&lt;kind&gt;.spawn</code>
+(see <a href="#runtime-execution-epic-45">Runtime execution</a> below).</li>
+<li><code>prompt</code> — <strong>required</strong> for any kind a region actually offers. The
+child agent's system prompt when this kind is spawned.</li>
+<li><code>model</code> — <strong>required</strong>. A <code>[models]</code> alias (see
+<a href="multi-agent-orchestration.html">Multi-agent orchestration</a>),
+resolved at lowering.</li>
+<li><code>tools</code> — optional. Ids from <code>[tools.*]</code> the spawned child may call,
+bounded by <code>capabilities</code> the same way any agent's tool access is.</li>
+</ul>
+<h2 id="authoring-a-dynamic-region"><a class="header" href="#authoring-a-dynamic-region">Authoring a dynamic region</a></h2>
+<pre><code class="language-toml">[[pipeline.steps]]
+id = "fanout"
+
+[pipeline.steps.dynamic]
+agent           = "coordinator"   # required: names the owning agent (see lattice above)
+spawns          = ["researcher"]  # optional: omitted = the whole [agent.kinds.*] store
+ceiling         = { "net.http" = { hosts = ["api.crawler.test"] } }
+max_spawns      = 8
+max_concurrency = 4
+</code></pre>
+<ul>
+<li><code>agent</code> — <strong>required</strong>. Names the <code>[agents.&lt;id&gt;]</code> entry that owns
+and runs as the region's coordinator; its effective grant becomes
+the region's L4a bound.</li>
+<li><code>spawns</code> — <strong>optional</strong>. The kind names this region may instantiate.
+Each must have a matching <code>[agent.kinds.&lt;name&gt;]</code>. Omitted ⇒ every
+kind in the <code>[agent.kinds.*]</code> store is offered to the coordinator.
+Either way, <code>tau build</code> fails loudly (<code>spawn_exceeds_region</code>) if any
+offered kind's capabilities exceed the region's own <code>ceiling</code>, and a
+region that resolves to zero spawnable kinds is an authoring error.</li>
+<li><code>ceiling</code> — the region's own capability envelope, in the same
+inline-table map grammar. Bounds every kind the region offers.</li>
+<li><code>max_spawns</code> — the hard cap on total agents this region may spawn
+across its lifetime (must be ≥ 1).</li>
+<li><code>max_concurrency</code> — the hard cap on agents running at once inside
+the region (must be ≥ 1, ≤ <code>max_spawns</code>).</li>
+</ul>
+<p>Lowered, a dynamic region becomes a <code>StepRun::Dynamic</code> node in the
+workflow IR (<code>ir_format</code> v2.7.0+) — see
+<a href="workflows.html">Workflows</a> for how pipeline steps generally lower.</p>
+<h2 id="the-build-time-check"><a class="header" href="#the-build-time-check">The build-time check</a></h2>
+<p>Like every other governance rule in tau, the dynamic-region lattice
+is enforced at <strong>build time</strong> (<code>tau check</code> / <code>tau build</code>), not
+deferred to a runtime gate — see
+<a href="three-gate-guarantee.html">the three-gate guarantee</a>. Four rule ids
+cover the lattice's two lower links:</p>
+<div class="table-wrapper"><table><thead><tr><th>Rule id</th><th>Lattice link</th><th>Fires when</th></tr></thead><tbody>
+<tr><td><code>tau.governance.spawn_exceeds_agent</code></td><td>agent ⊇ spawn (L3)</td><td>An agent's own <code>agent.spawn { allowed_kinds }</code> grant lists a kind whose <code>[agent.kinds.&lt;kind&gt;]</code> capabilities exceed that agent's effective grant.</td></tr>
+<tr><td><code>tau.governance.unknown_spawn_kind</code></td><td>agent ⊇ spawn (L3) / region ⊇ spawn (L4b)</td><td>An agent or a region lists a spawn kind with no matching <code>[agent.kinds.&lt;kind&gt;]</code> definition.</td></tr>
+<tr><td><code>tau.governance.region_exceeds_ceiling</code></td><td>region ⊆ owner (L4a)</td><td>A region's <code>ceiling</code> exceeds its owning agent's (<code>agent</code>, required) effective grant.</td></tr>
+<tr><td><code>tau.governance.spawn_exceeds_region</code></td><td>region ⊇ spawn (L4b)</td><td>A kind the region offers — via <code>spawns</code>, or the whole <code>[agent.kinds.*]</code> store when <code>spawns</code> is omitted — has capabilities exceeding that region's own <code>ceiling</code>.</td></tr>
+</tbody></table>
+</div>
+<p>All four are <code>Severity::Error</code> — a violation fails <code>tau check</code>
+(exit 2) and blocks <code>tau build</code>. There is no advisory/Note tier for
+this lattice: the design promotes what was, before EPIC 4.4, a
+runtime-deferred transparency Note (<code>spawn_runtime_enforced</code>) into a
+real build-time gate.</p>
+<h2 id="runtime-execution-epic-45"><a class="header" href="#runtime-execution-epic-45">Runtime execution (EPIC 4.5)</a></h2>
+<p>At runtime a dynamic region runs its owning <strong>coordinator</strong> agent
+(<code>agent = "..."</code>, required). Every kind the region offers appears in
+the coordinator's tool list as <code>agent.&lt;kind&gt;.spawn</code> — an ordinary
+tool (the same shape as a coding harness's subagent/Task tool),
+described to the LLM by the kind's <code>description</code>. Spawning is a tool
+call; the admission gate runs inside it:</p>
+<ol>
+<li><strong>Membership</strong> — by construction: only offered kinds are
+registered as tools.</li>
+<li><strong>Bounds</strong> — one pooled counter per region <em>execution</em> (the counter
+is rebuilt each time the step runs, so a region inside a <code>Loop</code>, or
+one re-entered by a check rewind, starts each pass with a full
+<code>max_spawns</code> budget), shared across
+every kind: past <code>max_spawns</code>, the call is <strong>soft-denied</strong> — an
+error tool-result the coordinator sees and must adapt to (e.g.
+"spawn denied: region <code>fanout</code> max_spawns exhausted (8/8)"); the
+run does not abort. <code>max_concurrency</code> is guarded the same way
+(defensively — tau dispatches a turn's tool calls sequentially
+today).</li>
+<li><strong>Attenuation</strong> — the child's grant is <code>meet(region ceiling, kind capabilities)</code> — the sound lattice meet, computed at runtime — and
+enforced on every child tool call via <code>AttenuatedDispatcher</code>. This
+runtime clamp is what makes the build-time L1 spawn-cap deferral
+sound, including against hand-crafted IR.</li>
+</ol>
+<p>Each admitted spawn runs the kind's own agent definition
+(<code>prompt</code>/<code>model</code>/<code>tools</code>) as child
+<code>&lt;region-step&gt;-&lt;kind&gt;-&lt;entry&gt;-&lt;n&gt;</code>; its final text returns as the
+tool result. The region step's output is the coordinator's final
+text.</p>
+<p>That id is kept to lowercase ASCII <code>[a-z0-9-]</code>, starting with a
+letter, at most 64 characters — because it becomes the child's
+<code>agent_id</code>, the key the per-agent token surface and the run span are
+recorded under, and the runtime converts it into a
+<code>tau_domain::PackageName</code> as well as an <code>AgentId</code>. <code>AgentId</code> itself
+admits more than this (<code>/</code>, <code>_</code>, and a leading digit — see
+<a href="../decisions/0070-agent-id-grammar.html">ADR-0070</a>); the narrower shape
+here is what <code>PackageName</code> still requires. The <code>&lt;region-step&gt;</code> and
+<code>&lt;kind&gt;</code> components are sanitized into that charset (any other
+character becomes <code>-</code>) and truncated if the whole id would exceed 64
+characters.</p>
+<p>Sanitizing is safe <em>here</em> precisely because <code>&lt;entry&gt;-&lt;n&gt;</code> supplies
+uniqueness independently of the name. Authored agent names have no
+such counter, which is why ADR-0070 widened the grammar for them
+instead of folding <code>/</code> away. <code>&lt;entry&gt;</code> is the run-scoped sequence
+number of the region execution and <code>&lt;n&gt;</code> the 0-based admission index
+within it, so <code>&lt;entry&gt;-&lt;n&gt;</code> is unique across a run even when a <code>Loop</code>
+pass or a check rewind restarts <code>&lt;n&gt;</code> at 0, and even when two long
+region names truncate to the same prefix. Uniqueness is per run:
+<code>&lt;entry&gt;</code> is not persisted, so a suspend/resume pair restarts it.</p>
+<p>If a check rewinds to a dynamic-region step as its gate, outstanding
+rationales are injected into the coordinator's next run (labelled
+prior turns), the same as an agent step.</p>
+<p>Every gate action is observable: denials surface as ordinary error
+<code>ToolCallCompleted</code> events in the run stream (no new <code>RunEvent</code>
+variant), and as <code>runtime.dynamic.spawned</code> / <code>runtime.dynamic.spawn_denied</code>
+/ <code>runtime.dynamic.attenuation_denied</code> <code>tracing</code> events, visible via
+<code>RUST_LOG</code> or the OTLP layer. These are not currently surfaced as <code>tau run --tui</code> drop rows — the IR interpreter path that runs dynamic
+regions builds <code>RunOptions</code> with no orchestration channel wired, so it
+emits none of the orchestration <code>TraceEvent</code>s the TUI renders — but a
+bounded-out run is auditable without reading the coordinator's prose.</p>
+<p><strong>wasm divergence (explicit):</strong> dynamic regions are native-only. <code>tau build --target wasm</code> rejects any workflow containing one at build
+time (<code>FeatureUnsupported</code>), so the guest interpreter never sees a
+region and carries no gate.</p>
+<p>Conformance fixture <code>crates/tau-ir-conformance/fixtures/24_dynamic_region</code>
+pins admit-one + soft-deny-the-next end-to-end.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../explanation/crate-map.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../explanation/escape-hatches.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../explanation/crate-map.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../explanation/escape-hatches.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

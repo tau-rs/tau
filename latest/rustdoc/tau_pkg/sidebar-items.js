@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["bundle","capability_override","crlf","error","install","install_sandbox","link","lockfile","manifest","project","registry","resolve","sandbox_check","scope","scope_credentials","skill_check","skill_resolve","source_list","synthesize","tree_hash","update","verify"]};

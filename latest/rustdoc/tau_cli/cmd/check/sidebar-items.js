@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CheckCategory","CheckStatus","GovernanceOutcome","Severity"],"fn":["compute_exit","evaluate_governance","render_no_constitution","render_ungoverned_bundle_refused","render_violations","run"],"struct":["CheckCtx","CheckFinding","CheckResult","FindingLocation","GovernanceFlags"]};

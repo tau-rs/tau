@@ -1,0 +1,767 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Phase 0 - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./retrospectives/phase-0.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="phase-0-retrospective"><a class="header" href="#phase-0-retrospective">Phase 0 retrospective</a></h1>
+<p><strong>Phase:</strong> 0 — bootstrap + foundational sub-projects
+<strong>Duration:</strong> 2026-04-24 → 2026-04-28 (5 days)
+<strong>Status:</strong> Complete
+<strong>Author:</strong> Maintainer + Claude Opus 4.7</p>
+<p>Per PG4, phases close with a retrospective that records what shipped,
+what slipped, what was learned, and what changes to guidelines or plans
+follow. Phase 0 ran from the bootstrap commit through the merge of
+sub-project 5 (<code>tau-cli</code>). This document is the public artifact closing
+the phase.</p>
+<p>The mid-phase reflection at <code>docs/retrospectives/phase-0-mid.md</code> already
+captured patterns from sub-projects 1-4. This document supersedes it for
+the formal retrospective record while preserving the mid-phase memo as
+the in-context capture that it was.</p>
+<hr />
+<h2 id="1-phase-0-summary"><a class="header" href="#1-phase-0-summary">1. Phase 0 summary</a></h2>
+<p><strong>Original goal:</strong> empty repo with green CI, full governance files, and
+the hexagonal workspace skeleton in place; then five foundational
+sub-projects (tau-domain, tau-ports, tau-pkg, tau-runtime, tau-cli)
+producing working, testable software on its own per the
+brainstorm→spec→plan→implementation cycle.</p>
+<p><strong>Outcome:</strong> the goal was met. Every sub-project shipped on time with
+ADR coverage, comprehensive tests, and CI gating. The hexagonal
+architecture (domain ⟶ ports ⟶ adapters) holds. The constitution and
+process guidelines proved load-bearing.</p>
+<p><strong>One unanticipated v0.1 limitation:</strong> plugin loading was deferred to
+Phase 1+ in sub-project 5 because the loading mechanism (dlopen,
+abi_stable, out-of-process IPC, WASM) was a bigger design decision than
+fits inside any single Phase 0 sub-project. v0.1 ships compiled-in mock
+plugins gated by <code>cfg(feature = "test-mock")</code> for testing; users can
+<code>tau install</code> source trees but the installed packages don't actually
+execute until Phase 1+ ships the loader. ADR-0007 §18 documents this
+prominently. This is the most material gap between Phase 0's intent
+and what was delivered.</p>
+<hr />
+<h2 id="2-phase-0-deliverables"><a class="header" href="#2-phase-0-deliverables">2. Phase 0 deliverables</a></h2>
+<h3 id="sub-projects-5"><a class="header" href="#sub-projects-5">Sub-projects (5)</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>#</th><th>Sub-project</th><th>Crate</th><th>Merge</th><th>ADRs</th></tr></thead><tbody>
+<tr><td>1</td><td>Pure data shapes</td><td><code>tau-domain</code></td><td>sign-off <code>2a06e18</code> (linear)</td><td>ADR-0002, ADR-0005</td></tr>
+<tr><td>2</td><td>Plugin trait surface</td><td><code>tau-ports</code></td><td>sign-off <code>cf29ae8</code> (linear)</td><td>ADR-0003</td></tr>
+<tr><td>3</td><td>Package manager</td><td><code>tau-pkg</code></td><td>sign-off <code>e7578b2</code> (linear)</td><td>ADR-0004</td></tr>
+<tr><td>4</td><td>Kernel</td><td><code>tau-runtime</code></td><td>squash <code>a50ed1d</code></td><td>ADR-0006</td></tr>
+<tr><td>5</td><td>CLI binary</td><td><code>tau-cli</code></td><td>squash <code>b82422e</code></td><td>ADR-0007</td></tr>
+</tbody></table>
+</div>
+<p>Plus the mid-phase reflection memo at <code>e7e798e</code> (between sub-projects 4
+and 5).</p>
+<h3 id="adrs-6"><a class="header" href="#adrs-6">ADRs (6)</a></h3>
+<ul>
+<li><strong>ADR-0001</strong> Bootstrap decisions</li>
+<li><strong>ADR-0002</strong> Manifest format, capability evolution, escape-hatch policy</li>
+<li><strong>ADR-0003</strong> tau-ports trait surface</li>
+<li><strong>ADR-0004</strong> tau-pkg package manager — public API, storage layout, lockfile</li>
+<li><strong>ADR-0005</strong> Custom serde for <code>PackageSource</code> and <code>PackageKind</code></li>
+<li><strong>ADR-0006</strong> tau-runtime kernel + Tool capabilities amendment</li>
+<li><strong>ADR-0007</strong> tau-cli + tau-runtime amendments (capability filter, run_with_history)</li>
+</ul>
+<p>All Accepted. Two ADRs (0006 + 0007) bundle a downstream sub-project's
+design with an additive amendment to the upstream crate it consumes —
+the "bundled-amendment" pattern works when the amendment is solely
+motivated by the downstream consumer.</p>
+<h3 id="tests-workspace-wide"><a class="header" href="#tests-workspace-wide">Tests (workspace-wide)</a></h3>
+<ul>
+<li><strong>464 tests</strong> passing across <strong>60 test binaries</strong> (workspace
+<code>cargo test --all-targets</code>).</li>
+<li><strong>21 doctests</strong> passing, <strong>49 ignored</strong> (the <code>ignore</code>-marked doctests
+on <code>#[non_exhaustive]</code> types per the established E0639 workaround).</li>
+<li><strong>1 ignored</strong> integration test (<code>run_kernel_errors::plugin_contract_violation</code>
+in tau-runtime; deferred to Phase 1's schema validation work).</li>
+<li><strong>Multiple proptests</strong> in tau-domain (capability parsers, manifest
+validation), tau-runtime (capability satisfies-relation, 256 cases ×
+3 properties), and tau-cli (project tau.toml round-trip, 64 cases).</li>
+</ul>
+<h3 id="ci"><a class="header" href="#ci">CI</a></h3>
+<ul>
+<li><strong>12 required status checks</strong> on <code>main</code>: rustfmt, clippy, 4× test
+matrix (Linux/macOS × stable/1.91), 5× per-crate no-default-features
+builds (tau-domain, tau-ports, tau-pkg, tau-runtime, tau-cli), and
+the tau-ports test-fixtures-only job.</li>
+<li>Windows test jobs run with <code>continue-on-error: true</code> per Constitution
+G15 — exercised but not gating.</li>
+<li>Branch protection: <code>enforce_admins=true</code>, <code>strict=true</code>, no force-push,
+no deletion. The maintainer follows the same gate.</li>
+</ul>
+<h3 id="workspace-structure"><a class="header" href="#workspace-structure">Workspace structure</a></h3>
+<p>The 8-crate skeleton from ADR-0001 is realized:</p>
+<div class="table-wrapper"><table><thead><tr><th>Crate</th><th>Role</th><th>Status</th></tr></thead><tbody>
+<tr><td><code>tau-domain</code></td><td>Pure data shapes</td><td>Shipped sub-project 1</td></tr>
+<tr><td><code>tau-ports</code></td><td>Plugin trait surface</td><td>Shipped sub-project 2</td></tr>
+<tr><td><code>tau-pkg</code></td><td>Package manager (sync)</td><td>Shipped sub-project 3</td></tr>
+<tr><td><code>tau-runtime</code></td><td>Kernel (async)</td><td>Shipped sub-project 4</td></tr>
+<tr><td><code>tau-cli</code></td><td>CLI binary</td><td>Shipped sub-project 5</td></tr>
+<tr><td><code>tau-app</code></td><td>Reserved for serve-mode binary</td><td>Bootstrap stub</td></tr>
+<tr><td><code>tau-infra</code></td><td>Reserved for shared infra</td><td>Bootstrap stub</td></tr>
+<tr><td><code>tau-observe</code></td><td>Reserved for observability extensions</td><td>Bootstrap stub</td></tr>
+</tbody></table>
+</div>
+<p>Three crates remain bootstrap stubs (<code>tau-app</code>, <code>tau-infra</code>,
+<code>tau-observe</code>); their roles are reserved for Phase 1+ work.</p>
+<hr />
+<h2 id="3-what-shipped--patterns-that-worked"><a class="header" href="#3-what-shipped--patterns-that-worked">3. What shipped — patterns that worked</a></h2>
+<h3 id="brainstorm--spec--plan--implementation--adr-cycle"><a class="header" href="#brainstorm--spec--plan--implementation--adr-cycle">Brainstorm → spec → plan → implementation → ADR cycle</a></h3>
+<p>Every sub-project followed the same rhythm: maintainer-driven brainstorm
+producing a spec; spec derived into a plan; plan executed via subagent-
+driven development (or in-line execution for sub-project 1); ADR filed
+penultimately; sign-off commit closing the branch. The cycle is
+predictable, auditable, and the per-step artifacts (spec, plan, ADR)
+are useful long after the sub-project ships.</p>
+<p>Concrete: sub-project 4's branch had 21 commits squash-merged into
+<code>a50ed1d</code>. Sub-project 5's branch had 19 implementation commits + 4
+mid-implementation fixes squash-merged into <code>b82422e</code>.</p>
+<h3 id="same-commit-escape-hatch-registration"><a class="header" href="#same-commit-escape-hatch-registration">Same-commit escape-hatch registration</a></h3>
+<p>The mechanical CI gate at
+<code>crates/tau-domain/tests/escape_hatch_registry.rs</code> enforces that every
+commit introducing an <code>Internal</code> error variant also appends an anchor
+to <code>docs/explanation/escape-hatches.md</code>. The discipline caught misses:
+two anchor registrations in sub-project 3 (<code>ScopeError::Internal</code>,
+<code>RegistryError::Internal</code>) were initially missed and the gate stopped
+them.</p>
+<p>Sub-project 5 deliberately added zero new <code>Internal</code> variants — the
+typed <code>ProjectConfigError</code> and <code>AgentResolutionError</code> taxonomies cover
+every codepath. The "don't ship variants without triggering codepaths"
+discipline (crystallized in the mid-phase memo) held end-to-end.</p>
+<h3 id="outcome--error-dichotomy"><a class="header" href="#outcome--error-dichotomy">Outcome / Error dichotomy</a></h3>
+<p>Crystallized during sub-project 4's brainstorm. Clean separation:</p>
+<ul>
+<li><code>Ok(RunOutcome::Failed)</code> for agent-level failures (capability denial,
+max turns reached) — the agent ran but couldn't accomplish the task.</li>
+<li><code>Err(RuntimeError)</code> for kernel-level errors (plugin errors, dispatch
+errors, contract violations) — the kernel itself broke.</li>
+</ul>
+<p>In sub-project 5 the dichotomy mapped cleanly to CLI exit codes (3
+buckets: 0 / 1 / 2). CI scripts can <code>case $?</code> on this without parsing
+JSON — and <code>--json</code> output is there when scripts need precision.</p>
+<p>The pattern generalizes to any future "run something" verb (workflow
+runner, multi-agent orchestrator, etc.). It should propagate.</p>
+<h3 id="bundled-adrs-for-tightly-coupled-trait-amendments"><a class="header" href="#bundled-adrs-for-tightly-coupled-trait-amendments">Bundled ADRs for tightly-coupled trait amendments</a></h3>
+<p>ADR-0006 covered the kernel design + the additive <code>Tool::capabilities()</code>
+amendment to ADR-0003. ADR-0007 covered tau-cli + two additive
+amendments to tau-runtime (capability filter, <code>run_with_history</code>).</p>
+<p>The bundling works when:</p>
+<ul>
+<li>The amendment is solely motivated by the downstream consumer.</li>
+<li>The downstream sub-project ships the amendment as part of its work.</li>
+<li>The amendment is additive (no breaking changes to existing callers).</li>
+</ul>
+<p>If a future amendment doesn't satisfy these — say, a tau-pkg change
+motivated by both tau-cli and a hypothetical Phase 1+ workflow runner —
+it gets its own ADR.</p>
+<h3 id="toml-round-trip-for-testing-non_exhaustive-types"><a class="header" href="#toml-round-trip-for-testing-non_exhaustive-types">TOML round-trip for testing <code>#[non_exhaustive]</code> types</a></h3>
+<p>Every sub-project after sub-project 1 leaned on this pattern:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(serde::Deserialize)]
+struct CapWrapper { cap: Capability }
+
+let wrapped: CapWrapper = toml::from_str(
+    r#"cap = { kind = "fs.read", paths = ["/tmp/**"] }"#
+).unwrap();
+<span class="boring">}</span></code></pre></pre>
+<p>Cleaner than threading constructors. More readable than mutating
+defaults. Should remain the v0.1 idiom for testing <code>#[non_exhaustive]</code>
+types in cross-crate contexts.</p>
+<h3 id="hand-authored-fixture-pattern-lockfile--manifest"><a class="header" href="#hand-authored-fixture-pattern-lockfile--manifest">Hand-authored fixture pattern (lockfile + manifest)</a></h3>
+<p>Sub-project 5's tests for <code>cmd::run</code> and <code>cmd::chat</code> initially planned
+to use git fixtures (<code>file://</code> URLs cloned via subprocess). The
+implementer pivoted to hand-authoring <code>.tau/tau-lock.toml</code> +
+<code>.tau/packages/&lt;name&gt;/&lt;version&gt;/tau.toml</code> directly. Faster (no git
+binary invocation per test), more deterministic, no bare-repo HEAD
+quirks. The git-fixture pattern remains the right choice for
+<code>tau install</code> integration tests where the install pipeline IS what's
+under test.</p>
+<h3 id="subagent-driven-development-for-plan-execution"><a class="header" href="#subagent-driven-development-for-plan-execution">Subagent-driven development for plan execution</a></h3>
+<p>Sub-projects 4 and 5 were executed via the <code>subagent-driven-development</code>
+skill. Per-task implementer subagents with controller review. The
+controller (this conversation) caught:</p>
+<ul>
+<li>Spec/reality mismatches (e.g., <code>tau_pkg::list</code> returns
+<code>Vec&lt;LockedPackage&gt;</code>, not <code>Vec&lt;InstalledPackage&gt;</code> as sub-project 5's
+spec hypothesized).</li>
+<li>Mid-implementation deviations that needed bundling (8 tau-domain /
+tau-ports constructors in sub-project 4 Task 10).</li>
+<li>Cross-platform foot-guns (CRLF, hardcoded <code>/tmp</code> paths).</li>
+</ul>
+<p>The skill's two-stage review (spec compliance + code quality) was not
+formally invoked per task — the controller reviewed each implementer's
+report directly. This worked for the maintainer-driven workflow but
+should be revisited if the team scales beyond one maintainer.</p>
+<hr />
+<h2 id="4-what-slipped--recurring-foot-guns-and-surprises"><a class="header" href="#4-what-slipped--recurring-foot-guns-and-surprises">4. What slipped — recurring foot-guns and surprises</a></h2>
+<h3 id="non_exhaustive-cross-crate-construction"><a class="header" href="#non_exhaustive-cross-crate-construction"><code>#[non_exhaustive]</code> cross-crate construction</a></h3>
+<p>The most repeated pattern across the phase. Specs assumed struct-literal
+construction would work; it doesn't across crate boundaries on
+<code>#[non_exhaustive]</code> types. Concrete instances:</p>
+<ul>
+<li>Sub-project 4 Task 10: 8 mid-implementation constructors landed in
+tau-domain and tau-ports (<code>Message::new</code>, <code>AgentStatus::failed</code>,
+<code>PackageId::new</code>, <code>CompletionRequest::new</code>,
+<code>LlmProviderMessage::{user,assistant,tool_result}</code>, <code>ToolUse::new</code>,
+<code>TokenUsage::new</code>, <code>SessionContext::new</code>).</li>
+<li>Sub-project 5 Task 9: spec assumed <code>Scope::resolve_project_only</code>,
+<code>InstalledPackage</code> shape, <code>PackageSource::Git { url }</code> — none matched
+reality.</li>
+</ul>
+<p>The mid-phase memo crystallized the spec-phase pre-flight checklist.
+Sub-project 5 still hit it because the spec was written <em>before</em> the
+checklist was crystallized. Phase 1 specs should run the checklist
+explicitly.</p>
+<h3 id="async-fn-in-trait-is-not-dyn-compatible"><a class="header" href="#async-fn-in-trait-is-not-dyn-compatible"><code>async fn in trait</code> is not dyn-compatible</a></h3>
+<p>Sub-project 4's spec wrote <code>Arc&lt;dyn LlmBackend&gt;</code> directly. Doesn't
+compile. The <code>DynLlmBackend</code> / <code>DynTool</code> / <code>DynStorage</code> wrapper-trait
+shim with blanket impls (~250 lines) is the standard idiomatic
+workaround. Removable when tau-ports gains a <code>trait_variant</code>-generated
+dyn variant.</p>
+<p>This was the single largest mid-implementation invention of the phase.
+It cost about 4 hours of design + implementation. A spec-phase pre-flight
+that asked "are async traits involved? are they dyn-compatible?" would
+have caught it.</p>
+<h3 id="file-git-clone-ci-failures-across-3-oses"><a class="header" href="#file-git-clone-ci-failures-across-3-oses"><code>file://</code> git clone CI failures across 3 OSes</a></h3>
+<p>Sub-project 3 hit three distinct issues:</p>
+<ol>
+<li>git 2.38+'s <code>protocol.file.allow=user</code> default silently blocking
+<code>file://</code> clones (CVE-2022-39253 mitigation).</li>
+<li>Bare repo <code>HEAD</code> not pointing at <code>main</code> after <code>clone --bare</code>.</li>
+<li>Windows path-to-URL conversion producing backslashes.</li>
+</ol>
+<p>Each surfaced only after CI ran on the relevant OS. The fixes are now
+captured (passing <code>-c protocol.file.allow=always</code>, explicit
+<code>symbolic-ref HEAD refs/heads/main</code>, <code>url::Url::from_file_path</code> for
+forward-slash). Phase 1 specs touching git fixtures should reference
+sub-project 3's Task 14 explicitly.</p>
+<h3 id="spec-drift-between-summary-tables-and-per-task-detail"><a class="header" href="#spec-drift-between-summary-tables-and-per-task-detail">Spec drift between summary tables and per-task detail</a></h3>
+<p>Sub-project 4 plan §Task 20 (final verification) expected
+<code>tests/proptest_capability_satisfies.rs</code> as a file; sub-project 4 Task
+17 correctly chose in-module proptests instead (Option B for
+<code>pub(crate)</code> access). The deviation was correct but had to be
+rationalized at sign-off rather than caught earlier.</p>
+<p>Plan-writing skill should cross-reference the summary table against
+per-task detail. Tackled mechanically by the writing-plans skill's
+self-review step ("type consistency"). Sub-project 5 had fewer such
+surprises; the skill is improving.</p>
+<h3 id="plugin-loading-deferred-to-phase-1"><a class="header" href="#plugin-loading-deferred-to-phase-1">Plugin loading deferred to Phase 1+</a></h3>
+<p>Not an unanticipated foot-gun so much as a scope decision that should
+have been made earlier. Sub-projects 1-4 produced libraries; sub-project
+5 was the first that needed real plugin loading to be useful. The
+deferral was the right call (plugin loading is a meaningful design
+decision deserving its own ADR), but it means Phase 0 ships a CLI that
+can install but not actually run anything outside the test-mock.</p>
+<p>This is <strong>the</strong> most material gap in Phase 0's deliverables.</p>
+<h3 id="windows-snapshot-tests--fixed-pre-retro-merge"><a class="header" href="#windows-snapshot-tests--fixed-pre-retro-merge">Windows snapshot tests — fixed pre-retro-merge</a></h3>
+<p>Sub-project 5's <code>help_snapshots.rs</code> snapshots passed locally on macOS
+but initially failed on Windows. Two normalizations resolved them
+end-to-end (both shipped before this retrospective merged):</p>
+<ol>
+<li><strong>CRLF → LF</strong> (commit <code>bd47d77</code>) — Windows writes <code>\r\n</code>, snapshots
+were recorded with <code>\n</code>.</li>
+<li><strong><code>tau.exe</code> → <code>tau</code></strong> (commit <code>8f614b6</code> on this retro branch) —
+clap derives the binary name from <code>argv[0]</code>, so help text shows
+<code>Usage: tau.exe init</code> on Windows.</li>
+</ol>
+<p>The earlier hypothesis (terminal-width-dependent text wrapping) was
+wrong; the wrapping is identical, only the binary-name and line-ending
+differ. With both normalizations in <code>capture_help</code>, the same <code>.snap</code>
+files are valid on every platform. All 14 CI jobs (incl. Windows
+stable + 1.91) green at retrospective merge time.</p>
+<p>This was the only outstanding non-blocking failure closing Phase 0.
+It's resolved; no Phase 1 work item required (originally listed as
+Tier 4 priority 16 — dropped).</p>
+<h3 id="other-minor-surprises"><a class="header" href="#other-minor-surprises">Other minor surprises</a></h3>
+<ul>
+<li>Sub-project 4 Task 5 hit <code>forbid(unsafe_code)</code> blocking
+<code>unsafe { env::set_var }</code> for tests; pivoted to <code>#[cfg(test)] pub(crate)</code>
+test-only constructors. Documented in sub-project 4's commit history.</li>
+<li>Sub-project 5 Task 9 added 2 extra <code>AgentResolutionError</code> variants
+beyond the spec text (<code>Registry</code>, <code>InvalidIdentifier</code>) for triggering
+codepaths the spec missed. Still satisfies "no error variants without
+triggering codepaths" — just additive.</li>
+<li>Sub-project 5 Task 13's <code>--max-turns</code> integration test had to set
+<code>max_turns: 1</code> rather than asserting "loop forever" because the mock
+backend's tool-use behaviour is single-turn-only. Not a defect, just a
+scope reality.</li>
+<li>4 mid-implementation fixes in sub-project 5 (clippy unused import,
+cross-platform paths, CRLF, rustfmt) added overhead between Tasks
+19 and the final merge. Most were caught by remote CI rather than
+local — local CI was rustfmt-permissive in ways the CI's rustfmt
+wasn't.</li>
+</ul>
+<hr />
+<h2 id="5-what-was-learned--guidelines-worth-keeping"><a class="header" href="#5-what-was-learned--guidelines-worth-keeping">5. What was learned — guidelines worth keeping</a></h2>
+<p>The mid-phase memo captured most of these. Sub-project 5 confirmed them
+and added a few. Consolidating here:</p>
+<h3 id="spec-phase-trait-pre-flight-checklist-now-codified"><a class="header" href="#spec-phase-trait-pre-flight-checklist-now-codified">Spec-phase trait pre-flight checklist (now codified)</a></h3>
+<p>Three checks every spec should run before the plan is derived:</p>
+<ol>
+<li><strong>Are all types referenced in code snippets <code>#[non_exhaustive]</code>?</strong> If
+yes, do public constructors exist for cross-crate use? If not, list
+the constructors as line items in the spec, NOT as silent discoveries
+during implementation.</li>
+<li><strong>Are async trait methods involved?</strong> If yes, will the kernel /
+consuming crate need dyn-compatibility? Native <code>async fn in trait</code> is
+not dyn-compatible; design accordingly (wrapper traits,
+<code>trait_variant::make</code>, or commit to monomorphic generics).</li>
+<li><strong>Are tests at integration-test level vs. unit-test level constrained
+by <code>pub(crate)</code> visibility?</strong> If yes, the spec should say which level
+for which test.</li>
+</ol>
+<p>These three caught us repeatedly. Phase 1 specs run them explicitly.</p>
+<h3 id="dont-ship-error-variants-without-triggering-codepaths"><a class="header" href="#dont-ship-error-variants-without-triggering-codepaths">Don't ship error variants without triggering codepaths</a></h3>
+<p>Crystallized in the mid-phase memo, validated by sub-project 5 (which
+shipped only error variants with concrete failure paths and zero
+<code>#[ignore]</code>'d "future trigger" tests beyond <code>plugin_contract_violation</code>,
+which has its own deferral note).</p>
+<h3 id="spec-language-vs-implementation-reality"><a class="header" href="#spec-language-vs-implementation-reality">Spec language vs implementation reality</a></h3>
+<p>Sub-project 4 specced "~45 events across 9 subsystems" for tracing
+vocabulary; Task 10 actually emitted ~22. Sub-project 5 specced
+<code>tau_pkg::list</code> returning <code>Vec&lt;InstalledPackage&gt;</code> but it returns
+<code>Vec&lt;LockedPackage&gt;</code>. Specs are estimates with error bars, not
+commitments.</p>
+<p>ADRs ratify reality, not aspiration. Implementation reports should
+explicitly call out where the spec's claim differs from what shipped.
+Sub-project 5's commit messages did this consistently.</p>
+<h3 id="local-ci-must-match-remote-ci"><a class="header" href="#local-ci-must-match-remote-ci">Local CI must match remote CI</a></h3>
+<p>Sub-project 5's last 4 fixes were all "CI caught it that local didn't":</p>
+<ul>
+<li>Clippy unused-import gated on a feature.</li>
+<li><code>cross_platform.rs</code> Linux paths failing on Windows.</li>
+<li>CRLF in snapshots.</li>
+<li>rustfmt's stable version more aggressive than the dev machine's.</li>
+</ul>
+<p>Mitigation for Phase 1: run <code>cargo fmt --check</code> and <code>cargo clippy --all-features -- -D warnings</code> against the <code>stable</code> toolchain explicitly
+before pushing, and where possible exercise the no-default-features
+compile path. The <code>feedback_branch_protection_workflow</code> memory captures
+the principle but the pre-push checklist could be tighter.</p>
+<h3 id="bundled-adrs-for-tightly-coupled-amendments-work"><a class="header" href="#bundled-adrs-for-tightly-coupled-amendments-work">Bundled ADRs for tightly-coupled amendments work</a></h3>
+<p>ADR-0006 + ADR-0007 both used the pattern. The discipline:</p>
+<ul>
+<li>The amendment must be solely motivated by the downstream consumer.</li>
+<li>The amendment is additive (no breaking changes).</li>
+<li>The bundle gets a single ADR rather than two.</li>
+</ul>
+<p>Don't bundle promiscuously — ADRs are cheap, and unrelated changes
+deserve separate decisions.</p>
+<h3 id="hand-authored-fixtures--git-fixtures-for-unit-tests"><a class="header" href="#hand-authored-fixtures--git-fixtures-for-unit-tests">Hand-authored fixtures &gt; git fixtures for unit tests</a></h3>
+<p>Where the test isn't exercising the install pipeline directly, writing
+the lockfile + manifest TOML on disk is faster, more deterministic, and
+free of git-binary quirks (HEAD pointing, protocol-allow, path
+normalization). Reserve git fixtures for the install path.</p>
+<h3 id="same-commit-escape-hatch-registration-is-non-negotiable"><a class="header" href="#same-commit-escape-hatch-registration-is-non-negotiable">Same-commit escape-hatch registration is non-negotiable</a></h3>
+<p>Mechanical CI test enforces it; the discipline caught misses; Phase 0
+ended with all anchors registered correctly. Keep it.</p>
+<hr />
+<h2 id="6-architecture-audit--does-the-design-hold"><a class="header" href="#6-architecture-audit--does-the-design-hold">6. Architecture audit — does the design hold?</a></h2>
+<p>Phase 0 closes with the hexagonal architecture and 5-crate runtime
+surface intact. A short audit before Phase 1 priorities:</p>
+<h3 id="things-to-keep-as-is"><a class="header" href="#things-to-keep-as-is">Things to keep as-is</a></h3>
+<ul>
+<li><strong>Domain ⟶ ports ⟶ adapters direction.</strong> No back-edges. tau-domain
+knows nothing about tau-ports; tau-ports knows nothing about tau-pkg
+or tau-runtime; tau-runtime knows nothing about tau-cli.</li>
+<li><strong>Per-operation typed errors with <code>#[from]</code> composition.</strong> Established
+in sub-project 1, validated in 3, 4, and 5. Top-level umbrella errors
+rejected (ADR-0004 §12, ADR-0006 alternative F).</li>
+<li><strong><code>#[non_exhaustive]</code> everywhere.</strong> Cross-crate construction is the
+cost; forward-compat additive evolution is the benefit. The pattern
+works. Phase 1 keeps it.</li>
+<li><strong>Bundled ADRs for tightly-coupled amendments.</strong> Pattern works; keep.</li>
+<li><strong>3-bucket exit codes mapped to the Outcome/Error dichotomy.</strong> Works
+for tau-cli; should propagate to any future "run something" verb.</li>
+</ul>
+<h3 id="things-to-revisit-in-phase-1"><a class="header" href="#things-to-revisit-in-phase-1">Things to revisit in Phase 1</a></h3>
+<ul>
+<li><strong>The <code>DynLlmBackend</code> / <code>DynTool</code> / <code>DynStorage</code> shim</strong> in tau-runtime
+is ~250 lines of boilerplate. When tau-ports gains a <code>trait_variant</code>-
+generated dyn variant (or when Rust's native <code>async fn in trait</code>
+gains dyn-compatibility), the shim can be removed. Phase 1 candidate:
+<code>trait_variant::make</code> on the four port traits with an explicit
+<code>Send</code>-bounded variant for <code>tokio::spawn</code> use cases.</li>
+<li><strong>Plugin loading mechanism</strong> (the elephant in the room). dlopen vs
+abi_stable vs out-of-process IPC vs WASM is a large design decision
+needing its own ADR. <strong>First Phase 1 sub-project candidate.</strong></li>
+<li><strong><code>tau-app</code> / <code>tau-infra</code> / <code>tau-observe</code> reserved crates.</strong> Their
+roles need definition in Phase 1. <code>tau-app</code> is intended for the
+serve-mode binary (was in original Phase 1 preview); <code>tau-infra</code> and
+<code>tau-observe</code> may absorb plugin-loading + advanced tracing
+respectively, or may consolidate / rename based on actual Phase 1
+needs.</li>
+<li><strong>REPL persistence.</strong> v0.1's in-memory-only approach is correct for
+v0.1 but Phase 1 likely wants <code>tau chat --resume &lt;id&gt;</code>. Schema +
+garbage-collection policy questions.</li>
+<li><strong>Streaming LLM responses.</strong> <code>LlmBackend::stream</code> exists but
+tau-runtime doesn't invoke it. Additive <code>Runtime::run_streaming</code> lands
+alongside the first real LLM-backend plugin that benefits from it
+(latency-sensitive UX).</li>
+</ul>
+<h3 id="things-explicitly-not-to-revisit-per-constitution-ng1-ng12"><a class="header" href="#things-explicitly-not-to-revisit-per-constitution-ng1-ng12">Things explicitly NOT to revisit (per Constitution NG1-NG12)</a></h3>
+<p>The non-goals from Constitution §2 hold. Phase 0 didn't violate any of
+them. Phase 1 doesn't either: the priorities below all fit within
+"runtime, not framework" (NG12), "developer tool, not end-user product"
+(NG11), and the rest of the NG list.</p>
+<p>One non-goal is worth re-emphasizing: <strong>NG6 — no persistent agent memory
+in core</strong>. REPL persistence (<code>tau chat --resume</code>) is CLI-side state, not
+agent memory. Workflow runners (Phase 1+) likewise persist <em>workflow
+state</em>, not agent state. The line between them must stay sharp.</p>
+<hr />
+<h2 id="7-phase-1-priorities"><a class="header" href="#7-phase-1-priorities">7. Phase 1 priorities</a></h2>
+<p>Concrete ordered list. The original <code>ROADMAP.md</code> Phase 1 (preview)
+section had four items (serve mode, sandboxing, performance budgets,
+cargo-audit/cargo-deny). Phase 1's actual priorities, informed by
+Phase 0's deliverables and deferrals, are below. They re-include the
+preview's four items at appropriate priority.</p>
+<h3 id="tier-1--unblocks-phase-1-itself"><a class="header" href="#tier-1--unblocks-phase-1-itself">Tier 1 — unblocks Phase 1 itself</a></h3>
+<p>These need to ship before most other work makes sense.</p>
+<ol>
+<li><strong>Plugin loading mechanism.</strong> Without it, <code>tau install</code> is a
+record-keeping operation. Multiple options (dlopen / abi_stable /
+out-of-process IPC / WASM) need an ADR-driven decision. <strong>First
+sub-project of Phase 1.</strong> Probable winner: out-of-process IPC over
+stdio (matches future serve-mode design + sandbox-friendly), but the
+brainstorm decides.</li>
+<li><strong>First real LLM-backend plugin.</strong> Likely an Anthropic / OpenAI HTTP
+adapter via reqwest. Validates the loading mechanism end-to-end and
+gives tau actual user value. Probably an out-of-tree package that
+<code>tau install</code> pulls in, not bundled with tau-cli.</li>
+<li><strong>First real Tool plugin.</strong> <code>fs-read</code> + <code>shell</code> as initial set —
+validates multi-plugin composition and the capability check at
+runtime. Exercises the tool dispatch loop with non-mock inputs.</li>
+</ol>
+<h3 id="tier-2--completes-phase-0-deferrals"><a class="header" href="#tier-2--completes-phase-0-deferrals">Tier 2 — completes Phase 0 deferrals</a></h3>
+<ol start="4">
+<li><strong>Capability override implementation</strong> (project tau.toml
+<code>[agents.&lt;id&gt;.capabilities]</code> with intersect-only semantics). Schema
+slot reserved in ADR-0007 §4. Small ADR + small implementation.</li>
+<li><strong>Transitive dependency resolution</strong> (<code>tau install &lt;agent&gt;</code> pulls
+<code>requires.tools</code> automatically). ADR-0004 §10 deferral; complements
+priority 1.</li>
+<li><strong>Schema validation for tool args</strong> (activates
+<code>RuntimeError::PluginContractViolation</code> and the
+<code>plugin_contract_violation</code> <code>#[ignore]</code>'d test). JSON Schema validation
+via <code>jsonschema</code> crate or hand-rolled.</li>
+<li><strong><code>tau update</code> / <code>tau verify</code> / <code>tau uninstall</code> subcommands.</strong> Spec
+§1 of sub-project 5 deferred these. Each is a smallish addition once
+plugin loading lands.</li>
+<li><strong>Streaming LLM responses</strong> (<code>Runtime::run_streaming</code> additive). Lands
+alongside the first LLM-backend plugin that benefits from it.</li>
+</ol>
+<h3 id="tier-3--extends-the-runtime"><a class="header" href="#tier-3--extends-the-runtime">Tier 3 — extends the runtime</a></h3>
+<ol start="9">
+<li><strong>Multi-agent orchestration</strong> (G10's deferred half). Inter-agent
+message routing in tau-runtime, a multi-agent run loop, possibly a
+new CLI verb (<code>tau orchestrate</code>). Substantial; likely its own
+sub-project with its own ADR.</li>
+<li><strong>Workflow / pipeline runner</strong> (the maintainer's broader vision —
+deterministic step-by-step pipelines). New crate (<code>tau-workflow</code>?)
+OR new tau-runtime feature. Big design discussion: LLM-driven skill
+flows vs pure-deterministic runners. Own ADR.</li>
+<li><strong>REPL persistence</strong> (<code>tau chat --resume &lt;id&gt;</code>, <code>tau chat --list-sessions</code>). Schema + GC policy. Mid-sized.</li>
+<li><strong>Sandboxing implementation</strong> (Constitution G12). The <code>Sandbox</code>
+trait is provisional in tau-ports; v0.1 doesn't invoke it. Real
+sandboxing requires OS-level work (jails, namespaces, Seatbelt) +
+its own ADR.</li>
+</ol>
+<h3 id="tier-4--operational-quality"><a class="header" href="#tier-4--operational-quality">Tier 4 — operational quality</a></h3>
+<ol start="13">
+<li><strong>Performance budgets enforced in CI</strong> (Constitution QG14). G16's
+100ms startup / 50MB memory budgets need automated validation.
+Likely a <code>criterion</code> + a CI threshold check.</li>
+<li><strong><code>cargo audit</code> + <code>cargo-deny</code> in CI</strong> (Constitution QG16). Standard
+Rust supply-chain checks.</li>
+<li><strong>Serve mode</strong> (JSON-RPC over stdio — Constitution G6, QG12). The
+second public surface alongside the embeddable Rust API. Probably
+lands in <code>tau-app</code>. Coordinates with priority 1's plugin-loading
+mechanism if it picks IPC.</li>
+</ol>
+<h3 id="out-of-scope-for-phase-1-per-constitution-ng1-ng12"><a class="header" href="#out-of-scope-for-phase-1-per-constitution-ng1-ng12">Out of scope for Phase 1 (per Constitution NG1-NG12)</a></h3>
+<ul>
+<li>Centralized package registry (NG4).</li>
+<li>Persistent agent memory in core (NG6).</li>
+<li>Hosted service (NG3).</li>
+<li>Identity / credentials (NG9).</li>
+<li>Telemetry / training data collection (NG10).</li>
+</ul>
+<p>These are forever-deferred. Phase 1 doesn't reopen them.</p>
+<hr />
+<h2 id="8-process-changes-for-phase-1"><a class="header" href="#8-process-changes-for-phase-1">8. Process changes for Phase 1</a></h2>
+<h3 id="updated-workflow"><a class="header" href="#updated-workflow">Updated workflow</a></h3>
+<ul>
+<li><strong>Spec-phase pre-flight checklist is now mandatory.</strong> Specs touching
+cross-crate types must check <code>#[non_exhaustive]</code> constructors, async
+dyn-compatibility, and test-visibility constraints up front.</li>
+<li><strong>Local pre-push CI parity.</strong> Run <code>cargo fmt --check</code> and <code>cargo clippy --workspace --all-targets --all-features -- -D warnings</code> plus
+every <code>--no-default-features</code> build before pushing. The 4 mid-merge
+fixes in sub-project 5 wouldn't have happened with this discipline.</li>
+<li><strong>Spec implementation reports must call out reality vs spec.</strong> The
+implementer subagent already does this; Phase 1 controllers should
+treat these as routine, not exceptional.</li>
+</ul>
+<h3 id="constitution-amendments"><a class="header" href="#constitution-amendments">Constitution amendments</a></h3>
+<p>None proposed. The Constitution held up across Phase 0 without edits.
+PG4's retro process worked. QG18's ADR discipline worked. The G/NG
+partition stayed stable.</p>
+<p>If anything, the mid-phase memo + this retrospective demonstrate that
+the discipline encoded in the Constitution is load-bearing. Don't
+amend what's working.</p>
+<h3 id="plan-execution-mode-going-forward"><a class="header" href="#plan-execution-mode-going-forward">Plan execution mode going forward</a></h3>
+<p>Subagent-driven development worked well for sub-projects 4 and 5.
+Recommend keeping it as the default for plan-driven work. The two-stage
+review (spec compliance + code quality) was not formally invoked per
+task; controller-driven review served the maintainer-driven workflow.
+Revisit if multi-maintainer scaling becomes relevant.</p>
+<h3 id="memory-hygiene"><a class="header" href="#memory-hygiene">Memory hygiene</a></h3>
+<p>The auto-memory system has captured branch-protection workflow and
+plan-driven workflow as project memories. Phase 1 should add (when the
+relevant decisions land):</p>
+<ul>
+<li>The plugin-loading mechanism choice.</li>
+<li>Phase 1 sub-project ordering (after the first 1-2 ship and validate
+the priorities above).</li>
+</ul>
+<hr />
+<h2 id="9-closing"><a class="header" href="#9-closing">9. Closing</a></h2>
+<p>Phase 0 produced a working, testable runtime stack from an empty repo
+in 5 days, on schedule, with full ADR coverage, comprehensive tests, and
+a clean CI gate. The hexagonal architecture holds. The constitution
+proved load-bearing. The brainstorm→spec→plan→implementation cycle
+proved repeatable.</p>
+<p>The single unanticipated v0.1 limitation (plugin loading deferred) is
+the focal point of Phase 1's first sub-project. Everything else flows
+from there.</p>
+<p>Phase 1 begins with the plugin-loading brainstorm.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/0070-agent-id-grammar.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../retrospectives/phase-0-mid.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/0070-agent-id-grammar.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../retrospectives/phase-0-mid.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
