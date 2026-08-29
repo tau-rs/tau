@@ -77,6 +77,21 @@ pub enum LowerError {
         target: TargetTriple,
     },
 
+    /// Tool-impl-fit failure (#735). The workflow declares a
+    /// `ToolImpl::Mcp` tool and the build target is a wasm guest, whose
+    /// `ToolDispatcher` resolves only `ToolImpl::Native`. MCP needs a live
+    /// transport the guest cannot own, so such a component would build
+    /// cleanly and then trap mid-run the first time the tool is invoked.
+    /// Wasm-only; native/host targets dispatch MCP normally and never
+    /// trigger this.
+    #[error("tool-impl-fit: no wasm guest dispatch path for MCP tool(s) {tools:?} on {target}")]
+    WasmToolImplUnsupported {
+        /// The offending MCP tool id(s), in sorted `BTreeMap` order.
+        tools: Vec<ToolId>,
+        /// The wasm target whose guest cannot dispatch them.
+        target: TargetTriple,
+    },
+
     /// A Deterministic step references a function name that the lowering
     /// registry doesn't know.
     #[error("deterministic step {step:?} references unknown fn `{fn_name}`")]
