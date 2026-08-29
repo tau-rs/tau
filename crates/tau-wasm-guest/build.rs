@@ -16,22 +16,46 @@
 
 use std::path::{Path, PathBuf};
 
+include!("build/ir_scan.rs");
+
 fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
     let dest = out.join("baked_ir.bin");
 
     println!("cargo:rerun-if-env-changed=TAU_IR_BYTES");
-    match std::env::var_os("TAU_IR_BYTES") {
+    let ir_bytes = match std::env::var_os("TAU_IR_BYTES") {
         Some(path) => {
             let path = PathBuf::from(path);
             println!("cargo:rerun-if-changed={}", path.display());
             let bytes = std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("reading TAU_IR_BYTES {}: {e}", path.display()));
-            std::fs::write(&dest, bytes).expect("writing baked_ir.bin");
+            std::fs::write(&dest, &bytes).expect("writing baked_ir.bin");
+            bytes
         }
         None => {
             std::fs::write(&dest, []).expect("writing empty baked_ir.bin");
+            Vec::new()
         }
+    };
+
+    // #689: gate the in-guest goal-predicate registry on what the baked IR
+    // can actually reach. Unlike the `tau_cap_*` cfgs below — derived from
+    // the capability-derived WIT world — this one has to read the IR itself,
+    // because nothing in the world text says whether a Branch condition
+    // exists. See `build/ir_scan.rs` for the four reachability paths and for
+    // why unknown means "link everything".
+    //
+    // The check-cfgs are unconditional so the guest compiles cleanly under
+    // every IR shape without an `unexpected cfg` warning (workspace lints
+    // are -D warnings).
+    println!("cargo:rustc-check-cfg=cfg(tau_goal_predicates)");
+    println!("cargo:rustc-check-cfg=cfg(tau_goal_matches)");
+    let goal_use = scan_baked_ir(&ir_bytes);
+    if goal_use.any {
+        println!("cargo:rustc-cfg=tau_goal_predicates");
+    }
+    if goal_use.matches {
+        println!("cargo:rustc-cfg=tau_goal_matches");
     }
 
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));

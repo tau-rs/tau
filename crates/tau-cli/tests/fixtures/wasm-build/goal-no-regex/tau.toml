@@ -1,0 +1,70 @@
+# #689: a pipeline whose control flow DOES need the in-guest
+# `DeterministicRegistry` but never reaches `matches`.
+#
+# This is the middle arm of the three-way gate, and the only fixture that
+# covers it: `pipeline` reaches no predicate at all, `north-star` reaches
+# `matches` in both its Branch and its Loop. Here the guest must link the
+# four allocation-only predicates and NOT the regex engine — a build that
+# linked nothing would fail at run time ("branch ... needs a deterministic
+# registry"), and one that linked everything would silently give the ~770 KiB
+# back.
+packages = ["anthropic"]
+
+[project]
+name = "goal-no-regex-wasm"
+version = "0.1.0"
+
+[models.claude]
+backend = "anthropic"
+model = "claude-sonnet-4-6"
+
+[agents.triage]
+display_name = "Triage"
+package = "goal-no-regex-wasm@^0.1"
+model = "claude"
+
+[agents.triage.prompt]
+system = "Triage the report."
+
+[agents.handle]
+display_name = "Handle"
+package = "goal-no-regex-wasm@^0.1"
+model = "claude"
+
+[agents.handle.prompt]
+system = "Handle the triaged report."
+
+[agents.summarize]
+display_name = "Summarize"
+package = "goal-no-regex-wasm@^0.1"
+model = "claude"
+
+[agents.summarize.prompt]
+system = "Summarize the outcome."
+
+[pipeline]
+
+[[pipeline.steps]]
+id = "triage"
+run = "agent:triage"
+input = "${input}"
+
+# `non_empty` is allocation-only — no regex engine required. The then-arm is
+# the one that runs (the cassette's triage turn returns text), so a completed
+# run proves the registry was linked AND consulted, not merely present.
+[[pipeline.steps]]
+id = "route"
+branch = { evaluates = "steps.triage.output", check = "non_empty" }
+
+  [[pipeline.steps.then]]
+  id = "handle"
+  run = "agent:handle"
+  input = "${steps.triage.output}"
+
+# Leaf final step: Branch stores no output, so the pipeline renderer renders
+# THIS step. Its template reads a step nested inside the branch subtree, and
+# unresolved refs hard-error — so a completed run proves the then-arm ran.
+[[pipeline.steps]]
+id = "summary"
+run = "agent:summarize"
+input = "${steps.handle.output}"

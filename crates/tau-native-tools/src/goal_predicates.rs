@@ -33,10 +33,37 @@ pub const SUPPORTED: &[&str; 5] = &[FN_EXISTS, FN_NON_EMPTY, FN_EQUALS, FN_MATCH
 /// "min_count").
 pub fn invoke(fn_name: &str, args: &Value) -> Option<Result<Value, String>> {
     match fn_name {
+        FN_MATCHES => Some(matches_(args)),
+        // Deliberately defined in terms of `invoke_alloc_only` rather than
+        // repeating the four arms: one dispatch table, so the two entry
+        // points cannot drift as predicates are added.
+        _ => invoke_alloc_only(fn_name, args),
+    }
+}
+
+/// [`invoke`] minus `matches` — the four predicates that need only `alloc`.
+///
+/// Exists so a caller that has PROVEN `matches` unreachable can dispatch
+/// without naming `matches_`, leaving `regex-automata` unreferenced for
+/// wasm-ld to garbage-collect (#689). That is worth ~770 KiB on a ~2.8 MB
+/// component, because dropping the reference drops `regex_syntax` (the
+/// parser) and the Unicode tables too, not just the matcher.
+///
+/// This is NOT a narrower regex dialect — the semantics of the four
+/// predicates it does answer are byte-identical to [`invoke`]'s. `matches`
+/// is absent, not redefined, so ADR-0068's cross-target parity holds: a
+/// build that can reach `matches` links the identical engine the native
+/// `BuiltinDeterministicRegistry` uses.
+///
+/// Returns `None` for `FN_MATCHES` exactly as it does for an unknown fn.
+/// The caller is responsible for only routing here when the fn cannot
+/// occur; in the wasm guest that proof is `build.rs`'s scan of the baked
+/// IR, backstopped by the registry's loud "no wasm execution path" error.
+pub fn invoke_alloc_only(fn_name: &str, args: &Value) -> Option<Result<Value, String>> {
+    match fn_name {
         FN_EXISTS => Some(exists(args)),
         FN_NON_EMPTY => Some(non_empty(args)),
         FN_EQUALS => Some(equals(args)),
-        FN_MATCHES => Some(matches_(args)),
         FN_MIN_COUNT => Some(min_count(args)),
         _ => None,
     }
@@ -292,6 +319,57 @@ mod tests {
             ),
             Some(Ok(json!(false)))
         );
+    }
+
+    /// `invoke_alloc_only` is the regex-free half of the SAME dispatch
+    /// table, not a narrower dialect (#689). For every fn it answers, its
+    /// verdict must be byte-identical to `invoke`'s — otherwise gating
+    /// `matches` out of a wasm build would silently change what the other
+    /// four predicates mean, which is exactly the cross-target split
+    /// ADR-0068 exists to prevent.
+    #[test]
+    fn invoke_alloc_only_agrees_with_invoke_on_the_four() {
+        for (fn_name, args) in [
+            (FN_EXISTS, json!({"present": true})),
+            (FN_EXISTS, json!({"present": false})),
+            (FN_NON_EMPTY, json!({"present": true, "content": "hi"})),
+            (FN_NON_EMPTY, json!({"present": true, "content": "  "})),
+            (
+                FN_EQUALS,
+                json!({"present": true, "content": "a", "equals": "a"}),
+            ),
+            (
+                FN_EQUALS,
+                json!({"present": true, "content": "a", "equals": "b"}),
+            ),
+            (
+                FN_MIN_COUNT,
+                json!({"present": true, "content": "a\n\nb", "min_count": 2}),
+            ),
+            (
+                FN_MIN_COUNT,
+                json!({"present": true, "content": "a", "min_count": 2}),
+            ),
+        ] {
+            assert_eq!(
+                invoke_alloc_only(fn_name, &args),
+                invoke(fn_name, &args),
+                "invoke_alloc_only must agree with invoke for {fn_name} on {args}"
+            );
+        }
+    }
+
+    /// `matches` is ABSENT from the alloc-only table, not redefined — it
+    /// declines exactly the way an unknown fn does. The wasm guest turns
+    /// that `None` into its loud "no wasm execution path" error rather than
+    /// a wrong verdict, so a build.rs scan that under-detected `matches`
+    /// fails visibly instead of silently taking a Branch's other arm.
+    #[test]
+    fn invoke_alloc_only_declines_matches() {
+        let args = json!({"present": true, "content": "URGENT", "pattern": "(?i)urgent"});
+        assert_eq!(invoke_alloc_only(FN_MATCHES, &args), None);
+        // ...while the full table still answers it.
+        assert_eq!(invoke(FN_MATCHES, &args), Some(Ok(json!(true))));
     }
 
     #[test]

@@ -109,3 +109,100 @@ fn build_wasm_parallel_pipeline_runs_in_guest() {
          BOTH parallel branches produced their outputs in-guest"
     );
 }
+
+/// #689: an IR that reaches no goal predicate links no predicate registry,
+/// and therefore no regex engine.
+///
+/// `pipeline` is agent-only — two agents, no Branch, Loop, check or
+/// deterministic step — so nothing in it can reach
+/// `tau_native_tools::goal_predicates`. Before the gate it paid for the full
+/// engine anyway: measured on this exact fixture, 2,777,914 B with the
+/// registry linked against 1,988,452 B without, a difference of 789,462 B
+/// (~771 KiB, 28.4% of the component). The saving is that large because
+/// dropping the reference drops `regex_syntax` (the parser, the bigger half
+/// of the code) and regex's Unicode tables in the data section, not just the
+/// matcher.
+///
+/// The byte ceiling below is a tripwire, not a target — it is set well above
+/// the measured size so unrelated growth does not flap it, while a
+/// re-linked engine (+771 KiB) blows straight through. `TAU_WASM_SIZE_BUDGET`
+/// cannot catch this: it gates the EMPTY-IR floor build, which has no
+/// pipeline to reach a predicate from.
+#[test]
+#[ignore = "builds a wasm component; run with --run-ignored"]
+fn goal_free_component_links_no_regex_engine() {
+    let (_module, bytes) =
+        tau_cli::cmd::build_wasm::lower_to_wasm_ir(&fixture("pipeline")).expect("lowers");
+    let component = common::wasm_component::build_component_with_ir(&bytes);
+
+    assert!(
+        !common::wasm_component::links_regex_engine(&component),
+        "an agent-only pipeline reaches no goal predicate, so build.rs must \
+         emit neither tau_goal_predicates nor tau_goal_matches and wasm-ld \
+         must collect the regex engine"
+    );
+
+    // Paired with `north_star_…`'s positive assertion, which fails if the
+    // name section ever stops being emitted and makes the check above vacuous.
+    const CEILING: usize = 2_300_000;
+    assert!(
+        component.len() < CEILING,
+        "goal-free component is {} B, over the {CEILING} B tripwire — the \
+         regex engine (~771 KiB) has most likely been re-linked; check what \
+         made `deterministic_registry()` reachable again",
+        component.len()
+    );
+}
+
+/// #689 middle arm: an IR that reaches a predicate but NOT `matches` links
+/// the four allocation-only predicates and still no regex engine.
+///
+/// This is the arm neither other fixture covers, and the only one that
+/// exercises `goal_predicates::invoke_alloc_only` in the guest. Both failure
+/// modes are silent without it: linking nothing makes the run die on "branch
+/// … needs a deterministic registry", and linking everything hands the
+/// ~771 KiB back while every other test still passes.
+///
+/// The run matters as much as the size. `summary`'s template reads
+/// `steps.handle.output` — a step nested inside the branch's then-arm — and
+/// unresolved refs hard-error, so a completed run proves the registry was
+/// consulted and answered `non_empty` correctly, not merely linked.
+#[test]
+#[ignore = "builds a wasm component; run with --run-ignored"]
+fn predicate_without_matches_runs_in_guest_without_the_regex_engine() {
+    let (_module, bytes) =
+        tau_cli::cmd::build_wasm::lower_to_wasm_ir(&fixture("goal-no-regex")).expect("lowers");
+    let component = common::wasm_component::build_component_with_ir(&bytes);
+
+    assert!(
+        !common::wasm_component::links_regex_engine(&component),
+        "`non_empty` is allocation-only; a pipeline that never reaches \
+         `matches` must not link the regex engine"
+    );
+
+    let response = |text: &str| {
+        serde_json::json!({
+            "text": text,
+            "tool_uses": [],
+            "stop_reason": "EndTurn",
+            "usage": null,
+        })
+        .to_string()
+    };
+    let (payload, _events) = tau_wasm_host::run_component(
+        &component,
+        "a report worth triaging",
+        vec![
+            response("triaged: needs handling"),
+            response("handled"),
+            response("NO-REGEX-SUMMARY"),
+        ],
+    )
+    .expect("guest evaluates a non-regex predicate and runs the branch");
+
+    assert_eq!(
+        payload, "NO-REGEX-SUMMARY",
+        "the then-arm must have run and the last leaf rendered; a registry \
+         that was linked but never consulted could not have got here"
+    );
+}
