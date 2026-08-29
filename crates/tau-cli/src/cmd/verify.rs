@@ -394,12 +394,22 @@ fn run_reproducibility_check(
         .map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
     let (ir_payload, repro_assets) = if shipped.ir_payload.is_some() {
         // Shipped bundle has an IR payload → rebuild with the same IR lowering.
-        // For reproducibility verification, skip live MCP resolution and use an
-        // empty cache; the reproduce check compares manifests field-by-field and
-        // MCP entries are expected to match via pinned contracts already on disk.
-        let empty_mcp_cache = std::collections::BTreeMap::new();
-        let lowered =
-            crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target, &empty_mcp_cache, None);
+        // Skip *live* MCP resolution — a reproducibility check must not depend
+        // on a handshake that could answer differently than it did at build
+        // time — but do feed in the pinned contracts from
+        // `.tau/mcp/<entry>.contract.json`, without which an MCP project
+        // re-lowers to a different IR and never reproduces (#714).
+        //
+        // Fail-closed: an unreadable pin leaves the rebuild without an
+        // `ir_payload` while the shipped bundle has one, so the comparison
+        // below reports "not reproducible" (exit 2) rather than passing.
+        let mcp_cache = crate::cmd::build::resolve_pinned_mcp_cache(&cwd)
+            .map(|(_locked, cache)| cache)
+            .unwrap_or_else(|e| {
+                tracing::warn!("reproducibility check: MCP pins unreadable: {e}");
+                std::collections::BTreeMap::new()
+            });
+        let lowered = crate::cmd::build::lower_ir(&cwd, &shipped.bundle.target, &mcp_cache, None);
         // Re-derive the asset store from source so the rebuilt bundle's
         // `[[assets]]` — and therefore its self-hash — matches the shipped one
         // when the prompt files are unchanged (D6-B).
