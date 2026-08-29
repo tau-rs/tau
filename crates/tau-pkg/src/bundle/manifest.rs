@@ -142,8 +142,10 @@ pub struct BundleManifest {
     /// Major schema version. v1 is the legacy line; v2 adds `ir_payload`;
     /// v3 adds the `[[trigger]]` section (emitted only when the project
     /// declares triggers); v4 adds the `[governance]` record (emitted by
-    /// every governed-by-default build). v5+ is rejected by `parse_str`
-    /// until supported.
+    /// every governed-by-default build); v5 adds the `[[assets]]` store;
+    /// v6 marks a bundle carrying a namespaced agent id (ADR-0070), emitted
+    /// only when one is present. v7+ is rejected by `parse_str` until
+    /// supported.
     pub schema_version: u32,
     /// Bundle-level metadata (sha + timestamp + tau version + target).
     pub bundle: BundleMeta,
@@ -301,6 +303,18 @@ pub struct BundleAgent {
     pub effective_capabilities: BundleEffectiveCapabilities,
 }
 
+/// `true` if `id` uses a shape only the post-ADR-0070 `AgentId` grammar
+/// accepts: a `/` separator, an `_`, or a leading digit. Ids that would have
+/// parsed before the widening return `false`, so an ordinary project's
+/// bundles keep their existing `schema_version`.
+///
+/// Deliberately a shape test on the string rather than a re-parse: the
+/// question is not "is this a legal id today" (it is — it came out of
+/// `AgentId`) but "would a pre-widening tau have accepted it".
+pub(crate) fn needs_schema_v6(id: &str) -> bool {
+    id.contains('/') || id.contains('_') || id.chars().next().is_some_and(|c| c.is_ascii_digit())
+}
+
 /// LLM backend reference carried in the bundle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackendRef {
@@ -423,7 +437,7 @@ impl BundleManifest {
     /// ```
     pub fn parse_str(s: &str) -> Result<Self, BundleParseError> {
         let manifest: BundleManifest = toml::from_str(s)?;
-        if manifest.schema_version < 1 || manifest.schema_version > 5 {
+        if manifest.schema_version < 1 || manifest.schema_version > 6 {
             return Err(BundleParseError::UnsupportedSchemaVersion {
                 found: manifest.schema_version,
             });
@@ -452,6 +466,23 @@ impl BundleManifest {
             return Err(BundleParseError::AssetSchemaVersionMismatch {
                 schema_version: manifest.schema_version,
             });
+        }
+        // ADR-0070: an agent id outside the pre-widening charset MUST declare
+        // schema_version >= 6. Weaker in kind than the three above — see
+        // `BundleParseError::AgentIdSchemaVersionMismatch` — this is a
+        // legibility gate, not a soundness one, because an id cannot be
+        // silently dropped the way a defaulted section can.
+        if manifest.schema_version < 6 {
+            if let Some(a) = manifest
+                .agents
+                .iter()
+                .find(|a| needs_schema_v6(a.id.as_str()))
+            {
+                return Err(BundleParseError::AgentIdSchemaVersionMismatch {
+                    schema_version: manifest.schema_version,
+                    id: a.id.as_str().to_string(),
+                });
+            }
         }
         Ok(manifest)
     }
@@ -734,31 +765,6 @@ verdict = "governed"
     }
 
     #[test]
-    fn parse_str_rejects_schema_version_6() {
-        // v5 is now valid (the `[[assets]]` store, D6-B); v6 is the new
-        // above-max version an old tau must reject.
-        let toml_str = r#"
-schema_version = 6
-
-[bundle]
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-created_at = "2026-06-13T00:00:00Z"
-tau_version = "0.1.0"
-target = "passthrough"
-
-[project]
-name = "x"
-version = "0.1.0"
-tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-"#;
-        let err = BundleManifest::parse_str(toml_str).expect_err("should reject v6");
-        match err {
-            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 6),
-            other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn parse_str_rejects_governance_at_schema_version_3() {
         // A governance record MUST carry schema_version >= 4 so an old tau
         // rejects the bundle rather than silently ignoring the verdict.
@@ -786,6 +792,111 @@ verdict = "ungoverned"
                 assert_eq!(schema_version, 3);
             }
             other => panic!("expected GovernanceSchemaVersionMismatch, got {other:?}"),
+        }
+    }
+
+    /// ADR-0070: the shape test that decides whether a bundle must declare
+    /// v6. `false` for every id a pre-widening tau would have accepted, so
+    /// ordinary projects see no version churn.
+    #[test]
+    fn needs_schema_v6_only_for_widened_ids() {
+        for pre_widening in ["a", "researcher", "agent-123", "x-1-2"] {
+            assert!(!needs_schema_v6(pre_widening), "{pre_widening}");
+        }
+        for widened in ["review/strict", "my_agent", "2fa", "a/b/c", "x_y-z"] {
+            assert!(needs_schema_v6(widened), "{widened}");
+        }
+    }
+
+    #[test]
+    fn parse_str_rejects_namespaced_agent_id_below_schema_version_6() {
+        let toml_str = r#"
+schema_version = 5
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-06-13T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[agents]]
+id = "review/strict"
+system_prompt_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+[agents.backend]
+kind = "stub"
+model = "m"
+"#;
+        let err = BundleManifest::parse_str(toml_str)
+            .expect_err("v5 + namespaced agent id must be rejected");
+        match err {
+            BundleParseError::AgentIdSchemaVersionMismatch { schema_version, id } => {
+                assert_eq!(schema_version, 5);
+                assert_eq!(id, "review/strict");
+            }
+            other => panic!("expected AgentIdSchemaVersionMismatch, got {other:?}"),
+        }
+    }
+
+    /// The same manifest at v6 parses, and the id survives verbatim — the
+    /// `/` is never folded (ADR-0070).
+    #[test]
+    fn parse_str_accepts_namespaced_agent_id_at_schema_version_6() {
+        let toml_str = r#"
+schema_version = 6
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-06-13T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[agents]]
+id = "review/strict"
+system_prompt_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+[agents.backend]
+kind = "stub"
+model = "m"
+"#;
+        let m = BundleManifest::parse_str(toml_str).expect("v6 + namespaced id parses");
+        assert_eq!(m.schema_version, 6);
+        assert_eq!(m.agents[0].id.as_str(), "review/strict");
+    }
+
+    /// The range check must still close at the top. v6 is now valid
+    /// (namespaced agent ids, ADR-0070), so v7 is the above-max version an
+    /// old tau must reject. Succeeds `parse_str_rejects_schema_version_6`,
+    /// which this change retired.
+    #[test]
+    fn parse_str_rejects_schema_version_7() {
+        let toml_str = r#"
+schema_version = 7
+
+[bundle]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+created_at = "2026-06-13T00:00:00Z"
+tau_version = "0.1.0"
+target = "passthrough"
+
+[project]
+name = "x"
+version = "0.1.0"
+tau_toml_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+        match BundleManifest::parse_str(toml_str).expect_err("v7 unsupported") {
+            BundleParseError::UnsupportedSchemaVersion { found } => assert_eq!(found, 7),
+            other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
     }
 

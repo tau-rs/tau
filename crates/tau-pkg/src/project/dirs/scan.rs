@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr as _;
 
 use super::super::project::{
     validate_dirs_decl, DirsEntry, ProjectConfigError, UncheckedAgent, UncheckedDirs, UncheckedTool,
@@ -254,6 +255,28 @@ fn walk(
             .chain(std::iter::once(stem.to_string()))
             .collect::<Vec<_>>()
             .join("/");
+
+        // Step 7b: an *agent* name becomes a typed identity downstream
+        // (`BundleAgent.id: tau_domain::AgentId`), so validate the assembled
+        // name here rather than trusting the per-segment `valid_segment`
+        // check to imply it. Asking the domain type keeps one grammar with
+        // one implementation: before ADR-0070 this surface had its own, and
+        // the two disagreed on `/`, `_`, and length — a name that scanned
+        // clean then died at manifest assembly with `tau build` exit 2 or a
+        // `tau resolve` panic (#715).
+        //
+        // Tool names are deliberately NOT checked: `tau_ir::ToolId` is an
+        // unvalidated newtype by design (ADR-0069), so there is no
+        // downstream type for a tool name to satisfy.
+        //
+        // This also bounds nesting depth, via `AgentId`'s 64-byte cap — the
+        // scan itself recurses freely and has no separate depth limit.
+        if matches!(kind, Kind::Agents) {
+            tau_domain::AgentId::from_str(&name).map_err(|e| ProjectConfigError::DefFile {
+                file: file_disp.clone(),
+                reason: format!("invalid agent name {name:?}: {e}"),
+            })?;
+        }
         let file_rel = {
             let mut p = root_rel.to_path_buf();
             for s in segments.iter() {
@@ -383,6 +406,66 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    /// `valid_segment` passes a `-`-leading segment, but `tau_domain::AgentId`
+    /// does not — and before ADR-0070 nothing caught the difference until
+    /// `tau build` reached manifest assembly, where the error named the id
+    /// rather than the file to rename (#715). The agents root now asks the
+    /// domain type at scan time.
+    #[test]
+    fn agent_name_illegal_for_the_domain_grammar_names_the_file() {
+        let t = tempfile::TempDir::new().unwrap();
+        write(t.path(), "agents/-foo.md", AGENT_MD);
+        let e = scan_dirs(t.path(), &dirs(Some("agents"), None)).unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("agents/-foo.md"), "must name the file: {msg}");
+        assert!(msg.contains("invalid agent name"), "{msg}");
+    }
+
+    /// `AgentId`'s 64-byte cap is the ONLY bound on nesting depth — the walk
+    /// itself recurses freely. A path that overruns it fails at the scan,
+    /// naming the file, rather than at manifest assembly.
+    #[test]
+    fn deep_agent_path_fails_on_the_length_cap() {
+        let t = tempfile::TempDir::new().unwrap();
+        // 16 dirs + stem, `/`-joined = 67 bytes > 64.
+        let rel = alloc_deep_path();
+        write(t.path(), &rel, AGENT_MD);
+        let e = scan_dirs(t.path(), &dirs(Some("agents"), None)).unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("exceeds 64 characters"), "{msg}");
+    }
+
+    fn alloc_deep_path() -> String {
+        let mut parts = vec!["agents".to_string()];
+        parts.extend(std::iter::repeat_n("seg".to_string(), 16));
+        format!("{}/seg.md", parts.join("/"))
+    }
+
+    /// Underscores were rejected by the old grammar even on a flat name, so
+    /// `agents/my_agent.md` failed at the bundle boundary while the scanner
+    /// happily accepted it (#715). Both accept it now.
+    #[test]
+    fn underscore_and_digit_leading_agent_names_scan_clean() {
+        let t = tempfile::TempDir::new().unwrap();
+        write(t.path(), "agents/my_agent.md", AGENT_MD);
+        write(t.path(), "agents/2fa/check.md", AGENT_MD);
+        let s = scan_dirs(t.path(), &dirs(Some("agents"), None)).unwrap();
+        let names: Vec<_> = s.agents.keys().cloned().collect();
+        assert_eq!(names, ["2fa/check", "my_agent"]);
+    }
+
+    /// Tool names are NOT run through `AgentId` — `tau_ir::ToolId` is an
+    /// unvalidated newtype by design (ADR-0069), so a tool name that no
+    /// agent name could carry still scans clean. Pins the asymmetry so a
+    /// later reader does not "fix" it into symmetry.
+    #[test]
+    fn tool_names_are_not_domain_validated() {
+        let t = tempfile::TempDir::new().unwrap();
+        write(t.path(), "tools/-x/y.toml", TOOL_TOML);
+        let s = scan_dirs(t.path(), &dirs(None, Some("tools"))).unwrap();
+        assert!(s.tools.contains_key("-x/y"), "{:?}", s.tools.keys());
     }
 
     #[test]

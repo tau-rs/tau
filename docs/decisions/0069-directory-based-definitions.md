@@ -160,15 +160,23 @@ same change, not a new mechanism).
   predates and is independent of `[dirs]`, so it will surface for projects
   that never adopt directory definitions. Remediation is mechanical: move the
   prompt inside the project root and reference it relatively.
-- **A `/`-containing *agent* name cannot reach a bundle yet.** `tau build`
-  writes `BundleAgent.id` as a `tau_domain::AgentId`, whose grammar is
-  `[a-z0-9-]` — no `/`, and no `_` either, though the dirs scanner accepts
-  both. A nested `agents/review/strict.md` therefore fails manifest assembly
-  with exit 2, and `tau resolve` panics on it outright. Tool names are
-  unaffected (`tau_ir::ToolId` is an unvalidated newtype), so
-  `tools/github/search.toml` works end to end. This is a pre-existing
+- **A `/`-containing *agent* name could not reach a bundle** when this ADR
+  was written. `tau build` writes `BundleAgent.id` as a
+  `tau_domain::AgentId`, whose grammar was `[a-z0-9-]` — no `/`, and no `_`
+  either, though the dirs scanner accepts both. A nested
+  `agents/review/strict.md` therefore failed manifest assembly with exit 2,
+  and `tau resolve` panicked on it outright. Tool names were unaffected
+  (`tau_ir::ToolId` is an unvalidated newtype), so
+  `tools/github/search.toml` worked end to end. This was a pre-existing
   `tau-domain` identity constraint — an inline `[agents."review/strict"]`
-  hits the same wall — that was invisible until the build pipeline became
-  dirs-aware. Widening the `AgentId` grammar is its own decision and is not
-  taken here; until then, keep dir-defined **agent** names flat and
-  kebab-case. `crates/tau-cli/tests/cmd_build_dirs.rs` pins the boundary.
+  hit the same wall — that stayed invisible until the build pipeline became
+  dirs-aware.
+
+  **Resolved by [ADR-0070](0070-agent-id-grammar.md)** (#715), which widened
+  `AgentId` to a `/`-separated namespaced grammar rather than sanitizing
+  authored names into the old one, and moved the check into the scanner so
+  the authoring surface can no longer accept a name the bundle boundary
+  refuses. The containment test this bullet pointed at
+  (`nested_agent_name_is_a_known_bundle_gap`) was deleted there, as its own
+  doc comment instructed; `crates/tau-cli/tests/cmd_build_dirs.rs` now pins
+  the positive behavior instead.

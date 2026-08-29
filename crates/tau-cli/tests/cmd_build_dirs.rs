@@ -50,9 +50,10 @@ system = "hi"
 /// agents root but not the tools root would fail loudly on an unknown tool
 /// ref rather than pass vacuously.
 ///
-/// The name is deliberately flat: a *nested* agent name (`review/strict`)
-/// cannot currently reach a bundle at all — see
-/// `nested_agent_name_is_a_known_bundle_gap` below.
+/// Used for both the flat `agents/strict.md` and the nested
+/// `agents/review/strict.md` in the shared fixture — the two differ only by
+/// path, which is the whole point: the path is the name (ADR-0069), and
+/// since ADR-0070 a nested one reaches the bundle intact.
 const AGENT_MD: &str = "---\n\
 display_name: Strict Reviewer\n\
 package: dirsbuild@^0.1\n\
@@ -99,6 +100,7 @@ fn make_tau_home(scratch: &std::path::Path) -> std::path::PathBuf {
 fn write_dirs_project(project: &std::path::Path) {
     write(project, "tau.toml", ROOT_TOML);
     write(project, "agents/strict.md", AGENT_MD);
+    write(project, "agents/review/strict.md", AGENT_MD);
     write(project, "tools/util/echo.toml", TOOL_TOML);
     write_empty_lockfile(project);
 }
@@ -135,6 +137,17 @@ fn build_ships_dir_defined_agent_and_verify_agrees() {
     assert!(
         ids.contains(&"solo"),
         "bundle must still carry the inline agent; got {ids:?}",
+    );
+    // ADR-0070: a nested name reaches the bundle verbatim. `/` is never
+    // folded to `-`, so this must not read `review-strict` — and it must
+    // coexist with the flat `strict` rather than collide with it.
+    assert!(
+        ids.contains(&"review/strict"),
+        "bundle must carry the nested [dirs]-defined agent; got {ids:?}",
+    );
+    assert_eq!(
+        m.schema_version, 6,
+        "a bundle carrying a namespaced agent id declares v6 (ADR-0070)",
     );
 
     // The IR payload must exist: lowering resolves `tool_refs =
@@ -191,44 +204,82 @@ fn build_agent_filter_accepts_dir_defined_agent() {
     assert_eq!(m.bundle.selected_agents, Some(vec!["strict".to_string()]));
 }
 
-/// KNOWN GAP (pinned, not endorsed): an agent whose name contains `/` —
-/// which is exactly what a nested `agents/review/strict.md` produces, and
-/// the headline example in the `[dirs]` how-to — cannot be represented in a
-/// bundle. `BundleAgent.id` is a `tau_domain::AgentId`, whose grammar is
-/// `[a-z0-9-]` (no `/`, and no `_` either, though the dirs scanner accepts
-/// both). `tau build` therefore exits 2 during manifest assembly.
+/// The nested name `review/strict` — the `[dirs]` how-to's headline example
+/// — must reach a bundle and slice like any other agent.
 ///
-/// This is pre-existing — an inline `[agents."review/strict"]` hits the same
-/// wall, and `tau resolve` is worse: it *panics* at
-/// `cmd/resolve_helpers.rs:68` (`expect("AgentId from validated entry")`).
-/// It was invisible until the build pipeline became `[dirs]`-aware, because
-/// nothing ever fed a `/`-named agent to it.
-///
-/// This test pins the current boundary so it can't shift silently. When the
-/// `AgentId` grammar is widened (a `tau-domain` identity decision, ADR
-/// territory — out of scope for the wiring fix that exposed it), delete this
-/// test and extend `build_ships_dir_defined_agent_and_verify_agrees` to a
-/// nested name instead.
+/// This replaces `nested_agent_name_is_a_known_bundle_gap`, which pinned the
+/// opposite boundary (exit 2 + "invalid id") while `tau_domain::AgentId`'s
+/// grammar was `[a-z0-9-]`. ADR-0070 widened it, and that test's own doc
+/// comment instructed its deletion once the grammar moved (#715).
 #[test]
-fn nested_agent_name_is_a_known_bundle_gap() {
+fn build_agent_filter_accepts_a_nested_agent_name() {
     let scratch = tempfile::tempdir().unwrap();
     let project = scratch.path().join("proj");
     std::fs::create_dir(&project).unwrap();
-    write(&project, "tau.toml", ROOT_TOML);
-    write(&project, "agents/review/strict.md", AGENT_MD);
-    write(&project, "tools/util/echo.toml", TOOL_TOML);
-    write_empty_lockfile(&project);
+    write_dirs_project(&project);
+    let tau_home = make_tau_home(scratch.path());
+    let out = project.join("one.tau");
+
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args([
+            "build",
+            "--allow-ungoverned",
+            "--agent",
+            "review/strict",
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+
+    let body = std::fs::read_to_string(&out).unwrap();
+    let m = tau_pkg::bundle::manifest::BundleManifest::parse_str(&body).unwrap();
+    let ids: Vec<&str> = m.agents.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["review/strict"],
+        "slice must be exactly the nested agent",
+    );
+
+    // A sliced bundle records `bundle.selected_agents`, which
+    // `bundle/reproduce.rs` reparses into `Vec<tau_domain::AgentId>` to
+    // replay the slice. That reparse is the one place a nested id crosses
+    // the domain grammar on the *read* path, so verify the slice rather
+    // than only the full bundle.
+    Command::cargo_bin("tau")
+        .unwrap()
+        .args(["verify", "--bundle", out.to_str().unwrap()])
+        .current_dir(&project)
+        .env("TAU_HOME", &tau_home)
+        .assert()
+        .success();
+}
+
+/// `tau resolve` must not panic on a nested agent name.
+///
+/// Before #715 this aborted at `cmd/resolve_helpers.rs`'s
+/// `expect("AgentId from validated entry")` — a panic on user-authored
+/// input, reachable from an inline `[agents."review/strict"]` just as easily
+/// as from a directory. `--dry-run` keeps the test offline while still
+/// walking every agent id through the parse that used to abort.
+#[test]
+fn resolve_does_not_panic_on_a_nested_agent_name() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_dirs_project(&project);
     let tau_home = make_tau_home(scratch.path());
 
     Command::cargo_bin("tau")
         .unwrap()
-        .args(["build", "--allow-ungoverned"])
+        .args(["resolve", "--dry-run"])
         .current_dir(&project)
         .env("TAU_HOME", &tau_home)
         .assert()
-        .code(2)
-        .stderr(predicates::str::contains("review/strict"))
-        .stderr(predicates::str::contains("invalid id"));
+        .success();
 }
 
 /// A `[dirs]`-defined MCP tool must have its contract resolved and pinned

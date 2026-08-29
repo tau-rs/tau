@@ -31,7 +31,11 @@ pub(crate) fn resolve_and_install_for_agent(
     no_install: bool,
     output: &mut Output,
 ) -> anyhow::Result<()> {
-    let agent_id = tau_domain::AgentId::from_str(&entry.id).expect("AgentId from validated entry");
+    // Never `expect`: `entry.id` is user-authored (a `[agents.<id>]` key or a
+    // `[dirs]` path), so a malformed one is input, not a broken invariant.
+    // This used to panic (#715).
+    let agent_id = tau_domain::AgentId::from_str(&entry.id)
+        .with_context(|| format!("agent {:?} has an invalid id", entry.id))?;
     let requires: Vec<(tau_domain::AgentId, tau_pkg::RequiredTool)> = entry
         .requires
         .tools
@@ -64,8 +68,10 @@ pub(crate) fn resolve_and_install_for_project(
 ) -> anyhow::Result<()> {
     let mut requires: Vec<(tau_domain::AgentId, tau_pkg::RequiredTool)> = Vec::new();
     for agent in agents {
-        let agent_id =
-            tau_domain::AgentId::from_str(&agent.id).expect("AgentId from validated entry");
+        // See `resolve_and_install_for_agent`: user-authored input, never a
+        // panic (#715).
+        let agent_id = tau_domain::AgentId::from_str(&agent.id)
+            .with_context(|| format!("agent {:?} has an invalid id", agent.id))?;
         for tool in &agent.requires.tools {
             requires.push((agent_id.clone(), tool.clone()));
         }

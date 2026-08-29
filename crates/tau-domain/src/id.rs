@@ -134,10 +134,24 @@ mod tests {
     }
 }
 
-/// An agent identifier. ASCII kebab-case, must start with a lowercase letter,
-/// 1..=64 characters, character set `[a-z0-9-]`.
+/// An agent identifier: one or more `/`-separated ASCII segments, 1..=64
+/// bytes in total.
 ///
-/// Same grammar as [`PackageName`]; separate type for clarity at call sites.
+/// ```text
+/// AgentId  := segment ( '/' segment )*        1..=64 bytes total
+/// segment  := [a-z0-9] [a-z0-9_-]*
+/// ```
+///
+/// The `/` separator makes an agent's authored location its identity:
+/// `[dirs]` names an agent by its path relative to the agents root, so
+/// `agents/review/strict.md` is agent `review/strict` and
+/// `agents/perf/strict.md` is `perf/strict` — distinct, never ambiguous
+/// (ADR-0069). Sanitizing `/` away would collapse them, which is why this
+/// grammar admits the separator rather than folding it (ADR-0070).
+///
+/// This is deliberately **not** [`PackageName`]'s grammar: a package name is
+/// a registry identity, not a project-local namespace, so it admits neither
+/// `/` nor `_` and still requires a leading letter.
 ///
 /// # Example
 ///
@@ -147,6 +161,14 @@ mod tests {
 ///
 /// let id = AgentId::from_str("researcher").unwrap();
 /// assert_eq!(id.as_str(), "researcher");
+///
+/// // Namespaced names round-trip verbatim.
+/// let nested = AgentId::from_str("review/strict").unwrap();
+/// assert_eq!(nested.as_str(), "review/strict");
+///
+/// assert!(AgentId::from_str("my_agent").is_ok());
+/// assert!(AgentId::from_str("review//strict").is_err());
+/// assert!(AgentId::from_str("-leading-dash").is_err());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AgentId(String);
@@ -180,15 +202,34 @@ impl FromStr for AgentId {
                 got: s.len(),
             });
         }
-        let mut chars = s.char_indices();
-        let (_, first) = chars.next().expect("length-checked above");
-        if !first.is_ascii_lowercase() {
-            return Err(AgentIdError::InvalidLeadingCharacter { ch: first });
-        }
-        for (pos, ch) in chars {
-            if !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') {
-                return Err(AgentIdError::InvalidCharacter { ch, pos });
+        // Validate segment by segment. The total-length cap above is the
+        // only bound on nesting depth: a second, independent depth limit
+        // would be a third grammar to keep in sync, which is the failure
+        // this type exists to avoid (ADR-0070).
+        //
+        // `offset` tracks the segment's start in the *whole* input so the
+        // byte positions in `InvalidCharacter` / `EmptySegment` point into
+        // the id the caller passed in, not into an interior slice of it.
+        let mut offset = 0usize;
+        for seg in s.split('/') {
+            let mut chars = seg.char_indices();
+            let Some((_, first)) = chars.next() else {
+                return Err(AgentIdError::EmptySegment { pos: offset });
+            };
+            if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+                return Err(AgentIdError::InvalidLeadingCharacter { ch: first });
             }
+            for (pos, ch) in chars {
+                if !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_') {
+                    return Err(AgentIdError::InvalidCharacter {
+                        ch,
+                        pos: offset + pos,
+                    });
+                }
+            }
+            // + 1 for the `/` that followed this segment. Overshoots by one
+            // past the final segment, which is never read.
+            offset += seg.len() + 1;
         }
         Ok(Self(s.to_owned()))
     }
@@ -201,8 +242,42 @@ mod agent_id_tests {
     #[test]
     fn accepts_valid() {
         for name in ["a", "researcher", "agent-123"] {
-            assert!(AgentId::from_str(name).is_ok());
+            assert!(AgentId::from_str(name).is_ok(), "should accept {name:?}");
         }
+    }
+
+    /// The three shapes ADR-0070 added: `/`-separated namespaces (what
+    /// `[dirs]` derives from a nested path), `_` inside a segment, and a
+    /// digit-leading segment.
+    #[test]
+    fn accepts_widened_shapes() {
+        let max_len = alloc::format!("a/{}", "b".repeat(62));
+        assert_eq!(max_len.len(), 64);
+        for name in [
+            "review/strict",
+            "perf/strict",
+            "a/b/c",
+            "my_agent",
+            "review/strict_v2",
+            "2fa",
+            "2fa/check",
+            "a1/b2-c3_d4",
+            max_len.as_str(),
+        ] {
+            assert!(AgentId::from_str(name).is_ok(), "should accept {name:?}");
+        }
+    }
+
+    /// Distinct paths must stay distinct names — the property that rules out
+    /// sanitizing `/` into `-` for authored ids (ADR-0070).
+    #[test]
+    fn nested_names_do_not_collapse() {
+        let a = AgentId::from_str("review/strict").unwrap();
+        let b = AgentId::from_str("perf/strict").unwrap();
+        let c = AgentId::from_str("review-strict").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.as_str(), "review/strict");
     }
 
     #[test]
@@ -219,20 +294,110 @@ mod agent_id_tests {
         );
     }
 
+    /// A leading `-` stays illegal so `tau build --agent <id>` can never be
+    /// ambiguous with a flag. `1agent` is *accepted* now — the leading rule
+    /// relaxed to `[a-z0-9]` so the domain grammar covers every segment the
+    /// `[dirs]` scanner can produce (ADR-0070).
     #[test]
     fn rejects_invalid_leading() {
         assert_eq!(
-            AgentId::from_str("1agent"),
-            Err(AgentIdError::InvalidLeadingCharacter { ch: '1' }),
+            AgentId::from_str("-agent"),
+            Err(AgentIdError::InvalidLeadingCharacter { ch: '-' }),
+        );
+        assert_eq!(
+            AgentId::from_str("_agent"),
+            Err(AgentIdError::InvalidLeadingCharacter { ch: '_' }),
+        );
+        assert_eq!(
+            AgentId::from_str("Agent"),
+            Err(AgentIdError::InvalidLeadingCharacter { ch: 'A' }),
+        );
+        assert!(AgentId::from_str("1agent").is_ok());
+    }
+
+    /// The leading rule applies per segment, not just to the whole id.
+    #[test]
+    fn rejects_invalid_leading_in_a_later_segment() {
+        assert_eq!(
+            AgentId::from_str("review/-strict"),
+            Err(AgentIdError::InvalidLeadingCharacter { ch: '-' }),
+        );
+        assert_eq!(
+            AgentId::from_str("review/Strict"),
+            Err(AgentIdError::InvalidLeadingCharacter { ch: 'S' }),
         );
     }
 
+    /// `_` is legal inside a segment now; the reported byte position is an
+    /// offset into the whole id, not into the segment it was found in.
     #[test]
     fn rejects_invalid_mid_char() {
+        assert!(AgentId::from_str("agent_x").is_ok());
         assert!(matches!(
-            AgentId::from_str("agent_x"),
-            Err(AgentIdError::InvalidCharacter { ch: '_', pos: 5 }),
+            AgentId::from_str("agent.x"),
+            Err(AgentIdError::InvalidCharacter { ch: '.', pos: 5 }),
         ));
+        assert!(matches!(
+            AgentId::from_str("agentX"),
+            Err(AgentIdError::InvalidCharacter { ch: 'X', pos: 5 }),
+        ));
+        assert!(matches!(
+            AgentId::from_str("review/str ict"),
+            Err(AgentIdError::InvalidCharacter { ch: ' ', pos: 10 }),
+        ));
+    }
+
+    /// A leading, trailing, or doubled `/` leaves an empty segment. `"/"`
+    /// is two empty segments and reports the first.
+    #[test]
+    fn rejects_empty_segments() {
+        assert_eq!(
+            AgentId::from_str("/review"),
+            Err(AgentIdError::EmptySegment { pos: 0 }),
+        );
+        assert_eq!(
+            AgentId::from_str("review/"),
+            Err(AgentIdError::EmptySegment { pos: 7 }),
+        );
+        assert_eq!(
+            AgentId::from_str("review//strict"),
+            Err(AgentIdError::EmptySegment { pos: 7 }),
+        );
+        assert_eq!(
+            AgentId::from_str("/"),
+            Err(AgentIdError::EmptySegment { pos: 0 }),
+        );
+    }
+
+    /// The 64-byte cap is the only bound on nesting depth (ADR-0070), so a
+    /// deep path fails as `TooLong` rather than via a separate depth limit.
+    #[test]
+    fn rejects_too_deep_via_the_length_cap() {
+        let deep = alloc::vec!["seg"; 17].join("/");
+        assert_eq!(deep.len(), 67);
+        assert_eq!(
+            AgentId::from_str(&deep),
+            Err(AgentIdError::TooLong { max: 64, got: 67 }),
+        );
+    }
+
+    /// `AgentId` and `PackageName` are no longer the same grammar. The pair
+    /// is asserted together by `dynamic.rs::assert_legal`, so the divergence
+    /// is pinned here rather than discovered there.
+    #[test]
+    fn diverges_from_package_name() {
+        for widened in ["review/strict", "my_agent", "2fa"] {
+            assert!(AgentId::from_str(widened).is_ok(), "{widened}");
+            assert!(
+                PackageName::from_str(widened).is_err(),
+                "PackageName must stay narrow: {widened}"
+            );
+        }
+        // Everything PackageName accepts, AgentId still accepts.
+        for shared in ["a", "fs-tools", "abc-123"] {
+            assert!(PackageName::from_str(shared).is_ok(), "{shared}");
+            assert!(AgentId::from_str(shared).is_ok(), "{shared}");
+        }
     }
 }
 
