@@ -131,8 +131,35 @@ pub fn build_envelope(package_dir: &Path) -> CapabilityPlan {
     CapabilityPlan::new(caps, None, None)
 }
 
+/// The user's home directory, used only as the fallback base for
+/// `$CARGO_HOME` / `$RUSTUP_HOME` when neither is exported.
+///
+/// `$HOME` first, then `%USERPROFILE%` — the same precedence
+/// [`crate::scope`]'s `resolve_global_path_from` already uses (#530).
+/// Windows has no `$HOME` by convention; `%USERPROFILE%` is the
+/// equivalent. Without the fallback, a Windows host with `RUSTUP_HOME`
+/// unset (the GitHub `windows-latest` shape: `dtolnay/rust-toolchain`
+/// exports `CARGO_HOME` but not `RUSTUP_HOME`) resolves the toolchain
+/// read grant to a bogus **relative** `.rustup`, so the real toolchain
+/// never enters the capability envelope.
+///
+/// Behaviour on Unix is unchanged and the envelope is not widened there:
+/// `$HOME` still wins whenever it is set, and `%USERPROFILE%` is not a
+/// Unix convention. An empty value counts as unset on both.
 fn home_dir() -> std::path::PathBuf {
-    std::env::var("HOME")
+    resolve_home_dir(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+}
+
+/// Pure resolution behind [`home_dir`], separated so the precedence is
+/// unit-testable without mutating process-global environment.
+fn resolve_home_dir(
+    home: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
+) -> std::path::PathBuf {
+    [home, user_profile]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_default()
 }
@@ -311,6 +338,43 @@ pub(crate) mod tests {
             .to_string()
             .replace('\\', "/");
         assert!(json.contains(&target), "target write path present: {json}");
+    }
+
+    #[test]
+    fn home_dir_prefers_home_over_userprofile() {
+        // Unix behaviour must be untouched: $HOME still wins, so the
+        // envelope's CARGO_HOME/RUSTUP_HOME fallbacks are unchanged there.
+        let p = resolve_home_dir(
+            Some(std::ffi::OsString::from("/x/home")),
+            Some(std::ffi::OsString::from("C:\\Users\\x")),
+        );
+        assert_eq!(p, std::path::Path::new("/x/home"));
+    }
+
+    #[test]
+    fn home_dir_falls_back_to_userprofile() {
+        // The Windows shape: no $HOME, only %USERPROFILE%. Before this
+        // fallback the result was an empty PathBuf, which made the
+        // envelope grant read on a relative `.rustup` / `.cargo`.
+        let p = resolve_home_dir(
+            None,
+            Some(std::ffi::OsString::from("C:\\Users\\runneradmin")),
+        );
+        assert_eq!(p, std::path::Path::new("C:\\Users\\runneradmin"));
+    }
+
+    #[test]
+    fn home_dir_treats_empty_as_unset() {
+        let p = resolve_home_dir(
+            Some(std::ffi::OsString::new()),
+            Some(std::ffi::OsString::from("C:\\Users\\x")),
+        );
+        assert_eq!(p, std::path::Path::new("C:\\Users\\x"));
+    }
+
+    #[test]
+    fn home_dir_is_empty_when_both_missing() {
+        assert_eq!(resolve_home_dir(None, None), std::path::PathBuf::new());
     }
 
     #[test]

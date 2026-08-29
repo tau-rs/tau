@@ -109,15 +109,18 @@ pub fn verify_bundle(opts: VerifyOptions) -> Result<VerifyReport, VerifyError> {
 ///
 /// The cwd's `tau.toml` was already proven byte-clean in step 6, so we
 /// load it through the SAME pipeline `build.rs` step 1 used
-/// ([`UncheckedProjectConfig`] → `validate()`). Prompt bytes are
-/// resolved via the shared [`crate::bundle::build::resolve_agent_prompt_bytes`]
-/// helper that build's step 5 also calls — so a clean verify can never
-/// spuriously fail on a prompt hash.
+/// ([`ProjectConfig::parse_str_at`], which is dirs-aware — see ADR-0069;
+/// loading through the non-scanning `UncheckedProjectConfig` → `validate()`
+/// path here would make every `[dirs]`-defined agent look like an
+/// `AgentSetMismatch`). Prompt bytes are resolved via the shared
+/// [`crate::bundle::build::resolve_agent_prompt_bytes`] helper that build's
+/// step 5 also calls — so a clean verify can never spuriously fail on a
+/// prompt hash.
 fn verify_agent_prompts(
     m: &BundleManifest,
     project_root: &std::path::Path,
 ) -> Result<BTreeMap<String, ResolvedAgent>, VerifyError> {
-    use crate::project::project::UncheckedProjectConfig;
+    use crate::project::project::ProjectConfig;
 
     let path = project_root.join("tau.toml");
     // Step 6 already confirmed these bytes match the bundle, so any read
@@ -135,11 +138,8 @@ fn verify_agent_prompts(
     };
     let tau_toml_str =
         std::str::from_utf8(&bytes).map_err(|e| to_io(format!("tau.toml is not utf-8: {e}")))?;
-    let unchecked: UncheckedProjectConfig =
-        toml::from_str(tau_toml_str).map_err(|e| to_io(format!("parse {path:?}: {e}")))?;
-    let project_config = unchecked
-        .validate()
-        .map_err(|e| to_io(format!("validate {path:?}: {e}")))?;
+    let project_config = ProjectConfig::parse_str_at(tau_toml_str, project_root)
+        .map_err(|e| to_io(format!("load {path:?}: {e}")))?;
 
     let mut agent_lookup: BTreeMap<String, ResolvedAgent> = BTreeMap::new();
     for agent in &m.agents {

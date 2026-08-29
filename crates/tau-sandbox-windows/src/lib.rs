@@ -3,8 +3,10 @@
 //! Wraps plugin commands with Windows AppContainer (Windows 8+) so the
 //! plugin runs inside a kernel-level isolated container. Strict tier:
 //! filesystem isolation per-capability via per-AppContainer-SID ACL
-//! grants + outbound network restricted to the host-side
-//! `tau-sandbox-proxy` task on `127.0.0.1:8443`.
+//! grants + outbound network restricted to a per-container named pipe
+//! (SID-ACL'd, no capability SIDs granted) fronting the host-side
+//! `tau-sandbox-proxy` allowlist logic; the in-container
+//! `tau-net-bridge-win` relays the plugin's traffic over the pipe.
 //!
 //! Compared to [`tau_sandbox_native`] (Linux landlock + seccomp + namespaces)
 //! and [`tau_sandbox_darwin`] (macOS sandbox-exec):
@@ -27,10 +29,13 @@
 
 #[cfg(target_os = "windows")]
 mod acl;
+#[cfg(target_os = "windows")]
+mod pipe_proxy;
 mod profile;
 
-pub use profile::{build_appcontainer_caps, AppContainerCaps};
+pub use profile::{build_appcontainer_caps, dir_shaped_write_paths, AppContainerCaps};
 
+pub mod bridge_args;
 pub mod launcher_args;
 
 /// Windows-only test helpers, gated behind the `integration-tests`
@@ -51,6 +56,44 @@ pub mod test_support {
     /// [`crate::acl::delete_appcontainer_profile`].
     pub fn delete_profile(name: &str) -> std::io::Result<()> {
         crate::acl::delete_appcontainer_profile(name)
+    }
+
+    /// Grant read+execute on `path` to the AppContainer profile `profile`
+    /// (spike #626 helper, re-added for `tests/egress_integration.rs`,
+    /// which needs to grant the probe exe to a *foreign* profile without
+    /// going through a full `wrap_spawn` plan).
+    pub fn grant_read(profile: &str, path: &str) -> std::io::Result<()> {
+        let sid = crate::acl::AppContainerSid {
+            profile_name: profile.to_string(),
+        };
+        crate::acl::grant_access(&sid, path, crate::acl::AccessKind::Read)
+    }
+
+    /// Dump `path`'s DACL as `[type/flags/mask/sid]` groups.
+    ///
+    /// Diagnostic only, for #622's `install_rust_cargo_acceptance`: it
+    /// answers "did the `$RUSTUP_HOME` grant actually land on
+    /// `rustc.exe`, and with which rights?" — the one question left
+    /// after the envelope markers showed the right tree was granted and
+    /// the grant call succeeded. See [`crate::acl::describe_dacl`].
+    pub fn describe_dacl(path: &str) -> std::io::Result<String> {
+        crate::acl::describe_dacl(path)
+    }
+
+    /// Spawn a pipe proxy DACL'd to `profile` and return the bare pipe
+    /// name plus an opaque keep-alive guard (drop aborts the accept
+    /// loop). For the foreign-container pipe-access control test, which
+    /// targets the pipe DACL directly rather than going through
+    /// `wrap_spawn`.
+    pub fn spawn_pipe_proxy(
+        profile: &str,
+        hosts: tau_sandbox_proxy::HostAllow,
+    ) -> std::io::Result<(String, Box<dyn std::any::Any + Send>)> {
+        let sid = crate::acl::AppContainerSid {
+            profile_name: profile.to_string(),
+        };
+        let h = crate::pipe_proxy::spawn_pipe_proxy(hosts, &sid)?;
+        Ok((h.pipe_name().to_string(), Box::new(h)))
     }
 }
 
@@ -99,6 +142,7 @@ impl CapabilityGate for WindowsSandbox {
         set.insert(tau_domain::CapabilityShape::FilesystemRead);
         set.insert(tau_domain::CapabilityShape::FilesystemWrite);
         set.insert(tau_domain::CapabilityShape::ProcessExec);
+        set.insert(tau_domain::CapabilityShape::NetworkHttp);
         set
     }
 
@@ -153,12 +197,13 @@ impl ProcessCapabilityGate for WindowsSandbox {
 /// Probe for AppContainer availability. Cached per `WindowsSandbox`
 /// instance via `OnceCell`.
 ///
-/// **Phase 2:** the real Win32 AppContainer implementation has landed
-/// (`acl.rs` grant/revoke, `wrap_spawn` via the launcher exec-wrapper), so
-/// this returns `Available { tier: Strict }` on Windows — filesystem and
-/// process isolation are enforced. Network egress remains deferred and
-/// fail-closed (`NetworkHttp` is not in `supported_shapes`) until the
-/// egress follow-on lands.
+/// The real Win32 AppContainer implementation has landed (`acl.rs`
+/// grant/revoke, `wrap_spawn` via the launcher exec-wrapper), so this
+/// returns `Available { tier: Strict }` on Windows — filesystem and
+/// process isolation are enforced. Network egress (#622) is enforced via
+/// a per-container named-pipe proxy: the AppContainer gets no network
+/// capability SIDs, and the pipe's DACL admits only the current user and
+/// the container's own SID.
 async fn run_probe() -> CapabilityProbe {
     if !cfg!(target_os = "windows") {
         return CapabilityProbe::Unavailable {
@@ -167,7 +212,7 @@ async fn run_probe() -> CapabilityProbe {
     }
     CapabilityProbe::Available {
         tier: tau_ports::CapabilityTier::Strict,
-        details: "AppContainer (FS + process isolation); network egress deferred (fail-closed)"
+        details: "AppContainer (FS + process isolation + proxied egress via named pipe)"
             .to_string(),
     }
 }
@@ -201,7 +246,22 @@ async fn wrap_spawn_windows(
         })?;
         granted_paths.push((path.clone(), acl::AccessKind::Read));
     }
+    // A write grant needs its target to EXIST: `SetNamedSecurityInfoW`
+    // answers `WIN32_ERROR(2)` (ERROR_FILE_NOT_FOUND) otherwise and the
+    // whole plan fails closed — which is what #622's CI round 1 hit on
+    // cargo's not-yet-created `<package>/target`. The container cannot
+    // create it either (its parent is deliberately not write-granted),
+    // so the spawn layer materialises the directory here. Only
+    // glob-shaped (`<dir>/**`) write entries qualify; see
+    // [`dir_shaped_write_paths`].
+    let dir_shaped: std::collections::HashSet<String> =
+        dir_shaped_write_paths(plan).into_iter().collect();
     for path in &caps.fs_write_paths {
+        if dir_shaped.contains(path) && !std::path::Path::new(path).exists() {
+            std::fs::create_dir_all(path).map_err(|e| CapabilityError::WrapFailed {
+                message: format!("create write-grant dir {path}: {e}"),
+            })?;
+        }
         acl::grant_access(&app_sid, path, acl::AccessKind::Write).map_err(|e| {
             CapabilityError::WrapFailed {
                 message: format!("grant write on {path}: {e}"),
@@ -210,17 +270,62 @@ async fn wrap_spawn_windows(
         granted_paths.push((path.clone(), acl::AccessKind::Write));
     }
 
-    // Fail closed on network — egress is a deferred follow-on EPIC.
-    // (Phase 2 spawns no host-side proxy task; `tau_sandbox_proxy::spawn_proxy`
-    // is currently `cfg(unix)`-gated because it builds on
-    // `tokio::net::UnixListener`. Windows egress requires either TCP-loopback
-    // IPC or named pipes — deferred.)
-    if caps.has_http {
-        return Err(CapabilityError::Unsupported {
-            what: "Network(Http) on Windows: egress not yet supported (deferred follow-on)"
-                .to_string(),
-        });
-    }
+    // Egress (#622): spawn the per-container pipe proxy. The container
+    // gets NO network capability SIDs — the SID-ACL'd pipe into this
+    // HostAllow proxy is its only route out. Fail closed on any setup
+    // error (ADR-0014).
+    let proxy_handle = if caps.has_http {
+        let mut any = false;
+        let mut exact: Vec<String> = Vec::new();
+        for cap in &plan.capabilities {
+            if let Capability::Network(NetCapability::Http { hosts, .. }) = cap {
+                if hosts.is_any() {
+                    any = true;
+                } else {
+                    exact.extend(hosts.exact_hosts());
+                }
+            }
+        }
+        let policy = if any {
+            tau_sandbox_proxy::HostAllow::Any
+        } else {
+            tau_sandbox_proxy::HostAllow::Exact(exact)
+        };
+        let handle =
+            pipe_proxy::spawn_pipe_proxy(policy, &app_sid).map_err(|e| CapabilityError::Proxy {
+                message: format!("spawn_pipe_proxy: {e}"),
+            })?;
+        Some(handle)
+    } else {
+        None
+    };
+
+    // Resolve the bridge exe (env override -> sibling of tau.exe ->
+    // PATH) and grant the container read+execute on it so the image
+    // load inside the AppContainer succeeds.
+    let bridge_exe: Option<std::path::PathBuf> = if proxy_handle.is_some() {
+        let p = std::env::var_os("TAU_NET_BRIDGE_WIN_PATH")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|e| e.parent().map(|d| d.join("tau-net-bridge-win.exe")))
+                    .filter(|p| p.exists())
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("tau-net-bridge-win"));
+        if p.exists() {
+            let ps = p.to_string_lossy().into_owned();
+            acl::grant_access(&app_sid, &ps, acl::AccessKind::Read).map_err(|e| {
+                CapabilityError::WrapFailed {
+                    message: format!("grant read on bridge exe {ps}: {e}"),
+                }
+            })?;
+            granted_paths.push((ps, acl::AccessKind::Read));
+        }
+        Some(p)
+    } else {
+        None
+    };
 
     // Rebuild the command to run the target THROUGH the launcher, which
     // does CreateProcessAsUserW inside the AppContainer. Mirrors the
@@ -237,8 +342,17 @@ async fn wrap_spawn_windows(
 
     *cmd = Command::new(launcher);
     cmd.arg("--profile").arg(&profile_name);
-    // caps.capability_sids would be added here once net lands; empty in Phase 2.
-    cmd.arg("--").arg(orig_program).args(orig_args);
+    // No capability SIDs are added for network (#622 design): the pipe
+    // proxy's DACL is the enforcement point, not a well-known SID grant.
+    cmd.arg("--");
+    if let (Some(proxy), Some(bridge)) = (&proxy_handle, &bridge_exe) {
+        // launcher -- <bridge> --pipe <name> -- <orig> <args...>
+        cmd.arg(bridge)
+            .arg("--pipe")
+            .arg(proxy.pipe_name())
+            .arg("--");
+    }
+    cmd.arg(orig_program).args(orig_args);
     for (k, v) in orig_envs {
         match v {
             Some(val) => {
@@ -259,12 +373,15 @@ async fn wrap_spawn_windows(
     let cleanup_sid = app_sid.clone();
     let cleanup_profile = profile_name.clone();
     let cleanup_paths = granted_paths;
-    let handle = CapabilityHandle::new(move || {
+    let mut handle = CapabilityHandle::new(move || {
         for (path, kind) in cleanup_paths.iter().rev() {
             let _ = acl::revoke_access(&cleanup_sid, path, *kind);
         }
         let _ = acl::delete_appcontainer_profile(&cleanup_profile);
     });
+    if let Some(p) = proxy_handle {
+        handle.nest_handle(Box::new(p));
+    }
 
     Ok(handle)
 }
@@ -281,15 +398,15 @@ mod tests {
     }
 
     #[test]
-    fn supported_shapes_is_fs_and_exec() {
+    fn supported_shapes_includes_network() {
         let s = WindowsSandbox::new("windows");
         let supported = s.supported_shapes();
         assert!(supported.contains(&tau_domain::CapabilityShape::FilesystemRead));
         assert!(supported.contains(&tau_domain::CapabilityShape::FilesystemWrite));
         assert!(supported.contains(&tau_domain::CapabilityShape::ProcessExec));
         assert!(
-            !supported.contains(&tau_domain::CapabilityShape::NetworkHttp),
-            "network is deferred (fail-closed) in Phase 2"
+            supported.contains(&tau_domain::CapabilityShape::NetworkHttp),
+            "egress landed with #622 — NetworkHttp must be supported"
         );
     }
 

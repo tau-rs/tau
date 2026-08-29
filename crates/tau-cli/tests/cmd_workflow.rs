@@ -171,6 +171,109 @@ input = "${input}"
     assert_eq!(record["status"], "ok");
 }
 
+/// How the caller silenced the console for the tau-rs/tau#694 regression
+/// tests: `--quiet` (flag path, `tau=warn`) or `RUST_LOG=error` (env path,
+/// which overrides the flags entirely). Both must leave the run log intact.
+enum Silencer {
+    QuietFlag,
+    RustLogError,
+}
+
+/// tau-rs/tau#694: console verbosity must not decide whether the on-disk
+/// run log is written.
+///
+/// The run log is the durability artifact `tau workflow resume` replays
+/// (see #650) — an empty log makes resume silently re-run every completed
+/// step. Before the fix, `install()` layered the `EnvFilter` on top of the
+/// registry, where it acts as a *global* filter: `tau=warn` short-circuited
+/// the INFO-level `tau::workflow::step` events before `WorkflowRunLogLayer`
+/// ever saw them, and the JSONL file was never even created. A per-layer
+/// filter on the layer could not have rescued it — a per-layer filter only
+/// narrows what its layer sees, it cannot widen past a global filter.
+fn assert_run_log_survives(silencer: Silencer) {
+    let dir = common::setup_echo_project("echo", "canned_text = \"echoed: hush\"\n", &[]);
+    let root = dir.path();
+
+    let wf_dir = root.join("workflows");
+    fs::create_dir_all(&wf_dir).unwrap();
+    fs::write(
+        wf_dir.join("quiet-pipeline.toml"),
+        r#"[workflow]
+description = "single-step pipeline run with the console silenced"
+
+[[steps]]
+id = "first"
+kind = "agent.run"
+agent = "echo"
+input = "${input}"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("tau").unwrap();
+    cmd.current_dir(root).env("TAU_HOME", root.join("global"));
+    match silencer {
+        Silencer::QuietFlag => {
+            cmd.args(["--quiet", "workflow", "run", "quiet-pipeline"]);
+            cmd.env_remove("RUST_LOG");
+        }
+        Silencer::RustLogError => {
+            cmd.args(["workflow", "run", "quiet-pipeline"]);
+            cmd.env("RUST_LOG", "error");
+        }
+    }
+    let output = cmd.args(["--input", "hush"]).output().unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "expected exit 0; stdout={stdout}\nstderr={stderr}"
+    );
+
+    // `run_id: <ulid>` is a bare `eprintln!` in `cmd::workflow::run`, so it
+    // survives any tracing filter and still names the file to look for.
+    let run_id = stderr
+        .lines()
+        .find_map(|l| l.strip_prefix("run_id: "))
+        .map(str::trim)
+        .unwrap_or_else(|| panic!("expected a `run_id: ` line on stderr; stderr={stderr}"));
+
+    // The console IS silenced — that part must keep working. The step event
+    // is an INFO event on `tau::workflow::step`; neither `tau=warn` nor
+    // `error` admits it, so it must not reach stderr.
+    let stderr_plain = strip_ansi(&stderr);
+    assert!(
+        !stderr_plain.contains("tau::workflow::step"),
+        "the console must stay silent; stderr={stderr_plain}"
+    );
+
+    // …and the run log must be complete anyway.
+    let log_path = root
+        .join(".tau")
+        .join("workflow-runs")
+        .join(format!("quiet-pipeline-{run_id}.jsonl"));
+    let log = fs::read_to_string(&log_path).unwrap_or_else(|e| {
+        panic!("run log {log_path:?} must exist with the console silenced: {e}")
+    });
+    let record: serde_json::Value =
+        serde_json::from_str(log.lines().next().expect("at least one JSONL line")).unwrap();
+    assert_eq!(record["step_id"], "first");
+    assert_eq!(record["kind"], "agent.run");
+    assert_eq!(record["status"], "ok");
+    assert_eq!(record["output"], "echoed: hush");
+}
+
+#[test]
+fn workflow_run_writes_run_log_even_when_quiet() {
+    assert_run_log_survives(Silencer::QuietFlag);
+}
+
+#[test]
+fn workflow_run_writes_run_log_under_rust_log_error() {
+    assert_run_log_survives(Silencer::RustLogError);
+}
+
 /// Count the `tau::workflow::step` events for a given step id in stderr.
 /// One event per *executed* step — a step replayed from the run log is
 /// skipped by `Runner::run` and emits nothing.

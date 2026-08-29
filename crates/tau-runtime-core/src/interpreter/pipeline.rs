@@ -9,6 +9,7 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 use tau_domain::{Address, AgentInstanceId, Message, MessagePayload};
@@ -194,6 +195,15 @@ where
         ir_digest: &ir_digest,
         store: suspend.store.as_ref(),
     };
+    // Run-scoped `Dynamic`-step entry counter (#731). Bumped once per
+    // execution of a `Dynamic` step — including each `Loop` pass and each
+    // check rewind — and folded into every child agent id so ids stay unique
+    // across a run, which per-region `RegionCounters` alone cannot achieve
+    // (it is rebuilt per execution). Owned here, borrowed by every nested
+    // `run_steps` slice; `&AtomicU64` is `Copy + Sync`, so the `Parallel`
+    // arm's concurrent branches share the one counter without a lock (there
+    // is no `Mutex` on the `no_std` guest profile).
+    let region_entries = AtomicU64::new(0);
     let flow = run_steps(
         &module,
         &pipeline.steps,
@@ -204,6 +214,7 @@ where
         Some(&ctx),
         start_at,
         initial_attempts,
+        &region_entries,
     )
     .await?;
     Ok(match flow {
@@ -285,6 +296,10 @@ where
 ///
 /// See [`run_pipeline`]'s docs for the abort / rewind-to-gate retry model —
 /// the loop body lives here.
+///
+/// `region_entries` is the run-scoped `Dynamic`-step entry counter; every
+/// nested slice borrows the top-level one so dynamic-region child ids stay
+/// unique across the whole run (#731).
 #[allow(clippy::too_many_arguments)]
 async fn run_steps<D>(
     module: &Arc<IrModule>,
@@ -296,6 +311,7 @@ async fn run_steps<D>(
     suspend: Option<&SuspendCtx<'_>>,
     start_at: usize,
     initial_attempts: BTreeMap<String, u32>,
+    region_entries: &AtomicU64,
 ) -> Result<StepsFlow, RuntimeError>
 where
     D: ToolDispatcher + Send + Sync + 'static,
@@ -493,6 +509,7 @@ where
                 None,
                 0,
                 BTreeMap::new(),
+                region_entries,
             ))
             .await?
             {
@@ -538,6 +555,7 @@ where
                     None,
                     0,
                     BTreeMap::new(),
+                    region_entries,
                 ))
                 .await?
                 {
@@ -644,6 +662,7 @@ where
                         None,
                         0,
                         BTreeMap::new(),
+                        region_entries,
                     )
                     .await?
                     {
@@ -778,6 +797,12 @@ where
                     })?
                     .clone();
                 let counters = Arc::new(RegionCounters::new(*max_spawns, *max_concurrency));
+                // One bump per *execution* of this step, taken before the
+                // coordinator runs. `counters` is rebuilt here too, so its
+                // admission index restarts at 0 on a `Loop` pass or a check
+                // rewind; `entry` is what keeps the resulting child ids
+                // distinct across those re-entries (#731).
+                let entry = region_entries.fetch_add(1, Ordering::SeqCst);
                 let spawn_tools: alloc::vec::Vec<SpawnTool<D>> = spawns
                     .iter()
                     .map(|s| {
@@ -786,6 +811,7 @@ where
                             envelope.clone(),
                             counters.clone(),
                             step.id.0.clone(),
+                            entry,
                             module.clone(),
                             dispatcher.clone(),
                         )
