@@ -1020,16 +1020,21 @@ fn mcp_capability_plan(
 
 /// Per-server-tool narrowed authority (execution-trace TUI spec §12.3).
 ///
+/// `declared` is the entry's **author envelope**
+/// (`[tools.<entry>].capabilities`), not the server contract's `caps` —
+/// see #712: a real handshake always reports empty contract caps, so
+/// clamping against those could never fire outside a test.
+///
 /// `Some(effective)` iff the entry's meet-clamped [`CapabilityPlan`]
-/// narrows this tool's declared `net.http` caps — i.e. the declared net
-/// caps are not a subset of the plan's. The effective set is the tool's
-/// non-net declared caps plus `meet(declared_net, plan_net)` (which may
-/// contain no net cap at all after a fail-closed empty meet — still a
-/// clamp; the kernel renders it `none`). `None` = not narrowed: no net
-/// caps declared, ungoverned plan, or the ceiling already covers the
-/// declared hosts. Only hosts narrow today — the `[allow.mcp]` registry
-/// is an any-method host ceiling — but the comparison spans full net
-/// caps so a method-carrying ceiling needs no rework here.
+/// narrows the declared `net.http` caps — i.e. the declared net caps are
+/// not a subset of the plan's. The effective set is the non-net declared
+/// caps plus `meet(declared_net, plan_net)` (which may contain no net cap
+/// at all after a fail-closed empty meet — still a clamp; the kernel
+/// renders it `none`). `None` = not narrowed: no net caps declared,
+/// ungoverned plan, or the ceiling already covers the declared hosts.
+/// Only hosts narrow today — the `[allow.mcp]` registry is an any-method
+/// host ceiling — but the comparison spans full net caps so a
+/// method-carrying ceiling needs no rework here.
 fn tool_effective_capabilities(
     declared: &[tau_domain::Capability],
     plan: &CapabilityPlan,
@@ -1137,7 +1142,17 @@ pub(crate) async fn setup_mcp_runtime(
         // Per server-tool in the contract, register one McpBackedTool.
         for st in &arc_client.contract().tools {
             let ir_tool_id = tau_ir::ids::ToolId(format!("{}.{}", locked.entry, st.name));
-            let effective = tool_effective_capabilities(&st.caps, &plan);
+            // #712: clamp against the AUTHOR ENVELOPE, not `st.caps`.
+            // A real handshake always yields `st.caps == []` — MCP does not
+            // standardize per-tool capability declaration and `McpTool` has
+            // no extension field to carry a tau-specific one, so
+            // `ServerContract::from_handshake`'s extractor has nothing to
+            // read. Clamping against it made this `None` for every tool of
+            // every real server. The envelope is also the more meaningful
+            // basis: the server is the untrusted party, so "you declared
+            // hosts X, governance clamped you to Y" is the statement a user
+            // can act on.
+            let effective = tool_effective_capabilities(&tool_entry.capabilities, &plan);
             let mcp_tool: Arc<dyn DynTool> = McpBackedTool::new(
                 ir_tool_id.0.clone(),
                 arc_client.clone(),
@@ -1240,8 +1255,9 @@ mod sandbox_plan_tests {
     use std::sync::Arc;
 
     use super::{
-        mcp_capability_plan, setup_mcp_runtime, tool_effective_capabilities, DynLlmBackend,
-        LockFile, LockedMcpEntry, RuntimeError,
+        canonical_hash, hash_to_hex, mcp_capability_plan, mcp_open, setup_mcp_runtime,
+        tool_effective_capabilities, DynLlmBackend, LockFile, LockedMcpEntry, McpClientOptions,
+        RuntimeError,
     };
 
     fn cap(json: serde_json::Value) -> Capability {
@@ -1372,6 +1388,106 @@ mod sandbox_plan_tests {
                 message: "recorded, then refused".into(),
             })
         }
+    }
+
+    /// #712 — the clamp must be computed against the **author envelope**
+    /// (`[tools.<entry>].capabilities`), not the server contract's `caps`.
+    ///
+    /// A real handshake always yields `caps == []`: MCP does not standardize
+    /// per-tool capability declaration, and `McpTool` carries no extension
+    /// field to hold a tau-specific one, so `ServerContract::from_handshake`
+    /// has nothing to extract. Sourcing `declared` from `st.caps` therefore
+    /// made `tool_effective_capabilities` return `None` for every tool from
+    /// every real server, and no clamp could ever be observed in production.
+    ///
+    /// This drives the real `setup_mcp_runtime` over a cassette transport
+    /// (no process spawn, so the gate is never consulted) and asserts the
+    /// registered tool carries the clamped effective set.
+    #[tokio::test]
+    async fn clamp_is_computed_from_author_envelope_not_empty_server_caps() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cassette = tmp.path().join("weather.jsonl");
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tau-mcp-tokio/tests/fixtures/weather_minimal_cassette.jsonl"),
+            &cassette,
+        )
+        .expect("copy cassette fixture");
+        let url = format!("cassette:{}", cassette.display());
+
+        let config = ProjectConfig::parse_str(&format!(
+            r#"
+[project]
+name = "clamp-envelope-test"
+
+[tools.weather]
+mcp = "{url}"
+capabilities = [
+    {{ kind = "net.http", hosts = ["api.weather.com", "evil.example"] }},
+    {{ kind = "fs.read", paths = ["/tmp/**"] }},
+]
+
+[allow.mcp.weather]
+url = "{url}"
+hosts = ["api.weather.com"]
+"#
+        ))
+        .expect("valid project config");
+
+        let gate = Arc::new(RecordingRefusalGate {
+            plans: Arc::new(Mutex::new(Vec::new())),
+        });
+
+        // The drift check compares against the live contract, so derive the
+        // pin hash from one throwaway open rather than hardcoding it.
+        let envelope = &config.tools.get("weather").expect("entry").capabilities;
+        let probe_plan = mcp_capability_plan("weather", envelope, config.allow.as_ref())
+            .expect("plan for probe open");
+        let probe = mcp_open(&url, &probe_plan, gate.clone(), McpClientOptions::default())
+            .await
+            .expect("cassette open");
+        let live_contract = probe.contract().clone();
+        assert!(
+            live_contract.tools.iter().all(|t| t.caps.is_empty()),
+            "precondition: a real handshake declares no caps — that is the bug's root"
+        );
+        let pin_hex = hash_to_hex(&canonical_hash(&live_contract).expect("hash"));
+        drop(probe);
+
+        let mut lockfile = LockFile::default();
+        lockfile.mcp_entries.push(LockedMcpEntry::new(
+            "weather".to_string(),
+            url.clone(),
+            pin_hex,
+            None,
+            vec![],
+        ));
+
+        let backend: Arc<dyn DynLlmBackend> = Arc::new(MockLlmBackend::new("stub-backend"));
+        let setup = setup_mcp_runtime(&config, &lockfile, backend, gate)
+            .await
+            .expect("cassette setup succeeds");
+
+        let (_, tool) = setup
+            .tools
+            .iter()
+            .find(|(id, _)| id.0 == "weather.get_forecast")
+            .expect("get_forecast registered");
+
+        let effective = tool
+            .effective_capabilities()
+            .expect("ceiling narrows the envelope → the tool must carry a clamped set");
+        let nets: Vec<&Capability> = effective
+            .iter()
+            .filter(|c| matches!(c, Capability::Network(_)))
+            .collect();
+        assert_eq!(nets.len(), 1, "one clamped net cap: {effective:?}");
+        let net_json = serde_json::to_value(nets[0]).expect("serialize");
+        assert_eq!(
+            net_json["hosts"],
+            serde_json::json!(["api.weather.com"]),
+            "evil.example must be clamped away by [allow.mcp.weather]"
+        );
     }
 
     #[tokio::test]
