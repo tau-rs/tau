@@ -22,6 +22,16 @@
 //! commits are needed — `symbolic-ref` reports the branch of an unborn HEAD,
 //! which is why the script uses it instead of `rev-parse --abbrev-ref`.
 
+// Unix-only: every test here executes `scripts/clean-worktrees.sh` directly,
+// and Windows has no interpreter for a bare `.sh`. The sweep itself is Unix-
+// only by nature -- it reasons about a Conductor worktree layout via a bash
+// script -- so compiling this suite away on Windows is the correct contract,
+// not a workaround for a portability gap worth closing. Without this the six
+// tests panicked at `.expect("run clean-worktrees.sh")` and took Tier 2 red
+// on main for a day (#741); Windows gets no test leg before Tier 2, so there
+// was no PR-time signal.
+#![cfg(unix)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -318,7 +328,6 @@ fn an_unreadable_timestamp_fails_closed_instead_of_deleting_everything() {
 fn script_is_executable() {
     // The justfile and the docs both invoke it directly; a lost exec bit turns
     // the documented recovery path into a permission error at the worst moment.
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = fs::metadata(script())
