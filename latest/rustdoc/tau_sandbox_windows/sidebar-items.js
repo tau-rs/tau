@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_appcontainer_caps","dir_shaped_write_paths"],"mod":["bridge_args","launcher_args"],"struct":["AppContainerCaps","WindowsSandbox"]};

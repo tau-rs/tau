@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["lower_project"],"mod":["capability_fit","feature_fit","mcp_build_error","parse","predicate_fit","resolve","typecheck"],"struct":["Caches","LowerOutput","PromptFileError","ResolvedMcpContract","ResolvedServerTool"]};

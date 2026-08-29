@@ -1,0 +1,350 @@
+<!DOCTYPE HTML>
+<html lang="en" class="rust sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ADR-0001 — Bootstrap - tau</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="tau — agentic Rust runtime. Documentation.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "rust";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('rust')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tau</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/titouanlebocq/tau/edit/main/docs/./decisions/0001-bootstrap.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="adr-0001-bootstrap-decisions"><a class="header" href="#adr-0001-bootstrap-decisions">ADR-0001: Bootstrap decisions</a></h1>
+<p><strong>Status:</strong> Accepted
+<strong>Date:</strong> 2026-04-24
+<strong>Deciders:</strong> Titouan Lebocq</p>
+<h2 id="context"><a class="header" href="#context">Context</a></h2>
+<p>Tau begins as an empty repository. The first commits make several
+decisions that pin the implementation of constitutional guidelines —
+license selection (QG10), MSRV value (QG7), workspace shape (Constitution
+§1 Crate scope), CI provider (QG6), governance file content (QG10), and
+documentation framework (QG8). PG3 ("decisions in commit messages")
+is insufficient for these because future ADRs must amend them by
+reference, and commit messages are not stable referents.</p>
+<p>This ADR records the bootstrap state so future ADRs can supersede
+specific items without ambiguity.</p>
+<h2 id="decision"><a class="header" href="#decision">Decision</a></h2>
+<ol>
+<li>
+<p><strong>License: <code>MIT OR Apache-2.0</code>.</strong> Dual-licensed via <code>LICENSE-MIT</code> and
+<code>LICENSE-APACHE</code> at repo root; declared in <code>[workspace.package].license</code>.</p>
+</li>
+<li>
+<p><strong>MSRV: <code>1.91</code>.</strong> Pinned in <code>[workspace.package].rust-version</code>.
+Verified by the MSRV row of the CI test matrix. Bumped by minor-version
+change only (QG7); never silently in patch releases (QG11).</p>
+</li>
+<li>
+<p><strong>Workspace shape: 8 crates, all scaffolded empty.</strong> <code>tau-domain</code>,
+<code>tau-ports</code>, <code>tau-infra</code>, <code>tau-app</code>, <code>tau-pkg</code>, <code>tau-observe</code>,
+<code>tau-runtime</code>, <code>tau-cli</code>. Members listed explicitly in root
+<code>Cargo.toml</code> (no glob).</p>
+</li>
+<li>
+<p><strong>CI: GitHub Actions, 3-OS × 2-toolchain matrix.</strong> Linux + macOS +
+Windows × stable + 1.91. Windows is non-blocking (<code>continue-on-error</code>)
+per G15. Three jobs: <code>fmt</code>, <code>clippy</code>, <code>test</code>. No caching, no
+<code>cargo audit</code>/<code>cargo-deny</code>, no coverage in Plan 1 — Phase 2 additions
+per QG14/QG16.</p>
+</li>
+<li>
+<p><strong>Conventional Commits enforced by docs only.</strong> <code>CONTRIBUTING.md</code>
+describes the format. No <code>commitlint</code> or git hooks in Plan 1.</p>
+</li>
+<li>
+<p><strong>Toolchain: <code>rust-toolchain.toml</code> pins <code>stable</code> for local dev.</strong>
+CI overrides per matrix entry via <code>dtolnay/rust-toolchain</code> action.</p>
+</li>
+<li>
+<p><strong>Docs framework: Diátaxis.</strong> Per QG8. Sections under <code>docs/</code>:
+<code>tutorials/</code>, <code>how-to/</code>, <code>reference/</code>, <code>explanation/</code>, <code>decisions/</code>.</p>
+</li>
+<li>
+<p><strong>Process artifacts under <code>docs/superpowers/</code>.</strong> Specs (from the
+brainstorming skill) and plans (from the writing-plans skill) are
+kept in-repo so reviewers see how decisions were made. Not part of
+the published Diátaxis tree.</p>
+</li>
+<li>
+<p><strong>Governance files: README, LICENSE-{MIT,APACHE}, CONTRIBUTING,
+SECURITY, CODE_OF_CONDUCT, GOVERNANCE, ROADMAP, CHANGELOG</strong> at repo
+root, all present from the bootstrap commit. Satisfies QG10 in full.</p>
+</li>
+<li>
+<p><strong>Lint denials enabled per-crate from day one.</strong>
+<code>#![forbid(unsafe_code)]</code> (QG4), <code>#![deny(missing_docs)]</code> (QG9),
+<code>#![deny(rustdoc::broken_intra_doc_links)]</code> (QG9) on every library
+<code>lib.rs</code>. Binary (<code>tau-cli/main.rs</code>) carries <code>forbid(unsafe_code)</code>
+only; its public surface is the CLI, not Rust items.</p>
+</li>
+</ol>
+<h2 id="consequences"><a class="header" href="#consequences">Consequences</a></h2>
+<p><strong>Positive:</strong></p>
+<ul>
+<li>Future contributors land code, not infrastructure. Every workspace-level
+question is decided.</li>
+<li>Lint denials caught at first commit; no retro-enforcement campaign needed.</li>
+<li>The MSRV CI row catches accidental MSRV drift before merge.</li>
+<li>Diátaxis structure is in place; new docs have an obvious home.</li>
+</ul>
+<p><strong>Negative:</strong></p>
+<ul>
+<li>Eight empty crates inflate the repo before any code lands. Acceptable —
+retrofitting a workspace member is a larger diff than landing one upfront,
+and the constitution names all eight.</li>
+<li>Dual licensing requires every contributor to be aware of the MIT-or-Apache
+choice; documented in <code>CONTRIBUTING.md</code>.</li>
+</ul>
+<p><strong>Neutral:</strong></p>
+<ul>
+<li>Phase 2 will add <code>cargo audit</code> and <code>cargo-deny</code> (QG16), <code>actions/cache</code>
+for CI speed, and likely commit signing. Each is its own ADR when added.</li>
+</ul>
+<h2 id="alternatives-considered"><a class="header" href="#alternatives-considered">Alternatives considered</a></h2>
+<ul>
+<li><strong>License: Apache-2.0 only.</strong> Loses MIT compatibility with old GPL-2.0
+consumers; rejected for a runtime tool that may be embedded in
+permissively-licensed downstream projects.</li>
+<li><strong>License: MIT only.</strong> No explicit patent grant; rejected because tau
+has plugin traits that may attract patent claims as the ecosystem
+matures.</li>
+<li><strong>Workspace: defer empty crates until first content lands.</strong> Rejected
+because retrofitting a workspace member is more diff than landing one
+empty (PR-noise economics).</li>
+<li><strong>CI: GitLab CI or sourcehut builds.</strong> Rejected because the repo is
+hosted on GitHub; cross-host CI adds tooling without value.</li>
+<li><strong>Commitlint / Husky for Conventional Commits.</strong> Rejected because it
+adds a Node toolchain dependency to a Rust repo for a solo-maintainer
+project. Revisit if non-conforming commits accumulate (QG23-style
+reactive enforcement).</li>
+<li><strong>Skip ADR-0001; record decisions in commit messages only.</strong> Rejected
+per QG18; bootstrap pins guideline implementations that need a stable
+referent for amendment.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../decisions/template.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../decisions/0002-manifest-format.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../decisions/template.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../decisions/0002-manifest-format.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../mermaid.min.js"></script>
+        <script src="../mermaid-init.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
