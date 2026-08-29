@@ -1,13 +1,20 @@
 name: Tier 2 — Heavy validation
 
 # Runs on:
-# - nightly cron 04:00 UTC against main HEAD (regression detection ≤24h)
+# - daily against main HEAD (regression detection ≤24h)
 # - pull_request labeled `full-matrix` (opt-in pre-merge heavy run)
-# - workflow_dispatch (manual)
+# - workflow_dispatch (manual, and the keeper — see below)
+#
+# The daily run is driven by `daily-gate-keeper.yml`, NOT by the cron
+# below: GitHub applies a repo-wide backoff to `schedule` events here
+# (#736) that stretched every cron in this repo to a ~10-12h effective
+# period. The cron is kept as a best-effort second path — when it does
+# fire, it satisfies the keeper's freshness check and nothing is
+# dispatched.
 #
 # Tier 2 is NON-BLOCKING for PR merge. Auto-merge fires on Tier 0
 # (ci-summary) green; Tier 2 results are informational, posted as PR
-# comments or — on cron — as rolling regression issues.
+# comments or — on a daily run — as rolling regression issues.
 
 on:
   schedule:
@@ -15,6 +22,14 @@ on:
   pull_request:
     types: [labeled, synchronize]
   workflow_dispatch:
+    inputs:
+      nightly:
+        description: >-
+          Treat this run as the daily regression run: report failures to
+          the rolling nightly-regression issue. Set by daily-gate-keeper.
+        type: boolean
+        required: false
+        default: false
   workflow_call:  # release.yml reuses this workflow for preflight
 
 concurrency:
@@ -633,7 +648,10 @@ jobs:
       - schema-conformance
       - wit-host-drift
       - wasm-lane
-    if: failure() && github.event_name == 'schedule'
+    # `inputs.nightly` covers the keeper-dispatched daily run; gating on
+    # `schedule` alone would silently stop filing regression issues now
+    # that the daily run arrives as a workflow_dispatch (#736).
+    if: failure() && (github.event_name == 'schedule' || inputs.nightly)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -670,7 +688,10 @@ jobs:
     # runner, report the range and let a human drive.
     name: regression-range
     needs: nightly-regression-handler
-    if: failure() && github.event_name == 'schedule'
+    # `inputs.nightly` covers the keeper-dispatched daily run; gating on
+    # `schedule` alone would silently stop filing regression issues now
+    # that the daily run arrives as a workflow_dispatch (#736).
+    if: failure() && (github.event_name == 'schedule' || inputs.nightly)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -680,18 +701,30 @@ jobs:
         id: green
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          # Most recent successful nightly cron. No date cap: the old
+          set -euo pipefail
+          # Most recent successful daily run. No date cap: the old
           # `--created '>=7 days ago'` filter went silent once main had been
           # red for >7 days — exactly when this report is most needed.
-          PREV=$(gh run list --workflow=tier2.yml --event=schedule --status success \
-            --limit 100 --json headSha,createdAt --jq '.[0] // empty')
+          #
+          # Must accept BOTH events: the daily run is normally dispatched by
+          # daily-gate-keeper.yml and only occasionally arrives as a cron
+          # (#736), so `--event=schedule` alone would find no green and
+          # report "main has been red for an extended period" every time.
+          # `head_branch == main` excludes full-matrix PR runs, which test a
+          # PR head rather than main.
+          PREV=$(gh api "repos/$GH_REPO/actions/workflows/tier2.yml/runs?per_page=100&status=success" \
+            --jq '[ .workflow_runs[]
+                    | select((.event == "schedule" or .event == "workflow_dispatch")
+                             and .head_branch == "main") ]
+                  | sort_by(.created_at) | last // empty')
           if [ -z "$PREV" ]; then
             echo "sha=" >> "$GITHUB_OUTPUT"
             echo "green_date=" >> "$GITHUB_OUTPUT"
           else
-            echo "sha=$(echo "$PREV" | jq -r '.headSha')" >> "$GITHUB_OUTPUT"
-            echo "green_date=$(echo "$PREV" | jq -r '.createdAt')" >> "$GITHUB_OUTPUT"
+            echo "sha=$(echo "$PREV" | jq -r '.head_sha')" >> "$GITHUB_OUTPUT"
+            echo "green_date=$(echo "$PREV" | jq -r '.created_at')" >> "$GITHUB_OUTPUT"
           fi
       - name: Post regression range to the rolling issue
         # ALWAYS post — the previous version exited silently when no green
