@@ -2,7 +2,12 @@ name: Security — daily CVE scan
 
 # Daily 04:00 UTC. Runs cargo-audit + osv-scanner against main HEAD.
 # Diffs result vs yesterday's cached report. Opens issue
-# `[security] new CVE: <id>` (label `security`) on NEW findings only.
+# `[security] new CVE: <id> (<scope>)` (label `security`) on NEW findings only.
+#
+# Scope is either `workspace` (the root Cargo.lock) or a package slug for one
+# of the out-of-workspace Cargo projects — manifests carrying their own
+# `[workspace]` table, which the workspace lockfile does not cover. See
+# scripts/audit-out-of-workspace.sh and issue #733.
 
 on:
   schedule:
@@ -41,14 +46,31 @@ jobs:
         run: |
           mkdir -p _security
           # cargo-audit output already surfaced by the action; for diff,
-          # re-run cargo audit json to a file.
-          cargo install cargo-audit --locked --version =0.22.2 || true
+          # re-run cargo audit json to a file. No `|| true` on the install:
+          # a failed install would silently produce empty reports for every
+          # scope below, and the diff job would go green having seen nothing.
+          cargo install cargo-audit --locked --version =0.22.2
           cargo audit --json > _security/cargo-audit.json || true
+          # The action above and the command above both read the workspace
+          # Cargo.lock only. The out-of-workspace manifests are independent
+          # cargo projects whose dependencies appear in no lockfile the
+          # workspace owns; audit each one separately (issue #733). The
+          # action takes no --file argument, so this is the shelled-out path.
+          # Defer a manifest-list drift failure until after the upload so a
+          # drifted list never costs a day of advisory coverage.
+          scripts/audit-out-of-workspace.sh _security \
+            || echo "MANIFEST_DRIFT=1" >> "$GITHUB_ENV"
+          ls -1 _security/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: security-daily-${{ github.run_id }}
           path: _security/
           retention-days: 30
+      - name: Fail on out-of-workspace manifest drift
+        if: env.MANIFEST_DRIFT == '1'
+        run: |
+          echo "::error::scripts/audit-out-of-workspace.sh no longer finds a manifest listed in its REQUIRED floor — a project moved or was deleted and has silently lost advisory coverage. Update the list."
+          exit 1
 
   diff-and-file-issues:
     name: diff vs yesterday + file issues on new
@@ -89,24 +111,51 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ ! -f _yesterday/cargo-audit.json ]; then
-            echo "No yesterday baseline; skipping diff (will file issues for ALL findings tomorrow)."
-            exit 0
+          shopt -s nullglob
+          REPORTS=(_today/cargo-audit*.json)
+          if [ ${#REPORTS[@]} -eq 0 ]; then
+            echo "::error::No cargo-audit report in today's artifact."
+            exit 1
           fi
-          # Extract advisory IDs from both reports (jq), diff, file
-          # issue for each new ID.
-          TODAY_IDS=$(jq -r '.vulnerabilities.list[].advisory.id // empty' _today/cargo-audit.json 2>/dev/null | sort -u)
-          YDAY_IDS=$(jq -r '.vulnerabilities.list[].advisory.id // empty' _yesterday/cargo-audit.json 2>/dev/null | sort -u)
-          NEW_IDS=$(comm -23 <(echo "$TODAY_IDS") <(echo "$YDAY_IDS"))
-          if [ -z "$NEW_IDS" ]; then
-            echo "No new advisories vs yesterday."
-            exit 0
-          fi
-          echo "$NEW_IDS" | while read -r ID; do
-            [ -z "$ID" ] && continue
-            DETAILS=$(jq -r ".vulnerabilities.list[] | select(.advisory.id == \"$ID\") | .advisory" _today/cargo-audit.json)
-            gh issue create \
-              --title "[security] new CVE: $ID" \
-              --label security \
-              --body "New RustSec advisory detected.\n\nID: $ID\n\nDetails:\n\`\`\`json\n$DETAILS\n\`\`\`\n\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          FILED=0
+          for TODAY_FILE in "${REPORTS[@]}"; do
+            BASE="$(basename "$TODAY_FILE")"
+            YDAY_FILE="_yesterday/$BASE"
+            # `cargo-audit.json` is the workspace; `cargo-audit-<pkg>.json`
+            # is one out-of-workspace cargo project.
+            case "$BASE" in
+              cargo-audit.json) SCOPE=workspace ;;
+              *) SCOPE="${BASE#cargo-audit-}"; SCOPE="${SCOPE%.json}" ;;
+            esac
+            # Per-file baseline. A missing counterpart means SKIP, never
+            # "everything is new" — otherwise the first run after a new
+            # report appears files an issue for every pre-existing advisory
+            # in that tree at once.
+            if [ ! -f "$YDAY_FILE" ]; then
+              echo "No yesterday baseline for $BASE (scope: $SCOPE); skipping (will diff tomorrow)."
+              continue
+            fi
+            # Extract advisory IDs from both reports (jq), diff, file
+            # issue for each new ID.
+            TODAY_IDS=$(jq -r '.vulnerabilities.list[].advisory.id // empty' "$TODAY_FILE" 2>/dev/null | sort -u)
+            YDAY_IDS=$(jq -r '.vulnerabilities.list[].advisory.id // empty' "$YDAY_FILE" 2>/dev/null | sort -u)
+            NEW_IDS=$(comm -23 <(echo "$TODAY_IDS") <(echo "$YDAY_IDS"))
+            if [ -z "$NEW_IDS" ]; then
+              echo "No new advisories vs yesterday for scope: $SCOPE."
+              continue
+            fi
+            while read -r ID; do
+              [ -z "$ID" ] && continue
+              DETAILS=$(jq -r ".vulnerabilities.list[] | select(.advisory.id == \"$ID\") | .advisory" "$TODAY_FILE")
+              # Scope is in the title so the same advisory hitting two
+              # cargo projects files two actionable issues, not one.
+              gh issue create \
+                --title "[security] new CVE: $ID ($SCOPE)" \
+                --label security \
+                --body "$(printf 'New RustSec advisory detected.\n\nID: %s\nScope: %s (report `%s`)\n\nDetails:\n```json\n%s\n```\n\nRun: %s/%s/actions/runs/%s\n' \
+                  "$ID" "$SCOPE" "$BASE" "$DETAILS" \
+                  "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}")"
+              FILED=$((FILED + 1))
+            done <<< "$NEW_IDS"
           done
+          echo "Filed $FILED issue(s) across ${#REPORTS[@]} report(s)."
