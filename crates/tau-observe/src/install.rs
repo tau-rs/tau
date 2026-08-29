@@ -471,23 +471,46 @@ fn install_non_blocking_inner(opts: InstallOptions) -> Result<InstallGuard, Inst
     };
     let (writer, worker_guard) = tracing_appender::non_blocking(file_appender);
 
-    // Per-layer filter on the fmt layer, matching the blocking path —
-    // see the `install` body for why the `EnvFilter` must not be a
-    // global filter (tau-rs/tau#694). This path does not compose
-    // `extra_layers` or the OTLP layer at all yet; that gap is #699.
-    let registry = tracing_subscriber::registry();
+    // Layer composition mirrors the blocking path in `install` — see
+    // that body for the full reasoning. In short: `extra_layers` are
+    // on-disk artifact sinks that must sit OUTSIDE the `EnvFilter`
+    // (tau-rs/tau#694), the `Option` wrapper around the vec is
+    // load-bearing (`Vec<L>`'s `enabled` is `iter().any(…)`, which is
+    // `false` for an empty vec and would suppress every event
+    // process-wide), and the OTLP layer is folded into the fmt layer
+    // with `Layer::and_then` so a single non-`Clone` `EnvFilter`
+    // covers both console sinks.
+    let extras = if opts.extra_layers.is_empty() {
+        None
+    } else {
+        Some(opts.extra_layers)
+    };
+
+    #[cfg(feature = "otlp")]
+    let console_extra = opts.otlp.as_ref().map(build_otel_layer);
+    #[cfg(not(feature = "otlp"))]
+    let console_extra: Option<tracing_subscriber::layer::Identity> = None;
+
+    let filter = opts.filter;
+    let base = tracing_subscriber::registry().with(extras);
     let result = match opts.format {
-        Format::Human => registry
-            .with(fmt::layer().with_writer(writer).with_filter(opts.filter))
+        Format::Human => base
+            .with(
+                fmt::layer()
+                    .with_writer(writer)
+                    .and_then(console_extra)
+                    .with_filter(filter),
+            )
             .try_init(),
-        Format::Json => registry
+        Format::Json => base
             .with(
                 fmt::layer()
                     .json()
                     .with_writer(writer)
                     .with_current_span(true)
                     .with_span_list(false)
-                    .with_filter(opts.filter),
+                    .and_then(console_extra)
+                    .with_filter(filter),
             )
             .try_init(),
     };
