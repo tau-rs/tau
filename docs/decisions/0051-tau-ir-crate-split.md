@@ -32,9 +32,9 @@ wasm) reached the kernel:
 Split `tau-ir` along a **crate boundary**, not a feature flag:
 
 - **`tau-ir`** — pure `#![no_std] + alloc`. IR types, `check`, `context`,
-  `pipeline`, `template`, `canonical`/`hash`, `message` (std adapters
-  behind an opt-in, **non-default** `with-std-adapters` that no longer
-  pulls `tau-pkg`). Builds for `wasm32-wasip2`.
+  `pipeline`, `template`, `canonical`/`hash`, `message` (no std
+  adapters and no feature flag — the boundary is the crate, not a
+  flag). Builds for `wasm32-wasip2`.
 - **`tau-ir-lower`** — std-side. The `lower` pass
   (`tau_pkg::ProjectConfig → IrModule`) and its `LowerError`. Linked by
   `tau-cli`, `tau-pkg`, `tau-conformance`, `tau-ir-conformance`,

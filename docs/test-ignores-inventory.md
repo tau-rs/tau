@@ -3,7 +3,7 @@
 **Refreshed:** 2026-08-27 (supersedes the 2026-05-17 refresh, itself
 superseding the 2026-05-13 inventory from PR #71)
 **Workspace state:** based on `origin/main` at `e38f2530`
-**Total `#[ignore]` annotations:** 44
+**Total `#[ignore]` annotations:** 45
 
 44 `#[ignore]` annotations across the workspace, organised into four
 triage buckets. This file is the canonical reference for what each ignored
@@ -333,6 +333,7 @@ Waiting on a specific helper / fixture / sibling work.
 | `crates/tau-conformance/tests/conformance.rs:67` | `fan_monitor_dev_matches_wasm` | `WasmProfile::run` is still `unimplemented!()` (`crates/tau-conformance/src/profile/wasm.rs`). The β.6 `conformance / linux` job runs `-p tau-conformance` without `--run-ignored`, so it is skipped there by design. **Stated reason is stale — see follow-ups.** |
 | `crates/tau-ir-lower/tests/lower_e2e.rs:143` | `lowering_refuses_on_capability_fit_mismatch` | No `Available` registry entry lacks `NetworkHttp` — all 7 entries use `fs_rw_exec_net`, `fs_rw_net` or `all_shapes`, each of which inserts it. Re-verified 2026-08-27 against `crates/tau-ports/src/target/registry.rs`. Un-ignore when a `no-network` target tier lands. |
 | `crates/tau-mcp-tokio/tests/http_lifecycle.rs:101` | `multi_event_sse_response` | A session-aware wiremock fixture: the single mock serves the same two-event body for every POST, so `recv_response_for` sees a stale `id=0` while waiting for `id=1`. **Stated reason is stale — see follow-ups.** |
+| `crates/tau-sandbox-windows/tests/install_rust_cargo_acceptance.rs:255` | `rust_cargo_install_succeeds_sandboxed_without_unsandboxed_escape` | #726: `CreateProcess` on `rustc.exe` denies even though its DACL carries a correct inherited allow-ACE (`FILE_EXECUTE` included) for the AppContainer's package SID. Windows-only, `integration-tests`-gated; egress chain itself is proven green by `tests/egress_integration.rs`. Un-ignore when #726 lands a fix. |
 | `crates/tau-cli/tests/clamp_row_e2e.rs:152` | `governed_clamped_mcp_run_writes_a_clamp_row` | The #631 execution-trace-TUI clamp-row definition-of-done e2e: a governed run with a meet-clamped MCP tool must write a `Clamp` row to `.tau/runs/<id>.jsonl`. Blocked on two pre-existing upstream bugs, not on #631's own code: #712 (the MCP handshake fixture returns empty tool capabilities, so the test's server-tool never carries a `net.http` cap to clamp) and #714 (bundle re-lowering rejects MCP-backed projects, so `tau build` fails before the run can start). Promote when both are fixed. |
 
 **CI plan:** revisit each line when its blocker resolves. If a blocker is
@@ -415,21 +416,30 @@ no annotation to count — so this table is the only control for the class.
 | `tau-sandbox-native` | `tests/{strict_bridge,strict_proxy,strict_seccomp,strict_exec_gating,light_landlock}.rs` | `test-tau-sandbox-native-e2e` (both steps) |
 | `tau-plugin-compat` | `tests/{layer3_check_sandbox,layer4_native,layer4_container}.rs` | `test-tau-plugin-compat` + the layer4-ignored matrix |
 | `tau-runtime-tokio` | `tests/{sandbox_container,sandbox_native}.rs` | `test-tau-runtime-e2e` (both steps) |
-| `tau-workflow` | `tests/integration.rs` | ⚠️ **nothing** — see below |
 
-⚠️ `tau-workflow` declares `integration-tests = []` and gates its only
-integration test behind it, and **no CI job or `just` recipe passes
-`--features integration-tests` for that crate.** The test has never run in CI.
-Unlike the sandbox lanes it needs no special host: it drives the real `Runner`
-against `MockLlmBackend` from `tau_ports::fixtures`, with no subprocess and no
-network, so the gate buys nothing. Follow-up candidate — either drop the
-`#![cfg]` so Tier 0 picks it up, or add the step. Not fixed here (this is a
-docs + guard change).
+`tau-workflow` was on this table until 2026-08-28 and is now **un-gated**
+(#716): `tests/integration.rs` lost its `#![cfg(feature =
+"integration-tests")]` and the crate's `integration-tests = []` declaration
+was deleted, so Tier 0's `--workspace --all-targets` runs it. Unlike the
+sandbox lanes it needed no special host — it drives the real `Runner` against
+`MockLlmBackend` from `tau_ports::fixtures`, with no subprocess and no
+network, so the gate bought nothing.
 
-⚠️ `tau-sandbox-container` declares `integration-tests = []` with **zero
-consumers** — no `tests/` directory and no `cfg(feature = "integration-tests")`
-anywhere in the crate. A dead feature flag reads as coverage that exists.
-Follow-up candidate.
+Un-gating exposed exactly the rot the gate was hiding, the #648 class: the
+test still asserted the pre-Sub-project-D contract in which `RunLog::append`
+wrote the JSONL directly. It is now a `tracing::event!` emitter materialized
+by `WorkflowRunLogLayer`, so with no subscriber installed the log file was
+never created and `replay` failed with `NotFound`. #716 fixed the test — it
+pins `run_id`, derives the path with `run_log_path`, and installs the layer
+via `set_default` for the run — rather than weakening the persistence
+assertions, which are the only end-to-end coverage of the property #650 broke.
+
+`tau-sandbox-container`'s `integration-tests = []` declaration had **zero
+consumers** — no `tests/` directory and no `cfg(feature =
+"integration-tests")` anywhere in the crate. A dead feature flag reads as
+coverage that exists, so #716 deleted the declaration. If that crate ever
+grows integration tests, re-add the feature *and* its CI step together, per
+the rule below.
 
 Before 2026-08-23 `tau-sandbox-darwin` declared the
 `integration-tests` feature but **no** CI job enabled it, so macOS
