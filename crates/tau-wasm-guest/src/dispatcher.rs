@@ -137,7 +137,24 @@ impl ToolDispatcher for GuestDispatcher {
     fn deterministic_registry(
         &self,
     ) -> Option<Arc<dyn tau_runtime_core::interpreter::deterministic::DeterministicRegistry>> {
-        Some(Arc::new(crate::goal_registry::GuestGoalRegistry))
+        // #689: when the baked IR reaches no goal predicate at all, the
+        // registry is never constructed and `goal_registry` is not compiled,
+        // so nothing references `tau_native_tools::goal_predicates` and
+        // wasm-ld drops the regex engine with it.
+        //
+        // `None` here is a genuine can't-happen for a build whose IR needs a
+        // predicate, not a silent fallback: `build.rs` derives the cfg from
+        // the same IR that is baked in, and the interpreter turns a missing
+        // registry into a hard error ("branch … needs a deterministic
+        // registry") rather than a default verdict.
+        #[cfg(tau_goal_predicates)]
+        {
+            Some(Arc::new(crate::goal_registry::GuestGoalRegistry))
+        }
+        #[cfg(not(tau_goal_predicates))]
+        {
+            None
+        }
     }
 }
 

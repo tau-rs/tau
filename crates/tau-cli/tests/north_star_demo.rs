@@ -512,4 +512,21 @@ fn north_star_wasm_guest_executes_same_workflow_same_terminal_outcome() {
          not an earlier step's — same last-leaf contract the dev leg renders \
          as final_message"
     );
+
+    // #689 positive control. This fixture reaches `matches` from BOTH the
+    // Branch condition and the Loop's `until`, so it is the shape that must
+    // still link the full engine after the goal-predicate gate — the run
+    // above already proves the predicate evaluated correctly.
+    //
+    // It also keeps the gate's NEGATIVE assertions honest: those search the
+    // name section for regex symbols, which would find nothing in a build
+    // that stripped names, passing vacuously. This assertion fails first in
+    // that case, so the pair cannot silently stop testing anything.
+    assert!(
+        common::wasm_component::links_regex_engine(&component),
+        "a component whose IR reaches `matches` must still link the regex \
+         engine; finding none here means either the #689 gate over-pruned or \
+         the build stopped emitting a name section (which would make every \
+         `!links_regex_engine` assertion vacuous)"
+    );
 }

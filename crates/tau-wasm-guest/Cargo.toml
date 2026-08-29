@@ -36,8 +36,27 @@ tau-native-tools = { path = "../tau-native-tools", default-features = false, fea
 futures-core = { workspace = true, default-features = false, features = ["alloc"] }
 serde_json = { workspace = true }
 
+# HOST-side only: `build.rs` decodes the baked IR to decide which goal
+# predicates this component can reach (#689). Build-dependencies are compiled
+# for the host and contribute ZERO bytes to the wasm artifact — they are a
+# different graph from the `cfg(target_arch = "wasm32")` deps above.
+#
+# A typed decode rather than a hand-rolled JSON peek: the scan reads
+# `workflow.steps` / `workflow.checks` / the pipeline tree, so an IR shape
+# change becomes a compile error here instead of a silently under-detected
+# predicate — which would fail at RUN time, on wasm only.
+[build-dependencies]
+tau-ir = { workspace = true }
+
 [dev-dependencies]
 tau-ports = { workspace = true }
+# `tests/ir_scan.rs` includes `build/ir_scan.rs` to cover the reachability
+# paths and to pin its `FN_MATCHES` literal against the authoritative
+# constant. Dev-only, so neither edge reaches the cdylib: `cargo build
+# -p tau-wasm-guest --target wasm32-wasip2` does not build dev-dependencies.
+tau-ir = { workspace = true }
+tau-native-tools = { path = "../tau-native-tools", default-features = false, features = ["goal-predicates"] }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

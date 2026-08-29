@@ -30,6 +30,10 @@ mod dispatcher;
 #[cfg(target_arch = "wasm32")]
 mod executor;
 #[cfg(target_arch = "wasm32")]
+// #689: absent entirely when the baked IR reaches no goal predicate, so
+// `tau_native_tools::goal_predicates` (and therefore `regex-automata`) is
+// unreferenced and wasm-ld collects it.
+#[cfg(tau_goal_predicates)]
 mod goal_registry;
 #[cfg(target_arch = "wasm32")]
 mod host_ports;

@@ -65,8 +65,20 @@ registry plus ~230 KiB to widen its regex feature set to match the native graph 
 all of it to components that carry real IR, and this gate did not move for any
 of it.
 
-Note the table below predates that regex widening: the same `pipeline` fixture
-built today is 2,786,007 bytes. The step-change conclusion is unchanged.
+**#689 gave most of that back, and this gate did not move for that either.** The
+guest now links the goal-predicate registry only when the baked IR can reach a
+predicate, and the regex engine only when it can reach `matches`. The
+`wasm-build/pipeline` fixture (two agents, no control flow) went from 2,777,914
+to 1,988,452 bytes — **789,462 B, ~771 KiB, 28.4%**. A component that does use
+`matches` is unchanged, by design: narrowing the engine instead would split
+in-guest `matches` semantics from the native registry, which is the parity
+property ADR-0068 exists to guarantee.
+
+Because this gate cannot see any of that, #689's saving is guarded by its own
+tests in `tau-cli/tests/build_wasm_e2e.rs` — see ADR-0068's Consequences.
+
+Note the table below predates the regex widening: the same `pipeline` fixture
+built at that point was 2,786,007 bytes. The step-change conclusion is unchanged.
 
 | Measurement | Bytes | KiB | Tool |
 |---|--:|--:|---|

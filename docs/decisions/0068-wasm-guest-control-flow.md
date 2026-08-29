@@ -89,12 +89,36 @@ Load-bearing facts established during design:
   Accepted: the alternative (a leaner engine) costs cross-target parity, see
   below.
 
-  Reducing this is tracked in **#689**, and it is a CODE change, not a
-  feature flip: `tau-wasm-guest/src/goal_registry.rs` calls
-  `tau_native_tools::goal_predicates::invoke` unconditionally, so building
-  the guest with `goal-predicates` off does not compile today (verified).
-  Cfg-gating the registry on whether the baked IR actually references a
-  predicate has to make that call site conditional first.
+  **Resolved by #689** — a component now pays only for the predicates its
+  baked IR can actually reach. `tau-wasm-guest/build.rs` decodes the IR it
+  bakes and emits `tau_goal_predicates` / `tau_goal_matches`; the guest then
+  either omits `goal_registry` entirely, routes through
+  `goal_predicates::invoke_alloc_only` (the four allocation-only
+  predicates), or links the full table. Nothing about a linked predicate's
+  MEANING changes — a build that can reach `matches` links the identical
+  engine the native registry uses, so the parity contract below is
+  untouched.
+
+  A Cargo feature could not express this: features resolve before build
+  scripts run, so nothing at feature-resolution time knows which IR is being
+  baked. The lever is reachability — the guest stops *referencing*
+  `matches_`, and wasm-ld garbage-collects the engine, the same mechanism
+  the `tau_cap_net_http` / `tau_cap_fs_*` arms use.
+
+  | Fixture | Reaches | Component |
+  |---|---|--:|
+  | `wasm-build/trivial` (one agent) | nothing | 1,988,124 B |
+  | `wasm-build/pipeline` (two agents) | nothing | 1,988,452 B |
+  | `north-star` (`matches` in Branch + Loop) | full table | 2,799,802 B |
+
+  Measured with `tau build wasm`, `wasm32-wasip2` release, at the commit
+  that landed #689. The `pipeline` fixture was 2,777,914 B before the gate,
+  so the saving on it is **789,462 B (~771 KiB, 28.4%)** — one end-to-end
+  differential on one fixture, NOT the sum of the two rows above. It exceeds
+  the 543,190 B row because that one stubbed only the `matches_` body,
+  pre-widening; unlinking the registry outright also drops `regex_syntax`
+  (the parser — the larger half of the regex code section, per #679) and
+  regex's Unicode tables in the data section.
 - **The engine's feature list is a parity contract, not a size knob.** The
   predicate source is shared, but cargo feature unification decides the
   accepted regex language per graph: in the `tau-cli` graph
@@ -110,7 +134,16 @@ Load-bearing facts established during design:
   graph_does` fails if the list is trimmed again.
 - Note that the `TAU_WASM_SIZE_BUDGET` gate does NOT bound this cost: it
   builds the guest with no `TAU_IR_BYTES`, so the empty-IR early return
-  makes the interpreter and the predicate registry dead code.
+  makes the interpreter and the predicate registry dead code. #689's gate is
+  therefore guarded by its own tests, not by that budget:
+  `goal_free_component_links_no_regex_engine` and
+  `predicate_without_matches_runs_in_guest_without_the_regex_engine`
+  (`tau-cli/tests/build_wasm_e2e.rs`). Both assert the ABSENCE of regex
+  symbols, which a build that stopped emitting a name section would satisfy
+  vacuously, so the north-star wasm leg carries the paired positive
+  assertion that a `matches`-using component still links the engine.
+  Absent `TAU_IR_BYTES`, the scan links everything — which is what keeps
+  CI's standalone link gate covering the full predicate path.
 - Obligation: the north-star fixture (#461) extends to a wasm execution leg
   (build succeeds; `tau_wasm_host::run_component` yields the same terminal
   sentinel as the dev leg); the build-refusal witness retargets to a
