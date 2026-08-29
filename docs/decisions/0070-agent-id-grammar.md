@@ -174,10 +174,18 @@ without it.
 
 - `[dirs]`' headline example works. `agents/review/strict.md` builds, slices
   (`tau build --agent review/strict`), verifies, and runs.
-- The silent `ir-agent` collapse in `agent_loop.rs` becomes unreachable for
-  authored names, closing the #715 half of the defect #731 closed from the
-  generated-id side. Per-agent token attribution and run spans are correct for
-  namespaced agents.
+- The silent `ir-agent` collapse of the **agent id** in `agent_loop.rs`
+  becomes unreachable for authored names, closing the #715 half of the defect
+  #731 closed from the generated-id side. Per-agent token attribution and run
+  spans key on that id, so they are now correct for namespaced agents.
+
+  The adjacent `pkg_name` conversion on the same lines still falls back:
+  `PackageName` stays narrow by Decision 2, so a namespaced id yields the
+  synthetic `PackageId("ir-agent", 0.0.0)` that `AgentDefinition::new`
+  requires. That is not a regression — it was already the behaviour for every
+  id `PackageName` rejects, and it was the behaviour for `review/strict`
+  before this change — and it is not an attribution surface. It is called out
+  here so the asymmetry on those five lines reads as deliberate.
 - `tau resolve` no longer panics on any project it can parse.
 - The scanner and the domain type share one grammar with one implementation.
   The class of bug this ADR fixes — an authoring surface accepting a name a

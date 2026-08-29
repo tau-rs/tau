@@ -503,8 +503,17 @@ where
     })?;
 
     // 5. Synthesise the AgentDefinition from the IR agent.
-    //    PackageName allows [a-z0-9-] starting with a letter — same as AgentId.
-    //    We fall back to "ir-agent" if the agent id doesn't conform.
+    //    Since ADR-0070 these two conversions no longer agree: `AgentId`
+    //    admits `/`, `_`, and a leading digit, `PackageName` still does not.
+    //    So a namespaced id like `review/strict` now yields the RIGHT
+    //    `domain_agent_id` — the key per-agent token accounting (#538) and
+    //    the run span (#731) are recorded under, and the whole point of
+    //    widening the grammar (#715) — while `pkg_name` still falls back to
+    //    the synthetic "ir-agent" home package. That fallback is not an
+    //    attribution surface (it only fills the `PackageId` that
+    //    `AgentDefinition::new` requires, at a stub 0.0.0 version), and it
+    //    was already the behaviour for every id `PackageName` rejects.
+    //    Deliberate asymmetry, not an oversight.
     let pkg_name = PackageName::from_str(&agent.id.0)
         .unwrap_or_else(|_| PackageName::from_str("ir-agent").expect("ir-agent is always valid"));
 
