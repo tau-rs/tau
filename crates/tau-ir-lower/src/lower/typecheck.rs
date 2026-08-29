@@ -648,12 +648,38 @@ fn validate_step_run(
             max_concurrency,
             ..
         } => {
-            // Bounds are validated at author time (tau-pkg) and kind
-            // resolution happens at lowering (UnknownAgentKind); the region
-            // produces an output and nests no pipeline steps, so no
-            // reference/scope check is needed here. But mirror Loop's
-            // defense-in-depth: hand-constructed IR that bypasses tau-pkg
-            // must still be rejected rather than silently accepted.
+            // Checked in three groups: the shape of the offered set, then
+            // the region's bounds, then its references. Bounds and set shape
+            // are validated at author time (tau-pkg) and kind resolution
+            // happens at lowering (UnknownAgentKind); the region produces an
+            // output and nests no pipeline steps, so no scope check is needed
+            // here. But mirror Loop's defense-in-depth: hand-constructed IR
+            // that bypasses tau-pkg must still be rejected rather than
+            // silently accepted. The one exception is the spawn-tool name
+            // collision at the end, which tau-pkg cannot catch.
+
+            // -- the offered set --
+            if spawns.is_empty() {
+                return Err(LowerError::DynamicSpawnsEmpty {
+                    step: outer_step_id.into(),
+                });
+            }
+            // Two entries for one kind would build two `SpawnTool`s named
+            // `agent.<kind>.spawn`, which the runtime builder rejects as a
+            // name collision.
+            {
+                let mut seen = alloc::collections::BTreeSet::new();
+                for spawn in spawns {
+                    if !seen.insert(spawn.kind.as_str()) {
+                        return Err(LowerError::DynamicSpawnKindDuplicate {
+                            step: outer_step_id.into(),
+                            kind: spawn.kind.clone(),
+                        });
+                    }
+                }
+            }
+
+            // -- bounds --
             if *max_spawns == 0 {
                 return Err(LowerError::DynamicMaxSpawnsZero {
                     step: outer_step_id.into(),
@@ -666,15 +692,17 @@ fn validate_step_run(
                     max_concurrency: *max_concurrency,
                 });
             }
+            // -- references --
             // EPIC 4.5: the region's owner must be a real coordinator agent,
             // and every spawn template's tool allow-list must resolve
             // against `workflow.tools` — mirrors StepRun::Agent/Tool above.
-            if !wf.agents.contains_key(owner) {
-                return Err(LowerError::UnknownPipelineRun {
-                    step: outer_step_id.into(),
-                    target: alloc::format!("agent:{}", owner.0),
-                });
-            }
+            let coordinator =
+                wf.agents
+                    .get(owner)
+                    .ok_or_else(|| LowerError::UnknownPipelineRun {
+                        step: outer_step_id.into(),
+                        target: alloc::format!("agent:{}", owner.0),
+                    })?;
             for spawn in spawns {
                 for tool_id in &spawn.tool_refs {
                     if !wf.tools.contains_key(tool_id) {
@@ -683,6 +711,32 @@ fn validate_step_run(
                             target: alloc::format!("tool:{}", tool_id.0),
                         });
                     }
+                }
+            }
+            // The coordinator runs with one `agent.<kind>.spawn` tool
+            // registered per offered kind, on top of its own `tool_refs`
+            // (`agent_loop.rs`). A `tool_refs` entry already carrying that
+            // name collides and aborts the run. Two precision points: only
+            // the COORDINATOR's `tool_refs` are registered (not all of
+            // `wf.tools`, so a project that merely defines such a tool
+            // without granting it is fine), and the registry keys on
+            // `spec.name`, not the `ToolId` map key. Children are unaffected
+            // — they run via plain `run_agent` and never receive a
+            // `SpawnTool`, so `spawn.tool_refs` is deliberately not checked.
+            let owned_tool_names: alloc::collections::BTreeSet<&str> = coordinator
+                .tool_refs
+                .iter()
+                .filter_map(|id| wf.tools.get(id))
+                .map(|t| t.spec.name.as_str())
+                .collect();
+            for spawn in spawns {
+                let spawn_tool = alloc::format!("agent.{}.spawn", spawn.kind);
+                if owned_tool_names.contains(spawn_tool.as_str()) {
+                    return Err(LowerError::DynamicSpawnToolNameCollision {
+                        step: outer_step_id.into(),
+                        kind: spawn.kind.clone(),
+                        tool: spawn_tool,
+                    });
                 }
             }
         }
@@ -706,6 +760,26 @@ mod tests {
 
     fn empty_caps() -> CapabilityRequirements {
         CapabilityRequirements { declared: vec![] }
+    }
+
+    /// A minimal runnable `DynamicSpawn` for a `StepRun::Dynamic` fixture.
+    /// Every field but `kind`/`tool_refs` is inert — these tests exercise the
+    /// region's structural guards, not spawn-template content.
+    fn dynamic_spawn(kind: &str, tool_refs: &[&str]) -> tau_ir::pipeline::DynamicSpawn {
+        tau_ir::pipeline::DynamicSpawn {
+            kind: kind.to_string(),
+            capabilities: empty_caps(),
+            description: String::new(),
+            prompt: tau_ir::prompt::PromptSource::inline(""),
+            model_ref: tau_ir::model_ref::ModelRef {
+                backend: String::new(),
+                model_id: String::new(),
+            },
+            tool_refs: tool_refs
+                .iter()
+                .map(|t| tau_ir::ids::ToolId(t.to_string()))
+                .collect(),
+        }
     }
 
     fn agent_with_tool_refs(id: &str, refs: &[&str]) -> Agent {
@@ -739,6 +813,21 @@ mod tests {
                 input_schema: serde_json::Value::Null,
             },
         }
+    }
+
+    /// A `ToolImpl::Native` tool with a non-sentinel `content_hash`, so it
+    /// survives the "every Native tool's content_hash must be non-zero" pass
+    /// and the fixture exercises only the check under test.
+    fn native_tool(name: &str) -> Tool {
+        tool_with_impl(
+            name,
+            ToolImpl::Native {
+                fn_ref: tau_ir::NativeFnRef {
+                    name: "noop".to_string(),
+                },
+                content_hash: [1u8; 32],
+            },
+        )
     }
 
     #[test]
@@ -1219,7 +1308,7 @@ mod tests {
                         run: StepRun::Dynamic {
                             owner: AgentId("coordinator".to_string()),
                             envelope: empty_caps(),
-                            spawns: alloc::vec![],
+                            spawns: alloc::vec![dynamic_spawn("researcher", &[])],
                             max_spawns: 0, // invalid
                             max_concurrency: 1,
                         },
@@ -1260,7 +1349,7 @@ mod tests {
                         run: StepRun::Dynamic {
                             owner: AgentId("coordinator".to_string()),
                             envelope: empty_caps(),
-                            spawns: alloc::vec![],
+                            spawns: alloc::vec![dynamic_spawn("researcher", &[])],
                             max_spawns: 2,
                             max_concurrency: 5, // invalid: > max_spawns
                         },
@@ -1305,7 +1394,7 @@ mod tests {
                         run: StepRun::Dynamic {
                             owner: AgentId("coordinator".to_string()),
                             envelope: empty_caps(),
-                            spawns: alloc::vec![],
+                            spawns: alloc::vec![dynamic_spawn("researcher", &[])],
                             max_spawns: 1,
                             max_concurrency: 1,
                         },
@@ -1332,8 +1421,8 @@ mod tests {
         // EPIC 4.5: a Dynamic region spawn template's `tool_refs` must all
         // resolve against `workflow.tools`, mirroring an Agent's tool_refs.
         use tau_ir::capability::CapabilityTable;
-        use tau_ir::ids::{PipelineStepId, ToolId};
-        use tau_ir::pipeline::{DynamicSpawn, Pipeline, PipelineStep, StepRun};
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
 
         let mut agents = BTreeMap::new();
         agents.insert(
@@ -1354,17 +1443,7 @@ mod tests {
                         run: StepRun::Dynamic {
                             owner: AgentId("coordinator".to_string()),
                             envelope: empty_caps(),
-                            spawns: alloc::vec![DynamicSpawn {
-                                kind: "researcher".to_string(),
-                                capabilities: empty_caps(),
-                                description: String::new(),
-                                prompt: tau_ir::prompt::PromptSource::inline(""),
-                                model_ref: tau_ir::model_ref::ModelRef {
-                                    backend: String::new(),
-                                    model_id: String::new(),
-                                },
-                                tool_refs: alloc::vec![ToolId("probe".to_string())],
-                            }],
+                            spawns: alloc::vec![dynamic_spawn("researcher", &["probe"])],
                             max_spawns: 1,
                             max_concurrency: 1,
                         },
@@ -1384,6 +1463,277 @@ mod tests {
             } if step == "fanout-step" && target == "tool:probe"),
             "expected UnknownPipelineRun; got {err:?}"
         );
+    }
+
+    #[test]
+    fn dynamic_empty_spawns_fails_typecheck() {
+        // StepRun::Dynamic { spawns: [], .. } → typecheck must reject.
+        // Defense-in-depth: tau-pkg validates this at author time, but
+        // hand-constructed IR (bypassing tau-pkg) must still be rejected.
+        // Every other field is valid, so this pins the emptiness guard alone.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("coordinator".to_string()),
+            agent_with_tool_refs("coordinator", &[]),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![], // invalid
+                            max_spawns: 1,
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject empty spawns");
+        assert!(
+            matches!(err, LowerError::DynamicSpawnsEmpty { ref step }
+                if step == "fanout-step"),
+            "expected DynamicSpawnsEmpty; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_duplicate_spawn_kind_fails_typecheck() {
+        // The same kind offered twice would build two `SpawnTool`s named
+        // `agent.researcher.spawn`, which the runtime builder rejects as a
+        // name collision (aborting the run with `Internal`). Defense-in-depth:
+        // tau-pkg rejects this at author time; hand-constructed IR must be
+        // rejected here.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::PipelineStepId;
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("coordinator".to_string()),
+            agent_with_tool_refs("coordinator", &[]),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools: BTreeMap::new(),
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![
+                                dynamic_spawn("researcher", &[]),
+                                dynamic_spawn("researcher", &[]), // duplicate
+                            ],
+                            max_spawns: 2,
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject duplicate spawn kind");
+        assert!(
+            matches!(err, LowerError::DynamicSpawnKindDuplicate { ref step, ref kind }
+                if step == "fanout-step" && kind == "researcher"),
+            "expected DynamicSpawnKindDuplicate; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_spawn_tool_name_collision_fails_typecheck() {
+        // A coordinator tool literally named `agent.researcher.spawn` takes
+        // the name the region would register for its `researcher` kind. NOT
+        // merely defense-in-depth: tau-pkg does not constrain `[tools.<name>]`
+        // keys, so an ordinary tau.toml reaches this and typecheck is the only
+        // gate.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::{PipelineStepId, ToolId};
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("coordinator".to_string()),
+            agent_with_tool_refs("coordinator", &["agent.researcher.spawn"]),
+        );
+        let mut tools = BTreeMap::new();
+        tools.insert(
+            ToolId("agent.researcher.spawn".to_string()),
+            native_tool("agent.researcher.spawn"),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools,
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![dynamic_spawn("researcher", &[])],
+                            max_spawns: 1,
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("should reject spawn-tool name collision");
+        assert!(
+            matches!(err, LowerError::DynamicSpawnToolNameCollision { ref step, ref kind, ref tool }
+                if step == "fanout-step"
+                    && kind == "researcher"
+                    && tool == "agent.researcher.spawn"),
+            "expected DynamicSpawnToolNameCollision; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_spawn_tool_name_collision_keys_on_spec_name_not_tool_id() {
+        // PRECISION TRAP: the registry keys on `wf.tools[id].spec.name`, NOT
+        // on the `ToolId` map key (`agent_loop.rs`). The granted tool below is
+        // keyed `harmless-id` but its `spec.name` is `agent.researcher.spawn`,
+        // so it DOES take the name the region registers for its `researcher`
+        // kind. A check written against `ToolId` sees no collision here and
+        // ships the runtime abort — this test fails against that mistake.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::{PipelineStepId, ToolId};
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("coordinator".to_string()),
+            agent_with_tool_refs("coordinator", &["harmless-id"]),
+        );
+        let mut tools = BTreeMap::new();
+        let mut granted = native_tool("harmless-id");
+        granted.spec.name = "agent.researcher.spawn".to_string();
+        tools.insert(ToolId("harmless-id".to_string()), granted);
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools,
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![dynamic_spawn("researcher", &[])],
+                            max_spawns: 1,
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        let err = typecheck(&parsed).expect_err("spec.name collision must be rejected");
+        assert!(
+            matches!(err, LowerError::DynamicSpawnToolNameCollision { ref step, ref kind, ref tool }
+                if step == "fanout-step"
+                    && kind == "researcher"
+                    && tool == "agent.researcher.spawn"),
+            "expected DynamicSpawnToolNameCollision; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dynamic_spawn_tool_name_collision_ignores_tools_not_granted_to_the_owner() {
+        // PRECISION TRAP, the other direction: the registry registers only the
+        // COORDINATOR's `tool_refs` (`agent_loop.rs`), not all of `wf.tools`.
+        // Here `agent.researcher.spawn` is DEFINED but granted to nobody, and
+        // a second agent that does hold it is not this region's owner. A check
+        // that scanned every workflow tool — or every agent's tool_refs —
+        // would falsely reject this project.
+        use tau_ir::capability::CapabilityTable;
+        use tau_ir::ids::{PipelineStepId, ToolId};
+        use tau_ir::pipeline::{Pipeline, PipelineStep, StepRun};
+
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            AgentId("coordinator".to_string()),
+            agent_with_tool_refs("coordinator", &[]),
+        );
+        agents.insert(
+            AgentId("bystander".to_string()),
+            agent_with_tool_refs("bystander", &["agent.researcher.spawn"]),
+        );
+        let mut tools = BTreeMap::new();
+        tools.insert(
+            ToolId("agent.researcher.spawn".to_string()),
+            native_tool("agent.researcher.spawn"),
+        );
+
+        let parsed = Parsed {
+            workflow: Workflow {
+                agents,
+                tools,
+                steps: BTreeMap::new(),
+                edges: alloc::vec::Vec::new(),
+                capability_table: CapabilityTable(BTreeMap::new()),
+                pipeline: Some(Pipeline {
+                    steps: alloc::vec![PipelineStep {
+                        id: PipelineStepId("fanout-step".to_string()),
+                        run: StepRun::Dynamic {
+                            owner: AgentId("coordinator".to_string()),
+                            envelope: empty_caps(),
+                            spawns: alloc::vec![dynamic_spawn("researcher", &[])],
+                            max_spawns: 1,
+                            max_concurrency: 1,
+                        },
+                        input: "${input}".to_string(),
+                    }],
+                }),
+                checks: BTreeMap::new(),
+            },
+            triggers: alloc::vec::Vec::new(),
+            assets: alloc::collections::BTreeMap::new(),
+        };
+        typecheck(&parsed).expect("a tool the owner does not hold must not collide");
     }
 
     #[test]
