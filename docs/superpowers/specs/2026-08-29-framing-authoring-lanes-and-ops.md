@@ -1,7 +1,15 @@
 # Framing — authoring lanes and the ops model (config / code / IaC)
 
-**Status:** Brainstorm / scoping document. Not a spec, not an ADR. Decisions
-enumerated in §6 graduate to ADRs individually.
+**Status:** SUPERSEDED in part by
+[`2026-09-01-tau-authoring-ops-and-primitives-design.md`](2026-09-01-tau-authoring-ops-and-primitives-design.md)
+(the consolidated design from the 2026-09-01 brainstorm session). Still valid:
+§2 (external audit), §3.3 (plan/apply/promote shape), §4 (progressive
+disclosure), §5 (anti-goals). **No longer valid:** §3.2/Lane-1a ("factories
+must span `[allow]`", "keep declarations-only static extraction"), S-7's
+"re-derive `authoring.rs`", the `tau-fleet.toml` naming, §8's deferral of
+multi-file TS. The successor document is authoritative wherever they conflict.
+
+Original status: brainstorm / scoping document. Not a spec, not an ADR.
 
 **Date:** 2026-08-29.
 
