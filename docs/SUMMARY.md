@@ -158,6 +158,13 @@
 - [ADR-0068 — Wasm guest executes IR control-flow in-guest](decisions/0068-wasm-guest-control-flow.md)
 - [ADR-0069 — Directory-based tool & agent definitions](decisions/0069-directory-based-definitions.md)
 - [ADR-0070 — `AgentId` grammar: namespaced authored names, sanitized generated ones](decisions/0070-agent-id-grammar.md)
+- [ADR-0071 — Three-surface split: TOML vocabulary, TS choreography, Rust muscle](decisions/0071-three-surface-split.md)
+- [ADR-0072 — The synth contract](decisions/0072-synth-contract.md)
+- [ADR-0073 — IR v3: multi-pipeline modules and pipeline imports](decisions/0073-ir-v3-multi-pipeline.md)
+- [ADR-0074 — The journal: one event-sourced record substrate](decisions/0074-journal-record-substrate.md)
+- [ADR-0075 — The ops lane: env `local`, pins, plan/apply](decisions/0075-ops-lane-local-first.md)
+- [ADR-0076 — The agentic instruction set (umbrella)](decisions/0076-agentic-instruction-set.md)
+- [ADR-0077 — Agent-exposure surfaces](decisions/0077-agent-exposure-surfaces.md)
 
 # Retrospectives
 

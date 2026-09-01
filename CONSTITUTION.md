@@ -75,7 +75,7 @@ Compressed: *Tau installs and runs agents in the terminal. Everything else — m
 
 **G5. Messages are the universal interaction primitive.** Every communication — human to agent, agent to agent, agent to tool, tool to agent — happens through messages. The message schema is stable. *Rationale:* one primitive, applied consistently, produces a system that can be reasoned about.
 
-**G6. Extensions interact with core only through defined interfaces.** The `tau-runtime` Rust library API and the serve-mode IPC protocol are tau's two public surfaces. Both are versioned; both are stable within minor versions. No hidden side channels. *Rationale:* public surfaces are a commitment; every unofficial way-in becomes a bug waiting to happen.
+**G6. Extensions interact with core only through defined interfaces.** tau's public surfaces are its versioned, schema-defined contracts: the authoring contract (ProjectConfig + the synth JSON, ADR-0072), the artifact contract (IR + WIT, ADR-0055/0056), and the operational interchange schemas (plan, run events, journal). "The tau SDK" is one language-plural product **generated from those schemas** — authoring bindings plus engine/consumer API — never a hand-maintained parallel definition; non-flagship languages are consumer-first. The `tau-runtime` Rust library API and the serve-mode IPC protocol remain versioned surfaces *within* that set. All are stable within minor versions. No hidden side channels. *Rationale:* public surfaces are a commitment; every unofficial way-in becomes a bug waiting to happen — and a hand-maintained SDK is an unofficial way-in that drifts. *(Amended 2026-09-01 per ADR-0077; original text named only the `tau-runtime` API + serve-mode IPC.)*
 
 **G7. The package manager is the only way to add extensions.** Everything enters tau via `tau install`. Including plugins. *Rationale:* one path in means auditability; alternate mechanisms (env vars, magic directories) fracture the security model.
 
@@ -181,7 +181,7 @@ The rule: **no cheap shortcuts.** Not "every possible quality practice." The dis
 
 **QG11. Strict SemVer.** Pre-1.0: `0.X.Y` where X bumps for breaking changes (allowed), Y for additions or fixes (non-breaking). Post-1.0: `X.Y.Z` full SemVer. Breaking changes never ship in a patch release.
 
-**QG12. Two public API surfaces.** The `tau-runtime` crate's exported items and the serve-mode IPC protocol schema. Both follow the same SemVer policy. CLI flags are intermediate stability: stable within minor versions but not part of the formal API surface.
+**QG12. The public API surface is the contract set.** The versioned contracts of G6 — authoring (ProjectConfig/synth), artifact (IR + WIT), and the operational interchange schemas — plus the `tau-runtime` crate's exported items and the serve-mode IPC protocol schema. All follow the same SemVer policy; schema files ship with drift tests. CLI flags are intermediate stability: stable within minor versions but not part of the formal API surface (the agent-grade CLI *contract* — help budget, exit codes, NDJSON stream — is frozen separately per ADR-0077). *(Amended 2026-09-01 per ADR-0077; originally "Two public API surfaces".)*
 
 **QG13. Deprecations are documented and cycled.** `#[deprecated]` with migration instructions. Pre-1.0: deprecated items removed in next breaking release. Post-1.0: deprecated items remain for at least two minor versions before removal in a major release.
 

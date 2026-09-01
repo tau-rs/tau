@@ -1,6 +1,17 @@
 # ADR-0022 — tau-workflow: linear pipeline runner
 
-**Status:** Accepted 2026-05-12.
+> **SUPERSEDED (2026-09-01).** Superseded twice: first functionally by
+> the workflow IR + interpreter (ADR-0037, ADR-0058/0059 — structured
+> control flow in the sealed artifact replaced the JSONL step runner),
+> then architecturally by the three-surface split and multi-pipeline IR
+> (ADR-0071, ADR-0073 — flow is authored in `pipelines/`, never as
+> `workflows/*.toml`). The `tau-workflow` crate, its CLI verbs, and its
+> docs are **deleted in Phase 0** of the 2026-09-01 redesign (epic E-0).
+> Numbering note: this ADR shares number 0022 with
+> [`0022-sandbox-darwin.md`](0022-sandbox-darwin.md) — see
+> [`README.md`](README.md).
+
+**Status:** Superseded (see banner). Originally accepted 2026-05-12.
 **Branch / PR:** `feat/tau-workflow` (PR pending).
 **Spec:** `docs/superpowers/specs/2026-05-12-tau-workflow-design.md`.
 

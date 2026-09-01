@@ -1,6 +1,19 @@
 # ADR-0041: β.8 TS authoring surface — declarations-only via static AST analysis
 
-**Status:** Accepted
+> **AMENDED — SUPERSEDED IN PART (2026-09-01).** The **static-extraction
+> decision** (swc AST analysis, `tau-ts-extract`, `.ts` file-extension
+> dispatch, single-file constraint) is superseded by the **synth
+> contract** (ADR-0072: sandboxed subprocess emitting ProjectConfig
+> JSON), and the **surface scope** (TS factories spanning agents, tools,
+> MCP) is superseded by the **three-surface split** (ADR-0071: TS
+> authors choreography only). The δ.2 runtime-JS/QuickJS deferral is
+> **killed outright** (never lands — design §8). What **carries
+> forward**: the one-validation-path rule (merge before the single
+> `validate()`, no parallel validation), snake_case parity with the TOML
+> schema, and rejection of an embedded JS runtime in tau-cli.
+> `tau-ts-extract` is deleted in Phase 1 (epic E-1).
+
+**Status:** Accepted; superseded in part by ADR-0071 + ADR-0072 (see banner)
 **Date:** 2026-06-10
 **Supersedes:** none
 

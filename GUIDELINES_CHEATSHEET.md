@@ -9,7 +9,7 @@ All 59 guidelines, one line each. For the full text and rationale see `CONSTITUT
 - **G3** Terminal-native. No GUI, no TUI.
 - **G4** Model-agnostic. Core never talks to a specific LLM.
 - **G5** Messages are the universal interaction primitive.
-- **G6** Extensions use public API only: `tau-runtime` crate + serve-mode protocol.
+- **G6** Extensions use public API only: the schema-defined contracts (authoring / artifact / operational interchange); SDKs are generated from them (ADR-0077).
 - **G7** Package manager is the only way to add extensions.
 - **G8** Global and project-local scopes; project overrides global.
 - **G9** Solo or orchestrated agents use the same core machinery.
@@ -50,7 +50,7 @@ All 59 guidelines, one line each. For the full text and rationale see `CONSTITUT
 - **QG9** `#![deny(missing_docs)]` on library public items; broken intra-doc links fail CI.
 - **QG10** Every repo has README, LICENSE, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, GOVERNANCE.
 - **QG11** Strict SemVer; no breaking changes in patch releases.
-- **QG12** Two public API surfaces: `tau-runtime` crate + serve-mode protocol.
+- **QG12** Public API surface = the contract set (schemas + `tau-runtime` crate + serve-mode protocol), all SemVer'd + drift-tested.
 - **QG13** Deprecations documented; one cycle pre-1.0, two post-1.0.
 - **QG14** Performance budgets enforced in CI from Phase 2.
 - **QG15** SECURITY.md with reporting channel.
