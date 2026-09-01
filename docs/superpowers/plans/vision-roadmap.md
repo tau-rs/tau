@@ -5,11 +5,16 @@ Derived from the 2026-06-20 roadmap-challenge session. Source of record:
 implementable backlog. This is the **active backlog**; for the historical phase
 record (Phase 0/1/α/β/γ/δ) see [`../../../ROADMAP.md`](../../../ROADMAP.md).
 
-**Vision (one line):** tau is a compiler+engine — declare what agents are *allowed* in a
-root `tau.toml` constitution, build workflows beautifully in any language (generated typed
-SDKs or the tau-native DSL), and tau proves behavior ⊆ constitution at build time and emits
-one hardware-agnostic, capability-bounded, conformance-proven component you embed anywhere,
-with no runtime surprises.
+**Vision (one line, re-pointed 2026-09-01 per the redesign):** tau compiles agent
+definitions into sealed artifacts you can prove things about — declare what agents are
+*allowed* in a root `tau.toml` constitution, author in three surfaces (TOML declares the
+vocabulary, TypeScript choreographs the flow, Rust implements the muscle — one validator,
+one frozen content-hashed IR underneath), and tau proves behavior ⊆ constitution at build
+time and emits one hardware-agnostic, capability-bounded, conformance-proven component you
+can test deterministically, review in CI, and run from any language. (Previous framing
+"build workflows beautifully in any language (generated typed SDKs or the tau-native
+DSL)" superseded by the three-surface split — ADR-0071, design
+[`2026-09-01-tau-authoring-ops-and-primitives-design.md`](../specs/2026-09-01-tau-authoring-ops-and-primitives-design.md) §1.)
 
 **How to use this doc:** epics = milestones; stories = one PR each (acceptance criteria +
 crates touched); when a story is picked up, generate its TDD plan via the `writing-plans`
@@ -186,11 +191,21 @@ as of 4.5 (2026-08-27)** — 4.5 was EPIC 4's last outstanding story.
 - **5.2** `tau embed --host c|rust|js` (generated host glue from WIT via wit-bindgen).
 - **5.3** ✅ Authoring-SDK codegen from the IR JSON schema (Smithy/JSON-Schema style); ship TS +
   Python. *Accept:* same agent in TOML/TS/Python → identical IR.
+  **[2026-09-01: SUPERSEDED]** — the acceptance criterion ("same *agent* in TOML/TS/Python")
+  is invalidated by the three-surface split (redesign §1: agents/models/`[allow]` are
+  TOML-dirs-only forever; TS authors *choreography* only, Python drops to consumer-first).
+  The shipped static-extraction TS factories and the TOML-emitting Python SDK are deleted
+  in Phase 1 (epic E-1) when their replacement lands; the one-validation-path pattern and
+  the schema-driven codegen machinery are harvested by the synth contract (ADR-0072) and
+  the `schemas/project-manifest/`-generated L1 factories (E-1/E-2).
 - **5.4** Typed React hook + Angular service (jco + ergonomic `tau embed` wrappers; Web
   Worker; `RunEvent` stream). *Accept:* typed npm package; demo renders streaming.
 - **5.5** Wire + document the 3-gate guarantee (compile-time types → `tau check` → conformance).
 - **5.6** Browser caps profile + published bundle-size number (wasm-metadce).
-**Epic DoD:** one agent → 3 frontends → identical IR; typed React/Angular package; gates documented.
+**Epic DoD [re-pointed 2026-09-01, ADR-0071]:** ~~one agent → 3 frontends → identical IR~~
+→ **one project → one IR, three surfaces** (TOML vocabulary / TS choreography / Rust
+muscle, all through the single validator); typed React/Angular *consumer* package; gates
+documented.
 
 ## EPIC 6 — Durability tiers  [A-minimal shipped (#373); mostly independent]
 **Goal:** intent-knob + compose-with-orchestrator + gated A-full.
@@ -210,6 +225,130 @@ as of 4.5 (2026-08-27)** — 4.5 was EPIC 4's last outstanding story.
   `dev/cm_wasip2` branch is `ahead_by=0`; evidence in [#415](https://github.com/tau-rs/tau/issues/415).
 - **7.4** *(gated: named gateway-less buyer)* tau-as-firmware niche (embassy+WAMR layering).
 **Epic DoD:** a product embeds tau as a no_std lib AND a wasm-guest; MCU path documented as gated.
+
+---
+
+## The 2026-09-01 redesign epics — three surfaces, ops lane, instruction set
+
+Source of record: the consolidated design
+[`../specs/2026-09-01-tau-authoring-ops-and-primitives-design.md`](../specs/2026-09-01-tau-authoring-ops-and-primitives-design.md)
+(its §10 decisions ledger is LOCKED) via the handoff
+[`2026-09-01-handoff-redesign-backlog.md`](2026-09-01-handoff-redesign-backlog.md).
+ADR wave: **ADR-0071..0077**. Implementation trees:
+[`authoring-surfaces`](../implementation-trees/authoring-surfaces.md) ·
+[`instruction-set`](../implementation-trees/instruction-set.md) ·
+[`ops-lane`](../implementation-trees/ops-lane.md) ·
+[`exposures`](../implementation-trees/exposures.md).
+
+**v1 = E-0 → E-4** (phases 0–4, each independently shippable). Arc acceptance:
+*north-star-v2* rebuilt on the new stack while the original north-star stays green as the
+legacy witness. The four UX requirements (design §12 — the permission sheet,
+journal-recording honesty, plan signal discipline, source-mapped synth errors) are
+**acceptance criteria on their epics, not polish**. Sequencing:
+
+```
+E-0  Align & clean            ◀── unblocks everything; no behavior change
+E-1  Rust declarations        (needs E-0 merged ADRs)
+E-2  Flow lane                (needs E-1: tau.gen.ts + project-manifest schema)
+E-3  Prove                    (needs E-2: pipelines to record/plan/inspect)
+E-4  Local ops                (needs E-3: plan is apply's diff engine)
+```
+
+### E-0 — Align & clean (Phase 0)  [unblocks everything · no behavior change]
+**Goal:** the repo stops contradicting the design; ADR wave merged; dead weight deleted.
+Plan: [`2026-09-01-epic-e0-align-and-clean.md`](2026-09-01-epic-e0-align-and-clean.md).
+- **E-0.1** ADR wave 0071–0077 merged (split, synth, IR v3, journal, ops lane,
+  instruction-set umbrella, exposures) + supersession banners (ADR-0022 tau-workflow,
+  ADR-0041 partial) + numbering-collision note in `docs/decisions/README.md`.
+- **E-0.2** Doc amendments: ROADMAP killed-item argued narrowing + δ.2 QuickJS retirement
+  + β.8 "one way" retirement; CONSTITUTION G6 + QG12 + cheatsheet; `tau-philosophy.md`
+  §"What you author" (three surfaces; "TS is sugar" dropped).
+- **E-0.3** Delete `tau-workflow` (crate + CLI verbs + docs; superseded twice).
+- **E-0.4** Delete dead weight: `tau-plugin-base`, `landlock-exec-repro`, `embed_c` stubs,
+  stale examples/refs.
+- **E-0.5** `xtask/tests/architecture_md.rs` + `ARCHITECTURE.md` updated for the deletions.
+**Epic DoD:** repo no longer contradicts the design; CI green; no behavior change.
+
+### E-1 — Rust declarations (Phase 1)  [design §1, §3.4, §4]
+**Goal:** the muscle surface — one tool authored via `#[tau::tool]` flows to gen + check +
+card. Plan: [`2026-09-01-epic-e1-rust-declarations.md`](2026-09-01-epic-e1-rust-declarations.md).
+- **E-1.1** Proc-macro crate: `#[tau::tool]`, `#[tau::deterministic]`, `tau::export![]`
+  (name/schema/description/capabilities derive from signature + attribute).
+- **E-1.2** Unified registry feeding both dispatchers (native + wasm).
+- **E-1.3** Real content hashes for registered fns — closes the name-hash hole
+  (`cmd/build.rs:533,597` sentinel).
+- **E-1.4** `tau.gen.ts` emitter: typed bindings for agents/models/tools/deterministic
+  fns/agent kinds; registry-content-hash-stamped (stale gen = loud build error).
+- **E-1.5** `schemas/project-manifest/` published + drift-tested (like `schemas/ir/`).
+- **E-1.6** Legacy authoring lane deleted: `tau-ts-extract` static factories + TOML-emitting
+  Python SDK (harvest the TOML-bridge/one-validation-path pattern).
+**Epic DoD:** one tool authored via `#[tau::tool]` flows to gen + check + card; name-hash
+hole closed.
+
+### E-2 — Flow lane (Phase 2)  [design §1, §3.4]
+**Goal:** the choreography surface — TS pipelines synth to ProjectConfig JSON through the
+one validator. Plan: [`2026-09-01-epic-e2-flow-lane.md`](2026-09-01-epic-e2-flow-lane.md).
+- **E-2.1** Synth subprocess runner (`[synth] entry` in `tau.toml`; Node/tsx default;
+  `tau-sandbox-native`, no network, fs read-only; canonical JSON on stdout; merge at the
+  unchecked level; CI double-synth byte-identity).
+- **E-2.2** `pipelines/` dir scanning (one file = one pipeline, id = file path,
+  ADR-0069/0070 style).
+- **E-2.3** IR v3 multi-pipeline (`pipelines: BTreeMap<PipelineId, Pipeline>`; the single
+  MAJOR bump, frozen v2 reader; schema + `REACHABLE-TYPES.md` + conformance fixtures move
+  together).
+- **E-2.4** Pipeline imports → `SubflowKind::Compose` unblocked (acyclic; namespaced under
+  the call-site id; capabilities unchanged).
+- **E-2.5** `[steps]` / `[tools] native=` removal (deprecate-warn one cycle).
+- **E-2.6** Predicate algebra + structured template access (`${steps.x.output.field}`,
+  JSON-pointer read only).
+- **E-2.7** `tau init --ts` golden path; wasm feature-registry repair
+  (`crates/tau-ports/src/target/registry.rs:136-139`; check in-flight PR #687 first).
+**Epic DoD:** north-star-v2 authors + builds; TOML twin byte-equal where applicable.
+
+### E-3 — Prove (Phase 3)  [design §2, §5, §6]
+**Goal:** the proof verbs — journal, plan, inspect, emitters.
+Plan: [`2026-09-01-epic-e3-prove.md`](2026-09-01-epic-e3-prove.md).
+- **E-3.1** Journal substrate (`.tau/runs/<id>/journal.jsonl`, typed events keyed
+  `(instance path, per-instance seq)`); `CheckpointGranularity::EventSourced` becomes real;
+  snapshots demoted to replay-shortcut optimization.
+- **E-3.2** `tau record` / `tau replay` (named `ReplayDivergence` on request-hash mismatch;
+  `--live-tools`); HTTP-VCR cassettes retired.
+- **E-3.3** `tau plan` + versioned `schemas/plan/` + exit codes 0/2/3/1 (capability changes
+  always first; 3 = widens capabilities).
+- **E-3.4** `tau inspect` — the permission-sheet capability card (+ `--attempt`).
+- **E-3.5** Pipeline RunEvents (StepStarted/StepCompleted/CheckEvaluated/Suspended —
+  additive run-event schema; freezes the NDJSON interface contract).
+- **E-3.6** skill (SKILL.md) + AGENTS.md emitters (`tau export --skill`); authoring skill +
+  `tau new` scaffolder.
+**Epic DoD:** plan renders a capability-diff-first PR comment; a journal replays a Dynamic
+run with concurrent spawns.
+
+### E-4 — Local ops (Phase 4)  [design §5]
+**Goal:** the machine is environment `local`; pin → plan → apply.
+Plan: [`2026-09-01-epic-e4-local-ops.md`](2026-09-01-epic-e4-local-ops.md).
+- **E-4.1** Env `local` + committed secret-free pins (`.tau/envs/local.state.toml`).
+- **E-4.2** `tau apply` — atomic per repo (+ `--pipeline` valve); systemd-user timer
+  adapters from `[trigger]` (ADR-0043 "compile the trigger, delegate the substrate").
+- **E-4.3** `[[moved]]` rename records (drive plan rename-not-replace + checkpoint remap).
+- **E-4.4** Lockfile v8 `[synth]` provenance (SDK version, gen hash, fragment SHAs;
+  additive).
+- **E-4.5** Remaining repairs lot (design §3.4): `AgentBudget.max_tokens` read,
+  `judge_model` wired, `output_schema` enforced, goals retry authorable, subflow args
+  forwarded, scalar-coercion fix, capability-order-insensitive hashes, real
+  `max_concurrency`.
+**Epic DoD:** north-star-v2 applied, scheduled by timer, resumed after rename via moved
+record; wasm bundles run-or-refuse per environment.
+
+### v2 backlog (do NOT plan yet — backlog entries only)
+Per design §3.2, §6, §11: ForEach · Sleep · WaitForEvent/EmitEvent (⊇ Suspend,
+resume_schema) · per-step retry/catch (fault plane) · variables+reducers ·
+on_exit+cancellation · Explore (Option B, budget + synthesis reserve) · event triggers ·
+environments/promote · serve v2 (socket, sessions, reverse dispatch) · MCP facade
+(`tau serve --mcp`) · OCI distribution + bundle gallery · Python consumer SDK · `tau add`
+packs (agent packs = δ.1 pulled to v2). **v2.5+:** memoization · typed client
+(`tau export --client`) · declarative concurrency/rate · stdlib packs (best-of-N, saga,
+sensor, fallback) · second authoring language. **v3:** fleet matrix · catalog · policy
+packs. Individual v2 step kinds get their own ADRs when built (ADR-0076 sets the rules).
 
 ---
 
