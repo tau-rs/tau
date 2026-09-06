@@ -1,12 +1,15 @@
 VISION FIXTURE — expected transcript (target state).
-Scene: agents/triage.md gained a tool, but tau.gen.ts was not regenerated.
-Drift between the vocabulary and the typed bridge is LOUD, never silent.
+Scene: tau/agents/triage.md gained a tool, but tau/gen was not
+regenerated (someone bypassed tau dev / postinstall). Gen is gitignored
+and reproducible, so the guarantee is FRESHNESS, verified everywhere it
+matters: drift between the vocabulary and the typed client is loud,
+never silent.
 
 $ npx tau check
-error[E-GEN-STALE]: tau.gen.ts is stale
-  registry hash sha256:9d44be02c1a7 ≠ stamped sha256:4f2c81d09aa3
+error[E-GEN-STALE]: tau/gen is stale
+  registry hash sha256:9d44be02c1a7 ≠ generated-from sha256:4f2c81d09aa3
   = the vocabulary changed after generation
-  help: run `tau dev` (regenerates and re-stamps), then commit tau.gen.ts
+  help: run `tau gen` (or `tau dev`, which watches), then re-run check
 
 $ echo $?
 1

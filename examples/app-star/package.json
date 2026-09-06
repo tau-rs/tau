@@ -3,6 +3,7 @@
   "private": true,
   "description": "VISION FIXTURE — target state, not yet runnable. See README.md.",
   "scripts": {
+    "postinstall": "tau gen",
     "dev": "tau dev & tsx src/server.ts",
     "check": "tau check && tsc --noEmit",
     "plan": "tau plan --check",

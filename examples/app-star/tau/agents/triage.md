@@ -1,6 +1,6 @@
 ---
 # VISION FIXTURE — target state. Agents are vocabulary: markdown +
-# frontmatter under agents/, dirs lane (ADR-0069/0070). Never defined in TS.
+# frontmatter under tau/agents/, dirs lane (ADR-0069/0070). Never in TS.
 id: triage
 model: default
 tools: [kb.search, billing.lookup]

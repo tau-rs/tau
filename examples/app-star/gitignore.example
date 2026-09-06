@@ -1,0 +1,7 @@
+# VISION FIXTURE — what a real app-star repo gitignores.
+# (Named gitignore.example so the fixture's own tau/gen/ stays committed
+# and walkable.)
+
+tau/gen/          # generated typed client — reproducible from tau/ sources
+.tau/runs/        # journals are per-run artifacts; export the ones you keep
+# NOTE: .tau/envs/*.state.toml (the pins) ARE committed — deliberately.

@@ -281,13 +281,18 @@ document is their shared "why".
 
 ## 8. Open questions (for the eventual ADRs, not for now)
 
-1. Collection convention for co-located definitions: `*.tau.ts` suffix scan
-   vs. explicit imports from the synth entry (leaning explicit — imports
-   keep the entry the single root and make the sandbox's read set obvious).
+1. ~~Collection convention~~ **RESOLVED at the 2026-09-06 review:**
+   dedicated `tau/` folder by convention (`tau/pipelines/` scanned, the
+   E-2.2 lane); `[synth] entry` as the opt-in composition escape hatch.
+   The generated client is the only runtime surface (no same-symbol
+   resolver), and the typed-reference rule (worked-examples B8) governs
+   the API surface.
 2. Naming: "harness declaration" vs. "exposure" vs. "surface"; and whether
    `tau export --harness` folds into `--client` as a mode.
-3. Whether declension scaffolds are generated-into-repo (committed,
-   hash-stamped like `tau.gen.ts`) or build-time artifacts.
+3. ~~Committed vs build artifact~~ **RESOLVED at the 2026-09-06 review:**
+   generated code (`tau/gen`, declension scaffolds) is gitignored and
+   regenerated (dev watch / postinstall / CI) with freshness verified by
+   `tau check`; committing remains permitted per repo.
 4. Monorepo shape for posture B: one `tau.toml` per app vs. workspace-level
    with per-app exposed sets.
 5. Whether the harness card's obligations block at `tau check` time for

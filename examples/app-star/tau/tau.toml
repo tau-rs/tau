@@ -1,12 +1,18 @@
 # VISION FIXTURE — target state, not yet buildable.
 # Spec: docs/superpowers/specs/2026-09-06-tau-as-code-worked-examples.md §2
-# Key names are illustrative until the slice ADRs fix them.
+# (2026-09-06 maintainer review: dedicated tau/ folder is the posture-B
+# default; [synth] entry is the opt-in composition escape hatch.)
 
 [project]
 id = "app-star"
 
-[synth]
-entry = "src/tau.entry.ts"       # runs sandboxed at BUILD time; never at runtime
+# No [synth] entry: the DEFAULT is convention — tau scans tau/pipelines/
+# (one file = one pipeline, id = file path), exactly the E-2.2 lane.
+# The React-style escape hatch, for teams that want to own collection
+# (e.g. true co-location of definitions next to routes):
+#
+#   [synth]
+#   entry = "../src/tau.entry.ts"
 
 # The constitution. TOML-only wherever the project roots — even inside an
 # app repo (invariant 3). Code can never emit this table.
@@ -14,7 +20,7 @@ entry = "src/tau.entry.ts"       # runs sandboxed at BUILD time; never at runtim
 net = ["api.anthropic.com", "billing.corp.internal:443"]
 
 [allow.fs]
-read = ["./kb"]
+read = ["../kb"]
 
 # Nightly backlog sweep — compiled to a systemd-user timer by `tau apply`
 # ("compile the trigger, delegate the substrate", ADR-0043).

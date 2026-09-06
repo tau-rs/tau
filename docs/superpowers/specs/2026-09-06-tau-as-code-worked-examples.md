@@ -22,6 +22,18 @@ built from and checked against.
 
 **Date:** 2026-09-06.
 
+**Review log:** 2026-09-06 maintainer walkthrough of §2 (app-star), three
+amendments folded in: **(a)** collection = dedicated `tau/` folder by
+convention (`tau/pipelines/` scanned, the E-2.2 lane), `[synth] entry` as
+the opt-in composition escape hatch — the same-file "dual projection"
+resolver is dropped; **(b)** the generated client (`tau/gen`) is the only
+runtime surface, and the **typed-reference rule** is adopted (B8);
+**(c)** `tau/gen` is **gitignored + freshness-checked**, not committed —
+this amends the design doc §1 sentence "tau.gen.ts … committed" (body
+prose, not a §10 numbered decision) and the corresponding ADR-wave line
+should be touched up when that PR is reviewed. §3 (harness-star) review
+pending.
+
 **Relates to:** design §10 (all locked decisions honored; none re-opened);
 vision doc §1–§6; [`vision-roadmap.md`](../plans/vision-roadmap.md);
 the north-star fixture lineage (arc acceptance = *north-star-v2*; this doc
@@ -56,43 +68,48 @@ agent gets a capability their reviewer didn't see.
 
 ```text
 ticketflow/
-├── package.json
-├── tau.toml                    # the root: project id + [synth] entry + [allow]
-├── agents/
-│   └── triage.md               # vocabulary: markdown + frontmatter (dirs lane)
-├── models/
-│   └── default.toml            # model identity → provider binding
-├── tau.gen.ts                  # generated, committed, hash-stamped (E-1.4)
-├── .tau/envs/local.state.toml  # the pin — committed, secret-free (E-4.1)
-└── src/
-    ├── tau.entry.ts            # [synth] entry: explicitly imports every *.tau.ts
-    ├── triage/triage.tau.ts    # ← the co-located pipeline (choreography only)
-    └── routes/tickets.ts       # ← the caller (ordinary app code)
+├── package.json                # theirs; + tau dep, postinstall runs `tau gen`
+├── src/                        # their app — tau never touches it
+│   └── routes/tickets.ts       # ← the caller (+2 lines)
+├── tau/                        # everything tau AUTHORS, one folder
+│   ├── tau.toml                # constitution; no [synth] entry needed
+│   ├── agents/triage.md        # vocabulary: markdown + frontmatter (dirs lane)
+│   ├── models/default.toml     # model identity → provider binding
+│   ├── pipelines/triage.ts     # scanned by convention (E-2.2); id = file path
+│   └── gen/                    # GENERATED typed client — gitignored
+├── .tau/                       # everything tau MANAGES
+│   └── envs/local.state.toml   # the pin — committed, secret-free (E-4.1)
+└── crates/ticketflow-tools/    # optional muscle: #[tau::tool] project Rust
 ```
 
-The app repo **is** a tau project. Nothing about dirs-scanning, `[allow]`,
-or the pin assumed a dedicated repo; posture B is a packaging stance, not a
-new mode.
+The app repo **is** a tau project: `tau/` = what you author, `.tau/` =
+what tau manages, `tau/gen` = the bridge out. The **default is pure
+convention** — `tau/pipelines/` is scanned exactly like posture A's
+`pipelines/` dir, zero new authoring machinery. The **escape hatch** for
+teams that want to own collection (true co-location included) is
+declaring `[synth] entry` and composing their own import graph — the
+React model: convention by default, composition when you outgrow it.
 
 ### 2.2 The constitution stays TOML — even here
 
 ```toml
-# tau.toml  (illustrative shape)
+# tau/tau.toml  (illustrative shape)
 [project]
 id = "ticketflow"
 
-[synth]
-entry = "src/tau.entry.ts"      # runs sandboxed at BUILD time; never at runtime
+# no [synth] entry: tau/pipelines/ is scanned by convention. Escape hatch:
+#   [synth]
+#   entry = "../src/tau.entry.ts"   # own your collection (co-location etc.)
 
 [allow]                          # never emittable by code — decision 5, unmoved
 net = ["api.anthropic.com", "billing.corp.internal:443"]
 
 [allow.fs]
-read = ["./kb"]
+read = ["../kb"]
 ```
 
 ```markdown
-<!-- agents/triage.md -->
+<!-- tau/agents/triage.md -->
 ---
 id: triage
 model: default
@@ -102,53 +119,63 @@ You triage inbound support tickets. Categorize, set urgency, and flag
 accounts that need a billing check…
 ```
 
-### 2.3 The co-located pipeline — one symbol, two projections
+### 2.3 The definition and the call site — split by the toolchain
+
+**The definition** runs *only* at build time, inside tau's synth sandbox
+— the way a Terraform file is only ever read by `terraform`. It is not
+part of the app bundle; nothing in `src/` imports it. (Design §4 API
+rules apply: typed non-coercible handles, predicate methods — never
+lambdas.)
 
 ```ts
-// src/triage/triage.tau.ts  (illustrative shape; design §4 API rules apply:
-// typed non-coercible handles, tagged-template interpolation, predicate
-// methods — never lambdas)
-import { pipeline, tau } from "tau";
-import { agents, tools } from "../../tau.gen";
+// tau/pipelines/triage.ts — build-time only; id = file path
+import { pipeline } from "tau";
+import { agents, tools } from "../gen";
 
-export const triage = pipeline("triage", (p) => {
+export default pipeline((p) => {
   const t = p.agent("classify", agents.triage, { input: p.input });
 
-  p.branch("flagged?", t.output.field("billing_flag").isTrue(), (b) => {
-    b.tool("billing", tools.billing.lookup, {
-      customer: tau`${t.output.field("customer_id")}`,
-    });
+  p.branch("flagged?", t.output.billing_flag.isTrue(), (b) => {
+    b.tool("billing", tools.billing.lookup, { customer: t.output.customer_id });
   });
 
-  p.check("categorized", t.output.field("category").isNonEmpty());
+  p.check("categorized", t.output.category.isNonEmpty());
   return { verdict: t.output };
 });
 ```
 
+**The typed-reference rule** (B8, adopted at review): *you write a string
+only when declaring a new name; every reference to declared vocabulary is
+a generated typed symbol.* `"classify"` / `"flagged?"` / `"categorized"`
+declare step ids (explicit ids, collision = synth error — locked); but
+`agents.triage`, `tools.billing.lookup`, and field access
+`t.output.category` come typed from `tau/gen` — a typo is a compile
+error, autocomplete lists exactly the project vocabulary. Field proxies
+compile to the locked JSON-pointer reads
+(`${steps.classify.output.category}`): typed surface, unchanged
+semantics. The rule holds in every declension (Python:
+`h.pipelines.oncall_investigate`, never `h.session("…")`).
+
+**The call site** is ordinary app code importing the *generated client*
+— the only runtime surface:
+
 ```ts
-// src/routes/tickets.ts — ordinary app code, no tau concepts beyond the handle
-import { triage } from "../triage/triage.tau";
+// src/routes/tickets.ts — runtime only
+import { pipelines } from "../../tau/gen";
 
 app.post("/tickets", async (req, reply) => {
-  const { verdict } = await triage.run({ ticket: req.body }); // typed I/O
+  const { verdict } = await pipelines.triage.run({ ticket: req.body }); // typed I/O
   reply.send(verdict);
 });
 ```
 
-What the toolchain does with that one module:
-
-- **At build (synth):** the sandboxed subprocess evaluates
-  `src/tau.entry.ts`, which imports `triage.tau.ts`; `pipeline()` registers
-  choreography into the emitted ProjectConfig JSON — the *same* lane, id
-  grammar, collision rules, and single `validate()` as `pipelines/*.ts`
-  (E-2). In-code definition is sugar over the flow lane, literally.
-- **At app runtime:** the same `triage` symbol resolves through the
-  generated typed client (v2.5 machinery) to an invocation handle bound to
-  the **pinned** bundle — warm `tau serve` socket when present, CLI NDJSON
-  contract otherwise. The definition body never executes in the app
-  process. How the same import resolves differently (conditional export,
-  gen-side splitting) is an ADR question; the visible contract above is
-  the fixed point.
+Definitions go *into* the toolchain; `tau/gen` comes *out*; the app only
+touches what comes out. `pipelines.triage.run()` executes the **pinned**
+bundle out-of-process — warm `tau serve` socket when present, CLI NDJSON
+contract otherwise; the definition body never executes in the app
+process. (The earlier same-symbol "dual projection" resolver was dropped
+at review: unnecessary once the dedicated folder is the default;
+escape-hatch users get the same effect with a userland re-export.)
 
 ### 2.4 The four DX beats that ARE the vision
 
@@ -168,10 +195,16 @@ exit 3
 
 The reviewer reads a permission sheet, not a diff of YAML soup.
 
-**(2) Drift is impossible-silently.** The dev edits `triage.tau.ts` but
-forgets to re-pin. The gen hash-stamp fails the app build ("stale
-tau.gen.ts"), and a definition ahead of the pin fails `tau plan --check`.
-Green CI *means* the code, the artifact, and the pin agree.
+**(2) Drift is impossible-silently.** `tau/gen` is **gitignored** —
+generated code reproducible from committed sources is a build artifact —
+and regenerated by `tau dev` (watch), npm postinstall, and CI. The
+guarantee moves from "committed + stamped" to **freshness, verified
+everywhere it matters**: `tau check` fails on a stale registry stamp, the
+double-synth byte-identity gate (already locked) keeps generation
+deterministic, and a definition ahead of the pin fails `tau plan
+--check`. Green CI *means* the code, the artifact, and the pin agree. (A
+repo that wants committed bindings may commit them; the stamp check works
+either way.)
 
 **(3) Deploy is one added step.** Their existing pipeline gains
 `tau apply` (atomic per repo) after the app deploy. A `[trigger]` for the
@@ -187,19 +220,28 @@ definition is a *named* `ReplayDivergence`, not a silent pass.
 ### 2.5 What must be true (scenario capabilities → tree)
 
 - **B1** — app-root project: golden-path docs + `tau init --app`
-  scaffold; nothing else new (rides E-2/E-4).
-- **B2** — explicit-import collection: `[synth] entry` reaches co-located
-  `*.tau.ts` modules; sandbox read-set derives from the import graph.
-- **B3** — dual projection: one exported symbol usable as definition
-  (synth) and typed run-handle (app runtime); ADR decides the mechanism.
+  scaffold laying down the `tau/` folder; `tau/` = authored, `.tau/` =
+  managed (rides E-2/E-4).
+- **B2** — collection: `tau/pipelines/` scanned by convention (the E-2.2
+  lane, zero new machinery); `[synth] entry` as the declared escape hatch
+  that owns collection — sandbox read-set derives from folder or import
+  graph respectively.
+- **B3** — the generated client is the only runtime surface: `tau/gen`
+  exposes `pipelines.<id>.run()` typed handles bound to the pinned
+  bundle; definition modules are never imported by app code.
 - **B4** — typed handle transport selection: serve socket when warm, CLI
   NDJSON fallback, identical semantics.
 - **B5** — plan-gated CI recipe: documented one-stanza `tau plan --check`
   gate with exit-3 semantics (rides E-3.3).
-- **B6** — stale-pin detection: definition/pin disagreement is a named
-  `plan --check` failure, distinct from widening (rides E-1.4 + E-4.1).
+- **B6** — gen freshness: `tau/gen` gitignored + regenerated (dev watch /
+  postinstall / CI); `tau check` fails stale stamps; stale pin is a named
+  `plan --check` failure distinct from widening (rides E-1.4 + E-4.1).
 - **B7** — journal portability: a journal captured in env `local` on one
   machine replays on another against the same IR hash (rides E-3.1/3.2).
+- **B8** — the typed-reference rule: strings only declare new ids; all
+  references to vocabulary (agents, tools, pipelines, models, output
+  fields) are generated typed symbols; field proxies compile to
+  JSON-pointer reads.
 
 ---
 
@@ -419,10 +461,10 @@ thereafter they bind like §10 decisions (change = argued ADR).
    sees sealed artifacts only; runtime graph construction stays refused.
 3. **The constitution is TOML wherever the project roots.** `[allow]`,
    agents, models, harness obligations: dirs/TOML, never emitted by code.
-4. **Co-location without runtime authoring.** The same source file may
-   carry a definition (harvested at synth) and its invocation (typed
-   handle at runtime); the toolchain makes the split, and drift between
-   them is a loud, named failure — never silent.
+4. **The toolchain makes the split.** Definitions are harvested at build
+   time; the generated client is the only runtime surface app code
+   touches; and drift anywhere along the chain — vocabulary → generated
+   code → artifact → pin — is a loud, named failure, never silent.
 5. **Widening is always loud.** Any capability increase — tool grant, net
    host, sandbox loosening, model outside ceiling — is a first-class,
    diffable, CI-blockable event (plan exit 3 semantics), in every posture.
@@ -459,10 +501,10 @@ examples impose:
 
 | Wave | Nodes | Gate before it |
 |---|---|---|
-| 0 (rides v1 as-is) | B1 B5 B6 X1 | E-1..E-4 merged (nothing new — docs/scaffold/wiring) |
-| 1 (first new machinery) | B2 B3 C1 C2 X4 | ADRs: collection convention, dual projection, harness schema |
+| 0 (rides v1 as-is) | B1 B2 B5 X1 | E-1..E-4 merged (folder convention = the E-2.2 lane + docs/scaffold) |
+| 1 (first new machinery) | B6 B8 C1 C2 X4 | ADRs: gen surface + typed-reference rule, harness schema |
 | 2 (transport) | B4 C3 C4 C7 | serve v2 lands (v2 backlog) |
-| 3 (codegen) | C5, then B3's runtime half | typed-client codegen lands (v2.5) |
+| 3 (codegen) | B3 C5 | typed-client codegen lands (v2.5) |
 | 4 (parity + ops) | C6 B7 X2 X3 | environments/promote (v2) |
 
 Tree-building rule: no node may weaken a §5 invariant to ship sooner; a
