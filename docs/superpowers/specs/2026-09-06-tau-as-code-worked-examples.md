@@ -481,6 +481,16 @@ Vision **in stone** = this document merged (invariants ratified). Vision
 - **`examples/harness-star/`** — a minimal Fieldbook (§3): harness
   declaration, Python declension over serve, wasm parity check, refusal
   test, approval round-trip. Green = every C-requirement demonstrated.
+  (Fixture refinement: three host-tool obligations — `runbook.apply`
+  joins the two sketched in §3.1, so a dangerous host tool reachable only
+  through an approved check is demonstrated.)
+
+Both fixtures exist **today as walkable skeletons** at those paths —
+every file the target state, banner-marked not-yet-runnable, with
+`transcripts/` showing expected CLI output and a README walkthrough of
+verification checkpoints (VB-1..10, VC-1..9) mapped to the requirement
+ids and invariants. The skeletons are the vision's review surface; they
+graduate in place to the living witnesses as the waves in §6 land.
 
 Both follow the north-star pattern: committed, CI-exercised, cited by docs
 — the fixture *is* the spec's proof, and a regression in one is a

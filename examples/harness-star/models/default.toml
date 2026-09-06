@@ -1,0 +1,7 @@
+# VISION FIXTURE — target state.
+id = "default"
+provider = "anthropic"
+model = "claude-sonnet-5"
+
+[ceiling]
+allow = ["claude-sonnet-5"]

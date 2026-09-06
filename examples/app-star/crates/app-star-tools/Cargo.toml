@@ -1,0 +1,12 @@
+# VISION FIXTURE — target state, not yet buildable.
+# NOT a workspace member (deliberate): this crate becomes real when the
+# E-1 proc-macro lane lands.
+
+[package]
+name = "app-star-tools"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tau = { version = "0.9", features = ["tool-macros"] }

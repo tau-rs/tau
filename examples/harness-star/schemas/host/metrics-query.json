@@ -1,0 +1,30 @@
+{
+  "$comment": "VISION FIXTURE — host-tool contract: tau schema-validates every call/result crossing the host boundary; the EFFECT is the host's (card: host-enforced).",
+  "$id": "harness-star/host/metrics.query",
+  "input": {
+    "type": "object",
+    "required": ["query", "range"],
+    "properties": {
+      "query": { "type": "string", "description": "PromQL" },
+      "range": { "type": "string", "description": "e.g. 30m" }
+    },
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "required": ["series"],
+    "properties": {
+      "series": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["labels", "values"],
+          "properties": {
+            "labels": { "type": "object" },
+            "values": { "type": "array", "items": { "type": "number" } }
+          }
+        }
+      }
+    }
+  }
+}

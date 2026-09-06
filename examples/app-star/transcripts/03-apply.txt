@@ -1,0 +1,13 @@
+VISION FIXTURE — expected transcript (target state).
+Scene: deploy. One added step; atomic per repo; the trigger compiles to a
+systemd-user timer — no scheduler service enters the architecture.
+
+$ tau apply
+tau apply  app-star → env local
+
+  build     ir sha256:c09df2e77b41  (ir_format 3.0.0)
+  plan      1 change: ~ pipeline triage (no capability change)
+  apply     pin .tau/envs/local.state.toml  b7e1a94c… → c09df2e7…
+  triggers  nightly-sweep → systemd-user unit tau-app-star-nightly-sweep.timer  (reloaded)
+
+Applied. Runs now execute ir sha256:c09df2e77b41.

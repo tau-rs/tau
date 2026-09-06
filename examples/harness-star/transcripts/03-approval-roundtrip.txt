@@ -1,0 +1,24 @@
+VISION FIXTURE — expected transcript (target state).
+Scene: the approval round-trip, as the host's event stream sees it.
+Reverse dispatch calls the host's Tools methods; the apply-fix check
+suspends the run (journaled) until the human answers; the resume carries
+the typed decision.
+
+session runbook-exec  run r-1207  ir sha256:9f3ac2d15e08
+
+  ▶ prepare        agent runbook-executor      started
+  ⇠ metrics.query  reverse-dispatch → Tools.metrics_query      (schema ok)
+  ⇢ metrics.query  result accepted                              (schema ok)
+  ▶ prepare        completed
+  ▶ apply-fix      check → ELICIT              run SUSPENDED
+      → on_approval(ApplyFixElicitation{plan: restart checkout-workers, …})
+      ← ApplyFixDecision{approved: true, note: "confirmed with @dana"}
+  ▶ apply-fix      resumed: approved           (journal: elicitation + decision)
+  ▶ approved?      branch → then
+  ⇠ runbook.apply  reverse-dispatch → Tools.runbook_apply
+  ⇢ runbook.apply  status=applied
+  ⇠ pager.ack      reverse-dispatch → Tools.pager_ack
+  ▶ run            completed: Applied
+
+Every ⇠/⇢ crossing and the elicitation are journal events — the incident
+review replays this run verbatim, decision included (invariant 11).

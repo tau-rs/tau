@@ -1,0 +1,12 @@
+VISION FIXTURE — expected transcript (target state).
+Scene: refusal up front. A host build shipped without runbook_apply.
+The gap is named at CONNECT — never discovered at step 7 of an incident
+(invariant 8).
+
+$ python app.py PD-4412
+Traceback (most recent call last):
+  ...
+fieldbook_harness.ObligationsError: E-HARNESS-OBLIGATIONS
+  host provides 2/3 declared tools
+  missing: runbook.apply (schemas/host/runbook-apply.json)
+  the session was refused before any step ran

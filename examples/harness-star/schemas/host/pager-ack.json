@@ -1,0 +1,15 @@
+{
+  "$comment": "VISION FIXTURE — host-tool contract.",
+  "$id": "harness-star/host/pager.ack",
+  "input": {
+    "type": "object",
+    "required": ["incident_id"],
+    "properties": { "incident_id": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "required": ["acked"],
+    "properties": { "acked": { "type": "boolean" } }
+  }
+}

@@ -1,0 +1,14 @@
+VISION FIXTURE — expected transcript (target state).
+Scene: the declension. Generated from the harness card, stamped, never
+hand-maintained (invariant 6). Deleting the output and regenerating is
+always safe — that is the definition of not-hand-maintained.
+
+$ tau export --harness py --out host-py/fieldbook_harness/
+export  harness card sha256:9f3ac2d15e08 → python
+
+  generated  fieldbook_harness/__init__.py     (Harness, HostTools, Session)
+  generated  fieldbook_harness/types.py        (12 types: tools, I/O, elicitation)
+
+note: regenerate when the pin moves; connect() refuses a stale stamp:
+  E-DECLENSION-STALE: scaffold generated from card 9f3ac2… but engine
+  serves card 61be07… — run `tau export --harness py` again

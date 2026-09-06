@@ -1,0 +1,43 @@
+# VISION FIXTURE — target state, not yet buildable.
+# Spec: docs/superpowers/specs/2026-09-06-tau-as-code-worked-examples.md §3
+# (Refines the spec sketch: three host-tool obligations, not two — the
+# runbook fix executes through the host too.)
+
+[project]
+id = "harness-star"
+
+[synth]
+entry = "pipelines/main.ts"      # classic flow-lane authoring (posture A inside C)
+
+[allow]
+net = ["api.anthropic.com"]      # tau-enforced egress; host tools carry their
+                                 # own CLAIMS, enforced by the host (see card)
+
+# ─── The harness declaration: what this artifact IS to an embedding host ───
+
+[harness]
+expose = ["oncall-investigate", "runbook-exec"]   # the product surface;
+                                                   # every other pipeline stays internal
+
+[[harness.host_tool]]            # obligations — the HOST must provide these
+id = "metrics.query"
+schema = "schemas/host/metrics-query.json"
+claims = ["net: prometheus.corp.internal:9090"]
+
+[[harness.host_tool]]
+id = "pager.ack"
+schema = "schemas/host/pager-ack.json"
+claims = ["net: api.pagerduty.com"]
+
+[[harness.host_tool]]
+id = "runbook.apply"
+schema = "schemas/host/runbook-apply.json"
+claims = ["exec: runbook-runner"]
+
+[harness.session]
+late_binding_ceiling = { fs_read = ["./workdir"] }  # session tools/MCP may
+                                                     # attach ONLY under this
+
+[harness.approvals]
+elicit = ["runbook-exec/apply-fix"]   # this check routes to the host as a
+                                      # typed elicitation (resume_schema)

@@ -1,0 +1,25 @@
+# VISION FIXTURE — target state, not yet buildable.
+# Spec: docs/superpowers/specs/2026-09-06-tau-as-code-worked-examples.md §2
+# Key names are illustrative until the slice ADRs fix them.
+
+[project]
+id = "app-star"
+
+[synth]
+entry = "src/tau.entry.ts"       # runs sandboxed at BUILD time; never at runtime
+
+# The constitution. TOML-only wherever the project roots — even inside an
+# app repo (invariant 3). Code can never emit this table.
+[allow]
+net = ["api.anthropic.com", "billing.corp.internal:443"]
+
+[allow.fs]
+read = ["./kb"]
+
+# Nightly backlog sweep — compiled to a systemd-user timer by `tau apply`
+# ("compile the trigger, delegate the substrate", ADR-0043).
+[[trigger]]
+id = "nightly-sweep"
+cron = "0 3 * * *"
+pipeline = "triage"
+input = { ticket = { source = "backlog" } }

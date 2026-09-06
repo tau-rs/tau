@@ -1,0 +1,15 @@
+{
+  "name": "app-star",
+  "private": true,
+  "description": "VISION FIXTURE — target state, not yet runnable. See README.md.",
+  "scripts": {
+    "dev": "tau dev & tsx src/server.ts",
+    "check": "tau check && tsc --noEmit",
+    "plan": "tau plan --check",
+    "deploy": "tau apply"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "tau": "^0.9.0"
+  }
+}

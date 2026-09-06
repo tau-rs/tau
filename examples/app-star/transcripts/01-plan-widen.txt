@@ -1,0 +1,17 @@
+VISION FIXTURE — expected transcript (target state).
+Scene: a dev adds a refund tool needing api.stripe.com egress and edits
+[allow]. CI runs the gate. Capability changes render FIRST, always.
+
+$ tau plan --check
+tau plan  app-star  source ↔ pin(local @ sha256:b7e1a94c20f6)
+
+! CAPABILITIES WIDEN
+    [allow].net        + api.stripe.com          ← requires review
+
+~ pipeline triage
+    + step refund      tool stripe.refund        (branch "flagged?")
+
+Plan: 1 widening, 1 addition. Exit 3 — widening blocks --check.
+
+$ echo $?
+3

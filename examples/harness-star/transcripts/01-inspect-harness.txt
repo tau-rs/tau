@@ -1,0 +1,25 @@
+VISION FIXTURE — expected transcript (target state).
+Scene: what security reviews. The harness card: obligations compiled into
+the bundle and rendered — not documented in a README (invariant 7). Note
+the honesty label: HOST-ENFORCED means tau schema-checks the calls but the
+EFFECTS are the host's word (invariant 9).
+
+$ tau inspect --harness
+harness-star  ir sha256:9f3ac2d15e08  (harness card)
+
+  EXPOSES
+    oncall-investigate    in: AlertRef      out: Findings
+    runbook-exec          in: RunbookRef    out: Applied | Refused
+
+  HOST MUST PROVIDE                                     enforcement
+    metrics.query   schemas/host/metrics-query.json     HOST-ENFORCED ⚠
+                    claims: net prometheus.corp.internal:9090
+    pager.ack       schemas/host/pager-ack.json         HOST-ENFORCED ⚠
+                    claims: net api.pagerduty.com
+    runbook.apply   schemas/host/runbook-apply.json     HOST-ENFORCED ⚠
+                    claims: exec runbook-runner
+                    reachable only via approved "apply-fix"
+
+  TAU-ENFORCED        net api.anthropic.com · model ceiling claude-sonnet-5
+  SESSION CEILING     fs.read ./workdir — nothing else may attach
+  APPROVALS → HOST    runbook-exec/apply-fix (typed, resume_schema)

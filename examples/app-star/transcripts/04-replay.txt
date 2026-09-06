@@ -1,0 +1,24 @@
+VISION FIXTURE — expected transcript (target state).
+Scene: the 3 a.m. story. A production triage run misfired; the on-call
+engineer copies the journal and replays the EXACT run locally —
+deterministically, LLM calls and all. Divergence is NAMED, never a silent
+false green (journal model, design §2).
+
+$ scp prod:.tau/runs/r-8823/journal.jsonl ./
+$ tau replay ./journal.jsonl
+tau replay  run r-8823  ir sha256:c09df2e77b41  (journal v1, 14 events)
+
+  ▶ classify        agent triage      [replayed: completion sha256:77ab…]
+  ▶ flagged?        branch            → then   [replayed]
+  ▶ billing         tool billing.lookup         [replayed: result]
+  ▶ categorized     check             FAILED: category = ""   ← the misfire
+
+Replay complete: bit-identical to the recorded run. The check failure
+reproduces; the agent returned an empty category for source=backlog inputs.
+
+--- and if the definition changed since the recording: ---
+
+$ tau replay ./journal.jsonl
+error[E-REPLAY-DIVERGENCE]: step "classify" request hash mismatch
+  recorded sha256:5510…  ≠  current sha256:8ac2…  (prompt changed after run)
+  help: replay against the recorded ir (sha256:c09df2e77b41), or re-record

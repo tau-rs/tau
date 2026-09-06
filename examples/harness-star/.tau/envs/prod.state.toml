@@ -1,0 +1,15 @@
+# VISION FIXTURE — target state (v2 environments). Env-tier bindings may
+# only NARROW what the artifact declared (invariant 10; worked-examples X2).
+
+environment = "prod"
+ir_hash = "sha256:9f3ac2d15e08"
+ir_format = "3.0.0"
+applied_at = "2026-09-06T15:40:00Z"
+
+# Named, versioned sandbox profile (the augmentation pillar): fs scoped to
+# the workdir, exec denied outside declared claims, no ambient egress.
+sandbox.profile = "nadir-locked@1"
+
+[models.default]                 # late-binding UNDER the declared ceiling
+endpoint = "https://llm-gw.corp.internal"
+model = "claude-sonnet-5"        # outside models/default.toml [ceiling] = refusal

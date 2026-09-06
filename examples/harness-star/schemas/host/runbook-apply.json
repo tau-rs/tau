@@ -1,0 +1,27 @@
+{
+  "$comment": "VISION FIXTURE — host-tool contract. The dangerous one: reachable only through the approval-gated branch in runbook-exec.",
+  "$id": "harness-star/host/runbook.apply",
+  "input": {
+    "type": "object",
+    "required": ["plan"],
+    "properties": {
+      "plan": {
+        "type": "object",
+        "required": ["runbook_id", "steps"],
+        "properties": {
+          "runbook_id": { "type": "string" },
+          "steps": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "required": ["status"],
+    "properties": {
+      "status": { "enum": ["applied", "failed"] },
+      "log": { "type": "string" }
+    }
+  }
+}

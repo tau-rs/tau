@@ -1,0 +1,15 @@
+# VISION FIXTURE — target state. The pin: committed, secret-free (E-4.1).
+# Green CI means code, artifact, and THIS file agree (invariant 4).
+
+environment = "local"
+ir_hash = "sha256:b7e1a94c20f6"
+ir_format = "3.0.0"
+applied_at = "2026-09-06T14:02:11Z"
+
+[synth]                       # lockfile-v8-style provenance (E-4.4)
+sdk_version = "0.9.0"
+gen_hash = "sha256:4f2c81d09aa3"     # must match the tau.gen.ts stamp
+
+[triggers.nightly-sweep]
+adapter = "systemd-user"
+unit = "tau-app-star-nightly-sweep.timer"

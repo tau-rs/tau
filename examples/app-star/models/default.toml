@@ -1,0 +1,10 @@
+# VISION FIXTURE — target state. Model identity is project vocabulary;
+# the provider is a plugin; environments late-bind endpoints ONLY under
+# the declared ceiling (worked-examples §4c, invariant 10).
+
+id = "default"
+provider = "anthropic"
+model = "claude-sonnet-5"
+
+[ceiling]
+allow = ["claude-sonnet-5", "claude-haiku-4-5"]
