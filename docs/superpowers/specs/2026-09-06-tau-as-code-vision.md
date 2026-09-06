@@ -13,6 +13,14 @@ project."*
 
 **Date:** 2026-09-06.
 
+**Set in stone by:** the worked-examples companion
+[`2026-09-06-tau-as-code-worked-examples.md`](2026-09-06-tau-as-code-worked-examples.md)
+— concrete end-to-end scenarios per posture, the twelve ratified invariants
+(its §5), the derived requirements (B/C/X ids) that seed the
+`tau-as-code` implementation tree, and the two acceptance fixtures
+(`app-star`, `harness-star`). When this document and that one disagree,
+that one wins.
+
 **Relates to:** design §1 (three surfaces), §3.3 (kernel closed, vocabulary
 open), §4 (TS API), §6 (integration surfaces), §10 decisions 4, 5, 7, 9, 12,
 13; ADR wave 0071–0077; [`vision-roadmap.md`](../plans/vision-roadmap.md)
