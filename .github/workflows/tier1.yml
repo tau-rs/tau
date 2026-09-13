@@ -35,10 +35,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: stable
-          components: rustfmt
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler and
+        # its components. Pinning a toolchain in the workflow as well would let
+        # CI and developers drift onto different compilers, which is the exact
+        # class of difference that shows up as "works on my machine".
+        run: rustup show active-toolchain
       - run: cargo fmt --all --check
 
   clippy:
@@ -46,9 +48,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          components: clippy
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler and
+        # its components. Pinning a toolchain in the workflow as well would let
+        # CI and developers drift onto different compilers, which is the exact
+        # class of difference that shows up as "works on my machine".
+        run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
@@ -57,7 +62,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler and
+        # its components. Pinning a toolchain in the workflow as well would let
+        # CI and developers drift onto different compilers, which is the exact
+        # class of difference that shows up as "works on my machine".
+        run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
@@ -74,7 +84,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0        # the diff gate needs the merge base
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler and
+        # its components. Pinning a toolchain in the workflow as well would let
+        # CI and developers drift onto different compilers, which is the exact
+        # class of difference that shows up as "works on my machine".
+        run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
@@ -115,7 +130,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler and
+        # its components. Pinning a toolchain in the workflow as well would let
+        # CI and developers drift onto different compilers, which is the exact
+        # class of difference that shows up as "works on my machine".
+        run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
