@@ -5,9 +5,10 @@
 > An **agent kernel**: the minimal, stable substrate on which agent harnesses
 > and pipelines are composed. Explicitly not another agent framework.
 
-**Status:** pre-M0. The frozen ABI and the pipeline exist; the kernel does not
-yet. That order is deliberate — the gates land before the code they gate, so the
-first line of kernel logic arrives as a pull request that already flows through
+**Status:** M0, the walking skeleton. The log, the reducer, four of the seven
+syscalls (`spawn`, `exit`, `send`, `recv`), and an echo driver: the loop runs
+end to end, and its log refolds to the same state hash. The gates landed first,
+on purpose, so this code arrived as a pull request that already flowed through
 them.
 
 ## The idea
@@ -43,6 +44,7 @@ Four invariants carry the design:
 | [ADR-0002](docs/adr/0002-seven-syscalls.md) | The seven, and the irreducibility test |
 | [ADR-0003](docs/adr/0003-substrate.md) | In-process body, event-sourced constitution |
 | [ADR-0004](docs/adr/0004-abi-freeze.md) | What is frozen, and the three gates that hold it |
+| [ADR-0005](docs/adr/0005-kernel-allocated-ids.md) | Where ids come from, and how replay confirms them |
 
 ## Layers
 

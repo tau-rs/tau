@@ -19,11 +19,17 @@ name = "tau_kernel"
 testing = []
 
 [dependencies]
-serde = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+sha2       = { workspace = true }
+thiserror  = { workspace = true }
 
 [dev-dependencies]
 insta      = { workspace = true }
-serde_json = { workspace = true }
+# The kernel is executor-agnostic: syscalls are plain futures over std wakers.
+# tokio is the harness's choice (ADR-0003), and the only harness today is the
+# end-to-end test, so it is a dev-dependency.
+tokio      = { workspace = true, features = ["rt", "macros"] }
 tau-kernel = { path = ".", features = ["testing"] }
 
 [lints]

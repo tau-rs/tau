@@ -1,0 +1,147 @@
+//! M0: the walking skeleton, end to end.
+//!
+//! Harness boots → root spawns a child → child sends to the echo driver and
+//! receives the reply → child exits with it → the harness claims both results.
+//! Then the part that is the actual point: fold the log twice and compare the
+//! state hashes to the live kernel's. The log is the kernel.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
+
+use tau_kernel::abi::{AgentId, Budget, DimKey, DriverId, Name, Namespace};
+use tau_kernel::driver::echo::EchoDriver;
+use tau_kernel::kernel::Kernel;
+use tau_kernel::log::Log;
+use tau_kernel::reducer::{fold, Status};
+use tau_kernel::syscall::{program, Match};
+
+/// A `Write` the test can read back after the kernel is done with it.
+#[derive(Clone, Default)]
+struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+impl SharedBuf {
+    fn contents(&self) -> Vec<u8> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl Write for SharedBuf {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+const FIXTURE: &str = "tests/fixtures/m0-walking-skeleton.log";
+const PAYLOAD: &[u8] = b"hello, kernel";
+
+fn echo_id() -> DriverId {
+    DriverId::new(Name::new("echo").unwrap())
+}
+
+#[tokio::test]
+async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
+    let sink = SharedBuf::default();
+    let log = Log::with_sink(sink.clone()).unwrap();
+    let kernel = Kernel::boot(log, |fut| {
+        tokio::spawn(fut);
+    });
+
+    // Boot: drivers first, so the root's namespace can name them.
+    let echo = kernel
+        .register_driver(echo_id(), EchoDriver::new())
+        .unwrap();
+    let ns = Namespace::from_caps([echo]);
+
+    let child_ns = ns.clone();
+    let root = kernel
+        .spawn_root(
+            program(move |root| async move {
+                let child = root
+                    .spawn(
+                        program(move |child| async move {
+                            let corr = child.send(echo, PAYLOAD).unwrap();
+                            let reply = child.recv(Match::Corr(corr)).await.unwrap();
+                            let echoed = child.read(reply.payload).unwrap();
+                            child.exit(&echoed)
+                        }),
+                        child_ns,
+                        Budget::from_dims([(DimKey::Tokens, 100)]),
+                    )
+                    .unwrap();
+                // The root's result is its child's id: the harness will use it
+                // to find the child's result. (An agent claiming its child's
+                // result is `wait`, which is M1.)
+                root.exit(&child.get().to_le_bytes())
+            }),
+            ns,
+            Budget::from_dims([(DimKey::Tokens, 1_000)]),
+        )
+        .unwrap();
+
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+
+    // --- results are stored until claimed, and claiming is logged
+    let root_result = kernel.claim(root).unwrap();
+    let child = AgentId::new(u64::from_le_bytes(root_result.try_into().unwrap()));
+    assert_eq!(kernel.claim(child).unwrap(), PAYLOAD);
+    assert!(kernel.claim(child).is_err(), "a result can be claimed once");
+
+    // --- accounting: 1000 → root, 100 carved to the child, 13 spent, 87 back
+    let state = kernel.state();
+    let root_rec = state.agent(root).unwrap();
+    let child_rec = state.agent(child).unwrap();
+    assert_eq!(root_rec.status, Status::Exited);
+    assert_eq!(child_rec.status, Status::Exited);
+    assert_eq!(root_rec.budget.get(&DimKey::Tokens), Some(987));
+    assert_eq!(
+        child_rec.budget.get(&DimKey::Tokens),
+        None,
+        "returned at exit"
+    );
+    assert_eq!(child_rec.spent.get(&DimKey::Tokens), Some(&13));
+    assert!(child_rec.mailbox.is_empty(), "the reply was resolved");
+    assert!(state.is_drained());
+
+    // --- the log is the kernel: two folds, one hash, equal to the live state
+    let live = kernel.state_hash();
+    let entries = kernel.entries();
+    let once = fold(&entries).unwrap();
+    let twice = fold(&entries).unwrap();
+    assert_eq!(once, state);
+    assert_eq!(once.hash(), live);
+    assert_eq!(twice.hash(), live);
+
+    // --- and the log survives the trip through bytes
+    let bytes = sink.contents();
+    let reread = Log::read_from(bytes.as_slice()).unwrap();
+    assert_eq!(reread.entries(), entries.as_slice());
+    assert_eq!(fold(reread.entries()).unwrap().hash(), live);
+
+    // The first fixture of the Tier 3 determinism corpus. Regenerate with
+    // `TAU_UPDATE_FIXTURES=1 cargo test -p tau-kernel --test m0_walking_skeleton`
+    // — and read the diff, because a changed fixture means the entry format
+    // or the reducer moved.
+    if std::env::var_os("TAU_UPDATE_FIXTURES").is_some() {
+        std::fs::write(FIXTURE, &bytes).unwrap();
+    }
+}
+
+#[test]
+fn the_fixture_refolds_to_the_pinned_state_hash() {
+    // The determinism sentinel at its smallest: yesterday's log, today's
+    // reducer, the same hash. If this fails, the reducer's behaviour on an
+    // existing log changed — which is the one thing it must never do quietly.
+    let bytes = include_bytes!("fixtures/m0-walking-skeleton.log");
+    let log = Log::read_from(&bytes[..]).unwrap();
+    let state = fold(log.entries()).unwrap();
+    assert!(state.is_drained());
+    insta::assert_snapshot!(state.hash().to_string());
+}

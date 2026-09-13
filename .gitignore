@@ -2,3 +2,6 @@
 **/*.rs.bk
 *.pending-snap
 .DS_Store
+
+# Determinism fixtures are logs on purpose; re-include them past any global *.log rule.
+!kernel/tests/fixtures/*.log

@@ -38,15 +38,25 @@ use super::{AgentId, DriverId};
 pub struct Capability(u64);
 
 impl Capability {
-    /// Mints a capability.
+    /// Mints a capability outside the kernel's allocator.
     ///
-    /// Minting is an act of the kernel's capability allocator. Until that
-    /// allocator exists (M0), the only public constructor is this one, gated
-    /// behind the `testing` feature that this crate enables for its own test
-    /// targets and nothing else enables at all.
+    /// Minting is an act of the kernel's allocator ([`Self::alloc`]). This
+    /// constructor exists so test targets can build namespaces without a
+    /// running kernel; it is gated behind the `testing` feature that this
+    /// crate enables for its own tests and nothing else enables at all.
     #[cfg(feature = "testing")]
     #[must_use]
     pub const fn mint(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Allocates a capability. Only the kernel's allocator calls this.
+    ///
+    /// Values come from a monotonic counter in reducer state, so a capability
+    /// is a pure function of the log and replay confirms rather than re-derives
+    /// it (ADR-0005). Crate-private: the wire format is unchanged.
+    #[must_use]
+    pub(crate) const fn alloc(raw: u64) -> Self {
         Self(raw)
     }
 
