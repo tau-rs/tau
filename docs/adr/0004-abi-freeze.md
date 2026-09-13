@@ -41,6 +41,15 @@ Three gates, deliberately redundant, because each fails differently:
 
 1. **`CODEOWNERS`** requires an explicit owner review for `kernel/src/abi/`.
    Catches a change nobody meant to make. Fails if the owner rubber-stamps.
+
+   > **Status: not yet binding.** Branch protection is unavailable on a private
+   > free-plan repository, and even once it is available GitHub does not let an
+   > author approve their own pull request — so with one maintainer, requiring
+   > code-owner review would block every ABI change behind an admin bypass and
+   > train exactly the reflex this gate exists to prevent. Gates 2 and 3 bind
+   > today; gate 1 activates when a second maintainer exists. Tracked in
+   > [#3](https://github.com/tau-rs/tau/issues/3), because a gate that is
+   > described but inert is the failure this project was rebooted to avoid.
 2. **The CI diff gate** fails any pull request that touches `kernel/src/abi/`
    unless it also bumps `ABI` or carries the `abi-change` label with a linked
    ADR. Catches a deliberate change with no paper trail. Fails if someone adds
