@@ -1,0 +1,5 @@
+---
+source: kernel/tests/m0_walking_skeleton.rs
+expression: state.hash().to_string()
+---
+f138faff0d78f2b5c1a0c35c2498bd0ee38f8ab860ac416fcb96f9195ec4064c

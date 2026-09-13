@@ -27,9 +27,30 @@
 //!
 //! # Status
 //!
-//! Pre-M0. This crate currently contains the frozen ABI and nothing else — by
-//! design: the pipeline and the ABI guard land before the first line of kernel
-//! logic, so that logic arrives as a pull request that already flows through
-//! them.
+//! M0, the walking skeleton: the [`log`], the [`reducer`], four of the seven
+//! syscalls (`spawn`, `exit`, `send`, `recv`), and an echo [`driver`]. The
+//! loop runs end to end and its log refolds to the same state hash. `wait`,
+//! `cancel`, the full budget dimensions, and the clock driver are M1; hooks
+//! and `attach` are M2.
+//!
+//! # Shape
+//!
+//! ```text
+//! Program  ──Handle──▶  Kernel  ──Delivery──▶  Driver
+//!    ▲                   │  │                     │
+//!    └──────Msg──────────┘  └──── Log ◀── reply ──┘
+//!                              (the truth)
+//! ```
+//!
+//! Every arrow through the kernel is a log [`Entry`](log::Entry), appended
+//! before it takes effect. [`reducer::fold`] over the entries reproduces
+//! [`reducer::State`] exactly; the kernel's in-memory state is that fold,
+//! kept warm.
 
 pub mod abi;
+pub mod blob;
+pub mod driver;
+pub mod kernel;
+pub mod log;
+pub mod reducer;
+pub mod syscall;
