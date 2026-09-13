@@ -1,0 +1,5 @@
+---
+source: kernel/tests/m1a_cancel.rs
+expression: state.hash().to_string()
+---
+adf59d12803d9d4d3101bdfe019badeec00b3ba904ade1f7b864cb66ecfca75e

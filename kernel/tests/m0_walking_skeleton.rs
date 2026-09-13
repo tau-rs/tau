@@ -1,8 +1,9 @@
 //! M0: the walking skeleton, end to end.
 //!
 //! Harness boots → root spawns a child → child sends to the echo driver and
-//! receives the reply → child exits with it → the harness claims both results.
-//! Then the part that is the actual point: fold the log twice and compare the
+//! receives the reply → child exits with it → the root `wait`s for the child
+//! and exits with the same bytes → the harness claims the root's result. Then
+//! the part that is the actual point: fold the log twice and compare the
 //! state hashes to the live kernel's. The log is the kernel.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -10,12 +11,12 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use tau_kernel::abi::{AgentId, Budget, DimKey, DriverId, Name, Namespace};
+use tau_kernel::abi::{Budget, DimKey, DriverId, Name, Namespace};
 use tau_kernel::driver::echo::EchoDriver;
-use tau_kernel::kernel::Kernel;
-use tau_kernel::log::Log;
-use tau_kernel::reducer::{fold, Status};
-use tau_kernel::syscall::{program, Match};
+use tau_kernel::kernel::{AbortHandle, BoxFuture, Kernel};
+use tau_kernel::log::{Entry, Log};
+use tau_kernel::reducer::{fold, Outcome, Status};
+use tau_kernel::syscall::{program, Match, WaitFor};
 
 /// A `Write` the test can read back after the kernel is done with it.
 #[derive(Clone, Default)]
@@ -38,6 +39,12 @@ impl Write for SharedBuf {
     }
 }
 
+/// tokio as the body (ADR-0003): spawn, and hand back the abort.
+fn tokio_spawner(fut: BoxFuture<()>) -> AbortHandle {
+    let task = tokio::spawn(fut);
+    Box::new(move || task.abort())
+}
+
 const FIXTURE: &str = "tests/fixtures/m0-walking-skeleton.log";
 const PAYLOAD: &[u8] = b"hello, kernel";
 
@@ -49,9 +56,7 @@ fn echo_id() -> DriverId {
 async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
     let sink = SharedBuf::default();
     let log = Log::with_sink(sink.clone()).unwrap();
-    let kernel = Kernel::boot(log, |fut| {
-        tokio::spawn(fut);
-    });
+    let kernel = Kernel::boot(log, tokio_spawner);
 
     // Boot: drivers first, so the root's namespace can name them.
     let echo = kernel
@@ -75,10 +80,11 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
                         Budget::from_dims([(DimKey::Tokens, 100)]),
                     )
                     .unwrap();
-                // The root's result is its child's id: the harness will use it
-                // to find the child's result. (An agent claiming its child's
-                // result is `wait`, which is M1.)
-                root.exit(&child.get().to_le_bytes())
+                // Syscall 3: the parent claims its child's result.
+                let done = root.wait(WaitFor::Child(child)).await.unwrap();
+                assert_eq!(done.agent, child);
+                let bytes = root.read(done.result().unwrap()).unwrap();
+                root.exit(&bytes)
             }),
             ns,
             Budget::from_dims([(DimKey::Tokens, 1_000)]),
@@ -88,14 +94,30 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
     kernel.drained().await.unwrap();
     kernel.shutdown();
 
-    // --- results are stored until claimed, and claiming is logged
-    let root_result = kernel.claim(root).unwrap();
-    let child = AgentId::new(u64::from_le_bytes(root_result.try_into().unwrap()));
-    assert_eq!(kernel.claim(child).unwrap(), PAYLOAD);
-    assert!(kernel.claim(child).is_err(), "a result can be claimed once");
+    // --- the root's result is the child's, claimed through `wait`; the
+    //     harness claims only what the tree left behind, and that is logged
+    let Outcome::Exited(blob) = kernel.claim(root).unwrap() else {
+        panic!("the root exited on its own");
+    };
+    assert_eq!(kernel.read(blob).unwrap(), PAYLOAD);
+    assert!(kernel.claim(root).is_err(), "a result can be claimed once");
+
+    let state = kernel.state();
+    let child = state
+        .agents()
+        .find_map(|(id, a)| (a.parent == Some(root)).then_some(id))
+        .unwrap();
+    assert!(
+        kernel.claim(child).is_err(),
+        "the parent already claimed the child"
+    );
+    let entries = kernel.entries();
+    assert!(entries.iter().any(|e| matches!(
+        e,
+        Entry::Claimed { agent, by: Some(by), .. } if *agent == child && *by == root
+    )));
 
     // --- accounting: 1000 → root, 100 carved to the child, 13 spent, 87 back
-    let state = kernel.state();
     let root_rec = state.agent(root).unwrap();
     let child_rec = state.agent(child).unwrap();
     assert_eq!(root_rec.status, Status::Exited);
@@ -109,10 +131,10 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
     assert_eq!(child_rec.spent.get(&DimKey::Tokens), Some(&13));
     assert!(child_rec.mailbox.is_empty(), "the reply was resolved");
     assert!(state.is_drained());
+    assert!(state.completed().is_empty(), "everything was claimed");
 
     // --- the log is the kernel: two folds, one hash, equal to the live state
     let live = kernel.state_hash();
-    let entries = kernel.entries();
     let once = fold(&entries).unwrap();
     let twice = fold(&entries).unwrap();
     assert_eq!(once, state);

@@ -19,6 +19,14 @@
 //! monotonic counter in this state. An entry carries the id it was allocated,
 //! and the check verifies it equals the counter. Replay therefore does not
 //! re-derive ids and hope; it confirms them.
+//!
+//! # Time
+//!
+//! The reducer never reads a clock. Time is a [`Tick`](Entry::Tick) entry, and
+//! [`State::now`] is the reading of the last one applied. A cancel deadline is
+//! an absolute reading on the agent's record, and the hard abort happens
+//! *inside* the apply of the tick that reaches it — so a fold reproduces every
+//! abort exactly, and nothing outside the log can postpone one.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -32,14 +40,41 @@ use crate::abi::{
 use crate::blob::sha256;
 use crate::log::Entry;
 
-/// Whether an agent is still running.
+/// Where an agent is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
-    /// The agent has not exited.
+    /// Running, unrestricted.
     Live,
-    /// The agent has exited; its record persists for accounting.
+    /// Cancelled and in its grace period: it may `recv`, `wait`, and `exit`,
+    /// but may not `spawn`, `send`, or `cancel`. Hard-aborted at its deadline.
+    Cancelling,
+    /// Exited on its own; its record persists for accounting.
     Exited,
+    /// Hard-aborted by the kernel at a cancel deadline; its record persists.
+    Aborted,
+}
+
+/// How an agent finished.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    /// It called `exit`; this is its result.
+    Exited(BlobRef),
+    /// The kernel aborted it at a cancel deadline. There is no result.
+    Aborted,
+}
+
+/// A finished agent whose outcome has not been claimed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Completion {
+    /// The agent that finished.
+    pub agent: AgentId,
+    /// Its parent, who may `wait` for it. `None` for the root: the harness
+    /// claims that one.
+    pub parent: Option<AgentId>,
+    /// How it finished.
+    pub outcome: Outcome,
 }
 
 /// Everything the kernel knows about one agent.
@@ -47,24 +82,31 @@ pub enum Status {
 pub struct Agent {
     /// The spawning agent; `None` for the root.
     pub parent: Option<AgentId>,
-    /// The birth namespace. Authority is this set — M0 has no transfer.
+    /// The birth namespace. Authority is this set — there is no transfer yet.
     pub ns: Namespace,
     /// What remains of the grant.
     pub budget: Budget,
     /// Everything drivers have reported against this agent, every dimension.
-    /// Recorded in full; only `tokens` is *enforced* in M0.
+    /// Recorded in full; only `tokens` is *enforced* so far.
     pub spent: BTreeMap<DimKey, u64>,
     /// Whether the `tokens` grant is gone. An exhausted agent cannot send.
     pub exhausted: bool,
-    /// Live or exited.
+    /// Where it is in its life.
     pub status: Status,
     /// Delivered, unresolved messages, in delivery order.
     pub mailbox: Vec<Msg>,
+    /// While [`Status::Cancelling`]: the clock reading at which the kernel
+    /// hard-aborts it. Set by `cancel`, only ever brought earlier, never later.
+    pub deadline: Option<u64>,
 }
 
 impl Agent {
     fn is_live(&self) -> bool {
-        matches!(self.status, Status::Live)
+        matches!(self.status, Status::Live | Status::Cancelling)
+    }
+
+    fn is_frozen(&self) -> bool {
+        matches!(self.status, Status::Cancelling)
     }
 }
 
@@ -75,11 +117,14 @@ pub struct State {
     next_agent: u64,
     next_corr: u64,
     next_cap: u64,
+    now: u64,
     drivers: BTreeMap<DriverId, Capability>,
     caps: BTreeMap<Capability, Endpoint>,
     agents: BTreeMap<AgentId, Agent>,
     corrs: BTreeMap<Corr, AgentId>,
-    results: BTreeMap<AgentId, BlobRef>,
+    /// Finished agents whose outcome is unclaimed, in completion order. A
+    /// `Vec`, not a map: `wait(Any)` returns in completion order.
+    completed: Vec<Completion>,
 }
 
 /// A digest of a [`State`], for comparing folds.
@@ -152,9 +197,13 @@ pub enum Refusal {
     /// No such agent.
     #[error("unknown agent {0}")]
     UnknownAgent(AgentId),
-    /// The agent has already exited.
+    /// The agent has already exited or been aborted.
     #[error("agent {0} has exited")]
     AgentExited(AgentId),
+    /// The agent is cancelled and in its grace period; it may not spawn, send,
+    /// or cancel.
+    #[error("agent {0} is cancelled and may not start new work")]
+    Frozen(AgentId),
     /// The agent's `tokens` grant is spent.
     #[error("agent {0} has exhausted its tokens")]
     Exhausted(AgentId),
@@ -213,9 +262,36 @@ pub enum Refusal {
         /// The message.
         seq: Seq,
     },
-    /// A claim for an agent with no stored result.
+    /// A claim for an agent with no unclaimed outcome.
     #[error("agent {0} has no unclaimed result")]
     NoResult(AgentId),
+    /// An agent claimed, or waited for, an agent that is not its child.
+    #[error("agent {child} is not a child of {agent}")]
+    NotChild {
+        /// The claimant.
+        agent: AgentId,
+        /// The agent it claimed.
+        child: AgentId,
+    },
+    /// An agent cancelled an agent outside its own subtree.
+    #[error("agent {target} is not a descendant of {agent}")]
+    NotDescendant {
+        /// The canceller.
+        agent: AgentId,
+        /// The agent it tried to cancel.
+        target: AgentId,
+    },
+    /// The agent is already cancelled; a deadline cannot be renegotiated.
+    #[error("agent {0} is already cancelled")]
+    AlreadyCancelling(AgentId),
+    /// A tick that reads earlier than the last one applied.
+    #[error("clock rewound: last tick read {now}, this one {found}")]
+    ClockRewound {
+        /// The last reading.
+        now: u64,
+        /// The offending reading.
+        found: u64,
+    },
 }
 
 impl State {
@@ -249,6 +325,12 @@ impl State {
         self.next_cap
     }
 
+    /// The reading of the last tick applied; zero before any.
+    #[must_use]
+    pub fn now(&self) -> u64 {
+        self.now
+    }
+
     /// How many entries have been applied.
     #[must_use]
     pub fn len(&self) -> u64 {
@@ -261,7 +343,7 @@ impl State {
         self.next_seq == 0
     }
 
-    /// One agent's record, live or exited.
+    /// One agent's record, whatever its status.
     #[must_use]
     pub fn agent(&self, id: AgentId) -> Option<&Agent> {
         self.agents.get(&id)
@@ -290,19 +372,90 @@ impl State {
         self.corrs.get(&corr).copied()
     }
 
-    /// An exit result that has not been claimed.
-    #[must_use]
-    pub fn result(&self, agent: AgentId) -> Option<BlobRef> {
-        self.results.get(&agent).copied()
+    /// Every open correlation owned by `agent`, in id order.
+    pub fn open_corrs(&self, agent: AgentId) -> impl Iterator<Item = Corr> + '_ {
+        self.corrs
+            .iter()
+            .filter(move |(_, owner)| **owner == agent)
+            .map(|(corr, _)| *corr)
     }
 
-    /// How many agents have not exited.
+    /// An unclaimed outcome.
+    #[must_use]
+    pub fn result(&self, agent: AgentId) -> Option<Outcome> {
+        self.completed
+            .iter()
+            .find(|c| c.agent == agent)
+            .map(|c| c.outcome)
+    }
+
+    /// Every unclaimed outcome, in completion order.
+    #[must_use]
+    pub fn completed(&self) -> &[Completion] {
+        &self.completed
+    }
+
+    /// The earliest-finished child of `parent` whose outcome is unclaimed.
+    /// This is what `wait(Any)` returns.
+    #[must_use]
+    pub fn next_completed_child(&self, parent: AgentId) -> Option<&Completion> {
+        self.completed.iter().find(|c| c.parent == Some(parent))
+    }
+
+    /// Whether `parent` has a child that has not finished.
+    #[must_use]
+    pub fn has_live_children(&self, parent: AgentId) -> bool {
+        self.agents
+            .values()
+            .any(|a| a.parent == Some(parent) && a.is_live())
+    }
+
+    /// Whether `ancestor` is a strict ancestor of `agent`.
+    #[must_use]
+    pub fn is_descendant(&self, agent: AgentId, ancestor: AgentId) -> bool {
+        let mut cursor = self.agents.get(&agent).and_then(|a| a.parent);
+        while let Some(id) = cursor {
+            if id == ancestor {
+                return true;
+            }
+            cursor = self.agents.get(&id).and_then(|a| a.parent);
+        }
+        false
+    }
+
+    /// `root` and every agent below it, whatever their status, in id order.
+    #[must_use]
+    pub fn subtree(&self, root: AgentId) -> Vec<AgentId> {
+        self.agents
+            .keys()
+            .copied()
+            .filter(|id| *id == root || self.is_descendant(*id, root))
+            .collect()
+    }
+
+    /// The cancelled agents a tick reading `now` would abort, deepest first.
+    ///
+    /// Deepest first because ids are allocated in spawn order, so a child's id
+    /// is always greater than its parent's: aborting in descending id order
+    /// returns a child's budget to its parent *before* the parent's is returned
+    /// to the grandparent, and nothing is stranded on a dead record.
+    #[must_use]
+    pub fn expiring(&self, now: u64) -> Vec<AgentId> {
+        self.agents
+            .iter()
+            .rev()
+            .filter(|(_, a)| a.is_frozen() && a.deadline.is_some_and(|d| d <= now))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// How many agents have not finished.
     #[must_use]
     pub fn live_count(&self) -> usize {
         self.agents.values().filter(|a| a.is_live()).count()
     }
 
-    /// Whether a root was spawned and every agent has since exited.
+    /// Whether a root was spawned and every agent has since finished.
     #[must_use]
     pub fn is_drained(&self) -> bool {
         !self.agents.is_empty() && self.live_count() == 0
@@ -312,7 +465,7 @@ impl State {
     ///
     /// Two folds of the same log must produce the same hash on every platform;
     /// that is the property the determinism jobs test. Serialization is
-    /// order-stable because every collection here is a B-tree.
+    /// order-stable because every collection here is a B-tree or a Vec.
     #[must_use]
     pub fn hash(&self) -> StateHash {
         // Serializing a struct of B-trees, integers, and validated strings
@@ -325,6 +478,15 @@ impl State {
         let agent = self.agents.get(&id).ok_or(Refusal::UnknownAgent(id))?;
         if !agent.is_live() {
             return Err(Refusal::AgentExited(id));
+        }
+        Ok(agent)
+    }
+
+    /// Live and not frozen: allowed to start new work.
+    fn active(&self, id: AgentId) -> Result<&Agent, Refusal> {
+        let agent = self.live(id)?;
+        if agent.is_frozen() {
+            return Err(Refusal::Frozen(id));
         }
         Ok(agent)
     }
@@ -389,7 +551,7 @@ impl State {
                         }
                     }
                     Some(parent) => {
-                        let p = self.live(*parent)?;
+                        let p = self.active(*parent)?;
                         if !ns.is_subset_of(&p.ns) {
                             return Err(Refusal::NotSubset { parent: *parent });
                         }
@@ -402,7 +564,7 @@ impl State {
                 let Endpoint::Agent { id } = msg.from else {
                     return Err(Refusal::WrongSender(msg.from.clone()));
                 };
-                let sender = self.live(id)?;
+                let sender = self.active(id)?;
                 if sender.exhausted {
                     return Err(Refusal::Exhausted(id));
                 }
@@ -479,9 +641,44 @@ impl State {
                     p.budget.clone().restore(&a.budget)?;
                 }
             }
-            Entry::Claimed { agent, .. } => {
-                if !self.results.contains_key(agent) {
-                    return Err(Refusal::NoResult(*agent));
+            Entry::Claimed { agent, by, .. } => {
+                let completion = self
+                    .completed
+                    .iter()
+                    .find(|c| c.agent == *agent)
+                    .ok_or(Refusal::NoResult(*agent))?;
+                if let Some(by) = by {
+                    self.live(*by)?;
+                    if completion.parent != Some(*by) {
+                        return Err(Refusal::NotChild {
+                            agent: *by,
+                            child: *agent,
+                        });
+                    }
+                }
+            }
+            Entry::Cancelled { by, agent, .. } => {
+                // Who is asking, before what they ask for.
+                if let Some(by) = by {
+                    self.active(*by)?;
+                    if !self.is_descendant(*agent, *by) {
+                        return Err(Refusal::NotDescendant {
+                            agent: *by,
+                            target: *agent,
+                        });
+                    }
+                }
+                let target = self.live(*agent)?;
+                if target.is_frozen() {
+                    return Err(Refusal::AlreadyCancelling(*agent));
+                }
+            }
+            Entry::Tick { now, .. } => {
+                if *now < self.now {
+                    return Err(Refusal::ClockRewound {
+                        now: self.now,
+                        found: *now,
+                    });
                 }
             }
         }
@@ -529,6 +726,7 @@ impl State {
                         spent: BTreeMap::new(),
                         status: Status::Live,
                         mailbox: Vec::new(),
+                        deadline: None,
                     },
                 );
                 self.next_agent = self.next_agent.saturating_add(1);
@@ -557,45 +755,101 @@ impl State {
                 a.mailbox.retain(|m| m.seq != *matched);
             }
             Entry::Exited { agent, result, .. } => {
-                let a = self
-                    .agents
-                    .get_mut(agent)
-                    .ok_or(Refusal::UnknownAgent(*agent))?;
-                a.status = Status::Exited;
-                // Mailbox hygiene (HANDOFF §4.9): unclaimed correlations and
-                // undelivered mail dead-letter at exit. A reply that arrives
-                // later finds no owner and is refused at the driver boundary.
-                a.mailbox.clear();
-                self.corrs.retain(|_, owner| owner != agent);
-                // Unspent budget returns to the parent. The root has none; its
-                // remainder stays on its record, which is where the harness's
-                // grant is accounted for. A parent's record persists past its
-                // own exit for exactly this reason: a child may outlive it.
-                if let Some(parent) = a.parent {
-                    let unspent = core::mem::replace(&mut a.budget, Budget::empty());
-                    let p = self
-                        .agents
-                        .get_mut(&parent)
-                        .ok_or(Refusal::UnknownAgent(parent))?;
-                    p.budget.restore(&unspent)?;
-                }
-                self.results.insert(*agent, *result);
+                self.finish(*agent, Outcome::Exited(*result))?;
             }
             Entry::Claimed { agent, .. } => {
-                self.results.remove(agent);
+                if let Some(idx) = self.completed.iter().position(|c| c.agent == *agent) {
+                    self.completed.remove(idx);
+                }
+            }
+            Entry::Cancelled {
+                seq,
+                by,
+                agent,
+                grace,
+                reason,
+            } => {
+                // Phase one: the atomic freeze. Every live agent in the subtree
+                // is frozen by this one entry, gets the notice, and gets the
+                // deadline — brought earlier if an inner cancel already set
+                // one, never pushed later.
+                let deadline = self.now.saturating_add(*grace);
+                let from = by.map_or(Endpoint::Harness, |id| Endpoint::Agent { id });
+                let notice = Msg::new(*seq, from, MsgKind::Notice, *reason);
+                for id in self.subtree(*agent) {
+                    let Some(a) = self.agents.get_mut(&id) else {
+                        continue;
+                    };
+                    if !a.is_live() {
+                        continue;
+                    }
+                    a.status = Status::Cancelling;
+                    a.deadline = Some(a.deadline.map_or(deadline, |d| d.min(deadline)));
+                    a.mailbox.push(notice.clone());
+                }
+                // A grace of zero is a deadline already reached.
+                self.expire()?;
+            }
+            Entry::Tick { now, .. } => {
+                self.now = *now;
+                self.expire()?;
             }
         }
         self.next_seq = self.next_seq.saturating_add(1);
+        Ok(())
+    }
+
+    /// Hard-aborts every cancelled agent whose deadline `now` has reached.
+    fn expire(&mut self) -> Result<(), Refusal> {
+        for id in self.expiring(self.now) {
+            self.finish(id, Outcome::Aborted)?;
+        }
+        Ok(())
+    }
+
+    /// Ends an agent, by exit or by abort: the record stays, the mailbox and
+    /// open correlations go (HANDOFF §4.9), unspent budget returns to the
+    /// parent, and the outcome is stored until claimed.
+    ///
+    /// The root has no parent; its remainder stays on its record, which is
+    /// where the harness's grant is accounted for. A parent's record persists
+    /// past its own end for exactly this reason: a child may outlive it.
+    fn finish(&mut self, id: AgentId, outcome: Outcome) -> Result<(), Refusal> {
+        let a = self.agents.get_mut(&id).ok_or(Refusal::UnknownAgent(id))?;
+        a.status = match outcome {
+            Outcome::Exited(_) => Status::Exited,
+            Outcome::Aborted => Status::Aborted,
+        };
+        a.deadline = None;
+        a.mailbox.clear();
+        let parent = a.parent;
+        let unspent = match parent {
+            Some(_) => core::mem::replace(&mut a.budget, Budget::empty()),
+            None => Budget::empty(),
+        };
+        self.corrs.retain(|_, owner| *owner != id);
+        if let Some(parent) = parent {
+            let p = self
+                .agents
+                .get_mut(&parent)
+                .ok_or(Refusal::UnknownAgent(parent))?;
+            p.budget.restore(&unspent)?;
+        }
+        self.completed.push(Completion {
+            agent: id,
+            parent,
+            outcome,
+        });
         Ok(())
     }
 }
 
 /// Records a driver's report against an agent and enforces `tokens`.
 ///
-/// M0 enforcement is deliberately coarse: a report that overdraws the grant
+/// Enforcement is deliberately coarse: a report that overdraws the grant
 /// drains it to zero and marks the agent exhausted, so its *next* send is
 /// refused. Reservation before the call — refusing a send that could not be
-/// paid for — is M1, with the rest of the budget dimensions.
+/// paid for — is M1b, with the rest of the budget dimensions.
 fn charge(agent: &mut Agent, consumed: &Consumption) {
     for (dim, amount) in consumed.iter() {
         let slot = agent.spent.entry(dim.clone()).or_insert(0);
