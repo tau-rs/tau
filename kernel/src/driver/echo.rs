@@ -24,7 +24,7 @@ impl EchoDriver {
 }
 
 impl Driver for EchoDriver {
-    fn handle(&mut self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
+    fn handle(&self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
         Box::pin(async move {
             let bytes = u64::try_from(request.payload.len()).unwrap_or(u64::MAX);
             let consumed = Consumption::from_dims([(DimKey::Tokens, bytes)]);

@@ -2,10 +2,10 @@
 {"entry":"driver_registered","seq":0,"driver":"echo","cap":0}
 {"entry":"spawned","seq":1,"parent":null,"agent":0,"ns":{"caps":[0]},"budget":{"tokens":1000}}
 {"entry":"spawned","seq":2,"parent":0,"agent":1,"ns":{"caps":[0]},"budget":{"tokens":100}}
-{"entry":"exited","seq":3,"agent":0,"result":"7c9fa136d4413fa6173637e883b6998d32e1d675f88cddff9dcbcf331820f4b8"}
-{"entry":"sent","msg":{"abi":0,"seq":4,"from":{"kind":"agent","id":1},"corr":0,"kind":"request","consumed":null,"payload":"e346a97aa74154f35a841e970cd3dd71e19e3f464320ed9e3ba32f1bced1f1ee"},"via":0}
-{"entry":"replied","msg":{"abi":0,"seq":5,"from":{"kind":"driver","id":"echo"},"corr":0,"kind":"reply","consumed":{"tokens":13},"payload":"e346a97aa74154f35a841e970cd3dd71e19e3f464320ed9e3ba32f1bced1f1ee"},"to":1}
-{"entry":"resolved","seq":6,"agent":1,"matched":5}
-{"entry":"exited","seq":7,"agent":1,"result":"e346a97aa74154f35a841e970cd3dd71e19e3f464320ed9e3ba32f1bced1f1ee"}
-{"entry":"claimed","seq":8,"agent":0}
-{"entry":"claimed","seq":9,"agent":1}
+{"entry":"sent","msg":{"abi":0,"seq":3,"from":{"kind":"agent","id":1},"corr":0,"kind":"request","consumed":null,"payload":"e346a97aa74154f35a841e970cd3dd71e19e3f464320ed9e3ba32f1bced1f1ee"},"via":0}
+{"entry":"replied","msg":{"abi":0,"seq":4,"from":{"kind":"driver","id":"echo"},"corr":0,"kind":"reply","consumed":{"tokens":13},"payload":"e346a97aa74154f35a841e970cd3dd71e19e3f464320ed9e3ba32f1bced1f1ee"},"to":1}
+{"entry":"resolved","seq":5,"agent":1,"matched":4}
+{"entry":"exited","seq":6,"agent":1,"result":"e346a97aa74154f35a841e970cd3dd71e19e3f464320ed9e3ba32f1bced1f1ee"}
+{"entry":"claimed","seq":7,"agent":1,"by":0}
+{"entry":"exited","seq":8,"agent":0,"result":"e346a97aa74154f35a841e970cd3dd71e19e3f464320ed9e3ba32f1bced1f1ee"}
+{"entry":"claimed","seq":9,"agent":0,"by":null}

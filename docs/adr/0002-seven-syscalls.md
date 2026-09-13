@@ -88,6 +88,17 @@ of every proposal, with an answer that is demonstrable rather than arguable.
 - **The obligation this creates**: proposals that fail the irreducibility test
   must be *recorded* as failing it. A rejected eighth syscall that is not
   written down gets proposed again in six months.
+- **Selectors are Rust API, not ABI** (decided 2026-09-13, closes #11). The
+  `recv` filter language (`Match`) and the `wait` selector (`Child(id) | Any`)
+  are syscall *arguments*. They never reach the wire: the log records which
+  message a `recv` resolved to and which outcome a `wait` claimed, never the
+  selector that chose it, so a fold does not evaluate them and a change to
+  them cannot cause a replay divergence. "Closed on purpose" is a promise
+  about the *shape* of the language — no user predicates — which the
+  irreducibility test guards; it is not a promise to freeze its variant list
+  by wire snapshot. `cargo-semver-checks` covers the Rust surface like any
+  other public type. Revisit if a non-Rust harness appears: at that point the
+  selectors would have a serialized form, and that form would be ABI.
 
 ## Alternatives considered
 

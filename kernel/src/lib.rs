@@ -27,11 +27,12 @@
 //!
 //! # Status
 //!
-//! M0, the walking skeleton: the [`log`], the [`reducer`], four of the seven
-//! syscalls (`spawn`, `exit`, `send`, `recv`), and an echo [`driver`]. The
-//! loop runs end to end and its log refolds to the same state hash. `wait`,
-//! `cancel`, the full budget dimensions, and the clock driver are M1; hooks
-//! and `attach` are M2.
+//! M1a: the [`log`], the [`reducer`], six of the seven syscalls (`spawn`,
+//! `exit`, `wait`, `cancel`, `send`, `recv`), an echo [`driver`], and a
+//! virtual clock. The loop runs end to end, a cancelled subtree is frozen,
+//! notified, abandoned at the drivers, and aborted at a tick, and every log
+//! refolds to the same state hash. The full budget dimensions and the
+//! wall-clock source are M1b; hooks and `attach` are M2.
 //!
 //! # Shape
 //!

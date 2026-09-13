@@ -33,7 +33,10 @@ use crate::abi::{AgentId, BlobRef, Budget, Capability, DriverId, LogHeader, Msg,
 ///
 /// Each variant carries the kernel-allocated ids it introduces (`agent`, `cap`,
 /// the `corr` inside a `msg`), so the reducer can *verify* an allocation on
-/// replay rather than re-deriving it and hoping it matches.
+/// replay rather than re-deriving it and hoping it matches. What a variant
+/// does *not* carry is anything the reducer can derive: `Cancelled` names the
+/// subtree's root, not its members, and a hard abort is not an entry at all
+/// but a consequence of applying the `Tick` that reaches the deadline.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "entry", rename_all = "snake_case")]
 pub enum Entry {
@@ -95,12 +98,39 @@ pub enum Entry {
         /// Its result, held until claimed.
         result: BlobRef,
     },
-    /// A stored exit result was claimed.
+    /// A stored outcome was claimed: by the parent through `wait`, or by the
+    /// harness for a result the tree left behind.
     Claimed {
         /// Log position.
         seq: Seq,
-        /// Whose result.
+        /// Whose outcome.
         agent: AgentId,
+        /// The claimant, or `None` for the harness.
+        by: Option<AgentId>,
+    },
+    /// An agent's subtree was cancelled: phase one of `cancel`, the atomic
+    /// freeze. Applying this entry freezes every live agent under `agent`,
+    /// delivers each a `Notice` from `by` carrying `reason`, and sets each one's
+    /// deadline to the current clock reading plus `grace`.
+    Cancelled {
+        /// Log position.
+        seq: Seq,
+        /// The canceller, or `None` for the harness.
+        by: Option<AgentId>,
+        /// The root of the cancelled subtree.
+        agent: AgentId,
+        /// How many clock units the subtree has to exit on its own.
+        grace: u64,
+        /// The payload of the notice each frozen agent receives.
+        reason: BlobRef,
+    },
+    /// The clock advanced. Time enters the system only this way (ADR-0003):
+    /// applying a tick is when cancel deadlines are enforced.
+    Tick {
+        /// Log position.
+        seq: Seq,
+        /// The clock reading. Non-decreasing across a log.
+        now: u64,
     },
 }
 
@@ -113,7 +143,9 @@ impl Entry {
             | Self::Spawned { seq, .. }
             | Self::Resolved { seq, .. }
             | Self::Exited { seq, .. }
-            | Self::Claimed { seq, .. } => *seq,
+            | Self::Claimed { seq, .. }
+            | Self::Cancelled { seq, .. }
+            | Self::Tick { seq, .. } => *seq,
             Self::Sent { msg, .. } | Self::Replied { msg, .. } => msg.seq,
         }
     }
