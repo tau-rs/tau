@@ -1,0 +1,17 @@
+[profile.default]
+retries       = 0
+fail-fast     = false
+failure-output = "immediate-final"
+
+# Tier 0 must stay sub-minute or the developer loop stops being a loop.
+# Anything slower than 5s is by definition not a unit test and belongs in an
+# integration suite (handoff §8, Tier 0).
+[profile.quick]
+default-filter = "kind(lib) or kind(bin)"
+slow-timeout   = { period = "5s", terminate-after = 1 }
+fail-fast      = true
+
+[profile.ci]
+retries        = 0          # a flake is a bug; the flake hunter quarantines, CI does not retry
+failure-output = "immediate-final"
+slow-timeout   = { period = "60s", terminate-after = 5 }

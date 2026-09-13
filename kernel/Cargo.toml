@@ -1,0 +1,30 @@
+[package]
+name        = "tau-kernel"
+description = "The tau agent kernel: seven syscalls, an event-sourced core, capability security."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+name = "tau_kernel"
+
+[features]
+# Exposes constructors that the kernel's own allocators own in production, so
+# that test targets can build ABI values without a running kernel. Enabled only
+# by the self dev-dependency below; no downstream crate can turn it on usefully,
+# because forging a value confers no authority (see `abi::Capability`).
+testing = []
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+insta      = { workspace = true }
+serde_json = { workspace = true }
+tau-kernel = { path = ".", features = ["testing"] }
+
+[lints]
+workspace = true

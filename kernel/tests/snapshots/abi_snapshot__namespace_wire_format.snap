@@ -1,0 +1,11 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: "Namespace::from_caps([cap(3), cap(1), cap(2)])"
+---
+{
+  "caps": [
+    1,
+    2,
+    3
+  ]
+}

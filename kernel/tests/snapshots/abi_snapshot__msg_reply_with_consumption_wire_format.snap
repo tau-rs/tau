@@ -1,0 +1,20 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: msg
+---
+{
+  "abi": 0,
+  "seq": 43,
+  "from": {
+    "kind": "driver",
+    "id": "anthropic"
+  },
+  "corr": 1001,
+  "kind": "reply",
+  "consumed": {
+    "tokens": 1234,
+    "cost_microusd": 9900,
+    "cache-read-tokens": 512
+  },
+  "payload": "0101010101010101010101010101010101010101010101010101010101010101"
+}

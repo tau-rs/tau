@@ -1,0 +1,13 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: "LogHeader::current()"
+---
+{
+  "magic": [
+    84,
+    65,
+    85,
+    0
+  ],
+  "abi": 0
+}

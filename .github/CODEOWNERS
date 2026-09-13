@@ -1,0 +1,14 @@
+# The ABI is the constitution: one directory, explicitly owned.
+#
+# Every other gate on kernel/src/abi/ is mechanical (the CI diff gate, the wire
+# snapshots). This one is a human, on purpose — the gates catch *that* the
+# surface changed; a person has to decide whether it should have.
+/kernel/src/abi/          @LEBOCQTitouan
+
+# The gates themselves. A pull request that can edit its own guard is not gated.
+/.github/workflows/       @LEBOCQTitouan
+/scripts/abi-guard.sh     @LEBOCQTitouan
+/.github/CODEOWNERS       @LEBOCQTitouan
+
+# Decisions are the project's memory.
+/docs/adr/                @LEBOCQTitouan

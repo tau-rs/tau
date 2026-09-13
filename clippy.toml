@@ -1,0 +1,18 @@
+# Determinism, enforced by lint rather than by review.
+#
+# The reducer is `fn apply(state, entry) -> state` and must be a pure,
+# deterministic fold. Hash-ordered containers leak allocator/hasher state into
+# iteration order, which surfaces as a state-hash mismatch on a *different
+# machine* — the Tier 2 cross-platform refold — long after the commit that
+# caused it. Denying the types is cheaper than debugging that.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is nondeterministic; use BTreeMap (see ADR-0003)" },
+    { path = "std::collections::HashSet", reason = "iteration order is nondeterministic; use BTreeSet (see ADR-0003)" },
+]
+
+# The reducer never reads a clock and never draws randomness: time enters the
+# system only as log entries appended by the clock driver (ADR-0003, §4.4).
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "time enters as log entries from the clock driver, never by reading a clock (ADR-0003)" },
+    { path = "std::time::Instant::now", reason = "time enters as log entries from the clock driver, never by reading a clock (ADR-0003)" },
+]

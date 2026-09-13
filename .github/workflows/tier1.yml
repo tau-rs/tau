@@ -1,0 +1,147 @@
+# Tier 1 — every pull request and every merge-queue entry. Budget: < 8 minutes.
+#
+# The pipeline is a funnel (docs/HANDOFF.md §7-8). Tier 0 is seconds, locally.
+# This is minutes, blocking. Tier 2 is deep verification on demand or by path.
+# Tier 3 is exhaustive, on a schedule, and opens issues instead of failing
+# builds. Nothing expensive is deleted; it is rescheduled downward.
+#
+# If this workflow creeps past ~8 minutes, the fix is to move a job down a tier,
+# not to accept the wait. People batch commits when feedback is slow, and
+# batched commits are what makes bisection expensive later.
+
+name: tier1
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tier1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0        # incremental artifacts embed compilation state and defeat caching
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: test (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --locked --workspace --all-features --profile ci
+      # nextest does not run doctests; the kernel's docs are where the ABI's
+      # reasoning lives, so a doctest that stops compiling is a docs rot signal.
+      - run: cargo test --locked --workspace --all-features --doc
+
+  abi-guard:
+    name: ABI guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0        # the diff gate needs the merge base
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-semver-checks
+
+      # Gate 3 of the freeze: the pinned wire format (docs/adr/0004-abi-freeze.md).
+      - name: Wire-format snapshots
+        run: cargo test --locked -p tau-kernel --all-features --test abi_snapshot --test abi_invariants
+
+      # Gate 2: a diff under kernel/src/abi/ needs an ABI bump or a labelled ADR.
+      - name: Diff gate
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: ./scripts/abi-guard.sh
+
+      # The Rust-API half of the surface, which wire snapshots do not cover.
+      # Pre-1.0 this is advisory in effect (0.x minors may break); it is here
+      # from the start so it is already wired when 1.0 makes it binding.
+      - name: Rust API surface
+        if: github.event_name == 'pull_request'
+        run: cargo semver-checks --baseline-rev "${{ github.event.pull_request.base.sha }}" -p tau-kernel
+        continue-on-error: true
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories licenses bans sources
+
+  macos-smoke:
+    name: smoke (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      # Unit-only. Full macOS parity is Tier 2; day-to-day macOS breakage is
+      # almost always linkage or path handling, which a smoke run catches.
+      - run: cargo nextest run --locked --workspace --all-features --profile quick
+
+  # A single required check, so branch protection does not have to enumerate
+  # the matrix. Adding a job above means adding it to `needs` here — and
+  # `result == success` for *every* need, because a skipped job reports
+  # 'skipped', not 'failure', and a gate that treats skipped as passing is a
+  # gate that fails open.
+  tier1:
+    name: tier1
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [fmt, clippy, test, abi-guard, deny, macos-smoke]
+    steps:
+      - name: Require every Tier 1 job to have succeeded
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "job results: $results"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "::error::a Tier 1 job reported '$r'"
+              exit 1
+            fi
+          done

@@ -1,0 +1,16 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: msg
+---
+{
+  "abi": 0,
+  "seq": 42,
+  "from": {
+    "kind": "agent",
+    "id": 7
+  },
+  "corr": 1001,
+  "kind": "request",
+  "consumed": null,
+  "payload": "abababababababababababababababababababababababababababababababab"
+}

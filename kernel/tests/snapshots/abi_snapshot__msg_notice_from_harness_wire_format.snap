@@ -1,0 +1,15 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: msg
+---
+{
+  "abi": 0,
+  "seq": 0,
+  "from": {
+    "kind": "harness"
+  },
+  "corr": null,
+  "kind": "notice",
+  "consumed": null,
+  "payload": "0000000000000000000000000000000000000000000000000000000000000000"
+}

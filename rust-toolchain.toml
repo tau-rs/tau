@@ -1,0 +1,6 @@
+# Pinned: reproducibility beats currency. The toolchain canary (Tier 3) tells us
+# when beta/nightly would break us; bumping this file is a deliberate PR.
+[toolchain]
+channel    = "1.97.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+profile    = "minimal"

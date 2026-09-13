@@ -1,0 +1,73 @@
+# Contributing
+
+## The short version
+
+```sh
+just check      # before every commit: fmt + clippy + unit tests, seconds
+just test       # before every pull request: everything Tier 1 runs
+```
+
+Branch from `main`, keep the branch short-lived, use
+[conventional commits](https://www.conventionalcommits.org/), open a pull
+request. `main` is protected: the merge queue is the only way in, and it re-runs
+Tier 1 on the *merged* state, which is what kills "green on the branch, red on
+main".
+
+## The one rule that is different here
+
+`kernel/src/abi/` is frozen. It evolves additively or not at all, and a pull
+request that touches it must either bump `pub const ABI: u16` or carry the
+`abi-change` label with a linked ADR. Three gates enforce this — `CODEOWNERS`,
+the CI diff gate, and `insta` snapshots of the wire format — and they are
+redundant on purpose, because each of them fails differently. See
+[ADR-0004](docs/adr/0004-abi-freeze.md).
+
+If a snapshot test fails, the ABI is telling you that you changed it. Read the
+diff before running `cargo insta accept`.
+
+Any new type in `kernel/src/abi/` arrives with its snapshot in the same pull
+request. A frozen type with no pinned wire form is frozen in name only.
+
+## Proposing an eighth syscall
+
+Show that it is *inexpressible* as a program over the existing seven. If it is
+expressible, it belongs in `libtau`, which has no special powers and needs no
+ADR. A proposal that fails this test still gets written down — an unrecorded
+rejection gets re-proposed in six months. See
+[ADR-0002](docs/adr/0002-seven-syscalls.md).
+
+## Where a change belongs
+
+The sorting rule, applied to every feature:
+
+| Scope | Home |
+|---|---|
+| Per-agent behavior | a program (agent code, or `libtau`) |
+| Per-endpoint behavior | a driver |
+| Cross-cutting policy | a hook |
+
+Hooks never do I/O and never run inference. ML-based screening is a driver or an
+agent, not a hook.
+
+## Determinism is not optional
+
+The reducer is a pure fold: no clock, no RNG, no iteration-order leaks. `HashMap`
+and `HashSet` are denied workspace-wide, as are `SystemTime::now` and
+`Instant::now` — time enters the system as log entries from the clock driver.
+These are lints rather than review comments because the failure they prevent
+shows up as a state-hash mismatch on someone else's machine, weeks later.
+
+Agent futures hold only plain memory and the kernel handle. No guards across an
+`await`: a drop-guard that runs during a hard abort is state the log never saw.
+
+## Tiers
+
+| Tier | When | What |
+|---|---|---|
+| 0 | locally, on save | `just check` — seconds |
+| 1 | every PR + merge queue | fmt, clippy, tests, ABI guard, cargo-deny, macOS smoke — under 8 minutes |
+| 2 | `deep-ci` label, or automatically on `kernel/**` | property tests, simulation soak, fuzzing, sanitizers, full macOS matrix |
+| 3 | scheduled | determinism drift sentinel, long fuzz, dependency drift, benchmarks, flake hunter |
+
+Tier 3 opens issues rather than failing builds. Drift is not the committer's
+fault, and blaming the wrong person trains everyone to ignore red.

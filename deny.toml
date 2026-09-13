@@ -1,0 +1,42 @@
+# cargo-deny: supply-chain gate, Tier 1.
+#
+# Advisories arrive independently of commits, which is why this also runs on a
+# schedule (Tier 3) rather than only when someone happens to push.
+
+[advisories]
+version = 2
+# Empty on purpose. An ignore entry here is a decision to ship a known
+# vulnerability; it must carry a comment naming the advisory, the reason, and
+# the condition under which it is removed.
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# A registry dependency with no version bound is a supply-chain hole. A
+# *path* dependency without one is just a workspace-internal edge — the
+# kernel's self dev-dependency, which enables the `testing` feature for its own
+# test targets and nothing else.
+allow-wildcard-paths = true
+# The kernel is a dependency of every harness that embeds tau. A duplicate of a
+# heavyweight transitive dep is a compile-time and binary-size tax paid by every
+# one of them.
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

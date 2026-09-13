@@ -1,0 +1,13 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: "Budget::from_dims([(DimKey::Tokens, 100_000),\n(DimKey::CostMicroUsd, 5_000_000), (DimKey::WallMs, 600_000),\n(DimKey::Calls, 256), (DimKey::Depth, 4), (DimKey::ComputeMs, 30_000),\n(DimKey::Custom(name(\"gpu_seconds\")), 12),])"
+---
+{
+  "tokens": 100000,
+  "cost_microusd": 5000000,
+  "wall_ms": 600000,
+  "calls": 256,
+  "depth": 4,
+  "compute_ms": 30000,
+  "gpu_seconds": 12
+}

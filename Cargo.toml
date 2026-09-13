@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["kernel"]
+
+[workspace.package]
+version      = "0.0.0"
+edition      = "2021"
+rust-version = "1.97"
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/tau-rs/tau"
+authors      = ["Titouan Lebocq <lebocq.tit@gmail.com>"]
+
+[workspace.dependencies]
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+insta      = { version = "1", features = ["json"] }
+
+# The reducer is a pure, deterministic fold. `-D warnings` is the floor; the
+# lints below are the ones whose violation would be a *correctness* bug in a
+# replayable system, so they are denied workspace-wide rather than left to
+# review.
+[workspace.lints.rust]
+unsafe_code             = "forbid"
+missing_docs            = "warn"
+unreachable_pub         = "warn"
+rust_2018_idioms        = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# Nondeterminism sources. A HashMap in reducer state is a replay bug that only
+# shows up on another platform, which is the most expensive kind.
+disallowed_types   = "deny"
+disallowed_methods = "deny"
+# Panics in the kernel are unrecoverable for every agent in the tree.
+unwrap_used        = "deny"
+expect_used        = "deny"
+panic              = "deny"
+indexing_slicing    = "deny"
+integer_division    = "deny"
