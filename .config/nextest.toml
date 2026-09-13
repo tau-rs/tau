@@ -4,12 +4,21 @@ fail-fast     = false
 failure-output = "immediate-final"
 
 # Tier 0 must stay sub-minute or the developer loop stops being a loop.
-# Anything slower than 5s is by definition not a unit test and belongs in an
-# integration suite (handoff §8, Tier 0).
+#
+# The rule is "anything slower than 5s is not a unit test", and the ceiling
+# below is what enforces it — a test that blows the budget is killed and the
+# run is red, so slowness cannot accumulate quietly.
+#
+# Note what this profile deliberately does NOT do: filter by test *kind*.
+# `kind(lib)` looked like the obvious way to say "unit tests only" and instead
+# selected nothing at all, because every test in this repository lives in
+# `tests/`. Nextest exits 4 on an empty selection rather than reporting a green
+# run over zero tests, which is the only reason that was caught in the first
+# hour instead of the first month. The ceiling is the right mechanism; the
+# filter was a proxy for it.
 [profile.quick]
-default-filter = "kind(lib) or kind(bin)"
-slow-timeout   = { period = "5s", terminate-after = 1 }
-fail-fast      = true
+slow-timeout = { period = "5s", terminate-after = 1 }
+fail-fast    = true
 
 [profile.ci]
 retries        = 0          # a flake is a bug; the flake hunter quarantines, CI does not retry
