@@ -454,8 +454,11 @@ impl Kernel {
         let abort = spawner(Box::pin(async move {
             let Exit { .. } = program(handle).await;
         }));
-        // The task may already have run to its exit on another worker. Keep
-        // the handle only while there is something to abort.
+        // The task may already have finished on another worker — by its own
+        // exit, or by a zero-grace cancel that ran before this lock. Keep the
+        // handle only while there is something to abort; otherwise fire it
+        // now, so a reducer-aborted task is stopped rather than merely failed
+        // closed.
         let mut inner = self.lock();
         let live = inner
             .state
@@ -463,6 +466,9 @@ impl Kernel {
             .is_some_and(|a| matches!(a.status, Status::Live | Status::Cancelling));
         if live {
             inner.aborts.insert(id, abort);
+        } else {
+            drop(inner);
+            abort();
         }
         Ok(id)
     }
