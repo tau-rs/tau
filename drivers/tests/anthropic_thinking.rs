@@ -3,6 +3,7 @@
 //! back to the provider unchanged in value — first with the driver alone,
 //! then with the real `libtau` tool loop driving it through the kernel.
 
+#![cfg(feature = "anthropic")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

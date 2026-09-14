@@ -4,6 +4,7 @@
 //! what the bound is checked against, and a count that fails — provider,
 //! transport, abandon — ends the flight before `/v1/messages` is touched.
 
+#![cfg(feature = "anthropic")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

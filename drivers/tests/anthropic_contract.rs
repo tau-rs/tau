@@ -4,6 +4,7 @@
 //! what `usage` says at the configured prices, and every failure mode is the
 //! error reply the contract names.
 
+#![cfg(feature = "anthropic")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
