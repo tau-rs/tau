@@ -7,11 +7,12 @@
 //! seeded PRNG so a run is a pure function of its seed.
 //!
 //! What the harness checks as it goes is the M1b conservation property: over
-//! the whole tree, after every entry, budgets plus reservations plus spent
-//! equal the root's grant plus overdraft, along every granted dimension but
-//! `depth`. What it hands back is the log and the incrementally built state,
-//! so a test can fold the log again — from memory, or through a serialized
-//! round-trip — and compare [`State::hash`].
+//! the whole tree, budgets plus reservations plus spent equal the root's
+//! grant plus overdraft, along every granted dimension but `depth` — after
+//! every entry in the Tier 1 shape, every `k` entries and at the end in the
+//! soak's ([`Options`]). What it hands back is the log and the incrementally
+//! built state, so a test can fold the log again — from memory, or through a
+//! serialized round-trip — and compare [`State::hash`].
 //!
 //! Refusals are part of the workload, not a failure of it. The generator
 //! proposes frozen senders, empty budgets, depth-zero parents, and clock
@@ -21,7 +22,7 @@
 //! can leave a partially applied entry behind, the one state the model has no
 //! name for.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tau_kernel::abi::{
     AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, Msg,
@@ -138,6 +139,38 @@ impl Rng {
     }
 }
 
+/// How a run is shaped: how long it is, how often it checks, how many agents
+/// it keeps alive.
+///
+/// The defaults, [`Options::exhaustive`], are the Tier 1 shape: conservation
+/// after every entry and no bound on the population. Both are quadratic in
+/// the number of agent records, which is fine at 10^4 events and hopeless at
+/// 10^6; the soak sets both and gets a run whose per-event cost no longer
+/// depends on how many agents have ever existed (HANDOFF §8, Tier 2 item 2).
+#[derive(Clone, Debug)]
+pub struct Options {
+    /// Accepted entries between boot and the draining epilogue.
+    pub events: u64,
+    /// Check conservation after every this-many accepted entries; `None`
+    /// checks only at the end. The end check is unconditional.
+    pub check_every: Option<u64>,
+    /// While this many agents are live, a spawn draw becomes an exit draw, so
+    /// the live population never exceeds it. `None` never redirects.
+    pub max_live: Option<u64>,
+}
+
+impl Options {
+    /// The Tier 1 shape: every entry checked, the population unbounded.
+    #[must_use]
+    pub const fn exhaustive(events: u64) -> Self {
+        Self {
+            events,
+            check_every: Some(1),
+            max_live: None,
+        }
+    }
+}
+
 /// What a run produced.
 #[derive(Debug)]
 pub struct Report {
@@ -145,10 +178,14 @@ pub struct Report {
     pub log: Log,
     /// The state built incrementally alongside the log.
     pub state: State,
+    /// The root's grant, which is what [`conserved`] measures against.
+    pub grant: Budget,
     /// How many proposals the reducer accepted, boot and epilogue included.
     pub accepted: u64,
     /// How many proposals the reducer refused.
     pub refused: u64,
+    /// The most agents that were live at once.
+    pub peak_live: u64,
 }
 
 /// A fake driver: a name and the ceiling it was registered with.
@@ -257,6 +294,12 @@ pub fn conserved(state: &State, grant: &Budget) -> Result<(), SimError> {
 }
 
 /// One run in progress.
+///
+/// The two indexes, `live` and `open`, mirror what the state knows so the
+/// choosers do not have to sweep every record to find it. They iterate in
+/// the same order as the state's own B-trees, so a chooser drawing from an
+/// index picks the same element as one drawing from a sweep — which is what
+/// keeps the Tier 1 logs pinned.
 struct Sim {
     rng: Rng,
     state: State,
@@ -266,11 +309,21 @@ struct Sim {
     drivers: Vec<Driver>,
     /// A dimension no ceiling reserves, for replies that report along it.
     stray: DimKey,
-    /// Which driver each open request went to. The reducer does not record
-    /// this — any registered driver may answer — so the fake world does.
-    routed: BTreeMap<Corr, usize>,
+    /// Every agent that has not finished, in id order.
+    live: BTreeSet<AgentId>,
+    /// Every open request, by the agent that holds its reservation, with the
+    /// driver it went to. The reducer does not record the driver — any
+    /// registered driver may answer — so the fake world does.
+    open: BTreeMap<AgentId, BTreeMap<Corr, usize>>,
+    /// How many of the state's completions the indexes have already seen.
+    /// Everything past this cursor finished since the last entry.
+    completions_seen: usize,
+    options: Options,
     accepted: u64,
     refused: u64,
+    peak_live: u64,
+    /// Accepted entries since conservation was last checked.
+    since_check: u64,
 }
 
 /// What happened to a proposal.
@@ -282,7 +335,7 @@ enum Verdict {
 impl Sim {
     /// Registers the drivers and spawns the root. Every boot entry is
     /// required.
-    fn boot(seed: u64) -> Result<Self, SimError> {
+    fn boot(seed: u64, options: &Options) -> Result<Self, SimError> {
         let mut sim = Self {
             rng: Rng::seeded(seed),
             state: State::initial(),
@@ -291,9 +344,14 @@ impl Sim {
             grant: root_grant(),
             drivers: Vec::new(),
             stray: DimKey::Custom(Name::new("pixels")?),
-            routed: BTreeMap::new(),
+            live: BTreeSet::new(),
+            open: BTreeMap::new(),
+            completions_seen: 0,
+            options: options.clone(),
             accepted: 0,
             refused: 0,
+            peak_live: 0,
+            since_check: 0,
         };
         for (id, ceiling) in drivers()? {
             let cap = Capability::mint(sim.state.next_cap());
@@ -317,7 +375,8 @@ impl Sim {
         Ok(sim)
     }
 
-    /// Offers `entry` to the reducer: check, then apply, then the
+    /// Offers `entry` to the reducer: check, then apply, then bring the
+    /// indexes up to date, then — every `check_every` entries — the
     /// conservation property.
     fn offer(&mut self, entry: Entry) -> Result<Verdict, SimError> {
         if let Err(refusal) = self.state.check(&entry) {
@@ -328,26 +387,59 @@ impl Sim {
         if let Err(refusal) = self.state.apply(&entry) {
             return Err(SimError::Inconsistent { at, refusal });
         }
-        if let Entry::Sent { msg, via } = &entry {
-            if let (Some(corr), Some(idx)) =
-                (msg.corr, self.drivers.iter().position(|d| d.cap == *via))
-            {
-                self.routed.insert(corr, idx);
-            }
-        }
-        if let Entry::Replied { msg, .. } = &entry {
-            if let Some(corr) = msg.corr {
-                self.routed.remove(&corr);
-            }
-        }
+        self.index(&entry);
         self.log.append(entry)?;
         self.accepted = self.accepted.saturating_add(1);
+        self.since_check = self.since_check.saturating_add(1);
         // The grant exists once the root does; before that there is nothing
         // to conserve.
-        if self.state.agent(self.root).is_some() {
+        let due = self
+            .options
+            .check_every
+            .is_some_and(|k| self.since_check >= k);
+        if due && self.state.agent(self.root).is_some() {
+            self.since_check = 0;
             conserved(&self.state, &self.grant)?;
         }
         Ok(Verdict::Accepted)
+    }
+
+    /// Mirrors an accepted entry into the indexes: a birth, a request opened
+    /// or settled, and whoever finished — by exit, by cancel, or inside a
+    /// tick — as the state's completion list reports it.
+    fn index(&mut self, entry: &Entry) {
+        match entry {
+            Entry::Spawned { agent, .. } => {
+                self.live.insert(*agent);
+                let now = u64::try_from(self.live.len()).unwrap_or(u64::MAX);
+                self.peak_live = self.peak_live.max(now);
+            }
+            Entry::Sent { msg, via } => {
+                if let (Endpoint::Agent { id }, Some(corr), Some(idx)) = (
+                    &msg.from,
+                    msg.corr,
+                    self.drivers.iter().position(|d| d.cap == *via),
+                ) {
+                    self.open.entry(*id).or_default().insert(corr, idx);
+                }
+            }
+            Entry::Replied { msg, to } => {
+                if let Some(corr) = msg.corr {
+                    if let Some(held) = self.open.get_mut(to) {
+                        held.remove(&corr);
+                        if held.is_empty() {
+                            self.open.remove(to);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        for done in self.state.completed().iter().skip(self.completions_seen) {
+            self.live.remove(&done.agent);
+            self.open.remove(&done.agent);
+        }
+        self.completions_seen = self.state.completed().len();
     }
 
     /// Offers an entry the run cannot do without.
@@ -361,11 +453,13 @@ impl Sim {
     // ------------------------------------------------------------ choosers
 
     fn live(&self) -> Vec<AgentId> {
-        self.state
-            .agents()
-            .filter(|(_, a)| is_live(a))
-            .map(|(id, _)| id)
-            .collect()
+        self.live.iter().copied().collect()
+    }
+
+    /// Whether the population is at its bound, if there is one.
+    fn at_capacity(&self) -> bool {
+        let live = u64::try_from(self.live.len()).unwrap_or(u64::MAX);
+        self.options.max_live.is_some_and(|max| live >= max)
     }
 
     fn live_non_root(&self) -> Vec<AgentId> {
@@ -398,6 +492,7 @@ impl Sim {
     /// resolve, ...).
     fn propose(&mut self) -> Option<Entry> {
         match self.rng.below(100) {
+            0..=14 if self.at_capacity() => self.exit(),
             0..=14 => self.spawn(),
             15..=34 => self.send(),
             35..=54 => self.reply(),
@@ -475,14 +570,12 @@ impl Sim {
     }
 
     fn reply(&mut self) -> Option<Entry> {
-        let open: Vec<(AgentId, Corr)> = self
-            .state
-            .agents()
-            .filter(|(_, a)| is_live(a))
-            .flat_map(|(id, a)| a.reserved.keys().map(move |corr| (id, *corr)))
+        let open: Vec<(AgentId, Corr, usize)> = self
+            .open
+            .iter()
+            .flat_map(|(id, held)| held.iter().map(move |(corr, idx)| (*id, *corr, *idx)))
             .collect();
-        let (to, corr) = *self.rng.pick(&open)?;
-        let idx = self.routed.get(&corr).copied().unwrap_or(0);
+        let (to, corr, idx) = *self.rng.pick(&open)?;
         let driver = self.drivers.get(idx)?.clone();
         let mut dims = Vec::new();
         for (dim, held) in driver.ceiling.iter() {
@@ -514,10 +607,10 @@ impl Sim {
 
     fn resolve(&mut self) -> Option<Entry> {
         let full: Vec<AgentId> = self
-            .state
-            .agents()
-            .filter(|(_, a)| is_live(a) && !a.mailbox.is_empty())
-            .map(|(id, _)| id)
+            .live
+            .iter()
+            .copied()
+            .filter(|id| self.state.agent(*id).is_some_and(|a| !a.mailbox.is_empty()))
             .collect();
         let agent = *self.rng.pick(&full)?;
         let seqs: Vec<Seq> = self
@@ -546,13 +639,8 @@ impl Sim {
     }
 
     fn claim(&mut self) -> Option<Entry> {
-        let completed: Vec<(AgentId, Option<AgentId>)> = self
-            .state
-            .completed()
-            .iter()
-            .map(|c| (c.agent, c.parent))
-            .collect();
-        let (agent, parent) = *self.rng.pick(&completed)?;
+        let done = self.rng.pick(self.state.completed())?;
+        let (agent, parent) = (done.agent, done.parent);
         let parent_live = parent
             .and_then(|p| self.state.agent(p))
             .is_some_and(is_live);
@@ -606,7 +694,8 @@ impl Sim {
     // ---------------------------------------------------------------- run
 
     /// Proposes until `events` entries have been accepted.
-    fn drive(&mut self, events: u64) -> Result<(), SimError> {
+    fn drive(&mut self) -> Result<(), SimError> {
+        let events = self.options.events;
         let target = self.accepted.saturating_add(events);
         let mut proposals: u64 = 0;
         let limit = events.saturating_mul(20).max(64);
@@ -645,12 +734,15 @@ impl Sim {
                 by: None,
             })?;
         }
-        Ok(())
+        // The end check, whatever the sampling: a drained tree must still
+        // account for every unit of the grant.
+        conserved(&self.state, &self.grant)
     }
 }
 
-/// Runs one simulation: boot, `events` accepted entries, then the draining
-/// epilogue. The result is a pure function of `seed` and `events`.
+/// Runs one simulation in the Tier 1 shape: boot, `events` accepted entries
+/// with conservation checked after each, then the draining epilogue. The
+/// result is a pure function of `seed` and `events`.
 ///
 /// # Errors
 ///
@@ -658,13 +750,25 @@ impl Sim {
 /// would be reducer bugs, [`SimError::Inconsistent`] and
 /// [`SimError::NotConserved`].
 pub fn run(seed: u64, events: u64) -> Result<Report, SimError> {
-    let mut sim = Sim::boot(seed)?;
-    sim.drive(events)?;
+    run_with(seed, &Options::exhaustive(events))
+}
+
+/// Runs one simulation shaped by `options`. The result is a pure function of
+/// `seed` and `options`.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_with(seed: u64, options: &Options) -> Result<Report, SimError> {
+    let mut sim = Sim::boot(seed, options)?;
+    sim.drive()?;
     sim.drain()?;
     Ok(Report {
         log: sim.log,
         state: sim.state,
+        grant: sim.grant,
         accepted: sim.accepted,
         refused: sim.refused,
+        peak_live: sim.peak_live,
     })
 }
