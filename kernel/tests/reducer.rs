@@ -848,6 +848,68 @@ fn a_parent_without_a_depth_grant_cannot_spawn() {
     );
 }
 
+#[test]
+fn a_parents_depth_is_unchanged_after_a_child_exits() {
+    let (mut state, root, child, _) = family();
+    let depth = |s: &State, id| s.agent(id).unwrap().budget.get(&DimKey::Depth);
+    assert_eq!(depth(&state, root), Some(3));
+    step(&mut state, |s| exited(s, child));
+    assert_eq!(depth(&state, root), Some(3), "depth is not handed back");
+    assert_eq!(
+        depth(&state, child),
+        None,
+        "a finished record holds nothing"
+    );
+}
+
+#[test]
+fn a_parents_depth_is_unchanged_after_a_child_is_aborted() {
+    // Past a cancel deadline.
+    let (mut state, root, child, _) = family();
+    let depth = |s: &State, id| s.agent(id).unwrap().budget.get(&DimKey::Depth);
+    step(&mut state, |s| cancelled(s, Some(root), child, 10));
+    step(&mut state, |s| tick(s, 10));
+    assert_eq!(state.agent(child).unwrap().status, Status::Aborted);
+    assert_eq!(depth(&state, root), Some(3), "after a deadline abort");
+
+    // By wall exhaustion.
+    let (mut state, _, root) = booted_with(timed_root());
+    step(&mut state, |s| spawned_with(s, root, timed(40, 2, 400)));
+    let child = agent(1);
+    step(&mut state, |s| tick(s, 400));
+    assert_eq!(state.agent(child).unwrap().status, Status::Aborted);
+    assert_eq!(depth(&state, root), Some(3), "after a wall abort");
+}
+
+/// The reproduction from #26: a root granted `depth: 2` spawns a child with
+/// no depth request, the child exits, and the root's own depth must not
+/// have grown. Four rounds once doubled it every time (2, 3, 5, 9, 17).
+#[test]
+fn depth_does_not_grow_with_spawn_and_exit_rounds() {
+    let grant = Budget::from_dims([
+        (DimKey::Tokens, 100),
+        (DimKey::Calls, 10),
+        (DimKey::Depth, 2),
+    ]);
+    let (mut state, _, root) = booted_with(grant);
+    let depth = |s: &State, id| s.agent(id).unwrap().budget.get(&DimKey::Depth);
+    for round in 1..=4 {
+        step(&mut state, |s| spawned(s, root, 1));
+        let child = agent(round);
+        assert_eq!(
+            depth(&state, child),
+            Some(1),
+            "round {round}: born at parent - 1"
+        );
+        step(&mut state, |s| exited(s, child));
+        assert_eq!(
+            depth(&state, root),
+            Some(2),
+            "round {round}: root unchanged"
+        );
+    }
+}
+
 // ------------------------------------------------------------------ wall
 
 fn timed_root() -> Budget {

@@ -439,16 +439,9 @@ impl Sim {
         }
         // Depth: usually asked for — sometimes the parent's own level, which
         // is one too many — and sometimes left to the reducer to derive.
-        //
-        // Both paths are capped at 3 until #26 lands: today a finished agent
-        // hands its `depth` back to its heir, so a child born at the
-        // parent's level minus one grows the tree's depth exponentially and
-        // overflows `u64` inside a tick-driven abort. The derived path is
-        // only taken under shallow parents for the same reason. Lift both
-        // caps when that closes.
         let level = parent_budget.get(&DimKey::Depth).unwrap_or(0);
-        if level > 4 || !self.rng.one_in(3) {
-            dims.push((DimKey::Depth, self.rng.up_to(level.min(3))));
+        if !self.rng.one_in(3) {
+            dims.push((DimKey::Depth, self.rng.up_to(level)));
         }
         Some(Entry::Spawned {
             seq: self.state.next_seq(),
