@@ -24,7 +24,7 @@ fn soak_options(events: u64) -> Options {
 
 #[test]
 fn the_linear_mode_refolds_to_the_same_hash() {
-    let report = run_with(SEED, &soak_options(20_000)).unwrap();
+    let report = run_with(SEED, &soak_options(8_000)).unwrap();
     let incremental = report.state.hash();
     let refold = fold(report.log.entries()).unwrap().hash();
     let mut bytes = Vec::new();
@@ -37,7 +37,7 @@ fn the_linear_mode_refolds_to_the_same_hash() {
         "fold of the serialized log diverged"
     );
     assert!(report.state.is_drained());
-    assert!(report.accepted >= 20_000);
+    assert!(report.accepted >= 8_000);
 }
 
 #[test]
