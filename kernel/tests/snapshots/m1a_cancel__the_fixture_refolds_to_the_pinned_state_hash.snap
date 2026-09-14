@@ -2,4 +2,4 @@
 source: kernel/tests/m1a_cancel.rs
 expression: state.hash().to_string()
 ---
-39c0cb72a2f2bb00147599603965ef37d8468f94c80c7362c0d0f848cc604279
+f29733e02a09af761647660d0dc493e7fc4d9538f6907d2b18487e8cc8c441da
