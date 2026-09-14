@@ -168,6 +168,33 @@ jobs:
           tool: cargo-nextest
       - run: cargo nextest run --locked -p tau-sim --all-features --profile quick
 
+  # Tier 1 job 6 (docs/HANDOFF.md §8): the coverage ratchet. Line coverage may
+  # not drop more than 0.5 points against the commit being merged onto. There is
+  # no stored baseline: the script checks the base out into a throwaway
+  # worktree and measures both sides in this run, sharing the dependency build
+  # through the target dir. A committed number would be a status file that
+  # rots; an artifact would need a first run to exist. The script fails closed
+  # on an empty selection, a zero line count, or an unresolvable base, and it
+  # runs on every event so the fan-in never sees it 'skipped'.
+  coverage:
+    name: coverage (ratchet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0        # the ratchet needs the parent commit's tree
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler and
+        # its components. Pinning a toolchain in the workflow as well would let
+        # CI and developers drift onto different compilers, which is the exact
+        # class of difference that shows up as "works on my machine".
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+      - run: ./scripts/coverage-ratchet.sh
+
   # A single required check, so branch protection does not have to enumerate
   # the matrix. Adding a job above means adding it to `needs` here — and
   # `result == success` for *every* need, because a skipped job reports
@@ -177,7 +204,7 @@ jobs:
     name: tier1
     runs-on: ubuntu-latest
     if: always()
-    needs: [fmt, clippy, test, abi-guard, deny, macos-smoke, determinism]
+    needs: [fmt, clippy, test, abi-guard, deny, macos-smoke, determinism, coverage]
     steps:
       - name: Require every Tier 1 job to have succeeded
         run: |
