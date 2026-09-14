@@ -58,7 +58,7 @@
 //! and the order in which a family exits does not change where it ends up.
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -164,9 +164,23 @@ pub struct State {
     caps: BTreeMap<Capability, Endpoint>,
     agents: BTreeMap<AgentId, Agent>,
     corrs: BTreeMap<Corr, AgentId>,
-    /// Finished agents whose outcome is unclaimed, in completion order. A
-    /// `Vec`, not a map: `wait(Any)` returns in completion order.
-    completed: Vec<Completion>,
+    /// Finished agents whose outcome is unclaimed, keyed by the order they
+    /// finished in: `wait(Any)` returns in completion order, which is not id
+    /// order.
+    completed: BTreeMap<u64, Completion>,
+    /// The completion ordinal each unclaimed outcome sits under, so a claim
+    /// finds it without scanning.
+    unclaimed: BTreeMap<AgentId, u64>,
+    /// The ordinal the next finish will take. Never reused, so completion
+    /// order survives claims in between.
+    next_completion: u64,
+    /// The agents that have not finished. Every per-entry sweep — the wall
+    /// charge, deadlines, expiry, liveness — walks this, not the records,
+    /// which persist after exit and so grow without bound (#45).
+    live: BTreeSet<AgentId>,
+    /// Each agent's children, for walking a subtree without filtering every
+    /// record ever spawned. Never pruned: the record stays, so does the edge.
+    children: BTreeMap<AgentId, BTreeSet<AgentId>>,
 }
 
 /// A digest of a [`State`], for comparing folds.
@@ -463,31 +477,32 @@ impl State {
     /// An unclaimed outcome.
     #[must_use]
     pub fn result(&self, agent: AgentId) -> Option<Outcome> {
-        self.completed
-            .iter()
-            .find(|c| c.agent == agent)
-            .map(|c| c.outcome)
+        self.completion(agent).map(|c| c.outcome)
+    }
+
+    /// The unclaimed completion of `agent`, if there is one.
+    fn completion(&self, agent: AgentId) -> Option<&Completion> {
+        self.completed.get(self.unclaimed.get(&agent)?)
     }
 
     /// Every unclaimed outcome, in completion order.
-    #[must_use]
-    pub fn completed(&self) -> &[Completion] {
-        &self.completed
+    pub fn completed(&self) -> impl ExactSizeIterator<Item = &Completion> + DoubleEndedIterator {
+        self.completed.values()
     }
 
     /// The earliest-finished child of `parent` whose outcome is unclaimed.
     /// This is what `wait(Any)` returns.
     #[must_use]
     pub fn next_completed_child(&self, parent: AgentId) -> Option<&Completion> {
-        self.completed.iter().find(|c| c.parent == Some(parent))
+        self.completed.values().find(|c| c.parent == Some(parent))
     }
 
     /// Whether `parent` has a child that has not finished.
     #[must_use]
     pub fn has_live_children(&self, parent: AgentId) -> bool {
-        self.agents
-            .values()
-            .any(|a| a.parent == Some(parent) && a.is_live())
+        self.children
+            .get(&parent)
+            .is_some_and(|kids| kids.iter().any(|kid| self.live.contains(kid)))
     }
 
     /// Whether `ancestor` is a strict ancestor of `agent`.
@@ -506,11 +521,19 @@ impl State {
     /// `root` and every agent below it, whatever their status, in id order.
     #[must_use]
     pub fn subtree(&self, root: AgentId) -> Vec<AgentId> {
-        self.agents
-            .keys()
-            .copied()
-            .filter(|id| *id == root || self.is_descendant(*id, root))
-            .collect()
+        if !self.agents.contains_key(&root) {
+            return Vec::new();
+        }
+        let mut found = vec![root];
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if let Some(kids) = self.children.get(&id) {
+                found.extend(kids.iter().copied());
+                pending.extend(kids.iter().copied());
+            }
+        }
+        found.sort_unstable();
+        found
     }
 
     /// The agents a tick reading `now` would end, deepest first: cancelled
@@ -524,39 +547,43 @@ impl State {
     #[must_use]
     pub fn expiring(&self, now: u64) -> Vec<AgentId> {
         let elapsed = now.saturating_sub(self.now);
-        self.agents
-            .iter()
+        self.live_agents()
             .rev()
             .filter(|(_, a)| {
-                a.is_live()
-                    && ((a.is_frozen() && a.deadline.is_some_and(|d| d <= now))
-                        || a.budget.get(&DimKey::WallMs).is_some_and(|w| w <= elapsed))
+                (a.is_frozen() && a.deadline.is_some_and(|d| d <= now))
+                    || a.budget.get(&DimKey::WallMs).is_some_and(|w| w <= elapsed)
             })
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id)
             .collect()
+    }
+
+    /// Every agent that has not finished, with its record, in id order.
+    fn live_agents(&self) -> impl DoubleEndedIterator<Item = (AgentId, &Agent)> + '_ {
+        self.live
+            .iter()
+            .filter_map(|id| Some((*id, self.agents.get(id)?)))
     }
 
     /// The cancelled agents whose deadline the current reading has reached,
     /// deepest first. What a grace of zero aborts at the cancel itself.
     fn deadline_reached(&self) -> Vec<AgentId> {
-        self.agents
-            .iter()
+        self.live_agents()
             .rev()
             .filter(|(_, a)| a.is_frozen() && a.deadline.is_some_and(|d| d <= self.now))
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id)
             .collect()
     }
 
     /// How many agents have not finished.
     #[must_use]
     pub fn live_count(&self) -> usize {
-        self.agents.values().filter(|a| a.is_live()).count()
+        self.live.len()
     }
 
     /// Whether a root was spawned and every agent has since finished.
     #[must_use]
     pub fn is_drained(&self) -> bool {
-        !self.agents.is_empty() && self.live_count() == 0
+        !self.agents.is_empty() && self.live.is_empty()
     }
 
     /// A digest of this state.
@@ -749,11 +776,7 @@ impl State {
                 }
             }
             Entry::Claimed { agent, by, .. } => {
-                let completion = self
-                    .completed
-                    .iter()
-                    .find(|c| c.agent == *agent)
-                    .ok_or(Refusal::NoResult(*agent))?;
+                let completion = self.completion(*agent).ok_or(Refusal::NoResult(*agent))?;
                 if let Some(by) = by {
                     self.live(*by)?;
                     if completion.parent != Some(*by) {
@@ -848,6 +871,10 @@ impl State {
                         deadline: None,
                     },
                 );
+                self.live.insert(*agent);
+                if let Some(parent) = parent {
+                    self.children.entry(*parent).or_default().insert(*agent);
+                }
                 self.next_agent = self.next_agent.saturating_add(1);
             }
             Entry::Sent { msg, via } => {
@@ -884,8 +911,8 @@ impl State {
                 self.finish(*agent, Outcome::Exited(*result))?;
             }
             Entry::Claimed { agent, .. } => {
-                if let Some(idx) = self.completed.iter().position(|c| c.agent == *agent) {
-                    self.completed.remove(idx);
+                if let Some(ordinal) = self.unclaimed.remove(agent) {
+                    self.completed.remove(&ordinal);
                 }
             }
             Entry::Cancelled {
@@ -924,8 +951,10 @@ impl State {
                 // is ended inside this same apply.
                 let elapsed = now.saturating_sub(self.now);
                 self.now = *now;
-                for a in self.agents.values_mut().filter(|a| a.is_live()) {
-                    charge_wall(a, elapsed)?;
+                for id in &self.live {
+                    if let Some(a) = self.agents.get_mut(id) {
+                        charge_wall(a, elapsed)?;
+                    }
                 }
                 for id in self.expiring(*now) {
                     self.finish(id, Outcome::Aborted)?;
@@ -961,7 +990,8 @@ impl State {
         };
         a.deadline = None;
         a.mailbox.clear();
-        for held in core::mem::take(&mut a.reserved).values() {
+        let released = core::mem::take(&mut a.reserved);
+        for held in released.values() {
             a.budget.restore(held)?;
         }
         let parent = a.parent;
@@ -971,7 +1001,11 @@ impl State {
             Some(_) => without_depth(&core::mem::replace(&mut a.budget, Budget::empty())),
             None => Budget::empty(),
         };
-        self.corrs.retain(|_, owner| *owner != id);
+        // Its open requests are exactly the reservations it held.
+        for corr in released.keys() {
+            self.corrs.remove(corr);
+        }
+        self.live.remove(&id);
         if let Some(heir) = heir {
             let h = self
                 .agents
@@ -979,11 +1013,17 @@ impl State {
                 .ok_or(Refusal::UnknownAgent(heir))?;
             h.budget.restore(&unspent)?;
         }
-        self.completed.push(Completion {
-            agent: id,
-            parent,
-            outcome,
-        });
+        let ordinal = self.next_completion;
+        self.next_completion = self.next_completion.saturating_add(1);
+        self.completed.insert(
+            ordinal,
+            Completion {
+                agent: id,
+                parent,
+                outcome,
+            },
+        );
+        self.unclaimed.insert(id, ordinal);
         Ok(())
     }
 }

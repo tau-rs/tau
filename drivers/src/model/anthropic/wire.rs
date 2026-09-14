@@ -64,6 +64,43 @@ pub(super) enum ThinkingParam {
     Disabled,
 }
 
+/// The body of `POST /v1/messages/count_tokens`: the main body minus what
+/// the endpoint does not take. It accepts `model`, `messages`, `system`
+/// and `tools`; `max_tokens` and the sampling knobs are not in its schema,
+/// so they are not sent. Borrowed from a [`Request`] so the two bodies
+/// cannot drift apart.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(super) struct CountRequest<'a> {
+    pub(super) model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) system: Option<&'a str>,
+    pub(super) messages: &'a [RequestMessage],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub(super) tools: &'a [Tool],
+    /// Thinking changes the prompt the provider builds, so the count
+    /// carries the same setting as the call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) thinking: Option<&'a ThinkingParam>,
+}
+
+impl<'a> From<&'a Request> for CountRequest<'a> {
+    fn from(request: &'a Request) -> Self {
+        Self {
+            model: &request.model,
+            system: request.system.as_deref(),
+            messages: &request.messages,
+            tools: &request.tools,
+            thinking: request.thinking.as_ref(),
+        }
+    }
+}
+
+/// What `count_tokens` answers: `{"input_tokens": N}`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub(super) struct CountResponse {
+    pub(super) input_tokens: u64,
+}
+
 /// One turn, as the provider frames it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct RequestMessage {
@@ -406,6 +443,57 @@ mod tests {
     }
 
     #[test]
+    fn the_count_body_is_the_main_body_minus_what_count_tokens_rejects() {
+        let mut request = bridge_request();
+        let sampling = request.sampling.as_mut().unwrap();
+        sampling.seed = None;
+        sampling.top_p = Some(0.5);
+        sampling.stop_sequences = vec!["END".into()];
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
+        let count = serde_json::to_value(CountRequest::from(&body)).unwrap();
+
+        let mut expected: Value = serde_json::from_str(ANTHROPIC_REQUEST).unwrap();
+        let object = expected.as_object_mut().unwrap();
+        for key in ["max_tokens", "temperature", "top_p", "stop_sequences"] {
+            object.remove(key);
+        }
+        assert_eq!(count, expected);
+        let keys: Vec<&str> = count
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["messages", "model", "system", "tools"]);
+    }
+
+    #[test]
+    fn the_count_body_omits_what_the_request_did_not_carry() {
+        let body = Request {
+            model: "m".into(),
+            max_tokens: 8,
+            system: None,
+            messages: vec![],
+            tools: vec![],
+            temperature: None,
+            top_p: None,
+            stop_sequences: vec![],
+            thinking: None,
+        };
+        let count = serde_json::to_value(CountRequest::from(&body)).unwrap();
+        assert_eq!(count, json!({"model": "m", "messages": []}));
+    }
+
+    #[test]
+    fn the_count_response_parses_and_rejects_the_wrong_shape() {
+        let count: CountResponse = serde_json::from_value(json!({"input_tokens": 2095})).unwrap();
+        assert_eq!(count.input_tokens, 2_095);
+        assert!(serde_json::from_value::<CountResponse>(json!({"tokens": 1})).is_err());
+        assert!(serde_json::from_value::<CountResponse>(json!({"input_tokens": "1"})).is_err());
+        assert!(serde_json::from_value::<CountResponse>(json!({"input_tokens": -1})).is_err());
+    }
+
+    #[test]
     fn the_recorded_response_maps_to_the_adr_reply_fixture() {
         let response: Response = serde_json::from_str(ANTHROPIC_RESPONSE).unwrap();
         let reply = to_bridge(&response, VERSION).unwrap();
@@ -539,6 +627,17 @@ mod tests {
             serde_json::to_value(&off).unwrap().get("thinking"),
             Some(&json!({"type": "disabled"}))
         );
+        // The count is sized with the same setting the call is made with.
+        assert_eq!(
+            serde_json::to_value(CountRequest::from(&off))
+                .unwrap()
+                .get("thinking"),
+            Some(&json!({"type": "disabled"}))
+        );
+        assert!(serde_json::to_value(CountRequest::from(&on))
+            .unwrap()
+            .get("thinking")
+            .is_none());
     }
 
     #[test]

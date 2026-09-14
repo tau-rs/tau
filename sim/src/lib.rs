@@ -29,7 +29,7 @@ use tau_kernel::abi::{
     MsgKind, Name, NameError, Namespace, Seq,
 };
 use tau_kernel::log::{Entry, Log, LogError};
-use tau_kernel::reducer::{Agent, Refusal, State, Status};
+use tau_kernel::reducer::{Agent, Completion, Refusal, State, Status};
 
 /// Why a run could not be completed.
 #[derive(Debug, thiserror::Error)]
@@ -435,7 +435,7 @@ impl Sim {
             }
             _ => {}
         }
-        for done in self.state.completed().iter().skip(self.completions_seen) {
+        for done in self.state.completed().skip(self.completions_seen) {
             self.live.remove(&done.agent);
             self.open.remove(&done.agent);
         }
@@ -639,7 +639,8 @@ impl Sim {
     }
 
     fn claim(&mut self) -> Option<Entry> {
-        let done = self.rng.pick(self.state.completed())?;
+        let unclaimed: Vec<&Completion> = self.state.completed().collect();
+        let done = self.rng.pick(&unclaimed)?;
         let (agent, parent) = (done.agent, done.parent);
         let parent_live = parent
             .and_then(|p| self.state.agent(p))
@@ -726,7 +727,7 @@ impl Sim {
             grace: 0,
             reason,
         })?;
-        let left: Vec<AgentId> = self.state.completed().iter().map(|c| c.agent).collect();
+        let left: Vec<AgentId> = self.state.completed().map(|c| c.agent).collect();
         for agent in left {
             self.require(Entry::Claimed {
                 seq: self.state.next_seq(),

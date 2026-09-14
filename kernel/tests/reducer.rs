@@ -514,7 +514,7 @@ fn a_tick_past_the_deadline_aborts_the_subtree_and_conserves_budget() {
         Some(100),
         "everything carved came back"
     );
-    let order: Vec<_> = state.completed().iter().map(|c| c.agent).collect();
+    let order: Vec<_> = state.completed().map(|c| c.agent).collect();
     assert_eq!(order, vec![grandchild, child]);
     assert_eq!(state.result(child), Some(Outcome::Aborted));
     assert!(!state.is_drained(), "the root is still live");
@@ -588,7 +588,7 @@ fn the_harness_may_cancel_anyone() {
         Some(100),
         "the root's remainder stays on its record"
     );
-    let from = &state.completed().first().unwrap().agent;
+    let from = &state.completed().next().unwrap().agent;
     assert_eq!(*from, agent(2), "deepest first");
 }
 
@@ -1090,4 +1090,135 @@ fn budgets_reservations_and_spent_sum_to_the_root_grant_at_every_step() {
     );
     assert_eq!(state.agent(a).unwrap().budget.get(&DimKey::Tokens), None);
     assert_eq!(state.agent(b).unwrap().status, Status::Aborted);
+}
+
+// ---------------------------------------------------------------- indexes
+
+/// Every view the reducer keeps an index for, recomputed by sweeping the
+/// records: the oracle the indexes must agree with after every entry.
+fn views_agree_with_a_full_sweep(state: &State) {
+    let is_live = |s: Status| matches!(s, Status::Live | Status::Cancelling);
+    let ids: Vec<AgentId> = state.agents().map(|(id, _)| id).collect();
+    let live: Vec<AgentId> = state
+        .agents()
+        .filter(|(_, a)| is_live(a.status))
+        .map(|(id, _)| id)
+        .collect();
+    let at = state.len();
+
+    assert_eq!(
+        state.live_count(),
+        live.len(),
+        "live_count after entry {at}"
+    );
+    assert_eq!(
+        state.is_drained(),
+        !ids.is_empty() && live.is_empty(),
+        "is_drained after entry {at}"
+    );
+    for id in &ids {
+        let children_live = state
+            .agents()
+            .any(|(_, a)| a.parent == Some(*id) && is_live(a.status));
+        assert_eq!(
+            state.has_live_children(*id),
+            children_live,
+            "has_live_children({id}) after entry {at}"
+        );
+        let below: Vec<AgentId> = ids
+            .iter()
+            .copied()
+            .filter(|x| x == id || state.is_descendant(*x, *id))
+            .collect();
+        assert_eq!(state.subtree(*id), below, "subtree({id}) after entry {at}");
+        assert_eq!(
+            state.result(*id),
+            state
+                .completed()
+                .find(|c| c.agent == *id)
+                .map(|c| c.outcome),
+            "result({id}) after entry {at}"
+        );
+        assert_eq!(
+            state.next_completed_child(*id),
+            state.completed().find(|c| c.parent == Some(*id)),
+            "next_completed_child({id}) after entry {at}"
+        );
+    }
+    for now in [state.now(), state.now() + 10, state.now() + 100, u64::MAX] {
+        let elapsed = now - state.now();
+        let ending: Vec<AgentId> = ids
+            .iter()
+            .rev()
+            .copied()
+            .filter(|id| {
+                let a = state.agent(*id).unwrap();
+                is_live(a.status)
+                    && ((a.status == Status::Cancelling && a.deadline.is_some_and(|d| d <= now))
+                        || a.budget.get(&DimKey::WallMs).is_some_and(|w| w <= elapsed))
+            })
+            .collect();
+        assert_eq!(
+            state.expiring(now),
+            ending,
+            "expiring({now}) after entry {at}"
+        );
+    }
+}
+
+#[test]
+fn the_indexed_views_agree_with_a_full_sweep_at_every_step() {
+    let (mut state, _, root) = booted_with(timed_root());
+    views_agree_with_a_full_sweep(&state);
+    let run = |state: &mut State, build: &dyn Fn(&State) -> Entry| {
+        step(state, build);
+        views_agree_with_a_full_sweep(state);
+    };
+    // The same script as the conservation test: every way an agent can
+    // finish — exit, deadline abort, wall abort, orphan cascade — plus claims
+    // in an order that is not spawn order.
+    let (a, g, b) = (agent(1), agent(2), agent(3));
+    run(&mut state, &|s| spawned_with(s, root, timed(40, 4, 400)));
+    run(&mut state, &|s| spawned_with(s, a, timed(10, 1, 100)));
+    run(&mut state, &|s| sent(s, a));
+    run(&mut state, &|s| tick(s, 50));
+    run(&mut state, &|s| replied(s, Corr::new(0), a, used(3)));
+    run(&mut state, &|s| sent(s, g));
+    run(&mut state, &|s| exited(s, a));
+    run(&mut state, &|s| replied(s, Corr::new(1), g, used(12)));
+    run(&mut state, &|s| spawned_with(s, root, timed(5, 1, 10)));
+    run(&mut state, &|s| cancelled(s, Some(root), b, 20));
+    run(&mut state, &|s| tick(s, 70));
+    run(&mut state, &|s| exited(s, g));
+    run(&mut state, &|s| tick(s, 100));
+    run(&mut state, &|s| claimed(s, b, Some(root)));
+    run(&mut state, &|s| claimed(s, a, None));
+    run(&mut state, &|s| tick(s, 5_000));
+    run(&mut state, &|s| claimed(s, g, None));
+    run(&mut state, &|s| claimed(s, root, None));
+    assert!(state.is_drained());
+    assert_eq!(state.completed().len(), 0);
+}
+
+#[test]
+fn a_subtree_walks_through_a_dead_middle_node() {
+    let (mut state, root, child, grandchild) = family();
+    step(&mut state, |s| exited(s, child));
+
+    // The record stays, so the dead child is still in every subtree it was
+    // in, and its live orphan is still reachable below it.
+    assert_eq!(state.subtree(root), vec![root, child, grandchild]);
+    assert_eq!(state.subtree(child), vec![child, grandchild]);
+    assert_eq!(state.subtree(grandchild), vec![grandchild]);
+    assert!(state.has_live_children(child), "the orphan is still live");
+    assert!(state.is_descendant(grandchild, root));
+
+    // A harness cancel of the root reaches the orphan through the dead child.
+    step(&mut state, |s| cancelled(s, None, root, 0));
+    assert_eq!(state.agent(child).unwrap().status, Status::Exited);
+    assert_eq!(state.agent(grandchild).unwrap().status, Status::Aborted);
+    assert_eq!(state.agent(root).unwrap().status, Status::Aborted);
+    assert!(!state.has_live_children(child));
+    assert!(state.is_drained());
+    views_agree_with_a_full_sweep(&state);
 }
