@@ -1,0 +1,30 @@
+[package]
+name        = "libtau"
+description = "Userspace ergonomics over the tau kernel's seven syscalls: infer() and the tool loop. No special powers."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+name = "libtau"
+
+[dependencies]
+# The kernel's public API only: `Handle`, the seven syscalls, and the bridge
+# vocabulary (ADR-0002, ADR-0006). No `testing` feature: nothing here forges
+# an ABI value.
+tau-kernel = { path = "../kernel", version = "0.0.0" }
+boon       = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+# Executor-agnostic like the kernel: tokio is the test harness's choice
+# (ADR-0003), never a dependency of the library.
+tokio = { workspace = true, features = ["rt", "macros", "sync"] }
+
+[lints]
+workspace = true
