@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["kernel", "drivers", "libtau", "sim"]
+# The fuzz crate is deliberately not a member: it only means anything under
+# nightly's sanitizer flags, and a member would put libFuzzer's C++ runtime on
+# the `just check` path. It has its own lockfile; see fuzz/Cargo.toml.
+exclude = ["fuzz"]
 
 [workspace.package]
 version      = "0.0.0"

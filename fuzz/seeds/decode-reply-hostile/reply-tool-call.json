@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "model": "claude-opus-5",
+  "content": [
+    { "type": "text", "text": "I will search for that." },
+    { "type": "tool_call", "id": "call_2", "name": "search", "input": { "query": "tau kernel" } }
+  ],
+  "stop": "tool_call",
+  "usage": { "input_tokens": 120, "output_tokens": 34 }
+}
