@@ -42,12 +42,19 @@ Three gates, deliberately redundant, because each fails differently:
 1. **`CODEOWNERS`** requires an explicit owner review for `kernel/src/abi/`.
    Catches a change nobody meant to make. Fails if the owner rubber-stamps.
 
-   > **Status: not yet binding.** Branch protection is unavailable on a private
-   > free-plan repository, and even once it is available GitHub does not let an
-   > author approve their own pull request — so with one maintainer, requiring
-   > code-owner review would block every ABI change behind an admin bypass and
-   > train exactly the reflex this gate exists to prevent. Gates 2 and 3 bind
-   > today; gate 1 activates when a second maintainer exists. Tracked in
+   > **Status: not yet binding — activates when a second maintainer exists.**
+   > The ruleset on `main` is live and enforced
+   > ([#2](https://github.com/tau-rs/tau/issues/2)), but its `pull_request`
+   > rule sets `require_code_owner_review: false` and
+   > `required_approving_review_count: 0`, on purpose. GitHub does not let an
+   > author approve their own pull request, and the repository has one
+   > collaborator, who is the sole owner of every path in `CODEOWNERS`.
+   > Requiring code-owner review today would block every ABI change behind an
+   > admin bypass and train exactly the reflex this gate exists to prevent.
+   > Gates 2 and 3 bind today. When a second maintainer joins, the whole change
+   > is flipping `require_code_owner_review` to `true` on that ruleset
+   > ([#24](https://github.com/tau-rs/tau/issues/24)); `CODEOWNERS` is already
+   > the right file for that day. Decided in
    > [#3](https://github.com/tau-rs/tau/issues/3), because a gate that is
    > described but inert is the failure this project was rebooted to avoid.
 2. **The CI diff gate** fails any pull request that touches `kernel/src/abi/`
@@ -133,6 +140,17 @@ means the cost of being early is a bump, not a break.
 
 **Trust review, skip the CI gate.** Rejected: review catches the change someone
 thought about. The gate catches the change nobody did.
+
+## Amendments
+
+- **2026-09-14** — Gate 1 restated
+  ([#3](https://github.com/tau-rs/tau/issues/3)). The 2026-09-13 note blamed a
+  private free-plan repository; the repository is now public and the `main`
+  ruleset is active ([#2](https://github.com/tau-rs/tau/issues/2)), so the one
+  remaining reason is the solo maintainer. Gate 1 is described as activating
+  when a second maintainer exists, and the ruleset setting that makes it bind
+  is named so the switch is a one-line change
+  ([#24](https://github.com/tau-rs/tau/issues/24)).
 
 [`Msg`]: ../../kernel/src/abi/msg.rs
 [`Capability`]: ../../kernel/src/abi/cap.rs
