@@ -1,0 +1,5 @@
+---
+source: kernel/tests/m1b_wall.rs
+expression: state.hash().to_string()
+---
+63ad529e70a483a528b564ffc8577eaa5e8d1991710cf8134155e036e78c625e

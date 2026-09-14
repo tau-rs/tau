@@ -29,7 +29,7 @@ insta      = { workspace = true }
 # The kernel is executor-agnostic: syscalls are plain futures over std wakers.
 # tokio is the harness's choice (ADR-0003), and the only harness today is the
 # end-to-end test, so it is a dev-dependency.
-tokio      = { workspace = true, features = ["rt", "macros", "sync"] }
+tokio      = { workspace = true, features = ["rt", "macros", "sync", "time"] }
 tau-kernel = { path = ".", features = ["testing"] }
 
 [lints]

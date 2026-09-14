@@ -1,7 +1,7 @@
 {"magic":[84,65,85,0],"abi":0}
-{"entry":"driver_registered","seq":0,"driver":"blackhole","cap":0}
-{"entry":"spawned","seq":1,"parent":null,"agent":0,"ns":{"caps":[0]},"budget":{"tokens":1000}}
-{"entry":"spawned","seq":2,"parent":0,"agent":1,"ns":{"caps":[0]},"budget":{"tokens":100}}
+{"entry":"driver_registered","seq":0,"driver":"blackhole","cap":0,"ceiling":{"tokens":50}}
+{"entry":"spawned","seq":1,"parent":null,"agent":0,"ns":{"caps":[0]},"budget":{"tokens":1000,"calls":10,"depth":1}}
+{"entry":"spawned","seq":2,"parent":0,"agent":1,"ns":{"caps":[0]},"budget":{"tokens":100,"calls":1}}
 {"entry":"sent","msg":{"abi":0,"seq":3,"from":{"kind":"agent","id":1},"corr":0,"kind":"request","consumed":null,"payload":"fcdd87acafcd87a1894b76b7b50ef80d418acfa128c837815a1674791419bab7"},"via":0}
 {"entry":"cancelled","seq":4,"by":0,"agent":1,"grace":10,"reason":"95ebd5e488d5d81cd8a36f2688abf90e96dbcc2b3dc36a967a752e2573c984f8"}
 {"entry":"resolved","seq":5,"agent":1,"matched":4}

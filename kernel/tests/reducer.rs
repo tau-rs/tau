@@ -27,8 +27,40 @@ fn tokens(n: u64) -> Budget {
     Budget::from_dims([(DimKey::Tokens, n)])
 }
 
+/// Tokens and calls: what a child needs to send.
+fn grant(tokens: u64, calls: u64) -> Budget {
+    Budget::from_dims([(DimKey::Tokens, tokens), (DimKey::Calls, calls)])
+}
+
+/// Tokens, calls, and a wall grant.
+fn timed(tokens: u64, calls: u64, wall: u64) -> Budget {
+    Budget::from_dims([
+        (DimKey::Tokens, tokens),
+        (DimKey::Calls, calls),
+        (DimKey::WallMs, wall),
+    ])
+}
+
+/// The root's grant in these tests: 100 tokens, 10 calls, three levels.
+fn root_grant() -> Budget {
+    Budget::from_dims([
+        (DimKey::Tokens, 100),
+        (DimKey::Calls, 10),
+        (DimKey::Depth, 3),
+    ])
+}
+
+/// What one request to the echo driver may cost at most, as registered.
+const CEILING: u64 = 10;
+
 /// A driver registered and a root spawned holding its capability.
 fn booted() -> (State, Capability, AgentId) {
+    booted_with(root_grant())
+}
+
+/// A driver registered with a `CEILING` of tokens, and a root spawned with
+/// `budget`, holding the driver's capability.
+fn booted_with(budget: Budget) -> (State, Capability, AgentId) {
     let cap = Capability::mint(0);
     let root = agent(0);
     let state = fold(&[
@@ -36,13 +68,14 @@ fn booted() -> (State, Capability, AgentId) {
             seq: Seq::new(0),
             driver: echo(),
             cap,
+            ceiling: tokens(CEILING),
         },
         Entry::Spawned {
             seq: Seq::new(1),
             parent: None,
             agent: root,
             ns: Namespace::from_caps([cap]),
-            budget: tokens(100),
+            budget,
         },
     ])
     .unwrap();
@@ -56,14 +89,37 @@ fn step(state: &mut State, build: impl FnOnce(&State) -> Entry) {
     state.apply(&entry).unwrap();
 }
 
+/// A child of `parent` with `budget` tokens and one call.
 fn spawned(state: &State, parent: AgentId, budget: u64) -> Entry {
+    spawned_with(state, parent, grant(budget, 1))
+}
+
+fn spawned_with(state: &State, parent: AgentId, budget: Budget) -> Entry {
     Entry::Spawned {
         seq: state.next_seq(),
         parent: Some(parent),
         agent: state.next_agent(),
         ns: Namespace::from_caps([Capability::mint(0)]),
-        budget: tokens(budget),
+        budget,
     }
+}
+
+fn replied(state: &State, corr: Corr, to: AgentId, consumed: Consumption) -> Entry {
+    Entry::Replied {
+        msg: Msg::new(
+            state.next_seq(),
+            Endpoint::Driver { id: echo() },
+            MsgKind::Reply,
+            BlobRef::EMPTY,
+        )
+        .with_corr(corr)
+        .with_consumption(consumed),
+        to,
+    }
+}
+
+fn used(tokens: u64) -> Consumption {
+    Consumption::from_dims([(DimKey::Tokens, tokens)])
 }
 
 fn sent(state: &State, from: AgentId) -> Entry {
@@ -121,10 +177,12 @@ fn refuse(state: &State, entry: &Entry) -> Refusal {
 }
 
 /// root(100) → child 1 (40) → grandchild 2 (10), with child 1 holding one
-/// open request. The shape every cancel test starts from.
+/// open request (and so `CEILING` tokens in reservation). The shape every
+/// cancel test starts from.
 fn family() -> (State, AgentId, AgentId, AgentId) {
     let (mut state, _, root) = booted();
-    step(&mut state, |s| spawned(s, root, 40));
+    // Two calls: one to hand the grandchild, one to send with.
+    step(&mut state, |s| spawned_with(s, root, grant(40, 2)));
     let child = agent(1);
     step(&mut state, |s| spawned(s, child, 10));
     let grandchild = agent(2);
@@ -159,6 +217,7 @@ fn a_root_cannot_hold_a_capability_the_kernel_never_minted() {
         seq: Seq::new(0),
         driver: echo(),
         cap: Capability::mint(0),
+        ceiling: tokens(CEILING),
     }])
     .unwrap();
     let err = refuse(
@@ -260,41 +319,6 @@ fn a_reply_to_an_exited_owner_is_dead_letter() {
         },
     );
     assert_eq!(err, Refusal::UnknownCorr(Some(Corr::new(0))));
-}
-
-#[test]
-fn spending_the_grant_exhausts_the_agent() {
-    let (mut state, cap, root) = booted();
-    step(&mut state, |s| sent(s, root));
-    let reply = Msg::new(
-        Seq::new(3),
-        Endpoint::Driver { id: echo() },
-        MsgKind::Reply,
-        BlobRef::EMPTY,
-    )
-    .with_corr(Corr::new(0))
-    .with_consumption(Consumption::from_dims([(DimKey::Tokens, 150)]));
-    step(&mut state, |_| Entry::Replied {
-        msg: reply,
-        to: root,
-    });
-
-    let rec = state.agent(root).unwrap();
-    assert_eq!(
-        rec.budget.get(&DimKey::Tokens),
-        Some(0),
-        "drained, not negative"
-    );
-    assert_eq!(
-        rec.spent.get(&DimKey::Tokens),
-        Some(&150),
-        "recorded in full"
-    );
-    assert!(rec.exhausted);
-
-    let err = refuse(&state, &sent(&state, root));
-    let _ = cap;
-    assert_eq!(err, Refusal::Exhausted(root));
 }
 
 #[test]
@@ -607,4 +631,401 @@ fn an_empty_log_folds_to_the_initial_state() {
     let log = Log::in_memory();
     assert_eq!(fold(log.entries()).unwrap(), State::initial());
     assert_eq!(State::initial().hash(), State::initial().hash());
+}
+
+// --------------------------------------------------------------- budgets
+
+#[test]
+fn a_send_reserves_the_ceiling_and_the_reply_settles_it() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let rec = state.agent(root).unwrap();
+    assert_eq!(
+        rec.budget.get(&DimKey::Tokens),
+        Some(100 - CEILING),
+        "the ceiling is held before delivery"
+    );
+    assert_eq!(rec.budget.get(&DimKey::Calls), Some(9), "one call charged");
+    assert_eq!(rec.reserved.get(&Corr::new(0)), Some(&tokens(CEILING)));
+    assert_eq!(rec.spent.get(&DimKey::Calls), Some(&1));
+    assert_eq!(rec.spent.get(&DimKey::Tokens), None, "nothing spent yet");
+
+    step(&mut state, |s| replied(s, Corr::new(0), root, used(3)));
+    let rec = state.agent(root).unwrap();
+    assert_eq!(
+        rec.budget.get(&DimKey::Tokens),
+        Some(97),
+        "the unused part of the reservation came back"
+    );
+    assert!(rec.reserved.is_empty(), "settled");
+    assert_eq!(rec.spent.get(&DimKey::Tokens), Some(&3));
+    assert!(rec.overdraft.is_empty());
+}
+
+#[test]
+fn a_send_that_cannot_reserve_the_ceiling_is_refused_before_delivery() {
+    // Tokens short of the ceiling.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned(s, root, 5));
+    let child = agent(1);
+    assert_eq!(
+        refuse(&state, &sent(&state, child)),
+        Refusal::Budget(BudgetError::Insufficient {
+            dim: DimKey::Tokens,
+            available: 5,
+            requested: CEILING
+        })
+    );
+    assert_eq!(state.owner(Corr::new(0)), None, "nothing was delivered");
+
+    // Calls exhausted: the reducer charges one per send.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned_with(s, root, grant(50, 1)));
+    step(&mut state, |s| sent(s, child));
+    assert_eq!(
+        refuse(&state, &sent(&state, child)),
+        Refusal::Budget(BudgetError::Insufficient {
+            dim: DimKey::Calls,
+            available: 0,
+            requested: 1
+        })
+    );
+
+    // No calls grant at all.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned_with(s, root, tokens(50)));
+    assert_eq!(
+        refuse(&state, &sent(&state, child)),
+        Refusal::Budget(BudgetError::NoGrant { dim: DimKey::Calls })
+    );
+}
+
+#[test]
+fn a_report_above_the_ceiling_is_charged_in_full_and_recorded_as_overdraft() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    step(&mut state, |s| replied(s, Corr::new(0), root, used(15)));
+    let rec = state.agent(root).unwrap();
+    assert_eq!(
+        rec.budget.get(&DimKey::Tokens),
+        Some(90),
+        "no refund, and nothing beyond the reservation was taken"
+    );
+    assert_eq!(rec.spent.get(&DimKey::Tokens), Some(&15), "charged in full");
+    assert_eq!(rec.overdraft.get(&DimKey::Tokens), Some(&5), "and visible");
+
+    // A dimension that was never reserved is overdraft entirely.
+    step(&mut state, |s| sent(s, root));
+    step(&mut state, |s| {
+        replied(
+            s,
+            Corr::new(1),
+            root,
+            Consumption::from_dims([(DimKey::Tokens, 2), (DimKey::ComputeMs, 7)]),
+        )
+    });
+    let rec = state.agent(root).unwrap();
+    assert_eq!(rec.budget.get(&DimKey::Tokens), Some(88));
+    assert_eq!(rec.spent.get(&DimKey::Tokens), Some(&17));
+    assert_eq!(rec.spent.get(&DimKey::ComputeMs), Some(&7));
+    assert_eq!(rec.overdraft.get(&DimKey::Tokens), Some(&5));
+    assert_eq!(rec.overdraft.get(&DimKey::ComputeMs), Some(&7));
+}
+
+#[test]
+fn a_finished_agent_releases_its_reservations_and_an_orphan_cascades_upward() {
+    // child 1 holds corr 0 with CEILING reserved, and 10 carved to grandchild.
+    let (mut state, root, child, grandchild) = family();
+    assert_eq!(
+        state.agent(child).unwrap().budget.get(&DimKey::Tokens),
+        Some(40 - 10 - CEILING)
+    );
+    step(&mut state, |s| exited(s, child));
+    let rec = state.agent(child).unwrap();
+    assert!(rec.reserved.is_empty(), "no leaked reservation");
+    assert_eq!(state.owner(Corr::new(0)), None);
+    assert_eq!(
+        state.agent(root).unwrap().budget.get(&DimKey::Tokens),
+        Some(90),
+        "the child's remainder, reservation included, came back"
+    );
+
+    // The grandchild is now an orphan. Its remainder goes to the nearest live
+    // ancestor — the root — not to the dead child's record (#15).
+    step(&mut state, |s| exited(s, grandchild));
+    assert_eq!(
+        state.agent(child).unwrap().budget.get(&DimKey::Tokens),
+        None,
+        "nothing stranded on the dead record"
+    );
+    assert_eq!(
+        state.agent(root).unwrap().budget.get(&DimKey::Tokens),
+        Some(100),
+        "as if the grandchild had exited first"
+    );
+}
+
+#[test]
+fn the_roots_record_is_the_ledger_even_after_the_root_exits() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned(s, root, 40));
+    step(&mut state, |s| exited(s, root));
+    assert_eq!(
+        state.agent(root).unwrap().budget.get(&DimKey::Tokens),
+        Some(60),
+        "the root keeps its remainder"
+    );
+    step(&mut state, |s| exited(s, agent(1)));
+    assert_eq!(
+        state.agent(root).unwrap().budget.get(&DimKey::Tokens),
+        Some(100),
+        "an orphan with no live ancestor returns to the root's record"
+    );
+}
+
+// ----------------------------------------------------------------- depth
+
+#[test]
+fn a_child_is_born_one_level_shallower_and_the_parent_keeps_its_own() {
+    let (state, root, child, grandchild) = family();
+    let depth = |id| state.agent(id).unwrap().budget.get(&DimKey::Depth);
+    assert_eq!(depth(root), Some(3), "not carved");
+    assert_eq!(depth(child), Some(2));
+    assert_eq!(depth(grandchild), Some(1));
+}
+
+#[test]
+fn a_spawn_at_depth_zero_is_refused() {
+    let (mut state, _, _, grandchild) = family();
+    step(&mut state, |s| spawned(s, grandchild, 1));
+    let leaf = agent(3);
+    assert_eq!(
+        state.agent(leaf).unwrap().budget.get(&DimKey::Depth),
+        Some(0)
+    );
+    assert_eq!(
+        refuse(&state, &spawned(&state, leaf, 1)),
+        Refusal::Budget(BudgetError::Insufficient {
+            dim: DimKey::Depth,
+            available: 0,
+            requested: 1
+        })
+    );
+}
+
+#[test]
+fn a_child_may_be_narrowed_in_depth_but_not_widened() {
+    let (mut state, _, root) = booted();
+    let narrow = Budget::from_dims([(DimKey::Tokens, 10), (DimKey::Depth, 0)]);
+    step(&mut state, |s| spawned_with(s, root, narrow));
+    let child = agent(1);
+    assert_eq!(
+        state.agent(child).unwrap().budget.get(&DimKey::Depth),
+        Some(0),
+        "asked for less than the default"
+    );
+    assert!(refuse(&state, &spawned(&state, child, 1))
+        .to_string()
+        .contains("depth"));
+
+    let wide = Budget::from_dims([(DimKey::Tokens, 10), (DimKey::Depth, 5)]);
+    assert_eq!(
+        refuse(&state, &spawned_with(&state, root, wide)),
+        Refusal::Budget(BudgetError::Insufficient {
+            dim: DimKey::Depth,
+            available: 2,
+            requested: 5
+        })
+    );
+}
+
+#[test]
+fn a_parent_without_a_depth_grant_cannot_spawn() {
+    let (state, _, root) = booted_with(tokens(100));
+    assert_eq!(
+        refuse(&state, &spawned(&state, root, 1)),
+        Refusal::Budget(BudgetError::NoGrant { dim: DimKey::Depth })
+    );
+}
+
+// ------------------------------------------------------------------ wall
+
+fn timed_root() -> Budget {
+    Budget::from_dims([
+        (DimKey::Tokens, 100),
+        (DimKey::Calls, 10),
+        (DimKey::Depth, 3),
+        (DimKey::WallMs, 1_000),
+    ])
+}
+
+#[test]
+fn the_clock_spends_wall_and_the_tick_that_empties_it_aborts() {
+    let (mut state, _, root) = booted_with(timed_root());
+    step(&mut state, |s| spawned_with(s, root, timed(40, 2, 400)));
+    let child = agent(1);
+    let wall = |s: &State, id: AgentId| s.agent(id).unwrap().budget.get(&DimKey::WallMs);
+    let spent = |s: &State, id: AgentId| s.agent(id).unwrap().spent.get(&DimKey::WallMs).copied();
+    assert_eq!(wall(&state, root), Some(600), "carved");
+    assert_eq!(wall(&state, child), Some(400));
+
+    step(&mut state, |s| tick(s, 100));
+    assert_eq!(wall(&state, root), Some(500));
+    assert_eq!(spent(&state, root), Some(100));
+    assert_eq!(wall(&state, child), Some(300));
+    assert_eq!(spent(&state, child), Some(100));
+    assert_eq!(
+        state.expiring(400),
+        vec![child],
+        "the tick that would empty it"
+    );
+    assert_eq!(state.expiring(399), vec![]);
+
+    step(&mut state, |s| tick(s, 400));
+    let rec = state.agent(child).unwrap();
+    assert_eq!(rec.status, Status::Aborted);
+    assert_eq!(
+        rec.spent.get(&DimKey::WallMs),
+        Some(&400),
+        "all of it, no more"
+    );
+    assert_eq!(rec.budget.get(&DimKey::Tokens), None, "returned");
+    assert_eq!(state.result(child), Some(Outcome::Aborted));
+    assert_eq!(
+        wall(&state, root),
+        Some(200),
+        "no wall came back: it was spent"
+    );
+    assert_eq!(
+        state.agent(root).unwrap().budget.get(&DimKey::Tokens),
+        Some(100),
+        "the tokens did"
+    );
+
+    step(&mut state, |s| tick(s, 600));
+    let rec = state.agent(root).unwrap();
+    assert_eq!(rec.status, Status::Aborted);
+    assert_eq!(rec.budget.get(&DimKey::WallMs), Some(0));
+    assert_eq!(rec.spent.get(&DimKey::WallMs), Some(&600));
+    assert!(state.is_drained());
+}
+
+#[test]
+fn wall_is_carved_from_the_parents_remaining_time() {
+    let (mut state, _, root) = booted_with(timed_root());
+    step(&mut state, |s| tick(s, 900));
+    assert_eq!(
+        refuse(&state, &spawned_with(&state, root, timed(10, 1, 500))),
+        Refusal::Budget(BudgetError::Insufficient {
+            dim: DimKey::WallMs,
+            available: 100,
+            requested: 500
+        }),
+        "a child cannot be granted time its parent no longer has"
+    );
+}
+
+#[test]
+fn a_timed_parent_may_not_spawn_an_untimed_child() {
+    let (state, _, root) = booted_with(timed_root());
+    assert_eq!(
+        refuse(&state, &spawned(&state, root, 10)),
+        Refusal::Unbounded {
+            parent: root,
+            dim: DimKey::WallMs
+        },
+        "a limit cannot be escaped by spawning"
+    );
+}
+
+#[test]
+fn an_untimed_agent_is_measured_but_never_charged() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned(s, root, 10));
+    step(&mut state, |s| tick(s, 500));
+    step(&mut state, |s| tick(s, 700));
+    for id in [root, agent(1)] {
+        let rec = state.agent(id).unwrap();
+        assert_eq!(rec.status, Status::Live, "{id}");
+        assert_eq!(rec.budget.get(&DimKey::WallMs), None, "{id}");
+        assert_eq!(
+            rec.spent.get(&DimKey::WallMs),
+            Some(&700),
+            "{id}: the receipt"
+        );
+    }
+    assert_eq!(state.expiring(u64::MAX), vec![]);
+}
+
+// -------------------------------------------------------------- property
+
+/// Tier 2 property #1, at one point in a fold: over the whole tree, budgets
+/// plus reservations plus spent equal the root's grant plus overdraft, along
+/// every granted dimension but `depth` — which is a shape limit every child
+/// inherits, not a resource that is handed down.
+fn conserved(state: &State, grant: &Budget) {
+    let mut sum: std::collections::BTreeMap<DimKey, u64> = Default::default();
+    let mut overdraft: std::collections::BTreeMap<DimKey, u64> = Default::default();
+    let add = |into: &mut std::collections::BTreeMap<DimKey, u64>, dim: &DimKey, v: u64| {
+        *into.entry(dim.clone()).or_insert(0) += v;
+    };
+    for (_, a) in state.agents() {
+        for (dim, v) in a.budget.iter() {
+            add(&mut sum, dim, v);
+        }
+        for held in a.reserved.values() {
+            for (dim, v) in held.iter() {
+                add(&mut sum, dim, v);
+            }
+        }
+        for (dim, v) in &a.spent {
+            add(&mut sum, dim, *v);
+        }
+        for (dim, v) in &a.overdraft {
+            add(&mut overdraft, dim, *v);
+        }
+    }
+    for (dim, want) in grant.iter().filter(|(d, _)| **d != DimKey::Depth) {
+        let over = overdraft.get(dim).copied().unwrap_or(0);
+        assert_eq!(
+            sum.get(dim).copied().unwrap_or(0),
+            want + over,
+            "`{dim}` after entry {}",
+            state.len()
+        );
+    }
+}
+
+#[test]
+fn budgets_reservations_and_spent_sum_to_the_root_grant_at_every_step() {
+    let grant = timed_root();
+    let (mut state, _, root) = booted_with(grant.clone());
+    conserved(&state, &grant);
+    let run = |state: &mut State, build: &dyn Fn(&State) -> Entry| {
+        step(state, build);
+        conserved(state, &grant);
+    };
+    let (a, g, b) = (agent(1), agent(2), agent(3));
+    run(&mut state, &|s| spawned_with(s, root, timed(40, 4, 400)));
+    run(&mut state, &|s| spawned_with(s, a, timed(10, 1, 100)));
+    run(&mut state, &|s| sent(s, a)); // corr 0, CEILING held
+    run(&mut state, &|s| tick(s, 50)); // wall charged to all three
+    run(&mut state, &|s| replied(s, Corr::new(0), a, used(3)));
+    run(&mut state, &|s| sent(s, g)); // corr 1
+    run(&mut state, &|s| exited(s, a)); // g is now an orphan
+    run(&mut state, &|s| replied(s, Corr::new(1), g, used(12))); // misreport: 2 over
+    run(&mut state, &|s| spawned_with(s, root, timed(5, 1, 10)));
+    run(&mut state, &|s| cancelled(s, Some(root), b, 20));
+    run(&mut state, &|s| tick(s, 70)); // b: deadline and wall, both reached
+    run(&mut state, &|s| exited(s, g)); // cascades past dead `a` to root
+    run(&mut state, &|s| tick(s, 100));
+    run(&mut state, &|s| claimed(s, b, Some(root)));
+    run(&mut state, &|s| tick(s, 5_000)); // root's own wall runs out
+    assert!(state.is_drained());
+    assert_eq!(
+        state.agent(g).unwrap().overdraft.get(&DimKey::Tokens),
+        Some(&2)
+    );
+    assert_eq!(state.agent(a).unwrap().budget.get(&DimKey::Tokens), None);
+    assert_eq!(state.agent(b).unwrap().status, Status::Aborted);
 }

@@ -99,6 +99,39 @@ of every proposal, with an answer that is demonstrable rather than arguable.
   by wire snapshot. `cargo-semver-checks` covers the Rust surface like any
   other public type. Revisit if a non-Rust harness appears: at that point the
   selectors would have a serialized form, and that form would be ABI.
+- **Budgets are enforced by reservation, and unspent grant never strands**
+  (decided 2026-09-14, M1b, closes #15). Four refinements of the `spawn` /
+  `exit` / `send` semantics above, all reducer-side, none on the wire:
+  1. *Reservation before the call.* A driver is registered with a
+     **ceiling** — the most one request to it may cost, declared by the
+     harness and recorded in the log. `send` carves the ceiling plus one
+     `calls` from the sender before delivery, and is refused if it cannot;
+     the reply settles the reservation against the driver's report. A report
+     above the ceiling is charged in full and the excess recorded as
+     *overdraft* on the agent — visible, never taken from budget the agent
+     still holds, because the ceiling was the harness's word, not the agent's.
+  2. *Depth is a shape limit, not a resource.* A child is born one level
+     shallower than its parent, or shallower if asked; a parent at zero cannot
+     spawn. The parent keeps its own level. Depth is therefore excluded from
+     the conservation property below.
+  3. *Wall time is spent by the clock.* Applying a tick moves the elapsed
+     reading out of every live agent's `wall_ms` grant; the tick that empties
+     one aborts that agent, inside the same apply. An agent with no `wall_ms`
+     grant is *untimed* — the one dimension where absent does not mean
+     "cannot spend", because the spender is the clock, not the agent — and a
+     child of a timed parent may not be untimed, so a limit cannot be escaped
+     by spawning. An untimed agent's elapsed wall is still recorded on its
+     receipt, so a run without a limit still reports what it took.
+  4. *Unspent grant returns to the nearest live ancestor*, or to the root's
+     record when there is none. Never to a dead non-root record, where nobody
+     could spend or return it: the outcome is the same as if the family had
+     exited youngest-first, whatever order it actually did. The root's record
+     is where the harness's grant is accounted for, alive or not.
+
+  The property that decides all four, and that the reducer tests check after
+  every entry of a fold: over the whole tree, budgets plus reservations plus
+  spent equal the root's grant plus overdraft, along every granted dimension
+  but `depth`. Overdraft is zero in a healthy run.
 
 ## Alternatives considered
 

@@ -47,6 +47,11 @@ fn tokio_spawner(fut: BoxFuture<()>) -> AbortHandle {
 
 const FIXTURE: &str = "tests/fixtures/m0-walking-skeleton.log";
 const PAYLOAD: &[u8] = b"hello, kernel";
+const CEILING: u64 = 64;
+
+fn tokens(n: u64) -> Budget {
+    Budget::from_dims([(DimKey::Tokens, n)])
+}
 
 fn echo_id() -> DriverId {
     DriverId::new(Name::new("echo").unwrap())
@@ -59,8 +64,10 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
     let kernel = Kernel::boot(log, tokio_spawner);
 
     // Boot: drivers first, so the root's namespace can name them.
+    // The ceiling is the harness's word on what one echo may cost at most;
+    // every send reserves it before delivery.
     let echo = kernel
-        .register_driver(echo_id(), EchoDriver::new())
+        .register_driver(echo_id(), EchoDriver::new(), tokens(CEILING))
         .unwrap();
     let ns = Namespace::from_caps([echo]);
 
@@ -77,7 +84,7 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
                             child.exit(&echoed)
                         }),
                         child_ns,
-                        Budget::from_dims([(DimKey::Tokens, 100)]),
+                        Budget::from_dims([(DimKey::Tokens, 100), (DimKey::Calls, 1)]),
                     )
                     .unwrap();
                 // Syscall 3: the parent claims its child's result.
@@ -87,7 +94,11 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
                 root.exit(&bytes)
             }),
             ns,
-            Budget::from_dims([(DimKey::Tokens, 1_000)]),
+            Budget::from_dims([
+                (DimKey::Tokens, 1_000),
+                (DimKey::Calls, 10),
+                (DimKey::Depth, 1),
+            ]),
         )
         .unwrap();
 
@@ -117,18 +128,26 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
         Entry::Claimed { agent, by: Some(by), .. } if *agent == child && *by == root
     )));
 
-    // --- accounting: 1000 → root, 100 carved to the child, 13 spent, 87 back
+    // --- accounting: 1000 → root, 100 carved to the child, 64 held for the
+    //     send, 13 spent, 51 refunded, 87 back; the one call charged
     let root_rec = state.agent(root).unwrap();
     let child_rec = state.agent(child).unwrap();
     assert_eq!(root_rec.status, Status::Exited);
     assert_eq!(child_rec.status, Status::Exited);
     assert_eq!(root_rec.budget.get(&DimKey::Tokens), Some(987));
+    assert_eq!(root_rec.budget.get(&DimKey::Calls), Some(9));
     assert_eq!(
         child_rec.budget.get(&DimKey::Tokens),
         None,
         "returned at exit"
     );
     assert_eq!(child_rec.spent.get(&DimKey::Tokens), Some(&13));
+    assert_eq!(child_rec.spent.get(&DimKey::Calls), Some(&1));
+    assert!(child_rec.reserved.is_empty(), "settled at the reply");
+    assert!(
+        child_rec.overdraft.is_empty(),
+        "the echo kept to its ceiling"
+    );
     assert!(child_rec.mailbox.is_empty(), "the reply was resolved");
     assert!(state.is_drained());
     assert!(state.completed().is_empty(), "everything was claimed");

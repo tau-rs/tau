@@ -27,12 +27,13 @@
 //!
 //! # Status
 //!
-//! M1a: the [`log`], the [`reducer`], six of the seven syscalls (`spawn`,
-//! `exit`, `wait`, `cancel`, `send`, `recv`), an echo [`driver`], and a
-//! virtual clock. The loop runs end to end, a cancelled subtree is frozen,
-//! notified, abandoned at the drivers, and aborted at a tick, and every log
-//! refolds to the same state hash. The full budget dimensions and the
-//! wall-clock source are M1b; hooks and `attach` are M2.
+//! M1b: the [`log`], the [`reducer`], six of the seven syscalls (`spawn`,
+//! `exit`, `wait`, `cancel`, `send`, `recv`), an echo [`driver`], a virtual
+//! clock and a wall clock. The loop runs end to end, a cancelled subtree is
+//! frozen, notified, abandoned at the drivers, and aborted at a tick, every
+//! reserved budget dimension is enforced — a send reserves the driver's
+//! ceiling before delivery, the clock spends wall time as it ticks — and
+//! every log refolds to the same state hash. Hooks and `attach` are M2.
 //!
 //! # Shape
 //!

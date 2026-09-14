@@ -27,6 +27,34 @@
 //! an absolute reading on the agent's record, and the hard abort happens
 //! *inside* the apply of the tick that reaches it — so a fold reproduces every
 //! abort exactly, and nothing outside the log can postpone one.
+//!
+//! Wall time is a budget dimension the clock spends on the agent's behalf:
+//! applying a tick moves the elapsed reading out of every live agent's
+//! `wall_ms` grant, and the tick that empties one aborts that agent. An agent
+//! with no `wall_ms` grant is *untimed* — the clock charges it nothing — which
+//! is the one place "absent" does not mean "cannot spend", because here the
+//! spender is the clock, not the agent. The exception cannot be used to
+//! escape a limit: a child of a timed parent must itself be timed.
+//!
+//! # Budgets
+//!
+//! Every reserved dimension is enforced. `spawn` carves the child's grant
+//! atomically from the parent's, except `depth`, which is not a resource but
+//! a shape limit: a child is born one level shallower than its parent, or
+//! shallower still if asked, and a parent at zero cannot spawn. `send`
+//! reserves the driver's declared ceiling plus one `calls` *before* delivery,
+//! so a request that could not be paid for is refused rather than overdrawn;
+//! the reply settles the reservation against what the driver reports. A
+//! report above the ceiling is charged in full and the excess recorded as
+//! [`overdraft`](Agent::overdraft) — never taken from budget the agent still
+//! holds, because the ceiling was the harness's declaration, not the agent's.
+//!
+//! The invariant every test of this module leans on: over the whole tree, at
+//! every step, budgets plus reservations plus spent sum to the root's grant
+//! (plus overdraft, zero in a healthy run), along every dimension but `depth`.
+//! Unspent budget returns to the nearest *live* ancestor at exit — or to the
+//! root's record if there is none — so it is never stranded on a dead one,
+//! and the order in which a family exits does not change where it ends up.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -84,13 +112,19 @@ pub struct Agent {
     pub parent: Option<AgentId>,
     /// The birth namespace. Authority is this set — there is no transfer yet.
     pub ns: Namespace,
-    /// What remains of the grant.
+    /// What remains of the grant and is not held for an open request.
     pub budget: Budget,
-    /// Everything drivers have reported against this agent, every dimension.
-    /// Recorded in full; only `tokens` is *enforced* so far.
+    /// Budget held for each open request: the driver's ceiling, carved at
+    /// `Sent` and settled at `Replied`. Released when the agent finishes.
+    pub reserved: BTreeMap<Corr, Budget>,
+    /// Everything charged to this agent, every dimension: driver reports,
+    /// one `calls` per send, and wall time as the clock passes. For an
+    /// untimed agent `wall_ms` here is a measurement, not a charge.
     pub spent: BTreeMap<DimKey, u64>,
-    /// Whether the `tokens` grant is gone. An exhausted agent cannot send.
-    pub exhausted: bool,
+    /// The part of [`spent`](Self::spent) no grant covered: a driver reported
+    /// more than its ceiling. Visible so a misreport is loud in the state
+    /// hash; driver supervision (M3) is what will act on it.
+    pub overdraft: BTreeMap<DimKey, u64>,
     /// Where it is in its life.
     pub status: Status,
     /// Delivered, unresolved messages, in delivery order.
@@ -108,6 +142,11 @@ impl Agent {
     fn is_frozen(&self) -> bool {
         matches!(self.status, Status::Cancelling)
     }
+
+    /// Whether this agent holds a `wall_ms` grant at all.
+    fn is_timed(&self) -> bool {
+        self.budget.get(&DimKey::WallMs).is_some()
+    }
 }
 
 /// The kernel's state: a pure fold over the log.
@@ -119,6 +158,8 @@ pub struct State {
     next_cap: u64,
     now: u64,
     drivers: BTreeMap<DriverId, Capability>,
+    /// What one request to each driver may cost at most, as registered.
+    ceilings: BTreeMap<DriverId, Budget>,
     caps: BTreeMap<Capability, Endpoint>,
     agents: BTreeMap<AgentId, Agent>,
     corrs: BTreeMap<Corr, AgentId>,
@@ -204,9 +245,16 @@ pub enum Refusal {
     /// or cancel.
     #[error("agent {0} is cancelled and may not start new work")]
     Frozen(AgentId),
-    /// The agent's `tokens` grant is spent.
-    #[error("agent {0} has exhausted its tokens")]
-    Exhausted(AgentId),
+    /// A child omitted a dimension its parent is bounded on. Only `wall_ms`
+    /// can be omitted at all — an untimed agent — and only under an untimed
+    /// parent: a limit cannot be escaped by spawning.
+    #[error("a child of {parent} may not be unbounded along `{dim}`")]
+    Unbounded {
+        /// The bounded parent.
+        parent: AgentId,
+        /// The dimension the child left out.
+        dim: DimKey,
+    },
     /// A child namespace that is not a subset of its parent's.
     #[error("namespace for a child of {parent} is not a subset of the parent's")]
     NotSubset {
@@ -366,6 +414,37 @@ impl State {
         self.caps.get(&cap)
     }
 
+    /// What one request to `driver` may cost at most, as registered.
+    #[must_use]
+    pub fn ceiling(&self, driver: &DriverId) -> Option<&Budget> {
+        self.ceilings.get(driver)
+    }
+
+    /// The ceiling of the driver a capability names, if it names one.
+    fn ceiling_via(&self, cap: Capability) -> Option<&Budget> {
+        match self.caps.get(&cap)? {
+            Endpoint::Driver { id } => self.ceilings.get(id),
+            _ => None,
+        }
+    }
+
+    /// Where `agent`'s unspent budget goes when it finishes: the nearest live
+    /// ancestor, or the root's record if every ancestor is dead. `None` for
+    /// the root itself, whose remainder stays where it is.
+    fn heir(&self, agent: AgentId) -> Option<AgentId> {
+        let mut cursor = self.agents.get(&agent)?.parent?;
+        loop {
+            let p = self.agents.get(&cursor)?;
+            if p.is_live() {
+                return Some(cursor);
+            }
+            match p.parent {
+                Some(grandparent) => cursor = grandparent,
+                None => return Some(cursor),
+            }
+        }
+    }
+
     /// The agent that owns a correlation, while it is open.
     #[must_use]
     pub fn owner(&self, corr: Corr) -> Option<AgentId> {
@@ -433,18 +512,36 @@ impl State {
             .collect()
     }
 
-    /// The cancelled agents a tick reading `now` would abort, deepest first.
+    /// The agents a tick reading `now` would end, deepest first: cancelled
+    /// ones whose deadline it reaches, and timed ones whose wall grant it
+    /// exhausts.
     ///
     /// Deepest first because ids are allocated in spawn order, so a child's id
     /// is always greater than its parent's: aborting in descending id order
     /// returns a child's budget to its parent *before* the parent's is returned
-    /// to the grandparent, and nothing is stranded on a dead record.
+    /// to the grandparent.
     #[must_use]
     pub fn expiring(&self, now: u64) -> Vec<AgentId> {
+        let elapsed = now.saturating_sub(self.now);
         self.agents
             .iter()
             .rev()
-            .filter(|(_, a)| a.is_frozen() && a.deadline.is_some_and(|d| d <= now))
+            .filter(|(_, a)| {
+                a.is_live()
+                    && ((a.is_frozen() && a.deadline.is_some_and(|d| d <= now))
+                        || a.budget.get(&DimKey::WallMs).is_some_and(|w| w <= elapsed))
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// The cancelled agents whose deadline the current reading has reached,
+    /// deepest first. What a grace of zero aborts at the cancel itself.
+    fn deadline_reached(&self) -> Vec<AgentId> {
+        self.agents
+            .iter()
+            .rev()
+            .filter(|(_, a)| a.is_frozen() && a.deadline.is_some_and(|d| d <= self.now))
             .map(|(id, _)| *id)
             .collect()
     }
@@ -555,7 +652,14 @@ impl State {
                         if !ns.is_subset_of(&p.ns) {
                             return Err(Refusal::NotSubset { parent: *parent });
                         }
-                        p.budget.clone().carve(budget)?;
+                        child_depth(p, budget)?;
+                        if p.is_timed() && budget.get(&DimKey::WallMs).is_none() {
+                            return Err(Refusal::Unbounded {
+                                parent: *parent,
+                                dim: DimKey::WallMs,
+                            });
+                        }
+                        p.budget.clone().carve(&without_depth(budget))?;
                     }
                 }
             }
@@ -565,9 +669,6 @@ impl State {
                     return Err(Refusal::WrongSender(msg.from.clone()));
                 };
                 let sender = self.active(id)?;
-                if sender.exhausted {
-                    return Err(Refusal::Exhausted(id));
-                }
                 if msg.kind != MsgKind::Request {
                     return Err(Refusal::WrongKind {
                         expected: MsgKind::Request,
@@ -591,11 +692,15 @@ impl State {
                         cap: *via,
                     });
                 }
-                match self.caps.get(via) {
-                    Some(Endpoint::Driver { .. }) => {}
+                let driver = match self.caps.get(via) {
+                    Some(Endpoint::Driver { id }) => id,
                     Some(_) => return Err(Refusal::Unroutable(*via)),
                     None => return Err(Refusal::UnknownCapability(*via)),
-                }
+                };
+                // Reservation before the call: the ceiling plus one `calls`,
+                // or the send does not happen.
+                let ceiling = self.ceilings.get(driver).ok_or(Refusal::Unroutable(*via))?;
+                sender.budget.clone().carve(&ask_for(ceiling))?;
             }
             Entry::Replied { msg, to } => {
                 self.check_envelope(msg)?;
@@ -633,12 +738,13 @@ impl State {
             }
             Entry::Exited { agent, .. } => {
                 let a = self.live(*agent)?;
-                if let Some(parent) = a.parent {
-                    let p = self
-                        .agents
-                        .get(&parent)
-                        .ok_or(Refusal::UnknownAgent(parent))?;
-                    p.budget.clone().restore(&a.budget)?;
+                let mut unspent = a.budget.clone();
+                for held in a.reserved.values() {
+                    unspent.restore(held)?;
+                }
+                if let Some(heir) = self.heir(*agent) {
+                    let h = self.agents.get(&heir).ok_or(Refusal::UnknownAgent(heir))?;
+                    h.budget.clone().restore(&unspent)?;
                 }
             }
             Entry::Claimed { agent, by, .. } => {
@@ -693,8 +799,14 @@ impl State {
     pub fn apply(&mut self, entry: &Entry) -> Result<(), Refusal> {
         self.check(entry)?;
         match entry {
-            Entry::DriverRegistered { driver, cap, .. } => {
+            Entry::DriverRegistered {
+                driver,
+                cap,
+                ceiling,
+                ..
+            } => {
                 self.drivers.insert(driver.clone(), *cap);
+                self.ceilings.insert(driver.clone(), ceiling.clone());
                 self.caps
                     .insert(*cap, Endpoint::Driver { id: driver.clone() });
                 self.next_cap = self.next_cap.saturating_add(1);
@@ -713,7 +825,12 @@ impl State {
                             .agents
                             .get_mut(parent)
                             .ok_or(Refusal::UnknownAgent(*parent))?;
-                        p.budget.carve(budget)?
+                        // Depth is derived, not carved: the parent keeps its
+                        // own level; the child is born one shallower.
+                        let depth = child_depth(p, budget)?;
+                        let mut granted = p.budget.carve(&without_depth(budget))?;
+                        granted.restore(&single(DimKey::Depth, depth))?;
+                        granted
                     }
                 };
                 self.agents.insert(
@@ -721,9 +838,10 @@ impl State {
                     Agent {
                         parent: *parent,
                         ns: ns.clone(),
-                        exhausted: granted.get(&DimKey::Tokens).is_none_or(|t| t == 0),
                         budget: granted,
+                        reserved: BTreeMap::new(),
                         spent: BTreeMap::new(),
+                        overdraft: BTreeMap::new(),
                         status: Status::Live,
                         mailbox: Vec::new(),
                         deadline: None,
@@ -731,21 +849,28 @@ impl State {
                 );
                 self.next_agent = self.next_agent.saturating_add(1);
             }
-            Entry::Sent { msg, .. } => {
+            Entry::Sent { msg, via } => {
                 if let (Endpoint::Agent { id }, Some(corr)) = (&msg.from, msg.corr) {
                     self.corrs.insert(corr, *id);
+                    let ceiling = self.ceiling_via(*via).cloned().unwrap_or_default();
+                    let a = self.agents.get_mut(id).ok_or(Refusal::UnknownAgent(*id))?;
+                    a.budget.carve(&ask_for(&ceiling))?;
+                    add(&mut a.spent, &DimKey::Calls, 1);
+                    a.reserved.insert(corr, ceiling);
                 }
                 self.next_corr = self.next_corr.saturating_add(1);
             }
             Entry::Replied { msg, to } => {
+                let a = self.agents.get_mut(to).ok_or(Refusal::UnknownAgent(*to))?;
+                let reservation = msg
+                    .corr
+                    .and_then(|corr| a.reserved.remove(&corr))
+                    .unwrap_or_default();
+                settle(a, &reservation, msg.consumed.as_ref())?;
+                a.mailbox.push(msg.clone());
                 if let Some(corr) = msg.corr {
                     self.corrs.remove(&corr);
                 }
-                let a = self.agents.get_mut(to).ok_or(Refusal::UnknownAgent(*to))?;
-                if let Some(consumed) = &msg.consumed {
-                    charge(a, consumed);
-                }
-                a.mailbox.push(msg.clone());
             }
             Entry::Resolved { agent, matched, .. } => {
                 let a = self
@@ -788,33 +913,40 @@ impl State {
                     a.mailbox.push(notice.clone());
                 }
                 // A grace of zero is a deadline already reached.
-                self.expire()?;
+                for id in self.deadline_reached() {
+                    self.finish(id, Outcome::Aborted)?;
+                }
             }
             Entry::Tick { now, .. } => {
+                // The clock spends wall time on every live agent's behalf;
+                // then whoever it emptied, and whoever's deadline it reached,
+                // is ended inside this same apply.
+                let elapsed = now.saturating_sub(self.now);
                 self.now = *now;
-                self.expire()?;
+                for a in self.agents.values_mut().filter(|a| a.is_live()) {
+                    charge_wall(a, elapsed)?;
+                }
+                for id in self.expiring(*now) {
+                    self.finish(id, Outcome::Aborted)?;
+                }
             }
         }
         self.next_seq = self.next_seq.saturating_add(1);
         Ok(())
     }
 
-    /// Hard-aborts every cancelled agent whose deadline `now` has reached.
-    fn expire(&mut self) -> Result<(), Refusal> {
-        for id in self.expiring(self.now) {
-            self.finish(id, Outcome::Aborted)?;
-        }
-        Ok(())
-    }
-
     /// Ends an agent, by exit or by abort: the record stays, the mailbox and
-    /// open correlations go (HANDOFF §4.9), unspent budget returns to the
-    /// parent, and the outcome is stored until claimed.
+    /// open correlations go (HANDOFF §4.9), reservations for those requests
+    /// are released, unspent budget returns up the tree, and the outcome is
+    /// stored until claimed.
     ///
-    /// The root has no parent; its remainder stays on its record, which is
-    /// where the harness's grant is accounted for. A parent's record persists
-    /// past its own end for exactly this reason: a child may outlive it.
+    /// Unspent budget goes to the nearest *live* ancestor, or to the root's
+    /// record if there is none — the root's record is where the harness's
+    /// grant is accounted for. Never to a dead non-root record, where nobody
+    /// could ever spend or return it: the outcome is the same as if the
+    /// family had exited youngest-first, whatever order it actually did.
     fn finish(&mut self, id: AgentId, outcome: Outcome) -> Result<(), Refusal> {
+        let heir = self.heir(id);
         let a = self.agents.get_mut(&id).ok_or(Refusal::UnknownAgent(id))?;
         a.status = match outcome {
             Outcome::Exited(_) => Status::Exited,
@@ -822,18 +954,21 @@ impl State {
         };
         a.deadline = None;
         a.mailbox.clear();
+        for held in core::mem::take(&mut a.reserved).values() {
+            a.budget.restore(held)?;
+        }
         let parent = a.parent;
-        let unspent = match parent {
+        let unspent = match heir {
             Some(_) => core::mem::replace(&mut a.budget, Budget::empty()),
             None => Budget::empty(),
         };
         self.corrs.retain(|_, owner| *owner != id);
-        if let Some(parent) = parent {
-            let p = self
+        if let Some(heir) = heir {
+            let h = self
                 .agents
-                .get_mut(&parent)
-                .ok_or(Refusal::UnknownAgent(parent))?;
-            p.budget.restore(&unspent)?;
+                .get_mut(&heir)
+                .ok_or(Refusal::UnknownAgent(heir))?;
+            h.budget.restore(&unspent)?;
         }
         self.completed.push(Completion {
             agent: id,
@@ -844,32 +979,117 @@ impl State {
     }
 }
 
-/// Records a driver's report against an agent and enforces `tokens`.
-///
-/// Enforcement is deliberately coarse: a report that overdraws the grant
-/// drains it to zero and marks the agent exhausted, so its *next* send is
-/// refused. Reservation before the call — refusing a send that could not be
-/// paid for — is M1b, with the rest of the budget dimensions.
-fn charge(agent: &mut Agent, consumed: &Consumption) {
-    for (dim, amount) in consumed.iter() {
-        let slot = agent.spent.entry(dim.clone()).or_insert(0);
-        *slot = slot.saturating_add(amount);
+/// The depth a child of `parent` is born with: one less than the parent's, or
+/// what the request asks for if that is smaller. A parent without a depth
+/// grant, or at zero, cannot spawn at all.
+fn child_depth(parent: &Agent, requested: &Budget) -> Result<u64, BudgetError> {
+    let available = parent
+        .budget
+        .get(&DimKey::Depth)
+        .ok_or(BudgetError::NoGrant { dim: DimKey::Depth })?
+        .checked_sub(1)
+        .ok_or(BudgetError::Insufficient {
+            dim: DimKey::Depth,
+            available: 0,
+            requested: 1,
+        })?;
+    match requested.get(&DimKey::Depth) {
+        None => Ok(available),
+        Some(asked) if asked <= available => Ok(asked),
+        Some(asked) => Err(BudgetError::Insufficient {
+            dim: DimKey::Depth,
+            available,
+            requested: asked,
+        }),
     }
-    let Some(tokens) = consumed.get(&DimKey::Tokens) else {
+}
+
+/// Adds to a per-dimension tally. Nothing is recorded for zero: an absent
+/// key and a zero are the same fact, and only one of them may appear in the
+/// state hash.
+fn add(map: &mut BTreeMap<DimKey, u64>, dim: &DimKey, amount: u64) {
+    if amount == 0 {
         return;
+    }
+    let slot = map.entry(dim.clone()).or_insert(0);
+    *slot = slot.saturating_add(amount);
+}
+
+/// One dimension as a budget, for carving and restoring a single amount.
+fn single(dim: DimKey, amount: u64) -> Budget {
+    Budget::from_dims([(dim, amount)])
+}
+
+/// What a `Sent` must be able to pay for: the driver's ceiling plus the one
+/// `calls` the reducer charges for the send itself.
+fn ask_for(ceiling: &Budget) -> Budget {
+    let calls = ceiling.get(&DimKey::Calls).unwrap_or(0).saturating_add(1);
+    Budget::from_dims(
+        ceiling
+            .iter()
+            .filter(|(dim, _)| **dim != DimKey::Calls)
+            .map(|(dim, amount)| (dim.clone(), amount))
+            .chain([(DimKey::Calls, calls)]),
+    )
+}
+
+/// The request minus `depth`, which is derived rather than carved.
+fn without_depth(requested: &Budget) -> Budget {
+    Budget::from_dims(
+        requested
+            .iter()
+            .filter(|(dim, _)| **dim != DimKey::Depth)
+            .map(|(dim, amount)| (dim.clone(), amount)),
+    )
+}
+
+/// Settles a reservation against what the driver reported.
+///
+/// Every reserved dimension refunds what was not used and records what was.
+/// Anything reported above the reservation — or along a dimension that was
+/// never reserved — is charged to `spent` in full and mirrored in `overdraft`,
+/// and is *not* taken from the budget the agent still holds.
+fn settle(
+    agent: &mut Agent,
+    reservation: &Budget,
+    consumed: Option<&Consumption>,
+) -> Result<(), BudgetError> {
+    let mut refund = Budget::empty();
+    for (dim, held) in reservation.iter() {
+        let used = consumed.and_then(|c| c.get(dim)).unwrap_or(0);
+        refund.restore(&single(dim.clone(), held.saturating_sub(used)))?;
+        add(&mut agent.spent, dim, used);
+        add(&mut agent.overdraft, dim, used.saturating_sub(held));
+    }
+    if let Some(consumed) = consumed {
+        for (dim, used) in consumed.iter() {
+            if reservation.get(dim).is_none() {
+                add(&mut agent.spent, dim, used);
+                add(&mut agent.overdraft, dim, used);
+            }
+        }
+    }
+    agent.budget.restore(&refund)
+}
+
+/// Charges `elapsed` clock units of wall time to a live agent.
+///
+/// A timed agent pays out of its `wall_ms` grant, down to zero and no
+/// further: the charge is the min of the two, so budget and spent always sum
+/// to what was granted. An untimed agent is charged nothing, and the elapsed
+/// time is recorded on its receipt anyway, so a run without a limit still
+/// reports how long it took.
+fn charge_wall(agent: &mut Agent, elapsed: u64) -> Result<(), BudgetError> {
+    let charged = match agent.budget.get(&DimKey::WallMs) {
+        Some(have) => {
+            let moved = elapsed.min(have);
+            agent.budget.carve(&single(DimKey::WallMs, moved))?;
+            moved
+        }
+        None => elapsed,
     };
-    let ask = Budget::from_dims([(DimKey::Tokens, tokens)]);
-    if agent.budget.carve(&ask).is_err() {
-        let remaining = agent.budget.get(&DimKey::Tokens).unwrap_or(0);
-        // Cannot fail: the amount is exactly what is there.
-        let _ = agent
-            .budget
-            .carve(&Budget::from_dims([(DimKey::Tokens, remaining)]));
-        agent.exhausted = true;
-    }
-    if agent.budget.get(&DimKey::Tokens).is_none_or(|t| t == 0) {
-        agent.exhausted = true;
-    }
+    add(&mut agent.spent, &DimKey::WallMs, charged);
+    Ok(())
 }
 
 /// Folds entries from the initial state.
