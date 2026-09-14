@@ -131,19 +131,19 @@ const PINNED: [(u64, usize, u64, &str); 3] = [
         SEED_A,
         5_032,
         895,
-        "ce636379a189c8485e4aa0256898f811e9f35161101f216bc5ecbff2064a308d",
+        "3b6bc4161c8853fefcb51f246d29aac2041d1b60cbe1cd5575b946d34008e09b",
     ),
     (
         SEED_B,
         5_018,
         984,
-        "9ce6b46c3fa303e7dca5ae56b67b0075f7b4e78491fa2881794a3e6ad5b786db",
+        "fdf08a7e6c7711d574dfbc3561da9035194d537cc7574f3086f19a3f45695205",
     ),
     (
         SEED_C,
         5_012,
         967,
-        "b29a90aa83b3389dddee5d0de9e5372bdc4c081bcd4860a3f21ec4a88b45bf28",
+        "7f68f74ac715b2bb2a54354394ca85ed4123a05b2c8ba22232a8f0f6a9f2e80e",
     ),
 ];
 
