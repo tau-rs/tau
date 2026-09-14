@@ -226,8 +226,9 @@ impl Handle {
     ///
     /// [`KernelError::WouldBlock`] if the target's inbox is full — handle it,
     /// the kernel will not queue on your behalf. [`KernelError::Refused`] if
-    /// this agent does not hold `cap`, has exhausted its tokens, or is
-    /// cancelled.
+    /// this agent does not hold `cap`, cannot reserve the driver's declared
+    /// ceiling plus one `calls` from its budget, or is cancelled. The
+    /// reservation happens *before* delivery and is settled by the reply.
     pub fn send(&self, cap: Capability, payload: &[u8]) -> Result<Corr, KernelError> {
         self.kernel.send(self.id, cap, payload)
     }

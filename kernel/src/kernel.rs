@@ -245,6 +245,13 @@ impl Kernel {
     /// Must happen before the root is spawned: a namespace can only be built
     /// from capabilities that exist.
     ///
+    /// `ceiling` is the most one request to this driver may cost, and it is
+    /// the harness's declaration, not the driver's: the kernel never parses a
+    /// payload, so it cannot price a request itself. Every `send` through the
+    /// returned capability reserves the ceiling plus one `calls` from the
+    /// sender *before* delivery — refused if the sender cannot cover it — and
+    /// the reply settles the reservation against what the driver reports.
+    ///
     /// # Errors
     ///
     /// [`Refusal::AfterBoot`] or [`Refusal::DriverExists`], via
@@ -253,6 +260,7 @@ impl Kernel {
         self: &Arc<Self>,
         id: DriverId,
         driver: D,
+        ceiling: Budget,
     ) -> Result<Capability, KernelError> {
         let driver: Arc<dyn Driver> = Arc::new(driver);
         let (cap, spawner) = {
@@ -263,6 +271,7 @@ impl Kernel {
                 seq: inner.state.next_seq(),
                 driver: id.clone(),
                 cap,
+                ceiling,
             };
             inner.commit(entry)?;
             inner.inboxes.insert(
@@ -370,9 +379,9 @@ impl Kernel {
         self.cancel(None, agent, mode)
     }
 
-    /// Publishes a clock reading as a `Tick` entry. Cancel deadlines the
-    /// reading reaches are enforced by the reducer as the tick applies, and
-    /// the aborted agents' tasks are stopped before this returns.
+    /// Publishes a clock reading as a `Tick` entry. Wall budgets are charged
+    /// and cancel deadlines enforced by the reducer as the tick applies, and
+    /// the tasks of the agents it ended are stopped before this returns.
     ///
     /// This is the clock source's entry point, not an agent's: time enters the
     /// system here and nowhere else (ADR-0003).
@@ -390,9 +399,9 @@ impl Kernel {
                 now,
             };
             inner.state.check(&entry)?;
-            let expiring = inner.state.expiring(now);
+            let ending = inner.state.expiring(now);
             inner.commit(entry)?;
-            inner.reap(&expiring)
+            inner.reap(&ending)
         };
         for abort in handles {
             abort();

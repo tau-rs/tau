@@ -9,10 +9,17 @@
 //! way a filesystem is named by its mount point. The name is what a log
 //! resolves six months later, so it belongs to the operator, not the code.
 //!
-//! Two drivers ship: [`echo::EchoDriver`], because the loop it proves is the
+//! Two kinds ship: [`echo::EchoDriver`], because the loop it proves is the
 //! point — request in, log entry, delivery, reply, log entry, consumption
-//! charged — and [`clock::VirtualClock`], which is not a request/reply driver
-//! at all but the one thing allowed to tell the kernel that time passed.
+//! settled — and the clocks in [`clock`], which are not request/reply drivers
+//! at all but the only things allowed to tell the kernel that time passed.
+//!
+//! A driver is registered with a *ceiling*: the most one request to it may
+//! cost, declared by the harness. The kernel reserves that much from the
+//! sender before delivery and settles against the driver's report, so a
+//! driver that reports honestly within its ceiling is all the accounting
+//! needs. A report above it is charged in full and recorded as overdraft on
+//! the agent; supervision (M3) is what will act on that.
 
 pub mod clock;
 pub mod echo;

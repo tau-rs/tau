@@ -48,6 +48,10 @@ pub enum Entry {
         driver: DriverId,
         /// The capability that names it.
         cap: Capability,
+        /// The most one request to this driver may cost, as declared by the
+        /// harness. Every `Sent` through `cap` reserves this much from the
+        /// sender before delivery; the `Replied` settles against it.
+        ceiling: Budget,
     },
     /// An agent was created.
     Spawned {
@@ -125,7 +129,8 @@ pub enum Entry {
         reason: BlobRef,
     },
     /// The clock advanced. Time enters the system only this way (ADR-0003):
-    /// applying a tick is when cancel deadlines are enforced.
+    /// applying a tick is when wall budgets are charged and cancel deadlines
+    /// are enforced.
     Tick {
         /// Log position.
         seq: Seq,

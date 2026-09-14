@@ -12,6 +12,10 @@ disallowed-types = [
 
 # The reducer never reads a clock and never draws randomness: time enters the
 # system only as log entries appended by the clock driver (ADR-0003, §4.4).
+#
+# The one exception is the clock driver itself: `read()` in
+# kernel/src/driver/clock.rs carries the single `#[allow]` in the workspace,
+# and what it reads becomes a `Tick` entry before anything acts on it.
 disallowed-methods = [
     { path = "std::time::SystemTime::now", reason = "time enters as log entries from the clock driver, never by reading a clock (ADR-0003)" },
     { path = "std::time::Instant::now", reason = "time enters as log entries from the clock driver, never by reading a clock (ADR-0003)" },

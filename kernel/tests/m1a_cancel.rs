@@ -72,6 +72,7 @@ impl Driver for BlackHole {
 const FIXTURE: &str = "tests/fixtures/m1a-cancel.log";
 const REASON: &[u8] = b"budget review";
 const GRACE: u64 = 10;
+const CEILING: u64 = 50;
 
 fn hole_id() -> DriverId {
     DriverId::new(Name::new("blackhole").unwrap())
@@ -85,7 +86,13 @@ async fn a_cancelled_child_is_notified_abandoned_and_aborted_at_the_deadline() {
     let clock = VirtualClock::new(Arc::clone(&kernel));
 
     let hole = BlackHole::default();
-    let cap = kernel.register_driver(hole_id(), hole.clone()).unwrap();
+    let cap = kernel
+        .register_driver(
+            hole_id(),
+            hole.clone(),
+            Budget::from_dims([(DimKey::Tokens, CEILING)]),
+        )
+        .unwrap();
     let ns = Namespace::from_caps([cap]);
 
     // Plain memory shared between programs and the harness, so the harness
@@ -128,7 +135,7 @@ async fn a_cancelled_child_is_notified_abandoned_and_aborted_at_the_deadline() {
                             child.exit(b"unreachable")
                         }),
                         child_ns,
-                        Budget::from_dims([(DimKey::Tokens, 100)]),
+                        Budget::from_dims([(DimKey::Tokens, 100), (DimKey::Calls, 1)]),
                     )
                     .unwrap();
                 sent_root.notified().await;
@@ -141,7 +148,11 @@ async fn a_cancelled_child_is_notified_abandoned_and_aborted_at_the_deadline() {
                 root.exit(b"")
             }),
             ns,
-            Budget::from_dims([(DimKey::Tokens, 1_000)]),
+            Budget::from_dims([
+                (DimKey::Tokens, 1_000),
+                (DimKey::Calls, 10),
+                (DimKey::Depth, 1),
+            ]),
         )
         .unwrap();
 
@@ -158,6 +169,11 @@ async fn a_cancelled_child_is_notified_abandoned_and_aborted_at_the_deadline() {
     assert_eq!(rec.deadline, Some(GRACE));
     let corr = Corr::new(0);
     assert_eq!(state.owner(corr), Some(child), "still open during grace");
+    assert_eq!(
+        rec.reserved.get(&corr),
+        Some(&Budget::from_dims([(DimKey::Tokens, CEILING)])),
+        "and its reservation is still held"
+    );
     assert_eq!(*hole.abandoned.lock().unwrap(), vec![corr]);
     {
         let seen = seen.lock().unwrap();
@@ -195,6 +211,10 @@ async fn a_cancelled_child_is_notified_abandoned_and_aborted_at_the_deadline() {
     assert_eq!(child_rec.budget.get(&DimKey::Tokens), None);
     assert!(child_rec.mailbox.is_empty());
     assert_eq!(state.owner(corr), None, "no correlation left open");
+    assert!(
+        child_rec.reserved.is_empty(),
+        "no leaked reservation (Tier 2 property #1)"
+    );
     assert_eq!(state.live_count(), 0, "no live descendants");
     assert!(state.is_drained());
     assert_eq!(
