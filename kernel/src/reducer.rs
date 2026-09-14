@@ -41,7 +41,8 @@
 //! Every reserved dimension is enforced. `spawn` carves the child's grant
 //! atomically from the parent's, except `depth`, which is not a resource but
 //! a shape limit: a child is born one level shallower than its parent, or
-//! shallower still if asked, and a parent at zero cannot spawn. `send`
+//! shallower still if asked, a parent at zero cannot spawn, and nothing
+//! comes back at exit — a parent's level is unchanged by a child's death. `send`
 //! reserves the driver's declared ceiling plus one `calls` *before* delivery,
 //! so a request that could not be paid for is refused rather than overdrawn;
 //! the reply settles the reservation against what the driver reports. A
@@ -744,7 +745,7 @@ impl State {
                 }
                 if let Some(heir) = self.heir(*agent) {
                     let h = self.agents.get(&heir).ok_or(Refusal::UnknownAgent(heir))?;
-                    h.budget.clone().restore(&unspent)?;
+                    h.budget.clone().restore(&without_depth(&unspent))?;
                 }
             }
             Entry::Claimed { agent, by, .. } => {
@@ -945,6 +946,12 @@ impl State {
     /// grant is accounted for. Never to a dead non-root record, where nobody
     /// could ever spend or return it: the outcome is the same as if the
     /// family had exited youngest-first, whatever order it actually did.
+    ///
+    /// The restores here cannot overflow, so a tick or a cancel that ends
+    /// several agents in one apply cannot fail half-way: along every
+    /// dimension but `depth`, budgets plus reservations plus spent sum to
+    /// the root's grant (overdraft lives in `spent` only), and each restore
+    /// moves part of that sum into another part of it; `depth` never moves.
     fn finish(&mut self, id: AgentId, outcome: Outcome) -> Result<(), Refusal> {
         let heir = self.heir(id);
         let a = self.agents.get_mut(&id).ok_or(Refusal::UnknownAgent(id))?;
@@ -958,8 +965,10 @@ impl State {
             a.budget.restore(held)?;
         }
         let parent = a.parent;
+        // `depth` was never carved from the heir, so it is not handed back:
+        // a shape limit does not grow because a child came and went.
         let unspent = match heir {
-            Some(_) => core::mem::replace(&mut a.budget, Budget::empty()),
+            Some(_) => without_depth(&core::mem::replace(&mut a.budget, Budget::empty())),
             None => Budget::empty(),
         };
         self.corrs.retain(|_, owner| *owner != id);
