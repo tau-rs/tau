@@ -17,7 +17,7 @@ default   = ["anthropic"]
 anthropic = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
-tau-kernel = { path = "../kernel" }
+tau-kernel = { path = "../kernel", version = "0.0.0" }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
