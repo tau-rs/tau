@@ -1,0 +1,152 @@
+# Tier 2 — deep verification (docs/HANDOFF.md §8). On demand, or by path.
+#
+# Tier 1 is the fast lane every PR pays for. This is the slow lane the frozen
+# parts of the system get automatically: a PR that touches `kernel/**` runs
+# it without being asked, any PR runs it under the `deep-ci` label, and it
+# runs on every push to main that touches the reducer or the harness. It is
+# not in the `tier1` fan-in and is not a required check; if it must gate a
+# merge, label the PR and wait for it.
+#
+# Today this is item 2 of the seven, the simulation soak: 10^6 events on
+# Linux, refolded on the same build, then refolded on macOS from the log the
+# Linux job uploaded. ADR-0003 calls the second half the check that catches
+# what a single machine never sees — iteration-order and formatting
+# differences that only show up on another platform. The other six items
+# are tracked in their own issues (refs #6).
+
+name: tier2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+    paths:
+      - "kernel/**"
+      - "sim/**"
+  workflow_dispatch:
+    inputs:
+      events:
+        description: Accepted entries to generate
+        default: "1000000"
+        required: false
+      seed:
+        description: Generator seed (decimal)
+        default: "20260914"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tier2-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+  SOAK_EVENTS: ${{ github.event.inputs.events || '1000000' }}
+  SOAK_SEED: ${{ github.event.inputs.seed || '20260914' }}
+
+jobs:
+  # Decides whether a pull request pays for the slow lane: the `deep-ci`
+  # label, or a diff under kernel/**. Pushes and manual runs always do.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'deep-ci') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$LABELLED" = "true" ]; then
+            echo "deep-ci label present"
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -q '^kernel/'; then
+            echo "kernel/** changed"
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "no label, no kernel diff: skipping"
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
+  soak-linux:
+    name: soak (linux, 10^6 events)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler.
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --locked --release -p tau-sim --bin soak
+      - name: Soak and refold on this build
+        run: |
+          set -euo pipefail
+          mkdir -p soak
+          SECONDS=0
+          ./target/release/soak soak \
+            --seed "$SOAK_SEED" --events "$SOAK_EVENTS" \
+            --log soak/log.jsonl --hash soak/hash.txt | tee soak/summary.txt
+          echo "linux soak+refold: ${SECONDS}s"
+          {
+            echo "## soak (linux)"
+            echo
+            echo "- events requested: $SOAK_EVENTS, seed $SOAK_SEED"
+            echo "- $(cat soak/summary.txt)"
+            echo "- run + same-build refold: ${SECONDS}s"
+            echo "- log: $(du -h soak/log.jsonl | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-log
+          path: soak/
+          retention-days: 7
+          if-no-files-found: error
+
+  # The cross-platform half: fold the Linux log on macOS, expect the same hash.
+  refold-macos:
+    name: refold (macos)
+    needs: soak-linux
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --locked --release -p tau-sim --bin soak
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: soak-log
+          path: soak/
+      - name: Refold the Linux log
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          ./target/release/soak refold --log soak/log.jsonl --expect soak/hash.txt | tee refold.txt
+          echo "macos refold: ${SECONDS}s"
+          {
+            echo "## refold (macos)"
+            echo
+            echo "- $(cat refold.txt)"
+            echo "- expected: $(cat soak/hash.txt)"
+            echo "- fold of the Linux log: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -9,7 +9,7 @@
 
 use tau_kernel::log::{Entry, Log};
 use tau_kernel::reducer::{fold, StateHash};
-use tau_sim::{run, Report};
+use tau_sim::{run, run_with, Options, Report};
 
 /// Accepted entries per seed.
 ///
@@ -120,4 +120,51 @@ fn every_entry_kind_and_an_overdraft_appear() {
             .any(|(_, a)| a.status == tau_kernel::reducer::Status::Aborted),
         "some agent was hard-aborted at a deadline"
     );
+}
+
+/// The three seeds' outputs at the Tier 1 size, pinned. The generator is
+/// allowed to get faster, not to change its mind: an index that replaces a
+/// sweep must hand `pick` the same element for the same draw, and this is
+/// the test that says so. A new pin needs a reason in the commit message.
+const PINNED: [(u64, usize, u64, &str); 3] = [
+    (
+        SEED_A,
+        5_032,
+        895,
+        "3b6bc4161c8853fefcb51f246d29aac2041d1b60cbe1cd5575b946d34008e09b",
+    ),
+    (
+        SEED_B,
+        5_018,
+        984,
+        "fdf08a7e6c7711d574dfbc3561da9035194d537cc7574f3086f19a3f45695205",
+    ),
+    (
+        SEED_C,
+        5_012,
+        967,
+        "7f68f74ac715b2bb2a54354394ca85ed4123a05b2c8ba22232a8f0f6a9f2e80e",
+    ),
+];
+
+#[test]
+fn the_tier1_seeds_still_produce_the_pinned_logs() {
+    for (seed, len, refused, hash) in PINNED {
+        let report = run(seed, EVENTS).unwrap();
+        assert_eq!(report.log.len(), len, "seed {seed:#x}: log length moved");
+        assert_eq!(report.refused, refused, "seed {seed:#x}: refusals moved");
+        assert_eq!(
+            report.state.hash().to_string(),
+            hash,
+            "seed {seed:#x}: state hash moved"
+        );
+    }
+}
+
+#[test]
+fn run_is_run_with_the_exhaustive_options() {
+    let plain = run(SEED_A, 500).unwrap();
+    let explicit = run_with(SEED_A, &Options::exhaustive(500)).unwrap();
+    assert_eq!(plain.log.entries(), explicit.log.entries());
+    assert_eq!(plain.state.hash(), explicit.state.hash());
 }
