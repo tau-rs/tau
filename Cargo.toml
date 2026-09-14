@@ -16,7 +16,13 @@ authors      = ["Titouan Lebocq <lebocq.tit@gmail.com>"]
 
 [workspace.dependencies]
 serde      = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: serde_json's default float parser is fast and not
+# correctly rounded — a tool-call `input` holding `1.2999999999999999e+73`
+# decoded, re-encoded, and decoded again is a different f64. The fuzz target
+# on `decode_reply` found it in its first fifteen minutes. The tool loop
+# forwards the model's numbers to tool drivers, so they must survive intact;
+# the cost lands on float parsing only, and the kernel's log has no floats.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2       = "0.10"
 thiserror  = "2"
 tokio      = { version = "1", default-features = false }
