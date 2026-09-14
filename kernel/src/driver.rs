@@ -27,6 +27,26 @@ pub mod echo;
 use crate::abi::{Consumption, Corr};
 use crate::kernel::{BoxFuture, Delivery};
 
+/// What a driver offers to a model, for schema projection (ADR-0006 §5).
+///
+/// Opaque to the kernel: it forwards these bytes from the driver to the agent
+/// that asked, and never reads them. The tool's *name* is not here — it is
+/// the [`DriverId`](crate::abi::DriverId) the harness registered the driver
+/// under, the way a filesystem is named by its mount point, so two instances
+/// of one driver type cannot collide and the name in a model transcript is
+/// the name in the log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolSchema {
+    /// One or two sentences the model reads to decide when to call this tool.
+    pub description: String,
+    /// A JSON Schema (draft 2020-12) for the tool's input, as bytes.
+    ///
+    /// Bytes rather than a parsed document, so that the kernel has nothing
+    /// to interpret. The driver derives it from the same type it validates
+    /// the input with, so there is one source of truth per driver.
+    pub input_schema: Vec<u8>,
+}
+
 /// A driver's contract with the kernel.
 ///
 /// `&self` throughout: the kernel calls [`Driver::abandon`] from a `cancel`
@@ -38,6 +58,21 @@ pub trait Driver: Send + Sync + 'static {
     /// The kernel charges the report against the requester's budget without
     /// interpreting it. Report honestly, in your native units.
     fn handle(&self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)>;
+
+    /// The tool this driver is, if it is one.
+    ///
+    /// A driver is at most one tool: a driver with several operations puts
+    /// the discriminator in its own schema. The invocation payload it then
+    /// receives is exactly the model's `input` bytes, and its reply bytes
+    /// are exactly what the model reads back (ADR-0006 §5).
+    ///
+    /// Must be cheap and pure: the kernel calls it on every
+    /// `Handle::describe`, and nothing is logged. The default is `None` —
+    /// not a tool — which is right for a model driver, a clock, and the echo
+    /// driver alike.
+    fn describe(&self) -> Option<ToolSchema> {
+        None
+    }
 
     /// The requester of `corr` has been cancelled: stop working on it if you
     /// can. Phase two of `cancel` (ADR-0002).

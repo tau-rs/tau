@@ -23,7 +23,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::abi::{AgentId, BlobRef, Budget, Capability, Corr, Endpoint, Msg, MsgKind, Namespace};
+use crate::abi::{
+    AgentId, BlobRef, Budget, Capability, Corr, DriverId, Endpoint, Msg, MsgKind, Namespace,
+};
+use crate::driver::ToolSchema;
 use crate::kernel::{BoxFuture, Kernel, KernelError};
 pub use crate::reducer::Outcome;
 
@@ -252,6 +255,23 @@ impl Handle {
     #[must_use]
     pub fn read(&self, blob: BlobRef) -> Option<Vec<u8>> {
         self.kernel.read(blob)
+    }
+
+    /// What the driver behind `cap` offers as a tool, and the name the
+    /// harness gave it. Not a syscall: like [`Handle::read`], a query with
+    /// no effect to log — the projected tool list ends up inside a request
+    /// payload the log already references by hash (ADR-0006 §5).
+    ///
+    /// `None` if the driver is not a tool (a model driver, say).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Refused`] with `NotHeld` if this agent does not hold
+    /// `cap`, or `Unroutable` if `cap` does not name a driver. Authority
+    /// stays in the kernel: a child projects its own namespace, never a copy
+    /// of its parent's table.
+    pub fn describe(&self, cap: Capability) -> Result<Option<(DriverId, ToolSchema)>, KernelError> {
+        self.kernel.describe(self.id, cap)
     }
 }
 

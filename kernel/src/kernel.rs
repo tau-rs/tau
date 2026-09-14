@@ -39,7 +39,7 @@ use crate::abi::{
     Namespace,
 };
 use crate::blob::BlobStore;
-use crate::driver::Driver;
+use crate::driver::{Driver, ToolSchema};
 use crate::log::{Entry, Log, LogError};
 use crate::reducer::{Outcome, Refusal, State, StateHash, Status};
 use crate::syscall::{CancelMode, Exit, ExitResult, Handle, Program, WaitFor};
@@ -554,6 +554,43 @@ impl Kernel {
             abort();
         }
         Ok(())
+    }
+
+    /// The tool schema of the driver behind `via`, for `from`. A read, not
+    /// a syscall: see `Handle::describe`.
+    ///
+    /// The driver is called outside the kernel lock. Its `describe` is
+    /// documented as cheap and pure, but a lock held across foreign code is
+    /// a deadlock waiting for a driver that reaches back in.
+    pub(crate) fn describe(
+        &self,
+        from: AgentId,
+        via: Capability,
+    ) -> Result<Option<(DriverId, ToolSchema)>, KernelError> {
+        let (id, driver) = {
+            let inner = self.lock();
+            inner.ensure_ok()?;
+            let agent = inner.state.agent(from).ok_or(Refusal::UnknownAgent(from))?;
+            if !agent.ns.holds(via) {
+                return Err(Refusal::NotHeld {
+                    agent: from,
+                    cap: via,
+                }
+                .into());
+            }
+            let id = match inner.state.resolve(via) {
+                Some(Endpoint::Driver { id }) => id.clone(),
+                Some(_) => return Err(Refusal::Unroutable(via).into()),
+                None => return Err(Refusal::UnknownCapability(via).into()),
+            };
+            let driver = inner
+                .drivers
+                .get(&id)
+                .map(Arc::clone)
+                .ok_or(Refusal::Unroutable(via))?;
+            (id, driver)
+        };
+        Ok(driver.describe().map(|schema| (id, schema)))
     }
 
     pub(crate) fn send(

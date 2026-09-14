@@ -51,6 +51,7 @@
 
 pub mod abi;
 pub mod blob;
+pub mod bridge;
 pub mod driver;
 pub mod kernel;
 pub mod log;
