@@ -62,18 +62,17 @@
 mod estimate;
 mod wire;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 use tau_kernel::abi::{Budget, Consumption, Corr};
-use tau_kernel::bridge::{
-    ErrorKind, ModelError, ModelReply, ModelRequest, StopReason, Usage, VERSION,
-};
+use tau_kernel::bridge::{ErrorKind, ModelError, ModelReply, ModelRequest, Usage, VERSION};
 use tau_kernel::driver::Driver;
 use tau_kernel::kernel::{BoxFuture, Delivery};
 use tokio::sync::Notify;
+
+use super::transport::{encode, error_reply, Exchange, Transport};
 
 // The provider-neutral parts, re-exported so the paths this module always
 // had keep resolving. Their home is `model` and `model::ceiling`.
@@ -210,37 +209,8 @@ struct Inner {
     endpoint: reqwest::Url,
     /// `/v1/messages/count_tokens`, used in [`InputEstimate::CountTokens`].
     count_endpoint: reqwest::Url,
-    client: reqwest::Client,
-    flights: Mutex<Flights>,
-}
-
-/// The calls `abandon` can reach. Ordered maps, not hashed: the workspace
-/// forbids the latter, and these are never large.
-#[derive(Debug, Default)]
-struct Flights {
-    /// corr → the signal `abandon` pulls. An entry lives exactly as long as
-    /// the call: [`Flight`] removes it on drop.
-    open: BTreeMap<Corr, Arc<Notify>>,
-    /// Abandoned before the driver saw the request. The kernel computes
-    /// phase two of `cancel` from the sender's open corrs, which include a
-    /// delivery still queued for this driver, so `abandon` can precede
-    /// `handle`. A corr is never reused within a run, so remembering it is
-    /// safe; the call it names answers `transport` without going out.
-    abandoned_early: BTreeSet<Corr>,
-}
-
-/// One call's registration, removed when the call ends however it ends —
-/// including a driver task torn down at shutdown.
-struct Flight {
-    inner: Arc<Inner>,
-    corr: Corr,
-    notify: Arc<Notify>,
-}
-
-impl Drop for Flight {
-    fn drop(&mut self) {
-        self.inner.lock_flights().open.remove(&self.corr);
-    }
+    /// The client, the headers, the timeout and the flight registry.
+    transport: Transport,
 }
 
 impl AnthropicDriver {
@@ -252,28 +222,20 @@ impl AnthropicDriver {
     /// [`ConfigError`], as described on each variant.
     pub fn new(config: AnthropicConfig) -> Result<Self, ConfigError> {
         let ceiling = config.ceiling()?;
-        let base = config.base_url.trim_end_matches('/');
-        let parse = |raw: String| {
-            reqwest::Url::parse(&raw).map_err(|e| ConfigError::BadBaseUrl {
-                url: config.base_url.clone(),
-                reason: e.to_string(),
-            })
-        };
-        let endpoint = parse(format!("{base}/v1/messages"))?;
-        let count_endpoint = parse(format!("{base}/v1/messages/count_tokens"))?;
-        // No client-side timeout: the driver's own `tokio::time::timeout`
-        // is the one that turns into `error.transport`.
-        let client = reqwest::Client::builder()
-            .build()
-            .map_err(|e| ConfigError::Client(e.to_string()))?;
+        let endpoint = Transport::endpoint(&config.base_url, "/v1/messages")?;
+        let count_endpoint = Transport::endpoint(&config.base_url, "/v1/messages/count_tokens")?;
+        let headers = vec![
+            ("x-api-key", config.api_key.expose().to_owned()),
+            ("anthropic-version", API_VERSION.to_owned()),
+        ];
+        let transport = Transport::new(headers, config.timeout)?;
         Ok(Self {
             inner: Arc::new(Inner {
                 config,
                 ceiling,
                 endpoint,
                 count_endpoint,
-                client,
-                flights: Mutex::new(Flights::default()),
+                transport,
             }),
         })
     }
@@ -294,7 +256,7 @@ impl AnthropicDriver {
     /// How many calls are in flight right now.
     #[must_use]
     pub fn in_flight(&self) -> usize {
-        self.inner.lock_flights().open.len()
+        self.inner.transport.in_flight()
     }
 }
 
@@ -302,56 +264,21 @@ impl Driver for AnthropicDriver {
     fn handle(&self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
         // Registered now, not when the future is first polled: `abandon`
         // may arrive in between, and it must find the entry.
-        let flight = self.inner.enter(request.corr);
+        let inner = Arc::clone(&self.inner);
+        let flight = inner.transport.enter(request.corr);
         Box::pin(async move {
-            let (reply, consumed) = flight.inner.answer(&request.payload, &flight.notify).await;
+            let (reply, consumed) = inner.answer(&request.payload, flight.notify()).await;
             drop(flight);
             (encode(&reply), consumed)
         })
     }
 
     fn abandon(&self, corr: Corr) {
-        let mut flights = self.inner.lock_flights();
-        match flights.open.get(&corr) {
-            // A permit is stored if nobody is waiting yet, so an abandon that
-            // lands before the `select!` is reached still takes effect.
-            Some(notify) => notify.notify_one(),
-            None => {
-                flights.abandoned_early.insert(corr);
-            }
-        }
+        self.inner.transport.abandon(corr);
     }
-}
-
-/// What one HTTP exchange produced, before mapping.
-enum Exchange {
-    /// The provider answered; here is the status and the body.
-    Answered { status: u16, body: Vec<u8> },
-    /// It did not: connection, timeout, or abandon.
-    Lost(String),
 }
 
 impl Inner {
-    fn lock_flights(&self) -> std::sync::MutexGuard<'_, Flights> {
-        self.flights.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn enter(self: &Arc<Self>, corr: Corr) -> Flight {
-        let notify = Arc::new(Notify::new());
-        {
-            let mut flights = self.lock_flights();
-            if flights.abandoned_early.remove(&corr) {
-                notify.notify_one();
-            }
-            flights.open.insert(corr, Arc::clone(&notify));
-        }
-        Flight {
-            inner: Arc::clone(self),
-            corr,
-            notify,
-        }
-    }
-
     /// The whole pipeline: parse, refuse or map, size the input (locally or
     /// by asking the provider), call, map back.
     async fn answer(&self, payload: &[u8], notify: &Notify) -> (ModelReply, Consumption) {
@@ -408,11 +335,7 @@ impl Inner {
             );
         }
 
-        let exchange = tokio::select! {
-            exchange = self.post(&self.endpoint, bytes) => exchange,
-            () = notify.notified() => Exchange::Lost("abandoned by cancel".to_owned()),
-        };
-        match exchange {
+        match self.transport.exchange(&self.endpoint, bytes, notify).await {
             Exchange::Lost(message) => self.refuse(ErrorKind::Transport, message),
             Exchange::Answered { status, body } if (200..300).contains(&status) => {
                 self.map_answer(&body)
@@ -432,11 +355,11 @@ impl Inner {
                 kind: ErrorKind::Unsupported,
                 message: format!("count request does not serialize: {e}"),
             })?;
-        let exchange = tokio::select! {
-            exchange = self.post(&self.count_endpoint, bytes) => exchange,
-            () = notify.notified() => Exchange::Lost("abandoned by cancel".to_owned()),
-        };
-        match exchange {
+        match self
+            .transport
+            .exchange(&self.count_endpoint, bytes, notify)
+            .await
+        {
             Exchange::Lost(message) => Err(ModelError {
                 kind: ErrorKind::Transport,
                 message,
@@ -455,33 +378,6 @@ impl Inner {
                 kind: ErrorKind::Provider,
                 message: provider_message(status, &body),
             }),
-        }
-    }
-
-    async fn post(&self, endpoint: &reqwest::Url, bytes: Vec<u8>) -> Exchange {
-        let send = self
-            .client
-            .post(endpoint.clone())
-            .header("content-type", "application/json")
-            .header("x-api-key", self.config.api_key.expose())
-            .header("anthropic-version", API_VERSION)
-            .body(bytes)
-            .send();
-        let response = match tokio::time::timeout(self.config.timeout, send).await {
-            Ok(Ok(response)) => response,
-            Ok(Err(e)) => return Exchange::Lost(format!("request failed: {}", without_url(e))),
-            Err(_elapsed) => {
-                return Exchange::Lost(format!("no answer within {:?}", self.config.timeout))
-            }
-        };
-        let status = response.status().as_u16();
-        match tokio::time::timeout(self.config.timeout, response.bytes()).await {
-            Ok(Ok(body)) => Exchange::Answered {
-                status,
-                body: body.to_vec(),
-            },
-            Ok(Err(e)) => Exchange::Lost(format!("body failed: {}", without_url(e))),
-            Err(_elapsed) => Exchange::Lost(format!("no body within {:?}", self.config.timeout)),
         }
     }
 
@@ -513,7 +409,7 @@ impl Inner {
         let response: wire::Response = match serde_json::from_value(value) {
             Ok(response) => response,
             Err(e) => {
-                let reply = self.error_reply(
+                let reply = error_reply(
                     ErrorKind::Provider,
                     format!("HTTP 200 body could not be mapped: {e}"),
                     model,
@@ -524,10 +420,7 @@ impl Inner {
         };
         match wire::to_bridge(&response, VERSION) {
             Ok(reply) => (reply, consumed),
-            Err(err) => (
-                self.error_reply(err.kind, err.message, model, usage),
-                consumed,
-            ),
+            Err(err) => (error_reply(err.kind, err.message, model, usage), consumed),
         }
     }
 
@@ -536,25 +429,9 @@ impl Inner {
     fn refuse(&self, kind: ErrorKind, message: String) -> (ModelReply, Consumption) {
         let model = Some(self.config.model.clone());
         (
-            self.error_reply(kind, message, model, Usage::default()),
+            error_reply(kind, message, model, Usage::default()),
             Consumption::none(),
         )
-    }
-
-    fn error_reply(
-        &self,
-        kind: ErrorKind,
-        message: String,
-        model: Option<String>,
-        usage: Usage,
-    ) -> ModelReply {
-        ModelReply {
-            v: VERSION,
-            model,
-            content: Vec::new(),
-            stop: StopReason::Error(ModelError { kind, message }),
-            usage,
-        }
     }
 }
 
@@ -572,25 +449,6 @@ fn provider_message(status: u16, body: &[u8]) -> String {
             format!("HTTP {status}: {short}")
         }
     }
-}
-
-/// reqwest's `Display` includes the URL, which may carry a query string the
-/// operator considers sensitive; the base URL is config, not something to
-/// echo into every agent's mailbox.
-fn without_url(e: reqwest::Error) -> String {
-    e.without_url().to_string()
-}
-
-/// A reply, as bytes. Serializing these types cannot fail in practice
-/// (`Value` inputs came from JSON); if it ever does, the reply says so
-/// instead of being empty.
-fn encode(reply: &ModelReply) -> Vec<u8> {
-    serde_json::to_vec(reply).unwrap_or_else(|_| {
-        format!(
-            r#"{{"v":{VERSION},"content":[],"stop":{{"error":{{"kind":"provider","message":"reply could not be serialized"}}}},"usage":{{"input_tokens":0,"output_tokens":0}}}}"#
-        )
-        .into_bytes()
-    })
 }
 
 #[cfg(test)]
@@ -676,18 +534,5 @@ mod tests {
             provider_message(502, b"<html>bad gateway</html>"),
             "HTTP 502: <html>bad gateway</html>"
         );
-    }
-
-    #[test]
-    fn encode_never_returns_nothing() {
-        let reply = ModelReply {
-            v: VERSION,
-            model: None,
-            content: vec![],
-            stop: StopReason::EndTurn,
-            usage: Usage::default(),
-        };
-        let parsed: ModelReply = serde_json::from_slice(&encode(&reply)).unwrap();
-        assert_eq!(parsed, reply);
     }
 }
