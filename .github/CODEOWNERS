@@ -3,6 +3,9 @@
 # Every other gate on kernel/src/abi/ is mechanical (the CI diff gate, the wire
 # snapshots). This one is a human, on purpose — the gates catch *that* the
 # surface changed; a person has to decide whether it should have.
+#
+# Not yet binding: the main ruleset has require_code_owner_review off until a
+# second maintainer exists (docs/adr/0004-abi-freeze.md, gate 1; issue #24).
 /kernel/src/abi/          @LEBOCQTitouan
 
 # The gates themselves. A pull request that can edit its own guard is not gated.
