@@ -9,6 +9,10 @@
     {
       "role": "assistant",
       "content": [
+        { "type": "thinking", "provider": "anthropic",
+          "data": { "type": "thinking", "thinking": "", "signature": "EqQBCkYIBxgCKkBtX3Rob3VnaHRfc2ln" } },
+        { "type": "thinking", "provider": "anthropic",
+          "data": { "type": "redacted_thinking", "data": "EmwKAhgBEgxyZWRhY3RlZC1ibG9i" } },
         { "type": "text", "text": "Let me look." },
         { "type": "tool_call", "id": "call_1", "name": "store", "input": { "op": "read", "key": "a" } }
       ]
@@ -33,6 +37,5 @@
       }
     }
   ],
-  "max_tokens": 1024,
-  "sampling": { "temperature": 0.0, "seed": 42 }
+  "max_tokens": 1024
 }

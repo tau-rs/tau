@@ -8,17 +8,21 @@
 //! | `text` block | `text` block |
 //! | `tool_call` block | `tool_use` (`id`, `name`, `input`) |
 //! | `tool_result` block | `tool_result` (`tool_use_id`, `content`, `is_error`) |
+//! | `thinking` block, `provider: anthropic` | `data` verbatim, in place (reply: `thinking` / `redacted_thinking` wrapped, in order) |
+//! | `thinking` block, other provider | *dropped* (ADR-0007 §2) |
 //! | `tools[]` | `tools[]` (`name`, `description`, `input_schema`) |
 //! | `max_tokens` | `max_tokens`, clamped |
 //! | `sampling.seed` | *unsupported* → `error.unsupported` |
 //! | `sampling.stop_sequences` | `stop_sequences` |
 //! | `stop` | `end_turn`, `tool_use`→`tool_call`, `max_tokens`, `stop_sequence`, `refusal` |
 //! | `usage` | `usage.input_tokens`, `usage.output_tokens` |
+//! | *config* `thinking: Disabled` | `thinking: {"type": "disabled"}` |
 //!
-//! `pause_turn` only arises with server-side tools, which v1 does not
-//! declare; one that arrives anyway is `error.provider`. `thinking` blocks in
-//! a reply have no slot in bridge v1 (thinking is driver configuration, not
-//! in v1) and are dropped; #42 tracks the amendment.
+//! `pause_turn` only arises with server-side tools, which the bridge does
+//! not declare; one that arrives anyway is `error.provider`. Thinking blocks
+//! are sealed: the reply wraps each one as the provider wrote it, and the
+//! request unwraps it and sends it back unchanged, because the provider
+//! rejects a turn whose thinking was edited or dropped (ADR-0007).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +31,10 @@ use tau_kernel::bridge::{
 };
 
 use super::estimate::clamp_max_tokens;
+use super::ThinkingMode;
+
+/// The `provider` tag this driver writes on, and replays, thinking blocks.
+pub const PROVIDER: &str = "anthropic";
 
 /// One Messages API request body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -44,6 +52,16 @@ pub(super) struct Request {
     pub(super) top_p: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) stop_sequences: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) thinking: Option<ThinkingParam>,
+}
+
+/// The `thinking` request parameter. Only the form the config can ask for:
+/// omitted means the model's default, which is thinking on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum ThinkingParam {
+    Disabled,
 }
 
 /// The body of `POST /v1/messages/count_tokens`: the main body minus what
@@ -59,6 +77,10 @@ pub(super) struct CountRequest<'a> {
     pub(super) messages: &'a [RequestMessage],
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub(super) tools: &'a [Tool],
+    /// Thinking changes the prompt the provider builds, so the count
+    /// carries the same setting as the call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) thinking: Option<&'a ThinkingParam>,
 }
 
 impl<'a> From<&'a Request> for CountRequest<'a> {
@@ -68,6 +90,7 @@ impl<'a> From<&'a Request> for CountRequest<'a> {
             system: request.system.as_deref(),
             messages: &request.messages,
             tools: &request.tools,
+            thinking: request.thinking.as_ref(),
         }
     }
 }
@@ -103,6 +126,10 @@ pub(super) enum RequestBlock {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         is_error: bool,
     },
+    /// A sealed block sent back as the provider wrote it: `thinking` or
+    /// `redacted_thinking`, unwrapped from a bridge `thinking` block.
+    #[serde(untagged)]
+    Sealed(Value),
 }
 
 /// A tool definition, as the provider wants it.
@@ -114,18 +141,23 @@ pub(super) struct Tool {
 }
 
 /// One Messages API response body (HTTP 200).
+///
+/// `content` is kept raw: a thinking block goes into the bridge exactly as
+/// it arrived, so the value is what is wrapped, not a re-serialization of
+/// a typed copy of it.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub(super) struct Response {
     #[serde(default)]
     pub(super) model: Option<String>,
     #[serde(default)]
-    pub(super) content: Vec<ResponseBlock>,
+    pub(super) content: Vec<Value>,
     #[serde(default)]
     pub(super) stop_reason: Option<String>,
     pub(super) usage: ResponseUsage,
 }
 
-/// A content block on the way out. Anything v1 has no slot for is `Other`.
+/// A content block on the way out, by its tag. Anything the bridge has no
+/// slot for is `Other`.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum ResponseBlock {
@@ -137,8 +169,8 @@ pub(super) enum ResponseBlock {
         name: String,
         input: Value,
     },
-    /// Thinking and its redacted form: driver configuration in v1, no bridge
-    /// slot, dropped on the way out.
+    /// Thinking and its redacted form: sealed into a bridge `thinking`
+    /// block, the raw value verbatim (ADR-0007). The fields are not read.
     Thinking,
     RedactedThinking,
     #[serde(other)]
@@ -183,12 +215,15 @@ pub(super) struct ErrorDetail {
 ///
 /// Refuses (`unsupported`) a present `sampling.seed`: Anthropic has no seed,
 /// and a seed that was quietly ignored is a branch that was quietly not
-/// controlled. `max_tokens` is clamped to `max_max_tokens`. The bridge
-/// version is the caller's check; this function assumes a v1 request.
+/// controlled. `max_tokens` is clamped to `max_max_tokens`. A `thinking`
+/// block of this provider is unwrapped and sent verbatim; one of another
+/// provider is dropped (ADR-0007 §2). The bridge version is the caller's
+/// check; this function assumes a current request.
 pub(super) fn to_provider(
     request: &ModelRequest,
     model: &str,
     max_max_tokens: u32,
+    thinking: ThinkingMode,
 ) -> Result<Request, ModelError> {
     let sampling = request.sampling.clone().unwrap_or_default();
     if sampling.seed.is_some() {
@@ -216,6 +251,10 @@ pub(super) fn to_provider(
         temperature: sampling.temperature,
         top_p: sampling.top_p,
         stop_sequences: sampling.stop_sequences,
+        thinking: match thinking {
+            ThinkingMode::ProviderDefault => None,
+            ThinkingMode::Disabled => Some(ThinkingParam::Disabled),
+        },
     })
 }
 
@@ -227,24 +266,29 @@ fn message_to_provider(message: &Message) -> RequestMessage {
     let content = message
         .content
         .iter()
-        .map(|block| match block {
-            Content::Text { text } => RequestBlock::Text { text: text.clone() },
-            Content::ToolCall { id, name, input } => RequestBlock::ToolUse {
+        .filter_map(|block| match block {
+            Content::Text { text } => Some(RequestBlock::Text { text: text.clone() }),
+            Content::ToolCall { id, name, input } => Some(RequestBlock::ToolUse {
                 id: id.clone(),
                 name: name.clone(),
                 input: input.clone(),
-            },
+            }),
             // `error_kind` has no provider slot and is dropped, as §4 says.
             Content::ToolResult {
                 call_id,
                 content,
                 is_error,
                 error_kind: _,
-            } => RequestBlock::ToolResult {
+            } => Some(RequestBlock::ToolResult {
                 tool_use_id: call_id.clone(),
                 content: content.clone(),
                 is_error: *is_error,
-            },
+            }),
+            // Ours goes back exactly as it came; another provider's
+            // reasoning is unreadable here and is dropped (ADR-0007 §2).
+            Content::Thinking { provider, data } => {
+                (provider == PROVIDER).then(|| RequestBlock::Sealed(data.clone()))
+            }
         })
         .collect();
     RequestMessage {
@@ -260,18 +304,23 @@ fn message_to_provider(message: &Message) -> RequestMessage {
 /// either way; the caller bills it regardless of which arm this returns.
 pub(super) fn to_bridge(response: &Response, v: u16) -> Result<ModelReply, ModelError> {
     let mut content = Vec::with_capacity(response.content.len());
-    for block in &response.content {
+    for raw in &response.content {
+        let block: ResponseBlock = serde_json::from_value(raw.clone())
+            .map_err(|e| provider(&format!("response content block could not be read: {e}")))?;
         match block {
-            ResponseBlock::Text { text } => content.push(Content::Text { text: text.clone() }),
-            ResponseBlock::ToolUse { id, name, input } => content.push(Content::ToolCall {
-                id: id.clone(),
-                name: name.clone(),
-                input: input.clone(),
-            }),
-            ResponseBlock::Thinking | ResponseBlock::RedactedThinking => {}
+            ResponseBlock::Text { text } => content.push(Content::Text { text }),
+            ResponseBlock::ToolUse { id, name, input } => {
+                content.push(Content::ToolCall { id, name, input });
+            }
+            ResponseBlock::Thinking | ResponseBlock::RedactedThinking => {
+                content.push(Content::Thinking {
+                    provider: PROVIDER.to_owned(),
+                    data: raw.clone(),
+                });
+            }
             ResponseBlock::Other => {
                 return Err(provider(
-                    "response carries a content block bridge v1 has no slot for",
+                    "response carries a content block the bridge has no slot for",
                 ));
             }
         }
@@ -321,6 +370,16 @@ mod tests {
     const ANTHROPIC_REQUEST: &str = include_str!("../../../tests/fixtures/anthropic/request.json");
     const ANTHROPIC_RESPONSE: &str =
         include_str!("../../../tests/fixtures/anthropic/response-tool-use.json");
+    const REQUEST_THINKING: &str =
+        include_str!("../../../../kernel/tests/fixtures/bridge/request-thinking.json");
+    const REPLY_THINKING: &str =
+        include_str!("../../../../kernel/tests/fixtures/bridge/reply-thinking.json");
+    const ANTHROPIC_REQUEST_THINKING: &str =
+        include_str!("../../../tests/fixtures/anthropic/request-thinking.json");
+    const ANTHROPIC_RESPONSE_THINKING: &str =
+        include_str!("../../../tests/fixtures/anthropic/response-thinking.json");
+
+    const DEFAULT: ThinkingMode = ThinkingMode::ProviderDefault;
 
     fn bridge_request() -> ModelRequest {
         serde_json::from_str(REQUEST).unwrap()
@@ -328,7 +387,7 @@ mod tests {
 
     #[test]
     fn the_adr_example_request_is_refused_for_its_seed() {
-        let err = to_provider(&bridge_request(), "claude-opus-5", 1_024).unwrap_err();
+        let err = to_provider(&bridge_request(), "claude-opus-5", 1_024, DEFAULT).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Unsupported);
         assert!(err.message.contains("seed"), "{}", err.message);
     }
@@ -337,7 +396,7 @@ mod tests {
     fn the_adr_example_request_minus_seed_maps_to_the_recorded_provider_body() {
         let mut request = bridge_request();
         request.sampling.as_mut().unwrap().seed = None;
-        let body = to_provider(&request, "claude-opus-5", 1_024).unwrap();
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
         let expected: Value = serde_json::from_str(ANTHROPIC_REQUEST).unwrap();
         assert_eq!(serde_json::to_value(&body).unwrap(), expected);
         let back: Request = serde_json::from_value(expected).unwrap();
@@ -352,7 +411,7 @@ mod tests {
         sampling.top_p = Some(0.5);
         sampling.stop_sequences = vec!["END".into()];
         request.max_tokens = 4_096;
-        let body = to_provider(&request, "m", 1_024).unwrap();
+        let body = to_provider(&request, "m", 1_024, DEFAULT).unwrap();
         assert_eq!(body.max_tokens, 1_024);
         assert_eq!(body.temperature, Some(0.0));
         assert_eq!(body.top_p, Some(0.5));
@@ -372,7 +431,7 @@ mod tests {
             max_tokens: 8,
             sampling: None,
         };
-        let body = serde_json::to_value(to_provider(&request, "m", 8).unwrap()).unwrap();
+        let body = serde_json::to_value(to_provider(&request, "m", 8, DEFAULT).unwrap()).unwrap();
         assert_eq!(
             body,
             json!({
@@ -390,7 +449,7 @@ mod tests {
         sampling.seed = None;
         sampling.top_p = Some(0.5);
         sampling.stop_sequences = vec!["END".into()];
-        let body = to_provider(&request, "claude-opus-5", 1_024).unwrap();
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
         let count = serde_json::to_value(CountRequest::from(&body)).unwrap();
 
         let mut expected: Value = serde_json::from_str(ANTHROPIC_REQUEST).unwrap();
@@ -419,6 +478,7 @@ mod tests {
             temperature: None,
             top_p: None,
             stop_sequences: vec![],
+            thinking: None,
         };
         let count = serde_json::to_value(CountRequest::from(&body)).unwrap();
         assert_eq!(count, json!({"model": "m", "messages": []}));
@@ -478,18 +538,106 @@ mod tests {
     }
 
     #[test]
-    fn thinking_blocks_are_dropped_and_unknown_blocks_refused() {
-        let content = json!([
-            {"type": "thinking", "thinking": "", "signature": "abc"},
-            {"type": "redacted_thinking", "data": "xyz"},
-            {"type": "text", "text": "ok"}
-        ]);
+    fn thinking_blocks_are_sealed_verbatim_and_unknown_blocks_refused() {
+        // Whatever fields the provider puts in, including ones this driver
+        // has never heard of, the sealed block is the raw value.
+        let thinking =
+            json!({"type": "thinking", "thinking": "", "signature": "abc", "new_field": 1});
+        let redacted = json!({"type": "redacted_thinking", "data": "xyz"});
+        let content = json!([thinking, redacted, {"type": "text", "text": "ok"}]);
         let reply = to_bridge(&response(Some("end_turn"), content), VERSION).unwrap();
-        assert_eq!(reply.content, [Content::Text { text: "ok".into() }]);
+        assert_eq!(
+            reply.content,
+            [
+                Content::Thinking {
+                    provider: "anthropic".into(),
+                    data: thinking
+                },
+                Content::Thinking {
+                    provider: "anthropic".into(),
+                    data: redacted
+                },
+                Content::Text { text: "ok".into() },
+            ]
+        );
 
         let content = json!([{"type": "server_tool_use", "id": "x", "name": "web_search"}]);
         let err = to_bridge(&response(Some("end_turn"), content), VERSION).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Provider);
+
+        // A block with a known tag but the wrong shape is unreadable, too.
+        let content = json!([{"type": "text", "no_text": true}]);
+        let err = to_bridge(&response(Some("end_turn"), content), VERSION).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Provider);
+    }
+
+    #[test]
+    fn the_recorded_thinking_response_maps_to_the_adr_0007_reply_fixture() {
+        let response: Response = serde_json::from_str(ANTHROPIC_RESPONSE_THINKING).unwrap();
+        let reply = to_bridge(&response, VERSION).unwrap();
+        let expected: Value = serde_json::from_str(REPLY_THINKING).unwrap();
+        assert_eq!(serde_json::to_value(&reply).unwrap(), expected);
+    }
+
+    #[test]
+    fn a_request_replays_our_thinking_blocks_in_place_and_drops_foreign_ones() {
+        let mut request: ModelRequest = serde_json::from_str(REQUEST_THINKING).unwrap();
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
+        let expected: Value = serde_json::from_str(ANTHROPIC_REQUEST_THINKING).unwrap();
+        assert_eq!(serde_json::to_value(&body).unwrap(), expected);
+        let back: Request = serde_json::from_value(expected).unwrap();
+        assert_eq!(
+            back, body,
+            "the provider body round-trips, sealed blocks included"
+        );
+
+        // The same two blocks, but written by some other provider's driver:
+        // this driver cannot replay them, and the provider would reject
+        // them, so they are dropped and the turn is otherwise unchanged.
+        let assistant = request.messages.get_mut(1).unwrap();
+        for block in &mut assistant.content {
+            if let Content::Thinking { provider, .. } = block {
+                *provider = "someone-else".into();
+            }
+        }
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
+        let turn = body.messages.get(1).unwrap();
+        assert!(
+            !turn
+                .content
+                .iter()
+                .any(|b| matches!(b, RequestBlock::Sealed(_))),
+            "{turn:?}"
+        );
+        assert_eq!(turn.content.len(), 2, "text and tool_use remain");
+    }
+
+    #[test]
+    fn thinking_off_is_one_parameter_and_the_default_is_none() {
+        let mut request = bridge_request();
+        request.sampling = None;
+        let on = to_provider(&request, "m", 8, ThinkingMode::ProviderDefault).unwrap();
+        assert_eq!(on.thinking, None);
+        assert!(
+            serde_json::to_value(&on).unwrap().get("thinking").is_none(),
+            "omitted, not null"
+        );
+        let off = to_provider(&request, "m", 8, ThinkingMode::Disabled).unwrap();
+        assert_eq!(
+            serde_json::to_value(&off).unwrap().get("thinking"),
+            Some(&json!({"type": "disabled"}))
+        );
+        // The count is sized with the same setting the call is made with.
+        assert_eq!(
+            serde_json::to_value(CountRequest::from(&off))
+                .unwrap()
+                .get("thinking"),
+            Some(&json!({"type": "disabled"}))
+        );
+        assert!(serde_json::to_value(CountRequest::from(&on))
+            .unwrap()
+            .get("thinking")
+            .is_none());
     }
 
     #[test]

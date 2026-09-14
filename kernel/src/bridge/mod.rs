@@ -29,8 +29,9 @@
 //!
 //! A [`ModelRequest`] carries the conversation, the projected tools, and the
 //! output cap; a [`ModelReply`] carries what the model said, why it stopped,
-//! and what it used. Tool calls and results are [`Content`] blocks inside
-//! both. Which tools exist is answered by the driver, not this module: see
+//! and what it used. Tool calls, results, and the model's sealed thinking
+//! (ADR-0007) are [`Content`] blocks inside both. Which tools exist is
+//! answered by the driver, not this module: see
 //! [`Driver::describe`](crate::driver::Driver::describe).
 //!
 //! [`ABI`]: crate::abi::ABI
@@ -43,6 +44,7 @@ pub use request::{Content, Message, ModelRequest, Role, Sampling, ToolDef, ToolE
 
 /// The bridge version stamped on every [`ModelRequest`] and [`ModelReply`].
 ///
-/// A driver that receives a request stamped with a version it does not
-/// implement replies [`ErrorKind::Unsupported`]; it never guesses.
-pub const VERSION: u16 = 1;
+/// `2` since ADR-0007 added the `thinking` block. A driver that receives a
+/// request stamped with a version it does not implement replies
+/// [`ErrorKind::Unsupported`]; it never guesses.
+pub const VERSION: u16 = 2;

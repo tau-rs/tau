@@ -1,5 +1,5 @@
 {
-  "v": 1,
+  "v": 2,
   "model": "claude-opus-5",
   "content": [],
   "stop": { "error": { "kind": "over_ceiling", "message": "input estimated at 9210 tokens, bound is 8000" } },

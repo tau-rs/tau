@@ -60,12 +60,30 @@ pub enum Role {
 
 /// A block of content inside a [`Message`] or a reply.
 ///
-/// Three kinds. A new kind is a bridge version bump, so the enum is
+/// Four kinds. A new kind is a bridge version bump, so the enum is
 /// exhaustive on purpose: a loop that matches on it should be told by the
 /// compiler when the contract grows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
+    /// The model's reasoning, as the provider returned it, sealed
+    /// (ADR-0007).
+    ///
+    /// Opaque: the loop carries it back in the assistant turn without
+    /// reading it, because the provider requires its thinking blocks back
+    /// unchanged on the next call and rejects a turn that edits or drops
+    /// them. A driver of the same `provider` unwraps `data` and sends it
+    /// verbatim, in place; a driver of another provider drops the block,
+    /// which is what the provider itself does with reasoning its model
+    /// cannot read.
+    Thinking {
+        /// The wire format `data` is written in, named by the driver that
+        /// produced it (`anthropic` for the Messages API). A provider, not
+        /// a model: the provider decides per model what it can read.
+        provider: String,
+        /// The provider's block, verbatim.
+        data: Value,
+    },
     /// Plain text.
     Text {
         /// The text.
