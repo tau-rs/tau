@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "libtau", "sim"]
+members = ["kernel", "drivers", "libtau", "sim"]
 
 [workspace.package]
 version      = "0.0.0"
@@ -16,6 +16,9 @@ serde_json = "1"
 sha2       = "0.10"
 thiserror  = "2"
 tokio      = { version = "1", default-features = false }
+# rustls with the platform root store: reqwest's bundled `webpki-roots` is
+# CDLA-Permissive-2.0, which deny.toml does not allow; the native store is not.
+reqwest    = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 insta      = { version = "1", features = ["json"] }
 # JSON Schema (draft 2020-12) validation for the tool loop's `bad_args`
 # (ADR-0006 §4). No HTTP resolver, no network: schemas come from `describe()`.

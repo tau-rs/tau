@@ -1,0 +1,38 @@
+{
+  "model": "claude-opus-5",
+  "max_tokens": 1024,
+  "system": "You are a research assistant with a key-value store.",
+  "messages": [
+    {
+      "role": "user",
+      "content": [{ "type": "text", "text": "What is stored under key a?" }]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "Let me look." },
+        { "type": "tool_use", "id": "call_1", "name": "store", "input": { "op": "read", "key": "a" } }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "call_1", "content": "hello" }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "store",
+      "description": "Read or write the run's key-value store.",
+      "input_schema": {
+        "type": "object",
+        "oneOf": [
+          { "properties": { "op": { "const": "read" }, "key": { "type": "string" } }, "required": ["op", "key"] },
+          { "properties": { "op": { "const": "write" }, "key": { "type": "string" }, "value": { "type": "string" } }, "required": ["op", "key", "value"] }
+        ]
+      }
+    }
+  ],
+  "temperature": 0.0
+}

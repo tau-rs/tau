@@ -1,0 +1,35 @@
+[package]
+name        = "tau-drivers"
+description = "Drivers for the tau kernel: the border guards between envelopes and the world."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+name = "tau_drivers"
+
+[features]
+default   = ["anthropic"]
+# The Anthropic Messages API model driver (ADR-0006 §6, Anthropic column).
+anthropic = ["dep:reqwest", "dep:tokio"]
+
+[dependencies]
+tau-kernel = { path = "../kernel", version = "0.0.0" }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+reqwest    = { workspace = true, optional = true }
+# This crate is the first tokio-native consumer of the kernel; the kernel
+# itself stays executor-agnostic (ADR-0003). `select!` needs `macros`.
+tokio      = { workspace = true, features = ["sync", "time", "macros"], optional = true }
+
+[dev-dependencies]
+# The stub HTTP server the tests answer from, and the runtime that drives the
+# kernel in the integration tests.
+tokio      = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+
+[lints]
+workspace = true
