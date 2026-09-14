@@ -3,11 +3,11 @@
 //! The byte-level target finds framing bugs; this one starts past the
 //! framing. An `Arbitrary` shape mirroring ADR-0006 §3 is rendered to JSON
 //! that is always well-formed and often wrong in the ways a model or a
-//! misbehaving driver could be wrong: a `v` that is not 1, a `stop` nobody
+//! misbehaving driver could be wrong: a `v` this crate does not speak, a `stop` nobody
 //! defined, blocks of an unknown `type`, fields that do not exist, numbers
 //! at the edges of `u64`, and text repeated until it is large.
 //!
-//! What must hold: no panic; a reply that decodes carries `v == 1`; a
+//! What must hold: no panic; a reply that decodes carries the current `v`; a
 //! `Version` error names the `v` that was sent; and a reply that decodes
 //! survives a round trip.
 
@@ -22,6 +22,7 @@ use tau_kernel::bridge::VERSION;
 #[derive(Arbitrary, Debug)]
 enum Version {
     Current,
+    Previous,
     Zero,
     Next,
     Max,
@@ -35,6 +36,7 @@ impl Version {
     fn render(&self) -> Option<Value> {
         Some(match self {
             Self::Current => json!(VERSION),
+            Self::Previous => json!(VERSION.wrapping_sub(1)),
             Self::Zero => json!(0),
             Self::Next => json!(VERSION.wrapping_add(1)),
             Self::Max => json!(u16::MAX),
@@ -48,6 +50,10 @@ impl Version {
 
 #[derive(Arbitrary, Debug)]
 enum Block {
+    Thinking {
+        provider: String,
+        data: Leaf,
+    },
     Text {
         text: String,
         repeat: u8,
@@ -104,6 +110,9 @@ impl Leaf {
 impl Block {
     fn render(&self) -> Value {
         match self {
+            Self::Thinking { provider, data } => {
+                json!({ "type": "thinking", "provider": provider, "data": data.render() })
+            }
             Self::Text { text, repeat } => {
                 // Bounded: at most 255 copies of a fuzzer-sized string.
                 json!({ "type": "text", "text": text.repeat(usize::from(*repeat)) })

@@ -5,7 +5,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -21,6 +22,15 @@ pub(crate) struct Captured {
 }
 
 impl Captured {
+    /// The request path from the request line (`POST <path> HTTP/1.1`).
+    pub(crate) fn path(&self) -> &str {
+        self.head
+            .lines()
+            .next()
+            .and_then(|line| line.split(' ').nth(1))
+            .unwrap_or("")
+    }
+
     /// The value of header `name` (case-insensitive), if present.
     pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.head.lines().find_map(|line| {
@@ -43,6 +53,14 @@ pub(crate) enum Answer {
     /// Read the request, then hold the connection open until the client
     /// closes it, and signal `closed` when that happens.
     Hang(Arc<Notify>),
+    /// One `(status, body)` per connection, in order; a connection past the
+    /// end of the script gets a 500 so the test fails loudly.
+    Script(Arc<Mutex<VecDeque<(u16, String)>>>),
+}
+
+/// A [`Answer::Script`] over `answers`, in order.
+pub(crate) fn script(answers: impl IntoIterator<Item = (u16, String)>) -> Answer {
+    Answer::Script(Arc::new(Mutex::new(answers.into_iter().collect())))
 }
 
 /// A running stub.
@@ -53,8 +71,27 @@ pub(crate) struct Stub {
     pub(crate) captured: mpsc::UnboundedReceiver<Captured>,
 }
 
-/// Starts a stub that answers every connection with `answer`.
+/// Which answer a request path gets. `None` as the path is the catch-all.
+type Routes = Arc<Vec<(Option<&'static str>, Answer)>>;
+
+/// Starts a stub that answers every request, whatever its path, with
+/// `answer`.
 pub(crate) async fn start(answer: Answer) -> Stub {
+    serve(Arc::new(vec![(None, answer)])).await
+}
+
+/// Starts a stub that answers by exact request path. A path not listed
+/// gets a 404 with a JSON body, so a driver that hits the wrong endpoint
+/// fails loudly instead of being served the answer meant for another.
+pub(crate) async fn start_routed(routes: Vec<(&'static str, Answer)>) -> Stub {
+    let routes = routes
+        .into_iter()
+        .map(|(path, answer)| (Some(path), answer))
+        .collect();
+    serve(Arc::new(routes)).await
+}
+
+async fn serve(routes: Routes) -> Stub {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, captured) = mpsc::unbounded_channel();
@@ -64,8 +101,8 @@ pub(crate) async fn start(answer: Answer) -> Stub {
                 return;
             };
             let tx = tx.clone();
-            let answer = answer.clone();
-            tokio::spawn(read_request(stream, answer, tx));
+            let routes = Arc::clone(&routes);
+            tokio::spawn(read_request(stream, routes, tx));
         }
     });
     Stub {
@@ -84,7 +121,7 @@ pub(crate) async fn refused_base_url() -> String {
 
 async fn read_request(
     mut stream: TcpStream,
-    answer: Answer,
+    routes: Routes,
     tx: mpsc::UnboundedSender<Captured>,
 ) -> Option<()> {
     let mut buf = Vec::new();
@@ -117,13 +154,40 @@ async fn read_request(
         }
         body.extend_from_slice(chunk.get(..n)?);
     }
+    let captured = Captured { head, body };
+    let answer = routes
+        .iter()
+        .find(|(path, _)| path.is_none_or(|p| p == captured.path()))
+        .map(|(_, answer)| answer.clone())
+        .unwrap_or_else(|| {
+            Answer::Json(
+                404,
+                format!(
+                    r#"{{"type":"error","error":{{"type":"not_found_error","message":"no route for {}"}}}}"#,
+                    captured.path()
+                ),
+            )
+        });
     // Reported before answering: a `Hang` answer only ends when the client
     // goes away, and the test needs to know the request arrived before that.
-    let _ = tx.send(Captured { head, body });
+    let _ = tx.send(captured);
+    let answer = match answer {
+        Answer::Script(script) => {
+            let next = script.lock().unwrap().pop_front();
+            let (status, body) = next.unwrap_or((
+                500,
+                r#"{"type":"error","error":{"type":"stub","message":"script exhausted"}}"#.into(),
+            ));
+            Answer::Json(status, body)
+        }
+        other => other,
+    };
     match answer {
         Answer::Json(status, body) => {
             let reason = match status {
                 200 => "OK",
+                400 => "Bad Request",
+                404 => "Not Found",
                 429 => "Too Many Requests",
                 500 => "Internal Server Error",
                 529 => "Overloaded",
@@ -144,6 +208,7 @@ async fn read_request(
             let _ = stream.read(&mut scratch).await;
             closed.notify_one();
         }
+        Answer::Script(_) => unreachable!("resolved above"),
     }
     Some(())
 }

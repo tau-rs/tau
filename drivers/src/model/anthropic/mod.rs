@@ -20,11 +20,26 @@
 //! ```
 //!
 //! and the driver keeps that number honest from its side: it **refuses** a
-//! request whose estimated input exceeds the bound (`error.over_ceiling`,
-//! nothing sent) and **clamps** `max_tokens` to the maximum. The estimate is
-//! ⌈bytes × 2 ⁄ 5⌉ over the serialized provider body — bytes ÷ 3, then
-//! × 1.2, conservative for English and JSON. Prices are in microdollars per
-//! token at the *uncached* rate.
+//! request whose input exceeds the bound (`error.over_ceiling`, nothing sent
+//! to `/v1/messages`) and **clamps** `max_tokens` to the maximum. How the
+//! input is sized is [`AnthropicConfig::estimate`]:
+//!
+//! - [`InputEstimate::Bytes`], the default: ⌈bytes × 2 ⁄ 5⌉ over the
+//!   serialized provider body — bytes ÷ 3, then × 1.2, conservative for
+//!   English and JSON. No extra request.
+//! - [`InputEstimate::CountTokens`]: `POST /v1/messages/count_tokens` first,
+//!   with the same headers and the subset of the body that endpoint takes,
+//!   and the bound is checked against the exact `input_tokens` it answers.
+//!   The count is part of the same flight: it honours `abandon` and the
+//!   timeout like the call, and a count that fails ends the flight with the
+//!   same `error.transport` / `error.provider` the call would have given,
+//!   nothing sent to `/v1/messages`. It costs no tokens and no money, so it
+//!   is not in the reply's `Consumption`; `calls` is the kernel's dimension
+//!   and counts the one `send`. The timeout applies to each HTTP exchange,
+//!   so a flight in this mode may take up to twice `timeout` in the worst
+//!   case.
+//!
+//! Prices are in microdollars per token at the *uncached* rate.
 //!
 //! # What it refuses
 //!
@@ -40,8 +55,9 @@
 //! # What it does not do
 //!
 //! No retries — a retry is a second `send`, and that is the loop's call
-//! (#34). No token-counting endpoint yet (#32). No thinking controls:
-//! `thinking` blocks in a reply have no bridge slot and are dropped (#42).
+//! (#34). No effort control, and no thinking control beyond off
+//! ([`ThinkingMode`]): thinking blocks in a reply are sealed into the bridge
+//! and replayed unchanged (ADR-0007).
 
 mod estimate;
 mod wire;
@@ -60,7 +76,8 @@ use tau_kernel::driver::Driver;
 use tau_kernel::kernel::{BoxFuture, Delivery};
 use tokio::sync::Notify;
 
-pub use estimate::{clamp_max_tokens, tokens_for_bytes};
+pub use estimate::{clamp_max_tokens, tokens_for_bytes, InputEstimate};
+pub use wire::PROVIDER;
 
 /// Where the Messages API lives when the harness does not say otherwise.
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -117,8 +134,9 @@ pub struct AnthropicConfig {
     /// The API's base URL. [`DEFAULT_BASE_URL`] in production; a local stub
     /// in tests.
     pub base_url: String,
-    /// The largest prompt the driver will send, in estimated tokens. A
-    /// request estimated above it is refused with `error.over_ceiling`.
+    /// The largest prompt the driver will send, in tokens as
+    /// [`estimate`](Self::estimate) sizes them. A request above it is refused
+    /// with `error.over_ceiling`.
     pub input_bound: u64,
     /// The largest `max_tokens` the driver will set. A request asking for
     /// more is clamped.
@@ -127,14 +145,38 @@ pub struct AnthropicConfig {
     pub input_price_microusd: u64,
     /// Output price in microdollars per token.
     pub output_price_microusd: u64,
-    /// How long one call may take before it is `error.transport`. Enforced
-    /// with `tokio::time`, never by reading a clock.
+    /// How long one HTTP exchange may take before it is `error.transport`.
+    /// Enforced with `tokio::time`, never by reading a clock. In
+    /// [`InputEstimate::CountTokens`] mode the count and the call each get
+    /// the full timeout.
     pub timeout: Duration,
+    /// How the prompt is sized against `input_bound`.
+    /// [`InputEstimate::Bytes`] from [`new`](Self::new).
+    pub estimate: InputEstimate,
+    /// Whether the model thinks. Driver configuration, not the request's
+    /// (ADR-0006 §2, ADR-0007 §5).
+    pub thinking: ThinkingMode,
+}
+
+/// Whether the model thinks (ADR-0007 §5).
+///
+/// Off is the only control: no effort, no budget. A model that does not
+/// allow off (Claude Fable and Mythos, at the time of writing) answers 400,
+/// which the driver reports as `error.provider` with the provider's text —
+/// a harness misconfiguration, surfaced on the first call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThinkingMode {
+    /// Omit the parameter: the model's default, which is thinking on for
+    /// every current model.
+    #[default]
+    ProviderDefault,
+    /// Send `thinking: {"type": "disabled"}`.
+    Disabled,
 }
 
 impl AnthropicConfig {
-    /// A config with the production base URL and the default timeout; the
-    /// numbers that make the ceiling are yours to set.
+    /// A config with the production base URL, the default timeout and the
+    /// bytes estimate; the numbers that make the ceiling are yours to set.
     #[must_use]
     pub fn new(
         model: impl Into<String>,
@@ -153,6 +195,8 @@ impl AnthropicConfig {
             input_price_microusd,
             output_price_microusd,
             timeout: DEFAULT_TIMEOUT,
+            estimate: InputEstimate::Bytes,
+            thinking: ThinkingMode::default(),
         }
     }
 
@@ -249,7 +293,10 @@ pub struct AnthropicDriver {
 struct Inner {
     config: AnthropicConfig,
     ceiling: Budget,
+    /// `/v1/messages`.
     endpoint: reqwest::Url,
+    /// `/v1/messages/count_tokens`, used in [`InputEstimate::CountTokens`].
+    count_endpoint: reqwest::Url,
     client: reqwest::Client,
     flights: Mutex<Flights>,
 }
@@ -292,11 +339,15 @@ impl AnthropicDriver {
     /// [`ConfigError`], as described on each variant.
     pub fn new(config: AnthropicConfig) -> Result<Self, ConfigError> {
         let ceiling = config.ceiling()?;
-        let raw = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
-        let endpoint = reqwest::Url::parse(&raw).map_err(|e| ConfigError::BadBaseUrl {
-            url: config.base_url.clone(),
-            reason: e.to_string(),
-        })?;
+        let base = config.base_url.trim_end_matches('/');
+        let parse = |raw: String| {
+            reqwest::Url::parse(&raw).map_err(|e| ConfigError::BadBaseUrl {
+                url: config.base_url.clone(),
+                reason: e.to_string(),
+            })
+        };
+        let endpoint = parse(format!("{base}/v1/messages"))?;
+        let count_endpoint = parse(format!("{base}/v1/messages/count_tokens"))?;
         // No client-side timeout: the driver's own `tokio::time::timeout`
         // is the one that turns into `error.transport`.
         let client = reqwest::Client::builder()
@@ -307,6 +358,7 @@ impl AnthropicDriver {
                 config,
                 ceiling,
                 endpoint,
+                count_endpoint,
                 client,
                 flights: Mutex::new(Flights::default()),
             }),
@@ -387,7 +439,8 @@ impl Inner {
         }
     }
 
-    /// The whole pipeline: parse, refuse or map, estimate, call, map back.
+    /// The whole pipeline: parse, refuse or map, size the input (locally or
+    /// by asking the provider), call, map back.
     async fn answer(&self, payload: &[u8], notify: &Notify) -> (ModelReply, Consumption) {
         let request: ModelRequest = match serde_json::from_slice(payload) {
             Ok(request) => request,
@@ -407,8 +460,12 @@ impl Inner {
                 ),
             );
         }
-        let body = match wire::to_provider(&request, &self.config.model, self.config.max_max_tokens)
-        {
+        let body = match wire::to_provider(
+            &request,
+            &self.config.model,
+            self.config.max_max_tokens,
+            self.config.thinking,
+        ) {
             Ok(body) => body,
             Err(err) => return self.refuse(err.kind, err.message),
         };
@@ -421,19 +478,25 @@ impl Inner {
                 )
             }
         };
-        let estimate = tokens_for_bytes(bytes.len());
-        if estimate > self.config.input_bound {
+        let (input, sized) = match self.config.estimate {
+            InputEstimate::Bytes => (tokens_for_bytes(bytes.len()), "estimated"),
+            InputEstimate::CountTokens => match self.count(&body, notify).await {
+                Ok(count) => (count, "counted"),
+                Err(err) => return self.refuse(err.kind, err.message),
+            },
+        };
+        if input > self.config.input_bound {
             return self.refuse(
                 ErrorKind::OverCeiling,
                 format!(
-                    "input estimated at {estimate} tokens, bound is {}",
+                    "input {sized} at {input} tokens, bound is {}",
                     self.config.input_bound
                 ),
             );
         }
 
         let exchange = tokio::select! {
-            exchange = self.post(bytes) => exchange,
+            exchange = self.post(&self.endpoint, bytes) => exchange,
             () = notify.notified() => Exchange::Lost("abandoned by cancel".to_owned()),
         };
         match exchange {
@@ -447,10 +510,45 @@ impl Inner {
         }
     }
 
-    async fn post(&self, bytes: Vec<u8>) -> Exchange {
+    /// The exact input size, from `count_tokens`. Same flight as the call:
+    /// the same `notify`, the same timeout, the same error rules, and a
+    /// failure here means the call never goes out.
+    async fn count(&self, body: &wire::Request, notify: &Notify) -> Result<u64, ModelError> {
+        let bytes =
+            serde_json::to_vec(&wire::CountRequest::from(body)).map_err(|e| ModelError {
+                kind: ErrorKind::Unsupported,
+                message: format!("count request does not serialize: {e}"),
+            })?;
+        let exchange = tokio::select! {
+            exchange = self.post(&self.count_endpoint, bytes) => exchange,
+            () = notify.notified() => Exchange::Lost("abandoned by cancel".to_owned()),
+        };
+        match exchange {
+            Exchange::Lost(message) => Err(ModelError {
+                kind: ErrorKind::Transport,
+                message,
+            }),
+            Exchange::Answered { status, body } if (200..300).contains(&status) => {
+                serde_json::from_slice::<wire::CountResponse>(&body)
+                    .map(|count| count.input_tokens)
+                    .map_err(|e| ModelError {
+                        kind: ErrorKind::Provider,
+                        message: format!(
+                            "count_tokens answered HTTP {status} with a body that is not a count: {e}"
+                        ),
+                    })
+            }
+            Exchange::Answered { status, body } => Err(ModelError {
+                kind: ErrorKind::Provider,
+                message: provider_message(status, &body),
+            }),
+        }
+    }
+
+    async fn post(&self, endpoint: &reqwest::Url, bytes: Vec<u8>) -> Exchange {
         let send = self
             .client
-            .post(self.endpoint.clone())
+            .post(endpoint.clone())
             .header("content-type", "application/json")
             .header("x-api-key", self.config.api_key.expose())
             .header("anthropic-version", API_VERSION)
@@ -575,7 +673,10 @@ fn without_url(e: reqwest::Error) -> String {
 /// instead of being empty.
 fn encode(reply: &ModelReply) -> Vec<u8> {
     serde_json::to_vec(reply).unwrap_or_else(|_| {
-        br#"{"v":1,"content":[],"stop":{"error":{"kind":"provider","message":"reply could not be serialized"}},"usage":{"input_tokens":0,"output_tokens":0}}"#.to_vec()
+        format!(
+            r#"{{"v":{VERSION},"content":[],"stop":{{"error":{{"kind":"provider","message":"reply could not be serialized"}}}},"usage":{{"input_tokens":0,"output_tokens":0}}}}"#
+        )
+        .into_bytes()
     })
 }
 
@@ -652,6 +753,10 @@ mod tests {
         assert_eq!(
             driver.inner.endpoint.as_str(),
             "http://127.0.0.1:9/v1/messages"
+        );
+        assert_eq!(
+            driver.inner.count_endpoint.as_str(),
+            "http://127.0.0.1:9/v1/messages/count_tokens"
         );
     }
 

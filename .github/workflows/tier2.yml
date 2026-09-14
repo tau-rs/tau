@@ -7,14 +7,16 @@
 # not in the `tier1` fan-in and is not a required check; if it must gate a
 # merge, label the PR and wait for it.
 #
-# Today this is items 2 and 3 of the seven. The simulation soak: 10^6 events
-# on Linux, refolded on the same build, then refolded on macOS from the log
-# the Linux job uploaded. ADR-0003 calls the second half the check that
-# catches what a single machine never sees — iteration-order and formatting
-# differences that only show up on another platform. And fuzzing: fifteen
-# minutes per target on the paths attacker-controlled bytes enter by — the
-# envelope, the log file, and the model reply. The other five items are
-# tracked in their own issues (refs #6).
+# Today this is items 1, 2 and 3 of the seven. The simulation soak: 10^6
+# events on Linux, refolded on the same build, then refolded on macOS from
+# the log the Linux job uploaded. ADR-0003 calls the second half the check
+# that catches what a single machine never sees — iteration-order and
+# formatting differences that only show up on another platform. The property
+# tests, cranked: the four ADR-0002 properties over arbitrary trees, at a
+# case count `just check` could never afford. And fuzzing: fifteen minutes
+# per target on the paths attacker-controlled bytes enter by — the envelope,
+# the log file, and the model reply. The other four items are tracked in
+# their own issues (refs #6).
 
 name: tier2
 
@@ -153,6 +155,39 @@ jobs:
             echo "- fold of the Linux log: ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Item 1: the four properties (ADR-0002) over arbitrary trees, 10^5 cases
+  # each. `sim/tests/properties.rs` reads the count from PROPTEST_CASES and
+  # defaults to a few dozen so the developer loop stays fast; this is the
+  # same test with the budget it deserves. `cargo test`, not nextest: the ci
+  # profile's per-test ceiling is sized for Tier 1, and the four tests share
+  # the runner's cores either way.
+  proptest-cranked:
+    name: proptest (cranked, 10^5 cases)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PROPTEST_CASES: 100000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test --locked --release -p tau-sim --test properties --no-run
+      - name: Run the properties
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo test --locked --release -p tau-sim --test properties | tee proptest.txt
+          echo "proptest at $PROPTEST_CASES cases: ${SECONDS}s"
+          {
+            echo "## proptest (cranked)"
+            echo
+            echo "- cases per property: $PROPTEST_CASES"
+            echo "- $(grep '^test result' proptest.txt)"
+            echo "- wall: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
   # Item 3: fuzzing, 15 minutes per target. Model output is attacker-
   # controlled input, so the targets are the exact paths bytes from outside
   # enter by (fuzz/fuzz_targets/). The seed corpora are committed; what
@@ -228,3 +263,4 @@ jobs:
             fuzz/fuzz.log
           retention-days: 7
           if-no-files-found: warn
+||||||| eac316d

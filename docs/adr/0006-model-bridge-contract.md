@@ -45,7 +45,7 @@ what keeps invariant 2 true after this ADR; the test is what keeps it true
 after the next one.
 
 The bridge is **not ABI**. It carries its own version, `v`, on every request
-and reply (`bridge::VERSION`, `1` today), and it is governed by this ADR
+and reply (`bridge::VERSION`, `2` since ADR-0007), and it is governed by this ADR
 rather than by `ABI` and the wire snapshots. The kernel's log stores a blob
 hash either way; a bridge bump changes what the blob store holds, never what
 the log says.
@@ -54,7 +54,7 @@ the log says.
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "system": "You are a research assistant with a key-value store.",
   "messages": [
     {
@@ -95,10 +95,10 @@ the log says.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `v` | `u16` | Bridge version. A driver that does not know it replies `error.unsupported`. |
+| `v` | `u16` | Bridge version (`2` since [ADR-0007](0007-thinking-blocks.md)). A driver that does not know it replies `error.unsupported`. |
 | `system` | string, optional | The system prompt. Top-level, because Anthropic has it top-level and an OpenAI-compatible driver can fold it into a `system` message; the reverse mapping is lossy. |
 | `messages` | array | Alternating `user` / `assistant` turns. Only those two roles: tool results are `user` content, as Anthropic frames them; an OpenAI-compatible driver unfolds them into `tool` role messages. |
-| `messages[].content[]` | `text` \| `tool_call` \| `tool_result` | The three block types. See §4 for the tool blocks. |
+| `messages[].content[]` | `text` \| `tool_call` \| `tool_result` \| `thinking` | The block types. See §4 for the tool blocks and [ADR-0007](0007-thinking-blocks.md) for `thinking`. |
 | `tools` | array, may be empty | Projected tool definitions: `name` (a validated `Name`, see §5), `description`, `input_schema` (JSON Schema, draft 2020-12). |
 | `max_tokens` | `u32` | The output cap for *this* call. The driver clamps or refuses above its registered maximum (§7). |
 | `sampling` | object, optional | `temperature`, `top_p`, `seed`, `stop_sequences`. Each optional; absent means the provider's default. |
@@ -115,13 +115,15 @@ The reply says which model actually answered, for the record.
 
 **Not in v1**: thinking and effort controls (driver configuration), images
 and documents, streaming via `MsgKind::Partial`, server-side tools. Each is
-additive when it comes.
+additive when it comes. *Amended:* thinking blocks turned out not to be
+configuration but content the provider requires back; [ADR-0007](0007-thinking-blocks.md)
+adds the block and bumps `v` to 2. Thinking *off* remains driver configuration.
 
 ### 3. The reply: one JSON object per `Reply`
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "model": "claude-opus-5",
   "content": [
     { "type": "text", "text": "I will search for that." },
@@ -137,7 +139,7 @@ additive when it comes.
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "model": "claude-opus-5",
   "content": [],
   "stop": { "error": { "kind": "over_ceiling", "message": "input estimated at 9210 tokens, bound is 8000" } },
@@ -390,6 +392,15 @@ crate split is mechanical then.
 Rejected: a driver that fails after a partial stream has both a usage report
 and an error, and one shape with `stop.error` carries both without a rule
 about which wins.
+
+## Amendments
+
+- **2026-09-14** — [ADR-0007](0007-thinking-blocks.md)
+  ([#42](https://github.com/tau-rs/tau/issues/42)): a fourth content block,
+  `thinking`, opaque and provider-tagged, that a provider driver round-trips
+  and the loop carries unread; `v` bumped to 2. The JSON examples above say
+  `"v": 2` so that §8's fixture rule still holds. Thinking *off* stays driver
+  configuration (`AnthropicConfig::thinking`).
 
 [`Msg`]: ../../kernel/src/abi/msg.rs
 [`Consumption`]: ../../kernel/src/abi/budget.rs

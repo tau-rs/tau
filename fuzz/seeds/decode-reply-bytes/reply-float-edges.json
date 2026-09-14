@@ -1,1 +1,1 @@
-{"v":1,"content":[{"type":"tool_call","id":"call_1","name":"compute","input":{"x":1.2999999999999999e+73,"y":-0,"z":9007199254740993}}],"stop":"tool_call","usage":{"input_tokens":1,"output_tokens":1}}
+{"v":2,"content":[{"type":"tool_call","id":"call_1","name":"compute","input":{"x":1.2999999999999999e+73,"y":-0,"z":9007199254740993}}],"stop":"tool_call","usage":{"input_tokens":1,"output_tokens":1}}

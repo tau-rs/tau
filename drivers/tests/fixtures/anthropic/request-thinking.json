@@ -1,5 +1,6 @@
 {
-  "v": 2,
+  "model": "claude-opus-5",
+  "max_tokens": 1024,
   "system": "You are a research assistant with a key-value store.",
   "messages": [
     {
@@ -9,14 +10,16 @@
     {
       "role": "assistant",
       "content": [
+        { "type": "thinking", "thinking": "", "signature": "EqQBCkYIBxgCKkBtX3Rob3VnaHRfc2ln" },
+        { "type": "redacted_thinking", "data": "EmwKAhgBEgxyZWRhY3RlZC1ibG9i" },
         { "type": "text", "text": "Let me look." },
-        { "type": "tool_call", "id": "call_1", "name": "store", "input": { "op": "read", "key": "a" } }
+        { "type": "tool_use", "id": "call_1", "name": "store", "input": { "op": "read", "key": "a" } }
       ]
     },
     {
       "role": "user",
       "content": [
-        { "type": "tool_result", "call_id": "call_1", "content": "hello", "is_error": false }
+        { "type": "tool_result", "tool_use_id": "call_1", "content": "hello" }
       ]
     }
   ],
@@ -32,7 +35,5 @@
         ]
       }
     }
-  ],
-  "max_tokens": 1024,
-  "sampling": { "temperature": 0.0, "seed": 42 }
+  ]
 }
