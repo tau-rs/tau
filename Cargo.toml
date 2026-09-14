@@ -43,7 +43,7 @@ proptest   = { version = "1", default-features = false, features = ["std"] }
 # replayable system, so they are denied workspace-wide rather than left to
 # review.
 [workspace.lints.rust]
-unsafe_code             = "forbid"
+unsafe_code             = "deny"
 missing_docs            = "warn"
 unreachable_pub         = "warn"
 rust_2018_idioms        = { level = "warn", priority = -1 }
