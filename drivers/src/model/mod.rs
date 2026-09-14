@@ -6,14 +6,17 @@
 //! configuration (ADR-0006 §7), refuses what it cannot honour instead of
 //! degrading silently, and reports its consumption honestly, error or not.
 //! What is the same for every provider — the ceiling arithmetic, the API
-//! key, the reasons a config is rejected — lives here; the wire format and
-//! the transport live with each driver.
+//! key, the reasons a config is rejected — lives here; the flight registry
+//! and the timed HTTP exchange are `transport`, shared by every driver
+//! that speaks HTTP; the wire format lives with each driver.
 
 use std::fmt;
 
 use tau_kernel::abi::DimKey;
 
 pub mod ceiling;
+#[cfg(any(feature = "anthropic", feature = "openai"))]
+pub(crate) mod transport;
 
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
