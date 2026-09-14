@@ -144,6 +144,30 @@ jobs:
       # almost always linkage or path handling, which a smoke run catches.
       - run: cargo nextest run --locked --workspace --all-features --profile quick
 
+  # Tier 1 job 3 (docs/HANDOFF.md §8): the fast determinism check. The `sim`
+  # harness drives the reducer with three fixed seeds, folds each log twice
+  # more — from memory and through a JSON round-trip — and every fold must
+  # hash the same. This is the canary for reducer nondeterminism; the proof is
+  # the Tier 2 soak. The quick profile is deliberate: its 5s ceiling is what
+  # keeps this "seconds, not minutes", and nextest exits 4 on an empty
+  # selection, so a renamed crate cannot make this job pass on nothing.
+  determinism:
+    name: determinism (3 seeds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler and
+        # its components. Pinning a toolchain in the workflow as well would let
+        # CI and developers drift onto different compilers, which is the exact
+        # class of difference that shows up as "works on my machine".
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --locked -p tau-sim --all-features --profile quick
+
   # A single required check, so branch protection does not have to enumerate
   # the matrix. Adding a job above means adding it to `needs` here — and
   # `result == success` for *every* need, because a skipped job reports
@@ -153,7 +177,7 @@ jobs:
     name: tier1
     runs-on: ubuntu-latest
     if: always()
-    needs: [fmt, clippy, test, abi-guard, deny, macos-smoke]
+    needs: [fmt, clippy, test, abi-guard, deny, macos-smoke, determinism]
     steps:
       - name: Require every Tier 1 job to have succeeded
         run: |
