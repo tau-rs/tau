@@ -26,7 +26,7 @@ use tau_kernel::bridge::{
     Content, ErrorKind, Message, ModelError, ModelReply, ModelRequest, Role, StopReason, Usage,
 };
 
-use super::estimate::clamp_max_tokens;
+use crate::model::ceiling::clamp_max_tokens;
 
 /// One Messages API request body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

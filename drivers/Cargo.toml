@@ -12,9 +12,12 @@ authors.workspace      = true
 name = "tau_drivers"
 
 [features]
-default   = ["anthropic"]
+default   = ["anthropic", "openai"]
 # The Anthropic Messages API model driver (ADR-0006 §6, Anthropic column).
 anthropic = ["dep:reqwest", "dep:tokio"]
+# The OpenAI-compatible chat-completions driver (ADR-0006 §6, right-hand
+# column): OpenAI itself, vLLM, and everything else that speaks the shape.
+openai    = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
 tau-kernel = { path = "../kernel", version = "0.0.0" }

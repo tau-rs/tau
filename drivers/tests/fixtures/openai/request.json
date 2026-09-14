@@ -1,0 +1,34 @@
+{
+  "model": "Qwen/Qwen3-8B",
+  "max_tokens": 1024,
+  "messages": [
+    { "role": "system", "content": "You are a research assistant with a key-value store." },
+    { "role": "user", "content": "What is stored under key a?" },
+    {
+      "role": "assistant",
+      "content": "Let me look.",
+      "tool_calls": [
+        { "id": "call_1", "type": "function", "function": { "name": "store", "arguments": "{\"key\":\"a\",\"op\":\"read\"}" } }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "call_1", "content": "hello" }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "store",
+        "description": "Read or write the run's key-value store.",
+        "parameters": {
+          "type": "object",
+          "oneOf": [
+            { "properties": { "op": { "const": "read" }, "key": { "type": "string" } }, "required": ["op", "key"] },
+            { "properties": { "op": { "const": "write" }, "key": { "type": "string" }, "value": { "type": "string" } }, "required": ["op", "key", "value"] }
+          ]
+        }
+      }
+    }
+  ],
+  "temperature": 0.0,
+  "seed": 42
+}

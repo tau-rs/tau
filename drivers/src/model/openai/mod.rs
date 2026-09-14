@@ -1,18 +1,22 @@
-//! The Anthropic model driver: [`ModelRequest`] in, [`ModelReply`] out, over
-//! the Messages API, behind a ceiling it enforces itself (ADR-0006).
+//! The OpenAI-compatible model driver: [`ModelRequest`] in, [`ModelReply`]
+//! out, over `POST /v1/chat/completions`, behind a ceiling it enforces
+//! itself (ADR-0006). "Compatible" is the point: OpenAI, vLLM, llama.cpp,
+//! Ollama, LM Studio and the rest all answer the same shape, and one driver
+//! pointed at a different base URL covers them.
 //!
 //! # Configuration is the harness's, not the request's
 //!
 //! Which model answers, at what prices, under what bound, is
-//! [`AnthropicConfig`]. A capability is one endpoint at one model; the
-//! request only says what to ask. The API key comes from the environment
-//! ([`ApiKey::from_env`]) or from the harness's own secret store
-//! ([`ApiKey::new`]) — never from a file in the repository.
+//! [`OpenAiConfig`]. A capability is one endpoint at one model; the request
+//! only says what to ask. The API key is optional — a local vLLM has none —
+//! and comes from the environment ([`ApiKey::from_env`]) or from the
+//! harness's own secret store ([`ApiKey::new`]), never from a file in the
+//! repository.
 //!
 //! # The ceiling, from both sides
 //!
-//! The harness registers the driver with [`AnthropicDriver::ceiling`], which
-//! [`AnthropicConfig::ceiling`] derives per ADR-0006 §7:
+//! The harness registers the driver with [`OpenAiDriver::ceiling`], which
+//! [`OpenAiConfig::ceiling`] derives per ADR-0006 §7:
 //!
 //! ```text
 //! tokens        = input_bound + max_max_tokens
@@ -22,26 +26,36 @@
 //! and the driver keeps that number honest from its side: it **refuses** a
 //! request whose estimated input exceeds the bound (`error.over_ceiling`,
 //! nothing sent) and **clamps** `max_tokens` to the maximum. The estimate is
-//! ⌈bytes × 2 ⁄ 5⌉ over the serialized provider body — bytes ÷ 3, then
-//! × 1.2, conservative for English and JSON. Prices are in microdollars per
-//! token at the *uncached* rate.
+//! ⌈bytes × 2 ⁄ 5⌉ over the serialized provider body. Prices are in
+//! microdollars per token at the *uncached* rate; a local server is priced
+//! at zero and the ceiling is then tokens only.
+//!
+//! # `max_tokens` or `max_completion_tokens`
+//!
+//! The clamped cap goes in one field, chosen by [`OpenAiConfig::output_cap`].
+//! The default is `max_tokens`: it is the field every compatible server
+//! understands, while `max_completion_tokens` is OpenAI's newer name that
+//! its reasoning models require and that older or smaller servers reject.
+//! The operator flips it per capability; the driver never sends both.
 //!
 //! # What it refuses
 //!
 //! A bridge version other than [`VERSION`], a request that does not parse,
-//! and a present `sampling.seed` are `error.unsupported`, nothing sent. The
-//! provider's own rejections (4xx/5xx) are `error.provider` with the status
-//! and the provider's text; a 200 the driver cannot map is `error.provider`
-//! too. A connection failure, the configured timeout, or an `abandon` from
-//! `cancel` is `error.transport`. The call is non-streaming, so a provider
-//! error never follows a partial answer: consumption is what `usage` says on
-//! a 200, and nothing otherwise.
+//! and a block in a turn that has no chat-completions shape are
+//! `error.unsupported`, nothing sent. Every sampling field passes through:
+//! this column has a `seed`. The provider's own rejections (4xx/5xx) are
+//! `error.provider` with the status and the provider's text; a 200 the
+//! driver cannot map is `error.provider` too. A connection failure, the
+//! configured timeout, or an `abandon` from `cancel` is `error.transport`.
+//! The call is non-streaming, so a provider error never follows a partial
+//! answer: consumption is what `usage` says on a 200, and nothing otherwise.
 //!
 //! # What it does not do
 //!
 //! No retries — a retry is a second `send`, and that is the loop's call
-//! (#34). No token-counting endpoint yet (#32). No thinking controls:
-//! `thinking` blocks in a reply have no bridge slot and are dropped (#42).
+//! (#34). No token counting: chat-completions servers have no counting
+//! endpoint, so the byte estimate is the estimate. No thinking controls:
+//! `reasoning_content` in a reply has no bridge slot and is dropped (#42).
 
 mod wire;
 
@@ -58,37 +72,51 @@ use tau_kernel::driver::Driver;
 use tau_kernel::kernel::{BoxFuture, Delivery};
 use tokio::sync::Notify;
 
-// The provider-neutral parts, re-exported so the paths this module always
-// had keep resolving. Their home is `model` and `model::ceiling`.
 pub use super::ceiling::{clamp_max_tokens, tokens_for_bytes};
 pub use super::{ApiKey, ConfigError};
 
-/// Where the Messages API lives when the harness does not say otherwise.
-pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
-/// The `anthropic-version` header this driver speaks.
-pub const API_VERSION: &str = "2023-06-01";
+/// Where chat completions live when the harness does not say otherwise.
+pub const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 /// The environment variable [`ApiKey::from_env`] reads by default.
-pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
-/// The timeout a config gets from [`AnthropicConfig::new`].
+pub const API_KEY_ENV: &str = "OPENAI_API_KEY";
+/// The timeout a config gets from [`OpenAiConfig::new`].
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Everything the harness decides about one Anthropic model capability.
+/// Which request field carries the clamped output cap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputCap {
+    /// `max_tokens`: the original field, understood by every compatible
+    /// server. The default.
+    #[default]
+    MaxTokens,
+    /// `max_completion_tokens`: OpenAI's newer name, required by its
+    /// reasoning models and unknown to some smaller servers.
+    MaxCompletionTokens,
+}
+
+/// Everything the harness decides about one OpenAI-compatible model
+/// capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AnthropicConfig {
-    /// The model id, as the provider names it (`claude-opus-5`).
+pub struct OpenAiConfig {
+    /// The model id, as the server names it (`gpt-4.1`, `Qwen/Qwen3-8B`).
     pub model: String,
-    /// The API key.
-    pub api_key: ApiKey,
-    /// The API's base URL. [`DEFAULT_BASE_URL`] in production; a local stub
-    /// in tests.
+    /// The API key, sent as `Authorization: Bearer`. `None` sends no header,
+    /// which is what a local server without auth expects.
+    pub api_key: Option<ApiKey>,
+    /// The server's base URL, without the `/v1/chat/completions` path.
+    /// [`DEFAULT_BASE_URL`] in production; `http://localhost:8000` for a
+    /// local vLLM; a stub in tests.
     pub base_url: String,
+    /// Which field carries the output cap. See [`OutputCap`].
+    pub output_cap: OutputCap,
     /// The largest prompt the driver will send, in estimated tokens. A
     /// request estimated above it is refused with `error.over_ceiling`.
     pub input_bound: u64,
-    /// The largest `max_tokens` the driver will set. A request asking for
+    /// The largest output cap the driver will set. A request asking for
     /// more is clamped.
     pub max_max_tokens: u32,
-    /// Input price in microdollars per token, uncached rate.
+    /// Input price in microdollars per token, uncached rate. Zero for a
+    /// server you run yourself.
     pub input_price_microusd: u64,
     /// Output price in microdollars per token.
     pub output_price_microusd: u64,
@@ -97,13 +125,14 @@ pub struct AnthropicConfig {
     pub timeout: Duration,
 }
 
-impl AnthropicConfig {
-    /// A config with the production base URL and the default timeout; the
-    /// numbers that make the ceiling are yours to set.
+impl OpenAiConfig {
+    /// A config with the production base URL, `max_tokens` as the cap field,
+    /// and the default timeout; the numbers that make the ceiling are yours
+    /// to set.
     #[must_use]
     pub fn new(
         model: impl Into<String>,
-        api_key: ApiKey,
+        api_key: Option<ApiKey>,
         input_bound: u64,
         max_max_tokens: u32,
         input_price_microusd: u64,
@@ -113,6 +142,7 @@ impl AnthropicConfig {
             model: model.into(),
             api_key,
             base_url: DEFAULT_BASE_URL.to_owned(),
+            output_cap: OutputCap::default(),
             input_bound,
             max_max_tokens,
             input_price_microusd,
@@ -123,10 +153,7 @@ impl AnthropicConfig {
 
     /// The registration ceiling this config implies (ADR-0006 §7): the most
     /// one call can cost when the driver enforces the bound and the clamp.
-    ///
-    /// At Claude Opus 5 list prices (5 and 25 µUSD per token), an input bound
-    /// of 8,000 and a maximum `max_tokens` of 1,024 give 9,024 `tokens` and
-    /// 65,600 `cost_microusd`. `calls` is not included; the kernel adds it.
+    /// `calls` is not included; the kernel adds it.
     ///
     /// # Errors
     ///
@@ -141,8 +168,7 @@ impl AnthropicConfig {
     }
 
     /// What `usage` costs at this config's prices: `tokens` = in + out,
-    /// `cost_microusd` = in × input price + out × output price. Saturates at
-    /// `u64::MAX`, which no real call reaches.
+    /// `cost_microusd` = in × input price + out × output price.
     #[must_use]
     pub fn price(&self, usage: Usage) -> Consumption {
         super::ceiling::price(usage, self.input_price_microusd, self.output_price_microusd)
@@ -152,13 +178,13 @@ impl AnthropicConfig {
 /// The driver. Cheap to clone; every clone shares one HTTP client and one
 /// table of in-flight calls.
 #[derive(Clone, Debug)]
-pub struct AnthropicDriver {
+pub struct OpenAiDriver {
     inner: Arc<Inner>,
 }
 
 #[derive(Debug)]
 struct Inner {
-    config: AnthropicConfig,
+    config: OpenAiConfig,
     ceiling: Budget,
     endpoint: reqwest::Url,
     client: reqwest::Client,
@@ -194,16 +220,19 @@ impl Drop for Flight {
     }
 }
 
-impl AnthropicDriver {
+impl OpenAiDriver {
     /// Builds the driver, validating the config: the ceiling must fit, the
     /// base URL must parse.
     ///
     /// # Errors
     ///
     /// [`ConfigError`], as described on each variant.
-    pub fn new(config: AnthropicConfig) -> Result<Self, ConfigError> {
+    pub fn new(config: OpenAiConfig) -> Result<Self, ConfigError> {
         let ceiling = config.ceiling()?;
-        let raw = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+        let raw = format!(
+            "{}/v1/chat/completions",
+            config.base_url.trim_end_matches('/')
+        );
         let endpoint = reqwest::Url::parse(&raw).map_err(|e| ConfigError::BadBaseUrl {
             url: config.base_url.clone(),
             reason: e.to_string(),
@@ -225,7 +254,7 @@ impl AnthropicDriver {
     }
 
     /// The ceiling to register this driver with: the same numbers
-    /// [`Driver::handle`] enforces. See [`AnthropicConfig::ceiling`].
+    /// [`Driver::handle`] enforces. See [`OpenAiConfig::ceiling`].
     #[must_use]
     pub fn ceiling(&self) -> Budget {
         self.inner.ceiling.clone()
@@ -233,7 +262,7 @@ impl AnthropicDriver {
 
     /// The config this driver was built from.
     #[must_use]
-    pub fn config(&self) -> &AnthropicConfig {
+    pub fn config(&self) -> &OpenAiConfig {
         &self.inner.config
     }
 
@@ -244,7 +273,7 @@ impl AnthropicDriver {
     }
 }
 
-impl Driver for AnthropicDriver {
+impl Driver for OpenAiDriver {
     fn handle(&self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
         // Registered now, not when the future is first polled: `abandon`
         // may arrive in between, and it must find the entry.
@@ -271,7 +300,7 @@ impl Driver for AnthropicDriver {
 
 /// What one HTTP exchange produced, before mapping.
 enum Exchange {
-    /// The provider answered; here is the status and the body.
+    /// The server answered; here is the status and the body.
     Answered { status: u16, body: Vec<u8> },
     /// It did not: connection, timeout, or abandon.
     Lost(String),
@@ -318,8 +347,12 @@ impl Inner {
                 ),
             );
         }
-        let body = match wire::to_provider(&request, &self.config.model, self.config.max_max_tokens)
-        {
+        let body = match wire::to_provider(
+            &request,
+            &self.config.model,
+            self.config.max_max_tokens,
+            self.config.output_cap,
+        ) {
             Ok(body) => body,
             Err(err) => return self.refuse(err.kind, err.message),
         };
@@ -359,14 +392,14 @@ impl Inner {
     }
 
     async fn post(&self, bytes: Vec<u8>) -> Exchange {
-        let send = self
+        let mut send = self
             .client
             .post(self.endpoint.clone())
-            .header("content-type", "application/json")
-            .header("x-api-key", self.config.api_key.expose())
-            .header("anthropic-version", API_VERSION)
-            .body(bytes)
-            .send();
+            .header("content-type", "application/json");
+        if let Some(key) = &self.config.api_key {
+            send = send.header("authorization", format!("Bearer {}", key.expose()));
+        }
+        let send = send.body(bytes).send();
         let response = match tokio::time::timeout(self.config.timeout, send).await {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => return Exchange::Lost(format!("request failed: {}", without_url(e))),
@@ -423,7 +456,13 @@ impl Inner {
             }
         };
         match wire::to_bridge(&response, VERSION) {
-            Ok(reply) => (reply, consumed),
+            Ok(reply) => (
+                ModelReply {
+                    model: reply.model.or(model),
+                    ..reply
+                },
+                consumed,
+            ),
             Err(err) => (
                 self.error_reply(err.kind, err.message, model, usage),
                 consumed,
@@ -458,15 +497,13 @@ impl Inner {
     }
 }
 
-/// `HTTP <status> <type>: <message>` when the body is the provider's error
-/// shape; `HTTP <status>: <body, truncated>` otherwise.
+/// `HTTP <status> <type>: <message>` when the body is either error shape
+/// the compatible world uses; `HTTP <status>: <body, truncated>` otherwise.
 fn provider_message(status: u16, body: &[u8]) -> String {
-    match serde_json::from_slice::<wire::ErrorBody>(body) {
-        Ok(parsed) => format!(
-            "HTTP {status} {}: {}",
-            parsed.error.kind, parsed.error.message
-        ),
-        Err(_) => {
+    match wire::parse_error(body) {
+        Some(detail) if detail.kind.is_empty() => format!("HTTP {status}: {}", detail.message),
+        Some(detail) => format!("HTTP {status} {}: {}", detail.kind, detail.message),
+        None => {
             let text = String::from_utf8_lossy(body);
             let short: String = text.chars().take(200).collect();
             format!("HTTP {status}: {short}")
@@ -494,11 +531,12 @@ fn encode(reply: &ModelReply) -> Vec<u8> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::*;
     use tau_kernel::abi::DimKey;
 
-    fn config() -> AnthropicConfig {
-        AnthropicConfig::new("claude-opus-5", ApiKey::new("k"), 8_000, 1_024, 5, 25)
+    use super::*;
+
+    fn config() -> OpenAiConfig {
+        OpenAiConfig::new("gpt-4.1", Some(ApiKey::new("k")), 8_000, 1_024, 5, 25)
     }
 
     #[test]
@@ -507,10 +545,25 @@ mod tests {
         assert_eq!(ceiling.get(&DimKey::Tokens), Some(9_024));
         assert_eq!(ceiling.get(&DimKey::CostMicroUsd), Some(65_600));
         assert_eq!(ceiling.get(&DimKey::Calls), None, "the kernel adds calls");
-        let driver = AnthropicDriver::new(config()).unwrap();
+        let driver = OpenAiDriver::new(config()).unwrap();
         assert_eq!(driver.ceiling(), ceiling);
         assert_eq!(driver.config(), &config());
+        assert_eq!(driver.config().output_cap, OutputCap::MaxTokens);
         assert_eq!(driver.in_flight(), 0);
+    }
+
+    #[test]
+    fn a_free_local_server_has_a_tokens_only_cost() {
+        let c = OpenAiConfig::new("Qwen/Qwen3-8B", None, 8_000, 1_024, 0, 0);
+        let ceiling = c.ceiling().unwrap();
+        assert_eq!(ceiling.get(&DimKey::Tokens), Some(9_024));
+        assert_eq!(ceiling.get(&DimKey::CostMicroUsd), Some(0));
+        let consumed = c.price(Usage {
+            input_tokens: 120,
+            output_tokens: 34,
+        });
+        assert_eq!(consumed.get(&DimKey::Tokens), Some(154));
+        assert_eq!(consumed.get(&DimKey::CostMicroUsd), Some(0));
     }
 
     #[test]
@@ -523,17 +576,7 @@ mod tests {
                 dim: DimKey::Tokens
             })
         ));
-        assert!(AnthropicDriver::new(c).is_err());
-    }
-
-    #[test]
-    fn pricing_is_in_plus_out_at_the_configured_rates() {
-        let consumed = config().price(Usage {
-            input_tokens: 120,
-            output_tokens: 34,
-        });
-        assert_eq!(consumed.get(&DimKey::Tokens), Some(154));
-        assert_eq!(consumed.get(&DimKey::CostMicroUsd), Some(600 + 850));
+        assert!(OpenAiDriver::new(c).is_err());
     }
 
     #[test]
@@ -541,15 +584,15 @@ mod tests {
         let mut c = config();
         c.base_url = "not a url".into();
         assert!(matches!(
-            AnthropicDriver::new(c),
+            OpenAiDriver::new(c),
             Err(ConfigError::BadBaseUrl { .. })
         ));
         let mut c = config();
-        c.base_url = "http://127.0.0.1:9/".into();
-        let driver = AnthropicDriver::new(c).unwrap();
+        c.base_url = "http://localhost:8000/".into();
+        let driver = OpenAiDriver::new(c).unwrap();
         assert_eq!(
             driver.inner.endpoint.as_str(),
-            "http://127.0.0.1:9/v1/messages"
+            "http://localhost:8000/v1/chat/completions"
         );
     }
 
@@ -559,12 +602,20 @@ mod tests {
     }
 
     #[test]
-    fn provider_messages_carry_the_status_and_the_providers_text() {
-        let body = br#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#;
+    fn provider_messages_carry_the_status_and_the_servers_text() {
+        let wrapped = br#"{"error":{"message":"slow down","type":"rate_limit_error"}}"#;
         assert_eq!(
-            provider_message(529, body),
-            "HTTP 529 overloaded_error: busy"
+            provider_message(429, wrapped),
+            "HTTP 429 rate_limit_error: slow down"
         );
+        let flat =
+            br#"{"object":"error","message":"busy","type":"ServiceUnavailableError","code":503}"#;
+        assert_eq!(
+            provider_message(503, flat),
+            "HTTP 503 ServiceUnavailableError: busy"
+        );
+        let untyped = br#"{"message":"nope"}"#;
+        assert_eq!(provider_message(400, untyped), "HTTP 400: nope");
         assert_eq!(
             provider_message(502, b"<html>bad gateway</html>"),
             "HTTP 502: <html>bad gateway</html>"

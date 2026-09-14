@@ -1,19 +1,28 @@
-//! One real call, ignored by default. Run it with:
+//! One real call, ignored by default. Against OpenAI:
 //!
 //! ```sh
-//! TAU_ANTHROPIC_LIVE=1 ANTHROPIC_API_KEY=... \
-//!     cargo test -p tau-drivers --test anthropic_live -- --ignored
+//! TAU_OPENAI_LIVE=1 OPENAI_API_KEY=... \
+//!     cargo test -p tau-drivers --test openai_live -- --ignored
 //! ```
 //!
-//! It costs a few hundred tokens at Claude Opus 5 list prices and asserts
-//! only what the contract promises: a reply that is not an error, a real
-//! usage, and a consumption priced from it.
+//! or against a local vLLM (no key needed):
+//!
+//! ```sh
+//! TAU_OPENAI_LIVE=1 TAU_OPENAI_BASE_URL=http://localhost:8000 \
+//!     TAU_OPENAI_MODEL=Qwen/Qwen3-8B \
+//!     cargo test -p tau-drivers --test openai_live -- --ignored
+//! ```
+//!
+//! It costs a few hundred tokens and asserts only what the contract
+//! promises: a reply that is not an error, a real usage, and a consumption
+//! priced from it. Prices here are placeholders: the assertion is that the
+//! arithmetic holds, not that the number is a bill.
 
-#![cfg(feature = "anthropic")]
+#![cfg(feature = "openai")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use serde_json::json;
-use tau_drivers::model::anthropic::{AnthropicConfig, AnthropicDriver, ApiKey, API_KEY_ENV};
+use tau_drivers::model::openai::{ApiKey, OpenAiConfig, OpenAiDriver, API_KEY_ENV};
 use tau_kernel::abi::Name;
 use tau_kernel::abi::{AgentId, Corr, DimKey};
 use tau_kernel::bridge::{
@@ -23,22 +32,19 @@ use tau_kernel::driver::Driver;
 use tau_kernel::kernel::Delivery;
 
 #[tokio::test]
-#[ignore = "needs TAU_ANTHROPIC_LIVE=1 and ANTHROPIC_API_KEY; costs money"]
+#[ignore = "needs TAU_OPENAI_LIVE=1 and OPENAI_API_KEY or TAU_OPENAI_BASE_URL; may cost money"]
 async fn one_real_call_round_trips() {
-    if std::env::var("TAU_ANTHROPIC_LIVE").as_deref() != Ok("1") {
-        eprintln!("TAU_ANTHROPIC_LIVE is not 1; skipping");
+    if std::env::var("TAU_OPENAI_LIVE").as_deref() != Ok("1") {
+        eprintln!("TAU_OPENAI_LIVE is not 1; skipping");
         return;
     }
-    let key = ApiKey::from_env(API_KEY_ENV).expect("ANTHROPIC_API_KEY is set");
-    let driver = AnthropicDriver::new(AnthropicConfig::new(
-        "claude-opus-5",
-        key,
-        8_000,
-        256,
-        5,
-        25,
-    ))
-    .unwrap();
+    let model = std::env::var("TAU_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_owned());
+    let key = ApiKey::from_env(API_KEY_ENV).ok();
+    let mut config = OpenAiConfig::new(model, key, 8_000, 256, 1, 4);
+    if let Ok(base_url) = std::env::var("TAU_OPENAI_BASE_URL") {
+        config.base_url = base_url;
+    }
+    let driver = OpenAiDriver::new(config).unwrap();
 
     let request = ModelRequest {
         v: VERSION,
@@ -85,6 +91,6 @@ async fn one_real_call_round_trips() {
     );
     assert_eq!(
         consumed.get(&DimKey::CostMicroUsd),
-        Some(reply.usage.input_tokens * 5 + reply.usage.output_tokens * 25)
+        Some(reply.usage.input_tokens + reply.usage.output_tokens * 4)
     );
 }
