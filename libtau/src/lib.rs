@@ -31,18 +31,24 @@
 //!
 //! - [`infer`]: one model call. Encode, `send`, `recv` on the correlation
 //!   (or the cancel notice that pre-empts it), `read`, decode.
+//! - [`RetryPolicy`] and [`infer_with`]: the same call again when the
+//!   driver could not get an answer. Every attempt is its own `send`, and
+//!   the wait comes from a sleep the caller supplies.
 //! - [`Toolbox`]: the projected namespace. One tool per capability, named
 //!   by the `DriverId` the harness registered the driver under, with the
 //!   driver's schema compiled for validation.
-//! - [`tool_loop`]: the loop of HANDOFF §3.2. Every failure short of a
-//!   budget refusal is fed back to the model as a `tool_result`, so it can
-//!   self-correct.
+//! - [`tool_loop`] and [`tool_loop_with`]: the loop of HANDOFF §3.2. Every
+//!   failure short of a budget refusal is fed back to the model as a
+//!   `tool_result`, so it can self-correct.
 //!
 //! # What is deliberately not here
 //!
-//! Retries, fan-out, and a bound on the number of rounds. A budget bounds
-//! the loop already: every `send` reserves the driver's ceiling plus one
-//! call, and the loop ends the moment that reservation is refused.
+//! Fan-out, a bound on the number of rounds, and a retry that the budget
+//! does not see. A budget bounds the loop already: every `send` — a retry
+//! included — reserves the driver's ceiling plus one call, and the loop
+//! ends the moment that reservation is refused. No driver retries on its
+//! own, and this crate reads no clock: the wait between attempts is a
+//! future the caller hands in.
 //!
 //! [`ModelRequest`]: tau_kernel::bridge::ModelRequest
 //! [`ModelReply`]: tau_kernel::bridge::ModelReply
@@ -51,6 +57,8 @@ mod infer;
 mod tool_loop;
 mod toolbox;
 
-pub use infer::{decode_reply, encode_request, infer, InferError};
-pub use tool_loop::{prompt, render_result, tool_loop, ToolLoopError};
+pub use infer::{
+    decode_reply, encode_request, infer, infer_with, should_retry, InferError, RetryPolicy,
+};
+pub use tool_loop::{prompt, render_result, tool_loop, tool_loop_with, ToolLoopError};
 pub use toolbox::{ProjectError, Toolbox};

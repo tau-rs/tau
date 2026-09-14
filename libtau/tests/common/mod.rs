@@ -5,10 +5,13 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tau_kernel::abi::{Budget, Capability, Consumption, DimKey, DriverId, Name, Namespace};
-use tau_kernel::bridge::{Content, ModelReply, ModelRequest, StopReason, Usage, VERSION};
+use tau_kernel::bridge::{
+    Content, ErrorKind, ModelError, ModelReply, ModelRequest, StopReason, Usage, VERSION,
+};
 use tau_kernel::driver::echo::EchoDriver;
 use tau_kernel::driver::{Driver, ToolSchema};
 use tau_kernel::kernel::{AbortHandle, BoxFuture, Delivery, Kernel};
@@ -249,4 +252,52 @@ pub(crate) fn tool_call(id: &str, name: &str, input: Value) -> Content {
 
 pub(crate) fn calls(blocks: Vec<Content>) -> ModelReply {
     reply(blocks, StopReason::ToolCall)
+}
+
+// --- error replies and the recorded wait ----------------------------------
+
+/// A reply whose stop is a driver-side error.
+pub(crate) fn error_reply(kind: ErrorKind, message: &str) -> ModelReply {
+    reply(
+        Vec::new(),
+        StopReason::Error(ModelError {
+            kind,
+            message: message.into(),
+        }),
+    )
+}
+
+/// The driver's `transport` reply for a timeout, as the Anthropic driver
+/// words it.
+pub(crate) fn transport() -> ModelReply {
+    error_reply(ErrorKind::Transport, "no answer within 600s")
+}
+
+/// The driver's `provider` reply for an HTTP status, as the Anthropic
+/// driver words it.
+pub(crate) fn provider(status: u16) -> ModelReply {
+    error_reply(
+        ErrorKind::Provider,
+        &format!("HTTP {status} some_error: text"),
+    )
+}
+
+/// A model-side decline: a stop reason, not an error.
+pub(crate) fn refusal() -> ModelReply {
+    reply(Vec::new(), StopReason::Refusal)
+}
+
+/// The waits a retry policy asked for, in order.
+pub(crate) type Waits = Arc<Mutex<Vec<Duration>>>;
+
+/// A sleep that returns at once and records what it was asked to wait.
+/// The policy's schedule is asserted without wall time.
+pub(crate) fn recording_sleep(
+    waits: &Waits,
+) -> impl FnMut(Duration) -> std::future::Ready<()> + Send + 'static {
+    let waits = Arc::clone(waits);
+    move |d| {
+        waits.lock().unwrap().push(d);
+        std::future::ready(())
+    }
 }
