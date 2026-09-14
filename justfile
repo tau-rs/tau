@@ -39,6 +39,15 @@ abi-review:
 deny:
     cargo deny check advisories licenses bans sources
 
+# The Tier 1 coverage ratchet, locally: line coverage against the merge base
+# with origin/main may not drop more than 0.5 points. Same script as CI, so
+# the numbers match. Override the base with BASE_SHA=<sha> just coverage.
+coverage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export BASE_SHA="${BASE_SHA:-$(git merge-base origin/main HEAD)}"
+    exec ./scripts/coverage-ratchet.sh
+
 # Re-run the Tier 0 gate on every save.
 watch:
     cargo watch -s 'just check'
