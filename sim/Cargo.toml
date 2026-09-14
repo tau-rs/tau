@@ -1,0 +1,24 @@
+[package]
+name        = "tau-sim"
+description = "Deterministic simulation harness for the tau kernel: seeded workloads over the reducer. Test-only."
+publish     = false
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+name = "tau_sim"
+
+[dependencies]
+# `testing` exposes `Capability::mint`, which is the only way to build the
+# `DriverRegistered` entry that boots a run before the state holds any
+# capability. It is the feature's stated purpose: test targets building ABI
+# values without a running kernel. Forging a value confers no authority.
+tau-kernel = { path = "../kernel", features = ["testing"] }
+thiserror  = { workspace = true }
+
+[lints]
+workspace = true
