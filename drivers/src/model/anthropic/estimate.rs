@@ -1,12 +1,28 @@
 //! Input estimation and output clamping: the driver's side of the ceiling
 //! (ADR-0006 §7).
 
+/// How the driver sizes a prompt against `input_bound` (ADR-0006 §7): with
+/// a margin, locally, or exactly, by asking the provider first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InputEstimate {
+    /// [`tokens_for_bytes`] over the serialized provider body: ⌈bytes × 2 ⁄ 5⌉,
+    /// conservative, no extra request. The default.
+    #[default]
+    Bytes,
+    /// `POST /v1/messages/count_tokens` before the call, and the bound is
+    /// checked against the number the provider answers. One more request
+    /// per call, on its own rate limit, at no token cost; it is not
+    /// reported in the call's consumption.
+    CountTokens,
+}
+
 /// A conservative token estimate for `bytes` of prompt: bytes ÷ 3, then
 /// × 1.2, rounded up — that is, ⌈bytes × 2 ⁄ 5⌉.
 ///
 /// A byte count is not a token count; the margin is what absorbs tokenizer
-/// drift, and it errs high on purpose. The exact path is the provider's
-/// token-counting endpoint (#32), which costs a request but no tokens.
+/// drift, and it errs high on purpose. The exact path is
+/// [`InputEstimate::CountTokens`], which costs a request but no tokens.
 #[must_use]
 pub fn tokens_for_bytes(bytes: usize) -> u64 {
     let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
@@ -44,6 +60,11 @@ mod tests {
     #[test]
     fn estimate_saturates_instead_of_overflowing() {
         assert_eq!(tokens_for_bytes(usize::MAX), u64::MAX.div_ceil(5));
+    }
+
+    #[test]
+    fn the_default_estimate_is_bytes() {
+        assert_eq!(InputEstimate::default(), InputEstimate::Bytes);
     }
 
     #[test]
