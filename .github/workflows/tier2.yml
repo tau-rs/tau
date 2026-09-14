@@ -203,9 +203,13 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
+          # cargo-fuzz defaults `--target` to the triple *it* was built for,
+          # and install-action ships a static musl binary; ASan does not
+          # exist for musl. Name the host triple so the build follows rustc.
+          HOST="$(rustc +nightly -vV | sed -n 's/^host: //p')"
           mkdir -p "corpus/$TARGET"
           SECONDS=0
-          cargo +nightly fuzz run "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- \
+          cargo +nightly fuzz run --target "$HOST" "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- \
             -max_total_time=900 -print_final_stats=1 2>&1 | tee fuzz.log
           {
             echo "## fuzz ($TARGET)"
