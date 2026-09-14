@@ -55,8 +55,9 @@
 //! # What it does not do
 //!
 //! No retries — a retry is a second `send`, and that is the loop's call
-//! (#34). No thinking controls: `thinking` blocks in a reply have no bridge
-//! slot and are dropped (#42).
+//! (#34). No effort control, and no thinking control beyond off
+//! ([`ThinkingMode`]): thinking blocks in a reply are sealed into the bridge
+//! and replayed unchanged (ADR-0007).
 
 mod estimate;
 mod wire;
@@ -79,6 +80,7 @@ use tokio::sync::Notify;
 pub use super::ceiling::{clamp_max_tokens, tokens_for_bytes};
 pub use super::{ApiKey, ConfigError};
 pub use estimate::InputEstimate;
+pub use wire::PROVIDER;
 
 /// Where the Messages API lives when the harness does not say otherwise.
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -118,6 +120,25 @@ pub struct AnthropicConfig {
     /// How the prompt is sized against `input_bound`.
     /// [`InputEstimate::Bytes`] from [`new`](Self::new).
     pub estimate: InputEstimate,
+    /// Whether the model thinks. Driver configuration, not the request's
+    /// (ADR-0006 §2, ADR-0007 §5).
+    pub thinking: ThinkingMode,
+}
+
+/// Whether the model thinks (ADR-0007 §5).
+///
+/// Off is the only control: no effort, no budget. A model that does not
+/// allow off (Claude Fable and Mythos, at the time of writing) answers 400,
+/// which the driver reports as `error.provider` with the provider's text —
+/// a harness misconfiguration, surfaced on the first call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThinkingMode {
+    /// Omit the parameter: the model's default, which is thinking on for
+    /// every current model.
+    #[default]
+    ProviderDefault,
+    /// Send `thinking: {"type": "disabled"}`.
+    Disabled,
 }
 
 impl AnthropicConfig {
@@ -142,6 +163,7 @@ impl AnthropicConfig {
             output_price_microusd,
             timeout: DEFAULT_TIMEOUT,
             estimate: InputEstimate::Bytes,
+            thinking: ThinkingMode::default(),
         }
     }
 
@@ -351,8 +373,12 @@ impl Inner {
                 ),
             );
         }
-        let body = match wire::to_provider(&request, &self.config.model, self.config.max_max_tokens)
-        {
+        let body = match wire::to_provider(
+            &request,
+            &self.config.model,
+            self.config.max_max_tokens,
+            self.config.thinking,
+        ) {
             Ok(body) => body,
             Err(err) => return self.refuse(err.kind, err.message),
         };
@@ -560,7 +586,10 @@ fn without_url(e: reqwest::Error) -> String {
 /// instead of being empty.
 fn encode(reply: &ModelReply) -> Vec<u8> {
     serde_json::to_vec(reply).unwrap_or_else(|_| {
-        br#"{"v":1,"content":[],"stop":{"error":{"kind":"provider","message":"reply could not be serialized"}},"usage":{"input_tokens":0,"output_tokens":0}}"#.to_vec()
+        format!(
+            r#"{{"v":{VERSION},"content":[],"stop":{{"error":{{"kind":"provider","message":"reply could not be serialized"}}}},"usage":{{"input_tokens":0,"output_tokens":0}}}}"#
+        )
+        .into_bytes()
     })
 }
 

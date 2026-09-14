@@ -188,11 +188,15 @@ async fn what_the_driver_cannot_honour_is_unsupported_and_nothing_is_sent() {
 
     // A version this driver does not speak.
     let mut future = sendable_request();
-    future.v = 2;
+    future.v = VERSION + 1;
     let (reply, _) = call(&driver, &future).await;
     let err = error_of(&reply);
     assert_eq!(err.kind, ErrorKind::Unsupported);
-    assert!(err.message.contains("version 2"), "{}", err.message);
+    assert!(
+        err.message.contains(&format!("version {}", VERSION + 1)),
+        "{}",
+        err.message
+    );
 
     // Not a request at all.
     let (bytes, consumed) = driver

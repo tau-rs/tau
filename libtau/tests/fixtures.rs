@@ -6,7 +6,7 @@
 
 use libtau::{decode_reply, encode_request, InferError};
 use serde_json::Value;
-use tau_kernel::bridge::{Content, ErrorKind, ModelRequest, StopReason, ToolErrorKind};
+use tau_kernel::bridge::{Content, ErrorKind, ModelRequest, StopReason, ToolErrorKind, VERSION};
 
 const REQUEST: &str = include_str!("../../kernel/tests/fixtures/bridge/request.json");
 const REPLY_TOOL_CALL: &str =
@@ -43,11 +43,12 @@ fn the_reply_fixtures_decode() {
 #[test]
 fn a_reply_from_another_bridge_version_is_refused() {
     let mut v: Value = serde_json::from_str(REPLY_TOOL_CALL).unwrap();
+    let other_version = VERSION + 1;
     v.as_object_mut()
         .unwrap()
-        .insert("v".into(), Value::from(2));
+        .insert("v".into(), Value::from(other_version));
     match decode_reply(v.to_string().as_bytes()) {
-        Err(InferError::Version { found: 2 }) => {}
+        Err(InferError::Version { found }) if found == other_version => {}
         other => panic!("expected a version error, got {other:?}"),
     }
     assert!(matches!(

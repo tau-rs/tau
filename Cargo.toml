@@ -23,6 +23,10 @@ insta      = { version = "1", features = ["json"] }
 # JSON Schema (draft 2020-12) validation for the tool loop's `bad_args`
 # (ADR-0006 §4). No HTTP resolver, no network: schemas come from `describe()`.
 boon       = "0.6"
+# Property tests (HANDOFF §8, Tier 2 item 1). No `fork`/`timeout`: the
+# reducer is a pure fold, so a case cannot hang, and both would drag in
+# rusty-fork and tempfile for nothing.
+proptest   = { version = "1", default-features = false, features = ["std"] }
 
 # The reducer is a pure, deterministic fold. `-D warnings` is the floor; the
 # lints below are the ones whose violation would be a *correctness* bug in a

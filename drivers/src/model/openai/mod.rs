@@ -54,8 +54,10 @@
 //!
 //! No retries — a retry is a second `send`, and that is the loop's call
 //! (#34). No token counting: chat-completions servers have no counting
-//! endpoint, so the byte estimate is the estimate. No thinking controls:
-//! `reasoning_content` in a reply has no bridge slot and is dropped (#42).
+//! endpoint, so the byte estimate is the estimate. No thinking format of
+//! its own: a `thinking` block in a request is another provider's and is
+//! dropped (ADR-0007 §2); `reasoning_content` in a reply is ignored, not
+//! sealed.
 
 mod wire;
 
@@ -523,7 +525,10 @@ fn without_url(e: reqwest::Error) -> String {
 /// instead of being empty.
 fn encode(reply: &ModelReply) -> Vec<u8> {
     serde_json::to_vec(reply).unwrap_or_else(|_| {
-        br#"{"v":1,"content":[],"stop":{"error":{"kind":"provider","message":"reply could not be serialized"}},"usage":{"input_tokens":0,"output_tokens":0}}"#.to_vec()
+        format!(
+            r#"{{"v":{VERSION},"content":[],"stop":{{"error":{{"kind":"provider","message":"reply could not be serialized"}}}},"usage":{{"input_tokens":0,"output_tokens":0}}}}"#
+        )
+        .into_bytes()
     })
 }
 

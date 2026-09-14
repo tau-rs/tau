@@ -14,12 +14,15 @@
 //! | `sampling.stop_sequences` | `stop` |
 //! | `stop` | `finish_reason`: `stop`→`end_turn`, `tool_calls`→`tool_call`, `length`→`max_tokens`, `content_filter`→`refusal` |
 //! | `usage` | `usage.prompt_tokens`, `usage.completion_tokens` |
+//! | `thinking` block | dropped, whatever its `provider` (ADR-0007 §2) |
 //!
 //! A `user` turn is split: every `tool_result` becomes a `tool` message
 //! first, in order, so they sit right after the assistant's `tool_calls`
 //! as the endpoint requires; any text left becomes one `user` message after
-//! them. `reasoning_content` (vLLM's thinking) has no bridge slot and is
-//! ignored on the way out, as the Anthropic driver drops `thinking` (#42).
+//! them. This driver defines no thinking format of its own: a `thinking`
+//! block in a request is another provider's reasoning and is dropped, as
+//! ADR-0007 §2 allows, and `reasoning_content` in a reply (vLLM's thinking)
+//! is ignored rather than sealed.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -124,7 +127,7 @@ pub(super) struct Choice {
     pub(super) finish_reason: Option<String>,
 }
 
-/// The assistant's message. Fields v1 has no slot for (`refusal`,
+/// The assistant's message. Fields the bridge has no slot for (`refusal`,
 /// `reasoning_content`, `logprobs`) are ignored.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(super) struct ResponseMessage {
@@ -186,8 +189,9 @@ pub(super) fn parse_error(body: &[u8]) -> Option<ErrorDetail> {
 /// `max_tokens` is clamped to `max_max_tokens` and carried in the field
 /// `output_cap` names. Refuses (`unsupported`) a block in a turn that has no
 /// chat-completions shape: a `tool_call` in a `user` turn, a `tool_result`
-/// in an `assistant` turn. The bridge version is the caller's check; this
-/// function assumes a v1 request.
+/// in an `assistant` turn. A `thinking` block is dropped: it is another
+/// provider's (ADR-0007 §2). The bridge version is the caller's check; this
+/// function assumes a request it can read.
 pub(super) fn to_provider(
     request: &ModelRequest,
     model: &str,
@@ -241,6 +245,9 @@ fn message_to_provider(message: &Message, out: &mut Vec<RequestMessage>) -> Resu
     for block in &message.content {
         match (message.role, block) {
             (_, Content::Text { text }) => texts.push(text),
+            // Another provider's reasoning: unreadable here by definition,
+            // dropped the way the provider itself would (ADR-0007 §2).
+            (_, Content::Thinking { .. }) => {}
             (Role::Assistant, Content::ToolCall { id, name, input }) => tool_calls.push(ToolCall {
                 id: id.clone(),
                 kind: "function".to_owned(),
@@ -320,7 +327,7 @@ pub(super) fn to_bridge(response: &Response, v: u16) -> Result<ModelReply, Model
     for call in &choice.message.tool_calls {
         if call.kind != "function" {
             return Err(provider(&format!(
-                "tool call `{}` has type `{}`, which bridge v1 has no slot for",
+                "tool call `{}` has type `{}`, which the bridge has no slot for",
                 call.id, call.kind
             )));
         }
@@ -387,6 +394,8 @@ mod tests {
         include_str!("../../../../kernel/tests/fixtures/bridge/reply-tool-call.json");
     const TOOL_RESULTS: &str =
         include_str!("../../../../kernel/tests/fixtures/bridge/tool-results.json");
+    const REQUEST_THINKING: &str =
+        include_str!("../../../../kernel/tests/fixtures/bridge/request-thinking.json");
     const OPENAI_REQUEST: &str = include_str!("../../../tests/fixtures/openai/request.json");
     const OPENAI_RESPONSE: &str =
         include_str!("../../../tests/fixtures/openai/response-tool-call.json");
@@ -405,6 +414,19 @@ mod tests {
         assert_eq!(serde_json::to_value(&body).unwrap(), expected);
         let back: Request = serde_json::from_value(expected).unwrap();
         assert_eq!(back, body, "the provider body round-trips");
+    }
+
+    #[test]
+    fn the_adr_0007_thinking_request_maps_with_its_foreign_blocks_dropped() {
+        let request: ModelRequest = serde_json::from_str(REQUEST_THINKING).unwrap();
+        let body = to_provider(&request, MODEL, 1_024, OutputCap::MaxTokens).unwrap();
+        // The same body as the plain example, which this fixture is plus
+        // two `anthropic` thinking blocks and minus the sampling.
+        let mut expected: Value = serde_json::from_str(OPENAI_REQUEST).unwrap();
+        let fields = expected.as_object_mut().unwrap();
+        fields.remove("temperature");
+        fields.remove("seed");
+        assert_eq!(serde_json::to_value(&body).unwrap(), expected);
     }
 
     #[test]
