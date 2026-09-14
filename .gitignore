@@ -5,3 +5,11 @@
 
 # Determinism fixtures are logs on purpose; re-include them past any global *.log rule.
 !kernel/tests/fixtures/*.log
+
+# Fuzzing (fuzz/): the seed corpora are committed; what libFuzzer grows, the
+# crashes it finds, and its build tree are not. Corpus persistence is Tier 3.
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage
+!fuzz/seeds/**

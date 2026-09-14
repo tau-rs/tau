@@ -11,9 +11,11 @@ check: fmt-check lint test-quick
 # Format everything.
 fmt:
     cargo fmt --all
+    cargo fmt --manifest-path fuzz/Cargo.toml --all
 
 fmt-check:
     cargo fmt --all --check
+    cargo fmt --manifest-path fuzz/Cargo.toml --all --check
 
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -38,6 +40,17 @@ abi-review:
 
 deny:
     cargo deny check advisories licenses bans sources
+    cargo deny --manifest-path fuzz/Cargo.toml check --config deny.toml licenses bans sources
+
+# Fuzz one target for `secs` seconds (Tier 2 item 3). Needs nightly and
+# cargo-fuzz; the seed corpus is read, and what libFuzzer grows lands in
+# fuzz/corpus/<target>, which is not committed. Targets: fuzz/fuzz_targets/.
+fuzz target secs="60":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd fuzz
+    mkdir -p "corpus/{{target}}"
+    cargo +nightly fuzz run "{{target}}" "corpus/{{target}}" "seeds/{{target}}" -- -max_total_time={{secs}}
 
 # The Tier 1 coverage ratchet, locally: line coverage against the merge base
 # with origin/main may not drop more than 0.5 points. Same script as CI, so

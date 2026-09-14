@@ -7,14 +7,16 @@
 # not in the `tier1` fan-in and is not a required check; if it must gate a
 # merge, label the PR and wait for it.
 #
-# Today this is items 1 and 2 of the seven. The simulation soak: 10^6 events
-# on Linux, refolded on the same build, then refolded on macOS from the log
-# the Linux job uploaded. ADR-0003 calls the second half the check that
-# catches what a single machine never sees — iteration-order and formatting
-# differences that only show up on another platform. And the property tests,
-# cranked: the four ADR-0002 properties over arbitrary trees, at a case count
-# `just check` could never afford. The other five items are tracked in their
-# own issues (refs #6).
+# Today this is items 1, 2 and 3 of the seven. The simulation soak: 10^6
+# events on Linux, refolded on the same build, then refolded on macOS from
+# the log the Linux job uploaded. ADR-0003 calls the second half the check
+# that catches what a single machine never sees — iteration-order and
+# formatting differences that only show up on another platform. The property
+# tests, cranked: the four ADR-0002 properties over arbitrary trees, at a
+# case count `just check` could never afford. And fuzzing: fifteen minutes
+# per target on the paths attacker-controlled bytes enter by — the envelope,
+# the log file, and the model reply. The other four items are tracked in
+# their own issues (refs #6).
 
 name: tier2
 
@@ -186,3 +188,78 @@ jobs:
             echo "- $(grep '^test result' proptest.txt)"
             echo "- wall: ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"
+  # Item 3: fuzzing, 15 minutes per target. Model output is attacker-
+  # controlled input, so the targets are the exact paths bytes from outside
+  # enter by (fuzz/fuzz_targets/). The seed corpora are committed; what
+  # libFuzzer grows is not kept — corpus persistence is Tier 3 (#7). A crash
+  # is kept: the reproducer is uploaded so the failure can be replayed.
+  #
+  # cargo-fuzz needs nightly for the sanitizer flags. Nightly is installed
+  # beside the pinned toolchain and named per invocation; rust-toolchain.toml
+  # stays the single source of truth for everything else. RUSTFLAGS is
+  # cleared for this job: `-D warnings` on a moving nightly would make it
+  # red for lint churn in kernel/, which is the toolchain canary's job (#7),
+  # not this one's. The fuzz crate itself is held to clippy separately below.
+  fuzz:
+    name: fuzz (${{ matrix.target }}, 15 min)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [msg-envelope, log-read-from, decode-reply-bytes, decode-reply-hostile]
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly beside the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+          cargo +nightly --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz -> target
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-fuzz
+      - name: Lockfile is current, targets are clean
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          cargo +nightly fetch --locked
+          cargo +nightly fmt --all --check
+          cargo +nightly clippy --all-targets --locked -- -D warnings
+      - name: Fuzz
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # cargo-fuzz defaults `--target` to the triple *it* was built for,
+          # and install-action ships a static musl binary; ASan does not
+          # exist for musl. Name the host triple so the build follows rustc.
+          HOST="$(rustc +nightly -vV | sed -n 's/^host: //p')"
+          mkdir -p "corpus/$TARGET"
+          SECONDS=0
+          cargo +nightly fuzz run --target "$HOST" "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- \
+            -max_total_time=900 -print_final_stats=1 2>&1 | tee fuzz.log
+          {
+            echo "## fuzz ($TARGET)"
+            echo
+            echo "- seeds: $(ls "seeds/$TARGET" | wc -l), corpus grown to: $(ls "corpus/$TARGET" | wc -l)"
+            echo "- $(grep -E '^#[0-9]+\s+DONE' fuzz.log | tail -1 || echo 'no DONE line')"
+            echo "- wall: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the reproducer
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/
+            fuzz/fuzz.log
+          retention-days: 7
+          if-no-files-found: warn

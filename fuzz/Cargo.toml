@@ -1,0 +1,66 @@
+# The fuzz crate: Tier 2 item 3 (docs/HANDOFF.md §8), issue #36.
+#
+# Not a workspace member, on purpose. `just check` runs on every save, and a
+# member here would make it compile libFuzzer's C++ runtime and four binaries
+# that only mean anything under nightly's sanitizer flags. The root manifest
+# lists this directory under `exclude`; the crate has its own lockfile, and
+# `just deny` checks it against the same deny.toml.
+#
+# Four targets, one invariant each: arbitrary bytes on a path attacker-
+# controlled input enters by produce a value or an `Err`, never a panic and
+# never an allocation beyond the input's size. Where a value comes out, it
+# must also survive a round trip through its own serializer.
+#
+# Local run: `just fuzz <target> [seconds]`. Needs nightly and cargo-fuzz.
+
+[package]
+name        = "tau-fuzz"
+version     = "0.0.0"
+edition     = "2021"
+publish     = false
+license     = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary     = { version = "1", features = ["derive"] }
+serde_json    = "1"
+tau-kernel    = { path = "../kernel" }
+libtau        = { path = "../libtau" }
+
+# The kernel's own floor, restated because an excluded crate cannot inherit
+# `[workspace.lints]`. A target that unwraps would turn a finding into noise.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic       = "deny"
+
+[[bin]]
+name  = "msg-envelope"
+path  = "fuzz_targets/msg_envelope.rs"
+test  = false
+doc   = false
+bench = false
+
+[[bin]]
+name  = "log-read-from"
+path  = "fuzz_targets/log_read_from.rs"
+test  = false
+doc   = false
+bench = false
+
+[[bin]]
+name  = "decode-reply-bytes"
+path  = "fuzz_targets/decode_reply_bytes.rs"
+test  = false
+doc   = false
+bench = false
+
+[[bin]]
+name  = "decode-reply-hostile"
+path  = "fuzz_targets/decode_reply_hostile.rs"
+test  = false
+doc   = false
+bench = false

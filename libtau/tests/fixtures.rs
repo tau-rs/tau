@@ -92,3 +92,20 @@ fn the_tool_results_fixture_is_what_the_loop_renders() {
     assert_eq!(content(2), "denied: this agent does not hold `search`");
     assert!(content(1).starts_with("bad args for `search`: "));
 }
+
+/// Found by the Tier 2 fuzz target on `decode_reply` in its first fifteen
+/// minutes: serde_json's default float parser is not correctly rounded, so
+/// a tool-call `input` decoded, re-encoded, and decoded again could hold a
+/// different f64 than the model wrote. The workspace enables
+/// `float_roundtrip`; this pins that it stays enabled.
+#[test]
+fn a_tool_call_input_with_a_float_at_the_edge_survives_a_round_trip() {
+    let json = format!(
+        r#"{{"v":{VERSION},"content":[{{"type":"tool_call","id":"call_1","name":"compute",
+        "input":{{"x":1.2999999999999999e+73,"y":-0,"z":9007199254740993}}}}],
+        "stop":"tool_call","usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+    );
+    let first = decode_reply(json.as_bytes()).unwrap();
+    let again = decode_reply(&serde_json::to_vec(&first).unwrap()).unwrap();
+    assert_eq!(again, first);
+}
