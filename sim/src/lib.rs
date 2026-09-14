@@ -319,6 +319,9 @@ struct Sim {
     /// Everything past this cursor finished since the last entry.
     completions_seen: usize,
     options: Options,
+    /// Whether this run checks conservation at all. [`run_unchecked`] turns
+    /// it off for a caller that owns the properties itself.
+    check: bool,
     accepted: u64,
     refused: u64,
     peak_live: u64,
@@ -335,7 +338,7 @@ enum Verdict {
 impl Sim {
     /// Registers the drivers and spawns the root. Every boot entry is
     /// required.
-    fn boot(seed: u64, options: &Options) -> Result<Self, SimError> {
+    fn boot(seed: u64, options: &Options, check: bool) -> Result<Self, SimError> {
         let mut sim = Self {
             rng: Rng::seeded(seed),
             state: State::initial(),
@@ -348,6 +351,7 @@ impl Sim {
             open: BTreeMap::new(),
             completions_seen: 0,
             options: options.clone(),
+            check,
             accepted: 0,
             refused: 0,
             peak_live: 0,
@@ -397,7 +401,7 @@ impl Sim {
             .options
             .check_every
             .is_some_and(|k| self.since_check >= k);
-        if due && self.state.agent(self.root).is_some() {
+        if self.check && due && self.state.agent(self.root).is_some() {
             self.since_check = 0;
             conserved(&self.state, &self.grant)?;
         }
@@ -736,7 +740,10 @@ impl Sim {
         }
         // The end check, whatever the sampling: a drained tree must still
         // account for every unit of the grant.
-        conserved(&self.state, &self.grant)
+        if self.check {
+            conserved(&self.state, &self.grant)?;
+        }
+        Ok(())
     }
 }
 
@@ -760,7 +767,25 @@ pub fn run(seed: u64, events: u64) -> Result<Report, SimError> {
 ///
 /// As [`run`].
 pub fn run_with(seed: u64, options: &Options) -> Result<Report, SimError> {
-    let mut sim = Sim::boot(seed, options)?;
+    finish(Sim::boot(seed, options, true)?)
+}
+
+/// Runs one simulation shaped by `options` without checking conservation —
+/// not along the way, not at the end. `check_every` is ignored.
+///
+/// For a caller that checks the properties itself over the log it gets back
+/// (the Tier 2 property tests): a run that checked and failed would return
+/// the failure without the entries that led to it, and a counterexample
+/// nobody can read is not much of a counterexample.
+///
+/// # Errors
+///
+/// As [`run`], less [`SimError::NotConserved`].
+pub fn run_unchecked(seed: u64, options: &Options) -> Result<Report, SimError> {
+    finish(Sim::boot(seed, options, false)?)
+}
+
+fn finish(mut sim: Sim) -> Result<Report, SimError> {
     sim.drive()?;
     sim.drain()?;
     Ok(Report {
