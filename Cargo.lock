@@ -1144,6 +1144,7 @@ dependencies = [
 name = "tau-drivers"
 version = "0.0.0"
 dependencies = [
+ "libtau",
  "reqwest",
  "serde",
  "serde_json",

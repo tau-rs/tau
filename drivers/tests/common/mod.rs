@@ -5,7 +5,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -43,6 +44,14 @@ pub(crate) enum Answer {
     /// Read the request, then hold the connection open until the client
     /// closes it, and signal `closed` when that happens.
     Hang(Arc<Notify>),
+    /// One `(status, body)` per connection, in order; a connection past the
+    /// end of the script gets a 500 so the test fails loudly.
+    Script(Arc<Mutex<VecDeque<(u16, String)>>>),
+}
+
+/// A [`Answer::Script`] over `answers`, in order.
+pub(crate) fn script(answers: impl IntoIterator<Item = (u16, String)>) -> Answer {
+    Answer::Script(Arc::new(Mutex::new(answers.into_iter().collect())))
 }
 
 /// A running stub.
@@ -120,6 +129,17 @@ async fn read_request(
     // Reported before answering: a `Hang` answer only ends when the client
     // goes away, and the test needs to know the request arrived before that.
     let _ = tx.send(Captured { head, body });
+    let answer = match answer {
+        Answer::Script(script) => {
+            let next = script.lock().unwrap().pop_front();
+            let (status, body) = next.unwrap_or((
+                500,
+                r#"{"type":"error","error":{"type":"stub","message":"script exhausted"}}"#.into(),
+            ));
+            Answer::Json(status, body)
+        }
+        other => other,
+    };
     match answer {
         Answer::Json(status, body) => {
             let reason = match status {
@@ -144,6 +164,7 @@ async fn read_request(
             let _ = stream.read(&mut scratch).await;
             closed.notify_one();
         }
+        Answer::Script(_) => unreachable!("resolved above"),
     }
     Some(())
 }

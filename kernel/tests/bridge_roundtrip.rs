@@ -18,6 +18,8 @@ const REQUEST: &str = include_str!("fixtures/bridge/request.json");
 const REPLY_TOOL_CALL: &str = include_str!("fixtures/bridge/reply-tool-call.json");
 const REPLY_ERROR: &str = include_str!("fixtures/bridge/reply-error.json");
 const TOOL_RESULTS: &str = include_str!("fixtures/bridge/tool-results.json");
+const REQUEST_THINKING: &str = include_str!("fixtures/bridge/request-thinking.json");
+const REPLY_THINKING: &str = include_str!("fixtures/bridge/reply-thinking.json");
 
 /// Parses `json` as `T`, serializes it back, and checks the value is the same.
 /// Returns the typed value for further assertions.
@@ -141,8 +143,8 @@ fn optional_fields_default_when_absent() {
     // The smallest request a v1 driver must accept: no system, no tools, no
     // sampling. Absent means "provider default", and the fields must not
     // reappear on the way out.
-    let minimal = r#"{"v":1,"messages":[],"max_tokens":16}"#;
-    let request: ModelRequest = round_trip(minimal);
+    let minimal = format!(r#"{{"v":{VERSION},"messages":[],"max_tokens":16}}"#);
+    let request: ModelRequest = round_trip(&minimal);
     assert_eq!(request.system, None);
     assert!(request.tools.is_empty());
     assert_eq!(request.sampling, None);
@@ -158,6 +160,67 @@ fn optional_fields_default_when_absent() {
             ..
         }
     ));
+}
+
+/// The two ADR-0007 examples: a sealed `thinking` block and a sealed
+/// `redacted_thinking` block, each carried as the provider wrote it.
+fn thinking_blocks() -> [Content; 2] {
+    [
+        Content::Thinking {
+            provider: "anthropic".into(),
+            data: serde_json::json!({
+                "type": "thinking", "thinking": "", "signature": "EqQBCkYIBxgCKkBtX3Rob3VnaHRfc2ln"
+            }),
+        },
+        Content::Thinking {
+            provider: "anthropic".into(),
+            data: serde_json::json!({
+                "type": "redacted_thinking", "data": "EmwKAhgBEgxyZWRhY3RlZC1ibG9i"
+            }),
+        },
+    ]
+}
+
+#[test]
+fn reply_with_thinking_round_trips_and_the_blocks_are_opaque() {
+    let reply: ModelReply = round_trip(REPLY_THINKING);
+    assert_eq!(reply.v, VERSION);
+    assert_eq!(reply.stop, StopReason::ToolCall);
+    let [thinking, redacted] = thinking_blocks();
+    assert_eq!(reply.content.first(), Some(&thinking));
+    assert_eq!(reply.content.get(1), Some(&redacted));
+    assert!(matches!(reply.content.get(2), Some(Content::Text { .. })));
+    assert!(matches!(
+        reply.content.get(3),
+        Some(Content::ToolCall { .. })
+    ));
+
+    // `data` is whatever the provider wrote: the bridge does not know the
+    // shape, so a shape it has never seen is carried just the same.
+    let novel = r#"{"type":"thinking","provider":"someone","data":{"anything":[1,{"goes":null}]}}"#;
+    let block: Content = round_trip(novel);
+    assert!(matches!(block, Content::Thinking { provider, .. } if provider == "someone"));
+}
+
+#[test]
+fn a_request_replays_the_thinking_blocks_where_the_reply_put_them() {
+    // The reply fixture's assistant turn, appended to the transcript as the
+    // loop appends it: the thinking blocks lead, in order, unchanged.
+    let request: ModelRequest = round_trip(REQUEST_THINKING);
+    let reply: ModelReply = round_trip(REPLY_THINKING);
+    let assistant = request.messages.get(1).expect("the assistant turn");
+    assert_eq!(assistant.role, Role::Assistant);
+    assert_eq!(assistant.content, reply.content);
+}
+
+#[test]
+fn a_reply_from_another_bridge_version_is_not_this_one() {
+    // The version is a number the reader checks, not a shape it parses:
+    // a `1` parses fine and it is the reader's job to refuse it.
+    let old =
+        r#"{"v":1,"content":[],"stop":"end_turn","usage":{"input_tokens":0,"output_tokens":0}}"#;
+    let reply: ModelReply = serde_json::from_str(old).unwrap();
+    assert_ne!(reply.v, VERSION);
 }
 
 #[test]
