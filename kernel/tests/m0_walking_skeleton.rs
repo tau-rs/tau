@@ -150,7 +150,7 @@ async fn the_loop_runs_and_its_log_refolds_to_the_same_state() {
     );
     assert!(child_rec.mailbox.is_empty(), "the reply was resolved");
     assert!(state.is_drained());
-    assert!(state.completed().is_empty(), "everything was claimed");
+    assert_eq!(state.completed().len(), 0, "everything was claimed");
 
     // --- the log is the kernel: two folds, one hash, equal to the live state
     let live = kernel.state_hash();
