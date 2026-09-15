@@ -2,4 +2,4 @@
 source: kernel/tests/m1b_wall.rs
 expression: state.hash().to_string()
 ---
-5770b438eb10f2b81fa1e8e24c14ea58173bd4434ee397b036605e63cf05565c
+63ad529e70a483a528b564ffc8577eaa5e8d1991710cf8134155e036e78c625e

@@ -1222,3 +1222,81 @@ fn a_subtree_walks_through_a_dead_middle_node() {
     assert!(state.is_drained());
     views_agree_with_a_full_sweep(&state);
 }
+
+// ------------------------------------------------------------------ hash
+
+/// A tree with something in every index: a live child, an exited child whose
+/// outcome is unclaimed, and a grandchild under the live one.
+fn indexed() -> (State, AgentId) {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned(s, root, 10));
+    step(&mut state, |s| spawned(s, root, 10));
+    let (live, done) = (agent(1), agent(2));
+    step(&mut state, |s| spawned(s, live, 5));
+    step(&mut state, |s| exited(s, done));
+    (state, root)
+}
+
+#[test]
+fn state_round_trips_through_serde_with_its_indexes() {
+    let (state, _) = indexed();
+    let json = serde_json::to_string(&state).unwrap();
+    let back: State = serde_json::from_str(&json).unwrap();
+    // Derived `PartialEq` compares the skipped indexes too, so equality here
+    // means the rebuild in `From<Canonical>` reproduced them.
+    assert_eq!(back, state);
+    assert_eq!(back.hash(), state.hash());
+}
+
+#[test]
+fn the_hash_serializes_canonical_state_only() {
+    let (state, _) = indexed();
+    let json: serde_json::Value = serde_json::to_value(&state).unwrap();
+    let object = json.as_object().unwrap();
+    for derived in ["live", "children", "unclaimed", "next_completion"] {
+        assert!(!object.contains_key(derived), "{derived} reached the wire");
+    }
+    let completed = object["completed"].as_array().unwrap();
+    assert_eq!(completed.len(), 1, "one unclaimed outcome, as a sequence");
+    let agent_json = completed.first().and_then(|c| c.get("agent")).unwrap();
+    assert_eq!(*agent_json, serde_json::to_value(agent(2)).unwrap());
+}
+
+#[test]
+fn the_hash_does_not_see_the_completion_ordinal() {
+    // Two children finish and are claimed: the ordinal counter advanced to 2
+    // and the completion map is empty again.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned(s, root, 10));
+    step(&mut state, |s| spawned(s, root, 10));
+    let (first, second) = (agent(1), agent(2));
+    step(&mut state, |s| exited(s, second));
+    step(&mut state, |s| exited(s, first));
+    step(&mut state, |s| claimed(s, second, Some(root)));
+    step(&mut state, |s| claimed(s, first, Some(root)));
+
+    // A round trip rebuilds the same canonical state with the counter back at
+    // zero: the only way to hold two states that differ in nothing but the
+    // ordinal, since agent records persist.
+    let json = serde_json::to_string(&state).unwrap();
+    let reset: State = serde_json::from_str(&json).unwrap();
+    assert_ne!(reset, state, "the counter was compacted on deserialize");
+    assert_eq!(reset.hash(), state.hash(), "the hash saw the counter");
+
+    // And the two keep agreeing once completions happen again: the ordinal
+    // only orders, it never reaches the hash.
+    let mut advanced = state;
+    let mut compacted = reset;
+    for s in [&mut advanced, &mut compacted] {
+        step(s, |s| spawned(s, root, 10));
+        step(s, |s| spawned(s, root, 10));
+        step(s, |s| exited(s, agent(4)));
+        step(s, |s| exited(s, agent(3)));
+    }
+    assert_eq!(advanced.hash(), compacted.hash());
+    assert_eq!(
+        advanced.next_completed_child(root).unwrap().agent,
+        compacted.next_completed_child(root).unwrap().agent
+    );
+    assert_eq!(advanced.next_completed_child(root).unwrap().agent, agent(4));
+}
