@@ -27,6 +27,16 @@
 //! handles of the agents the reducer just declared dead. The reducer decides;
 //! the executor obeys. Every syscall also fails closed on a finished agent, so
 //! a task the executor has not yet reaped cannot act.
+//!
+//! # Hooks, under the lock
+//!
+//! [`Kernel::attach`] installs a hook program at boot. At each pinned point
+//! (ADR-0008 §1) the syscall builds a [`HookEvent`], [`Inner::consult`]s
+//! every hook attached there in install order under the same lock, and
+//! commits the roll call as one `Verdicts` entry plus one `Emitted` entry
+//! per note — before the governed entry at a pre point, after the causing
+//! entry at an on point. The live closures live here beside the drivers; the
+//! reducer holds only their records, and the fold never runs one.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -35,11 +45,14 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
 
 use crate::abi::{
-    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DriverId, Endpoint, Msg, MsgKind,
-    Namespace,
+    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
+    Msg, MsgKind, Namespace, Seq,
 };
 use crate::blob::BlobStore;
 use crate::driver::{Driver, ToolSchema};
+use crate::hook::{
+    crossings, FailureMode, HookEvent, HookFailure, HookPoint, HookProgram, Roll, Ruling, Verdict,
+};
 use crate::log::{Entry, Log, LogError};
 use crate::reducer::{Outcome, Refusal, State, StateHash, Status};
 use crate::syscall::{CancelMode, Exit, ExitResult, Handle, Program, WaitFor};
@@ -77,6 +90,15 @@ pub enum KernelError {
     /// resolve, so it resolves to this instead.
     #[error("agent {0} has no children to wait for")]
     NoChildren(AgentId),
+    /// A hook denied it (ADR-0008 §3). The roll call is in the log; the
+    /// governed entry is not.
+    #[error("denied by {hook}: {reason}")]
+    Denied {
+        /// The hook that said no.
+        hook: HookId,
+        /// Its reason — or, for a hook that failed closed, its error.
+        reason: String,
+    },
     /// The kernel's log and state disagree. Nothing further will be accepted.
     #[error("kernel faulted: {reason}")]
     Faulted {
@@ -112,6 +134,9 @@ pub(crate) struct Inner {
     /// Registered drivers, so `cancel` can reach `abandon` while the driver's
     /// own loop is inside `handle`.
     drivers: BTreeMap<DriverId, Arc<dyn Driver>>,
+    /// The live hook programs, by id. Cache, not state: the reducer holds
+    /// their records, and the fold never consults them.
+    hooks: BTreeMap<HookId, HookProgram>,
     /// Which driver holds each open request. Cache, not state: derivable from
     /// the `Sent` entries' capabilities, kept warm for `cancel`.
     in_flight: BTreeMap<Corr, DriverId>,
@@ -197,6 +222,238 @@ impl Inner {
         self.wake_drain_if_done();
         handles
     }
+
+    // ------------------------------------------------------------------ hooks
+
+    /// Whether any hook is attached at `point`; the cheap gate before an
+    /// event is built.
+    fn hooked(&self, point: &HookPoint) -> bool {
+        self.state.hooks_at(point).next().is_some()
+    }
+
+    /// Whether any hook is attached at any `OnBudget` point.
+    fn budget_hooked(&self) -> bool {
+        self.state.budget_points().next().is_some()
+    }
+
+    /// The facts every event carries about its subject: parent and depth.
+    fn lineage(&self, agent: AgentId) -> (Option<AgentId>, u64) {
+        self.state.agent(agent).map_or((None, 0), |a| {
+            (a.parent, a.budget.get(&DimKey::Depth).unwrap_or(0))
+        })
+    }
+
+    /// Consults every hook at `point` about `event`, in install order, and
+    /// commits what they said: one `Verdicts` entry, then one `Emitted` per
+    /// note. Stops at the first ruling that stops it. Returns the hook that
+    /// denied and its reason, if one did.
+    ///
+    /// Writes nothing when no hook is attached at `point`.
+    fn consult(
+        &mut self,
+        point: &HookPoint,
+        event: &HookEvent,
+    ) -> Result<Option<(HookId, String)>, KernelError> {
+        let ids: Vec<HookId> = self.state.hooks_at(point).collect();
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        let mut roll: Roll = Vec::with_capacity(ids.len());
+        let mut notes: Vec<(HookId, AgentId, Vec<u8>)> = Vec::new();
+        let mut denied = None;
+        for id in ids {
+            let (Some(program), Some(record)) = (self.hooks.get(&id), self.state.hook(id)) else {
+                // Attached in the log but not live here: this kernel did not
+                // install it, which a boot-only registry makes impossible.
+                return Err(KernelError::Faulted {
+                    reason: format!("{id} is attached but has no program"),
+                });
+            };
+            let mode = record.failure;
+            let answer = if point.admits_deny() {
+                program.run(event)
+            } else {
+                // A `Deny` where nothing can be stopped is a program failure
+                // (ADR-0008 §1), and at an on point the mode does not matter.
+                match program.run(event) {
+                    Ok(Verdict::Deny(reason)) => Err(HookFailure::new(format!(
+                        "deny at {point}, which admits none: {reason}"
+                    ))),
+                    other => other,
+                }
+            };
+            let ruling = match answer {
+                Ok(Verdict::Allow) => Ruling::Allow,
+                Ok(Verdict::Deny(reason)) => {
+                    let blob = self.blobs.put(reason.as_bytes());
+                    denied = Some((id, reason));
+                    Ruling::Deny(blob)
+                }
+                Ok(Verdict::Emit { to, payload }) => {
+                    let blob = self.blobs.put(&payload);
+                    notes.push((id, to, payload));
+                    Ruling::Emit { to, payload: blob }
+                }
+                Err(HookFailure { message }) => {
+                    let error = self.blobs.put(message.as_bytes());
+                    if mode == FailureMode::Closed && point.admits_deny() {
+                        denied = Some((id, message));
+                    }
+                    Ruling::Failed { mode, error }
+                }
+            };
+            let stop = ruling.stops(point);
+            roll.push((id, ruling));
+            if stop {
+                break;
+            }
+        }
+        let entry = Entry::Verdicts {
+            seq: self.state.next_seq(),
+            point: point.clone(),
+            subject: event.subject(),
+            roll,
+        };
+        self.commit(entry)?;
+        for (hook, to, payload) in notes {
+            let msg = Msg::new(
+                self.state.next_seq(),
+                Endpoint::Hook { id: hook },
+                MsgKind::Notice,
+                BlobStore::digest(&payload),
+            );
+            self.commit(Entry::Emitted { hook, to, msg })?;
+            self.wake_agent(to);
+        }
+        Ok(denied)
+    }
+
+    /// The `OnExit` facts of `agent`, captured before the entry that ends
+    /// it: what it holds, budget and reservations, goes back up the tree in
+    /// that apply and is gone from the record afterwards.
+    fn before_exit(&self, agent: AgentId) -> Option<ExitFacts> {
+        let a = self.state.agent(agent)?;
+        let mut unspent = a.budget.clone();
+        for held in a.reserved.values() {
+            // Restoring what was carved from this very grant cannot
+            // overflow; the fallback keeps the kernel free of `unwrap`.
+            let _ = unspent.restore(held);
+        }
+        Some(ExitFacts {
+            agent,
+            parent: a.parent,
+            depth: a.budget.get(&DimKey::Depth).unwrap_or(0),
+            unspent,
+        })
+    }
+
+    /// Everything an on point needs to know before an entry is committed,
+    /// gathered only when a hook could use it.
+    fn before(&self, entry: &Entry, may_end: &[AgentId]) -> Aftermath {
+        let exits = if self.hooked(&HookPoint::OnExit) {
+            may_end
+                .iter()
+                .filter_map(|id| self.before_exit(*id))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let remaining = if self.budget_hooked() {
+            self.state.remaining(&self.state.budget_candidates(entry))
+        } else {
+            Vec::new()
+        };
+        Aftermath {
+            seq: entry.seq(),
+            mark: self.state.completion_mark(),
+            exits,
+            remaining,
+            result: None,
+        }
+    }
+
+    /// Fires the on points an entry caused, in this order: `OnExit` for
+    /// every agent it finished, deepest first; then `OnBudget` for every
+    /// crossing, in point order. A `Deny` here is a recorded failure, so
+    /// nothing is returned.
+    fn after(&mut self, before: Aftermath) -> Result<(), KernelError> {
+        let Aftermath {
+            seq,
+            mark,
+            exits,
+            remaining,
+            result,
+        } = before;
+        let finished: Vec<(AgentId, Outcome)> = self
+            .state
+            .completed_since(mark)
+            .map(|c| (c.agent, c.outcome))
+            .collect();
+        for (agent, outcome) in finished {
+            let Some(facts) = exits.iter().find(|f| f.agent == agent) else {
+                continue;
+            };
+            let result = match outcome {
+                Outcome::Exited(_) => result.clone(),
+                Outcome::Aborted => None,
+            };
+            let event = HookEvent::OnExit {
+                seq,
+                subject: agent,
+                parent: facts.parent,
+                depth: facts.depth,
+                outcome,
+                result,
+                unspent: facts.unspent.clone(),
+            };
+            self.consult(&HookPoint::OnExit, &event)?;
+        }
+        if remaining.is_empty() {
+            return Ok(());
+        }
+        let points: Vec<HookPoint> = self.state.budget_points().cloned().collect();
+        let fired = crossings(points.iter(), &remaining, |id| self.state.budget_of(id));
+        for (point, subject, was) in fired {
+            let HookPoint::OnBudget { dim, below } = &point else {
+                continue;
+            };
+            let (parent, depth) = self.lineage(subject);
+            let event = HookEvent::OnBudget {
+                seq,
+                subject,
+                parent,
+                depth,
+                dim: dim.clone(),
+                below: *below,
+                remaining: was,
+            };
+            self.consult(&point, &event)?;
+        }
+        Ok(())
+    }
+}
+
+/// What an `OnExit` event needs from an agent's record before the entry
+/// that ends it.
+struct ExitFacts {
+    agent: AgentId,
+    parent: Option<AgentId>,
+    depth: u64,
+    unspent: Budget,
+}
+
+/// The pre-commit snapshot the on points are computed from.
+struct Aftermath {
+    /// The position of the entry being committed.
+    seq: Seq,
+    /// The completion mark before it.
+    mark: u64,
+    /// The exit facts of every agent it might end.
+    exits: Vec<ExitFacts>,
+    /// The remaining grant of every agent it might lower.
+    remaining: Vec<(AgentId, Budget)>,
+    /// The result bytes, for an `Exited`.
+    result: Option<Vec<u8>>,
 }
 
 /// The kernel. One per run; shared by the harness, every agent handle, and
@@ -220,6 +477,7 @@ impl Kernel {
                 blobs: BlobStore::new(),
                 spawner: Arc::new(spawner),
                 drivers: BTreeMap::new(),
+                hooks: BTreeMap::new(),
                 in_flight: BTreeMap::new(),
                 aborts: BTreeMap::new(),
                 agent_wakers: BTreeMap::new(),
@@ -299,6 +557,48 @@ impl Kernel {
             }
         }));
         Ok(cap)
+    }
+
+    /// Syscall 7. Installs a hook program at `point` (ADR-0008 §4).
+    ///
+    /// On `Kernel`, not `Handle`: the harness's privilege is structural, not
+    /// a permission bit — an agent cannot express the call. Boot-only, like
+    /// [`register_driver`](Self::register_driver): refused once the root
+    /// exists, and there is no `detach`. The returned id is the hook's
+    /// position in the roll call at its point; hooks are consulted in the
+    /// order they were attached.
+    ///
+    /// `failure` says what a verdict the program fails to produce counts
+    /// as. At a point that admits `Deny` — `PreSend`, `PreDeliver`,
+    /// `OnSpawn` — it must be [`FailureMode::Closed`].
+    ///
+    /// A native program runs under the kernel lock, synchronously: no I/O,
+    /// no `await`, no lock of its own, no call back into the kernel, no
+    /// panic. That is enforced by review, not by the compiler.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::AfterBoot`] or [`Refusal::OpenAtVetoPoint`], via
+    /// [`KernelError::Refused`]; or a log write failure.
+    pub fn attach(
+        self: &Arc<Self>,
+        point: HookPoint,
+        program: HookProgram,
+        failure: FailureMode,
+    ) -> Result<HookId, KernelError> {
+        let mut inner = self.lock();
+        inner.ensure_ok()?;
+        let id = inner.state.next_hook();
+        let entry = Entry::Attached {
+            seq: inner.state.next_seq(),
+            hook: id,
+            point,
+            failure,
+            program: program.source(),
+        };
+        inner.commit(entry)?;
+        inner.hooks.insert(id, program);
+        Ok(id)
     }
 
     /// Spawns the root agent. The harness's grant is `budget`, whole.
@@ -400,7 +700,9 @@ impl Kernel {
             };
             inner.state.check(&entry)?;
             let ending = inner.state.expiring(now);
+            let before = inner.before(&entry, &ending);
             inner.commit(entry)?;
+            inner.after(before)?;
             inner.reap(&ending)
         };
         for abort in handles {
@@ -449,14 +751,38 @@ impl Kernel {
             let mut inner = self.lock();
             inner.ensure_ok()?;
             let id = inner.state.next_agent();
-            let entry = Entry::Spawned {
+            let mut entry = Entry::Spawned {
                 seq: inner.state.next_seq(),
                 parent,
                 agent: id,
                 ns,
                 budget,
             };
+            inner.state.check(&entry)?;
+            if inner.hooked(&HookPoint::OnSpawn) {
+                let Entry::Spawned { ns, budget, .. } = &entry else {
+                    return Err(KernelError::Faulted {
+                        reason: "spawn built a non-spawn entry".into(),
+                    });
+                };
+                let event = HookEvent::OnSpawn {
+                    seq: inner.state.next_seq(),
+                    subject: id,
+                    parent,
+                    depth: inner.state.birth_depth(parent, budget),
+                    ns: ns.clone(),
+                    remaining: budget.clone(),
+                };
+                if let Some((hook, reason)) = inner.consult(&HookPoint::OnSpawn, &event)? {
+                    return Err(KernelError::Denied { hook, reason });
+                }
+                if let Entry::Spawned { seq, .. } = &mut entry {
+                    *seq = inner.state.next_seq();
+                }
+            }
+            let before = inner.before(&entry, &[]);
             inner.commit(entry)?;
+            inner.after(before)?;
             (id, Arc::clone(&inner.spawner))
         };
         let handle = Handle::new(Arc::clone(self), id);
@@ -484,13 +810,15 @@ impl Kernel {
 
     pub(crate) fn exit(&self, agent: AgentId, result: &[u8]) {
         let mut inner = self.lock();
-        let result = inner.blobs.put(result);
+        let blob = inner.blobs.put(result);
         let entry = Entry::Exited {
             seq: inner.state.next_seq(),
             agent,
-            result,
+            result: blob,
         };
-        match inner.commit(entry) {
+        let mut before = inner.before(&entry, &[agent]);
+        before.result = Some(result.to_vec());
+        match inner.commit(entry).and_then(|()| inner.after(before)) {
             Ok(()) => {}
             // The reducer aborted this agent between its last poll and its
             // exit. The abort is the outcome of record; the exit is a no-op.
@@ -538,7 +866,9 @@ impl Kernel {
                 })
                 .collect();
             inner.blobs.put(&mode.reason);
+            let before = inner.before(&entry, &subtree);
             inner.commit(entry)?;
+            inner.after(before)?;
             // Everyone frozen sees the notice; a grace of zero has already
             // aborted them, and `reap` sorts one from the other.
             for id in &subtree {
@@ -602,14 +932,19 @@ impl Kernel {
         let mut inner = self.lock();
         inner.ensure_ok()?;
         let corr = inner.state.next_corr();
-        let msg = Msg::new(
-            inner.state.next_seq(),
-            Endpoint::Agent { id: from },
-            MsgKind::Request,
-            BlobStore::digest(payload),
-        )
-        .with_corr(corr);
-        let entry = Entry::Sent { msg, via };
+        let envelope = |seq| {
+            Msg::new(
+                seq,
+                Endpoint::Agent { id: from },
+                MsgKind::Request,
+                BlobStore::digest(payload),
+            )
+            .with_corr(corr)
+        };
+        let mut entry = Entry::Sent {
+            msg: envelope(inner.state.next_seq()),
+            via,
+        };
         inner.state.check(&entry)?;
         let driver = match inner.state.resolve(via) {
             Some(Endpoint::Driver { id }) => id.clone(),
@@ -621,8 +956,30 @@ impl Kernel {
         if inbox.queue.len() >= INBOX_CAPACITY {
             return Err(KernelError::WouldBlock(driver));
         }
+        if inner.hooked(&HookPoint::PreSend) {
+            let (parent, depth) = inner.lineage(from);
+            let event = HookEvent::PreSend {
+                seq: inner.state.next_seq(),
+                subject: from,
+                parent,
+                depth,
+                driver: driver.clone(),
+                corr,
+                payload: payload.to_vec(),
+                remaining: inner.state.budget_of(from).cloned().unwrap_or_default(),
+            };
+            if let Some((hook, reason)) = inner.consult(&HookPoint::PreSend, &event)? {
+                return Err(KernelError::Denied { hook, reason });
+            }
+            entry = Entry::Sent {
+                msg: envelope(inner.state.next_seq()),
+                via,
+            };
+        }
         inner.blobs.put(payload);
+        let before = inner.before(&entry, &[]);
         inner.commit(entry)?;
+        inner.after(before)?;
         inner.in_flight.insert(corr, driver.clone());
         if let Some(inbox) = inner.inboxes.get_mut(&driver) {
             inbox.queue.push_back(Delivery {
@@ -747,18 +1104,46 @@ impl Kernel {
             .state
             .owner(corr)
             .ok_or(Refusal::UnknownCorr(Some(corr)))?;
-        let msg = Msg::new(
-            inner.state.next_seq(),
-            Endpoint::Driver { id: driver.clone() },
-            MsgKind::Reply,
-            BlobStore::digest(payload),
-        )
-        .with_corr(corr)
-        .with_consumption(consumed);
-        let entry = Entry::Replied { msg, to };
+        let envelope = |seq| {
+            Msg::new(
+                seq,
+                Endpoint::Driver { id: driver.clone() },
+                MsgKind::Reply,
+                BlobStore::digest(payload),
+            )
+            .with_corr(corr)
+            .with_consumption(consumed.clone())
+        };
+        let mut entry = Entry::Replied {
+            msg: envelope(inner.state.next_seq()),
+            to,
+        };
         inner.state.check(&entry)?;
+        if inner.hooked(&HookPoint::PreDeliver) {
+            let (parent, depth) = inner.lineage(to);
+            let event = HookEvent::PreDeliver {
+                seq: inner.state.next_seq(),
+                subject: to,
+                parent,
+                depth,
+                driver: driver.clone(),
+                corr,
+                kind: MsgKind::Reply,
+                payload: payload.to_vec(),
+                remaining: inner.state.budget_of(to).cloned().unwrap_or_default(),
+            };
+            if let Some((hook, reason)) = inner.consult(&HookPoint::PreDeliver, &event)? {
+                return Err(KernelError::Denied { hook, reason });
+            }
+            entry = Entry::Replied {
+                msg: envelope(inner.state.next_seq()),
+                to,
+            };
+        }
         inner.blobs.put(payload);
+        let before = inner.before(&entry, &[]);
         inner.commit(entry)?;
+        inner.after(before)?;
         inner.in_flight.remove(&corr);
         inner.wake_agent(to);
         Ok(())

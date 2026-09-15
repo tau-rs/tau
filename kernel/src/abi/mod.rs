@@ -50,4 +50,9 @@ pub use name::{Name, NameError, NAME_MAX_LEN};
 /// Bumped only for an additive change to this module. `tau 1.0` means this
 /// number is frozen for good; until then it moves, but never silently — see
 /// the module docs for the three gates.
-pub const ABI: u16 = 0;
+///
+/// | ABI | Change | ADR |
+/// |---|---|---|
+/// | 0 | the first freeze | ADR-0004 |
+/// | 1 | `Endpoint::Hook` | ADR-0008 |
+pub const ABI: u16 = 1;

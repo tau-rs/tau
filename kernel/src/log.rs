@@ -27,7 +27,10 @@ use std::io::{self, BufRead, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::abi::{AgentId, BlobRef, Budget, Capability, DriverId, LogHeader, Msg, Namespace, Seq};
+use crate::abi::{
+    AgentId, BlobRef, Budget, Capability, DriverId, HookId, LogHeader, Msg, Namespace, Seq,
+};
+use crate::hook::{FailureMode, HookPoint, HookSource, Roll};
 
 /// One effect, as recorded.
 ///
@@ -137,6 +140,52 @@ pub enum Entry {
         /// The clock reading. Non-decreasing across a log.
         now: u64,
     },
+    /// A hook program was installed at boot, before any agent existed
+    /// (ADR-0008 §4). The registry is these entries, at the head of the log.
+    Attached {
+        /// Log position.
+        seq: Seq,
+        /// The hook, allocated by the kernel at `attach`.
+        hook: HookId,
+        /// Where it is consulted.
+        point: HookPoint,
+        /// What a verdict it fails to produce counts as.
+        failure: FailureMode,
+        /// What it is: a native by name, a rule by source.
+        program: HookSource,
+    },
+    /// The hooks at `point` were consulted about `subject`, and this is what
+    /// each answered, in `HookId` order, stopping at the first `Deny`
+    /// (ADR-0008 §3). At a pre point this precedes the governed entry — or
+    /// nothing, if a hook denied it; at an on point it follows the entry that
+    /// caused the moment. A point with no hook attached writes nothing.
+    ///
+    /// The fold confirms the roll call and never runs a program: the effect
+    /// of a `Deny` is the absence of the next entry, and the effect of an
+    /// `Emit` is the `Emitted` entry that follows.
+    Verdicts {
+        /// Log position.
+        seq: Seq,
+        /// The point consulted.
+        point: HookPoint,
+        /// The agent the moment was about.
+        subject: AgentId,
+        /// Who answered what.
+        roll: Roll,
+    },
+    /// A hook's `Emit` verdict produced a notice. Its own entry, because a
+    /// notice is a message and every message has its own position: two
+    /// notices sharing a `seq` in one mailbox would make a `Resolved`
+    /// ambiguous. Delivered to `to` if live; dead-lettered otherwise.
+    Emitted {
+        /// The hook that emitted it.
+        hook: HookId,
+        /// The recipient.
+        to: AgentId,
+        /// The envelope, from `Endpoint::Hook`. `msg.seq` is this entry's
+        /// position.
+        msg: Msg,
+    },
 }
 
 impl Entry {
@@ -150,8 +199,12 @@ impl Entry {
             | Self::Exited { seq, .. }
             | Self::Claimed { seq, .. }
             | Self::Cancelled { seq, .. }
-            | Self::Tick { seq, .. } => *seq,
-            Self::Sent { msg, .. } | Self::Replied { msg, .. } => msg.seq,
+            | Self::Tick { seq, .. }
+            | Self::Attached { seq, .. }
+            | Self::Verdicts { seq, .. } => *seq,
+            Self::Sent { msg, .. } | Self::Replied { msg, .. } | Self::Emitted { msg, .. } => {
+                msg.seq
+            }
         }
     }
 }

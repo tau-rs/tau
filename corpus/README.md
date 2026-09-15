@@ -13,18 +13,29 @@ corpus entry never changes once it is in.
 
 ## Contents
 
-| fixture | source | entries | hash pinned at |
-|---|---|---|---|
-| `m0-walking-skeleton` | `kernel/tests/fixtures/m0-walking-skeleton.log` | 10 | `f7bcdc5` (#62) |
-| `m1a-cancel` | `kernel/tests/fixtures/m1a-cancel.log` | 11 | `f7bcdc5` (#62) |
-| `m1b-wall` | `kernel/tests/fixtures/m1b-wall.log` | 9 | `f7bcdc5` (#62) |
-| `tier1-seed-a` | `soak soak --seed 0x7a75000000000001 --events 5000` | 5032 | `f7bcdc5` (#62) |
-| `tier1-seed-b` | `soak soak --seed 0x7a75000000000002 --events 5000` | 5018 | `f7bcdc5` (#62) |
-| `tier1-seed-c` | `soak soak --seed 0x7a75000000000003 --events 5000` | 5012 | `f7bcdc5` (#62) |
+| fixture | source | entries | recorded at | hash pinned at |
+|---|---|---|---|---|
+| `m0-walking-skeleton` | `kernel/tests/fixtures/m0-walking-skeleton.log` | 10 | ABI 0 | `a62e88c` (#80) |
+| `m1a-cancel` | `kernel/tests/fixtures/m1a-cancel.log` | 11 | ABI 0 | `a62e88c` (#80) |
+| `m1b-wall` | `kernel/tests/fixtures/m1b-wall.log` | 9 | ABI 0 | `a62e88c` (#80) |
+| `tier1-seed-a` | `soak soak --seed 0x7a75000000000001 --events 5000` at `f7bcdc5` | 5032 | ABI 0 | `a62e88c` (#80) |
+| `tier1-seed-b` | `soak soak --seed 0x7a75000000000002 --events 5000` at `f7bcdc5` | 5018 | ABI 0 | `a62e88c` (#80) |
+| `tier1-seed-c` | `soak soak --seed 0x7a75000000000003 --events 5000` at `f7bcdc5` | 5012 | ABI 0 | `a62e88c` (#80) |
+| `m2a-hooks` | `kernel/tests/fixtures/m2a-hooks.log` | 53 | ABI 1 | `a62e88c` (#80) |
 
-The three soak logs are the Tier 1 seeds at the Tier 1 size, so their
-sidecars equal `PINNED` in `sim/tests/determinism.rs`. The two checks agree
-by construction; if they ever disagree, one of them is wrong.
+The six ABI 0 logs are the ones first pinned at `f7bcdc5` (#62), unchanged
+byte for byte; ADR-0008 (#80) made `hooks` a canonical field of `State`, so
+every fold's hash moved once and the sidecars were re-pinned with that
+reason. They are the corpus's proof that a log from before a bump still
+folds after it. `m2a-hooks` is the first log with `Attached`, `Verdicts`,
+and `Emitted` entries: its `Attached` entries name native programs no
+build has, and the fold does not need them.
+
+The three soak logs were the Tier 1 seeds at the Tier 1 size when they were
+recorded. `PINNED` in `sim/tests/determinism.rs` pins what the *current*
+generator produces for those seeds; since #80 the generator attaches hooks
+at boot, so the two no longer describe the same logs. The sidecars here
+pin the fold of a frozen log; `PINNED` pins the generator.
 
 ## Adding a fixture
 
@@ -51,7 +62,7 @@ release, a harness run, a bug report), write the sidecar from a refold on
 ```
 
 Add a row to the table above with the `main` SHA the hash was pinned at.
-The job fails closed below six fixtures, so a fixture can be added but the
+The job fails closed below seven fixtures, so a fixture can be added but the
 floor in `tier3.yml` should move up with the count.
 
 ## A hash that moved
@@ -61,6 +72,7 @@ an input it had already accepted. That is a reducer-behaviour change, and the
 job files it as one (`tier3: determinism drift — <fixture>`). Re-pinning the
 sidecar is never the fix on its own: it needs an ADR-level reason, the way
 #62 re-pinned the milestone snapshots because the hash's *definition* changed
-(canonical state only, ADR-0003's "everything else is cache"). A re-pin
-without that reason quietly narrows the promise this directory exists to
-keep.
+(canonical state only, ADR-0003's "everything else is cache"), and the way
+#80 re-pinned every sidecar because ADR-0008 added a canonical field. A
+re-pin without that reason quietly narrows the promise this directory exists
+to keep.

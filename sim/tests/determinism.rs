@@ -91,6 +91,9 @@ fn every_entry_kind_and_an_overdraft_appear() {
         Entry::Claimed { .. } => "claimed",
         Entry::Cancelled { .. } => "cancelled",
         Entry::Tick { .. } => "tick",
+        Entry::Attached { .. } => "attached",
+        Entry::Verdicts { .. } => "verdicts",
+        Entry::Emitted { .. } => "emitted",
     };
     let seen: std::collections::BTreeSet<&str> = log.entries().iter().map(kind).collect();
     for want in [
@@ -103,6 +106,9 @@ fn every_entry_kind_and_an_overdraft_appear() {
         "claimed",
         "cancelled",
         "tick",
+        "attached",
+        "verdicts",
+        "emitted",
     ] {
         assert!(
             seen.contains(want),
@@ -129,21 +135,21 @@ fn every_entry_kind_and_an_overdraft_appear() {
 const PINNED: [(u64, usize, u64, &str); 3] = [
     (
         SEED_A,
-        5_032,
-        895,
-        "3b6bc4161c8853fefcb51f246d29aac2041d1b60cbe1cd5575b946d34008e09b",
+        5_026,
+        722,
+        "8d23bf41926c0282c6d888f706373257ca473a75bb5c6795b33c2a9bd5a69941",
     ),
     (
         SEED_B,
-        5_018,
-        984,
-        "fdf08a7e6c7711d574dfbc3561da9035194d537cc7574f3086f19a3f45695205",
+        5_020,
+        562,
+        "b87867b214924d8bdced55dcb8bac186b705b8d4315e8e283da8f1933b620f3c",
     ),
     (
         SEED_C,
-        5_012,
-        967,
-        "7f68f74ac715b2bb2a54354394ca85ed4123a05b2c8ba22232a8f0f6a9f2e80e",
+        5_022,
+        710,
+        "3412f04d881db20da565a736a92b7bf1e43df388f6bbac27027f88f31eae8e96",
     ),
 ];
 

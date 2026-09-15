@@ -40,7 +40,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
-  CORPUS_FLOOR: 6
+  CORPUS_FLOOR: 7
 
 jobs:
   sentinel:

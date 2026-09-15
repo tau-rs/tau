@@ -12,8 +12,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use tau_kernel::abi::{
-    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, LogHeader,
-    Msg, MsgKind, Name, Namespace, Seq, ABI,
+    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
+    LogHeader, Msg, MsgKind, Name, Namespace, Seq, ABI,
 };
 
 fn cap(n: u64) -> Capability {
@@ -29,8 +29,9 @@ fn abi_version_is_pinned() {
     // Bumping the ABI is legal and expected; doing it without noticing is not.
     // This assertion is the tripwire, and its failure message is the
     // instruction: bump here, and say why in an ADR.
+    // 0 → 1: `Endpoint::Hook`, ADR-0008 §6.
     assert_eq!(
-        ABI, 0,
+        ABI, 1,
         "ABI version changed; update this test and link the ADR that authorises it"
     );
 }
@@ -77,6 +78,21 @@ fn msg_notice_from_harness_wire_format() {
         Endpoint::Harness,
         MsgKind::Notice,
         BlobRef::EMPTY,
+    );
+
+    insta::assert_json_snapshot!(msg);
+}
+
+#[test]
+fn msg_notice_from_hook_wire_format() {
+    // The one case ABI 1 adds (ADR-0008 §6): a hook's `Emit` is a notice
+    // from the hook, so an agent can `recv` by sender and a reader can tell
+    // a budget warning from a cancel on the envelope alone.
+    let msg = Msg::new(
+        Seq::new(89),
+        Endpoint::Hook { id: HookId::new(3) },
+        MsgKind::Notice,
+        BlobRef::from_bytes([0x4a; 32]),
     );
 
     insta::assert_json_snapshot!(msg);

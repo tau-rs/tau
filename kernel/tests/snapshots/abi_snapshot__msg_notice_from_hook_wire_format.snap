@@ -4,12 +4,13 @@ expression: msg
 ---
 {
   "abi": 1,
-  "seq": 0,
+  "seq": 89,
   "from": {
-    "kind": "harness"
+    "kind": "hook",
+    "id": 3
   },
   "corr": null,
   "kind": "notice",
   "consumed": null,
-  "payload": "0000000000000000000000000000000000000000000000000000000000000000"
+  "payload": "4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a"
 }

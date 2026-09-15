@@ -14,6 +14,17 @@
 //! built state, so a test can fold the log again — from memory, or through a
 //! serialized round-trip — and compare [`State::hash`].
 //!
+//! Hooks are part of the workload too (ADR-0008's obligation on this
+//! crate). Boot attaches a seeded handful at the five points; the generator
+//! then plays the kernel's part — it never runs a program, there is none —
+//! and writes the roll call the kernel would: a `Verdicts` before a
+//! governed `Spawned`, `Sent`, or `Replied` (and no governed entry when a
+//! drawn ruling denies it), a `Verdicts` after every finish and every
+//! budget crossing, and an `Emitted` per note. The rulings are drawn from
+//! the seed, so the `Verdicts`/`Emitted` paths are under the soak and the
+//! second-platform refold, and an ill-formed roll call is proposed now and
+//! then so the reducer's refusals are too.
+//!
 //! Refusals are part of the workload, not a failure of it. The generator
 //! proposes frozen senders, empty budgets, depth-zero parents, and clock
 //! readings the reducer must accept or refuse on its own terms; a refusal is
@@ -25,9 +36,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tau_kernel::abi::{
-    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, Msg,
-    MsgKind, Name, NameError, Namespace, Seq,
+    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
+    Msg, MsgKind, Name, NameError, Namespace, Seq,
 };
+use tau_kernel::hook::{crossings, FailureMode, HookPoint, HookSource, Roll, Ruling};
 use tau_kernel::log::{Entry, Log, LogError};
 use tau_kernel::reducer::{Agent, Completion, Refusal, State, Status};
 
@@ -243,6 +255,68 @@ fn child_cap(dim: &DimKey) -> u64 {
     }
 }
 
+/// The points a run may attach hooks at. Two `OnBudget` lines: one on a
+/// dimension every child holds a little of, one on `calls`, which a send
+/// moves by exactly one.
+fn points() -> [HookPoint; 6] {
+    [
+        HookPoint::PreSend,
+        HookPoint::PreDeliver,
+        HookPoint::OnSpawn,
+        HookPoint::OnExit,
+        HookPoint::OnBudget {
+            dim: DimKey::Tokens,
+            below: 100,
+        },
+        HookPoint::OnBudget {
+            dim: DimKey::Calls,
+            below: 2,
+        },
+    ]
+}
+
+/// The pre point a governed entry is consulted at, if it has one.
+fn pre_point(entry: &Entry) -> Option<(HookPoint, AgentId)> {
+    match entry {
+        Entry::Spawned { agent, .. } => Some((HookPoint::OnSpawn, *agent)),
+        Entry::Sent { msg, .. } => match msg.from {
+            Endpoint::Agent { id } => Some((HookPoint::PreSend, id)),
+            _ => None,
+        },
+        Entry::Replied { to, .. } => Some((HookPoint::PreDeliver, *to)),
+        _ => None,
+    }
+}
+
+/// The same entry at a new position: what the kernel does after the roll
+/// call it consulted for took positions of its own.
+fn at(entry: Entry, seq: Seq) -> Entry {
+    match entry {
+        Entry::Spawned {
+            parent,
+            agent,
+            ns,
+            budget,
+            ..
+        } => Entry::Spawned {
+            seq,
+            parent,
+            agent,
+            ns,
+            budget,
+        },
+        Entry::Sent { mut msg, via } => {
+            msg.seq = seq;
+            Entry::Sent { msg, via }
+        }
+        Entry::Replied { mut msg, to } => {
+            msg.seq = seq;
+            Entry::Replied { msg, to }
+        }
+        other => other,
+    }
+}
+
 fn is_live(a: &Agent) -> bool {
     matches!(a.status, Status::Live | Status::Cancelling)
 }
@@ -367,16 +441,237 @@ impl Sim {
             })?;
             sim.drivers.push(Driver { id, cap, ceiling });
         }
+        // The policy: a seeded handful of hooks, at least one where sends
+        // are consulted and one where finishes are, up to two elsewhere and
+        // sometimes none, so a point with nothing attached — which writes
+        // nothing — is in the workload too.
+        let mut n = 0u64;
+        for point in points() {
+            let count = match point {
+                HookPoint::PreSend | HookPoint::OnExit => 1u64.saturating_add(sim.rng.below(2)),
+                _ => sim.rng.below(3),
+            };
+            for _ in 0..count {
+                let failure = if point.admits_deny() || sim.rng.one_in(2) {
+                    FailureMode::Closed
+                } else {
+                    FailureMode::Open
+                };
+                let name = Name::new(&format!("policy-{n}"))?;
+                n = n.saturating_add(1);
+                sim.require(Entry::Attached {
+                    seq: sim.state.next_seq(),
+                    hook: sim.state.next_hook(),
+                    point: point.clone(),
+                    failure,
+                    program: HookSource::Native(name),
+                })?;
+            }
+        }
         let root = sim.state.next_agent();
-        sim.require(Entry::Spawned {
+        let spawned = Entry::Spawned {
             seq: sim.state.next_seq(),
             parent: None,
             agent: root,
             ns: Namespace::from_caps(sim.drivers.iter().map(|d| d.cap)),
             budget: sim.grant.clone(),
-        })?;
+        };
+        // The root's spawn is required, so its roll call may not deny it.
+        match sim.govern(spawned, false)? {
+            Verdict::Accepted => {}
+            Verdict::Refused(refusal) => return Err(SimError::Required(refusal)),
+        }
         sim.root = root;
         Ok(sim)
+    }
+
+    // --------------------------------------------------------------- hooks
+
+    /// Offers a governed entry the way the kernel commits one: the reducer's
+    /// check first — a refused syscall consults nobody — then the roll call
+    /// at its pre point, then the entry at its new position unless a ruling
+    /// stopped it, then the on points it caused. `may_deny` is false for the
+    /// root's spawn, which the run cannot do without.
+    fn govern(&mut self, entry: Entry, may_deny: bool) -> Result<Verdict, SimError> {
+        let entry = match pre_point(&entry) {
+            Some((point, subject)) if self.state.hooks_at(&point).next().is_some() => {
+                if let Err(refusal) = self.state.check(&entry) {
+                    self.refused = self.refused.saturating_add(1);
+                    return Ok(Verdict::Refused(refusal));
+                }
+                if self.moment(&point, subject, may_deny)? {
+                    // Denied: the governed entry is never written. The
+                    // syscall's caller saw `Denied`; the log shows the roll.
+                    return Ok(Verdict::Accepted);
+                }
+                at(entry, self.state.next_seq())
+            }
+            _ => entry,
+        };
+        let mark = self.state.completion_mark();
+        let remaining = if self.state.budget_points().next().is_some() {
+            self.state.remaining(&self.state.budget_candidates(&entry))
+        } else {
+            Vec::new()
+        };
+        let verdict = self.offer(entry)?;
+        if matches!(verdict, Verdict::Refused(_)) {
+            return Ok(verdict);
+        }
+        // On points, in the kernel's order: every finish, deepest first;
+        // then every crossing, in point order.
+        if self.state.hooks_at(&HookPoint::OnExit).next().is_some() {
+            let finished: Vec<AgentId> =
+                self.state.completed_since(mark).map(|c| c.agent).collect();
+            for agent in finished {
+                self.moment(&HookPoint::OnExit, agent, false)?;
+            }
+        }
+        if !remaining.is_empty() {
+            let points: Vec<HookPoint> = self.state.budget_points().cloned().collect();
+            let fired = crossings(points.iter(), &remaining, |id| self.state.budget_of(id));
+            for (point, subject, _) in fired {
+                self.moment(&point, subject, false)?;
+            }
+        }
+        Ok(verdict)
+    }
+
+    /// One moment at `point` about `subject`: draws a ruling from each hook
+    /// attached there in install order, stopping where the kernel would,
+    /// writes the `Verdicts`, then an `Emitted` per note. Returns whether a
+    /// ruling stopped it. Every entry here is required: a roll call the
+    /// generator drew and the reducer refused is a bug in one of them.
+    fn moment(
+        &mut self,
+        point: &HookPoint,
+        subject: AgentId,
+        may_deny: bool,
+    ) -> Result<bool, SimError> {
+        let hooks: Vec<(HookId, FailureMode)> = self
+            .state
+            .hooks_at(point)
+            .filter_map(|id| Some((id, self.state.hook(id)?.failure)))
+            .collect();
+        let mut roll: Roll = Vec::with_capacity(hooks.len());
+        let mut notes: Vec<(HookId, AgentId, BlobRef)> = Vec::new();
+        let mut stopped = false;
+        for (hook, mode) in hooks {
+            let ruling = match self.rng.below(20) {
+                0..=11 => Ruling::Allow,
+                12..=15 => {
+                    let to = self.note_target(subject);
+                    let payload = self.rng.blob();
+                    notes.push((hook, to, payload));
+                    Ruling::Emit { to, payload }
+                }
+                16..=17 if point.admits_deny() && may_deny => Ruling::Deny(self.rng.blob()),
+                _ => {
+                    // A failure — or, at an on point, a deny, which is the
+                    // same thing — recorded with the hook's mode. At a pre
+                    // point a closed one stops the roll; the root's spawn
+                    // must not be stopped, so it fails open there.
+                    let mode = if may_deny { mode } else { FailureMode::Open };
+                    Ruling::Failed {
+                        mode,
+                        error: self.rng.blob(),
+                    }
+                }
+            };
+            stopped = ruling.stops(point);
+            roll.push((hook, ruling));
+            if stopped {
+                break;
+            }
+        }
+        self.require(Entry::Verdicts {
+            seq: self.state.next_seq(),
+            point: point.clone(),
+            subject,
+            roll,
+        })?;
+        for (hook, to, payload) in notes {
+            let msg = Msg::new(
+                self.state.next_seq(),
+                Endpoint::Hook { id: hook },
+                MsgKind::Notice,
+                payload,
+            );
+            self.require(Entry::Emitted { hook, to, msg })?;
+        }
+        Ok(stopped)
+    }
+
+    /// Where a note goes: usually the subject; sometimes another live
+    /// agent; now and then an agent that does not exist, so the dead-letter
+    /// path is in the workload.
+    fn note_target(&mut self, subject: AgentId) -> AgentId {
+        match self.rng.below(10) {
+            0..=6 => subject,
+            7..=8 => self.pick_live().unwrap_or(subject),
+            _ => AgentId::new(self.state.next_agent().get().saturating_add(7)),
+        }
+    }
+
+    /// A roll call or a note the kernel never writes, for the reducer to
+    /// refuse: out of order, at the wrong point, a deny where none is
+    /// admitted, a verdict after a deny, from a hook that is not attached.
+    fn hook_noise(&mut self) -> Option<Entry> {
+        let subject = self.pick_live()?;
+        let attached: Vec<(HookId, HookPoint)> = self
+            .state
+            .hooks()
+            .map(|(id, h)| (id, h.point.clone()))
+            .collect();
+        let (hook, point) = self.rng.pick(&attached)?.clone();
+        let allow = Ruling::Allow;
+        let deny = Ruling::Deny(self.rng.blob());
+        Some(match self.rng.below(5) {
+            0 => {
+                // The right hook at the wrong point.
+                let other = points()
+                    .into_iter()
+                    .find(|p| *p != point)
+                    .unwrap_or(HookPoint::OnExit);
+                Entry::Verdicts {
+                    seq: self.state.next_seq(),
+                    point: other,
+                    subject,
+                    roll: vec![(hook, allow)],
+                }
+            }
+            1 => Entry::Verdicts {
+                seq: self.state.next_seq(),
+                point: point.clone(),
+                subject,
+                roll: vec![(hook, deny), (hook, allow)],
+            },
+            2 => Entry::Verdicts {
+                seq: self.state.next_seq(),
+                point: HookPoint::OnExit,
+                subject,
+                roll: vec![(hook, deny)],
+            },
+            3 => Entry::Verdicts {
+                seq: self.state.next_seq(),
+                point,
+                subject,
+                roll: Vec::new(),
+            },
+            _ => {
+                let stranger = HookId::new(self.state.next_hook().get().saturating_add(3));
+                Entry::Emitted {
+                    hook: stranger,
+                    to: subject,
+                    msg: Msg::new(
+                        self.state.next_seq(),
+                        Endpoint::Hook { id: stranger },
+                        MsgKind::Notice,
+                        self.rng.blob(),
+                    ),
+                }
+            }
+        })
     }
 
     /// Offers `entry` to the reducer: check, then apply, then bring the
@@ -504,6 +799,7 @@ impl Sim {
             70..=77 => self.exit(),
             78..=85 => self.claim(),
             86..=89 => self.cancel(),
+            90..=91 => self.hook_noise(),
             _ => Some(self.tick()),
         }
     }
@@ -713,7 +1009,7 @@ impl Sim {
                 });
             }
             if let Some(entry) = self.propose() {
-                self.offer(entry)?;
+                self.govern(entry, true)?;
             }
         }
         Ok(())
@@ -724,13 +1020,17 @@ impl Sim {
     /// behind. Every entry here is required.
     fn drain(&mut self) -> Result<(), SimError> {
         let reason = self.rng.blob();
-        self.require(Entry::Cancelled {
+        let cancel = Entry::Cancelled {
             seq: self.state.next_seq(),
             by: None,
             agent: self.root,
             grace: 0,
             reason,
-        })?;
+        };
+        match self.govern(cancel, false)? {
+            Verdict::Accepted => {}
+            Verdict::Refused(refusal) => return Err(SimError::Required(refusal)),
+        }
         let left: Vec<AgentId> = self.state.completed().map(|c| c.agent).collect();
         for agent in left {
             self.require(Entry::Claimed {
