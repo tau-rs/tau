@@ -15,15 +15,18 @@
 //! serialized round-trip — and compare [`State::hash`].
 //!
 //! Hooks are part of the workload too (ADR-0008's obligation on this
-//! crate). Boot attaches a seeded handful at the five points; the generator
-//! then plays the kernel's part — it never runs a program, there is none —
-//! and writes the roll call the kernel would: a `Verdicts` before a
-//! governed `Spawned`, `Sent`, or `Replied` (and no governed entry when a
-//! drawn ruling denies it), a `Verdicts` after every finish and every
-//! budget crossing, and an `Emitted` per note. The rulings are drawn from
-//! the seed, so the `Verdicts`/`Emitted` paths are under the soak and the
-//! second-platform refold, and an ill-formed roll call is proposed now and
-//! then so the reducer's refusals are too.
+//! crate). Boot attaches a seeded handful at the five points — natives, and
+//! one or two rules drawn from a fixed pool, in a seeded order among them.
+//! The generator then plays the kernel's part and writes the roll call the
+//! kernel would: a `Verdicts` before a governed `Spawned`, `Sent`, or
+//! `Replied` (and no governed entry when a ruling denies it), a `Verdicts`
+//! after every finish and every budget crossing, and an `Emitted` per note.
+//! A native's ruling is drawn from the seed, since there is no program to
+//! run; a rule's is what [`Rule::evaluate`] says about the [`HookEvent`]
+//! built the way the kernel builds it, so the evaluator is under the soak
+//! and the second-platform refold along with the `Verdicts`/`Emitted`
+//! paths. An ill-formed roll call is proposed now and then so the reducer's
+//! refusals are too.
 //!
 //! Refusals are part of the workload, not a failure of it. The generator
 //! proposes frozen senders, empty budgets, depth-zero parents, and clock
@@ -39,9 +42,12 @@ use tau_kernel::abi::{
     AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
     Msg, MsgKind, Name, NameError, Namespace, Seq,
 };
-use tau_kernel::hook::{crossings, FailureMode, HookPoint, HookSource, Roll, Ruling};
+use tau_kernel::blob::BlobStore;
+use tau_kernel::hook::{
+    crossings, FailureMode, HookEvent, HookPoint, HookSource, Roll, Rule, Ruling, Verdict as Answer,
+};
 use tau_kernel::log::{Entry, Log, LogError};
-use tau_kernel::reducer::{Agent, Completion, Refusal, State, Status};
+use tau_kernel::reducer::{Agent, Completion, Outcome, Refusal, State, Status};
 
 /// Why a run could not be completed.
 #[derive(Debug, thiserror::Error)]
@@ -87,6 +93,11 @@ pub enum SimError {
         /// Proposals made.
         proposals: u64,
     },
+    /// The generator's own bookkeeping disagrees with what it proposed: an
+    /// entry it cannot describe as the event the kernel would build, or a
+    /// rule from its own pool that denied the root's spawn.
+    #[error("generator fault: {0}")]
+    Fault(&'static str),
 }
 
 /// A seeded PRNG: SplitMix64. Small, portable, and good enough for a workload
@@ -136,6 +147,29 @@ impl Rng {
         let len = u64::try_from(items.len()).ok()?;
         let idx = usize::try_from(self.below(len)).ok()?;
         items.get(idx)
+    }
+
+    /// Payload bytes, as an agent or a driver would hand them to the kernel:
+    /// a few dozen, now and then enough for a size rule to bite, now and
+    /// then opening with the phrase a `contains` rule looks for. The kernel
+    /// logs their digest; a hook sees the bytes.
+    pub fn payload(&mut self) -> Vec<u8> {
+        let len = if self.one_in(4) {
+            32u64.saturating_add(self.below(33))
+        } else {
+            self.below(32)
+        };
+        let len = usize::try_from(len).unwrap_or(0);
+        let mut bytes = Vec::with_capacity(len.saturating_add(24));
+        if self.one_in(6) {
+            bytes.extend_from_slice(b"Permission denied");
+        }
+        let body = bytes.len().saturating_add(len);
+        while bytes.len() < body {
+            bytes.extend_from_slice(&self.next_u64().to_le_bytes());
+        }
+        bytes.truncate(body);
+        bytes
     }
 
     /// A random 32-byte payload reference: content the kernel never reads.
@@ -275,6 +309,21 @@ fn points() -> [HookPoint; 6] {
     ]
 }
 
+/// The rules a run may attach: ADR-0008 §5's five examples, one per point
+/// they fit, resized to this world — its drivers are `echo`, `model`, and
+/// `tool`; its payloads a few dozen bytes; its tree four deep; its
+/// `OnBudget` lines the ones in [`points`]. Each is sized so the Tier 1
+/// seeds reach both sides of its predicate, and none can deny the root's
+/// spawn, which the run cannot do without.
+const RULE_POOL: [&str; 5] = [
+    "when pre_send if driver == tool and depth < 2 then deny \"tool needs depth 2\"",
+    "when pre_send if payload.len > 40 then deny \"over 40 bytes\"",
+    "when pre_deliver if driver == tool and payload contains \"Permission denied\" \
+     then emit to parent \"child hit a permission wall\"",
+    "when on_budget(tokens, 100) then emit \"tokens low\"",
+    "when on_spawn if depth < 1 then deny \"a leaf may not be spawned\"",
+];
+
 /// The pre point a governed entry is consulted at, if it has one.
 fn pre_point(entry: &Entry) -> Option<(HookPoint, AgentId)> {
     match entry {
@@ -319,6 +368,58 @@ fn at(entry: Entry, seq: Seq) -> Entry {
 
 fn is_live(a: &Agent) -> bool {
     matches!(a.status, Status::Live | Status::Cancelling)
+}
+
+/// What the kernel records for a rule's answer (`Kernel::consult`): a
+/// reason or a note by its digest, the bytes being what the store would
+/// hold; a `Deny` where none is admitted as a program failure with the
+/// hook's mode, which the parser makes impossible for a rule and the
+/// record mirrors anyway. Returns the ruling and the note to deliver.
+fn recorded(
+    point: &HookPoint,
+    mode: FailureMode,
+    answer: Answer,
+) -> (Ruling, Option<(AgentId, BlobRef)>) {
+    match answer {
+        Answer::Allow => (Ruling::Allow, None),
+        Answer::Deny(reason) if point.admits_deny() => {
+            (Ruling::Deny(BlobStore::digest(reason.as_bytes())), None)
+        }
+        Answer::Deny(reason) => {
+            let message = format!("deny at {point}, which admits none: {reason}");
+            let error = BlobStore::digest(message.as_bytes());
+            (Ruling::Failed { mode, error }, None)
+        }
+        Answer::Emit { to, payload } => {
+            let payload = BlobStore::digest(&payload);
+            (Ruling::Emit { to, payload }, Some((to, payload)))
+        }
+    }
+}
+
+/// A candidate entry with the bytes behind it: the payload of a `Sent` or
+/// `Replied`, the result of an `Exited`. The entry carries their digest;
+/// the event a hook sees carries the bytes, so the generator keeps both
+/// until the moment is over.
+struct Proposal {
+    entry: Entry,
+    bytes: Option<Vec<u8>>,
+}
+
+impl From<Entry> for Proposal {
+    fn from(entry: Entry) -> Self {
+        Self { entry, bytes: None }
+    }
+}
+
+/// The `OnExit` facts of an agent, captured before the entry that may end
+/// it: what it holds goes back up the tree in that apply and is gone from
+/// the record afterwards. The kernel's `ExitFacts`, mirrored.
+struct ExitFacts {
+    agent: AgentId,
+    parent: Option<AgentId>,
+    depth: u64,
+    unspent: Budget,
 }
 
 /// The conservation property (Tier 2 property #1, checked here at every
@@ -392,6 +493,9 @@ struct Sim {
     /// How many of the state's completions the indexes have already seen.
     /// Everything past this cursor finished since the last entry.
     completions_seen: usize,
+    /// The rules attached at boot, parsed, by the id they were attached
+    /// under: what a roll call consults where a native would draw.
+    rules: BTreeMap<HookId, Rule>,
     options: Options,
     /// Whether this run checks conservation at all. [`run_unchecked`] turns
     /// it off for a caller that owns the properties itself.
@@ -424,6 +528,7 @@ impl Sim {
             live: BTreeSet::new(),
             open: BTreeMap::new(),
             completions_seen: 0,
+            rules: BTreeMap::new(),
             options: options.clone(),
             check,
             accepted: 0,
@@ -441,31 +546,52 @@ impl Sim {
             })?;
             sim.drivers.push(Driver { id, cap, ceiling });
         }
-        // The policy: a seeded handful of hooks, at least one where sends
+        // The policy: a seeded handful of natives, at least one where sends
         // are consulted and one where finishes are, up to two elsewhere and
         // sometimes none, so a point with nothing attached — which writes
-        // nothing — is in the workload too.
+        // nothing — is in the workload too; plus one or two rules from the
+        // pool, each slotted at a seeded position among the natives at its
+        // own point, so install order is a draw and not a convention.
+        let rules = sim.draw_rules()?;
         let mut n = 0u64;
         for point in points() {
             let count = match point {
                 HookPoint::PreSend | HookPoint::OnExit => 1u64.saturating_add(sim.rng.below(2)),
                 _ => sim.rng.below(3),
             };
-            for _ in 0..count {
+            let mut programs: Vec<Option<Rule>> = (0..count).map(|_| None).collect();
+            for rule in rules.iter().filter(|r| *r.point() == point) {
+                let slots = u64::try_from(programs.len()).unwrap_or(u64::MAX);
+                let slot = usize::try_from(sim.rng.up_to(slots)).unwrap_or(0);
+                programs.insert(slot.min(programs.len()), Some(rule.clone()));
+            }
+            for program in programs {
+                // A rule cannot fail, so its mode is moot; it is drawn like
+                // a native's so the record has the same shape either way.
                 let failure = if point.admits_deny() || sim.rng.one_in(2) {
                     FailureMode::Closed
                 } else {
                     FailureMode::Open
                 };
-                let name = Name::new(&format!("policy-{n}"))?;
-                n = n.saturating_add(1);
+                let hook = sim.state.next_hook();
+                let source = match &program {
+                    Some(rule) => HookSource::Rule(rule.source().to_owned()),
+                    None => {
+                        let name = Name::new(&format!("policy-{n}"))?;
+                        n = n.saturating_add(1);
+                        HookSource::Native(name)
+                    }
+                };
                 sim.require(Entry::Attached {
                     seq: sim.state.next_seq(),
-                    hook: sim.state.next_hook(),
+                    hook,
                     point: point.clone(),
                     failure,
-                    program: HookSource::Native(name),
+                    program: source,
                 })?;
+                if let Some(rule) = program {
+                    sim.rules.insert(hook, rule);
+                }
             }
         }
         let root = sim.state.next_agent();
@@ -476,13 +602,38 @@ impl Sim {
             ns: Namespace::from_caps(sim.drivers.iter().map(|d| d.cap)),
             budget: sim.grant.clone(),
         };
-        // The root's spawn is required, so its roll call may not deny it.
-        match sim.govern(spawned, false)? {
+        // The root's spawn is required, so its roll call may not deny it: a
+        // native fails open there, and the pool is written so no rule can.
+        match sim.govern(spawned.into(), false)? {
             Verdict::Accepted => {}
             Verdict::Refused(refusal) => return Err(SimError::Required(refusal)),
         }
+        if sim.state.agent(root).is_none() {
+            return Err(SimError::Fault("a rule denied the root's spawn"));
+        }
         sim.root = root;
         Ok(sim)
+    }
+
+    /// One or two distinct rules from [`RULE_POOL`], parsed. The second is
+    /// chosen at an offset from the first, so distinctness is by
+    /// construction and not by redrawing.
+    fn draw_rules(&mut self) -> Result<Vec<Rule>, SimError> {
+        let pool = u64::try_from(RULE_POOL.len()).unwrap_or(u64::MAX);
+        let first = self.rng.below(pool);
+        let mut picks = vec![first];
+        if self.rng.one_in(2) {
+            let offset = 1u64.saturating_add(self.rng.below(pool.saturating_sub(1)));
+            picks.push(first.saturating_add(offset).rem_euclid(pool));
+        }
+        picks
+            .into_iter()
+            .filter_map(|i| RULE_POOL.get(usize::try_from(i).ok()?))
+            .map(|text| {
+                Rule::parse(text)
+                    .map_err(|_| SimError::Fault("the pool holds a rule that does not parse"))
+            })
+            .collect()
     }
 
     // --------------------------------------------------------------- hooks
@@ -492,14 +643,16 @@ impl Sim {
     /// at its pre point, then the entry at its new position unless a ruling
     /// stopped it, then the on points it caused. `may_deny` is false for the
     /// root's spawn, which the run cannot do without.
-    fn govern(&mut self, entry: Entry, may_deny: bool) -> Result<Verdict, SimError> {
+    fn govern(&mut self, proposal: Proposal, may_deny: bool) -> Result<Verdict, SimError> {
+        let Proposal { entry, bytes } = proposal;
         let entry = match pre_point(&entry) {
-            Some((point, subject)) if self.state.hooks_at(&point).next().is_some() => {
+            Some((point, _)) if self.hooked(&point) => {
                 if let Err(refusal) = self.state.check(&entry) {
                     self.refused = self.refused.saturating_add(1);
                     return Ok(Verdict::Refused(refusal));
                 }
-                if self.moment(&point, subject, may_deny)? {
+                let event = self.pre_event(&entry, bytes.as_deref())?;
+                if self.moment(&point, &event, may_deny)? {
                     // Denied: the governed entry is never written. The
                     // syscall's caller saw `Denied`; the log shows the roll.
                     return Ok(Verdict::Accepted);
@@ -508,11 +661,27 @@ impl Sim {
             }
             _ => entry,
         };
+        // Everything an on point needs to know before the entry is applied,
+        // gathered only when a hook could use it (the kernel's `before`).
+        let seq = entry.seq();
         let mark = self.state.completion_mark();
+        let exits: Vec<ExitFacts> = if self.hooked(&HookPoint::OnExit) {
+            self.may_end(&entry)
+                .into_iter()
+                .filter_map(|id| self.before_exit(id))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let remaining = if self.state.budget_points().next().is_some() {
             self.state.remaining(&self.state.budget_candidates(&entry))
         } else {
             Vec::new()
+        };
+        // The result bytes reach an `OnExit` event only through an `Exited`.
+        let result = match entry {
+            Entry::Exited { .. } => bytes,
+            _ => None,
         };
         let verdict = self.offer(entry)?;
         if matches!(verdict, Verdict::Refused(_)) {
@@ -520,34 +689,179 @@ impl Sim {
         }
         // On points, in the kernel's order: every finish, deepest first;
         // then every crossing, in point order.
-        if self.state.hooks_at(&HookPoint::OnExit).next().is_some() {
-            let finished: Vec<AgentId> =
-                self.state.completed_since(mark).map(|c| c.agent).collect();
-            for agent in finished {
-                self.moment(&HookPoint::OnExit, agent, false)?;
+        if self.hooked(&HookPoint::OnExit) {
+            let finished: Vec<(AgentId, Outcome)> = self
+                .state
+                .completed_since(mark)
+                .map(|c| (c.agent, c.outcome))
+                .collect();
+            for (agent, outcome) in finished {
+                let Some(facts) = exits.iter().find(|f| f.agent == agent) else {
+                    continue;
+                };
+                let result = match outcome {
+                    Outcome::Exited(_) => result.clone(),
+                    Outcome::Aborted => None,
+                };
+                let event = HookEvent::OnExit {
+                    seq,
+                    subject: agent,
+                    parent: facts.parent,
+                    depth: facts.depth,
+                    outcome,
+                    result,
+                    unspent: facts.unspent.clone(),
+                };
+                self.moment(&HookPoint::OnExit, &event, false)?;
             }
         }
         if !remaining.is_empty() {
             let points: Vec<HookPoint> = self.state.budget_points().cloned().collect();
             let fired = crossings(points.iter(), &remaining, |id| self.state.budget_of(id));
-            for (point, subject, _) in fired {
-                self.moment(&point, subject, false)?;
+            for (point, subject, was) in fired {
+                let HookPoint::OnBudget { dim, below } = &point else {
+                    continue;
+                };
+                let (parent, depth) = self.lineage(subject);
+                let event = HookEvent::OnBudget {
+                    seq,
+                    subject,
+                    parent,
+                    depth,
+                    dim: dim.clone(),
+                    below: *below,
+                    remaining: was,
+                };
+                self.moment(&point, &event, false)?;
             }
         }
         Ok(verdict)
     }
 
-    /// One moment at `point` about `subject`: draws a ruling from each hook
-    /// attached there in install order, stopping where the kernel would,
-    /// writes the `Verdicts`, then an `Emitted` per note. Returns whether a
-    /// ruling stopped it. Every entry here is required: a roll call the
-    /// generator drew and the reducer refused is a bug in one of them.
+    /// Whether any hook is attached at `point`.
+    fn hooked(&self, point: &HookPoint) -> bool {
+        self.state.hooks_at(point).next().is_some()
+    }
+
+    /// An agent's parent and `depth` grant, as the kernel reports them in
+    /// an event.
+    fn lineage(&self, agent: AgentId) -> (Option<AgentId>, u64) {
+        self.state.agent(agent).map_or((None, 0), |a| {
+            (a.parent, a.budget.get(&DimKey::Depth).unwrap_or(0))
+        })
+    }
+
+    /// The agents `entry` may end, for the `OnExit` facts to be captured
+    /// first: the one exiting, the subtree of the one cancelled, everyone
+    /// whose deadline the tick reaches.
+    fn may_end(&self, entry: &Entry) -> Vec<AgentId> {
+        match entry {
+            Entry::Exited { agent, .. } => vec![*agent],
+            Entry::Cancelled { agent, .. } => self.state.subtree(*agent),
+            Entry::Tick { now, .. } => self.state.expiring(*now),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The kernel's `before_exit`: what `agent` holds, budget and
+    /// reservations, before the entry that may end it.
+    fn before_exit(&self, agent: AgentId) -> Option<ExitFacts> {
+        let a = self.state.agent(agent)?;
+        let mut unspent = a.budget.clone();
+        for held in a.reserved.values() {
+            // Restoring what was carved from this very grant cannot
+            // overflow; the fallback keeps the crate free of `unwrap`.
+            let _ = unspent.restore(held);
+        }
+        Some(ExitFacts {
+            agent,
+            parent: a.parent,
+            depth: a.budget.get(&DimKey::Depth).unwrap_or(0),
+            unspent,
+        })
+    }
+
+    /// The event a pre point's hooks see for `entry`, built as the kernel
+    /// builds it: positioned at the `Verdicts` it will produce, with the
+    /// subject's grant before the reservation or settle, and the payload
+    /// bytes the entry only digests.
+    fn pre_event(&self, entry: &Entry, bytes: Option<&[u8]>) -> Result<HookEvent, SimError> {
+        let seq = self.state.next_seq();
+        match entry {
+            Entry::Spawned {
+                parent,
+                agent,
+                ns,
+                budget,
+                ..
+            } => Ok(HookEvent::OnSpawn {
+                seq,
+                subject: *agent,
+                parent: *parent,
+                depth: self.state.birth_depth(*parent, budget),
+                ns: ns.clone(),
+                remaining: budget.clone(),
+            }),
+            Entry::Sent { msg, via } => {
+                let Endpoint::Agent { id: subject } = msg.from else {
+                    return Err(SimError::Fault("a send from no agent"));
+                };
+                let Some(driver) = self.drivers.iter().find(|d| d.cap == *via) else {
+                    return Err(SimError::Fault("a send via a capability no driver holds"));
+                };
+                let (Some(corr), Some(payload)) = (msg.corr, bytes) else {
+                    return Err(SimError::Fault("a send without a correlation or bytes"));
+                };
+                let (parent, depth) = self.lineage(subject);
+                Ok(HookEvent::PreSend {
+                    seq,
+                    subject,
+                    parent,
+                    depth,
+                    driver: driver.id.clone(),
+                    corr,
+                    payload: payload.to_vec(),
+                    remaining: self.state.budget_of(subject).cloned().unwrap_or_default(),
+                })
+            }
+            Entry::Replied { msg, to } => {
+                let Endpoint::Driver { id: driver } = &msg.from else {
+                    return Err(SimError::Fault("a reply from no driver"));
+                };
+                let (Some(corr), Some(payload)) = (msg.corr, bytes) else {
+                    return Err(SimError::Fault("a reply without a correlation or bytes"));
+                };
+                let (parent, depth) = self.lineage(*to);
+                Ok(HookEvent::PreDeliver {
+                    seq,
+                    subject: *to,
+                    parent,
+                    depth,
+                    driver: driver.clone(),
+                    corr,
+                    kind: msg.kind,
+                    payload: payload.to_vec(),
+                    remaining: self.state.budget_of(*to).cloned().unwrap_or_default(),
+                })
+            }
+            _ => Err(SimError::Fault("an entry with no pre point")),
+        }
+    }
+
+    /// One moment at `point` about `event`: consults each hook attached
+    /// there in install order, stopping where the kernel would, writes the
+    /// `Verdicts`, then an `Emitted` per note. A rule answers for itself,
+    /// through [`Rule::evaluate`]; a native's ruling is drawn, there being
+    /// no program. Returns whether a ruling stopped it. Every entry here is
+    /// required: a roll call the generator wrote and the reducer refused is
+    /// a bug in one of them.
     fn moment(
         &mut self,
         point: &HookPoint,
-        subject: AgentId,
+        event: &HookEvent,
         may_deny: bool,
     ) -> Result<bool, SimError> {
+        let subject = event.subject();
         let hooks: Vec<(HookId, FailureMode)> = self
             .state
             .hooks_at(point)
@@ -557,24 +871,33 @@ impl Sim {
         let mut notes: Vec<(HookId, AgentId, BlobRef)> = Vec::new();
         let mut stopped = false;
         for (hook, mode) in hooks {
-            let ruling = match self.rng.below(20) {
-                0..=11 => Ruling::Allow,
-                12..=15 => {
-                    let to = self.note_target(subject);
-                    let payload = self.rng.blob();
+            let ruling = if let Some(rule) = self.rules.get(&hook) {
+                let (ruling, note) = recorded(point, mode, rule.evaluate(event));
+                if let Some((to, payload)) = note {
                     notes.push((hook, to, payload));
-                    Ruling::Emit { to, payload }
                 }
-                16..=17 if point.admits_deny() && may_deny => Ruling::Deny(self.rng.blob()),
-                _ => {
-                    // A failure — or, at an on point, a deny, which is the
-                    // same thing — recorded with the hook's mode. At a pre
-                    // point a closed one stops the roll; the root's spawn
-                    // must not be stopped, so it fails open there.
-                    let mode = if may_deny { mode } else { FailureMode::Open };
-                    Ruling::Failed {
-                        mode,
-                        error: self.rng.blob(),
+                ruling
+            } else {
+                match self.rng.below(20) {
+                    0..=11 => Ruling::Allow,
+                    12..=15 => {
+                        let to = self.note_target(subject);
+                        let payload = self.rng.blob();
+                        notes.push((hook, to, payload));
+                        Ruling::Emit { to, payload }
+                    }
+                    16..=17 if point.admits_deny() && may_deny => Ruling::Deny(self.rng.blob()),
+                    _ => {
+                        // A failure — or, at an on point, a deny, which is
+                        // the same thing — recorded with the hook's mode. At
+                        // a pre point a closed one stops the roll; the
+                        // root's spawn must not be stopped, so it fails open
+                        // there.
+                        let mode = if may_deny { mode } else { FailureMode::Open };
+                        Ruling::Failed {
+                            mode,
+                            error: self.rng.blob(),
+                        }
                     }
                 }
             };
@@ -789,18 +1112,18 @@ impl Sim {
     /// A candidate entry for the current state, or `None` if the kind drawn
     /// has nothing to act on (no open request to answer, no mailbox to
     /// resolve, ...).
-    fn propose(&mut self) -> Option<Entry> {
+    fn propose(&mut self) -> Option<Proposal> {
         match self.rng.below(100) {
             0..=14 if self.at_capacity() => self.exit(),
-            0..=14 => self.spawn(),
+            0..=14 => self.spawn().map(Into::into),
             15..=34 => self.send(),
             35..=54 => self.reply(),
-            55..=69 => self.resolve(),
+            55..=69 => self.resolve().map(Into::into),
             70..=77 => self.exit(),
-            78..=85 => self.claim(),
-            86..=89 => self.cancel(),
-            90..=91 => self.hook_noise(),
-            _ => Some(self.tick()),
+            78..=85 => self.claim().map(Into::into),
+            86..=89 => self.cancel().map(Into::into),
+            90..=91 => self.hook_noise().map(Into::into),
+            _ => Some(self.tick().into()),
         }
     }
 
@@ -847,7 +1170,7 @@ impl Sim {
         })
     }
 
-    fn send(&mut self) -> Option<Entry> {
+    fn send(&mut self) -> Option<Proposal> {
         let from = self.pick_live()?;
         let held: Vec<Capability> = self.state.agent(from)?.ns.iter().collect();
         let via = if held.is_empty() || self.rng.one_in(10) {
@@ -856,20 +1179,24 @@ impl Sim {
         } else {
             *self.rng.pick(&held)?
         };
-        let payload = self.rng.blob();
-        Some(Entry::Sent {
+        let payload = self.rng.payload();
+        let entry = Entry::Sent {
             msg: Msg::new(
                 self.state.next_seq(),
                 Endpoint::Agent { id: from },
                 MsgKind::Request,
-                payload,
+                BlobStore::digest(&payload),
             )
             .with_corr(self.state.next_corr()),
             via,
+        };
+        Some(Proposal {
+            entry,
+            bytes: Some(payload),
         })
     }
 
-    fn reply(&mut self) -> Option<Entry> {
+    fn reply(&mut self) -> Option<Proposal> {
         let open: Vec<(AgentId, Corr, usize)> = self
             .open
             .iter()
@@ -891,18 +1218,21 @@ impl Sim {
             // Along a dimension nobody reserved: overdraft entirely.
             dims.push((self.stray.clone(), self.rng.up_to(50).saturating_add(1)));
         }
-        let payload = self.rng.blob();
+        let payload = self.rng.payload();
         let mut msg = Msg::new(
             self.state.next_seq(),
             Endpoint::Driver { id: driver.id },
             MsgKind::Reply,
-            payload,
+            BlobStore::digest(&payload),
         )
         .with_corr(corr);
         if !self.rng.one_in(10) {
             msg = msg.with_consumption(Consumption::from_dims(dims));
         }
-        Some(Entry::Replied { msg, to })
+        Some(Proposal {
+            entry: Entry::Replied { msg, to },
+            bytes: Some(payload),
+        })
     }
 
     fn resolve(&mut self) -> Option<Entry> {
@@ -928,13 +1258,17 @@ impl Sim {
         })
     }
 
-    fn exit(&mut self) -> Option<Entry> {
+    fn exit(&mut self) -> Option<Proposal> {
         let agent = self.pick_live_non_root()?;
-        let result = self.rng.blob();
-        Some(Entry::Exited {
+        let result = self.rng.payload();
+        let entry = Entry::Exited {
             seq: self.state.next_seq(),
             agent,
-            result,
+            result: BlobStore::digest(&result),
+        };
+        Some(Proposal {
+            entry,
+            bytes: Some(result),
         })
     }
 
@@ -1008,8 +1342,8 @@ impl Sim {
                     proposals,
                 });
             }
-            if let Some(entry) = self.propose() {
-                self.govern(entry, true)?;
+            if let Some(proposal) = self.propose() {
+                self.govern(proposal, true)?;
             }
         }
         Ok(())
@@ -1027,7 +1361,7 @@ impl Sim {
             grace: 0,
             reason,
         };
-        match self.govern(cancel, false)? {
+        match self.govern(cancel.into(), false)? {
             Verdict::Accepted => {}
             Verdict::Refused(refusal) => return Err(SimError::Required(refusal)),
         }

@@ -135,21 +135,21 @@ fn every_entry_kind_and_an_overdraft_appear() {
 const PINNED: [(u64, usize, u64, &str); 3] = [
     (
         SEED_A,
-        5_026,
-        722,
-        "8d23bf41926c0282c6d888f706373257ca473a75bb5c6795b33c2a9bd5a69941",
+        5_022,
+        792,
+        "fae2a9f3842b8eb099e0a4d2e96a1ff97298c36bd702c72408b93d3f38c90383",
     ),
     (
         SEED_B,
-        5_020,
-        562,
-        "b87867b214924d8bdced55dcb8bac186b705b8d4315e8e283da8f1933b620f3c",
+        5_017,
+        535,
+        "ab193b1717c29b5e9b6d7f29051ab462a23252de2215f9653092d84f3395af49",
     ),
     (
         SEED_C,
-        5_022,
-        710,
-        "3412f04d881db20da565a736a92b7bf1e43df388f6bbac27027f88f31eae8e96",
+        5_023,
+        674,
+        "5e565f44667ea14bf8fa9cd4c9519606c5dd8a74fb1108b5178e2808b1832b2b",
     ),
 ];
 
