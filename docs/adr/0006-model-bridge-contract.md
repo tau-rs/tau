@@ -273,6 +273,7 @@ this ADR adds none to the kernel.
 | `tools[]` | `tools[]` (`name`, `description`, `input_schema`) | `tools[]` (`type: function`, `function.{name,description,parameters}`) |
 | `max_tokens` | `max_tokens` | `max_tokens` / `max_completion_tokens` |
 | `sampling.seed` | *unsupported* → `error.unsupported` | `seed` |
+| `sampling.temperature`, `sampling.top_p` | `temperature`, `top_p` when the driver's config says the model takes them; *unsupported* → `error.unsupported` otherwise, the default (every current model answers 400) | `temperature`, `top_p` |
 | `sampling.stop_sequences` | `stop_sequences` | `stop` |
 | `stop` | `end_turn`, `tool_use`→`tool_call`, `max_tokens`, `stop_sequence`, `refusal` | `finish_reason`: `stop`→`end_turn`, `tool_calls`→`tool_call`, `length`→`max_tokens`, `content_filter`→`refusal` |
 | `usage` | `usage.input_tokens`, `usage.output_tokens` | `usage.prompt_tokens`, `usage.completion_tokens` |

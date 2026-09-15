@@ -44,7 +44,11 @@
 //! # What it refuses
 //!
 //! A bridge version other than [`VERSION`], a request that does not parse,
-//! and a present `sampling.seed` are `error.unsupported`, nothing sent. The
+//! and a present `sampling.seed` are `error.unsupported`, nothing sent. So
+//! are a present `sampling.temperature` or `sampling.top_p` unless
+//! [`AnthropicConfig::sampling`] says the model takes them: every current
+//! model answers 400 to either, so the default is [`SamplingMode::Refused`]
+//! and the harness opts an older model in (ADR-0006 §2). The
 //! provider's own rejections (4xx/5xx) are `error.provider` with the status
 //! and the provider's text; a 200 the driver cannot map is `error.provider`
 //! too. A connection failure, the configured timeout, or an `abandon` from
@@ -122,6 +126,27 @@ pub struct AnthropicConfig {
     /// Whether the model thinks. Driver configuration, not the request's
     /// (ADR-0006 §2, ADR-0007 §5).
     pub thinking: ThinkingMode,
+    /// Whether the model takes `temperature` and `top_p`. Driver
+    /// configuration, because it is a fact about the model, not the
+    /// request; [`SamplingMode::Refused`] from [`new`](Self::new).
+    pub sampling: SamplingMode,
+}
+
+/// Whether the model takes non-default sampling (`temperature`, `top_p`).
+///
+/// Claude Opus 4.7 and later, Sonnet 5, and every Fable and Mythos model
+/// answer 400 to either field, whether or not thinking is on; the 4.6
+/// generation and Haiku 4.5 still take them. A driver refuses what it
+/// cannot honour (ADR-0006 §2), so a present field on a refusing model is
+/// `error.unsupported` with nothing sent, never silently dropped.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SamplingMode {
+    /// A present `temperature` or `top_p` is refused. The default, since
+    /// every model current at the time of writing rejects them.
+    #[default]
+    Refused,
+    /// `temperature` and `top_p` are sent as the request gives them.
+    Accepted,
 }
 
 /// Whether the model thinks (ADR-0007 §5).
@@ -163,6 +188,7 @@ impl AnthropicConfig {
             timeout: DEFAULT_TIMEOUT,
             estimate: InputEstimate::Bytes,
             thinking: ThinkingMode::default(),
+            sampling: SamplingMode::default(),
         }
     }
 
@@ -305,6 +331,7 @@ impl Inner {
             &self.config.model,
             self.config.max_max_tokens,
             self.config.thinking,
+            self.config.sampling,
         ) {
             Ok(body) => body,
             Err(err) => return self.refuse(err.kind, err.message),

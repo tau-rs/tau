@@ -49,13 +49,16 @@ fn driver(base_url: &str) -> AnthropicDriver {
     AnthropicDriver::new(c).unwrap()
 }
 
+/// The ADR's example request, minus the seed Anthropic cannot honour and
+/// the temperature a current model rejects.
 fn sendable_request() -> Vec<u8> {
     let mut request: Value = serde_json::from_str(REQUEST).unwrap();
-    request
+    let sampling = request
         .get_mut("sampling")
         .and_then(Value::as_object_mut)
-        .unwrap()
-        .remove("seed");
+        .unwrap();
+    sampling.remove("seed");
+    sampling.remove("temperature");
     serde_json::to_vec(&request).unwrap()
 }
 
