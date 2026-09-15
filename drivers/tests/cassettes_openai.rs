@@ -197,7 +197,11 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
         temperature: Some(0.2),
         ..Sampling::default()
     });
+    // `system` must be `None` here too: the OpenAI-compatible driver folds
+    // it into a first `system`-role message, so `system: Some(_)` alone
+    // would make this a one-message request, not an empty one.
     let empty = ModelRequest {
+        system: None,
         messages: vec![],
         ..text("", budget(target, 32))
     };
