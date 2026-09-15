@@ -1,0 +1,13 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: driver_registered ()
+---
+{
+  "entry": "driver_registered",
+  "seq": 0,
+  "driver": "tool",
+  "cap": 0,
+  "ceiling": {
+    "tokens": 30
+  }
+}

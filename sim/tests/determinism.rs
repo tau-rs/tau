@@ -94,6 +94,9 @@ fn every_entry_kind_and_an_overdraft_appear() {
         Entry::Attached { .. } => "attached",
         Entry::Verdicts { .. } => "verdicts",
         Entry::Emitted { .. } => "emitted",
+        // `Entry` is `#[non_exhaustive]` (ADR-0010): a thirteenth kind is an
+        // ABI event with its own row in this list, not a silent pass here.
+        _ => "unknown",
     };
     let seen: std::collections::BTreeSet<&str> = log.entries().iter().map(kind).collect();
     for want in [

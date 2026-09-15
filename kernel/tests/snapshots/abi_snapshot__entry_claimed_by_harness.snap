@@ -1,0 +1,10 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: claimed_by_harness ()
+---
+{
+  "entry": "claimed",
+  "seq": 48,
+  "agent": 0,
+  "by": null
+}

@@ -1,0 +1,20 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: spawned_root ()
+---
+{
+  "entry": "spawned",
+  "seq": 1,
+  "parent": null,
+  "agent": 0,
+  "ns": {
+    "caps": [
+      0
+    ]
+  },
+  "budget": {
+    "tokens": 70,
+    "calls": 10,
+    "depth": 2
+  }
+}

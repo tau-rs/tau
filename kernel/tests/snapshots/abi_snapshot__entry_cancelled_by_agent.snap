@@ -1,0 +1,12 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: cancelled_by_agent ()
+---
+{
+  "entry": "cancelled",
+  "seq": 4,
+  "by": 0,
+  "agent": 1,
+  "grace": 10,
+  "reason": "3333333333333333333333333333333333333333333333333333333333333333"
+}

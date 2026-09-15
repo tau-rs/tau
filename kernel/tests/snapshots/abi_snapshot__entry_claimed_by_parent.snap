@@ -1,0 +1,10 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: claimed_by_parent ()
+---
+{
+  "entry": "claimed",
+  "seq": 47,
+  "agent": 1,
+  "by": 0
+}
