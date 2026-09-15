@@ -97,6 +97,8 @@ async fn forward_mode_relays_headers_body_status_and_reports_the_exchange() {
         .post(format!("{}/v1/messages", relay.base_url))
         .header("content-type", "application/json")
         .header("x-api-key", "sk-ant-not-a-real-key")
+        .header("accept-encoding", "gzip")
+        .header("connection", "keep-alive")
         .body(r#"{"hello":"world"}"#)
         .send()
         .await
@@ -111,6 +113,19 @@ async fn forward_mode_relays_headers_body_status_and_reports_the_exchange() {
         Some("sk-ant-not-a-real-key")
     );
     assert_eq!(seen_upstream.json(), serde_json::json!({"hello":"world"}));
+    // Hop-by-hop headers from the client are stripped, not relayed verbatim:
+    // the client's `accept-encoding` must not reach upstream at all, and its
+    // `connection: keep-alive` must not pass through (reqwest may set its
+    // own `connection` for the relay -> upstream hop; that's fine).
+    assert_eq!(seen_upstream.header("accept-encoding"), None);
+    assert_ne!(seen_upstream.header("connection"), Some("keep-alive"));
+    // The relay does not forward a stale content-length: what upstream sees
+    // matches the body upstream actually received.
+    let seen_content_length: usize = seen_upstream
+        .header("content-length")
+        .and_then(|v| v.parse().ok())
+        .unwrap();
+    assert_eq!(seen_content_length, seen_upstream.body.len());
 
     let r = relayed.recv().await.unwrap();
     assert_eq!(r.status, 418);
