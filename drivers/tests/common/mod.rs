@@ -5,6 +5,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
+#[cfg(all(feature = "sandbox", unix))]
+pub(crate) mod sandbox;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
