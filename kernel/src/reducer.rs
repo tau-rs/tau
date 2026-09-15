@@ -151,7 +151,14 @@ impl Agent {
 }
 
 /// The kernel's state: a pure fold over the log.
+///
+/// Only the canonical fields are serialized, so [`State::hash`] is a function
+/// of the log alone: the derived indexes are skipped, and `completed` goes
+/// out as a sequence in completion order without its ordinal keys. On
+/// deserialize the indexes are rebuilt from the canonical fields via
+/// [`Canonical`], and the ordinals are compacted to `0..n`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "Canonical")]
 pub struct State {
     next_seq: u64,
     next_agent: u64,
@@ -166,21 +173,96 @@ pub struct State {
     corrs: BTreeMap<Corr, AgentId>,
     /// Finished agents whose outcome is unclaimed, keyed by the order they
     /// finished in: `wait(Any)` returns in completion order, which is not id
-    /// order.
+    /// order. Serialized as the sequence of completions; the keys are an
+    /// implementation detail and stay out of the hash.
+    #[serde(serialize_with = "completions_in_order")]
     completed: BTreeMap<u64, Completion>,
     /// The completion ordinal each unclaimed outcome sits under, so a claim
     /// finds it without scanning.
+    #[serde(skip)]
     unclaimed: BTreeMap<AgentId, u64>,
     /// The ordinal the next finish will take. Never reused, so completion
     /// order survives claims in between.
+    #[serde(skip)]
     next_completion: u64,
     /// The agents that have not finished. Every per-entry sweep — the wall
     /// charge, deadlines, expiry, liveness — walks this, not the records,
     /// which persist after exit and so grow without bound (#45).
+    #[serde(skip)]
     live: BTreeSet<AgentId>,
     /// Each agent's children, for walking a subtree without filtering every
     /// record ever spawned. Never pruned: the record stays, so does the edge.
+    #[serde(skip)]
     children: BTreeMap<AgentId, BTreeSet<AgentId>>,
+}
+
+/// Serializes the unclaimed completions as a sequence in completion order.
+fn completions_in_order<S>(
+    completed: &BTreeMap<u64, Completion>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.collect_seq(completed.values())
+}
+
+/// The canonical fields of a [`State`], as serialized: what a log determines
+/// and nothing derived from it. Deserialization lands here and rebuilds the
+/// indexes, so a cache added to `State` never reaches the wire.
+#[derive(Deserialize)]
+struct Canonical {
+    next_seq: u64,
+    next_agent: u64,
+    next_corr: u64,
+    next_cap: u64,
+    now: u64,
+    drivers: BTreeMap<DriverId, Capability>,
+    ceilings: BTreeMap<DriverId, Budget>,
+    caps: BTreeMap<Capability, Endpoint>,
+    agents: BTreeMap<AgentId, Agent>,
+    corrs: BTreeMap<Corr, AgentId>,
+    completed: Vec<Completion>,
+}
+
+impl From<Canonical> for State {
+    fn from(c: Canonical) -> Self {
+        let live = c
+            .agents
+            .iter()
+            .filter(|(_, a)| a.is_live())
+            .map(|(id, _)| *id)
+            .collect();
+        let mut children: BTreeMap<AgentId, BTreeSet<AgentId>> = BTreeMap::new();
+        for (id, a) in &c.agents {
+            if let Some(parent) = a.parent {
+                children.entry(parent).or_default().insert(*id);
+            }
+        }
+        let completed: BTreeMap<u64, Completion> = (0..).zip(c.completed).collect();
+        let unclaimed = completed
+            .iter()
+            .map(|(ordinal, completion)| (completion.agent, *ordinal))
+            .collect();
+        let next_completion = completed.len() as u64;
+        Self {
+            next_seq: c.next_seq,
+            next_agent: c.next_agent,
+            next_corr: c.next_corr,
+            next_cap: c.next_cap,
+            now: c.now,
+            drivers: c.drivers,
+            ceilings: c.ceilings,
+            caps: c.caps,
+            agents: c.agents,
+            corrs: c.corrs,
+            completed,
+            unclaimed,
+            next_completion,
+            live,
+            children,
+        }
+    }
 }
 
 /// A digest of a [`State`], for comparing folds.
