@@ -13,3 +13,6 @@
 /fuzz/artifacts
 /fuzz/coverage
 !fuzz/seeds/**
+
+# The determinism corpus (corpus/, Tier 3): logs on purpose, same rule.
+!corpus/*.log

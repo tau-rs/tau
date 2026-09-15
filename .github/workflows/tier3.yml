@@ -1,0 +1,165 @@
+# Tier 3 — scheduled drift (docs/HANDOFF.md §8). Nightly, on main.
+#
+# Tier 3 jobs open issues instead of failing builds: drift is not the
+# committer's fault, and a red build that blames the wrong person trains
+# everyone to ignore red. This file is item 1 of the seven, the determinism
+# drift sentinel (#72). The other six are tracked in #7.
+#
+# The sentinel refolds every log in corpus/ with today's main and expects
+# the state hash each was pinned at. A hash that moved means the reducer
+# changed its mind about an input it had already accepted — ADR-0003's "we
+# do not break userspace", checked on a schedule instead of on a user's
+# machine. A mismatch files an issue naming the fixture and both hashes. The
+# job itself goes red only when it could not have checked the corpus: too
+# few fixtures, a missing sidecar, a log the fold refuses, a broken build.
+#
+# Two landmines from v1 are designed around here. Scheduled workflows get
+# throttled: every v1 cron fired every ~11-12h regardless of its expression,
+# for months, undetected, so the last step counts this workflow's own
+# scheduled firings in the past 24h and files an issue when the count is
+# not exactly one. And an empty lane reports green: scripts/refold-corpus.sh
+# fails closed below a fixture-count floor.
+
+name: tier3
+
+on:
+  schedule:
+    # 03:17 UTC. An odd minute: the top of the hour is when every scheduled
+    # workflow on GitHub wants a runner, and that queue is the throttle.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tier3-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+  CORPUS_FLOOR: 6
+
+jobs:
+  sentinel:
+    name: determinism drift sentinel
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write       # to file drift and firings issues
+      actions: read       # to count this workflow's own scheduled runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler.
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --locked --release -p tau-sim --bin soak
+
+      - name: Refold the corpus
+        id: refold
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          ./scripts/refold-corpus.sh | tee refold.txt
+          {
+            echo "## determinism drift sentinel"
+            echo
+            echo "- $(rustc --version)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- $(tail -1 refold.txt)"
+            echo "- wall: ${SECONDS}s"
+            echo
+            echo '```'
+            grep -E '^(ok|DRIFT|TOOLING) ' refold.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One issue per drifted fixture, deduplicated by exact open title so a
+      # drift that persists for a week is one issue, not seven.
+      - name: File an issue per drifted fixture
+        if: always() && steps.refold.outputs.drifted != '' && steps.refold.outputs.drifted != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open="$(gh issue list --state open --limit 500 --json number,title)"
+          while IFS=$'\t' read -r name expected actual; do
+            title="tier3: determinism drift — $name"
+            existing="$(jq -r --arg t "$title" '.[] | select(.title == $t) | .number' <<<"$open" | head -1)"
+            if [ -n "$existing" ]; then
+              echo "$title: already open as #$existing"
+              gh issue comment "$existing" --body "Still drifting on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: folded \`$actual\`, sidecar says \`$expected\`. Run: $RUN_URL"
+              continue
+            fi
+            body="$(cat <<EOF
+          The nightly sentinel (\`tier3.yml\`) refolded \`corpus/$name.log\` on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` and did not get the hash it was pinned at.
+
+          | | state hash |
+          |---|---|
+          | pinned (\`corpus/$name.hash\`) | \`$expected\` |
+          | folded on \`$GITHUB_SHA\` | \`$actual\` |
+
+          - run: $RUN_URL
+          - A moved hash is a reducer-behaviour change for an input the reducer had already accepted. Per \`corpus/README.md\`, re-pinning the sidecar is never the fix on its own: it needs an ADR-level reason.
+
+          refs #72, #7
+          EOF
+          )"
+            url="$(gh issue create --title "$title" --label bug --label status:ready --body "$body")"
+            echo "$title: opened $url"
+          done < drift.tsv
+
+      # The throttle detector. Counts *scheduled* runs of this workflow created
+      # in the last 24 hours. On a scheduled run the count includes this one,
+      # so exactly 1 is healthy: 0 cannot happen, 2+ means the cron is firing
+      # more often than its expression, and a skipped night shows up as 2 the
+      # night after when GitHub catches up. On a manual run the count is
+      # written to the summary and nothing is filed — a dispatch inside the
+      # window would otherwise report a false double firing.
+      - name: Count this workflow's scheduled firings in the last 24h
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          since="$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+          count="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/tier3.yml/runs" \
+            -f event=schedule -f created=">=$since" -F per_page=100 --jq '.total_count')"
+          echo "scheduled firings since $since: $count (event: $EVENT)"
+          {
+            echo "- scheduled firings in the last 24h: $count (this run: \`$EVENT\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$EVENT" != "schedule" ]; then
+            echo "not a scheduled run; count is informational"
+            exit 0
+          fi
+          if [ "$count" -eq 1 ]; then
+            exit 0
+          fi
+          title="tier3: the nightly did not fire exactly once in 24h"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Again: $count scheduled firing(s) in the 24h before $RUN_URL."
+            echo "already open as #$existing"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          \`tier3.yml\` counted $count scheduled run(s) of itself created since \`$since\` (this run included). The cron is \`17 3 * * *\`, so the healthy count is exactly 1.
+
+          v1's crons fired every ~11-12h regardless of their expression, for months, undetected. This is the counter that is supposed to notice. Check the run list for the workflow, then decide whether the schedule moved or GitHub's scheduler did.
+
+          - run: $RUN_URL
+
+          refs #72, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label status:ready --body "$body")"
+          echo "opened $url"
