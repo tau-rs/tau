@@ -34,6 +34,10 @@
 //! - [`RetryPolicy`] and [`infer_with`]: the same call again when the
 //!   driver could not get an answer. Every attempt is its own `send`, and
 //!   the wait comes from a sleep the caller supplies.
+//! - [`Note`]: where a hook's `Emit` lands. Every call takes a
+//!   `&mut Vec<Note>`; a hook notice the call's `recv` resolved while
+//!   waiting is pushed there instead of dropped, and the program reads it
+//!   after the call. A cancel notice still ends the call.
 //! - [`Toolbox`]: the projected namespace. One tool per capability, named
 //!   by the `DriverId` the harness registered the driver under, with the
 //!   driver's schema compiled for validation.
@@ -58,7 +62,7 @@ mod tool_loop;
 mod toolbox;
 
 pub use infer::{
-    decode_reply, encode_request, infer, infer_with, should_retry, InferError, RetryPolicy,
+    decode_reply, encode_request, infer, infer_with, should_retry, InferError, Note, RetryPolicy,
 };
 pub use tool_loop::{prompt, render_result, tool_loop, tool_loop_with, ToolLoopError};
 pub use toolbox::{ProjectError, Toolbox};
