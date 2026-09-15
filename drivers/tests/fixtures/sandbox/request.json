@@ -1,0 +1,5 @@
+{
+  "v": 1,
+  "code": "import sys\nprint(sum(int(x) for x in sys.stdin.read().split()))\n",
+  "stdin": "1 2 3\n"
+}

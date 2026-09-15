@@ -31,6 +31,7 @@ on:
     paths:
       - "kernel/**"
       - "sim/**"
+      - "drivers/src/sandbox/**"
   workflow_dispatch:
     inputs:
       events:
@@ -58,7 +59,9 @@ env:
 
 jobs:
   # Decides whether a pull request pays for the slow lane: the `deep-ci`
-  # label, or a diff under kernel/**. Pushes and manual runs always do.
+  # label, or a diff under kernel/** or drivers/src/sandbox/** (the one
+  # place the system runs code it did not write). Pushes and manual runs
+  # always do.
   gate:
     name: gate
     runs-on: ubuntu-latest
@@ -84,11 +87,11 @@ jobs:
             echo "deep-ci label present"
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -q '^kernel/'; then
-            echo "kernel/** changed"
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -Eq '^(kernel/|drivers/src/sandbox/)'; then
+            echo "kernel/** or drivers/src/sandbox/** changed"
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          echo "no label, no kernel diff: skipping"
+          echo "no label, no kernel or sandbox diff: skipping"
           echo "run=false" >> "$GITHUB_OUTPUT"
 
   soak-linux:

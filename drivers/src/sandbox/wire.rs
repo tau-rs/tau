@@ -123,16 +123,19 @@ impl Usage {
 
 /// The input schema `describe()` projects: derived from [`Request`], the
 /// type the driver deserializes with, so there is one source of truth
-/// (ADR-0009 §7). Draft 2020-12, no `$schema` or `title`, and
-/// `additionalProperties: false`.
+/// (ADR-0009 §7). Draft 2020-12, no `$schema`, `title` or root
+/// `description`, and `additionalProperties: false`.
 #[must_use]
 pub fn schema() -> serde_json::Value {
     let settings = schemars::generate::SchemaSettings::draft2020_12().with(|s| {
         s.meta_schema = None;
     });
     let mut schema = SchemaGenerator::new(settings).root_schema_for::<Request>();
+    // The root's title and description are the type's, not the tool's:
+    // the tool's description is `describe()`'s sentence.
     if let Some(object) = schema.as_object_mut() {
         object.remove("title");
+        object.remove("description");
     }
     schema.to_value()
 }

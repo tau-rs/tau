@@ -1,0 +1,3 @@
+{ "v": 1, "stop": { "error": { "kind": "unsupported", "message": "code is 131072 bytes; the bound is 65536" } },
+  "stdout": "", "stderr": "", "truncated": { "stdout": false, "stderr": false },
+  "usage": { "cpu_user_us": 0, "cpu_sys_us": 0, "max_rss_bytes": 0 } }
