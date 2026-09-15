@@ -455,8 +455,14 @@ jobs:
         run: |
           set -euo pipefail
           SECONDS=0
+          # The sandbox tests spawn the instrumented shim as a real process,
+          # and a sanitizer runtime inside an rlimit fence is its own
+          # problem: the shadow mapping does not fit under RLIMIT_AS, and a
+          # deferred SIGTERM misses the abandon grace. That leg is #61's,
+          # with its own flags; this job stays the scheduler's.
           cargo +nightly nextest run --locked -Zbuild-std \
             -p tau-kernel -p libtau -p tau-drivers --all-features --profile ci \
+            -E 'not binary(/^sandbox_/)' \
             --target "$SAN_TARGET" 2>&1 | tee tsan.log
           {
             echo "## tsan (scheduler)"
