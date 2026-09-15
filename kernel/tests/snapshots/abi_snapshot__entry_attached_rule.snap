@@ -1,0 +1,14 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: attached_rule ()
+---
+{
+  "entry": "attached",
+  "seq": 2,
+  "hook": 1,
+  "point": "pre_deliver",
+  "failure": "open",
+  "program": {
+    "rule": "when pre_deliver then allow"
+  }
+}

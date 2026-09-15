@@ -3,7 +3,7 @@ source: kernel/tests/abi_snapshot.rs
 expression: msg
 ---
 {
-  "abi": 1,
+  "abi": 2,
   "seq": 43,
   "from": {
     "kind": "driver",

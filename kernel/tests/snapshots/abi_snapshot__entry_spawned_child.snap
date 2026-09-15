@@ -1,0 +1,17 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: spawned_child ()
+---
+{
+  "entry": "spawned",
+  "seq": 2,
+  "parent": 0,
+  "agent": 1,
+  "ns": {
+    "caps": []
+  },
+  "budget": {
+    "tokens": 20,
+    "depth": 1
+  }
+}

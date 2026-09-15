@@ -23,6 +23,7 @@ corpus entry never changes once it is in.
 | `tier1-seed-c` | `soak soak --seed 0x7a75000000000003 --events 5000` at `f7bcdc5` | 5012 | ABI 0 | `a62e88c` (#80) |
 | `m2a-hooks` | `kernel/tests/fixtures/m2a-hooks.log` | 53 | ABI 1 | `a62e88c` (#80) |
 | `sim-rule-hooks` | `soak soak --seed 0x7a75000000000001 --events 5000` at `c39a34d` | 5022 | ABI 1 | `c39a34d` (#97) |
+| `abi2-sim-seed-b` | `soak soak --seed 0x7a75000000000002 --events 5000` at `c6a5bf2` + the `ABI` 1 → 2 bump | 5017 | ABI 2 | `c6a5bf2` + #90 |
 
 The six ABI 0 logs are the ones first pinned at `f7bcdc5` (#62), unchanged
 byte for byte; ADR-0008 (#80) made `hooks` a canonical field of `State`, so
@@ -35,6 +36,11 @@ log whose `Attached` entries carry a `rule` program (#95 made the generator
 draw one or two at boot) and whose `Verdicts` roll a rule's `deny` and
 `emit`: it is seed `a` again, on the generator as of `c39a34d`, so the same
 seed appears twice in this table with different entry counts on purpose.
+`abi2-sim-seed-b` is the first log written under the `Entry` freeze
+(ADR-0010): its header and every envelope say `abi: 2`, so the nightly
+sentinel refolds a post-freeze log from the first night. It is seed `b` on
+the generator as of `c6a5bf2` with the bump applied, and rule-bearing like
+`sim-rule-hooks` (#97 asked that the corpus's ABI 2 sample be one).
 
 The first three soak logs were the Tier 1 seeds at the Tier 1 size when
 they were recorded. `PINNED` in `sim/tests/determinism.rs` pins what the *current*
@@ -67,7 +73,7 @@ release, a harness run, a bug report), write the sidecar from a refold on
 ```
 
 Add a row to the table above with the `main` SHA the hash was pinned at.
-The job fails closed below eight fixtures, so a fixture can be added but the
+The job fails closed below nine fixtures, so a fixture can be added but the
 floor in `tier3.yml` (and the script's default) should move up with the count.
 
 ## A hash that moved

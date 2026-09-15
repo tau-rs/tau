@@ -300,4 +300,4 @@ the reader, which never evaluates anything.
 
 [`LogHeader`]: ../../kernel/src/abi/msg.rs
 [`Msg`]: ../../kernel/src/abi/msg.rs
-[`Entry`]: ../../kernel/src/log.rs
+[`Entry`]: ../../kernel/src/abi/entry.rs
