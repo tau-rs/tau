@@ -13,14 +13,15 @@
 //! to the truncation. The header lets a reader refuse a log it cannot
 //! understand without parsing a single entry.
 //!
-//! # What is and is not frozen
+//! # What is frozen
 //!
-//! [`LogHeader`] and the [`Msg`] envelopes inside entries are ABI (see
-//! `kernel/src/abi/`). The [`Entry`] enum around them is **not yet** frozen:
-//! it is kernel-internal and may churn until the replay CLI lands (M2), at
-//! which point it joins the frozen surface. Fixtures in the determinism corpus
-//! pin the *state hash* of a fold, so a churn here shows up as a loud fixture
-//! failure rather than a silent divergence.
+//! [`LogHeader`], the [`Msg`] envelopes inside entries, and — since
+//! ADR-0009 — the [`Entry`] enum around them and the line framing described
+//! above. `Entry` moves under `kernel/src/abi/` with a snapshot per kind in
+//! the M2c-kernel lane; until then it is frozen where it stands, and a change
+//! to any kind's wire form is an ABI event (`docs/adr/0009-entry-freeze.md`).
+//! Fixtures in the determinism corpus pin the *state hash* of a fold, which
+//! is the second tripwire behind the snapshots.
 
 use core::fmt;
 use std::io::{self, BufRead, Write};
