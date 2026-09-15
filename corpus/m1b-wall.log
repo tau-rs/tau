@@ -1,0 +1,10 @@
+{"magic":[84,65,85,0],"abi":0}
+{"entry":"driver_registered","seq":0,"driver":"blackhole","cap":0,"ceiling":{"tokens":5}}
+{"entry":"spawned","seq":1,"parent":null,"agent":0,"ns":{"caps":[0]},"budget":{"tokens":100,"wall_ms":1000,"calls":2,"depth":1}}
+{"entry":"spawned","seq":2,"parent":0,"agent":1,"ns":{"caps":[0]},"budget":{"tokens":10,"wall_ms":100,"calls":1}}
+{"entry":"sent","msg":{"abi":0,"seq":3,"from":{"kind":"agent","id":1},"corr":0,"kind":"request","consumed":null,"payload":"fcdd87acafcd87a1894b76b7b50ef80d418acfa128c837815a1674791419bab7"},"via":0}
+{"entry":"tick","seq":4,"now":50}
+{"entry":"tick","seq":5,"now":100}
+{"entry":"claimed","seq":6,"agent":1,"by":0}
+{"entry":"exited","seq":7,"agent":0,"result":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"entry":"claimed","seq":8,"agent":0,"by":null}
