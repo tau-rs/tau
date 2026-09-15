@@ -2,7 +2,8 @@
 //!
 //! A [`Handle`] is an agent's whole world. It offers the seven syscalls and
 //! nothing else. Six are here: `spawn`, `exit`, `wait`, `cancel`, `send`,
-//! `recv`. `attach` is M2 and harness-privileged.
+//! `recv`. The seventh, `attach`, is harness-privileged and lives on
+//! [`Kernel`](crate::kernel::Kernel::attach): an agent cannot express it.
 //!
 //! # `exit` is a type, not a convention
 //!
@@ -147,7 +148,8 @@ impl ExitResult {
     }
 }
 
-/// An agent's kernel handle: the seven syscalls, and no other power.
+/// An agent's kernel handle: six of the seven syscalls, and no other power.
+/// The seventh, `attach`, is the harness's alone (ADR-0008 §4).
 pub struct Handle {
     kernel: Arc<Kernel>,
     id: AgentId,

@@ -33,7 +33,12 @@
 //! frozen, notified, abandoned at the drivers, and aborted at a tick, every
 //! reserved budget dimension is enforced — a send reserves the driver's
 //! ceiling before delivery, the clock spends wall time as it ticks — and
-//! every log refolds to the same state hash. Hooks and `attach` are M2.
+//! every log refolds to the same state hash.
+//!
+//! M2a: the seventh syscall. [`kernel::Kernel::attach`] installs a [`hook`]
+//! program at one of five pinned points before the root exists; every
+//! verdict is a log entry, and the fold confirms the roll call without ever
+//! running a program (ADR-0008).
 //!
 //! # Shape
 //!
@@ -53,6 +58,7 @@ pub mod abi;
 pub mod blob;
 pub mod bridge;
 pub mod driver;
+pub mod hook;
 pub mod kernel;
 pub mod log;
 pub mod reducer;

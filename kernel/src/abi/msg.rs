@@ -262,11 +262,12 @@ impl LogHeader {
     /// Deliberately not `==`: the whole point of an additive ABI is that a
     /// newer reader accepts an older log.
     #[must_use]
-    // `ABI` is 0 today, so `<=` is trivially true and clippy says so. The
-    // comparison is the *policy*, not an accident of the current value: at ABI
-    // 1 it starts rejecting logs from the future while still accepting logs
-    // from the past. Rewriting it to `==` to satisfy the lint would silently
-    // make the reader version-exact, which is the opposite of the rule.
+    // At ABI 0 `<=` was trivially true and clippy said so; the `allow` is
+    // kept so a future reset would not change the code. The comparison is
+    // the *policy*, not an accident of the current value: a reader at 1
+    // rejects a log from the future and accepts one from the past. Rewriting
+    // it to `==` would silently make the reader version-exact, which is the
+    // opposite of the rule.
     #[allow(clippy::absurd_extreme_comparisons)]
     pub const fn is_readable(&self) -> bool {
         matches!(self.magic, Self::MAGIC) && self.abi <= ABI

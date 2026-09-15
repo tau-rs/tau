@@ -6,7 +6,7 @@ use std::future::{ready, Future};
 use std::time::Duration;
 
 use serde_json::Value;
-use tau_kernel::abi::{BudgetError, Capability, Name};
+use tau_kernel::abi::{BudgetError, Capability, HookId, Name};
 use tau_kernel::bridge::{
     Content, Message, ModelReply, ModelRequest, Role, StopReason, ToolErrorKind, VERSION,
 };
@@ -102,8 +102,9 @@ pub fn prompt(user: &str, max_tokens: u32) -> ModelRequest {
 /// Each round: every `tool_call` block in the reply is answered, in order,
 /// with one `tool_result` in a single user turn. A call is answered without
 /// a `send` when its name is unknown or its input fails the schema, with
-/// `denied` when the kernel says this agent does not hold the capability,
-/// and with `failed` when the reply cannot be read. Only a budget refusal,
+/// `denied` when the kernel says this agent does not hold the capability or
+/// a hook denied the send (ADR-0008 §3, with the hook's reason as the
+/// content), and with `failed` when the reply cannot be read. Only a budget refusal,
 /// a cancellation, or a kernel failure ends the loop early.
 ///
 /// No retries: a model call that ends in an error reply ends the loop, and
@@ -237,6 +238,9 @@ async fn call_tool(
                 format!("denied: this agent does not hold `{name}`"),
             ));
         }
+        Err(KernelError::Denied { hook, reason }) => {
+            return Ok(denied_by_hook(call_id, hook, &reason));
+        }
         Err(KernelError::Refused(Refusal::Budget(e))) => return Err(ToolLoopError::Budget(e)),
         Err(KernelError::Refused(Refusal::Frozen(_))) => {
             return Err(ToolLoopError::Cancelled { reason: Vec::new() });
@@ -282,6 +286,16 @@ pub fn render_result(call_id: String, name: &str, reply: Option<Vec<u8>>) -> Con
             format!("`{name}`: reply payload unavailable"),
         ),
     }
+}
+
+/// The `denied` result for a hook's `Deny` (ADR-0006 §4, ADR-0008): the
+/// reason is the content, so the model reads why and self-corrects.
+fn denied_by_hook(call_id: String, hook: HookId, reason: &str) -> Content {
+    error_result(
+        call_id,
+        ToolErrorKind::Denied,
+        format!("denied by {hook}: {reason}"),
+    )
 }
 
 fn error_result(call_id: String, kind: ToolErrorKind, content: String) -> Content {

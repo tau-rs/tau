@@ -2,4 +2,4 @@
 source: kernel/tests/m0_walking_skeleton.rs
 expression: state.hash().to_string()
 ---
-99c1ee3ee22aaee84dc9b941d0a3b679fdacab67fa8e06b2ff82449ede586cdd
+9768a0c3512387c8e0d88854e04a5febb54e048a7e0cd5d18d89c838d5a21ff4

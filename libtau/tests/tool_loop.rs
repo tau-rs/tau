@@ -675,3 +675,107 @@ async fn the_loop_never_retries_a_refusal() {
     assert_eq!(world.model.seen().len(), 1);
     assert!(waits.is_empty());
 }
+
+// ------------------------------------------------------------------- hooks
+
+use tau_kernel::hook::{FailureMode, HookEvent, HookPoint, HookProgram, Verdict};
+
+#[tokio::test]
+async fn a_send_a_hook_denies_is_fed_back_as_denied_with_the_reason() {
+    // ADR-0008 §3 / ADR-0006 §4: the model reads why and self-corrects. The
+    // hook watches the store driver only, so the model call itself — whose
+    // transcript will carry the forbidden word back — is not denied.
+    let world = World::boot([
+        calls(vec![tool_call(
+            "call_5",
+            "store",
+            json!({ "op": "write", "key": "k", "value": "forbidden" }),
+        )]),
+        end_turn("noted"),
+    ]);
+    world
+        .kernel
+        .attach(
+            HookPoint::PreSend,
+            HookProgram::native(name("no-forbidden-writes"), |e| {
+                Ok(match e {
+                    HookEvent::PreSend {
+                        driver, payload, ..
+                    } if driver.name().as_str() == "store"
+                        && payload.windows(9).any(|w| w == b"forbidden") =>
+                    {
+                        Verdict::Deny("the store does not take that word".into())
+                    }
+                    _ => Verdict::Allow,
+                })
+            }),
+            FailureMode::Closed,
+        )
+        .unwrap();
+    let (transcript, result) = run_loop(
+        &world,
+        world.all_caps(),
+        plenty(),
+        vec![world.store_cap],
+        vec![],
+        prompt("go", 64),
+    )
+    .await;
+    assert_eq!(result.unwrap().stop, StopReason::EndTurn);
+    assert_eq!(
+        results_of(&transcript),
+        vec![tool_result(
+            "call_5",
+            "denied by hook:0: the store does not take that word",
+            Some(ToolErrorKind::Denied)
+        )]
+    );
+    assert!(world.store.seen().is_empty(), "the send never happened");
+}
+
+#[tokio::test]
+async fn a_hook_note_during_a_model_call_is_not_a_cancellation() {
+    // A hook that emits on every model send puts a `Notice` in the mailbox
+    // before the reply. It is from a hook, not from a canceller, and the
+    // loop carries on (#83 is where the note goes next).
+    let world = World::boot([
+        calls(vec![tool_call(
+            "call_6",
+            "store",
+            json!({ "op": "read", "key": "a" }),
+        )]),
+        end_turn("done"),
+    ]);
+    world
+        .kernel
+        .attach(
+            HookPoint::PreSend,
+            HookProgram::native(name("note-every-send"), |e| {
+                Ok(match e {
+                    HookEvent::PreSend { subject, .. } => Verdict::Emit {
+                        to: *subject,
+                        payload: b"noted".to_vec(),
+                    },
+                    _ => Verdict::Allow,
+                })
+            }),
+            FailureMode::Closed,
+        )
+        .unwrap();
+    let (transcript, result) = run_loop(
+        &world,
+        world.all_caps(),
+        plenty(),
+        vec![world.store_cap],
+        vec![],
+        prompt("go", 64),
+    )
+    .await;
+    let reply = result.unwrap();
+    assert_eq!(reply.stop, StopReason::EndTurn);
+    assert_eq!(
+        results_of(&transcript),
+        vec![tool_result("call_6", "hello", None)]
+    );
+    assert_eq!(world.model.seen().len(), 2);
+}

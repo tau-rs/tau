@@ -5,7 +5,7 @@
 use std::future::{ready, Future};
 use std::time::Duration;
 
-use tau_kernel::abi::{BlobRef, Capability, Corr, Msg, MsgKind};
+use tau_kernel::abi::{BlobRef, Capability, Corr, Endpoint, Msg, MsgKind};
 use tau_kernel::bridge::{ErrorKind, ModelError, ModelReply, ModelRequest, StopReason, VERSION};
 use tau_kernel::kernel::KernelError;
 use tau_kernel::syscall::{Handle, Match};
@@ -273,9 +273,10 @@ async fn call_once(
 /// The reply on `corr`, or the cancel notice that pre-empts it.
 ///
 /// A `Partial` on the correlation is skipped: v1 of the bridge does not
-/// stream, and a fragment is not the answer. Any `Notice` is taken to be a
-/// cancellation, which in M1 is the only notice an agent can receive; when
-/// hooks can `Emit` (M2) this is where their notices will be told apart.
+/// stream, and a fragment is not the answer. A `Notice` from an agent or
+/// the harness is a cancellation. A `Notice` from a hook — an `Emit`
+/// verdict, ADR-0008 §3 — is not: it is skipped here, which resolves it
+/// out of the mailbox without surfacing it to the program (#83).
 pub(crate) async fn await_reply(handle: &Handle, corr: Corr) -> Result<Msg, InferError> {
     loop {
         let msg = handle
@@ -287,6 +288,7 @@ pub(crate) async fn await_reply(handle: &Handle, corr: Corr) -> Result<Msg, Infe
             .map_err(InferError::Recv)?;
         match msg.kind {
             MsgKind::Reply => return Ok(msg),
+            MsgKind::Notice if matches!(msg.from, Endpoint::Hook { .. }) => continue,
             MsgKind::Notice => {
                 let reason = handle.read(msg.payload).unwrap_or_default();
                 return Err(InferError::Cancelled { reason });

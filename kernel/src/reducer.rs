@@ -50,6 +50,16 @@
 //! [`overdraft`](Agent::overdraft) — never taken from budget the agent still
 //! holds, because the ceiling was the harness's declaration, not the agent's.
 //!
+//! # Hooks
+//!
+//! The fold never runs a hook program (ADR-0008 §3). An `Attached` entry is
+//! the registry; a `Verdicts` entry is confirmed — every hook named is
+//! attached at that point, in `HookId` order, nothing after a `Deny` — and
+//! applied as nothing, because the effect of a `Deny` is the absence of the
+//! next entry; an `Emitted` entry is a notice delivered to a live mailbox and
+//! dropped otherwise. A log whose `Attached` entries name a native this
+//! binary does not have refolds to the same hash.
+//!
 //! The invariant every test of this module leans on: over the whole tree, at
 //! every step, budgets plus reservations plus spent sum to the root's grant
 //! (plus overdraft, zero in a healthy run), along every dimension but `depth`.
@@ -64,9 +74,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::abi::{
     AgentId, BlobRef, Budget, BudgetError, Capability, Consumption, Corr, DimKey, DriverId,
-    Endpoint, Msg, MsgKind, Namespace, Seq, ABI,
+    Endpoint, HookId, Msg, MsgKind, Namespace, Seq, ABI,
 };
 use crate::blob::sha256;
+use crate::hook::{FailureMode, HookPoint, HookRecord, Roll, Ruling};
 use crate::log::Entry;
 
 /// Where an agent is in its life.
@@ -164,11 +175,15 @@ pub struct State {
     next_agent: u64,
     next_corr: u64,
     next_cap: u64,
+    next_hook: u64,
     now: u64,
     drivers: BTreeMap<DriverId, Capability>,
     /// What one request to each driver may cost at most, as registered.
     ceilings: BTreeMap<DriverId, Budget>,
     caps: BTreeMap<Capability, Endpoint>,
+    /// Every installed hook, by id: the `Attached` entries at the head of
+    /// the log. Canonical, so the hash says which policy governed the run.
+    hooks: BTreeMap<HookId, HookRecord>,
     agents: BTreeMap<AgentId, Agent>,
     corrs: BTreeMap<Corr, AgentId>,
     /// Finished agents whose outcome is unclaimed, keyed by the order they
@@ -216,10 +231,12 @@ struct Canonical {
     next_agent: u64,
     next_corr: u64,
     next_cap: u64,
+    next_hook: u64,
     now: u64,
     drivers: BTreeMap<DriverId, Capability>,
     ceilings: BTreeMap<DriverId, Budget>,
     caps: BTreeMap<Capability, Endpoint>,
+    hooks: BTreeMap<HookId, HookRecord>,
     agents: BTreeMap<AgentId, Agent>,
     corrs: BTreeMap<Corr, AgentId>,
     completed: Vec<Completion>,
@@ -250,10 +267,12 @@ impl From<Canonical> for State {
             next_agent: c.next_agent,
             next_corr: c.next_corr,
             next_cap: c.next_cap,
+            next_hook: c.next_hook,
             now: c.now,
             drivers: c.drivers,
             ceilings: c.ceilings,
             caps: c.caps,
+            hooks: c.hooks,
             agents: c.agents,
             corrs: c.corrs,
             completed,
@@ -437,6 +456,29 @@ pub enum Refusal {
         /// The offending reading.
         found: u64,
     },
+    /// A hook that fails open at a point where it could veto: "if my guard
+    /// breaks, let everything through" is not a policy (ADR-0008 §4).
+    #[error("a hook at {0} may not fail open")]
+    OpenAtVetoPoint(HookPoint),
+    /// A roll call or a notice names a hook that is not attached at that
+    /// point.
+    #[error("hook {hook} is not attached at {point}")]
+    UnknownHook {
+        /// The hook named.
+        hook: HookId,
+        /// The point the entry claims.
+        point: HookPoint,
+    },
+    /// A roll call this kernel could not have written: out of `HookId`
+    /// order, incomplete, a verdict after a `Deny`, or a `Deny` at a point
+    /// that admits none.
+    #[error("roll call at {point} is not one the kernel writes: {reason}")]
+    BadRoll {
+        /// The point.
+        point: HookPoint,
+        /// What is wrong with it.
+        reason: &'static str,
+    },
 }
 
 impl State {
@@ -468,6 +510,112 @@ impl State {
     #[must_use]
     pub fn next_cap(&self) -> u64 {
         self.next_cap
+    }
+
+    /// The id the next `attach` will be allocated.
+    #[must_use]
+    pub fn next_hook(&self) -> HookId {
+        HookId::new(self.next_hook)
+    }
+
+    /// One installed hook's record.
+    #[must_use]
+    pub fn hook(&self, id: HookId) -> Option<&HookRecord> {
+        self.hooks.get(&id)
+    }
+
+    /// Every installed hook, in id order — which is install order.
+    pub fn hooks(&self) -> impl Iterator<Item = (HookId, &HookRecord)> + '_ {
+        self.hooks.iter().map(|(id, h)| (*id, h))
+    }
+
+    /// The hooks attached at `point`, in id order: the roll call's order.
+    pub fn hooks_at<'a>(&'a self, point: &'a HookPoint) -> impl Iterator<Item = HookId> + 'a {
+        self.hooks
+            .iter()
+            .filter(move |(_, h)| h.point == *point)
+            .map(|(id, _)| *id)
+    }
+
+    /// Every `OnBudget` point with at least one hook attached, each once,
+    /// in point order.
+    pub fn budget_points(&self) -> impl Iterator<Item = &HookPoint> + '_ {
+        let mut seen: Option<&HookPoint> = None;
+        self.hooks
+            .values()
+            .map(|h| &h.point)
+            .filter(|p| matches!(p, HookPoint::OnBudget { .. }))
+            .filter(move |p| {
+                if seen == Some(*p) {
+                    false
+                } else {
+                    seen = Some(*p);
+                    true
+                }
+            })
+    }
+
+    /// The agents whose remaining grant `entry` may lower — the candidates
+    /// for an `OnBudget` crossing (ADR-0008 §1): the parent a `Spawned`
+    /// carves from, the sender a `Sent` reserves from, the owner a
+    /// `Replied` settles, every live agent a `Tick` charges wall to. Every
+    /// other entry only returns budget.
+    #[must_use]
+    pub fn budget_candidates(&self, entry: &Entry) -> Vec<AgentId> {
+        match entry {
+            Entry::Spawned {
+                parent: Some(parent),
+                ..
+            } => vec![*parent],
+            Entry::Sent { msg, .. } => match msg.from {
+                Endpoint::Agent { id } => vec![id],
+                _ => Vec::new(),
+            },
+            Entry::Replied { to, .. } => vec![*to],
+            Entry::Tick { .. } => self.live.iter().copied().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The remaining grant of each of `agents`, for a crossing check after
+    /// the entry. See [`crate::hook::crossings`].
+    #[must_use]
+    pub fn remaining(&self, agents: &[AgentId]) -> Vec<(AgentId, Budget)> {
+        agents
+            .iter()
+            .filter_map(|id| Some((*id, self.agents.get(id)?.budget.clone())))
+            .collect()
+    }
+
+    /// The remaining grant of `agent`, whatever its status.
+    #[must_use]
+    pub fn budget_of(&self, agent: AgentId) -> Option<&Budget> {
+        self.agents.get(&agent).map(|a| &a.budget)
+    }
+
+    /// The depth a child of `parent` — or the root, for `None` — would be
+    /// born at with `requested`: what an `OnSpawn` event reports. Zero if
+    /// the spawn would be refused.
+    #[must_use]
+    pub fn birth_depth(&self, parent: Option<AgentId>, requested: &Budget) -> u64 {
+        match parent.and_then(|p| self.agents.get(&p)) {
+            Some(p) => child_depth(p, requested).unwrap_or(0),
+            None => requested.get(&DimKey::Depth).unwrap_or(0),
+        }
+    }
+
+    /// A mark on the completion sequence: hand it back to
+    /// [`completed_since`](Self::completed_since) after an entry to see who
+    /// finished in it, in the order they finished.
+    #[must_use]
+    pub fn completion_mark(&self) -> u64 {
+        self.next_completion
+    }
+
+    /// The agents that finished since `mark`, in completion order — which
+    /// is deepest first when one entry ends several.
+    pub fn completed_since(&self, mark: u64) -> impl Iterator<Item = &Completion> + '_ {
+        self.completed.range(mark..).map(|(_, c)| c)
     }
 
     /// The reading of the last tick applied; zero before any.
@@ -893,6 +1041,115 @@ impl State {
                     });
                 }
             }
+            Entry::Attached {
+                hook,
+                point,
+                failure,
+                ..
+            } => {
+                if !self.agents.is_empty() {
+                    return Err(Refusal::AfterBoot);
+                }
+                if hook.get() != self.next_hook {
+                    return Err(Refusal::BadAllocation {
+                        what: "hook",
+                        expected: self.next_hook,
+                        found: hook.get(),
+                    });
+                }
+                if *failure == FailureMode::Open && point.admits_deny() {
+                    return Err(Refusal::OpenAtVetoPoint(point.clone()));
+                }
+            }
+            Entry::Verdicts {
+                point,
+                subject,
+                roll,
+                ..
+            } => {
+                self.check_roll(point, roll)?;
+                // The subject of a pre-spawn moment does not exist yet: it is
+                // the id the spawn will be allocated. Every other subject is
+                // an agent the log has seen, live or not.
+                match point {
+                    HookPoint::OnSpawn if subject.get() != self.next_agent => {
+                        return Err(Refusal::BadAllocation {
+                            what: "agent",
+                            expected: self.next_agent,
+                            found: subject.get(),
+                        });
+                    }
+                    HookPoint::OnSpawn => {}
+                    _ if !self.agents.contains_key(subject) => {
+                        return Err(Refusal::UnknownAgent(*subject));
+                    }
+                    _ => {}
+                }
+            }
+            Entry::Emitted { hook, msg, .. } => {
+                self.check_envelope(msg)?;
+                let Endpoint::Hook { id } = msg.from else {
+                    return Err(Refusal::WrongSender(msg.from.clone()));
+                };
+                let record = self.hooks.get(&id).ok_or(Refusal::UnknownHook {
+                    hook: id,
+                    point: HookPoint::PreSend,
+                })?;
+                if id != *hook {
+                    return Err(Refusal::UnknownHook {
+                        hook: *hook,
+                        point: record.point.clone(),
+                    });
+                }
+                if msg.kind != MsgKind::Notice {
+                    return Err(Refusal::WrongKind {
+                        expected: MsgKind::Notice,
+                        found: msg.kind,
+                    });
+                }
+                if let Some(corr) = msg.corr {
+                    return Err(Refusal::UnknownCorr(Some(corr)));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Confirms a roll call: the hooks at `point`, in id order, complete —
+    /// every one attached there answered — unless one stopped it, in which
+    /// case it is the prefix ending there. A `Deny` where none is admitted
+    /// is a roll this kernel never writes.
+    fn check_roll(&self, point: &HookPoint, roll: &Roll) -> Result<(), Refusal> {
+        let bad = |reason| Refusal::BadRoll {
+            point: point.clone(),
+            reason,
+        };
+        if roll.is_empty() {
+            return Err(bad("empty: a point with no hook writes nothing"));
+        }
+        let mut expected = self.hooks_at(point);
+        let mut stopped = false;
+        for (hook, ruling) in roll {
+            if stopped {
+                return Err(bad("a verdict after the one that stopped it"));
+            }
+            match expected.next() {
+                Some(id) if id == *hook => {}
+                _ if !self.hooks.get(hook).is_some_and(|h| h.point == *point) => {
+                    return Err(Refusal::UnknownHook {
+                        hook: *hook,
+                        point: point.clone(),
+                    })
+                }
+                _ => return Err(bad("out of install order, or a hook skipped")),
+            }
+            if matches!(ruling, Ruling::Deny(_)) && !point.admits_deny() {
+                return Err(bad("a deny at a point that admits none"));
+            }
+            stopped = ruling.stops(point);
+        }
+        if !stopped && expected.next().is_some() {
+            return Err(bad("incomplete: a hook attached here was not asked"));
         }
         Ok(())
     }
@@ -1040,6 +1297,36 @@ impl State {
                 }
                 for id in self.expiring(*now) {
                     self.finish(id, Outcome::Aborted)?;
+                }
+            }
+            Entry::Attached {
+                hook,
+                point,
+                failure,
+                program,
+                ..
+            } => {
+                self.hooks.insert(
+                    *hook,
+                    HookRecord {
+                        point: point.clone(),
+                        failure: *failure,
+                        program: program.clone(),
+                    },
+                );
+                self.next_hook = self.next_hook.saturating_add(1);
+            }
+            // Confirmed by the check; applied as nothing. The effect of a
+            // `Deny` is the absence of the next entry, and the effect of an
+            // `Emit` is the `Emitted` entry that follows.
+            Entry::Verdicts { .. } => {}
+            Entry::Emitted { to, msg, .. } => {
+                // Delivered if the recipient is live; dead letter otherwise,
+                // exactly as a reply to an exited owner.
+                if let Some(a) = self.agents.get_mut(to) {
+                    if a.is_live() {
+                        a.mailbox.push(msg.clone());
+                    }
                 }
             }
         }

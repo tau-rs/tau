@@ -1,0 +1,5 @@
+---
+source: kernel/tests/m2a_hooks.rs
+expression: state.hash().to_string()
+---
+6e8a356118648494fd9171e5a3644433ac05b39a0e7c056f78441345da83c1e0

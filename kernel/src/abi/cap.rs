@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AgentId, DriverId};
+use super::{AgentId, DriverId, HookId};
 
 /// An unforgeable grant: the address of an endpoint and the permission to send
 /// to it, inseparably.
@@ -135,10 +135,14 @@ impl Namespace {
 
 /// Who a message is from, or where it is bound.
 ///
-/// Three kinds and no fourth: agents, drivers, and the harness. The harness is
+/// Agents, drivers, the harness, and — since ABI 1 (ADR-0008) — a hook, the
+/// sender of the notice an `Emit` verdict produces. The harness is
 /// deliberately *not* an agent — it is the pre-agent code that holds the kernel
 /// handle and owns the `attach` privilege. Writing that down is how the design
-/// resists a future elegance that would make it one.
+/// resists a future elegance that would make it one. A hook is not the harness
+/// either: written as `Harness`, a budget warning and a cancel notice would be
+/// indistinguishable on the envelope, and the closed `recv` filter could not
+/// say "from hook 3".
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -155,6 +159,12 @@ pub enum Endpoint {
     },
     /// The harness itself.
     Harness,
+    /// An installed hook program: the sender of the notice its `Emit`
+    /// verdict produced (ADR-0008 §6).
+    Hook {
+        /// Which hook.
+        id: HookId,
+    },
 }
 
 impl fmt::Display for Endpoint {
@@ -163,6 +173,7 @@ impl fmt::Display for Endpoint {
             Self::Agent { id } => write!(f, "{id}"),
             Self::Driver { id } => write!(f, "{id}"),
             Self::Harness => f.write_str("harness"),
+            Self::Hook { id } => write!(f, "{id}"),
         }
     }
 }

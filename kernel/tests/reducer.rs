@@ -1300,3 +1300,472 @@ fn the_hash_does_not_see_the_completion_ordinal() {
     );
     assert_eq!(advanced.next_completed_child(root).unwrap().agent, agent(4));
 }
+
+// ---------------------------------------------------------------------- hooks
+//
+// ADR-0008 §3: the fold confirms a roll call and never runs a program. Each
+// `Entry` kind the hooks add arrives with its refusals, as every kind before
+// it did.
+
+use tau_kernel::abi::HookId;
+use tau_kernel::hook::{FailureMode, HookPoint, HookSource, Ruling};
+
+fn hook(n: u64) -> HookId {
+    HookId::new(n)
+}
+
+fn low_tokens() -> HookPoint {
+    HookPoint::OnBudget {
+        dim: DimKey::Tokens,
+        below: 50,
+    }
+}
+
+fn attached(state: &State, point: HookPoint, failure: FailureMode) -> Entry {
+    Entry::Attached {
+        seq: state.next_seq(),
+        hook: state.next_hook(),
+        point,
+        failure,
+        program: HookSource::Native(Name::new("policy").unwrap()),
+    }
+}
+
+fn verdicts(
+    state: &State,
+    point: HookPoint,
+    subject: AgentId,
+    roll: Vec<(HookId, Ruling)>,
+) -> Entry {
+    Entry::Verdicts {
+        seq: state.next_seq(),
+        point,
+        subject,
+        roll,
+    }
+}
+
+fn hook_notice(state: &State, from: HookId) -> Msg {
+    Msg::new(
+        state.next_seq(),
+        Endpoint::Hook { id: from },
+        MsgKind::Notice,
+        BlobRef::EMPTY,
+    )
+}
+
+fn emitted(state: &State, by: HookId, to: AgentId) -> Entry {
+    Entry::Emitted {
+        hook: by,
+        to,
+        msg: hook_notice(state, by),
+    }
+}
+
+fn deny() -> Ruling {
+    Ruling::Deny(BlobRef::EMPTY)
+}
+
+fn failed(mode: FailureMode) -> Ruling {
+    Ruling::Failed {
+        mode,
+        error: BlobRef::EMPTY,
+    }
+}
+
+/// The echo driver, five hooks, and the root: two at `PreSend` (0, 1), one
+/// at `OnExit` (2), one at `OnBudget` (3), one at `OnSpawn` (4).
+fn hooked() -> (State, AgentId) {
+    let cap = Capability::mint(0);
+    let mut state = fold(&[Entry::DriverRegistered {
+        seq: Seq::new(0),
+        driver: echo(),
+        cap,
+        ceiling: tokens(CEILING),
+    }])
+    .unwrap();
+    step(&mut state, |s| {
+        attached(s, HookPoint::PreSend, FailureMode::Closed)
+    });
+    step(&mut state, |s| {
+        attached(s, HookPoint::PreSend, FailureMode::Closed)
+    });
+    step(&mut state, |s| {
+        attached(s, HookPoint::OnExit, FailureMode::Open)
+    });
+    step(&mut state, |s| {
+        attached(s, low_tokens(), FailureMode::Closed)
+    });
+    step(&mut state, |s| {
+        attached(s, HookPoint::OnSpawn, FailureMode::Closed)
+    });
+    step(&mut state, |s| Entry::Spawned {
+        seq: s.next_seq(),
+        parent: None,
+        agent: s.next_agent(),
+        ns: Namespace::from_caps([cap]),
+        budget: root_grant(),
+    });
+    assert_eq!(state.hooks().count(), 5);
+    (state, agent(0))
+}
+
+#[test]
+fn hooks_attach_at_boot_and_never_after() {
+    let (state, _) = hooked();
+    let err = refuse(
+        &state,
+        &attached(&state, HookPoint::OnExit, FailureMode::Open),
+    );
+    assert_eq!(err, Refusal::AfterBoot);
+}
+
+#[test]
+fn a_hook_id_is_confirmed_not_rederived() {
+    let state = fold(&[Entry::DriverRegistered {
+        seq: Seq::new(0),
+        driver: echo(),
+        cap: Capability::mint(0),
+        ceiling: tokens(CEILING),
+    }])
+    .unwrap();
+    let err = refuse(
+        &state,
+        &Entry::Attached {
+            seq: state.next_seq(),
+            hook: hook(3),
+            point: HookPoint::OnExit,
+            failure: FailureMode::Open,
+            program: HookSource::Native(Name::new("policy").unwrap()),
+        },
+    );
+    assert_eq!(
+        err,
+        Refusal::BadAllocation {
+            what: "hook",
+            expected: 0,
+            found: 3
+        }
+    );
+}
+
+#[test]
+fn a_hook_may_not_fail_open_where_it_can_veto() {
+    let base = fold(&[Entry::DriverRegistered {
+        seq: Seq::new(0),
+        driver: echo(),
+        cap: Capability::mint(0),
+        ceiling: tokens(CEILING),
+    }])
+    .unwrap();
+    for point in [
+        HookPoint::PreSend,
+        HookPoint::PreDeliver,
+        HookPoint::OnSpawn,
+    ] {
+        let err = refuse(&base, &attached(&base, point.clone(), FailureMode::Open));
+        assert_eq!(err, Refusal::OpenAtVetoPoint(point));
+    }
+    // At an on point the mode is recorded and does not matter.
+    let mut state = base.clone();
+    step(&mut state, |s| {
+        attached(s, HookPoint::OnExit, FailureMode::Open)
+    });
+    step(&mut state, |s| attached(s, low_tokens(), FailureMode::Open));
+    assert_eq!(state.hook(hook(0)).unwrap().failure, FailureMode::Open);
+}
+
+#[test]
+fn a_roll_call_names_only_hooks_attached_at_the_point() {
+    let (state, root) = hooked();
+    // Hook 2 is at `OnExit`, not `PreSend`; hook 9 is nowhere.
+    let err = refuse(
+        &state,
+        &verdicts(
+            &state,
+            HookPoint::PreSend,
+            root,
+            vec![(hook(0), Ruling::Allow), (hook(2), Ruling::Allow)],
+        ),
+    );
+    assert_eq!(
+        err,
+        Refusal::UnknownHook {
+            hook: hook(2),
+            point: HookPoint::PreSend
+        }
+    );
+    let err = refuse(
+        &state,
+        &verdicts(
+            &state,
+            HookPoint::OnExit,
+            root,
+            vec![(hook(9), Ruling::Allow)],
+        ),
+    );
+    assert_eq!(
+        err,
+        Refusal::UnknownHook {
+            hook: hook(9),
+            point: HookPoint::OnExit
+        }
+    );
+}
+
+#[test]
+fn a_roll_call_is_in_install_order_and_complete() {
+    let (state, root) = hooked();
+    let bad = |roll: Vec<(HookId, Ruling)>| match refuse(
+        &state,
+        &verdicts(&state, HookPoint::PreSend, root, roll),
+    ) {
+        Refusal::BadRoll { point, reason } => {
+            assert_eq!(point, HookPoint::PreSend);
+            reason
+        }
+        other => panic!("expected BadRoll, got {other:?}"),
+    };
+    assert!(bad(vec![]).starts_with("empty"));
+    assert!(bad(vec![(hook(1), Ruling::Allow), (hook(0), Ruling::Allow)]).contains("order"));
+    assert!(bad(vec![(hook(1), Ruling::Allow)]).contains("order"));
+    assert!(bad(vec![(hook(0), Ruling::Allow)]).starts_with("incomplete"));
+    // An open failure is an allow: the roll goes on.
+    assert!(bad(vec![(hook(0), failed(FailureMode::Open))]).starts_with("incomplete"));
+    assert!(bad(vec![(hook(0), deny()), (hook(1), Ruling::Allow)]).contains("after"));
+    assert!(bad(vec![
+        (hook(0), failed(FailureMode::Closed)),
+        (hook(1), deny())
+    ])
+    .contains("after"));
+
+    // What the kernel writes: everyone asked, or a prefix ending where it
+    // stopped.
+    let mut ok = state.clone();
+    step(&mut ok, |s| {
+        verdicts(
+            s,
+            HookPoint::PreSend,
+            root,
+            vec![(hook(0), Ruling::Allow), (hook(1), Ruling::Allow)],
+        )
+    });
+    step(&mut ok, |s| {
+        verdicts(s, HookPoint::PreSend, root, vec![(hook(0), deny())])
+    });
+    step(&mut ok, |s| {
+        verdicts(
+            s,
+            HookPoint::PreSend,
+            root,
+            vec![(hook(0), failed(FailureMode::Closed))],
+        )
+    });
+    step(&mut ok, |s| {
+        verdicts(
+            s,
+            HookPoint::PreSend,
+            root,
+            vec![(hook(0), Ruling::Allow), (hook(1), deny())],
+        )
+    });
+}
+
+#[test]
+fn a_deny_at_an_on_point_is_not_a_verdict() {
+    let (state, root) = hooked();
+    let err = refuse(
+        &state,
+        &verdicts(&state, HookPoint::OnExit, root, vec![(hook(2), deny())]),
+    );
+    assert!(matches!(err, Refusal::BadRoll { reason, .. } if reason.contains("admits none")));
+    // A failure there — which is what a `Deny` becomes — is recorded, and
+    // the mode does not matter: closed does not stop an on-point roll.
+    let mut ok = state.clone();
+    step(&mut ok, |s| {
+        verdicts(
+            s,
+            HookPoint::OnExit,
+            root,
+            vec![(hook(2), failed(FailureMode::Closed))],
+        )
+    });
+    step(&mut ok, |s| {
+        verdicts(s, low_tokens(), root, vec![(hook(3), Ruling::Allow)])
+    });
+}
+
+#[test]
+fn the_subject_of_a_moment_is_an_agent_the_log_knows() {
+    let (state, root) = hooked();
+    // Before a spawn the subject is the id the spawn will take, and no other.
+    let mut ok = state.clone();
+    step(&mut ok, |s| {
+        verdicts(
+            s,
+            HookPoint::OnSpawn,
+            s.next_agent(),
+            vec![(hook(4), Ruling::Allow)],
+        )
+    });
+    let err = refuse(
+        &state,
+        &verdicts(
+            &state,
+            HookPoint::OnSpawn,
+            agent(5),
+            vec![(hook(4), Ruling::Allow)],
+        ),
+    );
+    assert_eq!(
+        err,
+        Refusal::BadAllocation {
+            what: "agent",
+            expected: 1,
+            found: 5
+        }
+    );
+    // Everywhere else the subject exists — live or finished, but spawned.
+    let err = refuse(
+        &state,
+        &verdicts(
+            &state,
+            HookPoint::PreSend,
+            agent(7),
+            vec![(hook(0), deny())],
+        ),
+    );
+    assert_eq!(err, Refusal::UnknownAgent(agent(7)));
+    let _ = root;
+}
+
+#[test]
+fn verdicts_apply_as_nothing_but_a_position() {
+    let (state, root) = hooked();
+    let mut after = state.clone();
+    step(&mut after, |s| {
+        verdicts(
+            s,
+            HookPoint::PreSend,
+            root,
+            vec![(hook(0), Ruling::Allow), (hook(1), deny())],
+        )
+    });
+    assert_eq!(after.len(), state.len() + 1);
+    assert_eq!(after.agent(root), state.agent(root));
+    assert_eq!(
+        after.next_corr(),
+        state.next_corr(),
+        "the denied send never happened"
+    );
+}
+
+#[test]
+fn an_emitted_notice_lands_in_a_live_mailbox_from_its_hook() {
+    let (mut state, root) = hooked();
+    step(&mut state, |s| emitted(s, hook(0), root));
+    let mailbox = &state.agent(root).unwrap().mailbox;
+    assert_eq!(mailbox.len(), 1);
+    let note = mailbox.first().unwrap();
+    assert_eq!(note.from, Endpoint::Hook { id: hook(0) });
+    assert_eq!(note.kind, MsgKind::Notice);
+    assert_eq!(note.corr, None);
+    // A message, so a `recv` can resolve it like any other.
+    let seq = note.seq;
+    step(&mut state, |s| Entry::Resolved {
+        seq: s.next_seq(),
+        agent: root,
+        matched: seq,
+    });
+    assert!(state.agent(root).unwrap().mailbox.is_empty());
+}
+
+#[test]
+fn an_emitted_notice_to_a_finished_or_unknown_agent_dead_letters() {
+    let (mut state, root) = hooked();
+    step(&mut state, |s| spawned(s, root, 10));
+    let child = agent(1);
+    step(&mut state, |s| exited(s, child));
+    let before = state.clone();
+    step(&mut state, |s| emitted(s, hook(2), child));
+    step(&mut state, |s| emitted(s, hook(2), agent(9)));
+    assert!(state.agent(child).unwrap().mailbox.is_empty());
+    assert_eq!(state.agent(root), before.agent(root));
+    assert_eq!(
+        state.len(),
+        before.len() + 2,
+        "logged, and delivered nowhere"
+    );
+}
+
+#[test]
+fn an_emitted_envelope_is_a_notice_from_the_hook_that_emitted_it() {
+    let (state, root) = hooked();
+    let with = |msg: Msg, by: HookId| Entry::Emitted {
+        hook: by,
+        to: root,
+        msg,
+    };
+    let err = refuse(
+        &state,
+        &with(
+            Msg::new(
+                state.next_seq(),
+                Endpoint::Agent { id: root },
+                MsgKind::Notice,
+                BlobRef::EMPTY,
+            ),
+            hook(0),
+        ),
+    );
+    assert_eq!(err, Refusal::WrongSender(Endpoint::Agent { id: root }));
+    let err = refuse(&state, &with(hook_notice(&state, hook(1)), hook(0)));
+    assert_eq!(
+        err,
+        Refusal::UnknownHook {
+            hook: hook(0),
+            point: HookPoint::PreSend
+        }
+    );
+    let err = refuse(&state, &with(hook_notice(&state, hook(7)), hook(7)));
+    assert!(matches!(err, Refusal::UnknownHook { hook, .. } if hook == HookId::new(7)));
+    let mut reply = hook_notice(&state, hook(0));
+    reply.kind = MsgKind::Reply;
+    let err = refuse(&state, &with(reply, hook(0)));
+    assert_eq!(
+        err,
+        Refusal::WrongKind {
+            expected: MsgKind::Notice,
+            found: MsgKind::Reply
+        }
+    );
+    let err = refuse(
+        &state,
+        &with(
+            hook_notice(&state, hook(0)).with_corr(Corr::new(0)),
+            hook(0),
+        ),
+    );
+    assert_eq!(err, Refusal::UnknownCorr(Some(Corr::new(0))));
+    let mut future = hook_notice(&state, hook(0));
+    future.abi = ABI + 1;
+    let err = refuse(&state, &with(future, hook(0)));
+    assert_eq!(err, Refusal::Envelope { found: ABI + 1 });
+}
+
+#[test]
+fn hooks_are_canonical_state() {
+    let (with, _) = hooked();
+    let (without, ..) = booted();
+    assert_ne!(
+        with.hash(),
+        without.hash(),
+        "which policy governed the run is in the hash"
+    );
+    let json = serde_json::to_string(&with).unwrap();
+    let back: State = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, with);
+    assert_eq!(back.hash(), with.hash());
+    assert_eq!(back.hooks().count(), 5);
+    assert_eq!(back.next_hook(), hook(5));
+}
