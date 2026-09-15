@@ -1,5 +1,7 @@
-//! Every committed cassette is free of secret shapes and of request headers
-//! outside the allowlist, and names the directory it sits in.
+//! Guard and stub plumbing: every committed cassette is free of secret
+//! shapes and of request headers outside the allowlist and names the
+//! directory it sits in, and the stub's forward mode relays a request to a
+//! real upstream and reports what happened.
 
 #![cfg(feature = "anthropic")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -82,4 +84,36 @@ fn redaction_keeps_only_the_allowlist_and_refuses_strangers() {
         body: b"{}".to_vec(),
     };
     assert_eq!(cassette::redact(&stranger).unwrap_err(), "x-org-id");
+}
+
+#[tokio::test]
+async fn forward_mode_relays_headers_body_status_and_reports_the_exchange() {
+    // The "provider": a plain stub answering 418 with a fixed body.
+    let mut upstream = common::start(common::Answer::Json(418, r#"{"ok":true}"#.into())).await;
+    let (relay, mut relayed) = common::start_forwarding(upstream.base_url.clone()).await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", relay.base_url))
+        .header("content-type", "application/json")
+        .header("x-api-key", "sk-ant-not-a-real-key")
+        .body(r#"{"hello":"world"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 418);
+    assert_eq!(resp.text().await.unwrap(), r#"{"ok":true}"#);
+
+    let seen_upstream = upstream.captured.recv().await.unwrap();
+    assert_eq!(seen_upstream.path(), "/v1/messages");
+    assert_eq!(
+        seen_upstream.header("x-api-key"),
+        Some("sk-ant-not-a-real-key")
+    );
+    assert_eq!(seen_upstream.json(), serde_json::json!({"hello":"world"}));
+
+    let r = relayed.recv().await.unwrap();
+    assert_eq!(r.status, 418);
+    assert_eq!(r.body, br#"{"ok":true}"#);
+    assert_eq!(r.request.path(), "/v1/messages");
 }
