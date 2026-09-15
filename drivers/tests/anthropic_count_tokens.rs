@@ -41,10 +41,13 @@ fn driver(base_url: &str) -> AnthropicDriver {
     AnthropicDriver::new(config(base_url)).unwrap()
 }
 
-/// The ADR's example request, minus the seed Anthropic cannot honour.
+/// The ADR's example request, minus the seed Anthropic cannot honour and
+/// the temperature a current model rejects.
 fn sendable_request() -> ModelRequest {
     let mut request: ModelRequest = serde_json::from_str(REQUEST).unwrap();
-    request.sampling.as_mut().unwrap().seed = None;
+    let sampling = request.sampling.as_mut().unwrap();
+    sampling.seed = None;
+    sampling.temperature = None;
     request
 }
 
@@ -119,12 +122,10 @@ async fn under_the_bound_the_count_goes_first_and_the_call_follows() {
     assert_eq!(count.header("anthropic-version"), Some("2023-06-01"));
     assert_eq!(count.header("content-type"), Some("application/json"));
     // The count body is the main body minus what `count_tokens` does not
-    // accept: `max_tokens` and the sampling knobs.
+    // accept: `max_tokens` (the sampling knobs too, but the recorded body
+    // carries none; `wire.rs` covers that branch).
     let mut expected: Value = serde_json::from_str(ANTHROPIC_REQUEST).unwrap();
-    let object = expected.as_object_mut().unwrap();
-    for key in ["max_tokens", "temperature", "top_p", "stop_sequences"] {
-        object.remove(key);
-    }
+    expected.as_object_mut().unwrap().remove("max_tokens");
     assert_eq!(count.json(), expected);
 
     let main: Value = serde_json::from_str(ANTHROPIC_REQUEST).unwrap();

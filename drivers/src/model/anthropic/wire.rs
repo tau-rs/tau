@@ -13,6 +13,8 @@
 //! | `tools[]` | `tools[]` (`name`, `description`, `input_schema`) |
 //! | `max_tokens` | `max_tokens`, clamped |
 //! | `sampling.seed` | *unsupported* → `error.unsupported` |
+//! | `sampling.temperature` | `temperature` if *config* `sampling: Accepted`; else *unsupported* → `error.unsupported` |
+//! | `sampling.top_p` | `top_p` if *config* `sampling: Accepted`; else *unsupported* → `error.unsupported` |
 //! | `sampling.stop_sequences` | `stop_sequences` |
 //! | `stop` | `end_turn`, `tool_use`→`tool_call`, `max_tokens`, `stop_sequence`, `refusal` |
 //! | `usage` | `usage.input_tokens`, `usage.output_tokens` |
@@ -30,7 +32,7 @@ use tau_kernel::bridge::{
     Content, ErrorKind, Message, ModelError, ModelReply, ModelRequest, Role, StopReason, Usage,
 };
 
-use super::ThinkingMode;
+use super::{SamplingMode, ThinkingMode};
 use crate::model::ceiling::clamp_max_tokens;
 
 /// The `provider` tag this driver writes on, and replays, thinking blocks.
@@ -215,7 +217,10 @@ pub(super) struct ErrorDetail {
 ///
 /// Refuses (`unsupported`) a present `sampling.seed`: Anthropic has no seed,
 /// and a seed that was quietly ignored is a branch that was quietly not
-/// controlled. `max_tokens` is clamped to `max_max_tokens`. A `thinking`
+/// controlled. Refuses a present `sampling.temperature` or `sampling.top_p`
+/// the same way unless `sampling` is [`SamplingMode::Accepted`]: the model
+/// would answer 400, and a knob that was quietly dropped is the same quiet
+/// loss of control. `max_tokens` is clamped to `max_max_tokens`. A `thinking`
 /// block of this provider is unwrapped and sent verbatim; one of another
 /// provider is dropped (ADR-0007 §2). The bridge version is the caller's
 /// check; this function assumes a current request.
@@ -224,6 +229,7 @@ pub(super) fn to_provider(
     model: &str,
     max_max_tokens: u32,
     thinking: ThinkingMode,
+    sampling_mode: SamplingMode,
 ) -> Result<Request, ModelError> {
     let sampling = request.sampling.clone().unwrap_or_default();
     if sampling.seed.is_some() {
@@ -231,6 +237,21 @@ pub(super) fn to_provider(
             kind: ErrorKind::Unsupported,
             message: "sampling.seed is not supported by the Anthropic Messages API".into(),
         });
+    }
+    if sampling_mode == SamplingMode::Refused {
+        let present = [
+            ("temperature", sampling.temperature.is_some()),
+            ("top_p", sampling.top_p.is_some()),
+        ];
+        if let Some((field, _)) = present.iter().find(|(_, is_present)| *is_present) {
+            return Err(ModelError {
+                kind: ErrorKind::Unsupported,
+                message: format!(
+                    "sampling.{field} is not accepted by model `{model}`; \
+                     set AnthropicConfig::sampling to Accepted for a model that takes it"
+                ),
+            });
+        }
     }
     let messages = request.messages.iter().map(message_to_provider).collect();
     let tools = request
@@ -380,6 +401,8 @@ mod tests {
         include_str!("../../../tests/fixtures/anthropic/response-thinking.json");
 
     const DEFAULT: ThinkingMode = ThinkingMode::ProviderDefault;
+    const REFUSED: SamplingMode = SamplingMode::Refused;
+    const ACCEPTED: SamplingMode = SamplingMode::Accepted;
 
     fn bridge_request() -> ModelRequest {
         serde_json::from_str(REQUEST).unwrap()
@@ -387,7 +410,8 @@ mod tests {
 
     #[test]
     fn the_adr_example_request_is_refused_for_its_seed() {
-        let err = to_provider(&bridge_request(), "claude-opus-5", 1_024, DEFAULT).unwrap_err();
+        let err =
+            to_provider(&bridge_request(), "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Unsupported);
         assert!(err.message.contains("seed"), "{}", err.message);
     }
@@ -395,12 +419,64 @@ mod tests {
     #[test]
     fn the_adr_example_request_minus_seed_maps_to_the_recorded_provider_body() {
         let mut request = bridge_request();
-        request.sampling.as_mut().unwrap().seed = None;
-        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
+        let sampling = request.sampling.as_mut().unwrap();
+        sampling.seed = None;
+        sampling.temperature = None;
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap();
         let expected: Value = serde_json::from_str(ANTHROPIC_REQUEST).unwrap();
         assert_eq!(serde_json::to_value(&body).unwrap(), expected);
         let back: Request = serde_json::from_value(expected).unwrap();
         assert_eq!(back, body, "the provider body round-trips");
+    }
+
+    #[test]
+    fn temperature_and_top_p_are_refused_unless_the_config_says_the_model_takes_them() {
+        // The ADR's example minus its seed carries `temperature: 0.0`, which
+        // every current model rejects: refused by default, naming the field
+        // and the model.
+        let mut request = bridge_request();
+        request.sampling.as_mut().unwrap().seed = None;
+        let err = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Unsupported);
+        assert!(err.message.contains("temperature"), "{}", err.message);
+        assert!(err.message.contains("claude-opus-5"), "{}", err.message);
+
+        let sampling = request.sampling.as_mut().unwrap();
+        sampling.temperature = None;
+        sampling.top_p = Some(0.5);
+        let err = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Unsupported);
+        assert!(err.message.contains("top_p"), "{}", err.message);
+        assert!(err.message.contains("claude-opus-5"), "{}", err.message);
+
+        // Both present: the first field is the one named; nothing is built.
+        let sampling = request.sampling.as_mut().unwrap();
+        sampling.temperature = Some(0.0);
+        let err = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap_err();
+        assert!(err.message.contains("temperature"), "{}", err.message);
+
+        // Stop sequences alone are fine on a refusing model.
+        let sampling = request.sampling.as_mut().unwrap();
+        sampling.temperature = None;
+        sampling.top_p = None;
+        sampling.stop_sequences = vec!["END".into()];
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap();
+        assert_eq!(body.temperature, None);
+        assert_eq!(body.top_p, None);
+        assert_eq!(body.stop_sequences, ["END"]);
+
+        // An accepting model gets both, unchanged.
+        let sampling = request.sampling.as_mut().unwrap();
+        sampling.temperature = Some(0.0);
+        sampling.top_p = Some(0.5);
+        let body = to_provider(&request, "claude-opus-4-6", 1_024, DEFAULT, ACCEPTED).unwrap();
+        assert_eq!(body.temperature, Some(0.0));
+        assert_eq!(body.top_p, Some(0.5));
+        assert_eq!(
+            SamplingMode::default(),
+            REFUSED,
+            "refuse unless told otherwise"
+        );
     }
 
     #[test]
@@ -411,7 +487,7 @@ mod tests {
         sampling.top_p = Some(0.5);
         sampling.stop_sequences = vec!["END".into()];
         request.max_tokens = 4_096;
-        let body = to_provider(&request, "m", 1_024, DEFAULT).unwrap();
+        let body = to_provider(&request, "m", 1_024, DEFAULT, ACCEPTED).unwrap();
         assert_eq!(body.max_tokens, 1_024);
         assert_eq!(body.temperature, Some(0.0));
         assert_eq!(body.top_p, Some(0.5));
@@ -431,7 +507,8 @@ mod tests {
             max_tokens: 8,
             sampling: None,
         };
-        let body = serde_json::to_value(to_provider(&request, "m", 8, DEFAULT).unwrap()).unwrap();
+        let body =
+            serde_json::to_value(to_provider(&request, "m", 8, DEFAULT, REFUSED).unwrap()).unwrap();
         assert_eq!(
             body,
             json!({
@@ -449,14 +526,17 @@ mod tests {
         sampling.seed = None;
         sampling.top_p = Some(0.5);
         sampling.stop_sequences = vec!["END".into()];
-        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, ACCEPTED).unwrap();
+        assert_eq!(
+            body.temperature,
+            Some(0.0),
+            "the knobs are in the main body"
+        );
         let count = serde_json::to_value(CountRequest::from(&body)).unwrap();
 
         let mut expected: Value = serde_json::from_str(ANTHROPIC_REQUEST).unwrap();
         let object = expected.as_object_mut().unwrap();
-        for key in ["max_tokens", "temperature", "top_p", "stop_sequences"] {
-            object.remove(key);
-        }
+        object.remove("max_tokens");
         assert_eq!(count, expected);
         let keys: Vec<&str> = count
             .as_object()
@@ -582,7 +662,7 @@ mod tests {
     #[test]
     fn a_request_replays_our_thinking_blocks_in_place_and_drops_foreign_ones() {
         let mut request: ModelRequest = serde_json::from_str(REQUEST_THINKING).unwrap();
-        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap();
         let expected: Value = serde_json::from_str(ANTHROPIC_REQUEST_THINKING).unwrap();
         assert_eq!(serde_json::to_value(&body).unwrap(), expected);
         let back: Request = serde_json::from_value(expected).unwrap();
@@ -600,7 +680,7 @@ mod tests {
                 *provider = "someone-else".into();
             }
         }
-        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT).unwrap();
+        let body = to_provider(&request, "claude-opus-5", 1_024, DEFAULT, REFUSED).unwrap();
         let turn = body.messages.get(1).unwrap();
         assert!(
             !turn
@@ -616,13 +696,13 @@ mod tests {
     fn thinking_off_is_one_parameter_and_the_default_is_none() {
         let mut request = bridge_request();
         request.sampling = None;
-        let on = to_provider(&request, "m", 8, ThinkingMode::ProviderDefault).unwrap();
+        let on = to_provider(&request, "m", 8, ThinkingMode::ProviderDefault, REFUSED).unwrap();
         assert_eq!(on.thinking, None);
         assert!(
             serde_json::to_value(&on).unwrap().get("thinking").is_none(),
             "omitted, not null"
         );
-        let off = to_provider(&request, "m", 8, ThinkingMode::Disabled).unwrap();
+        let off = to_provider(&request, "m", 8, ThinkingMode::Disabled, REFUSED).unwrap();
         assert_eq!(
             serde_json::to_value(&off).unwrap().get("thinking"),
             Some(&json!({"type": "disabled"}))

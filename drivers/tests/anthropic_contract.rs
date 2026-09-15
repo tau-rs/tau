@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use common::{Answer, Stub};
 use serde_json::{json, Value};
-use tau_drivers::model::anthropic::{AnthropicConfig, AnthropicDriver, ApiKey};
+use tau_drivers::model::anthropic::{AnthropicConfig, AnthropicDriver, ApiKey, SamplingMode};
 use tau_kernel::abi::{AgentId, Consumption, Corr, DimKey};
 use tau_kernel::bridge::{
     Content, ErrorKind, Message, ModelError, ModelReply, ModelRequest, Role, StopReason, Usage,
@@ -44,10 +44,13 @@ fn driver(base_url: &str) -> AnthropicDriver {
     AnthropicDriver::new(config(base_url)).unwrap()
 }
 
-/// The ADR's example request, minus the seed Anthropic cannot honour.
+/// The ADR's example request, minus the seed Anthropic cannot honour and
+/// the temperature a current model rejects.
 fn sendable_request() -> ModelRequest {
     let mut request: ModelRequest = serde_json::from_str(REQUEST).unwrap();
-    request.sampling.as_mut().unwrap().seed = None;
+    let sampling = request.sampling.as_mut().unwrap();
+    sampling.seed = None;
+    sampling.temperature = None;
     request
 }
 
@@ -186,6 +189,25 @@ async fn what_the_driver_cannot_honour_is_unsupported_and_nothing_is_sent() {
     assert_eq!(reply.model.as_deref(), Some("claude-opus-5"));
     assert_eq!(reply.usage, Usage::default());
 
+    // The ADR's example minus its seed still carries `temperature: 0.0`,
+    // which the configured model rejects; the default config refuses it.
+    let mut warm: ModelRequest = serde_json::from_str(REQUEST).unwrap();
+    warm.sampling.as_mut().unwrap().seed = None;
+    let (reply, consumed) = call(&driver, &warm).await;
+    let err = error_of(&reply);
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(err.message.contains("temperature"), "{}", err.message);
+    assert!(err.message.contains("claude-opus-5"), "{}", err.message);
+    assert!(consumed.is_empty());
+
+    let mut nucleus = sendable_request();
+    nucleus.sampling.as_mut().unwrap().top_p = Some(0.5);
+    let (reply, consumed) = call(&driver, &nucleus).await;
+    let err = error_of(&reply);
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(err.message.contains("top_p"), "{}", err.message);
+    assert!(consumed.is_empty());
+
     // A version this driver does not speak.
     let mut future = sendable_request();
     future.v = VERSION + 1;
@@ -211,6 +233,26 @@ async fn what_the_driver_cannot_honour_is_unsupported_and_nothing_is_sent() {
     assert!(consumed.is_empty());
 
     nothing_sent(&mut stub);
+}
+
+#[tokio::test]
+async fn sampling_reaches_the_wire_unchanged_when_the_config_says_the_model_takes_it() {
+    let mut stub = common::start(Answer::Json(200, ANTHROPIC_RESPONSE.into())).await;
+    let mut c = config(&stub.base_url);
+    c.model = "claude-opus-4-6".into();
+    c.sampling = SamplingMode::Accepted;
+    let driver = AnthropicDriver::new(c).unwrap();
+    let mut request = sendable_request();
+    let sampling = request.sampling.as_mut().unwrap();
+    sampling.temperature = Some(0.0);
+    sampling.top_p = Some(0.5);
+
+    let (reply, _) = call(&driver, &request).await;
+    assert_eq!(reply.stop, StopReason::ToolCall);
+    let sent = stub.captured.recv().await.unwrap().json();
+    assert_eq!(sent.get("model"), Some(&json!("claude-opus-4-6")));
+    assert_eq!(sent.get("temperature"), Some(&json!(0.0)));
+    assert_eq!(sent.get("top_p"), Some(&json!(0.5)));
 }
 
 #[tokio::test]
