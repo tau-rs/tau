@@ -672,10 +672,13 @@ fn run(settings: &Settings, slot: &Slot, payload: &[u8]) -> (Reply, Consumption)
                 deadline = grace;
             }
             Ok(Event::Drained) => drained += 1,
-            Ok(Event::Abandon) => {
+            // Only while the shim is still ours to signal: once reaped, its
+            // pid may belong to someone else.
+            Ok(Event::Abandon) if status.is_none() => {
                 signal(shim_pid, Signal::SIGTERM);
                 deadline = grace;
             }
+            Ok(Event::Abandon) => {}
             Err(mpsc::RecvTimeoutError::Timeout) if status.is_none() && !last_resort => {
                 last_resort = true;
                 signal_group(shim_pid, Signal::SIGKILL);
