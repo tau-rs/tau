@@ -219,7 +219,7 @@ in name only.
 ### 7. What the replay CLI may assume
 
 The reader this freeze exists for — `tau replay <log>` — is specified by
-its own issue. What this ADR guarantees it:
+[#91](https://github.com/tau-rs/tau/issues/91). What this ADR guarantees it:
 
 - A header it accepts is followed by lines it can parse, or a
   `MalformedEntry` with a line number. Nothing in between.
@@ -233,10 +233,12 @@ its own issue. What this ADR guarantees it:
 
 ## Consequences
 
-- **Two implementation lanes, sequenced.** M2c-kernel lands §1, §2, §5 and
-  §6 in one pull request carrying `abi-change` with this ADR linked; the
-  snapshot diff shows the new cases and the `ABI` line. M2c-cli, gated on
-  it, ships `tau replay <log>` against §7. Both are filed from this ADR.
+- **Two implementation lanes, sequenced.** M2c-kernel
+  ([#90](https://github.com/tau-rs/tau/issues/90)) lands §1, §2, §5 and §6 in
+  one pull request carrying `abi-change` with this ADR linked; the snapshot
+  diff shows the new cases and the `ABI` line. M2c-cli
+  ([#91](https://github.com/tau-rs/tau/issues/91)), gated on it, ships
+  `tau replay <log>` against §7.
 - **`kernel/src/abi/` grows by two files and the gates cover them from the
   first commit.** `CODEOWNERS` already names the directory; the diff gate
   already diffs it; the snapshot job already runs `abi_snapshot`. No gate
