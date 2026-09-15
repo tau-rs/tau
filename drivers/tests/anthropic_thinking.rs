@@ -218,7 +218,7 @@ async fn the_tool_loop_over_the_driver_replays_thinking_on_its_second_call() {
                 let mut request = prompt("What is stored under key a?", 1024);
                 request.system =
                     Some("You are a research assistant with a key-value store.".into());
-                let reply = tool_loop(&h, model_cap, &toolbox, &mut request)
+                let reply = tool_loop(&h, model_cap, &toolbox, &mut request, &mut Vec::new())
                     .await
                     .expect("the loop completes");
                 sink.lock().unwrap().replace((request, reply));

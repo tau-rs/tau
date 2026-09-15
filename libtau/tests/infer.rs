@@ -31,7 +31,7 @@ async fn a_request_reaches_the_driver_and_its_reply_comes_back_decoded() {
         .run(
             program(move |h| async move {
                 let request = prompt("hello", 64);
-                let result = infer(&h, model, &request).await;
+                let result = infer(&h, model, &request, &mut Vec::new()).await;
                 sink.lock().unwrap().replace((request, result));
                 h.exit(b"")
             }),
@@ -61,7 +61,7 @@ async fn a_send_refused_on_budget_is_terminal_and_nothing_is_sent() {
     world
         .run(
             program(move |h| async move {
-                let result = infer(&h, model, &prompt("hello", 64)).await;
+                let result = infer(&h, model, &prompt("hello", 64), &mut Vec::new()).await;
                 sink.lock().unwrap().replace(result);
                 h.exit(b"")
             }),
@@ -86,7 +86,7 @@ async fn a_capability_not_held_is_a_terminal_send_error() {
     world
         .run(
             program(move |h| async move {
-                let result = infer(&h, model, &prompt("hello", 64)).await;
+                let result = infer(&h, model, &prompt("hello", 64), &mut Vec::new()).await;
                 sink.lock().unwrap().replace(result);
                 h.exit(b"")
             }),
@@ -140,7 +140,8 @@ async fn a_cancel_while_waiting_ends_the_call_with_the_reason() {
                             // lands while `infer` is inside `recv`. The
                             // notify is plain memory, not a guard.
                             sent_child.notify_one();
-                            let result = infer(&child, model, &prompt("hello", 64)).await;
+                            let result =
+                                infer(&child, model, &prompt("hello", 64), &mut Vec::new()).await;
                             sink.lock().unwrap().replace(result);
                             child.exit(b"stopped in time")
                         }),
@@ -198,7 +199,15 @@ async fn run_retrying(
     world
         .run(
             program(move |h| async move {
-                let result = infer_with(&h, model, &prompt("hello", 64), &policy, sleep).await;
+                let result = infer_with(
+                    &h,
+                    model,
+                    &prompt("hello", 64),
+                    &mut Vec::new(),
+                    &policy,
+                    sleep,
+                )
+                .await;
                 sink.lock().unwrap().replace(result);
                 h.exit(b"")
             }),

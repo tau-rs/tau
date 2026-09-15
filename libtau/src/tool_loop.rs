@@ -14,7 +14,7 @@ use tau_kernel::kernel::KernelError;
 use tau_kernel::reducer::Refusal;
 use tau_kernel::syscall::Handle;
 
-use crate::infer::{await_reply, infer_with, InferError, RetryPolicy};
+use crate::infer::{await_reply, infer_with, InferError, Note, RetryPolicy};
 use crate::toolbox::Toolbox;
 
 /// Why [`tool_loop`] stopped without a reply.
@@ -107,6 +107,11 @@ pub fn prompt(user: &str, max_tokens: u32) -> ModelRequest {
 /// content), and with `failed` when the reply cannot be read. Only a budget refusal,
 /// a cancellation, or a kernel failure ends the loop early.
 ///
+/// A hook's note seen while waiting on the model or on a tool — an `Emit`
+/// at `OnBudget`, say — does not end the loop and is not in the transcript:
+/// it is pushed onto `notes`, where the program reads it after the call
+/// ([`Note`]). Notes pushed before an error stay pushed.
+///
 /// No retries: a model call that ends in an error reply ends the loop, and
 /// the reply is returned. [`tool_loop_with`] is the same loop under a
 /// [`RetryPolicy`].
@@ -122,10 +127,17 @@ pub async fn tool_loop(
     model: Capability,
     tools: &Toolbox,
     request: &mut ModelRequest,
+    notes: &mut Vec<Note>,
 ) -> Result<ModelReply, ToolLoopError> {
-    tool_loop_with(handle, model, tools, request, &RetryPolicy::NONE, |_| {
-        ready(())
-    })
+    tool_loop_with(
+        handle,
+        model,
+        tools,
+        request,
+        notes,
+        &RetryPolicy::NONE,
+        |_| ready(()),
+    )
     .await
 }
 
@@ -144,6 +156,7 @@ pub async fn tool_loop_with<S, F>(
     model: Capability,
     tools: &Toolbox,
     request: &mut ModelRequest,
+    notes: &mut Vec<Note>,
     policy: &RetryPolicy,
     mut sleep: S,
 ) -> Result<ModelReply, ToolLoopError>
@@ -153,7 +166,7 @@ where
 {
     request.tools = tools.defs();
     loop {
-        let reply = infer_with(handle, model, request, policy, &mut sleep)
+        let reply = infer_with(handle, model, request, notes, policy, &mut sleep)
             .await
             .map_err(model_error)?;
         if reply.stop != StopReason::ToolCall {
@@ -185,7 +198,7 @@ where
         });
         let mut results = Vec::with_capacity(calls.len());
         for (id, name, input) in calls {
-            results.push(call_tool(handle, tools, id, &name, &input).await?);
+            results.push(call_tool(handle, tools, id, &name, &input, notes).await?);
         }
         request.messages.push(Message {
             role: Role::User,
@@ -210,6 +223,7 @@ async fn call_tool(
     call_id: String,
     name: &str,
     input: &Value,
+    notes: &mut Vec<Note>,
 ) -> Result<Content, ToolLoopError> {
     let Some(tool) = tools.resolve(name) else {
         let available: Vec<&str> = tools.names().map(Name::as_str).collect();
@@ -252,14 +266,16 @@ async fn call_tool(
             });
         }
     };
-    let msg = await_reply(handle, corr).await.map_err(|e| match e {
-        InferError::Cancelled { reason } => ToolLoopError::Cancelled { reason },
-        InferError::Recv(source) => ToolLoopError::Recv {
-            name: tool.def.name.clone(),
-            source,
-        },
-        other => ToolLoopError::Infer(other),
-    })?;
+    let msg = await_reply(handle, corr, notes)
+        .await
+        .map_err(|e| match e {
+            InferError::Cancelled { reason } => ToolLoopError::Cancelled { reason },
+            InferError::Recv(source) => ToolLoopError::Recv {
+                name: tool.def.name.clone(),
+                source,
+            },
+            other => ToolLoopError::Infer(other),
+        })?;
     Ok(render_result(call_id, name, handle.read(msg.payload)))
 }
 

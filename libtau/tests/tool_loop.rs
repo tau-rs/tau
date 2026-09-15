@@ -14,8 +14,8 @@ use common::{
     World, MODEL_CEILING, STORE_DESCRIPTION, TOOL_CEILING,
 };
 use libtau::{
-    prompt, render_result, tool_loop, tool_loop_with, ProjectError, RetryPolicy, ToolLoopError,
-    Toolbox,
+    prompt, render_result, tool_loop, tool_loop_with, Note, ProjectError, RetryPolicy,
+    ToolLoopError, Toolbox,
 };
 use serde_json::{json, Value};
 use tau_kernel::abi::{Budget, Capability, DimKey, Namespace};
@@ -30,7 +30,8 @@ use tau_kernel::syscall::{program, Handle};
 type LoopOutcome = (ModelRequest, Result<ModelReply, ToolLoopError>);
 
 /// Projects `caps` from inside the program, runs the loop on `request`, and
-/// leaves the transcript and the outcome in a slot.
+/// leaves the transcript and the outcome in a slot. The hook notes the loop
+/// saw are dropped; [`run_loop_noted`] keeps them.
 async fn run_loop(
     world: &World,
     ns: Namespace,
@@ -39,6 +40,19 @@ async fn run_loop(
     extra: Vec<(Capability, ToolDef)>,
     request: ModelRequest,
 ) -> LoopOutcome {
+    let (transcript, result, _) = run_loop_noted(world, ns, budget, caps, extra, request).await;
+    (transcript, result)
+}
+
+/// [`run_loop`], with the hook notes the loop saw and the program read.
+async fn run_loop_noted(
+    world: &World,
+    ns: Namespace,
+    budget: Budget,
+    caps: Vec<Capability>,
+    extra: Vec<(Capability, ToolDef)>,
+    request: ModelRequest,
+) -> (ModelRequest, Result<ModelReply, ToolLoopError>, Vec<Note>) {
     let out = slot();
     let sink = Arc::clone(&out);
     let model = world.model_cap;
@@ -50,8 +64,9 @@ async fn run_loop(
                     toolbox.add(cap, def).expect("add");
                 }
                 let mut request = request;
-                let result = tool_loop(&h, model, &toolbox, &mut request).await;
-                sink.lock().unwrap().replace((request, result));
+                let mut notes = Vec::new();
+                let result = tool_loop(&h, model, &toolbox, &mut request, &mut notes).await;
+                sink.lock().unwrap().replace((request, result, notes));
                 h.exit(b"")
             }),
             ns,
@@ -582,8 +597,16 @@ async fn run_loop_retrying(
             program(move |h| async move {
                 let toolbox = Toolbox::project(&h, &[store]).expect("projection");
                 let mut request = prompt("go", 64);
-                let result =
-                    tool_loop_with(&h, model, &toolbox, &mut request, &policy, sleep).await;
+                let result = tool_loop_with(
+                    &h,
+                    model,
+                    &toolbox,
+                    &mut request,
+                    &mut Vec::new(),
+                    &policy,
+                    sleep,
+                )
+                .await;
                 sink.lock().unwrap().replace((request, result));
                 h.exit(b"")
             }),
@@ -781,8 +804,8 @@ async fn a_send_a_hook_denies_is_fed_back_as_denied_with_the_reason() {
 #[tokio::test]
 async fn a_hook_note_during_a_model_call_is_not_a_cancellation() {
     // A hook that emits on every model send puts a `Notice` in the mailbox
-    // before the reply. It is from a hook, not from a canceller, and the
-    // loop carries on (#83 is where the note goes next).
+    // before the reply. It is from a hook, not from a canceller: the loop
+    // carries on, and the note lands in `notes` for the program (#83).
     let world = World::boot([
         calls(vec![tool_call(
             "call_6",
@@ -807,7 +830,7 @@ async fn a_hook_note_during_a_model_call_is_not_a_cancellation() {
             FailureMode::Closed,
         )
         .unwrap();
-    let (transcript, result) = run_loop(
+    let (transcript, result, notes) = run_loop_noted(
         &world,
         world.all_caps(),
         plenty(),
@@ -823,4 +846,76 @@ async fn a_hook_note_during_a_model_call_is_not_a_cancellation() {
         vec![tool_result("call_6", "hello", None)]
     );
     assert_eq!(world.model.seen().len(), 2);
+    // Three sends — model, store, model — and a note on each; every one was
+    // resolved by a `recv` the loop made, so every one is surfaced.
+    let payloads: Vec<Vec<u8>> = notes
+        .iter()
+        .map(|n| world.kernel.read(n.payload).unwrap())
+        .collect();
+    assert_eq!(payloads, vec![b"noted".to_vec(); 3]);
+    let first = notes.first().map(|n| n.hook);
+    assert!(notes.iter().all(|n| Some(n.hook) == first));
+}
+
+#[tokio::test]
+async fn an_on_budget_note_during_a_tool_call_reaches_the_program_after_the_loop() {
+    // The controller pattern of HANDOFF §10 / ADR-0008 Consequences: an
+    // `OnBudget` hook watches the root's `calls` and emits to the root when
+    // it dips under the line. The line is drawn so the *tool* send is the
+    // crossing — each send spends one call: model to 4, store to 3 — so the
+    // note enters the mailbox during the tool call, ahead of the store's
+    // reply. The loop's `recv` on the tool's correlation resolves the note
+    // first; it must not be a cancellation, must not be fed to the model,
+    // and must be in the program's hands once the loop returns.
+    let world = World::boot([
+        calls(vec![tool_call(
+            "call_7",
+            "store",
+            json!({ "op": "read", "key": "a" }),
+        )]),
+        end_turn("done"),
+    ]);
+    let hook = world
+        .kernel
+        .attach(
+            HookPoint::OnBudget {
+                dim: DimKey::Calls,
+                below: 4,
+            },
+            HookProgram::native(name("calls-low"), |e| {
+                Ok(match e {
+                    HookEvent::OnBudget { subject, .. } => Verdict::Emit {
+                        to: *subject,
+                        payload: b"calls running low".to_vec(),
+                    },
+                    _ => Verdict::Allow,
+                })
+            }),
+            FailureMode::Open,
+        )
+        .unwrap();
+    let (transcript, result, notes) = run_loop_noted(
+        &world,
+        world.all_caps(),
+        Budget::from_dims([(DimKey::Tokens, 100_000), (DimKey::Calls, 5)]),
+        vec![world.store_cap],
+        vec![],
+        prompt("go", 64),
+    )
+    .await;
+    assert_eq!(result.unwrap().stop, StopReason::EndTurn);
+    assert_eq!(
+        results_of(&transcript),
+        vec![tool_result("call_7", "hello", None)],
+        "the note is not a tool result"
+    );
+    let [note] = notes.as_slice() else {
+        panic!("one crossing, one note: {notes:?}");
+    };
+    assert_eq!(note.hook, hook);
+    assert_eq!(
+        world.kernel.read(note.payload).unwrap(),
+        b"calls running low"
+    );
+    assert_eq!(world.model.seen().len(), 2, "the loop ran to end_turn");
 }

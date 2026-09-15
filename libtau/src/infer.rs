@@ -5,7 +5,7 @@
 use std::future::{ready, Future};
 use std::time::Duration;
 
-use tau_kernel::abi::{BlobRef, Capability, Corr, Endpoint, Msg, MsgKind};
+use tau_kernel::abi::{BlobRef, Capability, Corr, Endpoint, HookId, Msg, MsgKind, Seq};
 use tau_kernel::bridge::{ErrorKind, ModelError, ModelReply, ModelRequest, StopReason, VERSION};
 use tau_kernel::kernel::KernelError;
 use tau_kernel::syscall::{Handle, Match};
@@ -49,6 +49,30 @@ pub enum InferError {
         /// The version on the reply.
         found: u16,
     },
+}
+
+/// A note a hook left for this agent (ADR-0008 §3): the `Notice` its
+/// `Emit` verdict produced, as this crate saw it while waiting for a reply.
+///
+/// A call waits with `recv` on the reply's correlation *or* any `Notice`,
+/// so a cancel can pre-empt it. A hook's note satisfies that filter too,
+/// and a `recv` that matched it has resolved it out of the mailbox: nothing
+/// in the seven syscalls puts it back. So instead of being dropped (#83) it
+/// is pushed onto the `notes` the caller passed in, and the wait goes on.
+/// The program reads it after the call; the bytes are behind `payload`,
+/// via `read`, exactly as for any message.
+///
+/// Only notes a call *resolved* land here. One that arrives after the last
+/// `recv` of a call is still in the mailbox, where a `recv` on
+/// `Match::Sender(Endpoint::Hook { id })` finds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    /// The hook whose `Emit` produced it.
+    pub hook: HookId,
+    /// The note's position in the log: the `Emitted` entry.
+    pub seq: Seq,
+    /// The note's bytes, by reference.
+    pub payload: BlobRef,
 }
 
 /// The bytes a `send` to a model capability carries: the request as bridge
@@ -192,7 +216,9 @@ fn http_status(message: &str) -> Option<u16> {
 /// Encodes `request`, sends it to `model`, waits for the reply on that
 /// correlation, reads the reply's bytes, and decodes them. The wait also
 /// watches for a `Notice`, so a cancel of this agent ends the call with
-/// [`InferError::Cancelled`] instead of a hang until the hard abort.
+/// [`InferError::Cancelled`] instead of a hang until the hard abort. A
+/// `Notice` from a hook is not a cancel: it is pushed onto `notes` and the
+/// wait goes on ([`Note`]). Notes pushed before an error stay pushed.
 ///
 /// No retries: an error reply is returned as it came. [`infer_with`] is the
 /// same call under a [`RetryPolicy`].
@@ -207,8 +233,12 @@ pub async fn infer(
     handle: &Handle,
     model: Capability,
     request: &ModelRequest,
+    notes: &mut Vec<Note>,
 ) -> Result<ModelReply, InferError> {
-    infer_with(handle, model, request, &RetryPolicy::NONE, |_| ready(())).await
+    infer_with(handle, model, request, notes, &RetryPolicy::NONE, |_| {
+        ready(())
+    })
+    .await
 }
 
 /// [`infer`] under a [`RetryPolicy`], with the wait done by `sleep`.
@@ -237,6 +267,7 @@ pub async fn infer_with<S, F>(
     handle: &Handle,
     model: Capability,
     request: &ModelRequest,
+    notes: &mut Vec<Note>,
     policy: &RetryPolicy,
     mut sleep: S,
 ) -> Result<ModelReply, InferError>
@@ -247,7 +278,7 @@ where
     let bytes = encode_request(request)?;
     let mut retry = 0;
     loop {
-        let reply = call_once(handle, model, &bytes).await?;
+        let reply = call_once(handle, model, &bytes, notes).await?;
         if retry >= policy.retries || !should_retry(&reply.stop) {
             return Ok(reply);
         }
@@ -261,9 +292,10 @@ async fn call_once(
     handle: &Handle,
     model: Capability,
     bytes: &[u8],
+    notes: &mut Vec<Note>,
 ) -> Result<ModelReply, InferError> {
     let corr = handle.send(model, bytes).map_err(InferError::Send)?;
-    let msg = await_reply(handle, corr).await?;
+    let msg = await_reply(handle, corr, notes).await?;
     let payload = handle
         .read(msg.payload)
         .ok_or(InferError::MissingPayload(msg.payload))?;
@@ -275,9 +307,13 @@ async fn call_once(
 /// A `Partial` on the correlation is skipped: v1 of the bridge does not
 /// stream, and a fragment is not the answer. A `Notice` from an agent or
 /// the harness is a cancellation. A `Notice` from a hook — an `Emit`
-/// verdict, ADR-0008 §3 — is not: it is skipped here, which resolves it
-/// out of the mailbox without surfacing it to the program (#83).
-pub(crate) async fn await_reply(handle: &Handle, corr: Corr) -> Result<Msg, InferError> {
+/// verdict, ADR-0008 §3 — is not: the `recv` has resolved it, so it is
+/// kept as a [`Note`] on `notes` for the program, and the wait goes on.
+pub(crate) async fn await_reply(
+    handle: &Handle,
+    corr: Corr,
+    notes: &mut Vec<Note>,
+) -> Result<Msg, InferError> {
     loop {
         let msg = handle
             .recv(Match::Or(vec![
@@ -288,8 +324,15 @@ pub(crate) async fn await_reply(handle: &Handle, corr: Corr) -> Result<Msg, Infe
             .map_err(InferError::Recv)?;
         match msg.kind {
             MsgKind::Reply => return Ok(msg),
-            MsgKind::Notice if matches!(msg.from, Endpoint::Hook { .. }) => continue,
             MsgKind::Notice => {
+                if let Endpoint::Hook { id } = msg.from {
+                    notes.push(Note {
+                        hook: id,
+                        seq: msg.seq,
+                        payload: msg.payload,
+                    });
+                    continue;
+                }
                 let reason = handle.read(msg.payload).unwrap_or_default();
                 return Err(InferError::Cancelled { reason });
             }
