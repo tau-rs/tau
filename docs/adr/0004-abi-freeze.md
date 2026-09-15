@@ -151,6 +151,11 @@ thought about. The gate catches the change nobody did.
   when a second maintainer exists, and the ruleset setting that makes it bind
   is named so the switch is a one-line change
   ([#24](https://github.com/tau-rs/tau/issues/24)).
+- **2026-09-15** — `ABI` 0 → 1 ([ADR-0008](0008-hooks-and-attach.md),
+  [#79](https://github.com/tau-rs/tau/issues/79)): `Endpoint` gains
+  `Hook { id: HookId }`, the sender of a notice a hook emits. The first bump,
+  additive, one new case in the wire snapshots. Lands with M2a-kernel, not
+  with the ADR.
 
 [`Msg`]: ../../kernel/src/abi/msg.rs
 [`Capability`]: ../../kernel/src/abi/cap.rs
