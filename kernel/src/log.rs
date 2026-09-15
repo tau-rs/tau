@@ -16,11 +16,11 @@
 //! # What is frozen
 //!
 //! [`LogHeader`], the [`Msg`] envelopes inside entries, and — since
-//! ADR-0009 — the [`Entry`] enum around them and the line framing described
+//! ADR-0010 — the [`Entry`] enum around them and the line framing described
 //! above. `Entry` moves under `kernel/src/abi/` with a snapshot per kind in
 //! the M2c-kernel lane (#90); until then it is frozen where it stands, and a
 //! change to any kind's wire form is an ABI event
-//! (`docs/adr/0009-entry-freeze.md`).
+//! (`docs/adr/0010-entry-freeze.md`).
 //! Fixtures in the determinism corpus pin the *state hash* of a fold, which
 //! is the second tripwire behind the snapshots.
 

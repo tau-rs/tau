@@ -52,7 +52,7 @@ Four invariants carry the design:
 | [ADR-0007](docs/adr/0007-thinking-blocks.md) | Provider reasoning as an opaque block the loop carries unread and only its own driver replays; bridge v2 |
 | [ADR-0008](docs/adr/0008-hooks-and-attach.md) | Hooks and the `attach` syscall: five points, three verdicts, two program tiers; ABI 0 → 1 |
 | [ADR-0009](docs/adr/0009-sandbox-driver.md) | The sandbox driver v0: a resource fence behind `send`, `compute_ms` accounting, and the isolation ladder above it |
-| [ADR-0009](docs/adr/0009-entry-freeze.md) | The `Entry` freeze: the twelve log kinds join the frozen directory, and `ABI` 2 is the first number that names the line format |
+| [ADR-0010](docs/adr/0010-entry-freeze.md) | The `Entry` freeze: the twelve log kinds join the frozen directory, and `ABI` 2 is the first number that names the line format |
 
 ## Layers
 

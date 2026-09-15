@@ -156,7 +156,7 @@ thought about. The gate catches the change nobody did.
   `Hook { id: HookId }`, the sender of a notice a hook emits. The first bump,
   additive, one new case in the wire snapshots. Lands with M2a-kernel, not
   with the ADR.
-- **2026-09-15** — `ABI` 1 → 2 ([ADR-0009](0009-entry-freeze.md),
+- **2026-09-15** — `ABI` 1 → 2 ([ADR-0010](0010-entry-freeze.md),
   [#10](https://github.com/tau-rs/tau/issues/10)): `Entry` and the hook wire
   types (`HookPoint`, `FailureMode`, `HookSource`, `Ruling`) move into the
   directory, twelve entry kinds gain snapshots, and the header number names

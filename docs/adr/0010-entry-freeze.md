@@ -1,4 +1,4 @@
-# ADR-0009: The `Entry` freeze — twelve kinds join the constitution, `ABI` 1 → 2
+# ADR-0010: The `Entry` freeze — twelve kinds join the constitution, `ABI` 1 → 2
 
 **Status:** Accepted
 **Date:** 2026-09-15
