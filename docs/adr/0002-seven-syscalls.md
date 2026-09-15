@@ -60,7 +60,10 @@ negotiable:
   filter is itself a log entry, because a resolution that is not logged is a
   replay divergence waiting to happen.
 - **`attach`**: harness-privileged only. Verdicts are `Allow`, `Deny(reason)`,
-  `Emit(Notice)`; every verdict is logged.
+  `Emit(Notice)`; every verdict is logged. Specified in full by
+  [ADR-0008](0008-hooks-and-attach.md) (2026-09-15, #79): five points, one
+  `Verdicts` entry per moment that the fold applies without re-running any
+  hook, a boot-only registry with no `detach`, and two program tiers.
 
 **The irreducibility test.** Any proposed eighth syscall must be shown
 *inexpressible* as a program over these seven. If it is expressible, it belongs
