@@ -132,3 +132,77 @@ async fn forward_mode_relays_headers_body_status_and_reports_the_exchange() {
     assert_eq!(r.body, br#"{"ok":true}"#);
     assert_eq!(r.request.path(), "/v1/messages");
 }
+
+use common::scenario::{self, Expect, Scenario, Step, Target};
+use tau_drivers::model::anthropic::{AnthropicConfig, AnthropicDriver, ApiKey};
+use tau_kernel::bridge::{Content, Message, ModelRequest, Role, VERSION};
+
+fn hello() -> ModelRequest {
+    ModelRequest {
+        v: VERSION,
+        system: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![Content::Text { text: "hi".into() }],
+        }],
+        tools: vec![],
+        max_tokens: 64,
+        sampling: None,
+    }
+}
+
+#[tokio::test]
+async fn replay_runs_a_synthetic_cassette_and_checks_request_equality() {
+    // Build a cassette by hand from the ADR fixture the contract suite already trusts.
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/anthropic/response-tool-use.json")).unwrap();
+    let make = |base: &str| -> Box<dyn tau_kernel::driver::Driver> {
+        let mut cfg = AnthropicConfig::new(
+            "claude-haiku-4-5-20251001",
+            ApiKey::new("sk-test"),
+            8_000,
+            64,
+            1,
+            5,
+        );
+        cfg.base_url = base.to_owned();
+        Box::new(AnthropicDriver::new(cfg).unwrap())
+    };
+    // What the driver will send for `hello()` — capture it once against a plain stub.
+    let mut probe = common::start(common::Answer::Json(200, fixture.to_string())).await;
+    let d = make(&probe.base_url);
+    let _ = scenario::call(d.as_ref(), 1, &hello()).await;
+    let sent = probe.captured.recv().await.unwrap();
+
+    let c = common::cassette::Cassette {
+        v: 1,
+        recorded_at: "2026-09-15".into(),
+        target: "synthetic".into(),
+        model: Some("claude-haiku-4-5-20251001".into()),
+        exchanges: vec![common::cassette::Exchange {
+            request: common::cassette::redact(&sent).unwrap(),
+            response: common::cassette::RecordedResponse {
+                status: 200,
+                body: fixture,
+            },
+        }],
+    };
+    common::cassette::save(&c, "synthetic_tool_use");
+
+    let s = Scenario {
+        name: "synthetic_tool_use",
+        target: Target::Anthropic,
+        model: "claude-haiku-4-5-20251001",
+        steps: vec![Step {
+            build: Box::new(|_| hello()),
+            expect: Expect::ToolCall {
+                name: "search",
+                min: 1,
+            },
+        }],
+    };
+    // Point replay at the synthetic directory by overriding the target dir name.
+    scenario::replay_from(&s, "synthetic", Box::new(make)).await;
+
+    std::fs::remove_dir_all(common::cassette::dir().join("synthetic")).unwrap();
+}

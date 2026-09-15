@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
 pub(crate) mod cassette;
+pub(crate) mod scenario;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
