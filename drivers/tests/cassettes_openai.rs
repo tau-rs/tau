@@ -61,6 +61,19 @@ fn make(target: Target, model: &'static str) -> Make {
     make_with(target, model, key(target), OutputCap::default())
 }
 
+/// Ollama's `qwen3:1.7b` reasons in-band before answering, and Ollama's
+/// OpenAI-compatible endpoint exposes no knob the driver sends to turn that
+/// off, so a tight cap burns entirely on reasoning tokens and leaves no
+/// content. Widen the budget for Ollama (measured: the pong prompt needs
+/// 136-200 tokens); OpenAI keeps its own `wanted`.
+fn budget(target: Target, wanted: u32) -> u32 {
+    if target == Target::Ollama {
+        wanted.max(512)
+    } else {
+        wanted
+    }
+}
+
 fn text(prompt: &str, max_tokens: u32) -> ModelRequest {
     ModelRequest {
         v: VERSION,
@@ -171,19 +184,22 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
         "gpt-does-not-exist"
     };
 
-    let mut stop5 = text("Count from 1 to 10, one number per line.", 128);
+    let mut stop5 = text(
+        "Count from 1 to 10, one number per line.",
+        budget(target, 128),
+    );
     stop5.sampling = Some(Sampling {
         stop_sequences: vec!["5".into()],
         ..Sampling::default()
     });
-    let mut warm = text("pong?", 32);
+    let mut warm = text("pong?", budget(target, 32));
     warm.sampling = Some(Sampling {
         temperature: Some(0.2),
         ..Sampling::default()
     });
     let empty = ModelRequest {
         messages: vec![],
-        ..text("", 32)
+        ..text("", budget(target, 32))
     };
 
     let all = vec![
@@ -192,7 +208,7 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 "text_end_turn",
                 target,
                 model,
-                || text("Reply with the single word: pong.", 64),
+                move || text("Reply with the single word: pong.", budget(target, 64)),
                 Expect::Stop(StopReason::EndTurn),
             ),
             make(target, model),
@@ -202,7 +218,12 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 "tool_call",
                 target,
                 model,
-                || with_calc(text("What is 17*23? Use the calculator tool.", 256)),
+                move || {
+                    with_calc(text(
+                        "What is 17*23? Use the calculator tool.",
+                        budget(target, 256),
+                    ))
+                },
                 Expect::ToolCall {
                     name: "calculator",
                     min: 1,
@@ -216,7 +237,7 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 target,
                 model,
                 "What is 17*23? Use the calculator tool.",
-                256,
+                budget(target, 256),
                 Expect::ToolCall {
                     name: "calculator",
                     min: 1,
@@ -230,10 +251,10 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 "parallel_tool_calls",
                 target,
                 model,
-                || {
+                move || {
                     with_calc(text(
                         "Compute 2+2 and 3+3 as two separate calculator calls in one turn.",
-                        512,
+                        budget(target, 512),
                     ))
                 },
                 Expect::ToolCall {
@@ -254,12 +275,15 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
             make(target, model),
         ),
         (
+            // OpenAI's chat completions does not distinguish a stop
+            // sequence from a natural stop, so this cassette pins that the
+            // sequence is applied but the bridge reports `end_turn`.
             one(
                 "stop_sequence_stop",
                 target,
                 model,
                 move || stop5.clone(),
-                Expect::Stop(StopReason::StopSequence),
+                Expect::Stop(StopReason::EndTurn),
             ),
             make(target, model),
         ),
@@ -278,7 +302,7 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 "max_completion_tokens_cap",
                 target,
                 model,
-                || text("pong?", 32),
+                move || text("pong?", budget(target, 32)),
                 Expect::Stop(StopReason::EndTurn),
             ),
             make_with(target, model, key(target), OutputCap::MaxCompletionTokens),
@@ -298,7 +322,7 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 "bad_key_401",
                 target,
                 model,
-                || text("pong?", 32),
+                move || text("pong?", budget(target, 32)),
                 Expect::ProviderError,
             ),
             make_with(
@@ -313,7 +337,7 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 "unknown_model_404",
                 target,
                 unknown_model,
-                || text("pong?", 32),
+                move || text("pong?", budget(target, 32)),
                 Expect::ProviderError,
             ),
             make(target, unknown_model),
