@@ -151,6 +151,17 @@ fn hello() -> ModelRequest {
     }
 }
 
+/// Removes the directory on drop, so the synthetic cassette is cleaned up
+/// even if an assertion inside the test panics: nextest runs tests in
+/// parallel, and a leftover directory is picked up by the secret-shape
+/// guard on this run or a later one.
+struct RemoveOnDrop(std::path::PathBuf);
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[tokio::test]
 async fn replay_runs_a_synthetic_cassette_and_checks_request_equality() {
     // Build a cassette by hand from the ADR fixture the contract suite already trusts.
@@ -187,6 +198,7 @@ async fn replay_runs_a_synthetic_cassette_and_checks_request_equality() {
             },
         }],
     };
+    let _cleanup = RemoveOnDrop(common::cassette::dir().join("synthetic"));
     common::cassette::save(&c, "synthetic_tool_use");
 
     let s = Scenario {
@@ -203,6 +215,4 @@ async fn replay_runs_a_synthetic_cassette_and_checks_request_equality() {
     };
     // Point replay at the synthetic directory by overriding the target dir name.
     scenario::replay_from(&s, "synthetic", Box::new(make)).await;
-
-    std::fs::remove_dir_all(common::cassette::dir().join("synthetic")).unwrap();
 }
