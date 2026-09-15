@@ -14,5 +14,11 @@
 //!   [`model::openai`] (feature `openai`) speaks chat completions, which is
 //!   OpenAI, vLLM, and everything else that copies the shape. Both are on
 //!   by default.
+//! - [`sandbox`] (feature `sandbox`, Unix-only, on by default) — the
+//!   sandbox driver of ADR-0009: code from a model, run by a fixed
+//!   interpreter behind rlimits, through the `tau-sandbox-shim` binary
+//!   this crate also builds and a harness ships beside itself.
 
 pub mod model;
+#[cfg(all(feature = "sandbox", unix))]
+pub mod sandbox;
