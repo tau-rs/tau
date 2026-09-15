@@ -1,0 +1,1 @@
+when pre_send if driver in { shell, sandbox } or not (depth == 1 and remaining.tokens <= 10) then deny "no"

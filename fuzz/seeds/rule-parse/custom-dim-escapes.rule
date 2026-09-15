@@ -1,0 +1,1 @@
+when on_budget(my-gpu_ms, 0) if remaining.calls >= 1 then emit to parent "say \"bye\"\n"

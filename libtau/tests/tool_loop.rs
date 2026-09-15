@@ -678,7 +678,52 @@ async fn the_loop_never_retries_a_refusal() {
 
 // ------------------------------------------------------------------- hooks
 
-use tau_kernel::hook::{FailureMode, HookEvent, HookPoint, HookProgram, Verdict};
+use tau_kernel::hook::{FailureMode, HookEvent, HookPoint, HookProgram, Rule, Verdict};
+
+#[tokio::test]
+async fn a_send_a_rule_denies_is_fed_back_as_denied_with_the_reason() {
+    // The same policy as the native hook below, as one line of the Rule
+    // language (ADR-0008 §5): no recompile, the same `denied` tool result.
+    let world = World::boot([
+        calls(vec![tool_call(
+            "call_5",
+            "store",
+            json!({ "op": "write", "key": "k", "value": "forbidden" }),
+        )]),
+        end_turn("noted"),
+    ]);
+    let rule = Rule::parse(
+        "when pre_send if driver == store and payload contains \"forbidden\" then deny \"the store does not take that word\"",
+    )
+    .unwrap();
+    world
+        .kernel
+        .attach(
+            HookPoint::PreSend,
+            HookProgram::Rule(rule),
+            FailureMode::Closed,
+        )
+        .unwrap();
+    let (transcript, result) = run_loop(
+        &world,
+        world.all_caps(),
+        plenty(),
+        vec![world.store_cap],
+        vec![],
+        prompt("go", 64),
+    )
+    .await;
+    assert_eq!(result.unwrap().stop, StopReason::EndTurn);
+    assert_eq!(
+        results_of(&transcript),
+        vec![tool_result(
+            "call_5",
+            "denied by hook:0: the store does not take that word",
+            Some(ToolErrorKind::Denied)
+        )]
+    );
+    assert!(world.store.seen().is_empty(), "the send never happened");
+}
 
 #[tokio::test]
 async fn a_send_a_hook_denies_is_fed_back_as_denied_with_the_reason() {

@@ -578,14 +578,24 @@ impl Kernel {
     ///
     /// # Errors
     ///
-    /// [`Refusal::AfterBoot`] or [`Refusal::OpenAtVetoPoint`], via
-    /// [`KernelError::Refused`]; or a log write failure.
+    /// [`Refusal::AfterBoot`], [`Refusal::OpenAtVetoPoint`], or
+    /// [`Refusal::RulePoint`], via [`KernelError::Refused`]; or a log write
+    /// failure.
     pub fn attach(
         self: &Arc<Self>,
         point: HookPoint,
         program: HookProgram,
         failure: FailureMode,
     ) -> Result<HookId, KernelError> {
+        if let HookProgram::Rule(rule) = &program {
+            if *rule.point() != point {
+                return Err(Refusal::RulePoint {
+                    rule: rule.point().clone(),
+                    attached: point,
+                }
+                .into());
+            }
+        }
         let mut inner = self.lock();
         inner.ensure_ok()?;
         let id = inner.state.next_hook();

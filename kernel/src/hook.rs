@@ -17,10 +17,12 @@
 //! synchronous, unmetered, and run under the kernel lock, so it must not do
 //! I/O, `await`, take a lock of its own, call back into the kernel, or
 //! panic. [`HookProgram::Rule`] is the one-line declarative language of
-//! ADR-0008 §5, parsed at `attach`; it arrives with M2a-rules (#81), and
-//! until then [`Rule::parse`] refuses everything.
+//! ADR-0008 §5: parsed at `attach`, total and stateless at the point, so
+//! it can never fail at runtime. See [`rule`].
 //!
 //! [`Kernel::attach`]: crate::kernel::Kernel::attach
+
+pub mod rule;
 
 use core::fmt;
 use std::sync::Arc;
@@ -31,6 +33,8 @@ use crate::abi::{
     AgentId, BlobRef, Budget, Corr, DimKey, DriverId, HookId, MsgKind, Name, Namespace, Seq,
 };
 use crate::reducer::Outcome;
+
+pub use rule::{Rule, RuleError};
 
 /// A pinned moment where hooks are consulted (ADR-0008 §1).
 ///
@@ -394,52 +398,6 @@ impl fmt::Debug for HookProgram {
             Self::Native { name, .. } => f.debug_struct("Native").field("name", name).finish(),
             Self::Rule(rule) => f.debug_tuple("Rule").field(rule).finish(),
         }
-    }
-}
-
-/// A parsed rule of the ADR-0008 §5 language.
-///
-/// The parser and evaluator arrive with M2a-rules (#81). Until then nothing
-/// parses, so no value of this type exists: the variant is a placeholder
-/// that refuses at `attach`, not a silent no-op.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Rule {
-    source: String,
-}
-
-/// Why rule text was refused.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum RuleError {
-    /// The language is not implemented in this build.
-    #[error("the rule language arrives with M2a-rules (#81); nothing parses yet")]
-    Unavailable,
-}
-
-impl Rule {
-    /// Parses one line of rule text.
-    ///
-    /// # Errors
-    ///
-    /// [`RuleError::Unavailable`], always, until #81 lands.
-    pub fn parse(source: &str) -> Result<Self, RuleError> {
-        let _ = source;
-        Err(RuleError::Unavailable)
-    }
-
-    /// The source text, as recorded in the log.
-    #[must_use]
-    pub fn source(&self) -> &str {
-        &self.source
-    }
-
-    /// Evaluates the rule against an event. Total: a rule cannot fail.
-    #[must_use]
-    pub fn evaluate(&self, event: &HookEvent) -> Verdict {
-        // Unreachable until `parse` produces a value (#81); the evaluator
-        // lands with the parser.
-        let _ = event;
-        Verdict::Allow
     }
 }
 

@@ -14,8 +14,8 @@
 # differences that only show up on another platform. The property tests,
 # cranked: the four ADR-0002 properties over arbitrary trees, at a case count
 # `just check` could never afford. Fuzzing: fifteen minutes per target on the
-# paths attacker-controlled bytes enter by — the envelope, the log file, and
-# the model reply. The platform matrix: the full suite on macOS, and the
+# paths attacker-controlled bytes enter by — the envelope, the log file, the
+# model reply, and the rule text. The platform matrix: the full suite on macOS, and the
 # Linux suite on both the pinned toolchain and beta. And the sanitizers: ASan
 # with LSan over the kernel's tests, TSan over everything that boots a
 # `Kernel` on tokio. The other two items are tracked in their own issues
@@ -212,7 +212,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [msg-envelope, log-read-from, decode-reply-bytes, decode-reply-hostile]
+        target: [msg-envelope, log-read-from, decode-reply-bytes, decode-reply-hostile, rule-parse]
     env:
       RUSTFLAGS: ""
     steps:
