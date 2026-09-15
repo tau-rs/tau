@@ -7,7 +7,7 @@
 # not in the `tier1` fan-in and is not a required check; if it must gate a
 # merge, label the PR and wait for it.
 #
-# Today this is items 1 to 4 of the seven. The simulation soak: 10^6 events
+# Today this is items 1 to 5 of the seven. The simulation soak: 10^6 events
 # on Linux, refolded on the same build, then refolded on macOS from the log
 # the Linux job uploaded. ADR-0003 calls the second half the check that
 # catches what a single machine never sees — iteration-order and formatting
@@ -15,9 +15,11 @@
 # cranked: the four ADR-0002 properties over arbitrary trees, at a case count
 # `just check` could never afford. Fuzzing: fifteen minutes per target on the
 # paths attacker-controlled bytes enter by — the envelope, the log file, and
-# the model reply. And the platform matrix: the full suite on macOS, and the
-# Linux suite on both the pinned toolchain and beta. The other three items
-# are tracked in their own issues (refs #6).
+# the model reply. The platform matrix: the full suite on macOS, and the
+# Linux suite on both the pinned toolchain and beta. And the sanitizers: ASan
+# with LSan over the kernel's tests, TSan over everything that boots a
+# `Kernel` on tokio. The other two items are tracked in their own issues
+# (refs #6).
 
 name: tier2
 
@@ -359,3 +361,103 @@ jobs:
           if [ "$TOOLCHAIN" = "beta" ] && [ "$CLIPPY$NEXTEST$DOCTESTS" != "successsuccesssuccess" ]; then
             echo "::warning title=beta toolchain::$version failed (clippy=$CLIPPY nextest=$NEXTEST doctests=$DOCTESTS); early warning, not a gate"
           fi
+
+  # Item 5: the sanitizers. Two legs, both on nightly because `-Zsanitizer`
+  # and `-Zbuild-std` are unstable, both on x86_64 Linux because that is
+  # where every sanitizer runtime exists. The std rebuild is what makes the
+  # runtime see allocations std makes on the crate's behalf; without it the
+  # instrumented code sits on an uninstrumented std and half the faults are
+  # invisible. `--target` is named explicitly so RUSTFLAGS does not reach
+  # build scripts and proc macros, which run on the host and must not be
+  # instrumented. Same nightly-beside-the-pin and cleared-RUSTFLAGS
+  # rationale as the fuzz job above; the sanitizer flag goes on the run step
+  # so the cache key and the job's env stay honest about what they hold.
+  #
+  # ASan with LSan over `tau-kernel`. The workspace forbids `unsafe`, so the
+  # class of fault this leg hunts is a leak or a use-after-free reachable
+  # through a dependency, not through code in this repository. LSan is on by
+  # default with ASan on Linux x86_64: a leaked test process exits non-zero
+  # at teardown and nextest reports it as a failure. The red-proof for that
+  # claim is a scratch PR linked from #38.
+  asan-kernel:
+    name: asan+lsan (kernel)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: ""
+      SAN_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly beside the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal --component rust-src
+          cargo +nightly --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: asan
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - name: Kernel tests under AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo +nightly nextest run --locked -Zbuild-std \
+            -p tau-kernel --all-features --profile ci --target "$SAN_TARGET" 2>&1 | tee asan.log
+          {
+            echo "## asan+lsan (kernel)"
+            echo
+            echo "- $(grep -E '^\s+Summary' asan.log | tail -1 | sed 's/^ *//')"
+            echo "- wall (build-std + run): ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # TSan over the tokio-facing layer: `kernel/src/kernel.rs` and the
+  # scheduler path, which only run under a spawner. Whole crates, not a
+  # hand-picked filter: a filter naming the nine files that boot a `Kernel`
+  # today would rot silently the day one is renamed, and a pure reducer test
+  # under TSan costs nothing but compile time. `libtau` and `tau-drivers`
+  # are the kernel's first tokio-native consumers; their kernel tests are
+  # where the scheduler is actually driven. The live driver tests skip
+  # themselves without TAU_*_LIVE=1, so no network is needed.
+  tsan-scheduler:
+    name: tsan (scheduler)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: ""
+      SAN_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly beside the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal --component rust-src
+          cargo +nightly --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: tsan
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - name: Kernel-booting tests under ThreadSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=thread
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo +nightly nextest run --locked -Zbuild-std \
+            -p tau-kernel -p libtau -p tau-drivers --all-features --profile ci \
+            --target "$SAN_TARGET" 2>&1 | tee tsan.log
+          {
+            echo "## tsan (scheduler)"
+            echo
+            echo "- $(grep -E '^\s+Summary' tsan.log | tail -1 | sed 's/^ *//')"
+            echo "- wall (build-std + run): ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
