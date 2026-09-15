@@ -140,8 +140,15 @@ fn one(
     }
 }
 
-fn round_trip(name: &'static str, model: &'static str, max_tokens: u32) -> Scenario {
-    let first = move || with_calc(text("What is 17*23? Use the calculator tool.", max_tokens));
+fn round_trip(
+    name: &'static str,
+    model: &'static str,
+    prompt: &'static str,
+    max_tokens: u32,
+    first_expect: Expect,
+    result: &'static str,
+) -> Scenario {
+    let first = move || with_calc(text(prompt, max_tokens));
     Scenario {
         name,
         target: Target::Anthropic,
@@ -149,13 +156,10 @@ fn round_trip(name: &'static str, model: &'static str, max_tokens: u32) -> Scena
         steps: vec![
             Step {
                 build: Box::new(move |_| first()),
-                expect: Expect::ToolCall {
-                    name: "calculator",
-                    min: 1,
-                },
+                expect: first_expect,
             },
             Step {
-                build: Box::new(move |prev| calc_result(&first(), prev.last().unwrap(), "391")),
+                build: Box::new(move |prev| calc_result(&first(), prev.last().unwrap(), result)),
                 expect: Expect::Stop(StopReason::EndTurn),
             },
         ],
@@ -201,7 +205,17 @@ fn scenarios() -> Vec<(Scenario, Make)> {
             make(HAIKU),
         ),
         (
-            round_trip("tool_result_round_trip", HAIKU, 256),
+            round_trip(
+                "tool_result_round_trip",
+                HAIKU,
+                "What is 17*23? Use the calculator tool.",
+                256,
+                Expect::ToolCall {
+                    name: "calculator",
+                    min: 1,
+                },
+                "391",
+            ),
             make(HAIKU),
         ),
         (
@@ -255,7 +269,14 @@ fn scenarios() -> Vec<(Scenario, Make)> {
             ),
         ),
         (
-            round_trip("thinking_on_replayed_second_turn", OPUS, 4096),
+            round_trip(
+                "thinking_on_replayed_second_turn",
+                OPUS,
+                "Work out the sum of the first 12 prime numbers step by step, then verify your total by calling the calculator tool once with the full addition expression.",
+                4096,
+                Expect::ThinkingToolCall { name: "calculator" },
+                "197",
+            ),
             make(OPUS),
         ),
         (

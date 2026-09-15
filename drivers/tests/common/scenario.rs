@@ -38,7 +38,17 @@ impl Target {
 
 pub(crate) enum Expect {
     Stop(StopReason),
-    ToolCall { name: &'static str, min: usize },
+    ToolCall {
+        name: &'static str,
+        min: usize,
+    },
+    /// Like `ToolCall`, but also requires at least one `Content::Thinking`
+    /// block: for scenarios that must force adaptive thinking to engage,
+    /// where a `ToolCall` reply with no thinking block means the prompt was
+    /// too easy, not that the driver is broken.
+    ThinkingToolCall {
+        name: &'static str,
+    },
     ProviderError,
     Policy,
 }
@@ -72,6 +82,28 @@ pub(crate) fn check(expect: &Expect, reply: &ModelReply, consumed: &Consumption)
                 "wanted >= {min} tool calls, got {}: {reply:#?}",
                 calls.len()
             );
+            for c in calls {
+                if let Content::ToolCall { name: n, .. } = c {
+                    assert_eq!(n, name);
+                }
+            }
+            billed();
+        }
+        Expect::ThinkingToolCall { name } => {
+            assert_eq!(reply.stop, StopReason::ToolCall, "{reply:#?}");
+            assert!(
+                reply
+                    .content
+                    .iter()
+                    .any(|c| matches!(c, Content::Thinking { .. })),
+                "no thinking block: adaptive thinking did not engage; use a harder prompt: {reply:#?}"
+            );
+            let calls: Vec<_> = reply
+                .content
+                .iter()
+                .filter(|c| matches!(c, Content::ToolCall { .. }))
+                .collect();
+            assert!(!calls.is_empty(), "no tool call: {reply:#?}");
             for c in calls {
                 if let Content::ToolCall { name: n, .. } = c {
                     assert_eq!(n, name);
