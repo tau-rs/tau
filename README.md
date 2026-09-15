@@ -50,6 +50,8 @@ Four invariants carry the design:
 | [ADR-0005](docs/adr/0005-kernel-allocated-ids.md) | Where ids come from, and how replay confirms them |
 | [ADR-0006](docs/adr/0006-model-bridge-contract.md) | The bytes a model driver and the tool loop agree on, carried by the kernel but versioned apart from the ABI |
 | [ADR-0007](docs/adr/0007-thinking-blocks.md) | Provider reasoning as an opaque block the loop carries unread and only its own driver replays; bridge v2 |
+| [ADR-0008](docs/adr/0008-hooks-and-attach.md) | Hooks and the `attach` syscall: five points, three verdicts, two program tiers; ABI 0 → 1 |
+| [ADR-0009](docs/adr/0009-sandbox-driver.md) | The sandbox driver v0: a resource fence behind `send`, `compute_ms` accounting, and the isolation ladder above it |
 
 ## Layers
 
