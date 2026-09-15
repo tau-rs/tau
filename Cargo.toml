@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["kernel", "drivers", "libtau", "sim"]
+# The fuzz crate is deliberately not a member: it only means anything under
+# nightly's sanitizer flags, and a member would put libFuzzer's C++ runtime on
+# the `just check` path. It has its own lockfile; see fuzz/Cargo.toml.
+exclude = ["fuzz"]
 
 [workspace.package]
 version      = "0.0.0"
@@ -12,7 +16,13 @@ authors      = ["Titouan Lebocq <lebocq.tit@gmail.com>"]
 
 [workspace.dependencies]
 serde      = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: serde_json's default float parser is fast and not
+# correctly rounded — a tool-call `input` holding `1.2999999999999999e+73`
+# decoded, re-encoded, and decoded again is a different f64. The fuzz target
+# on `decode_reply` found it in its first fifteen minutes. The tool loop
+# forwards the model's numbers to tool drivers, so they must survive intact;
+# the cost lands on float parsing only, and the kernel's log has no floats.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2       = "0.10"
 thiserror  = "2"
 tokio      = { version = "1", default-features = false }
@@ -23,6 +33,10 @@ insta      = { version = "1", features = ["json"] }
 # JSON Schema (draft 2020-12) validation for the tool loop's `bad_args`
 # (ADR-0006 §4). No HTTP resolver, no network: schemas come from `describe()`.
 boon       = "0.6"
+# Property tests (HANDOFF §8, Tier 2 item 1). No `fork`/`timeout`: the
+# reducer is a pure fold, so a case cannot hang, and both would drag in
+# rusty-fork and tempfile for nothing.
+proptest   = { version = "1", default-features = false, features = ["std"] }
 
 # The reducer is a pure, deterministic fold. `-D warnings` is the floor; the
 # lints below are the ones whose violation would be a *correctness* bug in a

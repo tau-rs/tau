@@ -1,0 +1,10 @@
+[
+  { "type": "tool_result", "call_id": "call_2", "is_error": true, "error_kind": "unknown_tool",
+    "content": "unknown tool `serch`; available: search, store" },
+  { "type": "tool_result", "call_id": "call_3", "is_error": true, "error_kind": "bad_args",
+    "content": "bad args for `search`: missing field `query`" },
+  { "type": "tool_result", "call_id": "call_4", "is_error": true, "error_kind": "denied",
+    "content": "denied: this agent does not hold `search`" },
+  { "type": "tool_result", "call_id": "call_5", "is_error": true, "error_kind": "failed",
+    "content": "search: upstream timeout" }
+]

@@ -9,6 +9,7 @@
 //! only what the contract promises: a reply that is not an error, a real
 //! usage, and a consumption priced from it.
 
+#![cfg(feature = "anthropic")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use serde_json::json;

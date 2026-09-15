@@ -7,11 +7,16 @@
 # not in the `tier1` fan-in and is not a required check; if it must gate a
 # merge, label the PR and wait for it.
 #
-# Today this is item 2 of the seven, the simulation soak: 10^6 events on
-# Linux, refolded on the same build, then refolded on macOS from the log the
-# Linux job uploaded. ADR-0003 calls the second half the check that catches
-# what a single machine never sees — iteration-order and formatting
-# differences that only show up on another platform. The other six items
+# Today this is items 1 to 4 of the seven. The simulation soak: 10^6 events
+# on Linux, refolded on the same build, then refolded on macOS from the log
+# the Linux job uploaded. ADR-0003 calls the second half the check that
+# catches what a single machine never sees — iteration-order and formatting
+# differences that only show up on another platform. The property tests,
+# cranked: the four ADR-0002 properties over arbitrary trees, at a case count
+# `just check` could never afford. Fuzzing: fifteen minutes per target on the
+# paths attacker-controlled bytes enter by — the envelope, the log file, and
+# the model reply. And the platform matrix: the full suite on macOS, and the
+# Linux suite on both the pinned toolchain and beta. The other three items
 # are tracked in their own issues (refs #6).
 
 name: tier2
@@ -150,3 +155,207 @@ jobs:
             echo "- expected: $(cat soak/hash.txt)"
             echo "- fold of the Linux log: ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Item 1: the four properties (ADR-0002) over arbitrary trees, 10^5 cases
+  # each. `sim/tests/properties.rs` reads the count from PROPTEST_CASES and
+  # defaults to a few dozen so the developer loop stays fast; this is the
+  # same test with the budget it deserves. `cargo test`, not nextest: the ci
+  # profile's per-test ceiling is sized for Tier 1, and the four tests share
+  # the runner's cores either way.
+  proptest-cranked:
+    name: proptest (cranked, 10^5 cases)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PROPTEST_CASES: 100000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test --locked --release -p tau-sim --test properties --no-run
+      - name: Run the properties
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo test --locked --release -p tau-sim --test properties | tee proptest.txt
+          echo "proptest at $PROPTEST_CASES cases: ${SECONDS}s"
+          {
+            echo "## proptest (cranked)"
+            echo
+            echo "- cases per property: $PROPTEST_CASES"
+            echo "- $(grep '^test result' proptest.txt)"
+            echo "- wall: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+  # Item 3: fuzzing, 15 minutes per target. Model output is attacker-
+  # controlled input, so the targets are the exact paths bytes from outside
+  # enter by (fuzz/fuzz_targets/). The seed corpora are committed; what
+  # libFuzzer grows is not kept — corpus persistence is Tier 3 (#7). A crash
+  # is kept: the reproducer is uploaded so the failure can be replayed.
+  #
+  # cargo-fuzz needs nightly for the sanitizer flags. Nightly is installed
+  # beside the pinned toolchain and named per invocation; rust-toolchain.toml
+  # stays the single source of truth for everything else. RUSTFLAGS is
+  # cleared for this job: `-D warnings` on a moving nightly would make it
+  # red for lint churn in kernel/, which is the toolchain canary's job (#7),
+  # not this one's. The fuzz crate itself is held to clippy separately below.
+  fuzz:
+    name: fuzz (${{ matrix.target }}, 15 min)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [msg-envelope, log-read-from, decode-reply-bytes, decode-reply-hostile]
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly beside the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+          cargo +nightly --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz -> target
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-fuzz
+      - name: Lockfile is current, targets are clean
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          cargo +nightly fetch --locked
+          cargo +nightly fmt --all --check
+          cargo +nightly clippy --all-targets --locked -- -D warnings
+      - name: Fuzz
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # cargo-fuzz defaults `--target` to the triple *it* was built for,
+          # and install-action ships a static musl binary; ASan does not
+          # exist for musl. Name the host triple so the build follows rustc.
+          HOST="$(rustc +nightly -vV | sed -n 's/^host: //p')"
+          mkdir -p "corpus/$TARGET"
+          SECONDS=0
+          cargo +nightly fuzz run --target "$HOST" "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- \
+            -max_total_time=900 -print_final_stats=1 2>&1 | tee fuzz.log
+          {
+            echo "## fuzz ($TARGET)"
+            echo
+            echo "- seeds: $(ls "seeds/$TARGET" | wc -l), corpus grown to: $(ls "corpus/$TARGET" | wc -l)"
+            echo "- $(grep -E '^#[0-9]+\s+DONE' fuzz.log | tail -1 || echo 'no DONE line')"
+            echo "- wall: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the reproducer
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/
+            fuzz/fuzz.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Tier 2 item 4, first half: the complete suite on macOS. Tier 1's macOS
+  # job is unit-only under the quick profile; this is the ci profile plus
+  # doctests, the same pair the Linux `test` job runs on every PR.
+  full-macos:
+    name: full (macos)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler.
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - name: Full suite
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo nextest run --locked --workspace --all-features --profile ci
+          nextest_s=$SECONDS; SECONDS=0
+          cargo test --locked --workspace --all-features --doc
+          {
+            echo "## full (macos)"
+            echo
+            echo "- $(rustc --version)"
+            echo "- nextest (ci profile): ${nextest_s}s"
+            echo "- doctests: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Tier 2 item 4, second half: the Linux suite on the pinned toolchain and
+  # on beta. Stable is a gate like any other Tier 2 job. Beta is early
+  # warning, not a gate: `continue-on-error` keeps it from failing the run,
+  # and the last step writes what happened to the step summary so a new
+  # rustc or clippy lint is seen the week it lands in beta rather than the
+  # week the pin moves. Clippy runs here on purpose — RUSTFLAGS covers new
+  # rustc lints, but new clippy lints only show up under clippy itself.
+  linux-toolchains:
+    name: toolchain (${{ matrix.toolchain }})
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.toolchain == 'beta' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler.
+        # The `stable` leg is that pin, not the stable channel.
+        run: rustup show active-toolchain
+      - name: Override with beta for this job only
+        if: matrix.toolchain == 'beta'
+        run: |
+          set -euo pipefail
+          rustup toolchain install beta --profile minimal --component clippy,rustfmt
+          echo "RUSTUP_TOOLCHAIN=beta" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - id: clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - id: nextest
+        run: cargo nextest run --locked --workspace --all-features --profile ci
+      - id: doctests
+        run: cargo test --locked --workspace --all-features --doc
+      - name: Report
+        if: always()
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+          CLIPPY: ${{ steps.clippy.outcome }}
+          NEXTEST: ${{ steps.nextest.outcome }}
+          DOCTESTS: ${{ steps.doctests.outcome }}
+        run: |
+          set -euo pipefail
+          version=$(rustc --version)
+          {
+            echo "## toolchain ($TOOLCHAIN)"
+            echo
+            echo "- $version"
+            echo "- clippy: $CLIPPY"
+            echo "- nextest (ci profile): $NEXTEST"
+            echo "- doctests: $DOCTESTS"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$TOOLCHAIN" = "beta" ] && [ "$CLIPPY$NEXTEST$DOCTESTS" != "successsuccesssuccess" ]; then
+            echo "::warning title=beta toolchain::$version failed (clippy=$CLIPPY nextest=$NEXTEST doctests=$DOCTESTS); early warning, not a gate"
+          fi

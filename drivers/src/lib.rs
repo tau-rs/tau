@@ -10,6 +10,9 @@
 //! One module per driver family, feature-gated:
 //!
 //! - [`model`] — model drivers speaking the bridge contract of ADR-0006.
-//!   [`model::anthropic`] (feature `anthropic`, on by default) is the first.
+//!   [`model::anthropic`] (feature `anthropic`) speaks the Messages API;
+//!   [`model::openai`] (feature `openai`) speaks chat completions, which is
+//!   OpenAI, vLLM, and everything else that copies the shape. Both are on
+//!   by default.
 
 pub mod model;

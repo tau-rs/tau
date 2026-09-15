@@ -92,7 +92,10 @@ pub fn prompt(user: &str, max_tokens: u32) -> ModelRequest {
 /// `request` is the conversation. Its `tools` are replaced by the toolbox's
 /// definitions, and every assistant turn and every tool-result turn the loop
 /// produces is appended to its `messages`, so after the call it holds the
-/// full transcript. The reply returned is the one that ended the loop —
+/// full transcript. The assistant turn is the reply's content *intact*,
+/// sealed thinking blocks included and in place: the provider requires
+/// them back unchanged (ADR-0007), and the loop is append-only so that the
+/// prefix they were signed over stays what it was. The reply returned is the one that ended the loop —
 /// `end_turn`, `max_tokens`, `stop_sequence`, `refusal`, or an error from
 /// the driver — and what to do about it is the caller's policy.
 ///
@@ -162,7 +165,12 @@ where
                 Content::ToolCall { id, name, input } => {
                     Some((id.clone(), name.clone(), input.clone()))
                 }
-                Content::Text { .. } | Content::ToolResult { .. } => None,
+                // Thinking is carried, never read: the whole reply goes
+                // back in the assistant turn below, sealed blocks in place
+                // (ADR-0007 §3).
+                Content::Text { .. } | Content::ToolResult { .. } | Content::Thinking { .. } => {
+                    None
+                }
             })
             .collect();
         if calls.is_empty() {

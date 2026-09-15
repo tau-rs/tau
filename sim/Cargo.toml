@@ -20,5 +20,8 @@ name = "tau_sim"
 tau-kernel = { path = "../kernel", features = ["testing"] }
 thiserror  = { workspace = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+
 [lints]
 workspace = true

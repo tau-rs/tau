@@ -152,6 +152,52 @@ async fn projection_names_the_tool_after_its_driver_and_uses_its_schema() {
     assert_eq!(world.model.seen().first().unwrap().tools, transcript.tools);
 }
 
+#[tokio::test]
+async fn sealed_thinking_blocks_go_back_in_the_assistant_turn_unchanged() {
+    // The scripted model thinks (two sealed blocks, one of them a shape the
+    // loop has never seen) before calling the tool. The second request
+    // must carry that whole turn back, blocks first, exactly as replied:
+    // the provider rejects a turn whose thinking was edited or dropped.
+    let sealed = |data: Value| Content::Thinking {
+        provider: "anthropic".into(),
+        data,
+    };
+    let first = calls(vec![
+        sealed(json!({"type": "thinking", "thinking": "", "signature": "EqQBCkYIBxgC"})),
+        sealed(json!({"type": "something_new", "nested": {"deep": [1, 2, 3]}})),
+        text("Let me look."),
+        tool_call("call_1", "store", json!({ "op": "read", "key": "a" })),
+    ]);
+    let expected_turn = first.content.clone();
+    let world = World::boot([first, end_turn("It is `hello`.")]);
+
+    let (transcript, result) = run_loop(
+        &world,
+        world.all_caps(),
+        plenty(),
+        vec![world.store_cap],
+        vec![],
+        prompt("What is stored under key a?", 1024),
+    )
+    .await;
+
+    assert_eq!(result.unwrap().stop, StopReason::EndTurn);
+    let seen = world.model.seen();
+    let second = seen.get(1).expect("two calls");
+    let assistant = second.messages.get(1).expect("the assistant turn");
+    assert_eq!(assistant.role, Role::Assistant);
+    assert_eq!(
+        assistant.content, expected_turn,
+        "sealed blocks in place, unread"
+    );
+    assert_eq!(
+        results_of(second),
+        vec![tool_result("call_1", "hello", None)],
+        "and the tool was still called"
+    );
+    assert_eq!(transcript.messages, second.messages);
+}
+
 // --- one test per error_kind ---------------------------------------------
 
 #[tokio::test]

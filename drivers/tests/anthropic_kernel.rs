@@ -3,6 +3,7 @@
 //! exactly what the driver reported, and a `cancel` reaches `abandon` while
 //! the HTTP call is in flight.
 
+#![cfg(feature = "anthropic")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
