@@ -5,11 +5,14 @@
 > An **agent kernel**: the minimal, stable substrate on which agent harnesses
 > and pipelines are composed. Explicitly not another agent framework.
 
-**Status:** M0, the walking skeleton. The log, the reducer, four of the seven
-syscalls (`spawn`, `exit`, `send`, `recv`), and an echo driver: the loop runs
-end to end, and its log refolds to the same state hash. The gates landed first,
-on purpose, so this code arrived as a pull request that already flowed through
-them.
+**Status:** M1, complete. Six of the seven syscalls run (`spawn`, `exit`,
+`wait`, `cancel`, `send`, `recv`); every budget dimension is enforced and
+reserved before a call; time arrives as `Tick` entries from a virtual or wall
+clock, never from a read inside the reducer; `tau-drivers` speaks to Anthropic
+and to OpenAI-compatible endpoints behind a per-driver ceiling; and `libtau`
+supplies `infer()` and the tool loop with no powers beyond the syscalls. Every
+log still refolds to the same state hash. Next is M2: hooks, which bring
+`attach`, the seventh syscall; a sandbox driver v0; and `tau replay <log>`.
 
 ## The idea
 
