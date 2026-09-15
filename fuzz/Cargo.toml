@@ -6,10 +6,11 @@
 # lists this directory under `exclude`; the crate has its own lockfile, and
 # `just deny` checks it against the same deny.toml.
 #
-# Four targets, one invariant each: arbitrary bytes on a path attacker-
+# Five targets, one invariant each: arbitrary bytes on a path attacker-
 # controlled input enters by produce a value or an `Err`, never a panic and
 # never an allocation beyond the input's size. Where a value comes out, it
-# must also survive a round trip through its own serializer.
+# must also survive a round trip through its own serializer — for a rule,
+# through its `Display` (ADR-0008 §5).
 #
 # Local run: `just fuzz <target> [seconds]`. Needs nightly and cargo-fuzz.
 
@@ -61,6 +62,13 @@ bench = false
 [[bin]]
 name  = "decode-reply-hostile"
 path  = "fuzz_targets/decode_reply_hostile.rs"
+test  = false
+doc   = false
+bench = false
+
+[[bin]]
+name  = "rule-parse"
+path  = "fuzz_targets/rule_parse.rs"
 test  = false
 doc   = false
 bench = false

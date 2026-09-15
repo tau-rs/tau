@@ -1,0 +1,1 @@
+when on_exit if depth != 0 then emit to parent "child gone"

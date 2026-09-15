@@ -25,7 +25,7 @@ use tau_kernel::abi::{
 };
 use tau_kernel::driver::Driver;
 use tau_kernel::hook::{
-    FailureMode, HookEvent, HookFailure, HookPoint, HookProgram, Rule, RuleError, Ruling, Verdict,
+    FailureMode, HookEvent, HookFailure, HookPoint, HookProgram, HookSource, Rule, Ruling, Verdict,
 };
 use tau_kernel::kernel::{AbortHandle, BoxFuture, Delivery, Kernel, KernelError};
 use tau_kernel::log::{Entry, Log};
@@ -650,12 +650,103 @@ async fn a_denied_reply_is_never_delivered_and_the_request_stays_open() {
     kernel.shutdown();
 }
 
-#[test]
-fn the_rule_language_is_not_here_yet() {
-    // #81 lands the parser; until then the variant is a placeholder that
-    // refuses, not a rule that silently allows.
+#[tokio::test]
+async fn a_rule_at_pre_send_denies_and_the_log_carries_its_source() {
+    // The second tier (ADR-0008 §5): the same veto as hook 1 above, written
+    // as one line, parsed at `attach`, its canonical text in the `Attached`
+    // entry. A rule attached at a point its `when` does not name is
+    // refused, not installed as a silent no-op.
+    let sink = SharedBuf::default();
+    let kernel = Kernel::boot(Log::with_sink(sink.clone()).unwrap(), tokio_spawner);
+    let tool = kernel
+        .register_driver(
+            tool_id(),
+            Gated {
+                permits: Arc::new(Semaphore::new(1)),
+            },
+            Budget::from_dims([(DimKey::Tokens, CEILING)]),
+        )
+        .unwrap();
+    let text = "when pre_send if driver == tool and payload contains \"rm -rf\" then deny \"no recursive deletes\"";
+    let rule = Rule::parse(text).unwrap();
+    let err = kernel
+        .attach(
+            HookPoint::OnSpawn,
+            HookProgram::Rule(rule.clone()),
+            FailureMode::Closed,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        KernelError::Refused(Refusal::RulePoint {
+            rule: HookPoint::PreSend,
+            attached: HookPoint::OnSpawn
+        })
+    ));
+    let id = kernel
+        .attach(
+            HookPoint::PreSend,
+            HookProgram::Rule(rule),
+            FailureMode::Closed,
+        )
+        .unwrap();
+    assert_eq!(id, hook(0));
+
+    let root = kernel
+        .spawn_root(
+            program(move |root| async move {
+                let err = root.send(tool, b"shell rm -rf /").unwrap_err();
+                let KernelError::Denied { hook: by, reason } = err else {
+                    panic!("expected Denied, got {err:?}");
+                };
+                assert_eq!(by, hook(0));
+                assert_eq!(reason, "no recursive deletes");
+                let corr = root.send(tool, b"shell ls").unwrap();
+                let reply = root.recv(Match::Corr(corr)).await.unwrap();
+                assert_eq!(root.read(reply.payload).unwrap(), b"re: shell ls");
+                root.exit(b"root done")
+            }),
+            Namespace::from_caps([tool]),
+            root_grant(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+
+    let entries = kernel.entries();
+    assert!(matches!(
+        &entries[1],
+        Entry::Attached { hook: h, point: HookPoint::PreSend, program: HookSource::Rule(src), .. }
+            if *h == hook(0) && src == text
+    ));
+    let rolls: Vec<&[(HookId, Ruling)]> = entries
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Verdicts {
+                point: HookPoint::PreSend,
+                subject,
+                roll,
+                ..
+            } if *subject == root => Some(roll.as_slice()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rolls.len(), 2, "one roll call per send attempt");
+    assert!(matches!(rolls[0], [(h, Ruling::Deny(_))] if *h == hook(0)));
+    assert!(matches!(rolls[1], [(h, Ruling::Allow)] if *h == hook(0)));
     assert_eq!(
-        Rule::parse("when pre_send then allow"),
-        Err(RuleError::Unavailable)
+        entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Sent { .. }))
+            .count(),
+        1,
+        "the denied send never happened"
     );
+
+    // The fold confirms the roll call without parsing the rule.
+    let live = kernel.state_hash();
+    assert_eq!(fold(&entries).unwrap().hash(), live);
+    let bytes = sink.contents();
+    let reread = Log::read_from(bytes.as_slice()).unwrap();
+    assert_eq!(fold(reread.entries()).unwrap().hash(), live);
 }

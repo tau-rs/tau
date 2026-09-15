@@ -479,6 +479,16 @@ pub enum Refusal {
         /// What is wrong with it.
         reason: &'static str,
     },
+    /// A rule written for one point, attached at another: it would answer
+    /// `Allow` to every event without ever being consulted about what it
+    /// says (ADR-0008 §5).
+    #[error("rule is written for {rule}, attached at {attached}")]
+    RulePoint {
+        /// The point the rule's `when` names.
+        rule: HookPoint,
+        /// The point it was attached at.
+        attached: HookPoint,
+    },
 }
 
 impl State {
