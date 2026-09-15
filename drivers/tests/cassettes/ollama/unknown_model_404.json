@@ -1,0 +1,42 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "ollama",
+  "model": "does-not-exist:latest",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "pong?",
+              "role": "user"
+            }
+          ],
+          "model": "does-not-exist:latest"
+        }
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": null,
+            "message": "model 'does-not-exist:latest' not found",
+            "param": null,
+            "type": "not_found_error"
+          }
+        }
+      }
+    }
+  ]
+}

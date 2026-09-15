@@ -1,0 +1,60 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "ollama",
+  "model": "qwen3:1.7b",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "Reply with the single word: pong.",
+              "role": "user"
+            }
+          ],
+          "model": "qwen3:1.7b"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "message": {
+                "content": "pong",
+                "reasoning": "Okay, the user wants me to reply with the single word \"pong\". Let me think about how to approach this.\n\nFirst, the instruction is straightforward: just output \"pong\" in a single word. The user might be testing if I can follow simple commands without any additional context. They could be looking for a quick response, maybe in a game or a testing scenario.\n\nI need to make sure I don't add any extra words or explain myself. The response has to be exactly \"pong\". Let me check if there's any hidden meaning or if the user expects a different response. Since the instruction is clear, I'll go with the exact word as requested.\n\nAlso, considering the possible scenario, the user might be playing a game where they need to type \"pong\" to trigger an action. Alternatively, it could be part of a larger context, but since the instruction is specific, I'll stick to the single word.\n\nNo need for any elaboration. Just the word \"pong\" in a single line. Let me confirm once more that there are no typos and that it's exactly as requested.\n",
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789511132,
+          "id": "chatcmpl-426",
+          "model": "qwen3:1.7b",
+          "object": "chat.completion",
+          "system_fingerprint": "fp_ollama",
+          "usage": {
+            "completion_tokens": 230,
+            "prompt_tokens": 27,
+            "prompt_tokens_details": {
+              "cached_tokens": 12
+            },
+            "total_tokens": 257
+          }
+        }
+      }
+    }
+  ]
+}
