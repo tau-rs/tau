@@ -8,8 +8,15 @@
 //! at the edges of `u64`, and text repeated until it is large.
 //!
 //! What must hold: no panic; a reply that decodes carries the current `v`; a
-//! `Version` error names the `v` that was sent; and a reply that decodes
+//! `Version` error names the `v` on the wire; and a reply that decodes
 //! survives a round trip.
+//!
+//! "On the wire" is deliberate (#69). The shape has two sources for a
+//! top-level key: the typed field and `extra`. An extra never overrides a
+//! typed field, but it does fill a slot the typed field left empty, so
+//! `Version::Missing` beside an extra `("v", 110)` sends `v: 110`. The
+//! oracle therefore reads the rendered object, not the shape, so it asserts
+//! what `decode_reply` actually saw.
 
 #![no_main]
 
@@ -222,11 +229,16 @@ struct Hostile {
     usage: Usage,
     /// Fields ADR-0006 does not define. Additive fields are the bridge's
     /// evolution story, so a reader must ignore rather than reject them.
+    /// A key that collides with a typed field above loses to it when that
+    /// field rendered, and takes the slot when it did not.
     extra: Vec<(String, Leaf)>,
 }
 
 impl Hostile {
-    fn render(&self) -> Vec<u8> {
+    /// The object that goes on the wire. Returned as a map rather than bytes
+    /// so the oracle can read the effective `v` from the same thing
+    /// `decode_reply` reads.
+    fn render(&self) -> Map<String, Value> {
         let mut reply = Map::new();
         if let Some(v) = self.v.render() {
             reply.insert("v".into(), v);
@@ -249,13 +261,14 @@ impl Hostile {
         for (key, leaf) in &self.extra {
             reply.entry(key.clone()).or_insert_with(|| leaf.render());
         }
-        // Serializing a `Value` cannot fail: every key is a string.
-        serde_json::to_vec(&Value::Object(reply)).unwrap_or_default()
+        reply
     }
 }
 
 fuzz_target!(|hostile: Hostile| {
-    let bytes = hostile.render();
+    let wire = hostile.render();
+    // Serializing a `Value` cannot fail: every key is a string.
+    let bytes = serde_json::to_vec(&Value::Object(wire.clone())).unwrap_or_default();
     match libtau::decode_reply(&bytes) {
         Ok(reply) => {
             assert_eq!(reply.v, VERSION, "decode_reply accepted a foreign version");
@@ -266,12 +279,13 @@ fuzz_target!(|hostile: Hostile| {
         }
         Err(libtau::InferError::Version { found }) => {
             assert_ne!(found, VERSION, "a Version error named the current version");
-            // The error names the `v` that was sent, and nothing else.
-            let sent = hostile.v.render();
+            // The error names the `v` on the wire, and nothing else. Read
+            // from the rendered object, not `hostile.v`: an extra may have
+            // filled a `v` the typed field left out (#69).
             assert_eq!(
-                sent,
-                Some(json!(found)),
-                "Version error does not name the v that was sent"
+                wire.get("v"),
+                Some(&json!(found)),
+                "Version error does not name the v on the wire"
             );
         }
         Err(_) => {}
