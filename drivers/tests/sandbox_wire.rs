@@ -201,4 +201,26 @@ fn the_description_names_every_bound_in_readable_units() {
     assert!(text.starts_with("Run code with `python3`."), "{text}");
     assert!(text.contains("1500 ms wall"), "{text}");
     assert!(text.contains("1000 bytes of stdout"), "{text}");
+
+    let mut config = adr_config();
+    config.output_bytes = 2 * 1024 * 1024;
+    let text = SandboxDriver::new(config)
+        .unwrap()
+        .describe()
+        .unwrap()
+        .description;
+    assert!(text.contains("2 MiB of stdout"), "{text}");
+}
+
+#[test]
+fn the_driver_shows_its_config_and_never_a_secret() {
+    let mut config = adr_config();
+    config.env = vec![("TOKEN".into(), "hunter2".into())];
+    let driver = SandboxDriver::new(config).unwrap();
+    assert_eq!(driver.config().cpu_seconds, 2);
+    let shown = format!("{driver:?}");
+    assert!(shown.contains("in_flight: 0"), "{shown}");
+    // The environment is the harness's to configure and may hold secrets;
+    // the config is what the harness wrote, and Debug shows it as written.
+    assert!(shown.contains("main.py"), "{shown}");
 }

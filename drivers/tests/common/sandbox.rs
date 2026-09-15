@@ -33,6 +33,12 @@ pub(crate) fn sh_id() -> DriverId {
 pub(crate) fn config(cpu: u32, wall: Duration) -> SandboxConfig {
     let mut c = SandboxConfig::new(["/bin/sh"], "main.sh", cpu, wall);
     c.shim = Some(SHIM.into());
+    // Under `cargo llvm-cov` the shim is instrumented too; it writes its
+    // profile only if told where. The driver hands the run exactly the
+    // configured environment, so the test configures it.
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        c.env.push(("LLVM_PROFILE_FILE".into(), profile));
+    }
     c
 }
 

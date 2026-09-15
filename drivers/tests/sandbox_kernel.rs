@@ -137,6 +137,78 @@ async fn a_missing_shim_is_a_host_error_billed_at_nothing() {
 }
 
 #[tokio::test]
+async fn a_scratch_root_that_cannot_be_used_is_a_host_error() {
+    let mut c = config(5, Duration::from_secs(10));
+    c.scratch_root = Some("/nonexistent/tau-scratch".into());
+    let (reply, root) = run_one(driver(c), request("echo hi")).await;
+    let Stop::Error(e) = reply.stop else {
+        panic!("{:?}", reply.stop)
+    };
+    assert_eq!(e.kind, ErrorKind::Host);
+    assert!(e.message.contains("scratch directory"), "{}", e.message);
+    assert!(!root.spent.contains_key(&DimKey::ComputeMs));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_memory_bound_reaches_the_shim_and_a_small_run_fits_under_it() {
+    let mut c = config(5, Duration::from_secs(10));
+    c.memory_bytes = Some(512 * 1024 * 1024);
+    let (reply, _) = run_one(driver(c), request("echo fits")).await;
+    assert_eq!(reply.stop, Stop::Exit(0), "{}", reply.stderr);
+    assert_eq!(reply.stdout, "fits\n");
+}
+
+#[test]
+fn the_shim_refuses_bad_arguments_and_reports_a_report_it_cannot_write() {
+    use std::process::Command;
+    let status = |args: &[&str]| {
+        Command::new(common::sandbox::SHIM)
+            .args(args)
+            .status()
+            .unwrap()
+    };
+    assert_eq!(status(&["--bogus", "1"]).code(), Some(2), "unknown flag");
+    assert_eq!(status(&["--cpu-s"]).code(), Some(2), "flag without a value");
+    assert_eq!(
+        status(&[
+            "--report",
+            "r.json",
+            "--cpu-s",
+            "1",
+            "--wall-ms",
+            "1000",
+            "--file-bytes",
+            "1",
+            "--open-files",
+            "8"
+        ])
+        .code(),
+        Some(2),
+        "no interpreter after --"
+    );
+    // Arguments in order, but the report cannot be written: exit 1, which
+    // the driver reads as lost.
+    let unwritable = [
+        "--report",
+        "/nonexistent/dir/r.json",
+        "--cpu-s",
+        "1",
+        "--wall-ms",
+        "1000",
+        "--file-bytes",
+        "1000000",
+        "--open-files",
+        "8",
+        "--",
+        "/bin/sh",
+        "-c",
+        "true",
+    ];
+    assert_eq!(status(&unwritable).code(), Some(1));
+}
+
+#[tokio::test]
 async fn a_missing_interpreter_is_a_host_error_from_the_shim() {
     let mut c = config(5, Duration::from_secs(10));
     c.interpreter = vec!["/nonexistent/python3".into()];
@@ -217,7 +289,8 @@ async fn the_run_sees_only_the_configured_environment_in_a_directory_that_is_gon
         "the scratch directory is gone after the reply"
     );
     let count: usize = lines.last().unwrap().trim().parse().unwrap();
-    // HOME, GREETING, and whatever `sh` itself sets (PWD, SHLVL, `_`...).
+    // HOME, GREETING, whatever `sh` itself sets (PWD, SHLVL, `_`...), and
+    // the profile path under `cargo llvm-cov`.
     assert!(
         count <= 6,
         "the environment is tiny: {count}\n{}",
