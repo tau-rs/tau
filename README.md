@@ -48,6 +48,8 @@ Four invariants carry the design:
 | [ADR-0003](docs/adr/0003-substrate.md) | In-process body, event-sourced constitution |
 | [ADR-0004](docs/adr/0004-abi-freeze.md) | What is frozen, and the three gates that hold it |
 | [ADR-0005](docs/adr/0005-kernel-allocated-ids.md) | Where ids come from, and how replay confirms them |
+| [ADR-0006](docs/adr/0006-model-bridge-contract.md) | The bytes a model driver and the tool loop agree on, carried by the kernel but versioned apart from the ABI |
+| [ADR-0007](docs/adr/0007-thinking-blocks.md) | Provider reasoning as an opaque block the loop carries unread and only its own driver replays; bridge v2 |
 
 ## Layers
 
