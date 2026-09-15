@@ -76,21 +76,31 @@ where `<target>` is `anthropic`, `openai`, or `ollama`.
   "recorded_at": "2026-09-15",
   "target": "anthropic",
   "model": "claude-haiku-4-5-20251001",
-  "request": {
-    "method": "POST",
-    "path": "/v1/messages",
-    "headers": { "content-type": "application/json", "anthropic-version": "2023-06-01" },
-    "body": { "...": "the JSON the driver sent" }
-  },
-  "response": {
-    "status": 200,
-    "body": { "...": "the JSON the provider returned" }
-  }
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "headers": { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+        "body": { "...": "the JSON the driver sent" }
+      },
+      "response": {
+        "status": 200,
+        "body": { "...": "the JSON the provider returned" }
+      }
+    }
+  ]
 }
 ```
 
+A scenario is a list of **exchanges**, because several make more than one
+HTTP call: a tool-result round trip is two calls, thinking replay is two,
+and `count_tokens` mode is a count call followed by the message call. Replay
+scripts the stub with the responses in order and checks the requests in order.
+
 `model` is the id the *response* reported (OpenAI answers a dated id for an
-alias), so a cassette names what actually answered.
+alias), so a cassette names what actually answered; a rejected call has no
+reply model, so the configured id is kept.
 
 ### 3. Allowlist recorder, not denylist redaction
 
@@ -106,22 +116,20 @@ with the offending header name.
 *Why*: a denylist has to be updated when a provider adds an auth header; an
 allowlist cannot leak what it never reads.
 
-### 4. What replay ignores
+### 4. What replay compares, and why nothing is masked
 
-Replay compares request bodies in value with these fields masked on both
-sides, because they are legitimately different on every recording:
-
-| Provider | Field | Why it varies |
-|---|---|---|
-| both | tool-call ids (`toolu_…`, `call_…`) in second-turn requests | provider-assigned |
-| Anthropic | `signature` inside sealed thinking blocks | per-response |
-| OpenAI | none in requests | |
+Replay compares every request body the driver sends with the recorded one
+**exactly, in value**. No masking is needed: the driver receives the
+recorded response, so a second-turn request carries the very tool-call ids
+and thinking signatures the recording did. If a request diverges, the driver
+moved, and the test is red for the right reason.
 
 Replay compares the *reply* only through the contract expectation (stop
-reason, content kinds and values the scenario fixes, usage present, error
-class). Provider ids, `created`, `system_fingerprint`, `service_tier`, and
-dated model ids are never asserted, so a re-record produces an informative
-diff without a red build.
+reason, tool-call names and count, usage present, error class). Provider ids,
+`created`, `system_fingerprint`, dated model ids, and generated text are
+never asserted. A **re-record** therefore produces a diff that is noisy in
+those fields by design and informative in the rest; a reviewer reads it, and
+the build does not go red on its own.
 
 ### 5. Guard test
 
