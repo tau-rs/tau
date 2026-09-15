@@ -6,12 +6,17 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use common::{
-    calls, end_turn, id, name, plenty, reply, slot, store_schema, take, text, tokio_spawner,
-    tool_call, BrokenSchemaDriver, World, MODEL_CEILING, STORE_DESCRIPTION, TOOL_CEILING,
+    calls, end_turn, id, name, plenty, provider, recording_sleep, refusal, reply, slot,
+    store_schema, take, text, tokio_spawner, tool_call, transport, BrokenSchemaDriver, Waits,
+    World, MODEL_CEILING, STORE_DESCRIPTION, TOOL_CEILING,
 };
-use libtau::{prompt, render_result, tool_loop, ProjectError, ToolLoopError, Toolbox};
+use libtau::{
+    prompt, render_result, tool_loop, tool_loop_with, ProjectError, RetryPolicy, ToolLoopError,
+    Toolbox,
+};
 use serde_json::{json, Value};
 use tau_kernel::abi::{Budget, Capability, DimKey, Namespace};
 use tau_kernel::bridge::{
@@ -555,4 +560,118 @@ fn echo_def(n: &str) -> ToolDef {
         description: "Echoes its input.".into(),
         input_schema: json!({}),
     }
+}
+
+// --- retries ---------------------------------------------------------------
+
+/// Runs `tool_loop_with` under `policy` with the store as the one tool,
+/// recording every wait.
+async fn run_loop_retrying(
+    world: &World,
+    budget: Budget,
+    policy: RetryPolicy,
+) -> (LoopOutcome, Vec<Duration>) {
+    let out = slot();
+    let sink = Arc::clone(&out);
+    let waits: Waits = Arc::default();
+    let sleep = recording_sleep(&waits);
+    let model = world.model_cap;
+    let store = world.store_cap;
+    world
+        .run(
+            program(move |h| async move {
+                let toolbox = Toolbox::project(&h, &[store]).expect("projection");
+                let mut request = prompt("go", 64);
+                let result =
+                    tool_loop_with(&h, model, &toolbox, &mut request, &policy, sleep).await;
+                sink.lock().unwrap().replace((request, result));
+                h.exit(b"")
+            }),
+            world.all_caps(),
+            budget,
+        )
+        .await;
+    let waits = waits.lock().unwrap().clone();
+    (take(&out), waits)
+}
+
+fn two_retries() -> RetryPolicy {
+    RetryPolicy {
+        retries: 2,
+        backoff: Duration::from_millis(10),
+        max_backoff: Duration::from_secs(1),
+    }
+}
+
+#[tokio::test]
+async fn the_loop_retries_a_transient_error_in_the_middle_of_a_round() {
+    let world = World::boot([
+        calls(vec![tool_call(
+            "call_1",
+            "store",
+            json!({ "op": "read", "key": "a" }),
+        )]),
+        provider(529),
+        end_turn("done"),
+    ]);
+    let ((transcript, result), waits) = run_loop_retrying(&world, plenty(), two_retries()).await;
+    assert_eq!(result.unwrap(), end_turn("done"));
+    assert_eq!(
+        world.model.seen().len(),
+        3,
+        "call, failed retry target, retry"
+    );
+    assert_eq!(world.store.seen().len(), 1, "the tool ran once");
+    assert_eq!(waits, vec![Duration::from_millis(10)]);
+    assert_eq!(
+        transcript.messages.len(),
+        3,
+        "user, assistant, tool results: the failed attempt leaves no turn"
+    );
+}
+
+#[tokio::test]
+async fn a_model_send_refused_on_budget_mid_retry_is_the_loops_budget_error() {
+    let world = World::boot([transport(), end_turn("never")]);
+    let one_call = Budget::from_dims([(DimKey::Tokens, 100_000), (DimKey::Calls, 1)]);
+    let ((_, result), waits) = run_loop_retrying(&world, one_call, two_retries()).await;
+    assert!(
+        matches!(result, Err(ToolLoopError::Budget(_))),
+        "got {result:?}"
+    );
+    assert_eq!(
+        world.model.seen().len(),
+        1,
+        "the refused retry was never sent"
+    );
+    assert_eq!(waits.len(), 1);
+}
+
+#[tokio::test]
+async fn a_model_send_refused_on_budget_before_any_call_is_the_loops_budget_error() {
+    let world = World::boot([end_turn("never")]);
+    let starved = Budget::from_dims([(DimKey::Tokens, MODEL_CEILING - 1), (DimKey::Calls, 5)]);
+    let (_, result) = run_loop(
+        &world,
+        world.all_caps(),
+        starved,
+        vec![world.store_cap],
+        vec![],
+        prompt("go", 64),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(ToolLoopError::Budget(_))),
+        "got {result:?}"
+    );
+    assert!(world.model.seen().is_empty());
+}
+
+#[tokio::test]
+async fn the_loop_never_retries_a_refusal() {
+    let world = World::boot([refusal(), end_turn("never")]);
+    let ((_, result), waits) = run_loop_retrying(&world, plenty(), two_retries()).await;
+    assert_eq!(result.unwrap(), refusal());
+    assert_eq!(world.model.seen().len(), 1);
+    assert!(waits.is_empty());
 }

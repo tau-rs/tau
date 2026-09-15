@@ -2,6 +2,9 @@
 //! `send`, `recv` → tool result → model, until the model stops for any other
 //! reason.
 
+use std::future::{ready, Future};
+use std::time::Duration;
+
 use serde_json::Value;
 use tau_kernel::abi::{BudgetError, Capability, Name};
 use tau_kernel::bridge::{
@@ -11,7 +14,7 @@ use tau_kernel::kernel::KernelError;
 use tau_kernel::reducer::Refusal;
 use tau_kernel::syscall::Handle;
 
-use crate::infer::{await_reply, infer, InferError};
+use crate::infer::{await_reply, infer_with, InferError, RetryPolicy};
 use crate::toolbox::Toolbox;
 
 /// Why [`tool_loop`] stopped without a reply.
@@ -31,9 +34,10 @@ pub enum ToolLoopError {
         /// What was wrong.
         reason: String,
     },
-    /// A tool `send` was refused on budget: the driver's ceiling cannot be
-    /// reserved. Terminal, never fed back — the model would only try again
-    /// with the same empty purse.
+    /// A `send` — to the model or to a tool — was refused on budget: the
+    /// driver's ceiling cannot be reserved. Terminal, never fed back and
+    /// never retried — the model would only try again with the same empty
+    /// purse.
     #[error("budget refused a tool call: {0}")]
     Budget(#[source] BudgetError),
     /// A tool `send` was refused for a reason that is neither authority nor
@@ -102,6 +106,10 @@ pub fn prompt(user: &str, max_tokens: u32) -> ModelRequest {
 /// and with `failed` when the reply cannot be read. Only a budget refusal,
 /// a cancellation, or a kernel failure ends the loop early.
 ///
+/// No retries: a model call that ends in an error reply ends the loop, and
+/// the reply is returned. [`tool_loop_with`] is the same loop under a
+/// [`RetryPolicy`].
+///
 /// Cancel-safe: the loop borrows the toolbox and mutates the request, both
 /// plain memory; no guard is held across an await (ADR-0003).
 ///
@@ -114,9 +122,39 @@ pub async fn tool_loop(
     tools: &Toolbox,
     request: &mut ModelRequest,
 ) -> Result<ModelReply, ToolLoopError> {
+    tool_loop_with(handle, model, tools, request, &RetryPolicy::NONE, |_| {
+        ready(())
+    })
+    .await
+}
+
+/// [`tool_loop`] with every model call made through
+/// [`infer_with`](crate::infer_with) under `policy`, waiting with `sleep`.
+///
+/// A retried attempt leaves nothing in the transcript: only the reply that
+/// ends a model call is appended. A model `send` refused on budget, on the
+/// first attempt or mid-retry, is [`ToolLoopError::Budget`].
+///
+/// # Errors
+///
+/// See [`ToolLoopError`].
+pub async fn tool_loop_with<S, F>(
+    handle: &Handle,
+    model: Capability,
+    tools: &Toolbox,
+    request: &mut ModelRequest,
+    policy: &RetryPolicy,
+    mut sleep: S,
+) -> Result<ModelReply, ToolLoopError>
+where
+    S: FnMut(Duration) -> F,
+    F: Future<Output = ()>,
+{
     request.tools = tools.defs();
     loop {
-        let reply = infer(handle, model, request).await?;
+        let reply = infer_with(handle, model, request, policy, &mut sleep)
+            .await
+            .map_err(model_error)?;
         if reply.stop != StopReason::ToolCall {
             return Ok(reply);
         }
@@ -152,6 +190,15 @@ pub async fn tool_loop(
             role: Role::User,
             content: results,
         });
+    }
+}
+
+/// A model call's failure as the loop's: a budget refusal is the loop's
+/// own terminal variant, everything else is carried through.
+fn model_error(e: InferError) -> ToolLoopError {
+    match e {
+        InferError::Send(KernelError::Refused(Refusal::Budget(e))) => ToolLoopError::Budget(e),
+        other => ToolLoopError::Infer(other),
     }
 }
 
