@@ -7,7 +7,7 @@
 # not in the `tier1` fan-in and is not a required check; if it must gate a
 # merge, label the PR and wait for it.
 #
-# Today this is items 1 to 6 of the seven. The simulation soak: 10^6 events
+# This is all seven items. The simulation soak: 10^6 events
 # on Linux, refolded on the same build, then refolded on macOS from the log
 # the Linux job uploaded. ADR-0003 calls the second half the check that
 # catches what a single machine never sees — iteration-order and formatting
@@ -21,7 +21,8 @@
 # shim, TSan over everything that boots a `Kernel` on tokio. And the serial
 # pass: the Linux suite once more with `--test-threads 1`, so a test that
 # only passes beside its neighbours is caught here rather than by the Tier 3
-# flake hunter. The last item is tracked in its own issue (refs #6).
+# flake hunter. And the benches, compiled but not run: a bench target that
+# stops building is caught here, not by the Tier 3 regression job.
 
 name: tier2
 
@@ -612,4 +613,39 @@ jobs:
             echo "- $(rustc --version)"
             echo "- $(grep -E '^\s+Summary' serial.log | tail -1 | sed 's/^ *//')"
             echo "- wall (build + run): ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Item 7: the benches, compiled and not judged. `just check` never builds
+  # a bench target: clippy's `--all-targets` type-checks `kernel/benches/`,
+  # but nothing links the criterion binary under the `bench` profile, so a
+  # target that stops building would only surface when the Tier 3 regression
+  # job (#7) tries to run it, days after the change that broke it. This leg
+  # builds every `[[bench]]` in the workspace and stops there. No execution,
+  # no baselines, no thresholds: timing on a shared runner is noise, and the
+  # judging belongs to the nightly job with instruction counts.
+  bench-compile:
+    name: bench (compile only)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # A release build of the workspace plus criterion; the cold path is the
+    # whole budget.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build every bench target, run none
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo bench --locked --workspace --no-run 2>&1 | tee bench.log
+          {
+            echo "## bench (compile only)"
+            echo
+            echo "- $(rustc --version)"
+            echo "- wall (build): ${SECONDS}s"
+            echo "- targets built:"
+            grep -E '^\s+Executable' bench.log | sed 's/^ *Executable /  - /'
           } >> "$GITHUB_STEP_SUMMARY"
