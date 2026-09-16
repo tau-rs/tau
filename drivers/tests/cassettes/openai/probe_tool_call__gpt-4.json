@@ -1,0 +1,101 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "openai",
+  "model": "gpt-4-0613",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "What is 17*23? Use the calculator tool.",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-4",
+          "tools": [
+            {
+              "function": {
+                "description": "Evaluates an arithmetic expression.",
+                "name": "calculator",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expression": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expression"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": null,
+                "refusal": null,
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\n  \"expression\": \"17*23\"\n}",
+                      "name": "calculator"
+                    },
+                    "id": "call_33TLSApvFxOlG8jFLQcPL2eh",
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1789511858,
+          "id": "chatcmpl-EOW4QYdyAdNStYt35EkrXLc5gn3eU",
+          "model": "gpt-4-0613",
+          "object": "chat.completion",
+          "service_tier": "default",
+          "system_fingerprint": null,
+          "usage": {
+            "completion_tokens": 17,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "prompt_tokens": 60,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cached_tokens": 0
+            },
+            "total_tokens": 77
+          }
+        }
+      }
+    }
+  ]
+}

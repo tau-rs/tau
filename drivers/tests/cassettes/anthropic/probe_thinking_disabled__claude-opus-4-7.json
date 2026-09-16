@@ -1,0 +1,71 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "anthropic",
+  "model": "claude-opus-4-7",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "headers": {
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 64,
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "pong?",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-opus-4-7",
+          "system": "You are terse.",
+          "thinking": {
+            "type": "disabled"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "container": null,
+          "content": [
+            {
+              "text": "ping",
+              "type": "text"
+            }
+          ],
+          "id": "msg_011Cf62P9PtuS2NQx5UJ3bPC",
+          "model": "claude-opus-4-7",
+          "role": "assistant",
+          "stop_details": null,
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 20,
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard"
+          }
+        }
+      }
+    }
+  ]
+}
