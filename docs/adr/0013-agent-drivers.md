@@ -851,3 +851,13 @@ neighbour for.
 
 [`driver.rs`]: ../../kernel/src/driver.rs
 [`Consumption`]: ../../kernel/src/abi/budget.rs
+
+## Amendments
+
+- **2026-09-16** — §2's "`unavailable` becomes a health entry" is resolved by
+  [ADR-0014](0014-driver-supervision.md) §6: it stays a reply kind, because
+  the kernel never reads a payload. A harness that wants a logged-out CLI
+  to be *down* reads the driver's verdict by its own means and calls
+  `retire_driver` or `replace_driver`; that is what writes the health
+  entry. The ladder of §5 is how an agent driver *reports* `lost`; ADR-0014
+  is what happens when it cannot report at all.
