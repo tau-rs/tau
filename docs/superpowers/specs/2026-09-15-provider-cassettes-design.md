@@ -55,8 +55,8 @@ content shape, error class, whether anything was sent). The same table drives:
   expectation is asserted. On success the cassette is written.
 - **replay**: default; the stub answers with the cassette's status and body.
   The expectation is asserted, and additionally the request the driver sends
-  now equals the cassette's request **in value**, after masking the volatile
-  fields listed in §4.
+  now equals the cassette's request **in value**, exactly (§4 explains why
+  nothing needs masking).
 
 *Why*: one table means record and replay can never drift from each other,
 and re-recording is the drift test rather than a separate canary.
@@ -150,9 +150,8 @@ outside the allowlist. It also fails if a cassette's `v` is unknown or its
 | `tool_result_round_trip` (two turns) | ✓ | ✓ | ✓ |
 | `parallel_tool_calls` | ✓ | ✓ | – |
 | `max_tokens_stop` | ✓ | ✓ | ✓ |
-| `stop_sequence_stop` | ✓ | ✓ | – |
+| `stop_sequence_stop` (OpenAI reports it as `end_turn`, see below) | ✓ | ✓ | – |
 | `sampling_accepted` | ✓ | ✓ | ✓ |
-| `sampling_refused_nothing_sent` (Opus 5 config) | ✓ | n/a | n/a |
 | `thinking_on_replayed_second_turn` | ✓ | n/a | n/a |
 | `thinking_disabled` | ✓ | n/a | n/a |
 | `count_tokens_estimate` | ✓ | n/a | n/a |
@@ -181,7 +180,26 @@ thinking-off, cap field, as observed) so the evidence is readable without
 opening JSON.
 
 **Not recordable on demand**, stay hand-written in the existing contract
-suites: `refusal` stop, 429, 529, transport timeout, abandon.
+suites: `refusal` stop, 429, 529, transport timeout, abandon. A refused
+sampling field never reaches the wire either, so it stays a contract test
+(`what_the_driver_cannot_honour_is_unsupported_and_nothing_is_sent`) rather
+than a cassette.
+
+**What recording taught** (each is pinned by a cassette, none is a driver
+bug):
+
+- OpenAI reports a stop sequence as `finish_reason: "stop"`, indistinguishable
+  from a natural end, so `stop_sequence_stop` on OpenAI expects `end_turn`
+  with the text truncated. ADR-0006 §6's mapping stands.
+- The OpenAI-compatible driver folds `system` into a first message, so
+  `bad_request_400` on OpenAI and Ollama sends `system: None` and
+  `messages: []`; with a system prompt the request is not empty.
+- Ollama's `qwen3:1.7b` reasons in-band and the OpenAI endpoint exposes no
+  knob the driver sends, so Ollama scenarios use `max_tokens` 512 except
+  `max_tokens_stop`.
+- Opus 5's adaptive thinking spends no thinking tokens on a trivial prompt.
+  The thinking-replay scenario uses a prompt that makes it think and asserts
+  a thinking block is present (`Expect::ThinkingToolCall`).
 
 ### 7. Model inventory drift
 
