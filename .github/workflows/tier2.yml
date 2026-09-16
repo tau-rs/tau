@@ -7,7 +7,7 @@
 # not in the `tier1` fan-in and is not a required check; if it must gate a
 # merge, label the PR and wait for it.
 #
-# Today this is items 1 to 5 of the seven. The simulation soak: 10^6 events
+# Today this is items 1 to 6 of the seven. The simulation soak: 10^6 events
 # on Linux, refolded on the same build, then refolded on macOS from the log
 # the Linux job uploaded. ADR-0003 calls the second half the check that
 # catches what a single machine never sees — iteration-order and formatting
@@ -18,8 +18,10 @@
 # model reply, and the rule text. The platform matrix: the full suite on macOS, and the
 # Linux suite on both the pinned toolchain and beta. And the sanitizers: ASan
 # with LSan over the kernel's tests and over the sandbox driver and its
-# shim, TSan over everything that boots a `Kernel` on tokio. The other two
-# items are tracked in their own issues (refs #6).
+# shim, TSan over everything that boots a `Kernel` on tokio. And the serial
+# pass: the Linux suite once more with `--test-threads 1`, so a test that
+# only passes beside its neighbours is caught here rather than by the Tier 3
+# flake hunter. The last item is tracked in its own issue (refs #6).
 
 name: tier2
 
@@ -567,4 +569,47 @@ jobs:
             echo "- $(grep -E '^\s+Summary' asan-sandbox.log | tail -1 | sed 's/^ *//')"
             echo "- symbolizer: $SYMBOLIZER"
             echo "- wall (build-std + run): ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Tier 2 item 6: the Linux suite once more, one test at a time. nextest
+  # already runs every test in its own process, so `--test-threads 1` does
+  # not isolate anything further; it only changes the schedule. Tests that
+  # ran side by side in tier1's `test (linux)` now run one after another, in
+  # nextest's order. A test that passes in parallel and fails here, or the
+  # reverse, is coupled to another through something outside its process —
+  # a fixed temp path, a port, a committed fixture — and depends on an
+  # ordering it should not. That is the flake the Tier 3 hunter (#7) would
+  # otherwise find by rerunning the suite at random widths; this leg finds
+  # it on every deep run. It gates: `ci` keeps `retries = 0` because a flake
+  # is a bug, and the job whose one purpose is to make order flakes loud
+  # cannot be the exception.
+  serial:
+    name: serial (test-threads 1)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # Measured on #133: 29 s of tests, 109 s wall with a warm cache. Fifteen
+    # minutes is a cold build plus a suite that grew; the 60 s per-test
+    # ceiling in the ci profile is what a hung test hits first.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - name: Full suite, one test at a time
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo nextest run --locked --workspace --all-features --profile ci \
+            --test-threads 1 2>&1 | tee serial.log
+          {
+            echo "## serial (test-threads 1)"
+            echo
+            echo "- $(rustc --version)"
+            echo "- $(grep -E '^\s+Summary' serial.log | tail -1 | sed 's/^ *//')"
+            echo "- wall (build + run): ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"
