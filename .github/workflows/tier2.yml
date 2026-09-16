@@ -382,6 +382,18 @@ jobs:
   # default with ASan on Linux x86_64: a leaked test process exits non-zero
   # at teardown and nextest reports it as a failure. The red-proof for that
   # claim is a scratch PR linked from #38.
+  #
+  # A report is only worth reading if its frames name a call site. The
+  # sanitizer runtime symbolizes through a bare `llvm-symbolizer` on PATH,
+  # and the runner ships only versioned ones (`llvm-symbolizer-18`, under
+  # `/usr/lib/llvm-18/bin/` with the bare name); rustup's `llvm-tools`
+  # component does not carry one at all. So each ASan leg finds the newest
+  # the image has and hands it to the runtime as `external_symbolizer_path`
+  # through `ASAN_OPTIONS`, which nextest passes to every test process and
+  # the sandbox test helper forwards into the shim's scrubbed environment.
+  # The symbolizer's LLVM being older than rustc's is fine: it reads DWARF,
+  # not IR. The red-proof for file:line frames in both legs is a scratch PR
+  # linked from #64.
   asan-kernel:
     name: asan+lsan (kernel)
     needs: gate
@@ -404,6 +416,20 @@ jobs:
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: cargo-nextest
+      - name: Point the sanitizer runtime at a symbolizer
+        run: |
+          set -euo pipefail
+          symbolizer="$(command -v llvm-symbolizer || true)"
+          if [ -z "$symbolizer" ]; then
+            symbolizer="$(printf '%s\n' /usr/lib/llvm-*/bin/llvm-symbolizer | sort -V | tail -1)"
+          fi
+          if ! [ -x "$symbolizer" ]; then
+            echo "::error title=asan::no llvm-symbolizer on this runner; LSan frames would be bare addresses"
+            exit 1
+          fi
+          "$symbolizer" --version
+          echo "ASAN_OPTIONS=external_symbolizer_path=$symbolizer" >> "$GITHUB_ENV"
+          echo "SYMBOLIZER=$symbolizer" >> "$GITHUB_ENV"
       - name: Kernel tests under AddressSanitizer
         env:
           RUSTFLAGS: -Zsanitizer=address
@@ -416,6 +442,7 @@ jobs:
             echo "## asan+lsan (kernel)"
             echo
             echo "- $(grep -E '^\s+Summary' asan.log | tail -1 | sed 's/^ *//')"
+            echo "- symbolizer: $SYMBOLIZER"
             echo "- wall (build-std + run): ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -506,6 +533,24 @@ jobs:
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: cargo-nextest
+      # Same step as `asan+lsan (kernel)`; the why is written there. Here it
+      # reaches two binaries: nextest hands `ASAN_OPTIONS` to the test
+      # process, and `drivers/tests/common/sandbox.rs` forwards it into the
+      # shim, whose environment the driver otherwise scrubs (ADR-0009 §4).
+      - name: Point the sanitizer runtime at a symbolizer
+        run: |
+          set -euo pipefail
+          symbolizer="$(command -v llvm-symbolizer || true)"
+          if [ -z "$symbolizer" ]; then
+            symbolizer="$(printf '%s\n' /usr/lib/llvm-*/bin/llvm-symbolizer | sort -V | tail -1)"
+          fi
+          if ! [ -x "$symbolizer" ]; then
+            echo "::error title=asan::no llvm-symbolizer on this runner; LSan frames would be bare addresses"
+            exit 1
+          fi
+          "$symbolizer" --version
+          echo "ASAN_OPTIONS=external_symbolizer_path=$symbolizer" >> "$GITHUB_ENV"
+          echo "SYMBOLIZER=$symbolizer" >> "$GITHUB_ENV"
       - name: Sandbox driver and shim under AddressSanitizer
         env:
           RUSTFLAGS: -Zsanitizer=address
@@ -520,5 +565,6 @@ jobs:
             echo "## asan+lsan (sandbox)"
             echo
             echo "- $(grep -E '^\s+Summary' asan-sandbox.log | tail -1 | sed 's/^ *//')"
+            echo "- symbolizer: $SYMBOLIZER"
             echo "- wall (build-std + run): ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"

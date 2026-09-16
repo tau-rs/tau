@@ -45,7 +45,8 @@ pub(crate) fn config(cpu: u32, wall: Duration) -> SandboxConfig {
     // on the shim's stderr when it finds no `atos` on an empty PATH, and
     // `ASAN_OPTIONS=symbolize=0` is how a local run keeps the interpreter's
     // stderr clean. The Linux leg (`asan+lsan (sandbox)`, tier2.yml) sets
-    // nothing and needs nothing.
+    // `external_symbolizer_path` so a leak in the shim is reported as
+    // file:line frames rather than bare addresses (#64).
     if let Ok(options) = std::env::var("ASAN_OPTIONS") {
         c.env.push(("ASAN_OPTIONS".into(), options));
     }
