@@ -647,5 +647,11 @@ jobs:
             echo "- $(rustc --version)"
             echo "- wall (build): ${SECONDS}s"
             echo "- targets built:"
-            grep -E '^\s+Executable' bench.log | sed 's/^ *Executable /  - /'
+            # CARGO_TERM_COLOR=always wraps the status word in escapes;
+            # strip them before matching. The verdict is cargo's exit
+            # status above, not this listing.
+            esc=$(printf '\033')
+            sed -E "s/${esc}\[[0-9;]*m//g" bench.log \
+              | grep -E '^\s*Executable ' | sed 's/^ *Executable /  - /' \
+              || echo "  - (none matched; see the build log)"
           } >> "$GITHUB_STEP_SUMMARY"
