@@ -168,6 +168,14 @@ thought about. The gate catches the change nobody did.
   header's twin. Additive, one new type, no bump: no existing byte changes
   and nothing a reader may assume about a log changes. `State` itself does
   not join; ADR-0011 §2 says why. Lands with M3a-kernel, not with the ADR.
+- **2026-09-16** — The digest behind `BlobRef` is named
+  ([ADR-0012](0012-blob-store-crypto-shredding.md),
+  [#121](https://github.com/tau-rs/tau/issues/121)): SHA-256 of the
+  plaintext, the empty payload mapping to `BlobRef::EMPTY`. Named in the
+  store's header, not here; nothing joins the directory and nothing bumps.
+  The store gains a port (`Blobs`), per-agent keys, and erasure by key drop;
+  the fold, `Entry` and `State` are untouched. Lands with M3b-kernel, not
+  with the ADR.
 
 [`Msg`]: ../../kernel/src/abi/msg.rs
 [`Capability`]: ../../kernel/src/abi/cap.rs
