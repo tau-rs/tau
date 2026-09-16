@@ -58,6 +58,7 @@ Four invariants carry the design:
 | [ADR-0010](docs/adr/0010-entry-freeze.md) | The `Entry` freeze: the twelve log kinds join the frozen directory, and `ABI` 2 is the first number that names the line format |
 | [ADR-0011](docs/adr/0011-snapshots.md) | Snapshots: the canonical state plus a header that binds it to one log and one fold; `State` stays out of the frozen directory, `FOLD` versions the reducer, and `tau replay --from` refuses loudly |
 | [ADR-0012](docs/adr/0012-blob-store-crypto-shredding.md) | The blob store: payloads by SHA-256 of the plaintext, one key per agent, a payload sealed under the key of the agent whose entry carries it; erasing a subtree is dropping its keys, `read` returns `None`, and the fold never notices |
+| [ADR-0013](docs/adr/0013-agent-drivers.md) | Agent drivers: the `claude` and `codex` CLIs as subprocess tools behind `send`; a whole task in, a worker envelope and the CLI's transcript out; subprocess-only auth, no billing mode in any type |
 
 ## Layers
 
