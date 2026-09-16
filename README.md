@@ -59,6 +59,7 @@ Four invariants carry the design:
 | [ADR-0011](docs/adr/0011-snapshots.md) | Snapshots: the canonical state plus a header that binds it to one log and one fold; `State` stays out of the frozen directory, `FOLD` versions the reducer, and `tau replay --from` refuses loudly |
 | [ADR-0012](docs/adr/0012-blob-store-crypto-shredding.md) | The blob store: payloads by SHA-256 of the plaintext, one key per agent, a payload sealed under the key of the agent whose entry carries it; erasing a subtree is dropping its keys, `read` returns `None`, and the fold never notices |
 | [ADR-0013](docs/adr/0013-agent-drivers.md) | Agent drivers: the `claude` and `codex` CLIs as subprocess tools behind `send`; a whole task in, a worker envelope and the CLI's transcript out; subprocess-only auth, no billing mode in any type |
+| [ADR-0014](docs/adr/0014-driver-supervision.md) | Driver supervision: a driver that does not answer is raised, not reported — `DriverDown`/`DriverUp` in the log, one `Unanswered` reply from the kernel per open request billed at the ceiling, a per-driver `reply_within` bound enforced at the tick, restart under the same capability; the fold confirms and ignores health, `FOLD` stays; ABI 2 → 3 |
 
 ## Layers
 
