@@ -16,7 +16,7 @@
 set -euo pipefail
 
 CORPUS="${CORPUS:-corpus}"
-CORPUS_FLOOR="${CORPUS_FLOOR:-7}"
+CORPUS_FLOOR="${CORPUS_FLOOR:-9}"
 DRIFT_OUT="${DRIFT_OUT:-drift.tsv}"
 SOAK="${SOAK:-./target/release/soak}"
 

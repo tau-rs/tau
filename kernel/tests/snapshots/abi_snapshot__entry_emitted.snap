@@ -1,0 +1,21 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: emitted ()
+---
+{
+  "entry": "emitted",
+  "hook": 5,
+  "to": 0,
+  "msg": {
+    "abi": 2,
+    "seq": 14,
+    "from": {
+      "kind": "hook",
+      "id": 5
+    },
+    "corr": null,
+    "kind": "notice",
+    "consumed": null,
+    "payload": "7777777777777777777777777777777777777777777777777777777777777777"
+  }
+}

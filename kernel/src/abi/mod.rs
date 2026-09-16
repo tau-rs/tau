@@ -35,12 +35,16 @@
 
 mod budget;
 mod cap;
+mod entry;
+mod hook;
 mod ids;
 mod msg;
 mod name;
 
 pub use budget::{Budget, BudgetError, Consumption, DimKey};
 pub use cap::{Capability, Endpoint, Namespace};
+pub use entry::Entry;
+pub use hook::{FailureMode, HookPoint, HookSource, Roll, Ruling};
 pub use ids::{AgentId, Corr, DriverId, HookId, Seq};
 pub use msg::{BlobRef, BlobRefError, LogHeader, Msg, MsgKind};
 pub use name::{Name, NameError, NAME_MAX_LEN};
@@ -55,4 +59,5 @@ pub use name::{Name, NameError, NAME_MAX_LEN};
 /// |---|---|---|
 /// | 0 | the first freeze | ADR-0004 |
 /// | 1 | `Endpoint::Hook` | ADR-0008 |
-pub const ABI: u16 = 1;
+/// | 2 | `Entry` and the hook wire types join this module; no byte changes, but 2 is the first number that identifies the entry format | ADR-0010 |
+pub const ABI: u16 = 2;

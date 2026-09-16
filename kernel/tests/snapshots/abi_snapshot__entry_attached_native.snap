@@ -1,0 +1,14 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: attached_native ()
+---
+{
+  "entry": "attached",
+  "seq": 1,
+  "hook": 0,
+  "point": "pre_send",
+  "failure": "closed",
+  "program": {
+    "native": "tattle-shell"
+  }
+}
