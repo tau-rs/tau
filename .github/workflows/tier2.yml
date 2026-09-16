@@ -17,9 +17,9 @@
 # paths attacker-controlled bytes enter by — the envelope, the log file, the
 # model reply, and the rule text. The platform matrix: the full suite on macOS, and the
 # Linux suite on both the pinned toolchain and beta. And the sanitizers: ASan
-# with LSan over the kernel's tests, TSan over everything that boots a
-# `Kernel` on tokio. The other two items are tracked in their own issues
-# (refs #6).
+# with LSan over the kernel's tests and over the sandbox driver and its
+# shim, TSan over everything that boots a `Kernel` on tokio. The other two
+# items are tracked in their own issues (refs #6).
 
 name: tier2
 
@@ -458,8 +458,9 @@ jobs:
           # The sandbox tests spawn the instrumented shim as a real process,
           # and a sanitizer runtime inside an rlimit fence is its own
           # problem: the shadow mapping does not fit under RLIMIT_AS, and a
-          # deferred SIGTERM misses the abandon grace. That leg is #61's,
-          # with its own flags; this job stays the scheduler's.
+          # deferred SIGTERM misses the abandon grace. That leg is
+          # `asan+lsan (sandbox)` below, with its own flags; this job stays
+          # the scheduler's.
           cargo +nightly nextest run --locked -Zbuild-std \
             -p tau-kernel -p libtau -p tau-drivers --all-features --profile ci \
             -E 'not binary(/^sandbox_/)' \
@@ -468,5 +469,56 @@ jobs:
             echo "## tsan (scheduler)"
             echo
             echo "- $(grep -E '^\s+Summary' tsan.log | tail -1 | sed 's/^ *//')"
+            echo "- wall (build-std + run): ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ASan with LSan over the trust boundary: the sandbox driver and the shim
+  # it spawns, which is the one place the system runs code it did not write
+  # (ADR-0009 §4). `-p tau-drivers` instruments the test binaries and the
+  # shim alike; the four `sandbox_*` binaries are the ones that exercise
+  # them. One thing the sanitizer runtime cannot live with, learned from
+  # the TSan job before it filtered the sandbox out (#61): a memory bound.
+  # ASan reserves terabytes of address space for its shadow mapping, which
+  # no `RLIMIT_AS` a test would set can hold, so the one test that sets
+  # `memory_bytes` is excluded by name here and says so at its definition;
+  # every other run goes unbounded. The deferred SIGTERM that missed the
+  # abandon grace under TSan does not recur under ASan, whose runtime is
+  # cheap to start: cancel, drop and wall run with the driver's defaults.
+  asan-sandbox:
+    name: asan+lsan (sandbox)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: ""
+      SAN_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly beside the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal --component rust-src
+          cargo +nightly --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: asan-sandbox
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - name: Sandbox driver and shim under AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo +nightly nextest run --locked -Zbuild-std \
+            -p tau-drivers --all-features --profile ci \
+            -E 'binary(/^sandbox_/) and not test(a_memory_bound_reaches_the_shim_and_a_small_run_fits_under_it)' \
+            --target "$SAN_TARGET" 2>&1 | tee asan-sandbox.log
+          {
+            echo "## asan+lsan (sandbox)"
+            echo
+            echo "- $(grep -E '^\s+Summary' asan-sandbox.log | tail -1 | sed 's/^ *//')"
             echo "- wall (build-std + run): ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"
