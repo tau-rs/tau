@@ -19,6 +19,10 @@ failure-output = "immediate-final"
 [profile.quick]
 slow-timeout = { period = "5s", terminate-after = 1 }
 fail-fast    = true
+# The sandbox's `cpu_limit` and `wall_limit` tests burn a second of CPU or
+# wall by construction (ADR-0009 §2) and the macOS smoke runner is 2-3x
+# slower than a laptop. They are the `ci` profile's; here they are not run.
+default-filter = 'not binary(sandbox_limits)'
 
 [profile.ci]
 retries        = 0          # a flake is a bug; the flake hunter quarantines, CI does not retry

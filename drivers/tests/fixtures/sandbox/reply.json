@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "stop": { "exit": 0 },
+  "stdout": "6\n",
+  "stderr": "",
+  "truncated": { "stdout": false, "stderr": false },
+  "usage": { "cpu_user_us": 18211, "cpu_sys_us": 4102, "max_rss_bytes": 9437184 }
+}

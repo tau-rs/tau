@@ -1,0 +1,12 @@
+{
+  "description": "Run Python 3 code. The code is written to main.py in an empty directory and run with `python3 main.py`; `stdin` is fed to it. Limits: 2 s CPU, 256 MiB memory, 10 s wall, 64 KiB of stdout and of stderr. No network. Nothing persists between calls.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "code":  { "type": "string", "description": "The program." },
+      "stdin": { "type": "string", "description": "Standard input for the program." }
+    },
+    "required": ["code"],
+    "additionalProperties": false
+  }
+}
