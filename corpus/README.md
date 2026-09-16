@@ -65,11 +65,12 @@ cargo build --release -p tau-sim --bin soak
 
 `soak` refuses to write a hash its own refold did not reproduce, so a sidecar
 it wrote is already a same-build refold. For a log recorded elsewhere (a
-release, a harness run, a bug report), write the sidecar from a refold on
-`main` and check it the way the job will:
+release, a harness run, a bug report), write the sidecar from a fold on
+`main` and check it the way the job will, with the kernel's own reader (#91):
 
 ```sh
-./target/release/soak refold --log corpus/<name>.log --expect corpus/<name>.hash
+cargo build --release -p tau-kernel --bin tau
+./target/release/tau replay corpus/<name>.log --expect corpus/<name>.hash
 ```
 
 Add a row to the table above with the `main` SHA the hash was pinned at.

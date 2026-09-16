@@ -5,8 +5,8 @@
 # everyone to ignore red. This file is item 1 of the seven, the determinism
 # drift sentinel (#72). The other six are tracked in #7.
 #
-# The sentinel refolds every log in corpus/ with today's main and expects
-# the state hash each was pinned at. A hash that moved means the reducer
+# The sentinel refolds every log in corpus/ with today's main, through
+# `tau replay --expect` (#91), and expects the state hash each was pinned at. A hash that moved means the reducer
 # changed its mind about an input it had already accepted — ADR-0003's "we
 # do not break userspace", checked on a schedule instead of on a user's
 # machine. A mismatch files an issue naming the fixture and both hashes. The
@@ -57,7 +57,7 @@ jobs:
         # rust-toolchain.toml is the single source of truth for the compiler.
         run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo build --locked --release -p tau-sim --bin soak
+      - run: cargo build --locked --release -p tau-kernel --bin tau
 
       - name: Refold the corpus
         id: refold

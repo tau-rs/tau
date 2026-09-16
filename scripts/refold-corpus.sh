@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tier 3 job 1 (docs/HANDOFF.md §8): the determinism drift sentinel's fold.
 #
-# Refolds every fixture in corpus/ with the `soak` binary this tree builds and
+# Refolds every fixture in corpus/ with `tau replay --expect` (the kernel's
+# own reader, #91; ADR-0010 §6 names this the CLI's acceptance test) and
 # compares each state hash to its committed `.hash` sidecar. Drift is not a
 # failure of this script: a fixture whose hash moved is appended to DRIFT_OUT
 # (tab-separated: name, expected, actual) and the workflow files it as an
@@ -12,16 +13,17 @@
 # Fails CLOSED:
 #   * fewer than CORPUS_FLOOR fixtures (an empty or half-checked-out corpus);
 #   * a log with no sidecar, an unreadable log, a fold that refuses an entry
-#     — every exit of `soak refold` that is not the hash comparison itself.
+#     — every exit of `tau replay` that is not the hash comparison itself
+#     (exit 6; the others are documented in kernel/src/bin/tau.rs).
 set -euo pipefail
 
 CORPUS="${CORPUS:-corpus}"
 CORPUS_FLOOR="${CORPUS_FLOOR:-9}"
 DRIFT_OUT="${DRIFT_OUT:-drift.tsv}"
-SOAK="${SOAK:-./target/release/soak}"
+TAU="${TAU:-./target/release/tau}"
 
-if [ ! -x "$SOAK" ]; then
-  echo "::error::$SOAK is not an executable; build it first (cargo build --release -p tau-sim --bin soak)"
+if [ ! -x "$TAU" ]; then
+  echo "::error::$TAU is not an executable; build it first (cargo build --release -p tau-kernel --bin tau)"
   exit 1
 fi
 
@@ -44,12 +46,12 @@ for log in "${logs[@]}"; do
     tooling=$((tooling + 1))
     continue
   fi
-  if out="$("$SOAK" refold --log "$log" --expect "$sidecar" 2>&1)"; then
+  if out="$("$TAU" replay "$log" --expect "$sidecar" 2>&1)"; then
     echo "ok       $name  ${out##*$'\n'}"
     ok=$((ok + 1))
     continue
   fi
-  # `soak refold` exits 1 for exactly one reason we want: the hash moved. Its
+  # `tau replay` exits 6 for exactly one reason we want: the hash moved. Its
   # message names both hashes. Any other exit is the tooling, and that is red.
   if [[ "$out" == *"hash mismatch across builds"* ]]; then
     expected="$(tr -d '[:space:]' < "$sidecar")"
@@ -59,7 +61,8 @@ for log in "${logs[@]}"; do
     echo "::warning title=determinism drift::$name folded to $actual, sidecar says $expected"
     echo "DRIFT    $name  expected $expected  folded $actual"
   else
-    echo "::error title=refold failed::$name: $out"
+    # The last line is the refusal; the lines before it are the header report.
+    echo "::error title=refold failed::$name: ${out##*$'\n'}"
     echo "TOOLING  $name"
     tooling=$((tooling + 1))
   fi
