@@ -11,61 +11,24 @@
 
 mod common;
 
-use std::sync::Arc;
-
-use common::e2e::{self, ample, MakeModel, Program, Run, CALC_TOKENS};
+use common::e2e::{
+    self, ample, MakeModel, Program, Run, CALC_PROMPT, CALC_TOKENS, HAIKU, MINI, OPUS,
+    PARALLEL_PROMPT, QWEN, THINKING_PROMPT,
+};
 use libtau::ToolLoopError;
 use serde_json::json;
-use tau_drivers::model::anthropic::{AnthropicConfig, AnthropicDriver};
-use tau_drivers::model::openai::{OpenAiConfig, OpenAiDriver};
 use tau_kernel::abi::{Budget, DimKey};
 use tau_kernel::bridge::{Content, Role, StopReason};
-use tau_kernel::driver::Driver;
 
-const HAIKU: &str = "claude-haiku-4-5-20251001";
-const OPUS: &str = "claude-opus-5";
-const MINI: &str = "gpt-4.1-mini";
-const QWEN: &str = "qwen3:1.7b";
-
-const CALC_PROMPT: &str = "What is 17*23? Use the calculator tool.";
-const PARALLEL_PROMPT: &str = "Compute 2+2 and 3+3 as two separate calculator calls in one turn.";
-const THINKING_PROMPT: &str = "Work out the sum of the first 12 prime numbers step by step, then verify your total by calling the calculator tool once with the full addition expression.";
-
-/// The same config the cassettes were recorded with (`cassettes_anthropic.rs`).
+/// The Anthropic driver with a placeholder key: the stub never checks it.
 fn anthropic(model: &'static str) -> MakeModel {
-    Box::new(move |base: &str| {
-        let (i, o) = if model.starts_with("claude-opus") {
-            (5, 25)
-        } else {
-            (1, 5)
-        };
-        let mut cfg = AnthropicConfig::new(
-            model,
-            tau_drivers::model::anthropic::ApiKey::new("replay"),
-            16_000,
-            4_096,
-            i,
-            o,
-        );
-        cfg.base_url = base.to_owned();
-        let driver = AnthropicDriver::new(cfg).unwrap();
-        let ceiling = driver.ceiling();
-        (Arc::new(driver) as Arc<dyn Driver>, ceiling)
-    })
+    e2e::anthropic(model, tau_drivers::model::anthropic::ApiKey::new("replay"))
 }
 
-/// The same config the cassettes were recorded with (`cassettes_openai.rs`);
-/// Ollama is the same driver with no key and no prices.
+/// The OpenAI driver with a placeholder key, or Ollama with none.
 fn openai(model: &'static str, ollama: bool) -> MakeModel {
-    Box::new(move |base: &str| {
-        let key = (!ollama).then(|| tau_drivers::model::openai::ApiKey::new("replay"));
-        let (i, o) = if ollama { (0, 0) } else { (1, 4) };
-        let mut cfg = OpenAiConfig::new(model, key, 16_000, 4_096, i, o);
-        cfg.base_url = base.to_owned();
-        let driver = OpenAiDriver::new(cfg).unwrap();
-        let ceiling = driver.ceiling();
-        (Arc::new(driver) as Arc<dyn Driver>, ceiling)
-    })
+    let key = (!ollama).then(|| tau_drivers::model::openai::ApiKey::new("replay"));
+    e2e::openai(model.to_owned(), key, ollama)
 }
 
 // --- tool loop to end_turn ------------------------------------------------
@@ -115,11 +78,7 @@ async fn round_trip(dir_name: &str, make: MakeModel, max_tokens: u32) -> Run {
 
 /// The model tokens the cassette's replies report, summed.
 fn usage_of(run: &Run, sum: impl Fn(&serde_json::Value) -> u64) -> u64 {
-    run.cassette
-        .exchanges
-        .iter()
-        .map(|e| sum(&e.response.body))
-        .sum()
+    run.exchanges.iter().map(|e| sum(&e.response.body)).sum()
 }
 
 fn anthropic_usage(body: &serde_json::Value) -> u64 {
@@ -197,7 +156,7 @@ async fn anthropic_tool_loop_replays_the_recorded_thinking_block_on_its_second_c
         assistant.content
     );
     let second = run.sent.get(1).unwrap().json();
-    let recorded = &run.cassette.exchanges.get(1).unwrap().request.body;
+    let recorded = &run.exchanges.get(1).unwrap().request.body;
     assert_eq!(
         second.pointer("/messages/1/content/0/signature"),
         recorded.pointer("/messages/1/content/0/signature")
