@@ -313,6 +313,15 @@ the reader, which never evaluates anything.
   moved; no sidecar, fixture or `PINNED` value did, because every pinned log
   ends drained and a finished agent's mailbox is empty. A future log that
   ends mid-cancel pins to a hash that already holds on every build.
+- **2026-09-16** — The question this ADR deferred is answered
+  ([ADR-0011](0011-snapshots.md), [#110](https://github.com/tau-rs/tau/issues/110)):
+  `State` stays out of `kernel/src/abi/`. Its canonical form is the reducer's
+  to correct and is versioned by a fold number of its own, `FOLD`, which the
+  re-pin rule in `corpus/README.md` bumps; a snapshot from another fold is
+  refused, not reinterpreted. Only the snapshot's header joins the
+  directory. The re-stamp the 2026-09-16 row above introduced is named as a
+  non-promise there (§3): the `abi` on a delivered envelope is the handing-
+  over build's, and replay does not preserve it.
 
 [`LogHeader`]: ../../kernel/src/abi/msg.rs
 [`Msg`]: ../../kernel/src/abi/msg.rs
