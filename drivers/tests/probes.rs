@@ -271,27 +271,37 @@ const NOT_CHAT: [&str; 11] = [
     "live",
 ];
 
-/// `Some(id without the suffix)` when `id` ends in `-YYYY-MM-DD`.
-fn undated(id: &str) -> Option<&str> {
-    let cut = id.len().checked_sub(11)?;
-    let tail = id.get(cut..)?;
-    if tail.chars().count() != 11 {
+/// The alias an id is a variant of: `Some(id without its tail)` when the
+/// tail is a snapshot date (`-YYYY-MM-DD`, or the older `-MMDD` of
+/// `gpt-4-0613`) or a context-window size (`gpt-3.5-turbo-16k`). Any
+/// four-digit tail counts as a date: the caller only acts on the answer
+/// when the alias is listed too, so a false match costs at most one
+/// variant of a model that is probed anyway.
+fn alias_of(id: &str) -> Option<&str> {
+    let is_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (base, tail) = id.rsplit_once('-')?;
+    if base.is_empty() {
         return None;
     }
-    let shaped = tail.chars().zip("-dddd-dd-dd".chars()).all(|(c, want)| {
-        if want == 'd' {
-            c.is_ascii_digit()
-        } else {
-            c == want
+    if tail.strip_suffix('k').is_some_and(is_digits) || (tail.len() == 4 && is_digits(tail)) {
+        return Some(base);
+    }
+    // `-2024-08-06`: the day is the tail, the year and month sit behind it.
+    if tail.len() == 2 && is_digits(tail) {
+        let (base, month) = base.rsplit_once('-')?;
+        let (base, year) = base.rsplit_once('-')?;
+        if month.len() == 2 && is_digits(month) && year.len() == 4 && is_digits(year) {
+            return Some(base).filter(|b| !b.is_empty());
         }
-    });
-    shaped.then(|| id.get(..cut)).flatten()
+    }
+    None
 }
 
 /// Whether an OpenAI id is one of the chat models worth a probe: a `gpt-` or
 /// `o<digit>` id that is not a modality-specific endpoint, not a
-/// `*-chat-latest` moving alias, and not a dated id whose undated alias the
-/// provider also lists (probing both would pay twice for one model).
+/// `*-chat-latest` moving alias, and not a snapshot or context-window
+/// variant whose alias the provider also lists (probing both would pay
+/// twice for one model).
 fn chat_capable(id: &str, all: &BTreeSet<String>) -> bool {
     let mut chars = id.chars();
     let shaped = id.starts_with("gpt-")
@@ -299,7 +309,7 @@ fn chat_capable(id: &str, all: &BTreeSet<String>) -> bool {
     shaped
         && !NOT_CHAT.iter().any(|bad| id.contains(bad))
         && !id.ends_with("-chat-latest")
-        && !undated(id).is_some_and(|base| all.contains(base))
+        && !alias_of(id).is_some_and(|base| all.contains(base))
 }
 
 /// The models the provider lists, in the order probes should spend money on
@@ -362,7 +372,7 @@ async fn list_models(target: Target, key: &str) -> Vec<String> {
 
 const TITLE: &str = "# Provider model capability table";
 const RENDERED_FROM: &str = "Rendered from `drivers/tests/cassettes/*/probe_*.json` by `probes::render_models_md`; do not edit by hand.";
-const LEGEND: &str = "A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text`, `tool call`, and `sampling present` all read 400 while `max_completion_tokens` reads `ok`: the same default cap field is sent on all three probes, so the request fails before the temperature question is ever reached, and that is the policy this table exists to record, not a driver bug. A model the provider retires keeps its cassettes and its row here, and is named under `retired` below, until someone deletes the files by hand.";
+const LEGEND: &str = "A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text`, `tool call`, and `sampling present` all read 400 while `max_completion_tokens` reads `ok`: the same default cap field is sent on all three probes, so the request fails before the temperature question is ever reached, and that is the policy this table exists to record, not a driver bug. An id that answers 404 to `text` is not served by this endpoint at all (OpenAI's `pro` tier lives on `v1/responses`), so its other probes are skipped and read `—`. A snapshot (`-YYYY-MM-DD`, `-MMDD`) or context-window variant (`-16k`) of an alias the provider also lists is not probed: one model, one row. A model the provider retires keeps its cassettes and its row here, and is named under `retired` below, until someone deletes the files by hand.";
 const INVENTORY: &str = "## inventory (at last record)";
 const RETIRED_LINE: &str = "- retired (cassette, no longer listed): ";
 const UNPROBED_LINE: &str = "- unprobed (listed, no cassette): ";
@@ -725,19 +735,131 @@ async fn record_probes() {
                 let name = s.name;
                 let consumed = scenario::record(&s, make).await;
                 spent += consumed.get(&DimKey::CostMicroUsd).unwrap_or(0);
+                let c = cassette::load(target.dir_name(), name).expect("just recorded");
+                let status = c.exchanges.first().map(|e| e.response.status);
                 if first {
                     // A wrong key answers 401 to everything, and `Policy`
                     // accepts a provider error, so the whole run would
                     // "pass" and record a table of 401s. Stop on the first.
                     first = false;
-                    let c = cassette::load(target.dir_name(), name).expect("just recorded");
-                    if c.exchanges.first().map(|e| e.response.status) == Some(401) {
+                    if status == Some(401) {
                         panic!("key rejected: {env_name}");
                     }
+                }
+                // A 404 to plain text means this endpoint does not serve
+                // the id at all (OpenAI's `pro` tier answers only on
+                // `v1/responses`); the other probes could only repeat it.
+                if probe == Probe::Text && status == Some(404) {
+                    eprintln!("{model}: 404 on text; skipping its other probes");
+                    continue 'models;
                 }
             }
         }
     }
     write_models_md(&retired, &unprobed);
     eprintln!("probes recorded; {spent} µUSD; retired={retired:?} unprobed={unprobed:?}");
+}
+
+/// The OpenAI ids a record run keeps, over a listing shaped like the real
+/// one at the time of writing: every rule of [`chat_capable`] has one id
+/// that trips it and one that survives it.
+#[test]
+fn openai_filter_keeps_one_row_per_chat_model() {
+    let listed: BTreeSet<String> = [
+        // kept: the alias of every family
+        "gpt-3.5-turbo",
+        "gpt-4",
+        "gpt-4-turbo",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4o",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5.2",
+        "gpt-5.6-luna",
+        "o1",
+        "o1-mini",
+        "o3-mini",
+        "o4-mini",
+        // kept: pro ids are probed (once — see `record_probes`), last
+        "gpt-5-pro",
+        "gpt-5.2-pro",
+        "o1-pro",
+        // dropped: dated duplicates of a listed alias, all three shapes
+        "gpt-4o-2024-08-06",
+        "gpt-4.1-2025-04-14",
+        "gpt-3.5-turbo-0125",
+        "gpt-3.5-turbo-1106",
+        "gpt-4-0613",
+        "gpt-3.5-turbo-16k",
+        // kept: a dated id whose alias is not listed is the only row for it
+        "gpt-4-turbo-preview-2024-01-25",
+        // dropped: moving aliases and modality endpoints
+        "gpt-5-chat-latest",
+        "chatgpt-4o-latest",
+        "gpt-4o-audio-preview",
+        "gpt-4o-realtime-preview",
+        "gpt-4o-mini-tts",
+        "gpt-4o-transcribe",
+        "gpt-4o-search-preview",
+        "gpt-3.5-turbo-instruct",
+        "gpt-5-codex",
+        "gpt-image-1",
+        "text-embedding-3-small",
+        "omni-moderation-latest",
+        "dall-e-3",
+        "whisper-1",
+        "tts-1",
+        "sora-2",
+        "o1-mini-2024-09-12",
+    ]
+    .into_iter()
+    .map(ToOwned::to_owned)
+    .collect();
+    let kept: Vec<&str> = listed
+        .iter()
+        .filter(|id| chat_capable(id, &listed))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            "gpt-3.5-turbo",
+            "gpt-4",
+            "gpt-4-turbo",
+            "gpt-4-turbo-preview-2024-01-25",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4o",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-pro",
+            "gpt-5.2",
+            "gpt-5.2-pro",
+            "gpt-5.6-luna",
+            "o1",
+            "o1-mini",
+            "o1-pro",
+            "o3-mini",
+            "o4-mini",
+        ]
+    );
+}
+
+/// The three suffixes that mark an id as a variant of a shorter alias,
+/// and the near-misses that must not.
+#[test]
+fn alias_of_knows_every_snapshot_suffix() {
+    assert_eq!(alias_of("gpt-4o-2024-08-06"), Some("gpt-4o"));
+    assert_eq!(alias_of("gpt-3.5-turbo-0125"), Some("gpt-3.5-turbo"));
+    assert_eq!(alias_of("gpt-4-0613"), Some("gpt-4"));
+    assert_eq!(alias_of("gpt-3.5-turbo-16k"), Some("gpt-3.5-turbo"));
+    assert_eq!(alias_of("gpt-4-32k"), Some("gpt-4"));
+    assert_eq!(alias_of("gpt-4o"), None);
+    assert_eq!(alias_of("gpt-5.2"), None);
+    assert_eq!(alias_of("o1"), None);
+    assert_eq!(alias_of("gpt-4o-mini-2024-07-18"), Some("gpt-4o-mini"));
+    assert_eq!(alias_of("gpt-5-mini"), None);
+    assert_eq!(alias_of("-16k"), None);
+    assert_eq!(alias_of("0613"), None);
 }
