@@ -1,6 +1,6 @@
 //! The OpenAI-compatible driver against recorded provider exchanges: the
 //! full ADR-0006 matrix on `gpt-4.1-mini`, the same shape replayed against a
-//! local Ollama on `qwen3:1.7b` (a subset — no `parallel_tool_calls`,
+//! local Ollama on `qwen3:1.7b` (a subset — no single-turn `parallel_tool_calls`,
 //! `stop_sequence_stop`, `max_completion_tokens_cap`, or `bad_key_401`).
 //! `TAU_RECORD=1` re-records through the relay.
 
@@ -9,12 +9,11 @@
 
 mod common;
 
+use common::calc;
 use common::scenario::{self, Expect, Make, Scenario, Step, Target};
-use serde_json::json;
 use tau_drivers::model::openai::{ApiKey, OpenAiConfig, OpenAiDriver, OutputCap, API_KEY_ENV};
-use tau_kernel::abi::Name;
 use tau_kernel::bridge::{
-    Content, Message, ModelReply, ModelRequest, Role, Sampling, StopReason, ToolDef, VERSION,
+    Content, Message, ModelReply, ModelRequest, Role, Sampling, StopReason, VERSION,
 };
 use tau_kernel::driver::Driver;
 
@@ -27,6 +26,7 @@ const OLLAMA_SCENARIOS: &[&str] = &[
     "text_end_turn",
     "tool_call",
     "tool_result_round_trip",
+    "parallel_tool_calls_round_trip",
     "max_tokens_stop",
     "sampling_accepted",
     "bad_request_400",
@@ -90,22 +90,14 @@ fn text(prompt: &str, max_tokens: u32) -> ModelRequest {
     }
 }
 
-fn calculator() -> ToolDef {
-    ToolDef {
-        name: Name::new("calculator").unwrap(),
-        description: "Evaluates an arithmetic expression.".into(),
-        input_schema: json!({"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"],"additionalProperties":false}),
-    }
-}
-
 fn with_calc(mut req: ModelRequest) -> ModelRequest {
-    req.tools = vec![calculator()];
+    req.tools = vec![calc::tool_def()];
     req
 }
 
 /// The second turn: the assistant's reply (tool calls, verbatim) then one
 /// `tool_result` per call.
-fn calc_result(first: &ModelRequest, prev: &ModelReply, result: &str) -> ModelRequest {
+fn calc_result(first: &ModelRequest, prev: &ModelReply) -> ModelRequest {
     let mut req = first.clone();
     req.messages.push(Message {
         role: Role::Assistant,
@@ -115,9 +107,9 @@ fn calc_result(first: &ModelRequest, prev: &ModelReply, result: &str) -> ModelRe
         .content
         .iter()
         .filter_map(|c| match c {
-            Content::ToolCall { id, .. } => Some(Content::ToolResult {
+            Content::ToolCall { id, input, .. } => Some(Content::ToolResult {
                 call_id: id.clone(),
-                content: result.into(),
+                content: calc::answer(input),
                 is_error: false,
                 error_kind: None,
             }),
@@ -156,7 +148,6 @@ fn round_trip(
     prompt: &'static str,
     max_tokens: u32,
     first_expect: Expect,
-    result: &'static str,
 ) -> Scenario {
     let first = move || with_calc(text(prompt, max_tokens));
     Scenario {
@@ -169,7 +160,7 @@ fn round_trip(
                 expect: first_expect,
             },
             Step {
-                build: Box::new(move |prev| calc_result(&first(), prev.last().unwrap(), result)),
+                build: Box::new(move |prev| calc_result(&first(), prev.last().unwrap())),
                 expect: Expect::Stop(StopReason::EndTurn),
             },
         ],
@@ -246,7 +237,6 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                     name: "calculator",
                     min: 1,
                 },
-                "391",
             ),
             make(target, model),
         ),
@@ -261,6 +251,20 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                         budget(target, 512),
                     ))
                 },
+                Expect::ToolCall {
+                    name: "calculator",
+                    min: 2,
+                },
+            ),
+            make(target, model),
+        ),
+        (
+            round_trip(
+                "parallel_tool_calls_round_trip",
+                target,
+                model,
+                "Compute 2+2 and 3+3 as two separate calculator calls in one turn.",
+                budget(target, 512),
                 Expect::ToolCall {
                     name: "calculator",
                     min: 2,
@@ -376,6 +380,7 @@ replay_tests! { Target::OpenAi,
     openai_tool_call => "tool_call",
     openai_tool_result_round_trip => "tool_result_round_trip",
     openai_parallel_tool_calls => "parallel_tool_calls",
+    openai_parallel_tool_calls_round_trip => "parallel_tool_calls_round_trip",
     openai_max_tokens_stop => "max_tokens_stop",
     openai_stop_sequence_stop => "stop_sequence_stop",
     openai_sampling_accepted => "sampling_accepted",
@@ -389,6 +394,7 @@ replay_tests! { Target::Ollama,
     ollama_text_end_turn => "text_end_turn",
     ollama_tool_call => "tool_call",
     ollama_tool_result_round_trip => "tool_result_round_trip",
+    ollama_parallel_tool_calls_round_trip => "parallel_tool_calls_round_trip",
     ollama_max_tokens_stop => "max_tokens_stop",
     ollama_sampling_accepted => "sampling_accepted",
     ollama_bad_request_400 => "bad_request_400",
@@ -403,7 +409,10 @@ async fn record_openai() {
         return;
     }
     let mut total = 0;
-    for (s, make) in scenarios(Target::OpenAi) {
+    for (s, make) in scenarios(Target::OpenAi)
+        .into_iter()
+        .filter(|(s, _)| scenario::record_selected(s.name))
+    {
         let c = scenario::record(&s, make).await;
         total += c.get(&tau_kernel::abi::DimKey::CostMicroUsd).unwrap_or(0);
     }
@@ -425,7 +434,10 @@ async fn record_ollama() {
         return;
     }
     let mut total = 0;
-    for (s, make) in scenarios(Target::Ollama) {
+    for (s, make) in scenarios(Target::Ollama)
+        .into_iter()
+        .filter(|(s, _)| scenario::record_selected(s.name))
+    {
         let c = scenario::record(&s, make).await;
         total += c.get(&tau_kernel::abi::DimKey::CostMicroUsd).unwrap_or(0);
     }

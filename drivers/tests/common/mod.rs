@@ -5,7 +5,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
+pub(crate) mod calc;
 pub(crate) mod cassette;
+pub(crate) mod e2e;
 pub(crate) mod scenario;
 
 #[cfg(all(feature = "sandbox", unix))]

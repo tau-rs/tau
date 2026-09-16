@@ -85,6 +85,7 @@ live mode="replay" target="all":
       exit 0
     fi
     [ "{{mode}}" = "record" ] || { echo "mode is replay, record or render"; exit 2; }
+    # TAU_RECORD_ONLY=name[,name] in the environment records just those scenarios.
     export TAU_RECORD=1
     key() { security find-generic-password -s "$1" -w 2>/dev/null || { echo "no Keychain entry $1" >&2; exit 2; }; }
     t="{{target}}"
