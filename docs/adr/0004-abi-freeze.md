@@ -162,6 +162,12 @@ thought about. The gate catches the change nobody did.
   directory, twelve entry kinds gain snapshots, and the header number names
   the line format for the first time. No byte any build writes changes.
   Lands with M2c-kernel, not with the ADR.
+- **2026-09-16** — `SnapshotHeader` joins the directory
+  ([ADR-0011](0011-snapshots.md), [#110](https://github.com/tau-rs/tau/issues/110)):
+  the header a reader checks before it parses a snapshot's body, the log
+  header's twin. Additive, one new type, no bump: no existing byte changes
+  and nothing a reader may assume about a log changes. `State` itself does
+  not join; ADR-0011 §2 says why. Lands with M3a-kernel, not with the ADR.
 
 [`Msg`]: ../../kernel/src/abi/msg.rs
 [`Capability`]: ../../kernel/src/abi/cap.rs
