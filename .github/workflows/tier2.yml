@@ -588,7 +588,10 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Measured on #133: 29 s of tests, 109 s wall with a warm cache. Fifteen
+    # minutes is a cold build plus a suite that grew; the 60 s per-test
+    # ceiling in the ci profile is what a hung test hits first.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
