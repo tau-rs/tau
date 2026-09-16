@@ -1,0 +1,12 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: cancelled_by_harness ()
+---
+{
+  "entry": "cancelled",
+  "seq": 6,
+  "by": null,
+  "agent": 0,
+  "grace": 0,
+  "reason": "0000000000000000000000000000000000000000000000000000000000000000"
+}

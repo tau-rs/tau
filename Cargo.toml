@@ -37,6 +37,17 @@ boon       = "0.6"
 # reducer is a pure fold, so a case cannot hang, and both would drag in
 # rusty-fork and tempfile for nothing.
 proptest   = { version = "1", default-features = false, features = ["std"] }
+# The sandbox driver's shim (ADR-0009 §4): rlimits, process-group kill and
+# `getrusage` through safe wrappers, since the workspace forbids `unsafe`.
+# `nix` rather than `rustix`: rustix 1.x has no `getrusage`, and the shim's
+# whole reason to exist is `RUSAGE_CHILDREN`.
+nix        = { version = "0.30", default-features = false, features = ["resource", "signal", "process"] }
+# A SIGTERM from the driver's `abandon` reaches the shim as a flag; the only
+# safe way to install a handler.
+signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
+# A tool driver's schema is derived from the type it deserializes with
+# (ADR-0006 §5, ADR-0009 §7): one source of truth.
+schemars   = { version = "1", features = ["derive"] }
 
 # The reducer is a pure, deterministic fold. `-D warnings` is the floor; the
 # lints below are the ones whose violation would be a *correctness* bug in a

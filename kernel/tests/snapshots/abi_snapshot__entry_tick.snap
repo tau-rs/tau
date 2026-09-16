@@ -1,0 +1,9 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: tick ()
+---
+{
+  "entry": "tick",
+  "seq": 4,
+  "now": 50
+}

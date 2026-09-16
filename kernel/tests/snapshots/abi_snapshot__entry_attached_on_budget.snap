@@ -1,0 +1,19 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: attached_on_budget ()
+---
+{
+  "entry": "attached",
+  "seq": 3,
+  "hook": 2,
+  "point": {
+    "on_budget": {
+      "dim": "tokens",
+      "below": 50
+    }
+  },
+  "failure": "open",
+  "program": {
+    "native": "low-tokens"
+  }
+}

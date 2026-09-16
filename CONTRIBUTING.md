@@ -13,6 +13,21 @@ request. `main` is protected: the merge queue is the only way in, and it re-runs
 Tier 1 on the *merged* state, which is what kills "green on the branch, red on
 main".
 
+## Picking up work
+
+Open issues are the to-do list; nothing else is. An issue is startable when it
+has no open blocker, no assignee, and no open pull request. Claim it by
+assigning yourself, and put `Closes #N` in the pull request body so the merge
+closes it.
+
+Blockers are native issue dependencies (the issue's *Relationships → Blocked
+by*, or `POST /repos/{owner}/{repo}/issues/{n}/dependencies/blocked_by`), never
+prose. A blocker that is a *condition* with no issue yet — a crate that does not
+exist, a second maintainer — keeps the `status:gated` label with the reason in
+the body until someone files the issue and adds the edge. `status:ready` means
+no open blocker. Anything that lists readiness reads only the dependency graph,
+so a "Gated on: #N" sentence is invisible to it.
+
 ## The one rule that is different here
 
 `kernel/src/abi/` is frozen. It evolves additively or not at all, and a pull

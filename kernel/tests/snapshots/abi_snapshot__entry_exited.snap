@@ -1,0 +1,10 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: exited ()
+---
+{
+  "entry": "exited",
+  "seq": 7,
+  "agent": 0,
+  "result": "2222222222222222222222222222222222222222222222222222222222222222"
+}

@@ -1,0 +1,10 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: resolved ()
+---
+{
+  "entry": "resolved",
+  "seq": 5,
+  "agent": 1,
+  "matched": 4
+}

@@ -8,6 +8,9 @@
 pub(crate) mod cassette;
 pub(crate) mod scenario;
 
+#[cfg(all(feature = "sandbox", unix))]
+pub(crate) mod sandbox;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

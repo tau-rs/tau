@@ -1,0 +1,22 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: replied ()
+---
+{
+  "entry": "replied",
+  "msg": {
+    "abi": 2,
+    "seq": 17,
+    "from": {
+      "kind": "driver",
+      "id": "tool"
+    },
+    "corr": 0,
+    "kind": "reply",
+    "consumed": {
+      "tokens": 12
+    },
+    "payload": "0101010101010101010101010101010101010101010101010101010101010101"
+  },
+  "to": 0
+}
