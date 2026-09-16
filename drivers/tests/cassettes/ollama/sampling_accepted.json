@@ -1,0 +1,61 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "ollama",
+  "model": "qwen3:1.7b",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "pong?",
+              "role": "user"
+            }
+          ],
+          "model": "qwen3:1.7b",
+          "temperature": 0.2
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "message": {
+                "content": "Are you referring to the classic arcade game Pong? Let me know if you'd like to play it or need help with something else!",
+                "reasoning": "Okay, the user asked \"pong?\" which is a bit unclear. Let me figure out what they mean. \"Pong\" can refer to the classic arcade game, or maybe they're asking about something else. Since they mentioned \"pong\" in the context of a game, I should check if they want to play Pong. But I need to make sure they don't mean something else. Maybe they're asking about the game mechanics or rules. Alternatively, they might be referring to a different context, like a sports term or a slang. Since the user hasn't provided more context, I should ask for clarification. Let me respond by asking if they want to play Pong or if there's something else they're interested in. That way, I can provide the best possible assistance.\n",
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789511136,
+          "id": "chatcmpl-304",
+          "model": "qwen3:1.7b",
+          "object": "chat.completion",
+          "system_fingerprint": "fp_ollama",
+          "usage": {
+            "completion_tokens": 192,
+            "prompt_tokens": 21,
+            "prompt_tokens_details": {
+              "cached_tokens": 12
+            },
+            "total_tokens": 213
+          }
+        }
+      }
+    }
+  ]
+}

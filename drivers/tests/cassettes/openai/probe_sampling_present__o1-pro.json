@@ -1,0 +1,43 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "openai",
+  "model": "o1-pro",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 32,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "pong?",
+              "role": "user"
+            }
+          ],
+          "model": "o1-pro",
+          "temperature": 0.2
+        }
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": null,
+            "message": "This model is only supported in v1/responses and not in v1/chat/completions.",
+            "param": "model",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    }
+  ]
+}

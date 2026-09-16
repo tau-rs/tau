@@ -1,0 +1,33 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "openai",
+  "model": "gpt-4.1-mini",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 32,
+          "messages": [],
+          "model": "gpt-4.1-mini"
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": "empty_array",
+            "message": "Invalid 'messages': empty array. Expected an array with minimum length 1, but got an empty array instead.",
+            "param": "messages",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    }
+  ]
+}

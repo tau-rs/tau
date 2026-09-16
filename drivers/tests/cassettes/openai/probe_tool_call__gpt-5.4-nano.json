@@ -1,0 +1,63 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "openai",
+  "model": "gpt-5.4-nano",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "What is 17*23? Use the calculator tool.",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-5.4-nano",
+          "tools": [
+            {
+              "function": {
+                "description": "Evaluates an arithmetic expression.",
+                "name": "calculator",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expression": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expression"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": "unsupported_parameter",
+            "message": "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+            "param": "max_tokens",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    }
+  ]
+}

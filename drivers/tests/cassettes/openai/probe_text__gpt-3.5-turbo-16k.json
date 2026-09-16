@@ -1,0 +1,70 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "openai",
+  "model": "gpt-3.5-turbo-0125",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 64,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "Reply with the single word: pong.",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-3.5-turbo-16k"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "Pong.",
+                "refusal": null,
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789511850,
+          "id": "chatcmpl-EOW4Ieh0xd5PAusZ7FRgFSUHNxkV8",
+          "model": "gpt-3.5-turbo-0125",
+          "object": "chat.completion",
+          "service_tier": "default",
+          "system_fingerprint": null,
+          "usage": {
+            "completion_tokens": 3,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "prompt_tokens": 23,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cached_tokens": 0
+            },
+            "total_tokens": 26
+          }
+        }
+      }
+    }
+  ]
+}

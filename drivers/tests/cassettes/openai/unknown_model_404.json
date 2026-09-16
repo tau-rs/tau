@@ -1,0 +1,42 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "openai",
+  "model": "gpt-does-not-exist",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 32,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "pong?",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-does-not-exist"
+        }
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": "model_not_found",
+            "message": "The model `gpt-does-not-exist` does not exist or you do not have access to it.",
+            "param": null,
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    }
+  ]
+}

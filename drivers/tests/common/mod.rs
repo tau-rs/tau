@@ -5,6 +5,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
+pub(crate) mod cassette;
+pub(crate) mod scenario;
+
 #[cfg(all(feature = "sandbox", unix))]
 pub(crate) mod sandbox;
 
@@ -59,6 +62,20 @@ pub(crate) enum Answer {
     /// One `(status, body)` per connection, in order; a connection past the
     /// end of the script gets a 500 so the test fails loudly.
     Script(Arc<Mutex<VecDeque<(u16, String)>>>),
+    /// Relay the request to `base_url` over real HTTPS, answer the client
+    /// with what came back, and report the pair on `relayed`.
+    Forward {
+        base_url: String,
+        relayed: mpsc::UnboundedSender<Relayed>,
+    },
+}
+
+/// One request the forward-mode stub relayed, with what came back.
+#[derive(Debug)]
+pub(crate) struct Relayed {
+    pub(crate) request: Captured,
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
 }
 
 /// A [`Answer::Script`] over `answers`, in order.
@@ -112,6 +129,20 @@ async fn serve(routes: Routes) -> Stub {
         base_url: format!("http://{addr}"),
         captured,
     }
+}
+
+/// A stub that relays every request to `base_url`. Record mode.
+pub(crate) async fn start_forwarding(base_url: String) -> (Stub, mpsc::UnboundedReceiver<Relayed>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let stub = serve(Arc::new(vec![(
+        None,
+        Answer::Forward {
+            base_url,
+            relayed: tx,
+        },
+    )]))
+    .await;
+    (stub, rx)
 }
 
 /// A base URL nothing listens on: the port is bound, then released.
@@ -173,7 +204,7 @@ async fn read_request(
         });
     // Reported before answering: a `Hang` answer only ends when the client
     // goes away, and the test needs to know the request arrived before that.
-    let _ = tx.send(captured);
+    let _ = tx.send(captured.clone());
     let answer = match answer {
         Answer::Script(script) => {
             let next = script.lock().unwrap().pop_front();
@@ -210,6 +241,47 @@ async fn read_request(
             let mut scratch = [0u8; 64];
             let _ = stream.read(&mut scratch).await;
             closed.notify_one();
+        }
+        Answer::Forward { base_url, relayed } => {
+            let url = format!("{}{}", base_url.trim_end_matches('/'), captured.path());
+            let mut req = reqwest::Client::new().post(url);
+            for line in captured.head.lines().skip(1) {
+                let Some((k, v)) = line.split_once(':') else {
+                    continue;
+                };
+                let name = k.trim().to_ascii_lowercase();
+                if matches!(
+                    name.as_str(),
+                    "host" | "content-length" | "connection" | "accept-encoding"
+                ) {
+                    continue;
+                }
+                req = req.header(name, v.trim());
+            }
+            let (status, body) = match req.body(captured.body.clone()).send().await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+                    (status, body)
+                }
+                Err(e) => (
+                    502,
+                    format!(r#"{{"type":"error","error":{{"type":"relay","message":"{e}"}}}}"#)
+                        .into_bytes(),
+                ),
+            };
+            let _ = relayed.send(Relayed {
+                request: captured.clone(),
+                status,
+                body: body.clone(),
+            });
+            let response = format!(
+                "HTTP/1.1 {status} Relayed\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.write_all(&body).await;
+            let _ = stream.shutdown().await;
         }
         Answer::Script(_) => unreachable!("resolved above"),
     }

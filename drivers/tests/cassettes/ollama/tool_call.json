@@ -1,0 +1,92 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "ollama",
+  "model": "qwen3:1.7b",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "What is 17*23? Use the calculator tool.",
+              "role": "user"
+            }
+          ],
+          "model": "qwen3:1.7b",
+          "tools": [
+            {
+              "function": {
+                "description": "Evaluates an arithmetic expression.",
+                "name": "calculator",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expression": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expression"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "reasoning": "Okay, the user is asking for 17 multiplied by 23. I need to use the calculator tool provided. Let me check the function details. The tool takes an expression as a string, so I should format the multiplication as a string. The expression would be \"17*23\". I'll call the calculator function with that argument. No other steps needed here since it's a straightforward multiplication. Just make sure the JSON is correctly formatted with the name and arguments.\n",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"expression\":\"17*23\"}",
+                      "name": "calculator"
+                    },
+                    "id": "call_wwuukb4s",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1789511133,
+          "id": "chatcmpl-444",
+          "model": "qwen3:1.7b",
+          "object": "chat.completion",
+          "system_fingerprint": "fp_ollama",
+          "usage": {
+            "completion_tokens": 125,
+            "prompt_tokens": 147,
+            "prompt_tokens_details": {
+              "cached_tokens": 146
+            },
+            "total_tokens": 272
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "ollama",
+  "model": "qwen3:1.7b",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [],
+          "model": "qwen3:1.7b"
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": null,
+            "message": "[] is too short - 'messages'",
+            "param": null,
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "anthropic",
+  "model": "claude-fable-5-1",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "headers": {
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "What is 17*23? Use the calculator tool.",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-fable-5-1",
+          "system": "You are terse.",
+          "tools": [
+            {
+              "description": "Evaluates an arithmetic expression.",
+              "input_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expression": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expression"
+                ],
+                "type": "object"
+              },
+              "name": "calculator"
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "container": null,
+          "content": [
+            {
+              "caller": {
+                "type": "direct"
+              },
+              "id": "toolu_017cEHUJyd5ADKVqM52aMhR9",
+              "input": {
+                "expression": "17*23"
+              },
+              "name": "calculator",
+              "type": "tool_use"
+            }
+          ],
+          "id": "msg_011Cf62RLAbzSpjJ7CzF7roo",
+          "model": "claude-fable-5-1",
+          "role": "assistant",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 403,
+            "output_tokens": 50,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard"
+          }
+        }
+      }
+    }
+  ]
+}

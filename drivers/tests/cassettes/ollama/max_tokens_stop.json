@@ -1,0 +1,60 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "ollama",
+  "model": "qwen3:1.7b",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 16,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "Write a 500-word essay about rivers.",
+              "role": "user"
+            }
+          ],
+          "model": "qwen3:1.7b"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "message": {
+                "content": "",
+                "reasoning": "Okay, the user wants a 500-word essay about rivers",
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789511135,
+          "id": "chatcmpl-351",
+          "model": "qwen3:1.7b",
+          "object": "chat.completion",
+          "system_fingerprint": "fp_ollama",
+          "usage": {
+            "completion_tokens": 16,
+            "prompt_tokens": 30,
+            "prompt_tokens_details": {
+              "cached_tokens": 6
+            },
+            "total_tokens": 46
+          }
+        }
+      }
+    }
+  ]
+}
