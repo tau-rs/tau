@@ -1301,6 +1301,82 @@ fn the_hash_does_not_see_the_completion_ordinal() {
     assert_eq!(advanced.next_completed_child(root).unwrap().agent, agent(4));
 }
 
+/// The envelopes still in a mailbox: every `Msg` any agent has not resolved.
+fn mailboxes(state: &State) -> Vec<serde_json::Value> {
+    let json = serde_json::to_value(state).unwrap();
+    json.get("agents")
+        .and_then(serde_json::Value::as_object)
+        .unwrap()
+        .values()
+        .flat_map(|a| {
+            a.get("mailbox")
+                .and_then(serde_json::Value::as_array)
+                .unwrap()
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn an_undrained_cancel_notice_does_not_put_the_build_abi_in_the_hash() {
+    // #109: the fold synthesizes the notice with `Msg::new`, which stamps the
+    // build's `ABI`. A log that ends while it is still in a mailbox must fold
+    // to the same hash on every build (ADR-0010 §7), so the stamp stays out
+    // of the canonical state.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| spawned(s, root, 10));
+    step(&mut state, |s| cancelled(s, Some(root), agent(1), 5));
+    let child = state.agent(agent(1)).unwrap();
+    assert_eq!(child.status, Status::Cancelling);
+    assert_eq!(child.mailbox.len(), 1, "the notice is undrained");
+    assert_eq!(child.mailbox.first().unwrap().abi, ABI);
+
+    let envelopes = mailboxes(&state);
+    assert_eq!(envelopes.len(), 1);
+    for envelope in &envelopes {
+        assert!(
+            envelope.get("abi").is_none(),
+            "an envelope's abi stamp reached the hash: {envelope}"
+        );
+        for kept in ["seq", "from", "corr", "kind", "consumed", "payload"] {
+            assert!(envelope.get(kept).is_some(), "{kept} left the hash");
+        }
+    }
+
+    // A round trip restores the stamp with this build's `ABI` and rebuilds
+    // the same state.
+    let json = serde_json::to_string(&state).unwrap();
+    let back: State = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, state);
+    assert_eq!(back.hash(), state.hash());
+}
+
+#[test]
+fn the_hash_does_not_see_an_envelope_abi_stamp() {
+    // Two logs that differ in one byte: the `abi` a driver's reply was
+    // written against. The reducer never decides on it, so the fold's hash
+    // must not either — that is what lets a log at `abi: 1` fold to its
+    // sidecar on a build at 2.
+    let fold_with = |stamp: u16| {
+        let (mut state, _, root) = booted();
+        step(&mut state, |s| spawned(s, root, 10));
+        step(&mut state, |s| sent(s, agent(1)));
+        step(&mut state, |s| {
+            let Entry::Replied { mut msg, to } = replied(s, Corr::new(0), agent(1), used(1)) else {
+                unreachable!()
+            };
+            msg.abi = stamp;
+            Entry::Replied { msg, to }
+        });
+        assert_eq!(state.agent(agent(1)).unwrap().mailbox.len(), 1);
+        state
+    };
+    let older = fold_with(ABI - 1);
+    let current = fold_with(ABI);
+    assert_ne!(older, current, "the records keep the stamp they were dealt");
+    assert_eq!(older.hash(), current.hash(), "the hash saw the stamp");
+}
+
 // ---------------------------------------------------------------------- hooks
 //
 // ADR-0008 §3: the fold confirms a roll call and never runs a program. Each

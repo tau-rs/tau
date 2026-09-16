@@ -140,6 +140,11 @@ pub struct Agent {
     /// Where it is in its life.
     pub status: Status,
     /// Delivered, unresolved messages, in delivery order.
+    ///
+    /// Serialized without each envelope's `abi` stamp: the fold never reads
+    /// it, and on a notice the fold synthesizes it names the *build*, not the
+    /// log — see [`mailbox`].
+    #[serde(with = "mailbox")]
     pub mailbox: Vec<Msg>,
     /// While [`Status::Cancelling`]: the clock reading at which the kernel
     /// hard-aborts it. Set by `cancel`, only ever brought earlier, never later.
@@ -209,6 +214,82 @@ pub struct State {
     /// record ever spawned. Never pruned: the record stays, so does the edge.
     #[serde(skip)]
     children: BTreeMap<AgentId, BTreeSet<AgentId>>,
+}
+
+/// The canonical form of a mailbox: every envelope without its `abi` stamp.
+///
+/// `Msg.abi` says which build wrote the envelope. For a `Replied` or an
+/// `Emitted` that is the log's own bytes; for the notice a `Cancelled` entry
+/// makes the fold synthesize, it is `Msg::new`'s `ABI` — this build's. The
+/// reducer decides on `seq`, `kind`, `corr` and `payload` and never on the
+/// stamp, so the stamp is provenance, not state, and a hash that carried it
+/// would move with the build instead of with the log (#109, ADR-0010 §7).
+/// Deserialization restores it as this build's `ABI`, the value any envelope
+/// this build hands out carries.
+mod mailbox {
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::abi::{BlobRef, Consumption, Corr, Endpoint, Msg, MsgKind, Seq, ABI};
+
+    /// A borrowed [`Msg`] with every field but `abi`.
+    #[derive(Serialize)]
+    struct Envelope<'a> {
+        seq: &'a Seq,
+        from: &'a Endpoint,
+        corr: &'a Option<Corr>,
+        kind: &'a MsgKind,
+        consumed: &'a Option<Consumption>,
+        payload: &'a BlobRef,
+    }
+
+    /// An owned [`Envelope`], as read back.
+    #[derive(Deserialize)]
+    struct Owned {
+        seq: Seq,
+        from: Endpoint,
+        corr: Option<Corr>,
+        kind: MsgKind,
+        consumed: Option<Consumption>,
+        payload: BlobRef,
+    }
+
+    pub(super) fn serialize<S>(mailbox: &[Msg], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(mailbox.len()))?;
+        for m in mailbox {
+            seq.serialize_element(&Envelope {
+                seq: &m.seq,
+                from: &m.from,
+                corr: &m.corr,
+                kind: &m.kind,
+                consumed: &m.consumed,
+                payload: &m.payload,
+            })?;
+        }
+        seq.end()
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Msg>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let owned = Vec::<Owned>::deserialize(deserializer)?;
+        Ok(owned
+            .into_iter()
+            .map(|o| Msg {
+                abi: ABI,
+                seq: o.seq,
+                from: o.from,
+                corr: o.corr,
+                kind: o.kind,
+                consumed: o.consumed,
+                payload: o.payload,
+            })
+            .collect())
+    }
 }
 
 /// Serializes the unclaimed completions as a sequence in completion order.
