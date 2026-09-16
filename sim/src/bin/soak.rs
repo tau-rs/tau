@@ -6,9 +6,10 @@
 //! refold --log PATH --expect PATH
 //! ```
 //!
-//! `soak` runs the generator in its linear-per-event mode, refolds the log in
-//! the same process, and refuses to write a hash the refold did not
-//! reproduce. `refold` reads a log another build wrote, folds it, and exits
+//! `soak` runs the generator in its linear-per-event mode — continuing from
+//! a written-and-restored snapshot at every `--check-every` point (ADR-0011
+//! §5) — refolds the log in the same process, and refuses to write a hash
+//! the refold did not reproduce. `refold` reads a log another build wrote, folds it, and exits
 //! non-zero unless the hash matches the one in `--expect`. The Linux job runs
 //! the first; the macOS job runs the second on the artifact — that is the
 //! cross-platform half of the check, the one that catches iteration-order
@@ -82,6 +83,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Cmd, String> {
                 events,
                 check_every,
                 max_live,
+                // ADR-0011 §5: a snapshot at every `--check-every` point,
+                // continued from, so the final hash is a chain of tails.
+                snapshot_every: check_every,
             },
             log,
             hash: hash.ok_or_else(|| format!("`--hash` is required\n{USAGE}"))?,
@@ -117,11 +121,12 @@ fn soak(seed: u64, options: &Options, log: &PathBuf, hash: &PathBuf) -> Result<(
     std::fs::write(hash, format!("{incremental}\n"))
         .map_err(|e| format!("cannot write {}: {e}", hash.display()))?;
     println!(
-        "seed={seed} entries={} refused={} peak_live={} records={} hash={incremental}",
+        "seed={seed} entries={} refused={} peak_live={} records={} restores={} hash={incremental}",
         report.log.len(),
         report.refused,
         report.peak_live,
         report.state.agents().count(),
+        report.restores,
     );
     Ok(())
 }

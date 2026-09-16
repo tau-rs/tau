@@ -30,7 +30,10 @@
 //! # What is here
 //!
 //! - [`infer`]: one model call. Encode, `send`, `recv` on the correlation
-//!   (or the cancel notice that pre-empts it), `read`, decode.
+//!   (or the cancel notice that pre-empts it), `read`, decode. Nothing here
+//!   reads `abi` off a delivered envelope: that stamp is the handing-over
+//!   build's and a replay from a snapshot does not preserve it (ADR-0011
+//!   §3, documented on `Handle::recv`).
 //! - [`RetryPolicy`] and [`infer_with`]: the same call again when the
 //!   driver could not get an answer. Every attempt is its own `send`, and
 //!   the wait comes from a sleep the caller supplies.

@@ -48,6 +48,7 @@ use tau_kernel::hook::{
 };
 use tau_kernel::log::{Entry, Log, LogError};
 use tau_kernel::reducer::{Agent, Completion, Outcome, Refusal, State, Status};
+use tau_kernel::snapshot::{JoinError, Snapshot, SnapshotError};
 
 /// Why a run could not be completed.
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +85,14 @@ pub enum SimError {
         /// The root's grant plus overdraft.
         expected: u64,
     },
+    /// A snapshot the run wrote could not be read back by the same build.
+    /// A reducer or snapshot bug.
+    #[error("a snapshot this build wrote is not usable by it: {0}")]
+    Snapshot(#[from] SnapshotError),
+    /// A snapshot the run wrote did not join to the log it was taken from.
+    /// A reducer or snapshot bug: the round trip lost something canonical.
+    #[error("a snapshot did not join to its own log: {0}")]
+    Join(#[from] JoinError),
     /// The generator could not find enough legal entries: too many proposals
     /// were refused or had no candidate.
     #[error("generator starved: {accepted} accepted after {proposals} proposals")]
@@ -203,16 +212,27 @@ pub struct Options {
     /// While this many agents are live, a spawn draw becomes an exit draw, so
     /// the live population never exceeds it. `None` never redirects.
     pub max_live: Option<u64>,
+    /// Every this-many accepted entries, write a snapshot of the state,
+    /// read it back, join it to the log so far, and *continue from the
+    /// restored state* (ADR-0011 §5). The run then is replay = snapshot +
+    /// tail at every such offset, chained, and its final hash agrees with a
+    /// refold of the log only if every restore was exact. `None` never
+    /// restores. Separate from `check_every` because the exhaustive shape
+    /// checks conservation at every entry, and a state serialized at every
+    /// entry would not fit the quick ceiling.
+    pub snapshot_every: Option<u64>,
 }
 
 impl Options {
-    /// The Tier 1 shape: every entry checked, the population unbounded.
+    /// The Tier 1 shape: every entry checked, the population unbounded, no
+    /// restores.
     #[must_use]
     pub const fn exhaustive(events: u64) -> Self {
         Self {
             events,
             check_every: Some(1),
             max_live: None,
+            snapshot_every: None,
         }
     }
 }
@@ -232,6 +252,9 @@ pub struct Report {
     pub refused: u64,
     /// The most agents that were live at once.
     pub peak_live: u64,
+    /// How many times the run continued from a restored snapshot
+    /// ([`Options::snapshot_every`]).
+    pub restores: u64,
 }
 
 /// A fake driver: a name and the ceiling it was registered with.
@@ -505,6 +528,9 @@ struct Sim {
     peak_live: u64,
     /// Accepted entries since conservation was last checked.
     since_check: u64,
+    /// `accepted` as of the last restore through a snapshot.
+    snapshot_at: u64,
+    restores: u64,
 }
 
 /// What happened to a proposal.
@@ -535,6 +561,8 @@ impl Sim {
             refused: 0,
             peak_live: 0,
             since_check: 0,
+            snapshot_at: 0,
+            restores: 0,
         };
         for (id, ceiling) in drivers()? {
             let cap = Capability::mint(sim.state.next_cap());
@@ -1345,7 +1373,31 @@ impl Sim {
             if let Some(proposal) = self.propose() {
                 self.govern(proposal, true)?;
             }
+            // Between events, never inside one: `govern` holds a completion
+            // mark across its entries, and a restore compacts the ordinals.
+            let due = self
+                .options
+                .snapshot_every
+                .is_some_and(|k| self.accepted.saturating_sub(self.snapshot_at) >= k);
+            if due {
+                self.snapshot_at = self.accepted;
+                self.restore_through_snapshot()?;
+            }
         }
+        Ok(())
+    }
+
+    /// Writes a snapshot of the state, reads it back, joins it to the log
+    /// so far, and continues from the restored state. The join re-hashes
+    /// the restored state against the header, so a round trip that lost a
+    /// canonical field fails here and not, silently, in the final hash.
+    fn restore_through_snapshot(&mut self) -> Result<(), SimError> {
+        let mut bytes = Vec::new();
+        self.state
+            .snapshot(self.log.prefix())
+            .write_to(&mut bytes)?;
+        self.state = Snapshot::read_from(bytes.as_slice())?.join(&self.log)?;
+        self.restores = self.restores.saturating_add(1);
         Ok(())
     }
 
@@ -1430,5 +1482,6 @@ fn finish(mut sim: Sim) -> Result<Report, SimError> {
         accepted: sim.accepted,
         refused: sim.refused,
         peak_live: sim.peak_live,
+        restores: sim.restores,
     })
 }

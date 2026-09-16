@@ -13,7 +13,8 @@ use tau_kernel::abi::{
     Endpoint, LogHeader, Msg, MsgKind, Name, Namespace, Seq, ABI,
 };
 use tau_kernel::log::{Entry, Log, LogError};
-use tau_kernel::reducer::{fold, Outcome, Refusal, State, Status};
+use tau_kernel::reducer::{fold, Outcome, Refusal, State, Status, FOLD};
+use tau_kernel::snapshot::Snapshot;
 
 fn echo() -> DriverId {
     DriverId::new(Name::new("echo").unwrap())
@@ -1375,6 +1376,95 @@ fn the_hash_does_not_see_an_envelope_abi_stamp() {
     let current = fold_with(ABI);
     assert_ne!(older, current, "the records keep the stamp they were dealt");
     assert_eq!(older.hash(), current.hash(), "the hash saw the stamp");
+}
+
+#[test]
+fn a_snapshot_mid_cancel_folds_to_the_full_hash_and_differs_only_in_stamps() {
+    // ADR-0011 §3: every undrained envelope comes back from a restore
+    // stamped with the restoring build's `ABI`. Here a reply written at
+    // `ABI - 1` and a synthesized cancel notice (stamped `ABI`) both sit
+    // undrained when the snapshot is taken.
+    let fold_with = |stamp: u16| {
+        let (mut state, _, root) = booted();
+        step(&mut state, |s| spawned(s, root, 10));
+        step(&mut state, |s| sent(s, agent(1)));
+        step(&mut state, |s| {
+            let Entry::Replied { mut msg, to } = replied(s, Corr::new(0), agent(1), used(1)) else {
+                unreachable!()
+            };
+            msg.abi = stamp;
+            Entry::Replied { msg, to }
+        });
+        step(&mut state, |s| cancelled(s, Some(root), agent(1), 5));
+        let child = state.agent(agent(1)).unwrap();
+        assert_eq!(child.status, Status::Cancelling);
+        assert_eq!(
+            child.mailbox.len(),
+            2,
+            "the reply and the notice, undrained"
+        );
+        assert_eq!(child.mailbox.first().unwrap().abi, stamp);
+        assert_eq!(child.mailbox.last().unwrap().abi, ABI);
+        state
+    };
+    let older = fold_with(ABI - 1);
+    let current = fold_with(ABI);
+    assert_ne!(older, current);
+    assert_eq!(older.hash(), current.hash());
+
+    let mut bytes = Vec::new();
+    older
+        .snapshot(Log::in_memory().prefix())
+        .write_to(&mut bytes)
+        .unwrap();
+    let restored = Snapshot::read_from(bytes.as_slice())
+        .unwrap()
+        .state()
+        .clone();
+    assert_eq!(restored.hash(), older.hash(), "the hash contract");
+    assert_ne!(restored, older, "the reply's stamp was re-stamped");
+    // What it was re-stamped *to* is this build's `ABI` — so the restored
+    // state is, field for field, the fold that had the stamp there all along.
+    assert_eq!(
+        restored, current,
+        "restore differs from the full fold in more than stamps"
+    );
+
+    // Folding both forward keeps them in step: the stamp is provenance, not
+    // state, and the notice drains from either the same way.
+    let mut from_snapshot = restored;
+    let mut from_log = older;
+    for s in [&mut from_snapshot, &mut from_log] {
+        let matched = s.agent(agent(1)).unwrap().mailbox.first().unwrap().seq;
+        step(s, |s| Entry::Resolved {
+            seq: s.next_seq(),
+            agent: agent(1),
+            matched,
+        });
+        step(s, |s| tick(s, 5));
+    }
+    assert_eq!(from_snapshot.hash(), from_log.hash());
+    assert_eq!(
+        from_snapshot.agent(agent(1)).unwrap().status,
+        Status::Aborted
+    );
+}
+
+#[test]
+fn fold_version_is_pinned_with_the_fixture_hashes() {
+    // ADR-0011 §2: `FOLD` and the four fixture hashes in one snapshot, so a
+    // diff shows the number and the hashes moving together — or the hashes
+    // moving and the number not, which is the review comment. A re-pin
+    // bumps `FOLD` (corpus/README.md).
+    let mut pinned = format!("FOLD={FOLD}\n");
+    for name in ["m0-walking-skeleton", "m1a-cancel", "m1b-wall", "m2a-hooks"] {
+        let path = format!("{}/tests/fixtures/{name}.log", env!("CARGO_MANIFEST_DIR"));
+        let bytes = std::fs::read(&path).unwrap();
+        let log = Log::read_from(bytes.as_slice()).unwrap();
+        let hash = fold(log.entries()).unwrap().hash();
+        pinned.push_str(&format!("{name}={hash}\n"));
+    }
+    insta::assert_snapshot!(pinned);
 }
 
 // ---------------------------------------------------------------------- hooks

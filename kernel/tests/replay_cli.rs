@@ -1,6 +1,7 @@
 //! `tau replay` over the corpus and over every way it can refuse (#91,
 //! ADR-0010 §6: "`tau replay` folding all of them to their sidecars is the
-//! acceptance test for the CLI").
+//! acceptance test for the CLI"), and `tau snapshot` / `tau replay --from`
+//! over the same corpus and every way *they* can refuse (#119, ADR-0011 §4).
 //!
 //! Every test runs the built binary as a subprocess: the exit code *is* the
 //! contract, and a test that called the functions would not see it.
@@ -9,16 +10,17 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    clippy::integer_division
 )]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use tau_kernel::abi::ABI;
+use tau_kernel::abi::{SnapshotHeader, ABI};
 use tau_kernel::log::Log;
-use tau_kernel::reducer::{fold, State};
+use tau_kernel::reducer::{fold, State, FOLD};
 
 /// The corpus lives at the repository root, not under `kernel/`.
 fn corpus() -> PathBuf {
@@ -188,15 +190,23 @@ fn exit_1_usage() {
 
 #[test]
 fn help_exits_0_and_documents_the_exit_codes() {
-    for args in [&["--help"][..], &["replay", "--help"][..]] {
+    for args in [
+        &["--help"][..],
+        &["replay", "--help"][..],
+        &["snapshot", "--help"][..],
+    ] {
         let out = tau(args);
         assert_eq!(out.status.code(), Some(0), "{args:?}");
         let text = stdout(&out);
         assert!(
-            text.contains("tau replay <log> [--expect <hash-file>]"),
+            text.contains("tau replay <log> [--from <snapshot>] [--expect <hash-file>]"),
             "{text}"
         );
-        for code in 0..=6 {
+        assert!(
+            text.contains("tau snapshot <log> [--at <k>] <out>"),
+            "{text}"
+        );
+        for code in 0..=8 {
             assert!(
                 text.contains(&format!("\n  {code}  ")),
                 "code {code} missing:\n{text}"
@@ -307,4 +317,273 @@ fn exit_6_on_an_expect_mismatch_naming_both_hashes() {
     let folded = printed_hash(&out);
     assert!(err.contains("expected deadbeef"), "{err}");
     assert!(err.contains(&format!("folded {folded}")), "{err}");
+}
+
+// --- snapshots: ADR-0011 §4 ---------------------------------------------------
+
+/// `tau snapshot <log> --at <k> <out>`, asserted to succeed; returns the file.
+fn snapshot_at(log: &Path, k: usize, name: &str) -> PathBuf {
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let at = k.to_string();
+    let run = tau(&[
+        "snapshot",
+        log.to_str().unwrap(),
+        "--at",
+        &at,
+        out.to_str().unwrap(),
+    ]);
+    assert!(run.status.success(), "{}: {}", log.display(), stderr(&run));
+    let text = stdout(&run);
+    assert!(
+        text.contains(&format!("seq={k} fold={FOLD} prefix=")),
+        "{text}"
+    );
+    out
+}
+
+fn replay_from(log: &Path, snapshot: &Path) -> Output {
+    tau(&[
+        "replay",
+        log.to_str().unwrap(),
+        "--from",
+        snapshot.to_str().unwrap(),
+    ])
+}
+
+/// The header and the body of a snapshot file.
+fn snapshot_lines(path: &Path) -> (SnapshotHeader, String) {
+    let text = fs::read_to_string(path).unwrap();
+    let mut lines = text.lines();
+    let header = serde_json::from_str(lines.next().unwrap()).unwrap();
+    (header, lines.next().unwrap().to_owned())
+}
+
+fn write_snapshot(name: &str, header: &SnapshotHeader, body: &str) -> PathBuf {
+    scratch(
+        name,
+        &format!("{}\n{body}\n", serde_json::to_string(header).unwrap()),
+    )
+}
+
+#[test]
+fn tau_snapshot_then_tau_replay_from_matches_every_sidecar() {
+    // ADR-0011 §3: the snapshot is invisible to the sidecar. One offset per
+    // log here, the middle; the in-process test covers the edges too.
+    for log in logs_in(&corpus()) {
+        let sidecar = log.with_extension("hash");
+        let expected = fs::read_to_string(&sidecar).unwrap().trim().to_owned();
+        let n = log_lines(&log).len() - 1;
+        let name = format!(
+            "snapshot-{}.snap",
+            log.file_stem().unwrap().to_str().unwrap()
+        );
+        let snapshot = snapshot_at(&log, n / 2, &name);
+        let out = tau(&[
+            "replay",
+            log.to_str().unwrap(),
+            "--from",
+            snapshot.to_str().unwrap(),
+            "--expect",
+            sidecar.to_str().unwrap(),
+        ]);
+        assert!(
+            out.status.success(),
+            "{}: exit {:?}\n{}",
+            log.display(),
+            out.status.code(),
+            stderr(&out)
+        );
+        let text = stdout(&out);
+        assert!(
+            text.contains(&format!("entries={n} from={} ", n / 2)),
+            "{text}"
+        );
+        assert_eq!(printed_hash(&out), expected, "{}", log.display());
+    }
+}
+
+#[test]
+fn tau_snapshot_defaults_to_the_whole_log_and_replays_to_the_same_hash() {
+    let log = small_log();
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("snapshot-whole.snap");
+    let run = tau(&["snapshot", log.to_str().unwrap(), out.to_str().unwrap()]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert!(stdout(&run).contains("seq=9 "), "{}", stdout(&run));
+    let (header, _) = snapshot_lines(&out);
+    assert_eq!(header.magic, SnapshotHeader::MAGIC);
+    assert_eq!((header.abi, header.fold, header.seq), (ABI, FOLD, 9));
+    let replayed = replay_from(&log, &out);
+    assert!(replayed.status.success(), "{}", stderr(&replayed));
+    let text = stdout(&replayed);
+    assert!(
+        text.contains("entries=9 from=9 last_seq=seq:8 hash="),
+        "{text}"
+    );
+    assert_eq!(printed_hash(&replayed), header.state);
+}
+
+#[test]
+fn tau_snapshot_exit_1_past_the_end_or_without_an_output() {
+    let log = small_log();
+    let out = tau(&["snapshot", log.to_str().unwrap(), "--at", "99", "/dev/null"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("`--at 99` is past the end"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("has 9 entries"), "{}", stderr(&out));
+    let out = tau(&["snapshot", log.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("needs a log and an output path"));
+    let out = tau(&["snapshot", log.to_str().unwrap(), "--at", "x", "/dev/null"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("wants a number"));
+}
+
+#[test]
+fn tau_snapshot_exit_5_when_the_fold_refuses_first() {
+    let mut lines = log_lines(&small_log());
+    lines.swap(1, 2);
+    let log = scratch(
+        "snapshot-out-of-order.log",
+        &format!("{}\n", lines.join("\n")),
+    );
+    let out = tau(&["snapshot", log.to_str().unwrap(), "--at", "3", "/dev/null"]);
+    assert_eq!(out.status.code(), Some(5), "{}", stderr(&out));
+    assert!(stderr(&out).contains("refused entry 0"), "{}", stderr(&out));
+}
+
+#[test]
+fn replay_from_exit_2_when_the_snapshot_cannot_be_opened() {
+    let missing = Path::new(env!("CARGO_TARGET_TMPDIR")).join("does-not-exist.snap");
+    let out = replay_from(&small_log(), &missing);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stderr(&out).contains("cannot open"), "{}", stderr(&out));
+}
+
+#[test]
+fn exit_7_when_the_snapshot_magic_is_wrong() {
+    let log = small_log();
+    let (mut header, body) = snapshot_lines(&snapshot_at(&log, 4, "exit7-magic.snap"));
+    header.magic = *b"TAU\0";
+    let out = replay_from(
+        &log,
+        &write_snapshot("exit7-magic-bad.snap", &header, &body),
+    );
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("magic [84, 65, 85, 0]"), "{err}");
+    assert!(err.contains("[84, 65, 85, 83]"), "{err}");
+}
+
+#[test]
+fn exit_7_when_the_snapshot_abi_is_newer_than_this_build_naming_both() {
+    let log = small_log();
+    let (mut header, body) = snapshot_lines(&snapshot_at(&log, 4, "exit7-abi.snap"));
+    header.abi = 99;
+    let out = replay_from(&log, &write_snapshot("exit7-abi-bad.snap", &header, &body));
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("abi 99"), "{err}");
+    assert!(err.contains(&format!("abi <= {ABI}")), "{err}");
+}
+
+#[test]
+fn exit_7_when_the_snapshot_fold_is_another_reducers_naming_both() {
+    let log = small_log();
+    let (mut header, body) = snapshot_lines(&snapshot_at(&log, 4, "exit7-fold.snap"));
+    header.fold = FOLD + 1;
+    let out = replay_from(&log, &write_snapshot("exit7-fold-bad.snap", &header, &body));
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains(&format!("fold {}", FOLD + 1)), "{err}");
+    assert!(err.contains(&format!("fold {FOLD}")), "{err}");
+}
+
+#[test]
+fn exit_7_when_the_snapshot_body_is_malformed() {
+    let log = small_log();
+    let (header, _) = snapshot_lines(&snapshot_at(&log, 4, "exit7-body.snap"));
+    let out = replay_from(
+        &log,
+        &write_snapshot("exit7-body-bad.snap", &header, "{\"next_seq\":4}"),
+    );
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("state is malformed"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn exit_8_when_the_snapshot_seq_is_past_the_end_of_the_log() {
+    // A snapshot of a longer log at an offset the short one never reaches:
+    // caught before any hashing.
+    let long = corpus().join("m2a-hooks.log");
+    let snapshot = snapshot_at(&long, 20, "exit8-seq.snap");
+    let out = replay_from(&small_log(), &snapshot);
+    assert_eq!(out.status.code(), Some(8), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("seq: the snapshot is at 20, the log has 9 entries"),
+        "{err}"
+    );
+}
+
+#[test]
+fn exit_8_when_the_prefix_digest_is_another_logs() {
+    // Same offset, other log: the ids line up, the digest does not.
+    let other = corpus().join("m1a-cancel.log");
+    let snapshot = snapshot_at(&other, 4, "exit8-prefix.snap");
+    let (header, _) = snapshot_lines(&snapshot);
+    let out = replay_from(&small_log(), &snapshot);
+    assert_eq!(out.status.code(), Some(8), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("prefix: the snapshot says"), "{err}");
+    assert!(err.contains(&header.prefix), "{err}");
+    assert!(err.contains("first 4 entries digest to"), "{err}");
+}
+
+#[test]
+fn exit_8_when_the_state_does_not_rehash_to_the_header() {
+    let log = small_log();
+    let (mut header, body) = snapshot_lines(&snapshot_at(&log, 4, "exit8-state.snap"));
+    let claimed = "ab".repeat(32);
+    header.state = claimed.clone();
+    let out = replay_from(
+        &log,
+        &write_snapshot("exit8-state-bad.snap", &header, &body),
+    );
+    assert_eq!(out.status.code(), Some(8), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!("state: the snapshot says {claimed}")),
+        "{err}"
+    );
+    assert!(err.contains("re-hashes to"), "{err}");
+}
+
+#[test]
+fn exit_8_when_the_body_next_seq_is_not_the_header_seq() {
+    let log = small_log();
+    let (mut header, body) = snapshot_lines(&snapshot_at(&log, 4, "exit8-next-seq.snap"));
+    // Move the body's offset and re-state the header from it, so the first
+    // three checks pass and only the last one can catch it.
+    let mut edited: serde_json::Value = serde_json::from_str(&body).unwrap();
+    edited["next_seq"] = serde_json::Value::from(3);
+    let moved: State = serde_json::from_value(edited).unwrap();
+    header.state = moved.hash().to_string();
+    let body = serde_json::to_string(&moved).unwrap();
+    let out = replay_from(
+        &log,
+        &write_snapshot("exit8-next-seq-bad.snap", &header, &body),
+    );
+    assert_eq!(out.status.code(), Some(8), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("next_seq: the snapshot header says seq 4, the state says next_seq 3"),
+        "{err}"
+    );
 }
