@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use tau_kernel::abi::Corr;
@@ -87,10 +87,31 @@ fn lock(flights: &Mutex<Flights>) -> MutexGuard<'_, Flights> {
     flights.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The one `reqwest::Client` of the process, cloned into every transport.
+///
+/// Building a client loads the platform root store — about 120 ms on macOS,
+/// and serialized inside the system framework, so a harness that builds many
+/// drivers pays it many times over. A `Client` is an `Arc` inside, and
+/// reqwest's own advice is to build one and reuse it: cloning costs nothing
+/// and the connection pool is per host either way, so every driver sees the
+/// same behaviour it saw with a client of its own. The build is attempted
+/// once; its error, if any, is remembered and returned to every caller.
+fn shared_client() -> Result<reqwest::Client, ConfigError> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .clone()
+        .map_err(ConfigError::Client)
+}
+
 impl Transport {
-    /// Builds the client. No client-side timeout: [`exchange`](Self::exchange)
-    /// enforces `timeout` with `tokio::time`, and that is what turns into
-    /// `error.transport`.
+    /// Takes a clone of the process's client. No client-side timeout:
+    /// [`exchange`](Self::exchange) enforces `timeout` with `tokio::time`,
+    /// and that is what turns into `error.transport`.
     ///
     /// # Errors
     ///
@@ -100,11 +121,8 @@ impl Transport {
         headers: Vec<(&'static str, String)>,
         timeout: Duration,
     ) -> Result<Self, ConfigError> {
-        let client = reqwest::Client::builder()
-            .build()
-            .map_err(|e| ConfigError::Client(e.to_string()))?;
         Ok(Self {
-            client,
+            client: shared_client()?,
             headers,
             timeout,
             flights: Arc::new(Mutex::new(Flights::default())),
