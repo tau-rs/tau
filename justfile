@@ -81,16 +81,20 @@ live mode="replay" target="all":
     key() { security find-generic-password -s "$1" -w 2>/dev/null || { echo "no Keychain entry $1" >&2; exit 2; }; }
     t="{{target}}"
     if [[ "$t" == all || "$t" == anthropic ]]; then
-      ANTHROPIC_API_KEY="$(key ANTHROPIC_API_KEY)" cargo test -p tau-drivers --all-features --test cassettes_anthropic -- --ignored --nocapture record_all
+      a="$(key ANTHROPIC_API_KEY)"
+      ANTHROPIC_API_KEY="$a" cargo test -p tau-drivers --all-features --test cassettes_anthropic -- --ignored --nocapture record_all
     fi
     if [[ "$t" == all || "$t" == openai ]]; then
-      OPENAI_API_KEY="$(key OPENAI_API_KEY)" cargo test -p tau-drivers --all-features --test cassettes_openai -- --ignored --nocapture record_openai
+      o="$(key OPENAI_API_KEY)"
+      OPENAI_API_KEY="$o" cargo test -p tau-drivers --all-features --test cassettes_openai -- --ignored --nocapture record_openai
     fi
     if [[ "$t" == all || "$t" == ollama ]]; then
       cargo test -p tau-drivers --all-features --test cassettes_openai -- --ignored --nocapture record_ollama
     fi
     if [[ "$t" == all || "$t" == probes ]]; then
-      ANTHROPIC_API_KEY="$(key ANTHROPIC_API_KEY)" OPENAI_API_KEY="$(key OPENAI_API_KEY)" cargo test -p tau-drivers --all-features --test probes -- --ignored --nocapture record_probes
+      a="$(key ANTHROPIC_API_KEY)"
+      o="$(key OPENAI_API_KEY)"
+      ANTHROPIC_API_KEY="$a" OPENAI_API_KEY="$o" cargo test -p tau-drivers --all-features --test probes -- --ignored --nocapture record_probes
     fi
     if [[ "$t" != all && "$t" != anthropic && "$t" != openai && "$t" != ollama && "$t" != probes ]]; then
       echo "target is all|anthropic|openai|ollama|probes"
