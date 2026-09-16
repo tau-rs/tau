@@ -1,0 +1,206 @@
+{
+  "v": 1,
+  "recorded_at": "2026-09-16",
+  "target": "ollama",
+  "model": "qwen3:1.7b",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "Compute 2+2 and 3+3 as two separate calculator calls in one turn.",
+              "role": "user"
+            }
+          ],
+          "model": "qwen3:1.7b",
+          "tools": [
+            {
+              "function": {
+                "description": "Evaluates an arithmetic expression.",
+                "name": "calculator",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expression": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expression"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "reasoning": "Okay, the user wants me to compute 2+2 and 3+3 as two separate calculator calls in one turn. Let me see. The tools provided have a calculator function that takes an expression as a string. So for each addition, I need to make a separate call.\n\nFirst, for 2+2, the expression would be \"2+2\". Then, for 3+3, it's \"3+3\". Since the user specified two separate calls, I should generate both JSON objects inside the tool_call tags. I need to make sure the arguments are correctly formatted as JSON objects with the name \"calculator\" and the expression key. Let me check the syntax again to ensure it's correct. Yep, each tool call should have the name and arguments. Alright, that's it.\n",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"expression\":\"2+2\"}",
+                      "name": "calculator"
+                    },
+                    "id": "call_z5on817b",
+                    "index": 0,
+                    "type": "function"
+                  },
+                  {
+                    "function": {
+                      "arguments": "{\"expression\":\"3+3\"}",
+                      "name": "calculator"
+                    },
+                    "id": "call_1il9ln6x",
+                    "index": 1,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1789558931,
+          "id": "chatcmpl-222",
+          "model": "qwen3:1.7b",
+          "object": "chat.completion",
+          "system_fingerprint": "fp_ollama",
+          "usage": {
+            "completion_tokens": 210,
+            "prompt_tokens": 152,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 362
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "You are terse.",
+              "role": "system"
+            },
+            {
+              "content": "Compute 2+2 and 3+3 as two separate calculator calls in one turn.",
+              "role": "user"
+            },
+            {
+              "content": null,
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{\"expression\":\"2+2\"}",
+                    "name": "calculator"
+                  },
+                  "id": "call_z5on817b",
+                  "type": "function"
+                },
+                {
+                  "function": {
+                    "arguments": "{\"expression\":\"3+3\"}",
+                    "name": "calculator"
+                  },
+                  "id": "call_1il9ln6x",
+                  "type": "function"
+                }
+              ]
+            },
+            {
+              "content": "4",
+              "role": "tool",
+              "tool_call_id": "call_z5on817b"
+            },
+            {
+              "content": "6",
+              "role": "tool",
+              "tool_call_id": "call_1il9ln6x"
+            }
+          ],
+          "model": "qwen3:1.7b",
+          "tools": [
+            {
+              "function": {
+                "description": "Evaluates an arithmetic expression.",
+                "name": "calculator",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expression": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "expression"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "message": {
+                "content": "The results of the calculations are:\n- 2 + 2 = 4  \n- 3 + 3 = 6  \n\nBoth results are accurate and separate. Let me know if you need further clarification!",
+                "reasoning": "Okay, the user asked to compute 2+2 and 3+3 as two separate calls. I made both calculator calls and got the results 4 and 6. Now, they're responding with 6. Hmm, maybe they want the sum of those results? Let me check the original question again. Oh, right, they wanted each calculation separately. So 4 and 6 are both correct. But the user's latest response is 6. Maybe they expect the total? Or perhaps they want to confirm the results. I should present both answers clearly. Let me state each result separately to clarify.\n",
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789558932,
+          "id": "chatcmpl-816",
+          "model": "qwen3:1.7b",
+          "object": "chat.completion",
+          "system_fingerprint": "fp_ollama",
+          "usage": {
+            "completion_tokens": 173,
+            "prompt_tokens": 212,
+            "prompt_tokens_details": {
+              "cached_tokens": 152
+            },
+            "total_tokens": 385
+          }
+        }
+      }
+    }
+  ]
+}

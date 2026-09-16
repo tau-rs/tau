@@ -149,6 +149,7 @@ outside the allowlist. It also fails if a cassette's `v` is unknown or its
 | `tool_call` | ✓ | ✓ | ✓ |
 | `tool_result_round_trip` (two turns) | ✓ | ✓ | ✓ |
 | `parallel_tool_calls` | ✓ | ✓ | – |
+| `parallel_tool_calls_round_trip` (two turns, #101) | ✓ | ✓ | ✓ |
 | `max_tokens_stop` | ✓ | ✓ | ✓ |
 | `stop_sequence_stop` (OpenAI reports it as `end_turn`, see below) | ✓ | ✓ | – |
 | `sampling_accepted` | ✓ | ✓ | ✓ |

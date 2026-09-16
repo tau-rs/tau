@@ -7,15 +7,14 @@
 
 mod common;
 
+use common::calc;
 use common::scenario::{self, Expect, Make, Scenario, Step, Target};
-use serde_json::json;
 use tau_drivers::model::anthropic::{
     AnthropicConfig, AnthropicDriver, ApiKey, InputEstimate, SamplingMode, ThinkingMode,
     API_KEY_ENV,
 };
-use tau_kernel::abi::Name;
 use tau_kernel::bridge::{
-    Content, Message, ModelReply, ModelRequest, Role, Sampling, StopReason, ToolDef, VERSION,
+    Content, Message, ModelReply, ModelRequest, Role, Sampling, StopReason, VERSION,
 };
 use tau_kernel::driver::Driver;
 
@@ -82,22 +81,14 @@ fn text(prompt: &str, max_tokens: u32) -> ModelRequest {
     }
 }
 
-fn calculator() -> ToolDef {
-    ToolDef {
-        name: Name::new("calculator").unwrap(),
-        description: "Evaluates an arithmetic expression.".into(),
-        input_schema: json!({"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"],"additionalProperties":false}),
-    }
-}
-
 fn with_calc(mut req: ModelRequest) -> ModelRequest {
-    req.tools = vec![calculator()];
+    req.tools = vec![calc::tool_def()];
     req
 }
 
 /// The second turn: the assistant's reply (thinking + tool calls, verbatim)
-/// then one `tool_result` per call.
-fn calc_result(first: &ModelRequest, prev: &ModelReply, result: &str) -> ModelRequest {
+/// then one `tool_result` per call, answered by the shared calculator.
+fn calc_result(first: &ModelRequest, prev: &ModelReply) -> ModelRequest {
     let mut req = first.clone();
     req.messages.push(Message {
         role: Role::Assistant,
@@ -107,9 +98,9 @@ fn calc_result(first: &ModelRequest, prev: &ModelReply, result: &str) -> ModelRe
         .content
         .iter()
         .filter_map(|c| match c {
-            Content::ToolCall { id, .. } => Some(Content::ToolResult {
+            Content::ToolCall { id, input, .. } => Some(Content::ToolResult {
                 call_id: id.clone(),
-                content: result.into(),
+                content: calc::answer(input),
                 is_error: false,
                 error_kind: None,
             }),
@@ -146,7 +137,6 @@ fn round_trip(
     prompt: &'static str,
     max_tokens: u32,
     first_expect: Expect,
-    result: &'static str,
 ) -> Scenario {
     let first = move || with_calc(text(prompt, max_tokens));
     Scenario {
@@ -159,7 +149,7 @@ fn round_trip(
                 expect: first_expect,
             },
             Step {
-                build: Box::new(move |prev| calc_result(&first(), prev.last().unwrap(), result)),
+                build: Box::new(move |prev| calc_result(&first(), prev.last().unwrap())),
                 expect: Expect::Stop(StopReason::EndTurn),
             },
         ],
@@ -214,7 +204,6 @@ fn scenarios() -> Vec<(Scenario, Make)> {
                     name: "calculator",
                     min: 1,
                 },
-                "391",
             ),
             make(HAIKU),
         ),
@@ -228,6 +217,19 @@ fn scenarios() -> Vec<(Scenario, Make)> {
                         512,
                     ))
                 },
+                Expect::ToolCall {
+                    name: "calculator",
+                    min: 2,
+                },
+            ),
+            make(HAIKU),
+        ),
+        (
+            round_trip(
+                "parallel_tool_calls_round_trip",
+                HAIKU,
+                "Compute 2+2 and 3+3 as two separate calculator calls in one turn.",
+                512,
                 Expect::ToolCall {
                     name: "calculator",
                     min: 2,
@@ -275,7 +277,6 @@ fn scenarios() -> Vec<(Scenario, Make)> {
                 "Work out the sum of the first 12 prime numbers step by step, then verify your total by calling the calculator tool once with the full addition expression.",
                 4096,
                 Expect::ThinkingToolCall { name: "calculator" },
-                "197",
             ),
             make(OPUS),
         ),
@@ -360,7 +361,8 @@ macro_rules! replay_tests {
 }
 
 replay_tests! {
-    text_end_turn, tool_call, tool_result_round_trip, parallel_tool_calls, max_tokens_stop,
+    text_end_turn, tool_call, tool_result_round_trip, parallel_tool_calls,
+    parallel_tool_calls_round_trip, max_tokens_stop,
     stop_sequence_stop, sampling_accepted, thinking_on_replayed_second_turn, thinking_disabled,
     count_tokens_estimate, bad_request_400, bad_key_401, unknown_model_404,
 }
@@ -373,7 +375,10 @@ async fn record_all() {
         return;
     }
     let mut total = 0;
-    for (s, make) in scenarios() {
+    for (s, make) in scenarios()
+        .into_iter()
+        .filter(|(s, _)| scenario::record_selected(s.name))
+    {
         let c = scenario::record(&s, make).await;
         total += c.get(&tau_kernel::abi::DimKey::CostMicroUsd).unwrap_or(0);
     }

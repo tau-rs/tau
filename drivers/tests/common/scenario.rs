@@ -161,6 +161,16 @@ pub(crate) fn record_enabled() -> bool {
     std::env::var("TAU_RECORD").as_deref() == Ok("1")
 }
 
+/// Whether `name` is in `TAU_RECORD_ONLY` (comma-separated scenario
+/// names); every scenario when it is unset. Re-recording one new scenario
+/// should not churn a dozen committed cassettes.
+pub(crate) fn record_selected(name: &str) -> bool {
+    match std::env::var("TAU_RECORD_ONLY") {
+        Ok(only) => only.split(',').any(|s| s.trim() == name),
+        Err(_) => true,
+    }
+}
+
 /// Sums two consumptions dimension-wise. `Consumption` has no add of its
 /// own; fold both `iter()`s into a `BTreeMap` (never `HashMap` — the reducer
 /// lint bans it workspace-wide, and this helper is compiled into the same
