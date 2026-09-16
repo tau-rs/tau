@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{
@@ -12,7 +12,8 @@ use common::{
     tokio_spawner, transport, Waits, World, MODEL_CEILING,
 };
 use libtau::{infer, infer_with, prompt, should_retry, InferError, RetryPolicy};
-use tau_kernel::abi::{Budget, Consumption, Corr, DimKey, Namespace};
+use tau_kernel::abi::{AgentId, BlobRef, Budget, Consumption, Corr, DimKey, Namespace};
+use tau_kernel::blob::{digest, Blobs, Memory};
 use tau_kernel::bridge::{ErrorKind, ModelError, ModelReply, StopReason};
 use tau_kernel::driver::Driver;
 use tau_kernel::kernel::{BoxFuture, Delivery, Kernel, KernelError};
@@ -225,6 +226,102 @@ fn three() -> RetryPolicy {
         retries: 3,
         backoff: Duration::from_millis(100),
         max_backoff: Duration::from_millis(250),
+    }
+}
+
+/// A store the test keeps a handle to, so it can drop a key from outside
+/// the kernel — what an operator deleting a file in `keys/` does.
+#[derive(Clone, Default)]
+struct Shared(Arc<Mutex<Memory>>);
+
+impl Blobs for Shared {
+    fn put(&mut self, owner: AgentId, bytes: &[u8]) -> BlobRef {
+        self.0.lock().unwrap().put(owner, bytes)
+    }
+
+    fn get(&self, blob: &BlobRef) -> Option<Vec<u8>> {
+        self.0.lock().unwrap().get(blob)
+    }
+
+    fn shred(&mut self, owner: AgentId) {
+        self.0.lock().unwrap().shred(owner);
+    }
+}
+
+/// A model that hands the request's correlation to the test and never
+/// answers on its own; the test replies through the kernel instead.
+#[derive(Clone, Default)]
+struct Held {
+    corr: Arc<Mutex<Option<Corr>>>,
+    delivered: Arc<Notify>,
+}
+
+impl Driver for Held {
+    fn handle(&self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
+        self.corr.lock().unwrap().replace(request.corr);
+        self.delivered.notify_one();
+        Box::pin(std::future::pending())
+    }
+
+    fn abandon(&self, _corr: Corr) {}
+}
+
+#[tokio::test]
+async fn infer_reports_a_shredded_reply_as_missing_payload() {
+    // ADR-0012 §6: the existing variant, reached through an actual shred.
+    // The reply is sealed for the agent that owns the correlation, and
+    // `Kernel::shred` refuses while that agent is live; so the erasure here
+    // is the store's own `shred`, between the reply's commit and the
+    // agent's `read` — the operator's key drop, from outside the kernel.
+    let mut store = Shared::default();
+    let kernel = Kernel::boot_with(
+        Log::with_sink(Vec::new()).unwrap(),
+        tokio_spawner,
+        Box::new(store.clone()),
+    );
+    let held = Held::default();
+    let model = kernel
+        .register_driver(
+            id("model"),
+            held.clone(),
+            Budget::from_dims([(DimKey::Tokens, MODEL_CEILING)]),
+        )
+        .unwrap();
+    let out = slot();
+    let sink = Arc::clone(&out);
+    let root = kernel
+        .spawn_root(
+            program(move |h| async move {
+                let result = infer(&h, model, &prompt("hello", 64), &mut Vec::new()).await;
+                sink.lock().unwrap().replace(result);
+                h.exit(b"")
+            }),
+            Namespace::from_caps([model]),
+            plenty(),
+        )
+        .unwrap();
+    held.delivered.notified().await;
+    let corr = held.corr.lock().unwrap().unwrap();
+
+    let bytes = serde_json::to_vec(&end_turn("gone")).unwrap();
+    let reply = digest(&bytes);
+    kernel
+        .reply(
+            &id("model"),
+            corr,
+            &bytes,
+            Consumption::from_dims([(DimKey::Tokens, 15)]),
+        )
+        .unwrap();
+    assert_eq!(kernel.read(reply).as_deref(), Some(bytes.as_slice()));
+    store.shred(root);
+    assert_eq!(kernel.read(reply), None);
+
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    match take(&out) {
+        Err(InferError::MissingPayload(blob)) => assert_eq!(blob, reply),
+        other => panic!("expected MissingPayload, got {other:?}"),
     }
 }
 

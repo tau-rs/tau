@@ -42,7 +42,7 @@ use tau_kernel::abi::{
     AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
     Msg, MsgKind, Name, NameError, Namespace, Seq,
 };
-use tau_kernel::blob::BlobStore;
+use tau_kernel::blob;
 use tau_kernel::hook::{
     crossings, FailureMode, HookEvent, HookPoint, HookSource, Roll, Rule, Ruling, Verdict as Answer,
 };
@@ -406,15 +406,15 @@ fn recorded(
     match answer {
         Answer::Allow => (Ruling::Allow, None),
         Answer::Deny(reason) if point.admits_deny() => {
-            (Ruling::Deny(BlobStore::digest(reason.as_bytes())), None)
+            (Ruling::Deny(blob::digest(reason.as_bytes())), None)
         }
         Answer::Deny(reason) => {
             let message = format!("deny at {point}, which admits none: {reason}");
-            let error = BlobStore::digest(message.as_bytes());
+            let error = blob::digest(message.as_bytes());
             (Ruling::Failed { mode, error }, None)
         }
         Answer::Emit { to, payload } => {
-            let payload = BlobStore::digest(&payload);
+            let payload = blob::digest(&payload);
             (Ruling::Emit { to, payload }, Some((to, payload)))
         }
     }
@@ -1213,7 +1213,7 @@ impl Sim {
                 self.state.next_seq(),
                 Endpoint::Agent { id: from },
                 MsgKind::Request,
-                BlobStore::digest(&payload),
+                blob::digest(&payload),
             )
             .with_corr(self.state.next_corr()),
             via,
@@ -1251,7 +1251,7 @@ impl Sim {
             self.state.next_seq(),
             Endpoint::Driver { id: driver.id },
             MsgKind::Reply,
-            BlobStore::digest(&payload),
+            blob::digest(&payload),
         )
         .with_corr(corr);
         if !self.rng.one_in(10) {
@@ -1292,7 +1292,7 @@ impl Sim {
         let entry = Entry::Exited {
             seq: self.state.next_seq(),
             agent,
-            result: BlobStore::digest(&result),
+            result: blob::digest(&result),
         };
         Some(Proposal {
             entry,
