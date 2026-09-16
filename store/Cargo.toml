@@ -1,0 +1,35 @@
+[package]
+name        = "tau-store"
+description = "The persistent, encrypting payload store behind the tau kernel's Blobs port: content by hash, erasure by key drop (ADR-0012)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+name = "tau_store"
+
+[dependencies]
+# `BlobRef`, `AgentId`, `blob::digest` and the `Blobs` port. Dependencies
+# point inward: the store knows the kernel's types, the kernel knows only
+# the trait.
+tau-kernel       = { path = "../kernel", version = "0.0.0" }
+# XChaCha20-Poly1305 (ADR-0012 §4). The 0.10 line, not 0.11: it shares
+# `crypto-common`, `cipher` and `block-buffer` with the `sha2` the kernel
+# already carries, so no harness pays for a second copy of the RustCrypto
+# stack. No `getrandom` feature on the cipher: the key bytes come from
+# `getrandom` directly, and the nonce is the reference, never random.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+getrandom        = "0.2"
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+thiserror        = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio    = { workspace = true, features = ["rt", "macros", "sync"] }
+
+[lints]
+workspace = true

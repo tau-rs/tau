@@ -48,7 +48,7 @@ use crate::abi::{
     AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
     Msg, MsgKind, Namespace, Seq,
 };
-use crate::blob::BlobStore;
+use crate::blob::{self, Blobs, Memory};
 use crate::driver::{Driver, ToolSchema};
 use crate::hook::{
     crossings, FailureMode, HookEvent, HookFailure, HookPoint, HookProgram, Roll, Ruling, Verdict,
@@ -110,6 +110,15 @@ pub enum KernelError {
     Closed,
 }
 
+/// Why [`Kernel::shred`] refused (ADR-0012 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ShredError {
+    /// An agent in the subtree is live or cancelling; nothing was shredded.
+    #[error("{0} is still live; cancel it and wait for the abort before shredding")]
+    Live(AgentId),
+}
+
 /// A request routed to a driver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Delivery {
@@ -129,7 +138,7 @@ struct Inbox {
 pub(crate) struct Inner {
     log: Log,
     state: State,
-    blobs: BlobStore,
+    blobs: Box<dyn Blobs>,
     spawner: Spawner,
     /// Registered drivers, so `cancel` can reach `abandon` while the driver's
     /// own loop is inside `handle`.
@@ -261,6 +270,7 @@ impl Inner {
         let mut roll: Roll = Vec::with_capacity(ids.len());
         let mut notes: Vec<(HookId, AgentId, Vec<u8>)> = Vec::new();
         let mut denied = None;
+        let subject = event.subject();
         for id in ids {
             let (Some(program), Some(record)) = (self.hooks.get(&id), self.state.hook(id)) else {
                 // Attached in the log but not live here: this kernel did not
@@ -285,17 +295,17 @@ impl Inner {
             let ruling = match answer {
                 Ok(Verdict::Allow) => Ruling::Allow,
                 Ok(Verdict::Deny(reason)) => {
-                    let blob = self.blobs.put(reason.as_bytes());
+                    let blob = self.blobs.put(subject, reason.as_bytes());
                     denied = Some((id, reason));
                     Ruling::Deny(blob)
                 }
                 Ok(Verdict::Emit { to, payload }) => {
-                    let blob = self.blobs.put(&payload);
+                    let blob = self.blobs.put(to, &payload);
                     notes.push((id, to, payload));
                     Ruling::Emit { to, payload: blob }
                 }
                 Err(HookFailure { message }) => {
-                    let error = self.blobs.put(message.as_bytes());
+                    let error = self.blobs.put(subject, message.as_bytes());
                     if mode == FailureMode::Closed && point.admits_deny() {
                         denied = Some((id, message));
                     }
@@ -311,7 +321,7 @@ impl Inner {
         let entry = Entry::Verdicts {
             seq: self.state.next_seq(),
             point: point.clone(),
-            subject: event.subject(),
+            subject,
             roll,
         };
         self.commit(entry)?;
@@ -320,7 +330,7 @@ impl Inner {
                 self.state.next_seq(),
                 Endpoint::Hook { id: hook },
                 MsgKind::Notice,
-                BlobStore::digest(&payload),
+                blob::digest(&payload),
             );
             self.commit(Entry::Emitted { hook, to, msg })?;
             self.wake_agent(to);
@@ -463,10 +473,20 @@ pub struct Kernel {
 }
 
 impl Kernel {
-    /// Boots a kernel over `log`, with `spawner` as the way to run tasks.
+    /// Boots a kernel over `log`, with `spawner` as the way to run tasks and
+    /// an in-memory blob store.
     ///
     /// With tokio: `|fut| { let h = tokio::spawn(fut); Box::new(move || h.abort()) }`.
     pub fn boot<S>(log: Log, spawner: S) -> Arc<Self>
+    where
+        S: Fn(BoxFuture<()>) -> AbortHandle + Send + Sync + 'static,
+    {
+        Self::boot_with(log, spawner, Box::new(Memory::new()))
+    }
+
+    /// Boots a kernel over `log` with the payload store the harness chose
+    /// (ADR-0012 §1): [`Memory`], or a persistent store beside the log.
+    pub fn boot_with<S>(log: Log, spawner: S, blobs: Box<dyn Blobs>) -> Arc<Self>
     where
         S: Fn(BoxFuture<()>) -> AbortHandle + Send + Sync + 'static,
     {
@@ -474,7 +494,7 @@ impl Kernel {
             inner: Mutex::new(Inner {
                 log,
                 state: State::initial(),
-                blobs: BlobStore::new(),
+                blobs,
                 spawner: Arc::new(spawner),
                 drivers: BTreeMap::new(),
                 hooks: BTreeMap::new(),
@@ -727,7 +747,39 @@ impl Kernel {
     /// it has no effect to log.
     #[must_use]
     pub fn read(&self, blob: BlobRef) -> Option<Vec<u8>> {
-        self.lock().blobs.get(&blob).map(<[u8]>::to_vec)
+        self.lock().blobs.get(&blob)
+    }
+
+    /// Erases the payloads of `root` and every agent below it (ADR-0012 §3):
+    /// the store drops each agent's key, and every reference their entries
+    /// carry reads as `None` from now on, in every copy of the store.
+    ///
+    /// Harness-level, like [`attach`](Self::attach): not a syscall, and not
+    /// a log entry — the log records the run, and a shred has no effect on
+    /// it, by construction. The subtree must be finished: a live agent would
+    /// keep sealing payloads under a key that no longer exists. Cancel it,
+    /// wait for the abort, then shred. An agent the kernel does not know, or
+    /// one that put nothing, is a no-op; so is a second shred.
+    ///
+    /// # Errors
+    ///
+    /// [`ShredError::Live`] naming the first agent in the subtree that is
+    /// still live or cancelling. Nothing is shredded in that case.
+    pub fn shred(&self, root: AgentId) -> Result<(), ShredError> {
+        let mut inner = self.lock();
+        let subtree = inner.state.subtree(root);
+        if let Some(live) = subtree.iter().copied().find(|id| {
+            inner
+                .state
+                .agent(*id)
+                .is_some_and(|a| matches!(a.status, Status::Live | Status::Cancelling))
+        }) {
+            return Err(ShredError::Live(live));
+        }
+        for owner in subtree {
+            inner.blobs.shred(owner);
+        }
+        Ok(())
     }
 
     /// A copy of every log entry so far.
@@ -820,7 +872,7 @@ impl Kernel {
 
     pub(crate) fn exit(&self, agent: AgentId, result: &[u8]) {
         let mut inner = self.lock();
-        let blob = inner.blobs.put(result);
+        let blob = inner.blobs.put(agent, result);
         let entry = Entry::Exited {
             seq: inner.state.next_seq(),
             agent,
@@ -861,7 +913,7 @@ impl Kernel {
                 by,
                 agent,
                 grace: mode.grace,
-                reason: BlobStore::digest(&mode.reason),
+                reason: blob::digest(&mode.reason),
             };
             inner.state.check(&entry)?;
             // Phase two's targets, read before the freeze: every open request
@@ -875,7 +927,7 @@ impl Kernel {
                     Some((Arc::clone(inner.drivers.get(driver)?), corr))
                 })
                 .collect();
-            inner.blobs.put(&mode.reason);
+            inner.blobs.put(agent, &mode.reason);
             let before = inner.before(&entry, &subtree);
             inner.commit(entry)?;
             inner.after(before)?;
@@ -947,7 +999,7 @@ impl Kernel {
                 seq,
                 Endpoint::Agent { id: from },
                 MsgKind::Request,
-                BlobStore::digest(payload),
+                blob::digest(payload),
             )
             .with_corr(corr)
         };
@@ -986,7 +1038,7 @@ impl Kernel {
                 via,
             };
         }
-        inner.blobs.put(payload);
+        inner.blobs.put(from, payload);
         let before = inner.before(&entry, &[]);
         inner.commit(entry)?;
         inner.after(before)?;
@@ -1119,7 +1171,7 @@ impl Kernel {
                 seq,
                 Endpoint::Driver { id: driver.clone() },
                 MsgKind::Reply,
-                BlobStore::digest(payload),
+                blob::digest(payload),
             )
             .with_corr(corr)
             .with_consumption(consumed.clone())
@@ -1150,7 +1202,7 @@ impl Kernel {
                 to,
             };
         }
-        inner.blobs.put(payload);
+        inner.blobs.put(to, payload);
         let before = inner.before(&entry, &[]);
         inner.commit(entry)?;
         inner.after(before)?;

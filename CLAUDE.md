@@ -21,6 +21,9 @@ Prerequisites: `just`, `cargo-nextest`, `cargo-insta` (each via `cargo install`)
 - `drivers/` — the only code that touches the outside world (HTTP, model providers).
 - `libtau/` — userspace over the seven syscalls: `infer()` and the tool loop.
   No special powers; anything expressible over the seven belongs here.
+- `store/` — `tau-store`. The persistent, encrypting payload store behind the
+  kernel's `Blobs` port (ADR-0012): one sealed copy per owner, erasure by key
+  drop. The kernel boots on `blob::Memory` when the harness supplies none.
 - `sim/` — deterministic seeded simulation of the reducer. Test-only.
 - `fuzz/` — cargo-fuzz targets. Not a workspace member on purpose: needs nightly
   and would put libFuzzer's C++ runtime on the `just check` path. Own lockfile.
