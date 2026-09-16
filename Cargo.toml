@@ -37,6 +37,10 @@ boon       = "0.6"
 # reducer is a pure fold, so a case cannot hang, and both would drag in
 # rusty-fork and tempfile for nothing.
 proptest   = { version = "1", default-features = false, features = ["std"] }
+# Benches (ADR-0003 KPIs). No default features: `rayon` and `plotters` would
+# ride along on the `just check` path, because clippy runs `--all-targets`;
+# `cargo_bench_support` is what makes `cargo bench` and its filters work.
+criterion  = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # The sandbox driver's shim (ADR-0009 §4): rlimits, process-group kill and
 # `getrusage` through safe wrappers, since the workspace forbids `unsafe`.
 # `nix` rather than `rustix`: rustix 1.x has no `getrusage`, and the shim's
