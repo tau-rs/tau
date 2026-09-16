@@ -87,4 +87,7 @@ sidecar is never the fix on its own: it needs an ADR-level reason, the way
 (canonical state only, ADR-0003's "everything else is cache"), and the way
 #80 re-pinned every sidecar because ADR-0008 added a canonical field. A
 re-pin without that reason quietly narrows the promise this directory exists
-to keep.
+to keep. A re-pin bumps `FOLD` in `kernel/src/reducer.rs` (ADR-0011 §2): the
+number names which reducer a snapshot's state is the fold of, and every
+snapshot taken before the re-pin is refused by every build after it, as it
+should be — they were folds of a reducer that no longer exists.

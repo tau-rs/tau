@@ -1403,8 +1403,8 @@ fn a_snapshot_mid_cancel_folds_to_the_full_hash_and_differs_only_in_stamps() {
             2,
             "the reply and the notice, undrained"
         );
-        assert_eq!(child.mailbox[0].abi, stamp);
-        assert_eq!(child.mailbox[1].abi, ABI);
+        assert_eq!(child.mailbox.first().unwrap().abi, stamp);
+        assert_eq!(child.mailbox.last().unwrap().abi, ABI);
         state
     };
     let older = fold_with(ABI - 1);
@@ -1435,7 +1435,7 @@ fn a_snapshot_mid_cancel_folds_to_the_full_hash_and_differs_only_in_stamps() {
     let mut from_snapshot = restored;
     let mut from_log = older;
     for s in [&mut from_snapshot, &mut from_log] {
-        let matched = s.agent(agent(1)).unwrap().mailbox[0].seq;
+        let matched = s.agent(agent(1)).unwrap().mailbox.first().unwrap().seq;
         step(s, |s| Entry::Resolved {
             seq: s.next_seq(),
             agent: agent(1),

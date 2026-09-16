@@ -19,6 +19,7 @@ fn soak_options(events: u64) -> Options {
         events,
         check_every: Some(1_000),
         max_live: Some(64),
+        snapshot_every: None,
     }
 }
 
@@ -65,6 +66,7 @@ fn the_population_bound_is_enforced() {
             events: 2_000,
             check_every: Some(1),
             max_live: Some(4),
+            snapshot_every: None,
         },
     )
     .unwrap();
@@ -84,9 +86,35 @@ fn an_unsampled_run_still_conserves_at_the_end() {
         events: 1_000,
         check_every: None,
         max_live: Some(16),
+        snapshot_every: None,
     };
     let report = run_with(SEED, &options).unwrap();
     assert!(report.state.is_drained());
     assert!(conserved(&report.state, &report.grant).is_ok());
     assert!(report.peak_live <= 16);
+}
+
+#[test]
+fn restoring_through_a_snapshot_at_every_check_point_changes_nothing() {
+    // ADR-0011 §5: the soak takes a snapshot at every check point and
+    // continues from it. Chained restores must leave the log and the hash
+    // exactly what a run without them produces, and the refold must agree.
+    let plain = run_with(SEED, &soak_options(8_000)).unwrap();
+    let restored = run_with(
+        SEED,
+        &Options {
+            snapshot_every: Some(1_000),
+            ..soak_options(8_000)
+        },
+    )
+    .unwrap();
+    assert!(restored.restores >= 8, "{} restores", restored.restores);
+    assert_eq!(plain.restores, 0);
+    assert_eq!(restored.log.entries(), plain.log.entries());
+    assert_eq!(restored.state.hash(), plain.state.hash());
+    assert_eq!(
+        restored.state.hash(),
+        fold(restored.log.entries()).unwrap().hash()
+    );
+    assert!(restored.state.is_drained());
 }

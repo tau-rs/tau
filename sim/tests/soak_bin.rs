@@ -37,6 +37,7 @@ fn soak_writes_a_log_whose_refold_matches_the_hash() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("entries="), "no summary line: {stdout}");
+    assert!(stdout.contains("restores="), "no restore count: {stdout}");
     let written = std::fs::read_to_string(&hash).unwrap();
     assert_eq!(written.trim().len(), 64, "a hex sha256: {written:?}");
 

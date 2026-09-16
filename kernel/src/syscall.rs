@@ -244,6 +244,15 @@ impl Handle {
     /// A cancelled agent's notice is a [`MsgKind::Notice`] from the canceller;
     /// a program that wants to see one while waiting on a reply asks for
     /// `Match::Or(vec![Match::Corr(corr), Match::Kind(MsgKind::Notice)])`.
+    ///
+    /// The `abi` stamp on the envelope handed back is the handing-over
+    /// build's, and replay does not preserve it (ADR-0011 §3): after a
+    /// restore from a snapshot every undrained envelope carries the restoring
+    /// build's `ABI`, where a fold from zero would have carried the stamp
+    /// its log entry did. Everything else on the envelope — `seq`, `from`,
+    /// `corr`, `kind`, `consumed`, `payload` — is canonical and identical. A
+    /// program that branches on `abi` relies on something the log does not
+    /// determine.
     pub fn recv(&self, filter: Match) -> Recv {
         Recv {
             kernel: Arc::clone(&self.kernel),

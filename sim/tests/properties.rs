@@ -89,6 +89,7 @@ fn holds(seed: u64, events: u64, property: Property) -> Result<(), TestCaseError
         events,
         check_every: None,
         max_live: None,
+        snapshot_every: None,
     };
     let Report { log, grant, .. } = run_unchecked(seed, &options)
         .map_err(|e| TestCaseError::fail(format!("seed {seed:#x}, {events} events: {e}")))?;
@@ -331,6 +332,7 @@ fn a_forged_resolution_is_caught_and_the_failure_prints_the_log() {
             events: 64,
             check_every: None,
             max_live: None,
+            snapshot_every: None,
         },
     )
     .unwrap();

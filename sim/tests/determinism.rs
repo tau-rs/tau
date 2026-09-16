@@ -5,7 +5,12 @@
 //! round-trip — and every fold must hash the same. This is the canary for
 //! reducer nondeterminism, not the proof: the proof is the Tier 2 soak.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::integer_division
+)]
 
 use tau_kernel::log::{Entry, Log};
 use tau_kernel::reducer::{fold, StateHash};
@@ -65,6 +70,36 @@ fn seed_b_refolds_to_the_same_hash() {
 #[test]
 fn seed_c_refolds_to_the_same_hash() {
     refolds_to_the_same_hash(SEED_C);
+}
+
+#[test]
+fn a_seed_restores_through_snapshots_to_the_pinned_hash() {
+    // ADR-0011 §5: replay = snapshot + tail at dozens of offsets, chained,
+    // against the fold from zero and against `PINNED`. One seed, one
+    // restore per fifty events: the quick ceiling is the budget, and every
+    // restore serializes and parses the whole state.
+    let (seed, entries, _, hash) = PINNED[0];
+    let restored = run_with(
+        seed,
+        &Options {
+            snapshot_every: Some(100),
+            ..Options::exhaustive(EVENTS)
+        },
+    )
+    .unwrap();
+    // Boot entries count as accepted before the loop, and the loop stops
+    // before the last period completes: a few short of fifty.
+    assert!(restored.restores >= 40, "{} restores", restored.restores);
+    assert_eq!(restored.log.len(), entries, "restores changed the log");
+    assert_eq!(
+        restored.state.hash().to_string(),
+        hash,
+        "restores changed the hash"
+    );
+    assert_eq!(
+        restored.state.hash(),
+        fold(restored.log.entries()).unwrap().hash()
+    );
 }
 
 #[test]
