@@ -62,4 +62,5 @@ pub mod hook;
 pub mod kernel;
 pub mod log;
 pub mod reducer;
+pub mod snapshot;
 pub mod syscall;

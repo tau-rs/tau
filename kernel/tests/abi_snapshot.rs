@@ -14,7 +14,7 @@
 use tau_kernel::abi::{
     AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, Entry,
     FailureMode, HookId, HookPoint, HookSource, LogHeader, Msg, MsgKind, Name, Namespace, Ruling,
-    Seq, ABI,
+    Seq, SnapshotHeader, ABI,
 };
 use tau_kernel::log::Log;
 
@@ -126,6 +126,28 @@ fn log_header_wire_format() {
     insta::assert_json_snapshot!(LogHeader::current());
 }
 
+/// A header with every field at a recognisable value: the numbers are the
+/// ADR-0011 §1 example's, the digests are bytes a reader can see are
+/// distinct. Not a header any log would produce; the shape is what is pinned.
+fn snapshot_header() -> SnapshotHeader {
+    SnapshotHeader {
+        magic: SnapshotHeader::MAGIC,
+        abi: 2,
+        fold: 1,
+        seq: 5017,
+        prefix: "11".repeat(32),
+        state: "22".repeat(32),
+    }
+}
+
+#[test]
+fn snapshot_header_wire_format() {
+    // ADR-0011 §2: the snapshot header joins the frozen surface so an old
+    // snapshot can always be *refused* legibly, whatever became of the state
+    // behind it.
+    insta::assert_json_snapshot!(snapshot_header());
+}
+
 #[test]
 fn every_frozen_type_round_trips() {
     // A snapshot pins how a value is written. This pins that reading it back
@@ -155,6 +177,13 @@ fn every_frozen_type_round_trips() {
     let header = LogHeader::current();
     let json = serde_json::to_string(&header).unwrap();
     assert_eq!(serde_json::from_str::<LogHeader>(&json).unwrap(), header);
+
+    let header = snapshot_header();
+    let json = serde_json::to_string(&header).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SnapshotHeader>(&json).unwrap(),
+        header
+    );
 
     // Every entry kind, and every variant split the snapshots pin: the
     // property `tau replay` depends on (ADR-0010 §5).

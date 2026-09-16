@@ -166,6 +166,22 @@ impl Agent {
     }
 }
 
+/// The fold version: which reducer a state is the fold of (ADR-0011 §2).
+///
+/// Two builds with the same `FOLD` fold every log to the same state; the
+/// corpus sidecars are the evidence. A snapshot is accepted only at
+/// `header.fold == FOLD` — equality, because a fold is one function or a
+/// different one. Bumped by every change that moves a pinned hash (a
+/// canonical field added or dropped, a wall charge or reservation computed
+/// differently); never by an `ABI` bump on its own. The fixture snapshot
+/// `fold_version_is_pinned_with_the_fixture_hashes` holds the number next to
+/// the hashes, so the diff a reviewer accepts shows them moving together.
+///
+/// | FOLD | Change | ADR |
+/// |---|---|---|
+/// | 1 | the first fold with a number: the state as of #112, the envelope stamp out of the hash | ADR-0011 |
+pub const FOLD: u16 = 1;
+
 /// The kernel's state: a pure fold over the log.
 ///
 /// Only the canonical fields are serialized, so [`State::hash`] is a function

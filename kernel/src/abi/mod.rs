@@ -40,6 +40,7 @@ mod hook;
 mod ids;
 mod msg;
 mod name;
+mod snapshot;
 
 pub use budget::{Budget, BudgetError, Consumption, DimKey};
 pub use cap::{Capability, Endpoint, Namespace};
@@ -48,6 +49,7 @@ pub use hook::{FailureMode, HookPoint, HookSource, Roll, Ruling};
 pub use ids::{AgentId, Corr, DriverId, HookId, Seq};
 pub use msg::{BlobRef, BlobRefError, LogHeader, Msg, MsgKind};
 pub use name::{Name, NameError, NAME_MAX_LEN};
+pub use snapshot::SnapshotHeader;
 
 /// The ABI version carried by every [`Msg`] and every log header.
 ///
