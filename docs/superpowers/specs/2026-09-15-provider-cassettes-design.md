@@ -214,8 +214,10 @@ reported as **retired**; a listed model with no probe cassettes is reported as
 
 ```
 just live                # replay-only sanity + prints how to record
-just live record         # TAU_RECORD=1, keys from Keychain, all targets
+just live record         # TAU_RECORD=1, keys from Keychain, all targets, drift diff at the end
 just live record anthropic
+just live e2e            # #102: the tool-loop programs live, all targets, nothing written
+just live e2e ollama
 ```
 
 Keys come from `security find-generic-password -s ANTHROPIC_API_KEY -w` and
@@ -228,6 +230,13 @@ Anthropic probes run cheapest model first. Each recorded reply's priced
 consumption is summed; when the running total exceeds `TAU_RECORD_CAP_MICROUSD`
 (default 3 000 000, three dollars) the run stops and reports which models
 are left. OpenAI pro-tier models are probed last for the same reason.
+
+The live e2e rows (#102, `drivers/tests/e2e_live.rs`) honour the same cap,
+cheapest model first, and stop *before* a row whose worst case (two calls at
+the driver's ceiling) would take the total past it. A live row asserts shape,
+not bytes: `end_turn`, every tool call answered, the kernel's `Tokens` equal
+to the usage the provider reported plus the calculator's. Byte equality with a
+recording stays a replay assertion.
 
 ## Components
 

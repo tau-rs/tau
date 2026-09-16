@@ -70,7 +70,10 @@ watch:
 # (`security find-generic-password`; store with `security add-generic-password -U -a "$USER"
 # -s ANTHROPIC_API_KEY -w "$(pbpaste)"`); `just live render` re-renders
 # drivers/tests/cassettes/MODELS.md from the cassettes already on disk, no
-# provider call. Costs money; see drivers/tests/cassettes/MODELS.md.
+# provider call; `just live e2e [anthropic|openai|ollama]` runs the tool-loop
+# programs of drivers/tests/e2e_live.rs against the real providers, nothing
+# written. Costs money, capped by TAU_RECORD_CAP_MICROUSD (default three
+# dollars); see drivers/tests/cassettes/MODELS.md.
 live mode="replay" target="all":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -84,11 +87,27 @@ live mode="replay" target="all":
       echo "re-rendered drivers/tests/cassettes/MODELS.md"
       exit 0
     fi
-    [ "{{mode}}" = "record" ] || { echo "mode is replay, record or render"; exit 2; }
-    # TAU_RECORD_ONLY=name[,name] in the environment records just those scenarios.
-    export TAU_RECORD=1
+    [[ "{{mode}}" == record || "{{mode}}" == e2e ]] || { echo "mode is replay, record, render or e2e"; exit 2; }
     key() { security find-generic-password -s "$1" -w 2>/dev/null || { echo "no Keychain entry $1" >&2; exit 2; }; }
     t="{{target}}"
+    if [ "{{mode}}" = "e2e" ]; then
+      [[ "$t" == all || "$t" == anthropic || "$t" == openai || "$t" == ollama ]] || { echo "target is all|anthropic|openai|ollama"; exit 2; }
+      e2e() { cargo test -p tau-drivers --all-features --test e2e_live -- --ignored --nocapture "$1"; }
+      if [[ "$t" == all || "$t" == anthropic ]]; then
+        a="$(key ANTHROPIC_API_KEY)"
+        TAU_ANTHROPIC_LIVE=1 ANTHROPIC_API_KEY="$a" e2e anthropic_live
+      fi
+      if [[ "$t" == all || "$t" == openai ]]; then
+        o="$(key OPENAI_API_KEY)"
+        TAU_OPENAI_LIVE=1 OPENAI_API_KEY="$o" e2e openai_live
+      fi
+      if [[ "$t" == all || "$t" == ollama ]]; then
+        TAU_OLLAMA_LIVE=1 e2e ollama_live
+      fi
+      exit 0
+    fi
+    # TAU_RECORD_ONLY=name[,name] in the environment records just those scenarios.
+    export TAU_RECORD=1
     if [[ "$t" == all || "$t" == anthropic ]]; then
       a="$(key ANTHROPIC_API_KEY)"
       ANTHROPIC_API_KEY="$a" cargo test -p tau-drivers --all-features --test cassettes_anthropic -- --ignored --nocapture record_all
@@ -109,7 +128,8 @@ live mode="replay" target="all":
       echo "target is all|anthropic|openai|ollama|probes"
       exit 2
     fi
-    echo; echo "re-recorded; review with: git diff --stat drivers/tests/cassettes"
+    echo; echo "re-recorded; drift against the committed cassettes:"
+    git diff --stat -- drivers/tests/cassettes
 
 # Install the pre-commit hook. Optional, never mandatory-slow: a hook that
 # takes a minute is a hook people disable.

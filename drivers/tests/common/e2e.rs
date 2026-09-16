@@ -1,7 +1,8 @@
-//! One agent program over a cassette: the kernel boots, a model driver and
+//! One agent program over a model driver: the kernel boots, the driver and
 //! the calculator are registered, the real `libtau` tool loop runs to its
-//! end, and what the loop caused to be sent is checked against the
-//! recording, request for request.
+//! end, and what the loop caused to be sent comes back with the run. Two
+//! sources for the provider's side: [`run`] replays a cassette through the
+//! stub, [`live`] relays to the real provider through the forwarding stub.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -16,11 +17,65 @@ use tau_kernel::log::Log;
 use tau_kernel::syscall::program as agent_program;
 
 use super::calc;
-use super::cassette::{self, Cassette};
-use super::Captured;
+use super::cassette::{self, Exchange, RecordedResponse};
+use super::scenario::Target;
+use super::{Captured, Stub};
 
 /// A model driver and the ceiling it was built with, at a base URL.
 pub(crate) type MakeModel = Box<dyn Fn(&str) -> (Arc<dyn Driver>, Budget) + Send + Sync>;
+
+pub(crate) const HAIKU: &str = "claude-haiku-4-5-20251001";
+pub(crate) const OPUS: &str = "claude-opus-5";
+pub(crate) const MINI: &str = "gpt-4.1-mini";
+pub(crate) const QWEN: &str = "qwen3:1.7b";
+
+pub(crate) const CALC_PROMPT: &str = "What is 17*23? Use the calculator tool.";
+pub(crate) const PARALLEL_PROMPT: &str =
+    "Compute 2+2 and 3+3 as two separate calculator calls in one turn.";
+pub(crate) const THINKING_PROMPT: &str = "Work out the sum of the first 12 prime numbers step by step, then verify your total by calling the calculator tool once with the full addition expression.";
+
+/// The Anthropic driver in the config the cassettes were recorded with
+/// (`cassettes_anthropic.rs`): Opus at 5/25, everything else at 1/5 µUSD
+/// per token.
+#[cfg(feature = "anthropic")]
+pub(crate) fn anthropic(
+    model: &'static str,
+    key: tau_drivers::model::anthropic::ApiKey,
+) -> MakeModel {
+    use tau_drivers::model::anthropic::{AnthropicConfig, AnthropicDriver};
+    Box::new(move |base: &str| {
+        let (i, o) = if model.starts_with("claude-opus") {
+            (5, 25)
+        } else {
+            (1, 5)
+        };
+        let mut cfg = AnthropicConfig::new(model, key.clone(), 16_000, 4_096, i, o);
+        cfg.base_url = base.to_owned();
+        let driver = AnthropicDriver::new(cfg).unwrap();
+        let ceiling = driver.ceiling();
+        (Arc::new(driver) as Arc<dyn Driver>, ceiling)
+    })
+}
+
+/// The OpenAI driver in the config the cassettes were recorded with
+/// (`cassettes_openai.rs`), 1/4 µUSD per token; Ollama is the same driver
+/// with no key and no prices.
+#[cfg(feature = "openai")]
+pub(crate) fn openai(
+    model: String,
+    key: Option<tau_drivers::model::openai::ApiKey>,
+    ollama: bool,
+) -> MakeModel {
+    use tau_drivers::model::openai::{OpenAiConfig, OpenAiDriver};
+    Box::new(move |base: &str| {
+        let (i, o) = if ollama { (0, 0) } else { (1, 4) };
+        let mut cfg = OpenAiConfig::new(model.clone(), key.clone(), 16_000, 4_096, i, o);
+        cfg.base_url = base.to_owned();
+        let driver = OpenAiDriver::new(cfg).unwrap();
+        let ceiling = driver.ceiling();
+        (Arc::new(driver) as Arc<dyn Driver>, ceiling)
+    })
+}
 
 /// `register_driver` takes a concrete `Driver`; this is the one for a
 /// driver already behind an `Arc<dyn Driver>`.
@@ -86,7 +141,9 @@ pub(crate) fn ample(_ceiling: &Budget) -> Budget {
 
 /// What one run left behind.
 pub(crate) struct Run {
-    pub(crate) cassette: Cassette,
+    /// The provider's side, in order: the cassette's exchanges on replay,
+    /// what the relay saw when live.
+    pub(crate) exchanges: Vec<Exchange>,
     /// The loop's answer.
     pub(crate) result: Result<ModelReply, ToolLoopError>,
     /// The request after the loop: the full transcript.
@@ -108,7 +165,38 @@ pub(crate) async fn run(dir_name: &str, name: &str, make: MakeModel, program: Pr
         .exchanges
         .iter()
         .map(|e| (e.response.status, e.response.body.to_string()));
-    let mut stub = super::start(super::script(answers)).await;
+    let stub = super::start(super::script(answers)).await;
+    drive(stub, cassette.exchanges, make, program).await
+}
+
+/// Like [`run`], but the model's side is the real provider behind
+/// `target`, reached through the forwarding stub; the exchanges are what
+/// the relay saw. Nothing is written to disk.
+pub(crate) async fn live(target: Target, make: MakeModel, program: Program) -> Run {
+    let (stub, mut relayed) = super::start_forwarding(target.live_base_url()).await;
+    let mut run = drive(stub, Vec::new(), make, program).await;
+    while let Ok(r) = relayed.try_recv() {
+        let request = cassette::redact(&r.request)
+            .unwrap_or_else(|h| panic!("{}: refusing to keep header {h}", target.dir_name()));
+        let body: Value = serde_json::from_slice(&r.body).unwrap_or_else(|e| {
+            panic!(
+                "{}: provider body is not JSON: {e}: {}",
+                target.dir_name(),
+                String::from_utf8_lossy(&r.body)
+            )
+        });
+        run.exchanges.push(Exchange {
+            request,
+            response: RecordedResponse {
+                status: r.status,
+                body,
+            },
+        });
+    }
+    run
+}
+
+async fn drive(mut stub: Stub, exchanges: Vec<Exchange>, make: MakeModel, program: Program) -> Run {
     let (model, ceiling) = make(&stub.base_url);
     let calculator = Calculator::default();
 
@@ -159,7 +247,7 @@ pub(crate) async fn run(dir_name: &str, name: &str, make: MakeModel, program: Pr
     let spent = kernel.state().agent(root).unwrap().spent.clone();
     let calls = calculator.seen.lock().unwrap().clone();
     Run {
-        cassette,
+        exchanges,
         result,
         transcript,
         calls,
@@ -173,7 +261,7 @@ impl Run {
     /// there are exactly `count` of them.
     pub(crate) fn assert_sent_matches_recording(&self, count: usize) {
         assert_eq!(self.sent.len(), count, "requests on the wire");
-        for (i, (sent, ex)) in self.sent.iter().zip(&self.cassette.exchanges).enumerate() {
+        for (i, (sent, ex)) in self.sent.iter().zip(&self.exchanges).enumerate() {
             assert_eq!(sent.path(), ex.request.path, "exchange #{i} path");
             assert_eq!(
                 sent.json(),

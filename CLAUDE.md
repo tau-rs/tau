@@ -12,7 +12,7 @@ Prerequisites: `just`, `cargo-nextest`, `cargo-insta` (each via `cargo install`)
 - `just abi` — wire-format snapshots and invariants for `kernel/src/abi/`.
 - `just abi-review` — `cargo insta review`. A snapshot diff means the frozen
   surface moved: read it, never accept it reflexively.
-- `just live [record|render [target]]` — provider cassettes: replay (default), re-record via Keychain keys, or re-render `drivers/tests/cassettes/MODELS.md`.
+- `just live [record|render|e2e [target]]` — provider cassettes: replay (default), re-record via Keychain keys, re-render `drivers/tests/cassettes/MODELS.md`, or run the tool-loop programs live (`e2e`, nothing written).
 
 ## Layout
 
