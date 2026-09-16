@@ -298,6 +298,22 @@ A log is self-describing because it carries the rule's text; whether a
 future build can *evaluate* that text is a question for `attach`, not for
 the reader, which never evaluates anything.
 
+
+## Amendments
+
+- **2026-09-16** — `Msg.abi` leaves the canonical state
+  ([#109](https://github.com/tau-rs/tau/issues/109)). §7 promised the same
+  hash on every build at `ABI ≥ 2`, but the notice a `Cancelled` entry makes
+  the fold synthesize was stamped with `Msg::new`'s `ABI` — the build's — and
+  `Agent.mailbox` was hashed with the stamp. A log ending with that notice
+  undrained folded to one hash per build. The fold never decides on an
+  envelope's `abi`, so the mailbox now serializes without it (ADR-0003's
+  "everything else is cache", as #62 did for the indexes) and a restored
+  state re-stamps with the restoring build's `ABI`. The hash's definition
+  moved; no sidecar, fixture or `PINNED` value did, because every pinned log
+  ends drained and a finished agent's mailbox is empty. A future log that
+  ends mid-cancel pins to a hash that already holds on every build.
+
 [`LogHeader`]: ../../kernel/src/abi/msg.rs
 [`Msg`]: ../../kernel/src/abi/msg.rs
 [`Entry`]: ../../kernel/src/abi/entry.rs
