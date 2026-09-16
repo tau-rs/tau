@@ -150,7 +150,14 @@ mod shim {
 
     /// Whether `status`, with `used` CPU, is the host kernel enforcing
     /// `RLIMIT_CPU`: `SIGXCPU` is unambiguous; a `SIGKILL` the shim did not
-    /// send, with the CPU at the limit, is the hard limit on Linux.
+    /// send, with the CPU near the limit, is the hard limit on Linux, which
+    /// wins over `SIGXCPU` when soft and hard are equal.
+    ///
+    /// "Near": Linux checks the limit against tick-sampled CPU time and
+    /// `getrusage` reports scheduler runtime, and on a virtualised host the
+    /// two drift by more than a few ticks. Nothing else in the fence sends
+    /// `SIGKILL`, so the check only has to tell the limit from a kill by a
+    /// third party, and a quarter of the limit does that.
     fn hit_cpu_limit(status: ExitStatus, used: RawUsage, cpu_s: u64) -> bool {
         let Some(sig) = status.signal() else {
             return false;
@@ -162,8 +169,8 @@ mod shim {
             return false;
         }
         let total = used.cpu_user_us.saturating_add(used.cpu_sys_us);
-        // Accounting granularity: a tick short of the limit is still the limit.
-        total.saturating_add(20_000) >= cpu_s.saturating_mul(1_000_000)
+        let limit = cpu_s.saturating_mul(1_000_000);
+        total.saturating_mul(4) >= limit.saturating_mul(3)
     }
 
     fn classify(status: ExitStatus, used: RawUsage, cpu_s: u64) -> End {
