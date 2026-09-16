@@ -194,7 +194,7 @@ Runs on demand and always before a release tag:
 2. **Deterministic simulation soak** (FoundationDB-style, the crown jewel): the `sim` crate drives the kernel with a seeded random workload (spawns, sends, cancels racing exits, driver failures, injected WouldBlock) against fake drivers and a virtual clock, 10^6+ events, then (a) refolds and compares state hash, (b) replays on a *second platform build* (macOS runner refolds the Linux-produced log) and compares — catching platform-dependent nondeterminism (HashMap ordering, float formatting).
 3. **Fuzzing, short**: `cargo-fuzz` 15-min jobs on envelope deserialization, log-file parsing, Rule-DSL parsing, tool-call JSON handling (model output is attacker-controlled input — fuzz the exact path it enters).
 4. **Full macOS matrix**: complete test suite + sim smoke on macOS; both stable and beta toolchains on Linux.
-5. **Sanitizers**: ASan/LSan test pass (nightly toolchain job) on the kernel; TSan on the queue/scheduler layer via every crate that boots a `Kernel`. The sandbox-driver leg joins when `drivers/sandbox/**` exists.
+5. **Sanitizers**: ASan/LSan test pass (nightly toolchain job) on the kernel; TSan on the queue/scheduler layer via every crate that boots a `Kernel`; ASan/LSan again over the sandbox driver and its shim, the one place the system runs code it did not write (#61).
 6. `cargo nextest run` with `--test-threads 1` once — surfaces order-dependent tests early.
 7. Benchmarks compiled (not judged) to catch bench rot.
 

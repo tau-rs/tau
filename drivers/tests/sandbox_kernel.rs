@@ -149,6 +149,10 @@ async fn a_scratch_root_that_cannot_be_used_is_a_host_error() {
     assert!(!root.spent.contains_key(&DimKey::ComputeMs));
 }
 
+/// Not run under AddressSanitizer: `asan+lsan (sandbox)` in tier2.yml
+/// excludes this test by name, because the ASan runtime's shadow mapping
+/// needs terabytes of address space and dies at startup under any
+/// `RLIMIT_AS` a test would set.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_memory_bound_reaches_the_shim_and_a_small_run_fits_under_it() {

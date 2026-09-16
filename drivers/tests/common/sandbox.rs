@@ -39,6 +39,16 @@ pub(crate) fn config(cpu: u32, wall: Duration) -> SandboxConfig {
     if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
         c.env.push(("LLVM_PROFILE_FILE".into(), profile));
     }
+    // Under `-Zsanitizer=address` the shim carries the ASan runtime, which
+    // reads its options from the environment it was given, not the
+    // harness's. Forwarded for the same reason: on macOS the runtime warns
+    // on the shim's stderr when it finds no `atos` on an empty PATH, and
+    // `ASAN_OPTIONS=symbolize=0` is how a local run keeps the interpreter's
+    // stderr clean. The Linux leg (`asan+lsan (sandbox)`, tier2.yml) sets
+    // nothing and needs nothing.
+    if let Ok(options) = std::env::var("ASAN_OPTIONS") {
+        c.env.push(("ASAN_OPTIONS".into(), options));
+    }
     c
 }
 
