@@ -110,8 +110,8 @@ The recorder copies request headers **only** from the set
 request ids and rate-limit state the driver does not use. If a captured
 request carries any header outside the allowlist that is not in the known
 transport set (`host`, `content-length`, `accept`, `user-agent`,
-`accept-encoding`), record mode **refuses to write** and fails the scenario
-with the offending header name.
+`accept-encoding`, `connection`), record mode **refuses to write** and fails
+the scenario with the offending header name.
 
 *Why*: a denylist has to be updated when a provider adds an auth header; an
 allowlist cannot leak what it never reads.

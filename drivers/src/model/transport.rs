@@ -96,6 +96,15 @@ fn lock(flights: &Mutex<Flights>) -> MutexGuard<'_, Flights> {
 /// and the connection pool is per host either way, so every driver sees the
 /// same behaviour it saw with a client of its own. The build is attempted
 /// once; its error, if any, is remembered and returned to every caller.
+///
+/// A pooled idle connection belongs to the tokio runtime that opened it and
+/// cannot be reused from another runtime, so a process that hosts several
+/// runtimes over its lifetime (many `#[tokio::test]`s under plain `cargo
+/// test`, for instance) must not carry idle connections across them. Every
+/// test stub in this workspace answers `connection: close`, and the live
+/// tests run one runtime per binary, which is why sharing this client is
+/// safe today; a future caller that pools connections across runtimes would
+/// need its own client, not this one.
 fn shared_client() -> Result<reqwest::Client, ConfigError> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     CLIENT

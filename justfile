@@ -68,15 +68,23 @@ watch:
 # Provider cassettes. `just live` replays; `just live record [anthropic|openai|ollama|probes]`
 # re-records through the relay with keys from the macOS Keychain
 # (`security find-generic-password`; store with `security add-generic-password -U -a "$USER"
-# -s ANTHROPIC_API_KEY -w "$(pbpaste)"`). Costs money; see drivers/tests/cassettes/MODELS.md.
+# -s ANTHROPIC_API_KEY -w "$(pbpaste)"`); `just live render` re-renders
+# drivers/tests/cassettes/MODELS.md from the cassettes already on disk, no
+# provider call. Costs money; see drivers/tests/cassettes/MODELS.md.
 live mode="replay" target="all":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{mode}}" = "replay" ]; then
+      echo "replaying committed cassettes; re-record with: just live record [anthropic|openai|ollama|probes]"
       exec cargo nextest run -p tau-drivers --all-features --profile quick \
         --test cassette_guard --test cassettes_anthropic --test cassettes_openai --test probes
     fi
-    [ "{{mode}}" = "record" ] || { echo "mode is replay or record"; exit 2; }
+    if [ "{{mode}}" = "render" ]; then
+      cargo test -p tau-drivers --all-features --test probes -- --ignored rewrite_models_md_from_disk
+      echo "re-rendered drivers/tests/cassettes/MODELS.md"
+      exit 0
+    fi
+    [ "{{mode}}" = "record" ] || { echo "mode is replay, record or render"; exit 2; }
     export TAU_RECORD=1
     key() { security find-generic-password -s "$1" -w 2>/dev/null || { echo "no Keychain entry $1" >&2; exit 2; }; }
     t="{{target}}"

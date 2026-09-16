@@ -144,6 +144,12 @@ pub(crate) fn all_files() -> Vec<PathBuf> {
         return out;
     };
     for target in targets.flatten() {
+        // `synthetic/` is where cassette_guard writes a throwaway cassette
+        // mid-run; walking it here could race that write and read a
+        // half-written file.
+        if target.file_name() == "synthetic" {
+            continue;
+        }
         let Ok(files) = std::fs::read_dir(target.path()) else {
             continue;
         };

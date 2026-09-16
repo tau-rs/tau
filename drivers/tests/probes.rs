@@ -362,7 +362,7 @@ async fn list_models(target: Target, key: &str) -> Vec<String> {
 
 const TITLE: &str = "# Provider model capability table";
 const RENDERED_FROM: &str = "Rendered from `drivers/tests/cassettes/*/probe_*.json` by `probes::render_models_md`; do not edit by hand.";
-const LEGEND: &str = "A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text` and `tool call` read 400 while `max_completion_tokens` reads `ok`: that is the policy this table exists to record, not a driver bug. A model the provider retires keeps its cassettes and its row here, and is named under `retired` below, until someone deletes the files by hand.";
+const LEGEND: &str = "A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text`, `tool call`, and `sampling present` all read 400 while `max_completion_tokens` reads `ok`: the same default cap field is sent on all three probes, so the request fails before the temperature question is ever reached, and that is the policy this table exists to record, not a driver bug. A model the provider retires keeps its cassettes and its row here, and is named under `retired` below, until someone deletes the files by hand.";
 const INVENTORY: &str = "## inventory (at last record)";
 const RETIRED_LINE: &str = "- retired (cassette, no longer listed): ";
 const UNPROBED_LINE: &str = "- unprobed (listed, no cassette): ";
@@ -639,6 +639,10 @@ async fn openai_probe_cassettes_replay() {
     replay_all(Target::OpenAi).await;
 }
 
+/// The two inventory bullets are read from the file under test and fed back
+/// into the renderer (`inventory_from`, above), so they are the one part of
+/// `MODELS.md` this test does not verify — the one fact the cassettes on
+/// disk cannot re-derive on their own.
 #[test]
 fn models_md_is_what_the_cassettes_render_to() {
     let cassettes = probe_cassettes();
