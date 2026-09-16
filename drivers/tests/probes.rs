@@ -14,6 +14,7 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use common::cassette::{self, Cassette};
 use common::scenario::{self, Build, Expect, Make, Scenario, Step, Target};
@@ -522,29 +523,89 @@ fn probe_cassettes() -> Vec<Cassette> {
         .collect()
 }
 
+/// Every `probe_*` cassette sitting in one target's directory.
+fn probe_files(target: Target) -> Vec<PathBuf> {
+    cassette::all_files()
+        .into_iter()
+        .filter(|f| {
+            let in_dir = f
+                .parent()
+                .and_then(|d| d.file_name())
+                .and_then(|d| d.to_str())
+                == Some(target.dir_name());
+            let is_probe = f
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with("probe_"));
+            in_dir && is_probe
+        })
+        .collect()
+}
+
+/// Replays one probe cassette through a driver configured exactly as the
+/// recording was: same model, same knobs, so the request the stub captures
+/// must equal the request on disk byte for byte.
+async fn replay_probe(file: PathBuf) {
+    let stem = file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_else(|| panic!("{}: no stem", file.display()))
+        .to_owned();
+    let rest = stem
+        .strip_prefix("probe_")
+        .unwrap_or_else(|| panic!("{stem}: not a probe cassette"));
+    let (kind, model_slug) = rest
+        .split_once("__")
+        .unwrap_or_else(|| panic!("{stem}: no __ between probe and model"));
+    let c: Cassette = serde_json::from_str(&std::fs::read_to_string(&file).unwrap())
+        .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let target = target_of(&c.target)
+        .unwrap_or_else(|| panic!("{}: unknown target {}", file.display(), c.target));
+    let model = probe_model(&c).unwrap_or_else(|| model_slug.to_owned());
+    let (s, make) = scenario_for(target, model, Probe::parse(kind));
+    scenario::replay_from(&s, target.dir_name(), make).await;
+}
+
+/// Replays every probe cassette of one target, all at once.
+///
+/// One probe is one stub round-trip over a real socket; a hundred and
+/// eighty of them in sequence overran the quick profile's 5 s ceiling, and
+/// they are independent — each `replay_from` starts its own stub — so they
+/// run as spawned tasks. A panicking replay is resumed on this thread with
+/// its payload intact, so the failure still names the scenario.
+async fn replay_all(target: Target) {
+    let files = probe_files(target);
+    let n = files.len();
+    assert!(
+        n > 0,
+        "no probe cassettes for {}; run `just live record probes`",
+        target.dir_name()
+    );
+    let mut handles = Vec::with_capacity(n);
+    for file in files {
+        handles.push(tokio::spawn(replay_probe(file)));
+    }
+    for handle in handles {
+        if let Err(joined) = handle.await {
+            match joined.try_into_panic() {
+                Ok(payload) => std::panic::resume_unwind(payload),
+                Err(e) => panic!("replay task did not finish: {e}"),
+            }
+        }
+    }
+    eprintln!("{n} {} probe cassettes replayed", target.dir_name());
+}
+
 // --- tests ---
 
-#[tokio::test]
-async fn every_probe_cassette_replays_against_the_driver_that_recorded_it() {
-    let mut n = 0;
-    for file in cassette::all_files() {
-        let stem = file.file_stem().unwrap().to_str().unwrap();
-        let Some(rest) = stem.strip_prefix("probe_") else {
-            continue;
-        };
-        let (kind, model_slug) = rest
-            .split_once("__")
-            .unwrap_or_else(|| panic!("{stem}: no __ between probe and model"));
-        let c: Cassette = serde_json::from_str(&std::fs::read_to_string(&file).unwrap())
-            .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-        let target = target_of(&c.target)
-            .unwrap_or_else(|| panic!("{}: unknown target {}", file.display(), c.target));
-        let model = probe_model(&c).unwrap_or_else(|| model_slug.to_owned());
-        let (s, make) = scenario_for(target, model, Probe::parse(kind));
-        scenario::replay_from(&s, target.dir_name(), make).await;
-        n += 1;
-    }
-    eprintln!("{n} probe cassettes replayed");
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn anthropic_probe_cassettes_replay() {
+    replay_all(Target::Anthropic).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn openai_probe_cassettes_replay() {
+    replay_all(Target::OpenAi).await;
 }
 
 #[test]
