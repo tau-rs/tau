@@ -2,7 +2,7 @@
 
 Rendered from `drivers/tests/cassettes/*/probe_*.json` by `probes::render_models_md`; do not edit by hand.
 
-A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text` and `tool call` read 400 while `max_completion_tokens` reads `ok`: that is the policy this table exists to record, not a driver bug.
+A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text` and `tool call` read 400 while `max_completion_tokens` reads `ok`: that is the policy this table exists to record, not a driver bug. A model the provider retires keeps its cassettes and its row here, and is named under `retired` below, until someone deletes the files by hand.
 
 ## anthropic
 

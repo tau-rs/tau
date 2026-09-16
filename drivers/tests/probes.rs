@@ -220,6 +220,17 @@ fn scenario_for(target: Target, model: String, p: Probe) -> (Scenario, Make) {
 
 // --- models endpoint ---
 
+/// Which provider owns a model id. Every Anthropic id begins `claude-`;
+/// everything else in this file is OpenAI's. Used to keep one target's
+/// inventory intact when only the other is being re-recorded.
+fn target_of(model: &str) -> Target {
+    if model.starts_with("claude-") {
+        Target::Anthropic
+    } else {
+        Target::OpenAi
+    }
+}
+
 /// Input and output price in µUSD per token. Only the ratio between models
 /// matters here: it is what makes the cap bite on the expensive ones first,
 /// and what the recorded `cost_microusd` is summed from.
@@ -351,12 +362,13 @@ async fn list_models(target: Target, key: &str) -> Vec<String> {
 
 const TITLE: &str = "# Provider model capability table";
 const RENDERED_FROM: &str = "Rendered from `drivers/tests/cassettes/*/probe_*.json` by `probes::render_models_md`; do not edit by hand.";
-const LEGEND: &str = "A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text` and `tool call` read 400 while `max_completion_tokens` reads `ok`: that is the policy this table exists to record, not a driver bug.";
+const LEGEND: &str = "A cell is `ok` when the recorded response was 2xx, `<status> <the start of the provider's message>` when it was not, and `—` where no cassette exists. OpenAI's gpt-5 and o-series reject the default `max_tokens` field with a 400 asking for `max_completion_tokens`, so on those models `text` and `tool call` read 400 while `max_completion_tokens` reads `ok`: that is the policy this table exists to record, not a driver bug. A model the provider retires keeps its cassettes and its row here, and is named under `retired` below, until someone deletes the files by hand.";
 const INVENTORY: &str = "## inventory (at last record)";
 const RETIRED_LINE: &str = "- retired (cassette, no longer listed): ";
 const UNPROBED_LINE: &str = "- unprobed (listed, no cassette): ";
 
-fn target_of(name: &str) -> Option<Target> {
+/// The target a cassette directory (or a cassette's `target` field) names.
+fn target_named(name: &str) -> Option<Target> {
     match name {
         "anthropic" => Some(Target::Anthropic),
         "openai" => Some(Target::OpenAi),
@@ -384,7 +396,7 @@ fn probe_model(c: &Cassette) -> Option<String> {
 /// defined by exactly one thing on the wire: tools, `temperature`,
 /// `thinking`, `max_completion_tokens`, or none of them.
 fn probe_of(c: &Cassette) -> Option<Probe> {
-    let target = target_of(&c.target)?;
+    let target = target_named(&c.target)?;
     let body = &c.exchanges.first()?.request.body;
     let present = |field: &str| body.get(field).is_some_and(|v| !v.is_null());
     if body
@@ -523,6 +535,25 @@ fn probe_cassettes() -> Vec<Cassette> {
         .collect()
 }
 
+/// The path of the rendered table.
+fn models_md() -> PathBuf {
+    cassette::dir().join("MODELS.md")
+}
+
+/// The two inventory bullets as the file on disk has them. Empty when there
+/// is no file yet.
+fn inventory_on_disk() -> (Vec<String>, Vec<String>) {
+    inventory_from(&std::fs::read_to_string(models_md()).unwrap_or_default())
+}
+
+/// Renders the table from the probe cassettes on disk plus the two bullets,
+/// and writes it. The only writer of `MODELS.md`, so a render-only refresh
+/// and the end of a recording run cannot drift apart.
+fn write_models_md(retired: &[String], unprobed: &[String]) {
+    let rendered = render_models_md(&probe_cassettes(), retired, unprobed);
+    std::fs::write(models_md(), rendered).expect("write MODELS.md");
+}
+
 /// Every `probe_*` cassette sitting in one target's directory.
 fn probe_files(target: Target) -> Vec<PathBuf> {
     cassette::all_files()
@@ -559,7 +590,7 @@ async fn replay_probe(file: PathBuf) {
         .unwrap_or_else(|| panic!("{stem}: no __ between probe and model"));
     let c: Cassette = serde_json::from_str(&std::fs::read_to_string(&file).unwrap())
         .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-    let target = target_of(&c.target)
+    let target = target_named(&c.target)
         .unwrap_or_else(|| panic!("{}: unknown target {}", file.display(), c.target));
     let model = probe_model(&c).unwrap_or_else(|| model_slug.to_owned());
     let (s, make) = scenario_for(target, model, Probe::parse(kind));
@@ -611,13 +642,25 @@ async fn openai_probe_cassettes_replay() {
 #[test]
 fn models_md_is_what_the_cassettes_render_to() {
     let cassettes = probe_cassettes();
-    let on_disk = std::fs::read_to_string(cassette::dir().join("MODELS.md")).unwrap_or_default();
+    let on_disk = std::fs::read_to_string(models_md()).unwrap_or_default();
     let (retired, unprobed) = inventory_from(&on_disk);
     assert_eq!(
         on_disk,
         render_models_md(&cassettes, &retired, &unprobed),
         "MODELS.md is stale; run `just live record`"
     );
+}
+
+/// Re-renders `MODELS.md` from the cassettes already on disk, keeping the
+/// inventory bullets the file already carries. No provider call and no
+/// money: this is the refresh for when the *renderer* changes — a new
+/// column, a reworded legend — as opposed to when the evidence changes.
+#[test]
+#[ignore = "rewrites drivers/tests/cassettes/MODELS.md"]
+fn rewrite_models_md_from_disk() {
+    let (retired, unprobed) = inventory_on_disk();
+    write_models_md(&retired, &unprobed);
+    eprintln!("MODELS.md re-rendered; retired={retired:?} unprobed={unprobed:?}");
 }
 
 #[tokio::test]
@@ -633,8 +676,23 @@ async fn record_probes() {
         .unwrap_or(3_000_000);
     let only = std::env::var("TAU_RECORD_TARGET").ok();
     let mut spent = 0u64;
-    let mut retired = Vec::new();
-    let mut unprobed = Vec::new();
+    // A scoped run learns nothing about the other provider, and the two
+    // bullets are one file: start from what the file says about the targets
+    // this run will not visit, or the recovery step of a capped OpenAI run
+    // (`TAU_RECORD_TARGET=anthropic`) would quietly erase the `unprobed`
+    // list it exists to work through. A whole-world run starts from nothing.
+    let (mut retired, mut unprobed) = match only.as_deref() {
+        None => (Vec::new(), Vec::new()),
+        Some(o) => {
+            let (was_retired, was_unprobed) = inventory_on_disk();
+            let elsewhere = |ids: Vec<String>| -> Vec<String> {
+                ids.into_iter()
+                    .filter(|m| target_of(m).dir_name() != o)
+                    .collect()
+            };
+            (elsewhere(was_retired), elsewhere(was_unprobed))
+        }
+    };
     for target in [Target::Anthropic, Target::OpenAi] {
         if only.as_deref().is_some_and(|o| o != target.dir_name()) {
             continue;
@@ -676,11 +734,6 @@ async fn record_probes() {
             }
         }
     }
-    let cassettes = probe_cassettes();
-    std::fs::write(
-        cassette::dir().join("MODELS.md"),
-        render_models_md(&cassettes, &retired, &unprobed),
-    )
-    .expect("write MODELS.md");
+    write_models_md(&retired, &unprobed);
     eprintln!("probes recorded; {spent} µUSD; retired={retired:?} unprobed={unprobed:?}");
 }
