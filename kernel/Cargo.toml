@@ -38,6 +38,19 @@ insta      = { workspace = true }
 # end-to-end test, so it is a dev-dependency.
 tokio      = { workspace = true, features = ["rt", "macros", "sync", "time"] }
 tau-kernel = { path = ".", features = ["testing"] }
+criterion  = { workspace = true }
+# The fold bench feeds the reducer a seeded, realistic log, and the sim crate
+# is the generator of those (`run_unchecked`). sim depends on the kernel as a
+# normal dependency, so this edge closes a dev-dependency cycle, which cargo
+# permits: the kernel lib is built once and both sides link the same artifact.
+tau-sim    = { path = "../sim" }
+
+# ADR-0003's two KPIs: reducer throughput in entries/sec and send→deliver
+# latency. Not on the `just check` path; `cargo bench -p tau-kernel --no-run`
+# is what must stay green (Tier 2 item 7, #40).
+[[bench]]
+name    = "kpi"
+harness = false
 
 [lints]
 workspace = true
