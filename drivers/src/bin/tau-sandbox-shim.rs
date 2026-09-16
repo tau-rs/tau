@@ -274,6 +274,10 @@ mod shim {
     }
 
     pub(super) fn main() -> ExitCode {
+        // RED PROOF (scratch, never merged): a 64 KiB heap block the shim
+        // forgets on purpose. `asan+lsan (sandbox)` must go red on the LSan
+        // report at the shim's exit; every other job stays as on #117.
+        std::mem::forget(vec![0xA5u8; 64 * 1024]);
         let args = match parse(std::env::args().skip(1)) {
             Ok(args) => args,
             Err(_) => return ExitCode::from(2),
