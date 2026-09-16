@@ -229,6 +229,13 @@ the reservation, `settle()`, push `msg` to `to`'s mailbox, drop the corr.
 `DriverDown` and `DriverUp`: **nothing**, after the check, the way
 `Verdicts` applies as nothing (ADR-0008 §3).
 
+**Hooks.** An `Unanswered` is kernel-originated, so `PreDeliver` does not
+see it, for the reason ADR-0008 §1 gives for the cancel notice: a hook may
+refuse what a driver says, and there is nothing here to refuse — the
+request must close. `OnBudget` fires on it as on any entry that moves a
+grant, which a full refund of a queued request does. `DriverDown` and
+`DriverUp` are at no hook point.
+
 **What replay and the fold ignore, and must keep ignoring:**
 
 - `reply_within` on `DriverRegistered`. The fold does not store it and
