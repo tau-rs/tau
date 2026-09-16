@@ -312,35 +312,105 @@ fn chat_capable(id: &str, all: &BTreeSet<String>) -> bool {
         && !alias_of(id).is_some_and(|base| all.contains(base))
 }
 
-/// The models the provider lists, in the order probes should spend money on
-/// them: Anthropic cheapest first, OpenAI alphabetical with the `pro` models
-/// last, since those are the ones that would eat the cap.
-async fn list_models(target: Target, key: &str) -> Vec<String> {
-    let client = reqwest::Client::new();
-    let base = format!("{}/v1/models", target.live_base_url());
-    let req = match target {
-        Target::Anthropic => client
-            .get(format!("{base}?limit=100"))
-            .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01"),
-        _ => client
-            .get(base)
-            .header("authorization", format!("Bearer {key}")),
-    };
-    let body: Value = req
-        .send()
-        .await
-        .expect("models request")
-        .json()
-        .await
-        .expect("models response is JSON");
-    let all: Vec<String> = body
+/// One `/v1/models` page: its ids in listing order and, when the page says
+/// `has_more`, the `last_id` the next request starts after. A page that
+/// promises more but names no cursor cannot be followed, and a partial list
+/// must not pass for the whole one, so that panics.
+fn page_of(body: &Value) -> (Vec<String>, Option<String>) {
+    let ids = body
         .get("data")
         .and_then(Value::as_array)
         .unwrap_or_else(|| panic!("no data array in {body}"))
         .iter()
         .filter_map(|m| m.get("id").and_then(Value::as_str).map(ToOwned::to_owned))
         .collect();
+    let has_more = body
+        .get("has_more")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let next = has_more.then(|| {
+        body.get("last_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| panic!("has_more without last_id in {body}"))
+    });
+    (ids, next)
+}
+
+/// Every id the provider lists, page after page. `fetch(after_id)` returns
+/// one page body; the walk asks again after that page's `last_id` for as
+/// long as the page says `has_more`. A page without `has_more` is the only
+/// page, which is what OpenAI's unpaginated list looks like.
+async fn walk_pages<Fut>(mut fetch: impl FnMut(Option<String>) -> Fut) -> Vec<String>
+where
+    Fut: std::future::Future<Output = Value>,
+{
+    let mut ids = Vec::new();
+    let mut after = None;
+    loop {
+        let (page, next) = page_of(&fetch(after).await);
+        ids.extend(page);
+        match next {
+            Some(cursor) => after = Some(cursor),
+            None => return ids,
+        }
+    }
+}
+
+/// A fetch for a provider whose list is not paginated today: it serves the
+/// one page and refuses a cursor, so the day OpenAI answers `has_more: true`
+/// the record run stops loudly instead of probing a truncated list.
+fn single_page<Fut>(mut fetch: impl FnMut() -> Fut) -> impl FnMut(Option<String>) -> Fut {
+    move |after| {
+        assert!(
+            after.is_none(),
+            "OpenAI /v1/models now paginates (has_more: true, last_id: {after:?}); follow its cursor in list_models as for Anthropic"
+        );
+        fetch()
+    }
+}
+
+/// The models the provider lists, in the order probes should spend money on
+/// them: Anthropic cheapest first, OpenAI alphabetical with the `pro` models
+/// last, since those are the ones that would eat the cap. Anthropic's list is
+/// paginated and walked to its last page; OpenAI's is one page by contract.
+async fn list_models(target: Target, key: &str) -> Vec<String> {
+    let client = reqwest::Client::new();
+    let base = format!("{}/v1/models", target.live_base_url());
+    let fetch_json = |req: reqwest::RequestBuilder| async move {
+        req.send()
+            .await
+            .expect("models request")
+            .json::<Value>()
+            .await
+            .expect("models response is JSON")
+    };
+    let all = match target {
+        Target::Anthropic => {
+            walk_pages(|after| {
+                let mut req = client
+                    .get(&base)
+                    .query(&[("limit", "100")])
+                    .header("x-api-key", key)
+                    .header("anthropic-version", "2023-06-01");
+                if let Some(after) = after {
+                    req = req.query(&[("after_id", after)]);
+                }
+                fetch_json(req)
+            })
+            .await
+        }
+        _ => {
+            walk_pages(single_page(|| {
+                fetch_json(
+                    client
+                        .get(&base)
+                        .header("authorization", format!("Bearer {key}")),
+                )
+            }))
+            .await
+        }
+    };
     match target {
         Target::Anthropic => {
             let mut ids = all;
@@ -862,4 +932,75 @@ fn alias_of_knows_every_snapshot_suffix() {
     assert_eq!(alias_of("gpt-5-mini"), None);
     assert_eq!(alias_of("-16k"), None);
     assert_eq!(alias_of("0613"), None);
+}
+
+/// A fake `/v1/models` server for [`walk_pages`]: one page per cursor,
+/// counting calls so a test can pin how many pages were asked for.
+fn paged(
+    pages: Vec<(Option<&'static str>, Value)>,
+) -> impl FnMut(Option<String>) -> std::future::Ready<Value> {
+    let mut served = 0usize;
+    move |after| {
+        let (cursor, body) = pages
+            .get(served)
+            .unwrap_or_else(|| panic!("asked for page {} of {}", served + 1, pages.len()));
+        assert_eq!(after.as_deref(), *cursor, "cursor of page {}", served + 1);
+        served += 1;
+        std::future::ready(body.clone())
+    }
+}
+
+/// Three pages chained by `has_more`/`last_id`, each requested with the
+/// `last_id` of the one before, and the ids kept in listing order.
+#[tokio::test]
+async fn anthropic_listing_follows_has_more_to_the_last_page() {
+    let ids = walk_pages(paged(vec![
+        (
+            None,
+            json!({"data": [{"id": "a"}, {"id": "b"}], "has_more": true, "first_id": "a", "last_id": "b"}),
+        ),
+        (
+            Some("b"),
+            json!({"data": [{"id": "c"}, {"id": "d"}], "has_more": true, "first_id": "c", "last_id": "d"}),
+        ),
+        (
+            Some("d"),
+            json!({"data": [{"id": "e"}], "has_more": false, "first_id": "e", "last_id": "e"}),
+        ),
+    ]))
+    .await;
+    assert_eq!(ids, ["a", "b", "c", "d", "e"]);
+}
+
+/// OpenAI's shape: a `data` array and no `has_more` at all. One page, one
+/// request, and `last_id` alone never triggers a second one.
+#[tokio::test]
+async fn a_page_without_has_more_is_the_only_page() {
+    let ids = walk_pages(paged(vec![(
+        None,
+        json!({"object": "list", "data": [{"id": "gpt-4o"}, {"id": "o1"}], "last_id": "o1"}),
+    )]))
+    .await;
+    assert_eq!(ids, ["gpt-4o", "o1"]);
+}
+
+/// A page that promises more but names no cursor cannot be followed; a
+/// partial list must not pass for the whole one.
+#[tokio::test]
+#[should_panic(expected = "has_more without last_id")]
+async fn a_page_that_says_has_more_but_names_no_cursor_panics() {
+    walk_pages(paged(vec![(
+        None,
+        json!({"data": [{"id": "a"}], "has_more": true, "last_id": null}),
+    )]))
+    .await;
+}
+
+/// OpenAI's fetch refuses a second page: the day its list paginates, the
+/// record run stops loudly instead of probing a truncated list.
+#[tokio::test]
+#[should_panic(expected = "OpenAI /v1/models now paginates")]
+async fn openai_listing_refuses_a_second_page() {
+    let page = json!({"object": "list", "data": [{"id": "gpt-4o"}], "has_more": true, "last_id": "gpt-4o"});
+    walk_pages(single_page(move || std::future::ready(page.clone()))).await;
 }
