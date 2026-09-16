@@ -114,3 +114,15 @@ M4.
 agent to contain a threat that only exists at one boundary. Agents are code the
 operator wrote; model-authored code is the untrusted input, and it arrives
 through exactly one driver.
+
+## Amendments
+
+- **2026-09-16** — Invariant 3 gains its one exception
+  ([ADR-0012](0012-blob-store-crypto-shredding.md),
+  [#121](https://github.com/tau-rs/tau/issues/121)). "Everything else is
+  cache" holds for every *derived* thing — state, indexes, snapshots.
+  Payload bytes are not derivable from the log; they live in the blob store,
+  outside the log on purpose, so that they can be erased while the log
+  cannot. The store is the other half of the truth, not a cache to be
+  rebuilt, and a shred is not a log entry because it has no effect on the
+  fold.
