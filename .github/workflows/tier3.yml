@@ -2,8 +2,9 @@
 #
 # Tier 3 jobs open issues instead of failing builds: drift is not the
 # committer's fault, and a red build that blames the wrong person trains
-# everyone to ignore red. This file is item 1 of the seven, the determinism
-# drift sentinel (#72). The other six are tracked in #7.
+# everyone to ignore red. This file holds item 1 of the seven, the
+# determinism drift sentinel (#72), and item 5, the benchmark regression
+# judge (#151). The other five are tracked in #7.
 #
 # The sentinel refolds every log in corpus/ with today's main, through
 # `tau replay --expect` (#91), and expects the state hash each was pinned at. A hash that moved means the reducer
@@ -19,6 +20,18 @@
 # scheduled firings in the past 24h and files an issue when the count is
 # not exactly one. And an empty lane reports green: scripts/refold-corpus.sh
 # fails closed below a fixture-count floor.
+#
+# The benchmark judge runs kernel/benches/kpi_ir.rs, ADR-0003's two KPIs
+# under callgrind, and compares each benchmark's instruction count with the
+# baseline committed next to it. Instruction counts do not move with the
+# runner's load, which is why they and not wall-clock are the judged number
+# (HANDOFF §8 item 5); criterion's `kpi` target stays the informational
+# wall-clock reading. More than 5 % over the baseline files an issue per
+# benchmark, deduplicated by open title. The job goes red only when it could
+# not have judged: valgrind or the runner missing, too few benchmarks, a
+# benchmark the baseline does not know. The same two landmines apply: the
+# firings counter above covers the whole workflow, both jobs fire together;
+# scripts/bench-regression.sh fails closed below a benchmark-count floor.
 
 name: tier3
 
@@ -28,6 +41,16 @@ on:
     # workflow on GitHub wants a runner, and that queue is the throttle.
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      baseline:
+        description: >-
+          judge: compare kpi_ir instruction counts with the committed baseline (the nightly's
+          behaviour). record: measure and upload kernel/benches/kpi_ir.baseline.tsv as the
+          `kpi-ir-baseline` artifact for a PR to commit, judge nothing.
+        type: choice
+        options: [judge, record]
+        default: judge
+        required: false
 
 permissions:
   contents: read
@@ -41,6 +64,8 @@ env:
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
   CORPUS_FLOOR: 10
+  KPI_FLOOR: 3
+  LIMIT_PCT: 5
 
 jobs:
   sentinel:
@@ -163,3 +188,128 @@ jobs:
           )"
           url="$(gh issue create --title "$title" --label status:ready --body "$body")"
           echo "opened $url"
+
+  # Item 5: the benchmark regression judge. valgrind and the runner binary
+  # are installed here, not on every tier: only this job runs the target.
+  # The runner's version must equal the library's, so it is read from
+  # Cargo.lock rather than pinned a second time.
+  bench:
+    name: benchmark regression (instruction counts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write       # to file regression issues
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install valgrind and the iai-callgrind runner
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind
+          version="$(cargo metadata --locked --format-version 1 \
+            | jq -r '.packages[] | select(.name == "iai-callgrind") | .version')"
+          [ -n "$version" ] || { echo "::error::iai-callgrind is not in Cargo.lock"; exit 1; }
+          # The runner has no `--version` of its own (it refuses to run
+          # outside the library's harness); `cargo install --list` is the
+          # record of what is installed.
+          installed() { cargo install --list | sed -nE 's/^iai-callgrind-runner v([0-9.]+):$/\1/p'; }
+          if [ "$(installed)" != "$version" ]; then
+            cargo install --locked iai-callgrind-runner --version "$version"
+          fi
+          valgrind --version
+          echo "iai-callgrind-runner $(installed)"
+
+      - name: Count instructions
+        id: bench
+        env:
+          MODE: ${{ github.event.inputs.baseline || 'judge' }}
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          # The runner's JSON goes to stdout, one summary per benchmark;
+          # cargo's own chatter and the runner's log go to stderr.
+          cargo bench --locked -p tau-kernel --bench kpi_ir -- --output-format=json > ir.json
+          ./scripts/bench-regression.sh ir.json | tee judge.txt
+          {
+            echo "## benchmark regression (instruction counts)"
+            echo
+            echo "- $(rustc --version); $(valgrind --version); iai-callgrind-runner $(cargo install --list | sed -nE 's/^iai-callgrind-runner v([0-9.]+):$/\1/p')"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`; mode: \`$MODE\`; limit: +${LIMIT_PCT} %"
+            echo "- $(tail -1 judge.txt)"
+            echo "- wall (build + run): ${SECONDS}s"
+            echo
+            echo '```'
+            grep -E '^(ok|REGRESSION|FASTER|TOOLING) ' judge.txt || true
+            echo '```'
+            if [ "$MODE" = "record" ]; then
+              echo
+              echo 'Recorded baseline (`kpi-ir-baseline` artifact):'
+              echo
+              echo '```'
+              cat kernel/benches/kpi_ir.baseline.tsv
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the recorded baseline
+        if: github.event.inputs.baseline == 'record'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kpi-ir-baseline
+          path: kernel/benches/kpi_ir.baseline.tsv
+          if-no-files-found: error
+
+      # The callgrind profiles behind the numbers, for whoever reads the
+      # issue: `callgrind_annotate` on the `.out` files shows where the
+      # instructions went.
+      - name: Upload the callgrind profiles
+        if: always() && steps.bench.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kpi-ir-profiles
+          path: |
+            ir.json
+            target/iai/
+          if-no-files-found: warn
+          retention-days: 14
+
+      # One issue per regressed benchmark, deduplicated by exact open title
+      # so a regression that persists for a week is one issue, not seven.
+      - name: File an issue per regressed benchmark
+        if: always() && steps.bench.outputs.regressed != '' && steps.bench.outputs.regressed != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open="$(gh issue list --state open --limit 500 --json number,title)"
+          while IFS=$'\t' read -r name old new pct; do
+            title="tier3: benchmark regression — $name"
+            existing="$(jq -r --arg t "$title" '.[] | select(.title == $t) | .number' <<<"$open" | head -1)"
+            if [ -n "$existing" ]; then
+              echo "$title: already open as #$existing"
+              gh issue comment "$existing" --body "Still over the limit on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: $new instructions, baseline $old ($pct %). Run: $RUN_URL"
+              continue
+            fi
+            body="$(cat <<EOF
+          The nightly judge (\`tier3.yml\`) ran \`kernel/benches/kpi_ir.rs\` on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` under callgrind, and \`$name\` retired more than ${LIMIT_PCT} % more instructions than the committed baseline.
+
+          | | instructions (Ir) |
+          |---|---|
+          | baseline (\`kernel/benches/kpi_ir.baseline.tsv\`) | \`$old\` |
+          | measured on \`$GITHUB_SHA\` | \`$new\` ($pct %) |
+
+          - run: $RUN_URL (the \`kpi-ir-profiles\` artifact holds the callgrind profiles; \`callgrind_annotate\` shows where the instructions went)
+          - Instruction counts do not move with the runner's load, so this is the code or the toolchain, not the machine. Find the commit between the baseline's \`ref\` (in the file's header) and \`$GITHUB_SHA\` that moved it.
+          - If the growth is the price of an intended change, the fix is a re-pin that says so: \`gh workflow run tier3.yml --ref main -f baseline=record\`, then commit the \`kpi-ir-baseline\` artifact in a PR that names the reason.
+
+          refs #151, #7
+          EOF
+          )"
+            url="$(gh issue create --title "$title" --label status:ready --body "$body")"
+            echo "$title: opened $url"
+          done < regressions.tsv

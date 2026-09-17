@@ -5,10 +5,23 @@
 
 [advisories]
 version = 2
-# Empty on purpose. An ignore entry here is a decision to ship a known
-# vulnerability; it must carry a comment naming the advisory, the reason, and
-# the condition under which it is removed.
-ignore = []
+# An ignore entry here is a decision to ship a known advisory; it must carry
+# a comment naming the advisory, the reason, and the condition under which it
+# is removed. Nothing below is a vulnerability: both are `unmaintained`
+# notices on crates that only `kernel/benches/kpi_ir.rs` reaches, through
+# `iai-callgrind` (a dev-dependency; the bench target ships nothing).
+ignore = [
+    # bincode 1.3.3, which iai-callgrind uses to talk to its runner binary.
+    # Its authors call 1.3.3 finished rather than abandoned. Removed when
+    # iai-callgrind moves off bincode 1.
+    "RUSTSEC-2025-0141",
+    # proc-macro-error2, reached through iai-callgrind-macros. Also carries
+    # a future-incompatibility warning (E0365, a private `proc_macro`
+    # re-export), which the pinned toolchain accepts; a toolchain bump that
+    # makes it a hard error forces the iai-callgrind upgrade. Removed when
+    # iai-callgrind-macros drops it.
+    "RUSTSEC-2026-0173",
+]
 
 [licenses]
 version = 2
