@@ -37,16 +37,32 @@
 //! per note — before the governed entry at a pre point, after the causing
 //! entry at an on point. The live closures live here beside the drivers; the
 //! reducer holds only their records, and the fold never runs one.
+//!
+//! # Driver supervision (ADR-0014)
+//!
+//! A driver that *answers* is fully handled by its reply, whatever it says.
+//! A driver that does not is the kernel's to close out, so no request ever
+//! hangs: the loop that polls `handle` catches an unwind and writes
+//! `DriverDown { crashed }` plus one `Unanswered` per request it had taken;
+//! [`Kernel::tick`] writes `Unanswered { overdue }` for every request past
+//! the bound its driver was registered with; and the harness's two verbs,
+//! [`Kernel::replace_driver`] and [`Kernel::retire_driver`], write the
+//! health transitions they cause. Each closed request bills its ceiling if
+//! the driver had taken it and nothing if it was still queued. Health, the
+//! bound and who holds what are cache here — [`DriverSlot`], `in_flight` —
+//! never reducer state. What happens to the driver next is the supervisor's
+//! call, told through [`Kernel::supervise`].
 
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
 
 use crate::abi::{
-    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
-    Msg, MsgKind, Namespace, Seq,
+    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DownCause, DriverId, Endpoint,
+    HookId, Msg, MsgKind, Namespace, Seq, UnansweredCause,
 };
 use crate::blob::{self, Blobs, Memory};
 use crate::driver::{Driver, ToolSchema};
@@ -54,7 +70,7 @@ use crate::hook::{
     crossings, FailureMode, HookEvent, HookFailure, HookPoint, HookProgram, Roll, Ruling, Verdict,
 };
 use crate::log::{Entry, Log, LogError};
-use crate::reducer::{Outcome, Refusal, State, StateHash, Status};
+use crate::reducer::{as_consumption, Outcome, Refusal, State, StateHash, Status};
 use crate::syscall::{CancelMode, Exit, ExitResult, Handle, Program, WaitFor};
 
 /// A boxed, sendable future.
@@ -135,25 +151,110 @@ struct Inbox {
     waker: Option<Waker>,
 }
 
+/// What the supervisor is told (ADR-0014 §6). Every event is after the
+/// fact: the kernel has already closed the request, recorded the transition
+/// and billed it; the supervisor decides only what happens to the driver
+/// next, through [`Kernel::replace_driver`] and [`Kernel::retire_driver`],
+/// and doing nothing is a valid policy for every event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DriverEvent {
+    /// The loop unwound. `DriverDown { crashed }` and its `Unanswered`s are
+    /// already logged; the inbox stays, and a replacement takes what is
+    /// queued in it.
+    Crashed {
+        /// The driver.
+        driver: DriverId,
+    },
+    /// A request passed the bound. Its `Unanswered { overdue }` is already
+    /// logged. The driver is not declared down: slow and dead look the same
+    /// from outside, and which it is is the supervisor's call.
+    Overdue {
+        /// The driver.
+        driver: DriverId,
+        /// The request.
+        corr: Corr,
+        /// Its owner.
+        agent: AgentId,
+    },
+    /// A `Replied` settled above the ceiling. The overdraft is already on
+    /// the agent, loud in the state hash (#18); nothing is logged beyond the
+    /// `Replied` that carries it.
+    Overdrew {
+        /// The driver.
+        driver: DriverId,
+        /// The request.
+        corr: Corr,
+        /// Its owner, who carries the overdraft.
+        agent: AgentId,
+        /// How far above the ceiling, per dimension.
+        excess: Consumption,
+    },
+}
+
+/// Where a driver is in its life, as the kernel — not the fold — knows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Health {
+    /// Its loop is running.
+    Up,
+    /// Its loop unwound; the inbox stays for a replacement.
+    Down,
+    /// The harness retired it; the capability is unroutable for good.
+    Retired,
+}
+
+/// One registered driver: the instance, the bound, and the loop's handle.
+/// Cache beside the fold's `drivers`/`ceilings`, never canonical state.
+struct DriverSlot {
+    /// The instance, so `cancel` can reach `abandon` while its loop is
+    /// inside `handle`. Replaced whole by `replace_driver` and dropped by
+    /// `retire_driver`; the old one goes when its aborted loop lets go of
+    /// it too.
+    driver: Option<Arc<dyn Driver>>,
+    /// `reply_within` at registration: how long a request may wait for its
+    /// answer, counted from its `Sent`, in `Tick.now` units. `None` is
+    /// unbounded.
+    reply_within: Option<u64>,
+    health: Health,
+    /// The loop's abort handle. "Nothing cancels a driver loop but shutdown"
+    /// became "nothing but shutdown and replacement" (ADR-0014 §5).
+    abort: Option<AbortHandle>,
+}
+
+/// An open request as the kernel tracks it: who holds it, when it was sent,
+/// whether the driver has taken it from the inbox. Derivable from the log
+/// but for the last bit, which is exactly the one that decides the bill of
+/// an `Unanswered` (ADR-0014 §3).
+struct InFlight {
+    driver: DriverId,
+    /// The clock reading at `Sent`.
+    sent_at: u64,
+    /// Whether `next_delivery` has handed it to the driver.
+    taken: bool,
+}
+
 pub(crate) struct Inner {
     log: Log,
     state: State,
     blobs: Box<dyn Blobs>,
     spawner: Spawner,
-    /// Registered drivers, so `cancel` can reach `abandon` while the driver's
-    /// own loop is inside `handle`.
-    drivers: BTreeMap<DriverId, Arc<dyn Driver>>,
+    /// Registered drivers with their health, bound and loop.
+    drivers: BTreeMap<DriverId, DriverSlot>,
     /// The live hook programs, by id. Cache, not state: the reducer holds
     /// their records, and the fold never consults them.
     hooks: BTreeMap<HookId, HookProgram>,
-    /// Which driver holds each open request. Cache, not state: derivable from
-    /// the `Sent` entries' capabilities, kept warm for `cancel`.
-    in_flight: BTreeMap<Corr, DriverId>,
+    /// Every open request, by correlation. Cache, not state: derivable from
+    /// the `Sent` entries' capabilities and the ticks between, kept warm for
+    /// `cancel`, the bound, and the bill of an `Unanswered`.
+    in_flight: BTreeMap<Corr, InFlight>,
     /// The executor's handle on each live agent's task.
     aborts: BTreeMap<AgentId, AbortHandle>,
     agent_wakers: BTreeMap<AgentId, Waker>,
     inboxes: BTreeMap<DriverId, Inbox>,
     drain_waker: Option<Waker>,
+    /// What the supervisor has not yet been told, in the order it happened.
+    events: VecDeque<DriverEvent>,
+    supervise_waker: Option<Waker>,
     fault: Option<String>,
     closed: bool,
 }
@@ -230,6 +331,195 @@ impl Inner {
             .retain(|corr, _| state.owner(*corr).is_some());
         self.wake_drain_if_done();
         handles
+    }
+
+    // ------------------------------------------------------------ supervision
+
+    /// Tells the supervisor, if one is listening.
+    fn raise(&mut self, event: DriverEvent) {
+        self.events.push_back(event);
+        if let Some(w) = self.supervise_waker.take() {
+            w.wake();
+        }
+    }
+
+    /// Closes one open request without its driver's answer (ADR-0014 §2–§3):
+    /// the envelope is from the kernel, empty, on the request's correlation,
+    /// billed the ceiling if the driver had taken it and nothing if not. Fires
+    /// `OnBudget` as any entry that moves a grant; `PreDeliver` does not see
+    /// it — there is nothing here a hook could refuse, the request must
+    /// close. Forgets the request and wakes its owner.
+    fn unanswered(&mut self, corr: Corr, cause: UnansweredCause) -> Result<(), KernelError> {
+        let Some(open) = self.in_flight.remove(&corr) else {
+            return Ok(());
+        };
+        if !open.taken {
+            // Still in the inbox: it leaves with the correlation, or a
+            // replacement would take a request that is already closed and
+            // its answer would be dead letter.
+            if let Some(inbox) = self.inboxes.get_mut(&open.driver) {
+                inbox.queue.retain(|d| d.corr != corr);
+            }
+        }
+        let Some(to) = self.state.owner(corr) else {
+            // Finished between the driver's taking it and now; the request
+            // went with the owner's record. Nothing to close.
+            return Ok(());
+        };
+        let mut msg = Msg::new(
+            self.state.next_seq(),
+            Endpoint::Kernel,
+            MsgKind::Reply,
+            BlobRef::EMPTY,
+        )
+        .with_corr(corr);
+        if open.taken {
+            let ceiling = self
+                .state
+                .ceiling(&open.driver)
+                .cloned()
+                .unwrap_or_default();
+            msg = msg.with_consumption(as_consumption(&ceiling));
+        }
+        let entry = Entry::Unanswered {
+            msg,
+            to,
+            driver: open.driver,
+            cause,
+        };
+        let before = self.before(&entry, &[]);
+        self.commit(entry)?;
+        self.after(before)?;
+        self.wake_agent(to);
+        Ok(())
+    }
+
+    /// Every open request routed to `driver`, in correlation order, with
+    /// whether the driver has taken it.
+    fn open_for(&self, driver: &DriverId) -> Vec<(Corr, bool)> {
+        self.in_flight
+            .iter()
+            .filter(|(_, open)| open.driver == *driver)
+            .map(|(corr, open)| (*corr, open.taken))
+            .collect()
+    }
+
+    /// The loop for `id` observed `handle` unwinding: `DriverDown { crashed }`,
+    /// then one `Unanswered { crashed }` per request the driver had taken,
+    /// under this one lock. Queued requests stay queued for a replacement.
+    fn crashed(&mut self, id: &DriverId) -> Result<(), KernelError> {
+        self.ensure_ok()?;
+        let Some(slot) = self.drivers.get_mut(id) else {
+            return Ok(());
+        };
+        if slot.health != Health::Up {
+            // Replaced or retired while the unwind was in flight: the
+            // transition is already in the log.
+            return Ok(());
+        }
+        slot.health = Health::Down;
+        slot.abort = None;
+        let entry = Entry::DriverDown {
+            seq: self.state.next_seq(),
+            driver: id.clone(),
+            cause: DownCause::Crashed,
+        };
+        self.commit(entry)?;
+        for (corr, taken) in self.open_for(id) {
+            if taken {
+                self.unanswered(corr, UnansweredCause::Crashed)?;
+            }
+        }
+        self.raise(DriverEvent::Crashed { driver: id.clone() });
+        Ok(())
+    }
+
+    /// The bound, enforced (ADR-0014 §5): every open request whose driver
+    /// has a `reply_within` and whose `sent_at + reply_within <= now` closes
+    /// as `Unanswered { overdue }`, billed per whether it was taken. Because
+    /// the loop is sequential, a hung `handle` makes every request behind it
+    /// overdue in turn, each at its own bound. The driver is not declared
+    /// down.
+    fn overdue(&mut self, now: u64) -> Result<(), KernelError> {
+        let due: Vec<(Corr, DriverId)> = self
+            .in_flight
+            .iter()
+            .filter(|(_, open)| {
+                self.drivers
+                    .get(&open.driver)
+                    .and_then(|slot| slot.reply_within)
+                    .is_some_and(|bound| open.sent_at.saturating_add(bound) <= now)
+            })
+            .map(|(corr, open)| (*corr, open.driver.clone()))
+            .collect();
+        for (corr, driver) in due {
+            let Some(agent) = self.state.owner(corr) else {
+                self.in_flight.remove(&corr);
+                continue;
+            };
+            self.unanswered(corr, UnansweredCause::Overdue)?;
+            self.raise(DriverEvent::Overdue {
+                driver,
+                corr,
+                agent,
+            });
+        }
+        Ok(())
+    }
+
+    /// The instance behind `driver`, if it is up: what `cancel` reaches
+    /// with `abandon`. A driver that is down has no open requests to
+    /// abandon, because they were unanswered when it went down.
+    fn driver_up(&self, driver: &DriverId) -> Option<Arc<dyn Driver>> {
+        let slot = self.drivers.get(driver)?;
+        (slot.health == Health::Up)
+            .then(|| slot.driver.as_ref().map(Arc::clone))
+            .flatten()
+    }
+
+    /// The harness's half of a replacement or a retirement, under the lock:
+    /// takes the loop's abort handle to fire outside it, writes
+    /// `DriverDown { retired }` if the driver was up, and closes its open
+    /// requests as `Unanswered { retired }` — the taken ones only when
+    /// `keep_queue` (a replacement takes the queue), every one otherwise.
+    /// Returns the handle. Does not change the slot's health; the caller
+    /// sets what comes next.
+    fn take_down(
+        &mut self,
+        id: &DriverId,
+        keep_queue: bool,
+    ) -> Result<Option<AbortHandle>, KernelError> {
+        let slot = self
+            .drivers
+            .get_mut(id)
+            .ok_or_else(|| Refusal::WrongSender(Endpoint::Driver { id: id.clone() }))?;
+        match slot.health {
+            Health::Retired => {
+                let cap = self.state.driver_cap(id).unwrap_or(Capability::alloc(0));
+                return Err(Refusal::Unroutable(cap).into());
+            }
+            Health::Down => {}
+            Health::Up => {
+                let entry = Entry::DriverDown {
+                    seq: self.state.next_seq(),
+                    driver: id.clone(),
+                    cause: DownCause::Retired,
+                };
+                self.commit(entry)?;
+            }
+        }
+        let abort = self.drivers.get_mut(id).and_then(|slot| slot.abort.take());
+        for (corr, taken) in self.open_for(id) {
+            if taken || !keep_queue {
+                self.unanswered(corr, UnansweredCause::Retired)?;
+            }
+        }
+        if !keep_queue {
+            if let Some(inbox) = self.inboxes.get_mut(id) {
+                inbox.queue.clear();
+            }
+        }
+        Ok(abort)
     }
 
     // ------------------------------------------------------------------ hooks
@@ -443,6 +733,35 @@ impl Inner {
     }
 }
 
+/// Polls a driver's `handle` future inside `catch_unwind`, so a panic in a
+/// driver is an outcome the loop sees rather than an unwind that ends the
+/// task in silence (ADR-0014 §5). `AssertUnwindSafe` because the future is
+/// dropped on `Err`, never polled again. Under `panic = "abort"` there is
+/// nothing to catch, which is that profile's contract.
+struct Guarded {
+    inner: BoxFuture<(Vec<u8>, Consumption)>,
+}
+
+impl Future for Guarded {
+    type Output = Result<(Vec<u8>, Consumption), ()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match catch_unwind(AssertUnwindSafe(|| self.inner.as_mut().poll(cx))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(out)) => Poll::Ready(Ok(out)),
+            Err(_) => Poll::Ready(Err(())),
+        }
+    }
+}
+
+/// `handle` itself may unwind before it returns a future; that is a crash
+/// too.
+fn guarded(driver: &Arc<dyn Driver>, delivery: Delivery) -> Result<Guarded, ()> {
+    catch_unwind(AssertUnwindSafe(|| driver.handle(delivery)))
+        .map(|inner| Guarded { inner })
+        .map_err(|_| ())
+}
+
 /// What an `OnExit` event needs from an agent's record before the entry
 /// that ends it.
 struct ExitFacts {
@@ -503,6 +822,8 @@ impl Kernel {
                 agent_wakers: BTreeMap::new(),
                 inboxes: BTreeMap::new(),
                 drain_waker: None,
+                events: VecDeque::new(),
+                supervise_waker: None,
                 fault: None,
                 closed: false,
             }),
@@ -530,6 +851,10 @@ impl Kernel {
     /// sender *before* delivery — refused if the sender cannot cover it — and
     /// the reply settles the reservation against what the driver reports.
     ///
+    /// Unbounded: [`register_driver_with`](Self::register_driver_with) with
+    /// `reply_within: None`, which is today's behaviour — a request to this
+    /// driver waits for its answer for as long as its owner lives.
+    ///
     /// # Errors
     ///
     /// [`Refusal::AfterBoot`] or [`Refusal::DriverExists`], via
@@ -540,8 +865,30 @@ impl Kernel {
         driver: D,
         ceiling: Budget,
     ) -> Result<Capability, KernelError> {
+        self.register_driver_with(id, driver, ceiling, None)
+    }
+
+    /// [`register_driver`](Self::register_driver) with a bound (ADR-0014
+    /// §2): `reply_within` is the most clock units a request to this driver
+    /// may wait for its answer, counted from its `Sent`, in the units the
+    /// clock publishes. A request past it is closed by the `tick` that
+    /// passes the bound, as `Unanswered { overdue }`, billed the ceiling if
+    /// the driver had taken it and nothing if it was still queued. The
+    /// driver's own timeouts must be shorter, so a driver that *can* report
+    /// a failure does so before the kernel stops waiting.
+    ///
+    /// # Errors
+    ///
+    /// As [`register_driver`](Self::register_driver).
+    pub fn register_driver_with<D: Driver>(
+        self: &Arc<Self>,
+        id: DriverId,
+        driver: D,
+        ceiling: Budget,
+        reply_within: Option<u64>,
+    ) -> Result<Capability, KernelError> {
         let driver: Arc<dyn Driver> = Arc::new(driver);
-        let (cap, spawner) = {
+        let cap = {
             let mut inner = self.lock();
             inner.ensure_ok()?;
             let cap = Capability::alloc(inner.state.next_cap());
@@ -550,6 +897,7 @@ impl Kernel {
                 driver: id.clone(),
                 cap,
                 ceiling,
+                reply_within,
             };
             inner.commit(entry)?;
             inner.inboxes.insert(
@@ -559,24 +907,162 @@ impl Kernel {
                     waker: None,
                 },
             );
-            inner.drivers.insert(id.clone(), Arc::clone(&driver));
-            (cap, Arc::clone(&inner.spawner))
+            inner.drivers.insert(
+                id.clone(),
+                DriverSlot {
+                    driver: Some(Arc::clone(&driver)),
+                    reply_within,
+                    health: Health::Up,
+                    abort: None,
+                },
+            );
+            cap
         };
+        self.spawn_loop(id, driver);
+        Ok(cap)
+    }
+
+    /// Spawns the loop for `id` over `driver`: `next_delivery` → `handle` →
+    /// `reply`, one request at a time, until the kernel shuts down or the
+    /// loop is aborted by a replacement. Keeps the abort handle on the slot.
+    fn spawn_loop(self: &Arc<Self>, id: DriverId, driver: Arc<dyn Driver>) {
         let kernel = Arc::clone(self);
-        // Driver loops are not agents: nothing cancels them but shutdown, so
-        // the abort handle is not kept.
-        let _ = spawner(Box::pin(async move {
-            while let Some(delivery) = kernel.next_delivery(id.clone()).await {
+        let loop_id = id.clone();
+        let spawner = Arc::clone(&self.lock().spawner);
+        let abort = spawner(Box::pin(async move {
+            while let Some(delivery) = kernel.next_delivery(loop_id.clone()).await {
                 let corr = delivery.corr;
-                let (payload, consumed) = driver.handle(delivery).await;
-                // A reply nobody can receive — the owner exited — is dead
-                // letter by design (HANDOFF §4.9). Driver supervision (M3)
-                // will surface the error envelope; for now it drops on the
-                // floor and the log shows exactly that: no `Replied` entry.
-                let _ = kernel.reply(&id, corr, &payload, consumed);
+                let answer = match guarded(&driver, delivery) {
+                    Ok(fut) => fut.await,
+                    Err(()) => Err(()),
+                };
+                match answer {
+                    Ok((payload, consumed)) => {
+                        // A reply nobody can receive — the owner exited, or
+                        // the request was already closed as unanswered — is
+                        // dead letter by design (HANDOFF §4.9, ADR-0014 §5):
+                        // it drops on the floor and the log shows exactly
+                        // that, no `Replied` entry and no second bill.
+                        let _ = kernel.reply(&loop_id, corr, &payload, consumed);
+                    }
+                    Err(()) => {
+                        // The driver raised instead of reporting. The
+                        // request it had taken is closed here, under one
+                        // lock, and the loop ends; the inbox stays for a
+                        // replacement (ADR-0014 §5). A `DriverDown` the log
+                        // cannot take has already faulted the kernel.
+                        let _ = kernel.lock().crashed(&loop_id);
+                        return;
+                    }
+                }
             }
         }));
-        Ok(cap)
+        let mut inner = self.lock();
+        if let Some(slot) = inner.drivers.get_mut(&id) {
+            if slot.health == Health::Up && slot.abort.is_none() {
+                slot.abort = Some(abort);
+                return;
+            }
+        }
+        // The loop already ended — it crashed before this lock, or the
+        // driver was retired — or a replacement raced in; nothing to keep.
+        drop(inner);
+        abort();
+    }
+
+    /// Restarts `id` with a fresh instance (ADR-0014 §5): same `DriverId`,
+    /// same `Capability` — the address every namespace holds survives — and
+    /// no new `DriverRegistered`, so it is allowed after boot, unlike
+    /// registration. If the old loop is still running it is aborted, the
+    /// old instance dropped, `DriverDown { retired }` written and every
+    /// request it had taken closed as `Unanswered { retired }` at the
+    /// ceiling; a driver that had crashed already has its `DriverDown`.
+    /// Then `DriverUp`, and a new loop over the same inbox, which takes
+    /// whatever is still queued. The bound is the registration's.
+    ///
+    /// The kernel never re-uses an instance that raised: supply a fresh one.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::WrongSender`] naming the driver if `id` was never
+    /// registered, [`Refusal::Unroutable`] if it was retired, via
+    /// [`KernelError::Refused`]; or a log write failure.
+    pub fn replace_driver<D: Driver>(
+        self: &Arc<Self>,
+        id: &DriverId,
+        driver: D,
+    ) -> Result<(), KernelError> {
+        let fresh: Arc<dyn Driver> = Arc::new(driver);
+        let old_loop = {
+            let mut inner = self.lock();
+            inner.ensure_ok()?;
+            let old_loop = inner.take_down(id, true)?;
+            let entry = Entry::DriverUp {
+                seq: inner.state.next_seq(),
+                driver: id.clone(),
+            };
+            inner.commit(entry)?;
+            if let Some(slot) = inner.drivers.get_mut(id) {
+                slot.driver = Some(Arc::clone(&fresh));
+                slot.health = Health::Up;
+            }
+            old_loop
+        };
+        if let Some(abort) = old_loop {
+            abort();
+        }
+        self.spawn_loop(id.clone(), fresh);
+        Ok(())
+    }
+
+    /// Retires `id` for good (ADR-0014 §5): `DriverDown { retired }` if it
+    /// was up, every open request — taken or queued — closed as
+    /// `Unanswered { retired }` (the ceiling for a taken one, nothing for a
+    /// queued one), the inbox removed, so every later `send` through its
+    /// capability is [`Refusal::Unroutable`] and `describe` through it is
+    /// `None`. A second retire is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::WrongSender`] naming the driver if `id` was never
+    /// registered, via [`KernelError::Refused`]; or a log write failure.
+    pub fn retire_driver(&self, id: &DriverId) -> Result<(), KernelError> {
+        let old_loop = {
+            let mut inner = self.lock();
+            inner.ensure_ok()?;
+            if inner
+                .drivers
+                .get(id)
+                .is_some_and(|slot| slot.health == Health::Retired)
+            {
+                return Ok(());
+            }
+            let old_loop = inner.take_down(id, false)?;
+            if let Some(slot) = inner.drivers.get_mut(id) {
+                slot.health = Health::Retired;
+                slot.driver = None;
+            }
+            // Removing the inbox is what makes the capability unroutable;
+            // its waker, if any, is the old loop's, which is being aborted.
+            inner.inboxes.remove(id);
+            old_loop
+        };
+        if let Some(abort) = old_loop {
+            abort();
+        }
+        Ok(())
+    }
+
+    /// The next thing a supervisor would want to know (ADR-0014 §6). A
+    /// future, like [`drained`](Self::drained): resolves to the oldest
+    /// event not yet taken, or to [`KernelError::Closed`] once the kernel
+    /// has shut down with none left, or [`KernelError::Faulted`]. The
+    /// supervisor is optional — a harness that never polls this still
+    /// drains, given a clock and a bound.
+    pub fn supervise(self: &Arc<Self>) -> Supervise {
+        Supervise {
+            kernel: Arc::clone(self),
+        }
     }
 
     /// Syscall 7. Installs a hook program at `point` (ADR-0008 §4).
@@ -653,15 +1139,17 @@ impl Kernel {
         }
     }
 
-    /// Stops accepting syscalls and ends every driver loop.
+    /// Stops accepting syscalls and ends every driver loop. Not a health
+    /// event: the run is over, and nothing is written (ADR-0014 §5).
     pub fn shutdown(&self) {
         let mut inner = self.lock();
         inner.closed = true;
-        let wakers: Vec<Waker> = inner
+        let mut wakers: Vec<Waker> = inner
             .inboxes
             .values_mut()
             .filter_map(|inbox| inbox.waker.take())
             .collect();
+        wakers.extend(inner.supervise_waker.take());
         drop(inner);
         for w in wakers {
             w.wake();
@@ -733,7 +1221,12 @@ impl Kernel {
             let before = inner.before(&entry, &ending);
             inner.commit(entry)?;
             inner.after(before)?;
-            inner.reap(&ending)
+            let handles = inner.reap(&ending);
+            // The bound (ADR-0014 §5): after the tick committed and the
+            // agents it ended are gone, every request past its driver's
+            // `reply_within` closes here, before the lock is released.
+            inner.overdue(now)?;
+            handles
         };
         for abort in handles {
             abort();
@@ -923,8 +1416,8 @@ impl Kernel {
                 .iter()
                 .flat_map(|id| inner.state.open_corrs(*id))
                 .filter_map(|corr| {
-                    let driver = inner.in_flight.get(&corr)?;
-                    Some((Arc::clone(inner.drivers.get(driver)?), corr))
+                    let open = inner.in_flight.get(&corr)?;
+                    Some((inner.driver_up(&open.driver)?, corr))
                 })
                 .collect();
             inner.blobs.put(agent, &mode.reason);
@@ -975,12 +1468,17 @@ impl Kernel {
                 Some(_) => return Err(Refusal::Unroutable(via).into()),
                 None => return Err(Refusal::UnknownCapability(via).into()),
             };
-            let driver = inner
-                .drivers
-                .get(&id)
-                .map(Arc::clone)
-                .ok_or(Refusal::Unroutable(via))?;
-            (id, driver)
+            let slot = inner.drivers.get(&id).ok_or(Refusal::Unroutable(via))?;
+            // A retired driver is no tool (ADR-0014 §5): the capability
+            // resolves, and nothing answers behind it.
+            let Some(driver) = slot
+                .driver
+                .as_ref()
+                .filter(|_| slot.health != Health::Retired)
+            else {
+                return Ok(None);
+            };
+            (id, Arc::clone(driver))
         };
         Ok(driver.describe().map(|schema| (id, schema)))
     }
@@ -1042,7 +1540,15 @@ impl Kernel {
         let before = inner.before(&entry, &[]);
         inner.commit(entry)?;
         inner.after(before)?;
-        inner.in_flight.insert(corr, driver.clone());
+        let sent_at = inner.state.now();
+        inner.in_flight.insert(
+            corr,
+            InFlight {
+                driver: driver.clone(),
+                sent_at,
+                taken: false,
+            },
+        );
         if let Some(inbox) = inner.inboxes.get_mut(&driver) {
             inbox.queue.push_back(Delivery {
                 corr,
@@ -1208,6 +1714,21 @@ impl Kernel {
         inner.after(before)?;
         inner.in_flight.remove(&corr);
         inner.wake_agent(to);
+        // A report above the ceiling settled as overdraft; the supervisor
+        // hears it as an event and nothing more is logged (ADR-0014 §6).
+        let ceiling = inner.state.ceiling(driver).cloned().unwrap_or_default();
+        let excess = Consumption::from_dims(consumed.iter().filter_map(|(dim, used)| {
+            let held = ceiling.get(dim).unwrap_or(0);
+            (used > held).then(|| (dim.clone(), used.saturating_sub(held)))
+        }));
+        if !excess.is_empty() {
+            inner.raise(DriverEvent::Overdrew {
+                driver: driver.clone(),
+                corr,
+                agent: to,
+                excess,
+            });
+        }
         Ok(())
     }
 
@@ -1261,11 +1782,39 @@ impl Future for NextDelivery {
             return Poll::Ready(None);
         };
         match inbox.queue.pop_front() {
-            Some(delivery) => Poll::Ready(Some(delivery)),
+            Some(delivery) => {
+                // Taken: from here an unanswered request bills its ceiling
+                // (ADR-0014 §3), because the driver may have done the work.
+                if let Some(open) = inner.in_flight.get_mut(&delivery.corr) {
+                    open.taken = true;
+                }
+                Poll::Ready(Some(delivery))
+            }
             None => {
                 inbox.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
         }
+    }
+}
+
+/// Resolves to the next [`DriverEvent`]. See [`Kernel::supervise`].
+pub struct Supervise {
+    kernel: Arc<Kernel>,
+}
+
+impl Future for Supervise {
+    type Output = Result<DriverEvent, KernelError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.kernel.lock();
+        if let Some(event) = inner.events.pop_front() {
+            return Poll::Ready(Ok(event));
+        }
+        if let Err(err) = inner.ensure_ok() {
+            return Poll::Ready(Err(err));
+        }
+        inner.supervise_waker = Some(cx.waker().clone());
+        Poll::Pending
     }
 }

@@ -129,8 +129,11 @@ fn every_entry_kind_and_an_overdraft_appear() {
         Entry::Attached { .. } => "attached",
         Entry::Verdicts { .. } => "verdicts",
         Entry::Emitted { .. } => "emitted",
-        // `Entry` is `#[non_exhaustive]` (ADR-0010): a thirteenth kind is an
-        // ABI event with its own row in this list, not a silent pass here.
+        Entry::DriverDown { .. } => "driver_down",
+        Entry::DriverUp { .. } => "driver_up",
+        Entry::Unanswered { .. } => "unanswered",
+        // `Entry` is `#[non_exhaustive]` (ADR-0010): a new kind is an ABI
+        // event with its own row in this list, not a silent pass here.
         _ => "unknown",
     };
     let seen: std::collections::BTreeSet<&str> = log.entries().iter().map(kind).collect();
@@ -147,6 +150,9 @@ fn every_entry_kind_and_an_overdraft_appear() {
         "attached",
         "verdicts",
         "emitted",
+        "driver_down",
+        "driver_up",
+        "unanswered",
     ] {
         assert!(
             seen.contains(want),
@@ -170,24 +176,26 @@ fn every_entry_kind_and_an_overdraft_appear() {
 /// allowed to get faster, not to change its mind: an index that replaces a
 /// sweep must hand `pick` the same element for the same draw, and this is
 /// the test that says so. A new pin needs a reason in the commit message.
+/// Last re-pinned for ADR-0014 (#148): the generator draws `DriverDown`,
+/// `DriverUp` and `Unanswered`, and the model driver registers a bound.
 const PINNED: [(u64, usize, u64, &str); 3] = [
     (
         SEED_A,
         5_022,
-        792,
-        "fae2a9f3842b8eb099e0a4d2e96a1ff97298c36bd702c72408b93d3f38c90383",
+        922,
+        "79a659d90989654569f8ed879014dfbdce55a827a6d28733c0fd10e4f2855287",
     ),
     (
         SEED_B,
-        5_017,
-        535,
-        "ab193b1717c29b5e9b6d7f29051ab462a23252de2215f9653092d84f3395af49",
+        5_022,
+        598,
+        "10f8d21a6d2d878da1943fe1396a7631b5d57ca80ac2ca35a8e2c9608463e3fa",
     ),
     (
         SEED_C,
-        5_023,
-        674,
-        "5e565f44667ea14bf8fa9cd4c9519606c5dd8a74fb1108b5178e2808b1832b2b",
+        5_022,
+        775,
+        "8564b194a88eed8c321c6451e3a81330ea9841f62a1f7f194d94506873e66c62",
     ),
 ];
 

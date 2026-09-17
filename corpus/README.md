@@ -24,6 +24,7 @@ corpus entry never changes once it is in.
 | `m2a-hooks` | `kernel/tests/fixtures/m2a-hooks.log` | 53 | ABI 1 | `a62e88c` (#80) |
 | `sim-rule-hooks` | `soak soak --seed 0x7a75000000000001 --events 5000` at `c39a34d` | 5022 | ABI 1 | `c39a34d` (#97) |
 | `abi2-sim-seed-b` | `soak soak --seed 0x7a75000000000002 --events 5000` at `c6a5bf2` + the `ABI` 1 → 2 bump | 5017 | ABI 2 | `c6a5bf2` + #90 |
+| `abi3-sim-seed-c` | `soak soak --seed 0x7a75000000000003 --events 5000` at `1dcaf7a` + the `ABI` 2 → 3 bump | 5022 | ABI 3 | `1dcaf7a` + #148 |
 
 The six ABI 0 logs are the ones first pinned at `f7bcdc5` (#62), unchanged
 byte for byte; ADR-0008 (#80) made `hooks` a canonical field of `State`, so
@@ -41,6 +42,12 @@ seed appears twice in this table with different entry counts on purpose.
 sentinel refolds a post-freeze log from the first night. It is seed `b` on
 the generator as of `c6a5bf2` with the bump applied, and rule-bearing like
 `sim-rule-hooks` (#97 asked that the corpus's ABI 2 sample be one).
+`abi3-sim-seed-c` is the first log with `DriverDown`, `DriverUp` and
+`Unanswered` entries and a `DriverRegistered` line carrying `reply_within`
+(ADR-0014, the `ABI` 2 → 3 bump): seed `c` on the generator as of
+`1dcaf7a` with the bump applied, so the sentinel refolds a log that closes
+requests without their driver's answer, taken and queued, from the first
+night. The nine sidecars before it did not move.
 
 The first three soak logs were the Tier 1 seeds at the Tier 1 size when
 they were recorded. `PINNED` in `sim/tests/determinism.rs` pins what the *current*
@@ -74,7 +81,7 @@ cargo build --release -p tau-kernel --bin tau
 ```
 
 Add a row to the table above with the `main` SHA the hash was pinned at.
-The job fails closed below nine fixtures, so a fixture can be added but the
+The job fails closed below ten fixtures, so a fixture can be added but the
 floor in `tier3.yml` (and the script's default) should move up with the count.
 
 ## A hash that moved

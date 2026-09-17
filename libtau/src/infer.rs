@@ -37,6 +37,17 @@ pub enum InferError {
         /// The reason the canceller gave, as bytes.
         reason: Vec<u8>,
     },
+    /// The driver never answered (ADR-0014 §7): it crashed, or the request
+    /// passed the bound the harness registered it with, or the harness
+    /// retired it. The reply came from the kernel, empty, and the request
+    /// was billed its ceiling if the driver had taken it. Not a
+    /// [`ModelReply`] and not [`MissingPayload`](Self::MissingPayload): an
+    /// unanswered request and a shredded reply are different facts.
+    #[error("the driver did not answer request {corr}")]
+    Unanswered {
+        /// The request that closed without an answer.
+        corr: Corr,
+    },
     /// The reply's payload is not in the blob store.
     #[error("reply payload {} is not readable", .0)]
     MissingPayload(BlobRef),
@@ -118,6 +129,7 @@ pub fn decode_reply(bytes: &[u8]) -> Result<ModelReply, InferError> {
 /// | reply | retried | why |
 /// |---|---|---|
 /// | `error.transport` | yes | no answer arrived; nothing the caller did |
+/// | a reply from the kernel — [`InferError::Unanswered`] | yes, as `transport` | the driver crashed, hung past its bound, or was retired (ADR-0014 §7); if it was retired the retry's `send` is `Unroutable` and ends the call like any refused `send` |
 /// | `error.provider`, message `HTTP 429` or `HTTP 5xx` (529 included) | yes | the provider said "not now" |
 /// | `error.provider`, any other status, or no status to read | no | the request, or the driver's mapping, is wrong |
 /// | `error.over_ceiling`, `error.unsupported` | no | the caller's mistake; nothing was billed |
@@ -278,10 +290,20 @@ where
     let bytes = encode_request(request)?;
     let mut retry = 0;
     loop {
-        let reply = call_once(handle, model, &bytes, notes).await?;
-        if retry >= policy.retries || !should_retry(&reply.stop) {
-            return Ok(reply);
-        }
+        // A reply from the kernel is retried like a transport error: no
+        // answer arrived and nothing the caller did caused it (ADR-0014
+        // §7). Every other error is terminal.
+        let again = match call_once(handle, model, &bytes, notes).await {
+            Ok(reply) => {
+                if retry >= policy.retries || !should_retry(&reply.stop) {
+                    return Ok(reply);
+                }
+                true
+            }
+            Err(InferError::Unanswered { .. }) if retry < policy.retries => true,
+            Err(err) => return Err(err),
+        };
+        debug_assert!(again);
         sleep(policy.wait(retry)).await;
         retry += 1;
     }
@@ -296,6 +318,9 @@ async fn call_once(
 ) -> Result<ModelReply, InferError> {
     let corr = handle.send(model, bytes).map_err(InferError::Send)?;
     let msg = await_reply(handle, corr, notes).await?;
+    if msg.from == Endpoint::Kernel {
+        return Err(InferError::Unanswered { corr });
+    }
     let payload = handle
         .read(msg.payload)
         .ok_or(InferError::MissingPayload(msg.payload))?;

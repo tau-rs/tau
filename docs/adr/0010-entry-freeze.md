@@ -116,7 +116,7 @@ hashes are shortened to `…` here and are 64 hex characters on the wire
 
 | Kind | Position | Wire form | Before | After |
 |---|---|---|---|---|
-| `DriverRegistered` | `seq` | `{"entry":"driver_registered","seq":0,"driver":"tool","cap":0,"ceiling":{"tokens":30}}` | `log.rs`, hash-pinned | `abi/entry.rs`, `entry_driver_registered` snapshot |
+| `DriverRegistered` | `seq` | `{"entry":"driver_registered","seq":0,"driver":"tool","cap":0,"ceiling":{"tokens":30},"reply_within":null}` — `reply_within` since ABI 3, defaulted (ADR-0014 §2) | `log.rs`, hash-pinned | `abi/entry.rs`, `entry_driver_registered`, `entry_driver_registered_bounded` snapshots |
 | `Spawned` | `seq` | `{"entry":"spawned","seq":1,"parent":null,"agent":0,"ns":{"caps":[0]},"budget":{"tokens":70,"calls":10,"depth":2}}` | same | `entry_spawned_root`, `entry_spawned_child` |
 | `Sent` | `msg.seq` | `{"entry":"sent","msg":{"abi":2,"seq":12,"from":{"kind":"agent","id":0},"corr":0,"kind":"request","consumed":null,"payload":"…"},"via":0}` | same | `entry_sent` |
 | `Replied` | `msg.seq` | `{"entry":"replied","msg":{"abi":2,"seq":17,"from":{"kind":"driver","id":"tool"},"corr":0,"kind":"reply","consumed":{"tokens":12},"payload":"…"},"to":0}` | same | `entry_replied` |
@@ -128,6 +128,9 @@ hashes are shortened to `…` here and are 64 hex characters on the wire
 | `Attached` | `seq` | `{"entry":"attached","seq":1,"hook":0,"point":"pre_send","failure":"closed","program":{"native":"tattle-shell"}}` | same | `entry_attached_native`, `entry_attached_rule` (`"program":{"rule":"when pre_send then allow"}`), `entry_attached_on_budget` (`"point":{"on_budget":{"dim":"tokens","below":50}}`) |
 | `Verdicts` | `seq` | `{"entry":"verdicts","seq":32,"point":"pre_send","subject":1,"roll":[[0,{"emit":{"to":0,"payload":"…"}}],[1,{"deny":"…"}]]}` | same | `entry_verdicts` with all four rulings: `"allow"`, `{"deny":"…"}`, `{"emit":{…}}`, `{"failed":{"mode":"closed","error":"…"}}` |
 | `Emitted` | `msg.seq` | `{"entry":"emitted","hook":5,"to":0,"msg":{"abi":2,"seq":14,"from":{"kind":"hook","id":5},"corr":null,"kind":"notice","consumed":null,"payload":"…"}}` | same | `entry_emitted` |
+| `DriverDown` (ABI 3, ADR-0014) | `seq` | `{"entry":"driver_down","seq":40,"driver":"model","cause":"crashed"}` | — | `entry_driver_down_crashed`, `entry_driver_down_retired` |
+| `DriverUp` (ABI 3, ADR-0014) | `seq` | `{"entry":"driver_up","seq":45,"driver":"model"}` | — | `entry_driver_up` |
+| `Unanswered` (ABI 3, ADR-0014) | `msg.seq` | `{"entry":"unanswered","msg":{"abi":3,"seq":41,"from":{"kind":"kernel"},"corr":7,"kind":"reply","consumed":{"tokens":8000,"cost_microusd":50000},"payload":"…"},"to":3,"driver":"model","cause":"crashed"}` | — | `entry_unanswered_taken` (`consumed` a ceiling), `entry_unanswered_queued` (`"consumed":null`) |
 
 Three shapes deserve a sentence each:
 
@@ -147,7 +150,8 @@ Three shapes deserve a sentence each:
 
 The `entry` tag strings — `driver_registered`, `spawned`, `sent`, `replied`,
 `resolved`, `exited`, `claimed`, `cancelled`, `tick`, `attached`,
-`verdicts`, `emitted` — are part of the freeze. So are the field names
+`verdicts`, `emitted`, and since ABI 3 `driver_down`, `driver_up`,
+`unanswered` — are part of the freeze. So are the field names
 above, the `snake_case` casing of `HookPoint`, `FailureMode`, `HookSource`
 and `Ruling`, and the externally-tagged enum form serde gives them
 (`"pre_send"`, `{"on_budget":{…}}`).
@@ -322,6 +326,20 @@ the reader, which never evaluates anything.
   directory. The re-stamp the 2026-09-16 row above introduced is named as a
   non-promise there (§3): the `abi` on a delivered envelope is the handing-
   over build's, and replay does not preserve it.
+
+- **2026-09-17** — Three kinds and one field join §3 under `ABI` 3
+  ([ADR-0014](0014-driver-supervision.md), [#148](https://github.com/tau-rs/tau/issues/148)):
+  `DriverDown { seq, driver, cause }` and `DriverUp { seq, driver }`, the
+  driver health transitions, confirmed and applied as nothing; `Unanswered
+  { msg, to, driver, cause }`, which closes a request its driver never
+  answered with an envelope from the new `Endpoint::Kernel` and settles it
+  as a `Replied` does; and `DriverRegistered.reply_within: Option<u64>`,
+  `#[serde(default)]`, so every log written before the bump reads as
+  unbounded. `Entry::seq()` reads `msg.seq` for `Unanswered`, as for the
+  three message-bearing kinds before it. The tag strings `driver_down`,
+  `driver_up`, `unanswered` and the `cause` tags `crashed`, `retired`,
+  `overdue` join the freeze. Per §6 the bump re-recorded nothing: the corpus
+  grew by one log recorded at `abi: 3`, and no sidecar moved.
 
 [`LogHeader`]: ../../kernel/src/abi/msg.rs
 [`Msg`]: ../../kernel/src/abi/msg.rs

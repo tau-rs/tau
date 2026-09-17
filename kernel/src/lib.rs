@@ -40,6 +40,15 @@
 //! verdict is a log entry, and the fold confirms the roll call without ever
 //! running a program (ADR-0008).
 //!
+//! M3c: driver supervision. A driver that does not answer — its `handle`
+//! unwinds, or a request passes the bound it was registered with — no
+//! longer hangs its requester: the kernel closes the request with a reply
+//! from itself, billed the ceiling if the driver had taken it, records the
+//! driver's health in the log, and tells the harness's supervisor through
+//! [`kernel::Kernel::supervise`]; the harness answers with
+//! [`kernel::Kernel::replace_driver`] or [`kernel::Kernel::retire_driver`]
+//! (ADR-0014).
+//!
 //! # Shape
 //!
 //! ```text

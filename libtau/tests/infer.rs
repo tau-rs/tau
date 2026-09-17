@@ -519,3 +519,143 @@ fn the_decision_table_reads_the_status_out_of_the_message() {
     assert!(!should_retry(&StopReason::MaxTokens));
     assert!(!should_retry(&StopReason::StopSequence));
 }
+
+// --- a reply from the kernel (ADR-0014 §7) ----------------------------------
+
+use common::{quiet_panics, Boom};
+use tau_kernel::kernel::DriverEvent;
+
+#[tokio::test]
+async fn infer_reports_a_reply_from_the_kernel_as_unanswered() {
+    quiet_panics();
+    let kernel = Kernel::boot(Log::with_sink(Vec::new()).unwrap(), tokio_spawner);
+    let model = kernel
+        .register_driver(
+            id("model"),
+            Boom::default(),
+            Budget::from_dims([(DimKey::Tokens, MODEL_CEILING)]),
+        )
+        .unwrap();
+    let out = slot();
+    let sink = Arc::clone(&out);
+    let root = kernel
+        .spawn_root(
+            program(move |h| async move {
+                let result = infer(&h, model, &prompt("hello", 64), &mut Vec::new()).await;
+                sink.lock().unwrap().replace(result);
+                h.exit(b"")
+            }),
+            Namespace::from_caps([model]),
+            plenty(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    match take(&out) {
+        Err(InferError::Unanswered { corr }) => assert_eq!(corr, Corr::new(0)),
+        other => panic!("expected Unanswered, got {other:?}"),
+    }
+    let state = kernel.state();
+    assert_eq!(
+        state.agent(root).unwrap().spent.get(&DimKey::Tokens),
+        Some(&MODEL_CEILING),
+        "taken by the driver: billed the ceiling"
+    );
+}
+
+#[tokio::test]
+async fn infer_retries_an_unanswered_request_like_a_transport_error() {
+    // Each attempt is its own `send`; the driver crashes on each. The
+    // supervisor replaces it once and retires it on the second crash, so
+    // the third attempt's `send` is `Unroutable` and ends the call the way
+    // any refused `send` does. The sleep between attempts waits for the
+    // supervisor to have acted, so the outcome does not depend on timing.
+    quiet_panics();
+    let kernel = Kernel::boot(Log::with_sink(Vec::new()).unwrap(), tokio_spawner);
+    let model = kernel
+        .register_driver(
+            id("model"),
+            Boom::default(),
+            Budget::from_dims([(DimKey::Tokens, MODEL_CEILING)]),
+        )
+        .unwrap();
+    let acted = Arc::new(Notify::new());
+    let supervisor = {
+        let kernel = Arc::clone(&kernel);
+        let acted = Arc::clone(&acted);
+        tokio::spawn(async move {
+            let mut crashes = 0;
+            while let Ok(event) = kernel.supervise().await {
+                let DriverEvent::Crashed { driver } = event else {
+                    continue;
+                };
+                crashes += 1;
+                if crashes == 1 {
+                    kernel.replace_driver(&driver, Boom::default()).unwrap();
+                } else {
+                    kernel.retire_driver(&driver).unwrap();
+                }
+                acted.notify_one();
+            }
+            crashes
+        })
+    };
+    let out = slot();
+    let sink = Arc::clone(&out);
+    let waits: Waits = Arc::default();
+    let seen = Arc::clone(&waits);
+    let acted_call = Arc::clone(&acted);
+    kernel
+        .spawn_root(
+            program(move |h| async move {
+                let sleep = move |d: Duration| {
+                    seen.lock().unwrap().push(d);
+                    let acted = Arc::clone(&acted_call);
+                    async move { acted.notified().await }
+                };
+                let result = infer_with(
+                    &h,
+                    model,
+                    &prompt("hello", 64),
+                    &mut Vec::new(),
+                    &three(),
+                    sleep,
+                )
+                .await;
+                sink.lock().unwrap().replace(result);
+                h.exit(b"")
+            }),
+            Namespace::from_caps([model]),
+            plenty(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    assert_eq!(supervisor.await.unwrap(), 2);
+    match take(&out) {
+        Err(InferError::Send(KernelError::Refused(Refusal::Unroutable(cap)))) => {
+            assert_eq!(cap, model);
+        }
+        other => panic!("expected Unroutable, got {other:?}"),
+    }
+    assert_eq!(
+        waits.lock().unwrap().as_slice(),
+        [Duration::from_millis(100), Duration::from_millis(200)],
+        "two unanswered attempts, two waits; the third send was refused"
+    );
+    let entries = kernel.entries();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, tau_kernel::log::Entry::Sent { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, tau_kernel::log::Entry::Unanswered { .. }))
+            .count(),
+        2
+    );
+}

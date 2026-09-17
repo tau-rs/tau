@@ -73,7 +73,7 @@ fn replay_from(log: &Log, k: usize) -> State {
 #[test]
 fn every_corpus_log_replays_from_each_of_its_snapshots() {
     let logs = logs_in(&corpus());
-    assert!(logs.len() >= 9, "corpus holds {} logs", logs.len());
+    assert!(logs.len() >= 10, "corpus holds {} logs", logs.len());
     for path in logs {
         let expected = fs::read_to_string(path.with_extension("hash"))
             .unwrap()
@@ -90,7 +90,7 @@ fn every_corpus_log_replays_from_each_of_its_snapshots() {
 #[test]
 fn every_fixture_replays_from_each_of_its_snapshots() {
     let logs = logs_in(&fixtures());
-    assert_eq!(logs.len(), 4, "the four milestone fixtures");
+    assert_eq!(logs.len(), 5, "the five milestone fixtures");
     for path in logs {
         let log = read(&path);
         let full = fold(log.entries()).unwrap().hash();

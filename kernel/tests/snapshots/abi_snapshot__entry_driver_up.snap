@@ -1,0 +1,9 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: driver_up ()
+---
+{
+  "entry": "driver_up",
+  "seq": 45,
+  "driver": "model"
+}

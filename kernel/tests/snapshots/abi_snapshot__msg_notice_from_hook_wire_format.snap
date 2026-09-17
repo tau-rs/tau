@@ -3,7 +3,7 @@ source: kernel/tests/abi_snapshot.rs
 expression: msg
 ---
 {
-  "abi": 2,
+  "abi": 3,
   "seq": 89,
   "from": {
     "kind": "hook",

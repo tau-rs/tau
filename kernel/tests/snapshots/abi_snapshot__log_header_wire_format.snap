@@ -9,5 +9,5 @@ expression: "LogHeader::current()"
     85,
     0
   ],
-  "abi": 2
+  "abi": 3
 }

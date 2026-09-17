@@ -18,7 +18,7 @@
 set -euo pipefail
 
 CORPUS="${CORPUS:-corpus}"
-CORPUS_FLOOR="${CORPUS_FLOOR:-9}"
+CORPUS_FLOOR="${CORPUS_FLOOR:-10}"
 DRIFT_OUT="${DRIFT_OUT:-drift.tsv}"
 TAU="${TAU:-./target/release/tau}"
 

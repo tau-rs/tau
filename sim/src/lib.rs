@@ -39,15 +39,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tau_kernel::abi::{
-    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, HookId,
-    Msg, MsgKind, Name, NameError, Namespace, Seq,
+    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DownCause, DriverId, Endpoint,
+    HookId, Msg, MsgKind, Name, NameError, Namespace, Seq, UnansweredCause,
 };
 use tau_kernel::blob;
 use tau_kernel::hook::{
     crossings, FailureMode, HookEvent, HookPoint, HookSource, Roll, Rule, Ruling, Verdict as Answer,
 };
 use tau_kernel::log::{Entry, Log, LogError};
-use tau_kernel::reducer::{Agent, Completion, Outcome, Refusal, State, Status};
+use tau_kernel::reducer::{as_consumption, Agent, Completion, Outcome, Refusal, State, Status};
 use tau_kernel::snapshot::{JoinError, Snapshot, SnapshotError};
 
 /// Why a run could not be completed.
@@ -268,19 +268,24 @@ struct Driver {
 /// The fixed driver set every run boots with. Three ceilings of different
 /// shapes so `send` reserves, and `Replied` settles, along more than one
 /// dimension: a `calls` ceiling exercises the "ceiling plus one call" rule.
-fn drivers() -> Result<Vec<(DriverId, Budget)>, NameError> {
+/// The model is registered with a bound (ADR-0014 §2), so the field is on
+/// the wire in every log the sim writes; the fold ignores it either way.
+fn drivers() -> Result<Vec<(DriverId, Budget, Option<u64>)>, NameError> {
     Ok(vec![
         (
             DriverId::new(Name::new("echo")?),
             Budget::from_dims([(DimKey::Tokens, 10)]),
+            None,
         ),
         (
             DriverId::new(Name::new("model")?),
             Budget::from_dims([(DimKey::Tokens, 40), (DimKey::CostMicroUsd, 500)]),
+            Some(1_000),
         ),
         (
             DriverId::new(Name::new("tool")?),
             Budget::from_dims([(DimKey::ComputeMs, 20), (DimKey::Calls, 1)]),
+            None,
         ),
     ])
 }
@@ -564,13 +569,14 @@ impl Sim {
             snapshot_at: 0,
             restores: 0,
         };
-        for (id, ceiling) in drivers()? {
+        for (id, ceiling, reply_within) in drivers()? {
             let cap = Capability::mint(sim.state.next_cap());
             sim.require(Entry::DriverRegistered {
                 seq: sim.state.next_seq(),
                 driver: id.clone(),
                 cap,
                 ceiling: ceiling.clone(),
+                reply_within,
             })?;
             sim.drivers.push(Driver { id, cap, ceiling });
         }
@@ -1073,7 +1079,7 @@ impl Sim {
                     self.open.entry(*id).or_default().insert(corr, idx);
                 }
             }
-            Entry::Replied { msg, to } => {
+            Entry::Replied { msg, to } | Entry::Unanswered { msg, to, .. } => {
                 if let Some(corr) = msg.corr {
                     if let Some(held) = self.open.get_mut(to) {
                         held.remove(&corr);
@@ -1151,8 +1157,91 @@ impl Sim {
             78..=85 => self.claim().map(Into::into),
             86..=89 => self.cancel().map(Into::into),
             90..=91 => self.hook_noise().map(Into::into),
+            92..=93 => self.health().map(Into::into),
+            94..=96 => self.unanswered(),
             _ => Some(self.tick().into()),
         }
+    }
+
+    /// A health transition (ADR-0014 §4): the fold confirms the driver is
+    /// registered and applies it as nothing. Now and then a driver the log
+    /// never registered, for the refusal.
+    fn health(&mut self) -> Option<Entry> {
+        let driver = if self.rng.one_in(8) {
+            DriverId::new(Name::new("ghost").ok()?)
+        } else {
+            self.pick_driver()?.id.clone()
+        };
+        let seq = self.state.next_seq();
+        Some(if self.rng.one_in(2) {
+            let cause = if self.rng.one_in(2) {
+                DownCause::Crashed
+            } else {
+                DownCause::Retired
+            };
+            Entry::DriverDown { seq, driver, cause }
+        } else {
+            Entry::DriverUp { seq, driver }
+        })
+    }
+
+    /// A request closed without its driver's answer (ADR-0014 §3): billed
+    /// the ceiling, exactly — the driver had taken it — or nothing — it was
+    /// still queued. Now and then one the kernel never writes, for the
+    /// refusal: another owner, a bill that is neither, a payload, a sender
+    /// other than the kernel.
+    fn unanswered(&mut self) -> Option<Proposal> {
+        let open: Vec<(AgentId, Corr, usize)> = self
+            .open
+            .iter()
+            .flat_map(|(id, held)| held.iter().map(move |(corr, idx)| (*id, *corr, *idx)))
+            .collect();
+        let (mut to, corr, idx) = *self.rng.pick(&open)?;
+        let driver = self.drivers.get(idx)?.clone();
+        let cause = match self.rng.below(3) {
+            0 => UnansweredCause::Crashed,
+            1 => UnansweredCause::Overdue,
+            _ => UnansweredCause::Retired,
+        };
+        let mut msg = Msg::new(
+            self.state.next_seq(),
+            Endpoint::Kernel,
+            MsgKind::Reply,
+            BlobRef::EMPTY,
+        )
+        .with_corr(corr);
+        if self.rng.one_in(2) {
+            msg = msg.with_consumption(as_consumption(&driver.ceiling));
+        }
+        if self.rng.one_in(6) {
+            match self.rng.below(4) {
+                0 => to = self.pick_live().unwrap_or(to),
+                1 => {
+                    let over = Consumption::from_dims(
+                        driver
+                            .ceiling
+                            .iter()
+                            .map(|(dim, held)| (dim.clone(), held.saturating_add(1))),
+                    );
+                    msg = msg.with_consumption(over);
+                }
+                2 => msg.payload = self.rng.blob(),
+                _ => {
+                    msg.from = Endpoint::Driver {
+                        id: driver.id.clone(),
+                    };
+                }
+            }
+        }
+        Some(
+            Entry::Unanswered {
+                msg,
+                to,
+                driver: driver.id,
+                cause,
+            }
+            .into(),
+        )
     }
 
     fn spawn(&mut self) -> Option<Entry> {

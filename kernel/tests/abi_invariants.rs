@@ -7,9 +7,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use tau_kernel::abi::{
-    AgentId, BlobRef, Budget, BudgetError, Capability, Corr, DimKey, DriverId, Endpoint, Entry,
-    FailureMode, HookId, HookPoint, HookSource, LogHeader, Msg, MsgKind, Name, NameError,
-    Namespace, Ruling, Seq, ABI,
+    AgentId, BlobRef, Budget, BudgetError, Capability, Corr, DimKey, DownCause, DriverId, Endpoint,
+    Entry, FailureMode, HookId, HookPoint, HookSource, LogHeader, Msg, MsgKind, Name, NameError,
+    Namespace, Ruling, Seq, UnansweredCause, ABI,
 };
 use tau_kernel::log::{Log, LogError};
 use tau_kernel::reducer::{fold, Refusal};
@@ -215,17 +215,19 @@ fn json(entry: &Entry) -> serde_json::Value {
 }
 
 #[test]
-fn position_is_top_level_seq_for_nine_kinds_and_msg_seq_for_three() {
-    // `Refusal::OutOfOrder` reads `Entry::seq()`. Nine kinds carry `seq`
-    // themselves; `Sent`, `Replied` and `Emitted` carry a `Msg` whose `seq`
-    // *is* the position, and duplicating it at the top level would be a
-    // second source of truth for the refusal to disagree with.
+fn position_is_top_level_seq_for_eleven_kinds_and_msg_seq_for_four() {
+    // `Refusal::OutOfOrder` reads `Entry::seq()`. Eleven kinds carry `seq`
+    // themselves; `Sent`, `Replied`, `Emitted` and — since ABI 3, ADR-0014
+    // §8 — `Unanswered` carry a `Msg` whose `seq` *is* the position, and
+    // duplicating it at the top level would be a second source of truth for
+    // the refusal to disagree with.
     let top_level = [
         Entry::DriverRegistered {
             seq: Seq::new(10),
             driver: tool(),
             cap: Capability::mint(0),
             ceiling: Budget::from_dims([(DimKey::Tokens, 1)]),
+            reply_within: None,
         },
         Entry::Spawned {
             seq: Seq::new(11),
@@ -273,6 +275,15 @@ fn position_is_top_level_seq_for_nine_kinds_and_msg_seq_for_three() {
             subject: AgentId::new(0),
             roll: vec![],
         },
+        Entry::DriverDown {
+            seq: Seq::new(19),
+            driver: tool(),
+            cause: DownCause::Crashed,
+        },
+        Entry::DriverUp {
+            seq: Seq::new(20),
+            driver: tool(),
+        },
     ];
     for (i, entry) in top_level.iter().enumerate() {
         let want = 10 + i as u64;
@@ -288,7 +299,7 @@ fn position_is_top_level_seq_for_nine_kinds_and_msg_seq_for_three() {
     let in_msg = [
         Entry::Sent {
             msg: Msg::new(
-                Seq::new(20),
+                Seq::new(30),
                 Endpoint::Agent {
                     id: AgentId::new(0),
                 },
@@ -300,7 +311,7 @@ fn position_is_top_level_seq_for_nine_kinds_and_msg_seq_for_three() {
         },
         Entry::Replied {
             msg: Msg::new(
-                Seq::new(21),
+                Seq::new(31),
                 Endpoint::Driver { id: tool() },
                 MsgKind::Reply,
                 blob(4),
@@ -312,15 +323,27 @@ fn position_is_top_level_seq_for_nine_kinds_and_msg_seq_for_three() {
             hook: HookId::new(0),
             to: AgentId::new(0),
             msg: Msg::new(
-                Seq::new(22),
+                Seq::new(32),
                 Endpoint::Hook { id: HookId::new(0) },
                 MsgKind::Notice,
                 blob(5),
             ),
         },
+        Entry::Unanswered {
+            msg: Msg::new(
+                Seq::new(33),
+                Endpoint::Kernel,
+                MsgKind::Reply,
+                BlobRef::EMPTY,
+            )
+            .with_corr(Corr::new(0)),
+            to: AgentId::new(0),
+            driver: tool(),
+            cause: UnansweredCause::Overdue,
+        },
     ];
     for (i, entry) in in_msg.iter().enumerate() {
-        let want = 20 + i as u64;
+        let want = 30 + i as u64;
         assert_eq!(entry.seq().get(), want);
         assert!(json(entry).get("seq").is_none(), "{entry:?}");
         assert_eq!(
@@ -329,6 +352,72 @@ fn position_is_top_level_seq_for_nine_kinds_and_msg_seq_for_three() {
             "{entry:?}"
         );
     }
+}
+
+#[test]
+fn a_driver_registered_line_without_reply_within_reads_as_none() {
+    // ADR-0014 §2: every corpus and fixture log written before ABI 3 is
+    // such a line, and each must keep folding. `null` and absent are the
+    // same fact — unbounded — and only the former is ever written now.
+    let old =
+        r#"{"entry":"driver_registered","seq":0,"driver":"tool","cap":0,"ceiling":{"tokens":30}}"#;
+    let entry: Entry = serde_json::from_str(old).unwrap();
+    assert_eq!(
+        entry,
+        Entry::DriverRegistered {
+            seq: Seq::new(0),
+            driver: tool(),
+            cap: Capability::mint(0),
+            ceiling: Budget::from_dims([(DimKey::Tokens, 30)]),
+            reply_within: None,
+        }
+    );
+    assert_eq!(
+        json(&entry).get("reply_within"),
+        Some(&serde_json::Value::Null),
+        "written back, the bound is explicit"
+    );
+    let bounded: Entry = serde_json::from_str(
+        r#"{"entry":"driver_registered","seq":0,"driver":"tool","cap":0,"ceiling":{"tokens":30},"reply_within":250}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        bounded,
+        Entry::DriverRegistered {
+            reply_within: Some(250),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn the_corr_an_unanswered_closes_is_on_the_wire() {
+    // ADR-0014 §9: like a `Replied`, an `Unanswered` names the correlation
+    // it closes inside its envelope, and the fold confirms it is open. Its
+    // sender is the kernel, and `kind` is `reply` — what `recv(Corr(c))`
+    // matches on.
+    let entry = Entry::Unanswered {
+        msg: Msg::new(
+            Seq::new(41),
+            Endpoint::Kernel,
+            MsgKind::Reply,
+            BlobRef::EMPTY,
+        )
+        .with_corr(Corr::new(1001)),
+        to: AgentId::new(3),
+        driver: tool(),
+        cause: UnansweredCause::Crashed,
+    };
+    let json = json(&entry);
+    assert_eq!(json.pointer("/msg/corr"), Some(&serde_json::json!(1001)));
+    assert_eq!(
+        json.pointer("/msg/from"),
+        Some(&serde_json::json!({ "kind": "kernel" }))
+    );
+    assert_eq!(json.pointer("/msg/kind"), Some(&serde_json::json!("reply")));
+    assert_eq!(json.get("to"), Some(&serde_json::json!(3)));
+    assert_eq!(json.get("driver"), Some(&serde_json::json!("tool")));
+    assert_eq!(json.get("cause"), Some(&serde_json::json!("crashed")));
 }
 
 #[test]
@@ -378,6 +467,7 @@ fn the_ids_a_kind_introduces_are_on_the_wire() {
         driver: tool(),
         cap: Capability::mint(7),
         ceiling: Budget::from_dims([(DimKey::Tokens, 1)]),
+        reply_within: None,
     };
     assert_eq!(json(&registered).get("cap"), Some(&serde_json::json!(7)));
 

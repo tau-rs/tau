@@ -9,5 +9,6 @@ expression: driver_registered ()
   "cap": 0,
   "ceiling": {
     "tokens": 30
-  }
+  },
+  "reply_within": null
 }

@@ -70,6 +70,7 @@ fn booted_with(budget: Budget) -> (State, Capability, AgentId) {
             driver: echo(),
             cap,
             ceiling: tokens(CEILING),
+            reply_within: None,
         },
         Entry::Spawned {
             seq: Seq::new(1),
@@ -219,6 +220,7 @@ fn a_root_cannot_hold_a_capability_the_kernel_never_minted() {
         driver: echo(),
         cap: Capability::mint(0),
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     let err = refuse(
@@ -1548,6 +1550,7 @@ fn hooked() -> (State, AgentId) {
         driver: echo(),
         cap,
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     step(&mut state, |s| {
@@ -1593,6 +1596,7 @@ fn a_hook_id_is_confirmed_not_rederived() {
         driver: echo(),
         cap: Capability::mint(0),
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     let err = refuse(
@@ -1622,6 +1626,7 @@ fn a_hook_may_not_fail_open_where_it_can_veto() {
         driver: echo(),
         cap: Capability::mint(0),
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     for point in [
@@ -1934,4 +1939,364 @@ fn hooks_are_canonical_state() {
     assert_eq!(back.hash(), with.hash());
     assert_eq!(back.hooks().count(), 5);
     assert_eq!(back.next_hook(), hook(5));
+}
+
+// ---------------------------------------------------------------- supervision
+//
+// ADR-0014 §3–§4: an `Unanswered` settles like a `Replied` and is refused
+// like one, plus the two shapes the kernel never writes (`BadBill`); the
+// health transitions are confirmed and applied as nothing.
+
+use tau_kernel::abi::{DownCause, UnansweredCause};
+use tau_kernel::reducer::as_consumption;
+
+/// The envelope an `Unanswered` carries: from the kernel, a reply, empty.
+fn from_kernel(state: &State, corr: Corr) -> Msg {
+    Msg::new(
+        state.next_seq(),
+        Endpoint::Kernel,
+        MsgKind::Reply,
+        BlobRef::EMPTY,
+    )
+    .with_corr(corr)
+}
+
+fn unanswered(state: &State, corr: Corr, to: AgentId, consumed: Option<Consumption>) -> Entry {
+    let mut msg = from_kernel(state, corr);
+    if let Some(consumed) = consumed {
+        msg = msg.with_consumption(consumed);
+    }
+    Entry::Unanswered {
+        msg,
+        to,
+        driver: echo(),
+        cause: UnansweredCause::Crashed,
+    }
+}
+
+/// The reply-from-the-kernel the owner reads: `recv(Corr(c))` matches it.
+fn reply_from_kernel(state: &State, agent: AgentId, corr: Corr) -> Msg {
+    state
+        .agent(agent)
+        .unwrap()
+        .mailbox
+        .iter()
+        .find(|m| m.corr == Some(corr))
+        .cloned()
+        .expect("the unanswered reply is in the mailbox")
+}
+
+#[test]
+fn an_unanswered_taken_request_settles_at_the_ceiling() {
+    // ADR-0014 §3, row "taken": spent += ceiling, refund 0, overdraft 0.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let corr = Corr::new(0);
+    assert_eq!(
+        state.agent(root).unwrap().budget.get(&DimKey::Tokens),
+        Some(90)
+    );
+    step(&mut state, |s| {
+        unanswered(s, corr, root, Some(as_consumption(&tokens(CEILING))))
+    });
+    let a = state.agent(root).unwrap();
+    assert_eq!(a.budget.get(&DimKey::Tokens), Some(90), "no refund");
+    assert_eq!(a.spent.get(&DimKey::Tokens), Some(&CEILING));
+    assert!(
+        a.overdraft.is_empty(),
+        "the kernel bills exactly the reservation"
+    );
+    assert!(a.reserved.is_empty());
+    assert_eq!(state.owner(corr), None, "the correlation is closed");
+    let reply = reply_from_kernel(&state, root, corr);
+    assert_eq!(reply.from, Endpoint::Kernel);
+    assert_eq!(reply.kind, MsgKind::Reply);
+    assert_eq!(reply.payload, BlobRef::EMPTY);
+    conserved(&state, &root_grant());
+}
+
+#[test]
+fn an_unanswered_queued_request_refunds_its_reservation() {
+    // ADR-0014 §3, row "queued": nothing ran, nothing was seen, full refund.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let corr = Corr::new(0);
+    step(&mut state, |s| unanswered(s, corr, root, None));
+    let a = state.agent(root).unwrap();
+    assert_eq!(a.budget.get(&DimKey::Tokens), Some(100), "refunded in full");
+    assert_eq!(a.spent.get(&DimKey::Tokens), None);
+    assert_eq!(
+        a.spent.get(&DimKey::Calls),
+        Some(&1),
+        "the send itself stays charged"
+    );
+    assert!(a.overdraft.is_empty());
+    assert!(a.reserved.is_empty());
+    assert_eq!(state.owner(corr), None);
+    let reply = reply_from_kernel(&state, root, corr);
+    assert_eq!(reply.consumed, None);
+    conserved(&state, &root_grant());
+}
+
+#[test]
+fn an_unanswered_entry_for_a_closed_corr_is_refused() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let corr = Corr::new(0);
+    step(&mut state, |s| replied(s, corr, root, used(3)));
+    let err = refuse(&state, &unanswered(&state, corr, root, None));
+    assert_eq!(err, Refusal::UnknownCorr(Some(corr)));
+    // Never allocated at all.
+    let err = refuse(&state, &unanswered(&state, Corr::new(9), root, None));
+    assert_eq!(err, Refusal::UnknownCorr(Some(Corr::new(9))));
+    // No correlation on the envelope.
+    let Entry::Unanswered {
+        mut msg,
+        to,
+        driver,
+        cause,
+    } = unanswered(&state, corr, root, None)
+    else {
+        panic!("not an unanswered entry");
+    };
+    msg.corr = None;
+    let err = refuse(
+        &state,
+        &Entry::Unanswered {
+            msg,
+            to,
+            driver,
+            cause,
+        },
+    );
+    assert_eq!(err, Refusal::UnknownCorr(None));
+}
+
+#[test]
+fn an_unanswered_entry_addressed_to_the_wrong_owner_is_refused() {
+    let (state, root, child, _) = family();
+    let corr = Corr::new(0);
+    let err = refuse(&state, &unanswered(&state, corr, root, None));
+    assert_eq!(
+        err,
+        Refusal::WrongOwner {
+            corr,
+            expected: child,
+            found: root,
+        }
+    );
+}
+
+#[test]
+fn an_unanswered_entry_from_anyone_but_the_kernel_is_refused() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let corr = Corr::new(0);
+    for from in [
+        Endpoint::Driver { id: echo() },
+        Endpoint::Harness,
+        Endpoint::Agent { id: root },
+        Endpoint::Hook { id: hook(0) },
+    ] {
+        let Entry::Unanswered {
+            mut msg,
+            to,
+            driver,
+            cause,
+        } = unanswered(&state, corr, root, None)
+        else {
+            panic!("not an unanswered entry");
+        };
+        msg.from = from.clone();
+        let err = refuse(
+            &state,
+            &Entry::Unanswered {
+                msg,
+                to,
+                driver,
+                cause,
+            },
+        );
+        assert_eq!(err, Refusal::WrongSender(from));
+    }
+    // A driver the log never registered, whatever the sender says.
+    let ghost = DriverId::new(Name::new("ghost").unwrap());
+    let err = refuse(
+        &state,
+        &Entry::Unanswered {
+            msg: from_kernel(&state, corr),
+            to: root,
+            driver: ghost.clone(),
+            cause: UnansweredCause::Retired,
+        },
+    );
+    assert_eq!(err, Refusal::WrongSender(Endpoint::Driver { id: ghost }));
+    // And not a notice.
+    let mut msg = from_kernel(&state, corr);
+    msg.kind = MsgKind::Notice;
+    let err = refuse(
+        &state,
+        &Entry::Unanswered {
+            msg,
+            to: root,
+            driver: echo(),
+            cause: UnansweredCause::Overdue,
+        },
+    );
+    assert_eq!(
+        err,
+        Refusal::WrongKind {
+            expected: MsgKind::Reply,
+            found: MsgKind::Notice,
+        }
+    );
+}
+
+#[test]
+fn an_unanswered_entry_billing_other_than_none_or_the_ceiling_is_refused() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let corr = Corr::new(0);
+    for bill in [
+        used(3),
+        used(CEILING + 1),
+        Consumption::none(),
+        Consumption::from_dims([
+            (DimKey::Tokens, CEILING),
+            (DimKey::Custom(Name::new("pixels").unwrap()), 1),
+        ]),
+    ] {
+        let err = refuse(&state, &unanswered(&state, corr, root, Some(bill.clone())));
+        assert_eq!(err, Refusal::BadBill { corr }, "bill {bill:?}");
+    }
+    // Exactly the ceiling is the one bill accepted.
+    let mut ok = state.clone();
+    step(&mut ok, |s| {
+        unanswered(s, corr, root, Some(as_consumption(&tokens(CEILING))))
+    });
+}
+
+#[test]
+fn an_unanswered_entry_with_a_payload_is_refused() {
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let corr = Corr::new(0);
+    let mut msg = from_kernel(&state, corr);
+    msg.payload = BlobRef::from_bytes([0xab; 32]);
+    let err = refuse(
+        &state,
+        &Entry::Unanswered {
+            msg,
+            to: root,
+            driver: echo(),
+            cause: UnansweredCause::Crashed,
+        },
+    );
+    assert_eq!(err, Refusal::BadBill { corr });
+}
+
+#[test]
+fn driver_down_and_up_for_an_unregistered_driver_are_refused() {
+    let (state, ..) = booted();
+    let ghost = DriverId::new(Name::new("ghost").unwrap());
+    let err = refuse(
+        &state,
+        &Entry::DriverDown {
+            seq: state.next_seq(),
+            driver: ghost.clone(),
+            cause: DownCause::Crashed,
+        },
+    );
+    assert_eq!(
+        err,
+        Refusal::WrongSender(Endpoint::Driver { id: ghost.clone() })
+    );
+    let err = refuse(
+        &state,
+        &Entry::DriverUp {
+            seq: state.next_seq(),
+            driver: ghost.clone(),
+        },
+    );
+    assert_eq!(err, Refusal::WrongSender(Endpoint::Driver { id: ghost }));
+}
+
+#[test]
+fn driver_down_and_up_change_nothing_but_the_position() {
+    // ADR-0014 §4: health is not canonical state. Everything but `next_seq`
+    // is byte-identical before and after, and a `Sent` through a driver the
+    // log says is down is still accepted — the live kernel is what refuses
+    // it, and only after a retire.
+    let (mut state, _, root) = booted();
+    step(&mut state, |s| sent(s, root));
+    let before = state.clone();
+    let strip = |s: &State| {
+        let mut json = serde_json::to_value(s).unwrap();
+        json.as_object_mut().unwrap().remove("next_seq");
+        json
+    };
+    for cause in [DownCause::Crashed, DownCause::Retired] {
+        step(&mut state, |s| Entry::DriverDown {
+            seq: s.next_seq(),
+            driver: echo(),
+            cause,
+        });
+        step(&mut state, |s| Entry::DriverUp {
+            seq: s.next_seq(),
+            driver: echo(),
+        });
+    }
+    assert_eq!(state.len(), before.len() + 4);
+    assert_eq!(strip(&state), strip(&before));
+    assert_ne!(state.hash(), before.hash(), "the position is in the hash");
+    step(&mut state, |s| Entry::DriverDown {
+        seq: s.next_seq(),
+        driver: echo(),
+        cause: DownCause::Retired,
+    });
+    step(&mut state, |s| sent(s, root));
+    assert_eq!(
+        state.open_corrs(root).count(),
+        2,
+        "the fold does not refuse it"
+    );
+    conserved(&state, &root_grant());
+}
+
+#[test]
+fn a_cancelling_agent_receives_an_unanswered_reply() {
+    // Cancelling included, as for a `Replied`: the request must close, and
+    // the frozen owner may still `recv` it during its grace period.
+    let (mut state, root, child, _) = family();
+    let corr = Corr::new(0);
+    step(&mut state, |s| cancelled(s, Some(root), child, 10));
+    assert_eq!(state.agent(child).unwrap().status, Status::Cancelling);
+    let Entry::Unanswered {
+        msg, to, driver, ..
+    } = unanswered(&state, corr, child, Some(as_consumption(&tokens(CEILING))))
+    else {
+        panic!("not an unanswered entry");
+    };
+    step(&mut state, |_| Entry::Unanswered {
+        msg,
+        to,
+        driver,
+        cause: UnansweredCause::Retired,
+    });
+    let a = state.agent(child).unwrap();
+    assert_eq!(a.status, Status::Cancelling);
+    assert_eq!(a.mailbox.len(), 2, "the cancel notice and the reply");
+    assert_eq!(
+        reply_from_kernel(&state, child, corr).from,
+        Endpoint::Kernel
+    );
+    assert_eq!(state.owner(corr), None);
+    conserved(&state, &root_grant());
+    // Once it has finished, nothing can be delivered to it.
+    step(&mut state, |s| exited(s, child));
+    let (mut again, _, root) = booted();
+    step(&mut again, |s| sent(s, root));
+    step(&mut again, |s| exited(s, root));
+    let err = refuse(&again, &unanswered(&again, Corr::new(0), root, None));
+    assert_eq!(err, Refusal::UnknownCorr(Some(Corr::new(0))));
 }

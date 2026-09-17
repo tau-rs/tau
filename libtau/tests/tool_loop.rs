@@ -919,3 +919,87 @@ async fn an_on_budget_note_during_a_tool_call_reaches_the_program_after_the_loop
     );
     assert_eq!(world.model.seen().len(), 2, "the loop ran to end_turn");
 }
+
+// --- a tool that never answers (ADR-0014 §7) --------------------------------
+
+use common::{quiet_panics, Boom};
+use libtau::render_unanswered;
+
+#[tokio::test]
+async fn the_tool_loop_renders_an_unanswered_call_as_a_failed_tool_result() {
+    // The store's driver raises. The request closes with a reply from the
+    // kernel, and the model reads a `failed` tool result — as it reads a
+    // driver's own `error.transport` — and decides what to do next.
+    quiet_panics();
+    let kernel = Kernel::boot(Log::with_sink(Vec::new()).unwrap(), tokio_spawner);
+    let scripted = common::ScriptedModel::new([
+        calls(vec![tool_call(
+            "call_1",
+            "store",
+            json!({ "op": "read", "key": "a" }),
+        )]),
+        end_turn("the store did not answer; giving up"),
+    ]);
+    let model = kernel
+        .register_driver(
+            id("model"),
+            scripted.clone(),
+            Budget::from_dims([(DimKey::Tokens, MODEL_CEILING)]),
+        )
+        .unwrap();
+    let store = kernel
+        .register_driver(
+            id("store"),
+            Boom { tool: true },
+            Budget::from_dims([(DimKey::Tokens, TOOL_CEILING)]),
+        )
+        .unwrap();
+    let out = slot();
+    let sink = Arc::clone(&out);
+    let root = kernel
+        .spawn_root(
+            program(move |h| async move {
+                let toolbox = Toolbox::project(&h, &[store]).expect("projection");
+                let mut request = prompt("read a", 64);
+                let mut notes = Vec::new();
+                let result = tool_loop(&h, model, &toolbox, &mut request, &mut notes).await;
+                sink.lock().unwrap().replace((request, result));
+                h.exit(b"")
+            }),
+            Namespace::from_caps([model, store]),
+            plenty(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+
+    let (transcript, result) = take(&out);
+    assert_eq!(
+        result.unwrap(),
+        end_turn("the store did not answer; giving up")
+    );
+    assert_eq!(
+        results_of(&transcript),
+        vec![tool_result(
+            "call_1",
+            "`store`: the driver did not answer",
+            Some(ToolErrorKind::Failed)
+        )]
+    );
+    assert_eq!(
+        render_unanswered("call_9".into(), "search"),
+        tool_result(
+            "call_9",
+            "`search`: the driver did not answer",
+            Some(ToolErrorKind::Failed)
+        )
+    );
+    let state = kernel.state();
+    let a = state.agent(root).unwrap();
+    assert_eq!(
+        a.spent.get(&DimKey::Tokens),
+        Some(&(TOOL_CEILING + 2 * 15)),
+        "the tool call billed its ceiling; the two model calls their usage"
+    );
+    assert!(a.overdraft.is_empty());
+}

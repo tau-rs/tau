@@ -67,5 +67,7 @@ mod toolbox;
 pub use infer::{
     decode_reply, encode_request, infer, infer_with, should_retry, InferError, Note, RetryPolicy,
 };
-pub use tool_loop::{prompt, render_result, tool_loop, tool_loop_with, ToolLoopError};
+pub use tool_loop::{
+    prompt, render_result, render_unanswered, tool_loop, tool_loop_with, ToolLoopError,
+};
 pub use toolbox::{ProjectError, Toolbox};
