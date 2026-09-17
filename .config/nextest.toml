@@ -22,7 +22,16 @@ fail-fast    = true
 # The sandbox's `cpu_limit` and `wall_limit` tests burn a second of CPU or
 # wall by construction (ADR-0009 §2) and the macOS smoke runner is 2-3x
 # slower than a laptop. They are the `ci` profile's; here they are not run.
-default-filter = 'not binary(sandbox_limits)'
+# So are the two sweeps that replay every corpus log from several snapshot
+# offsets — one in-process, one through the `tau` binary: each is a few
+# whole folds of every 5000-entry log, ~2.5 s in debug on a laptop and past
+# the ceiling on the smoke runner once the corpus reached ten (#148). The
+# `ci` profile's Linux job runs them on every pull request.
+default-filter = '''
+not binary(sandbox_limits)
+and not test(every_corpus_log_replays_from_each_of_its_snapshots)
+and not test(tau_snapshot_then_tau_replay_from_matches_every_sidecar)
+'''
 
 [profile.ci]
 retries        = 0          # a flake is a bug; the flake hunter quarantines, CI does not retry
