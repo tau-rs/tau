@@ -74,7 +74,7 @@ if [ "$MODE" = "record" ]; then
     echo "# Re-pin with: gh workflow run tier3.yml --ref main -f baseline=record,"
     echo "# then commit the kpi-ir-baseline artifact with the reason for the move."
     echo "# recorded: $(date -u '+%Y-%m-%dT%H:%M:%SZ') ref=${GITHUB_SHA:-$(git rev-parse HEAD)}"
-    echo "# $(rustc --version) | $(valgrind --version 2>/dev/null || echo 'valgrind ?') | iai-callgrind-runner $(iai-callgrind-runner --version 2>/dev/null | awk '{print $NF}' || echo '?')"
+    echo "# $(rustc --version) | $(valgrind --version 2>/dev/null || echo 'valgrind ?') | iai-callgrind-runner $(cargo install --list 2>/dev/null | sed -nE 's/^iai-callgrind-runner v([0-9.]+):$/\1/p' || echo '?')"
     printf '%s\n' "$measured"
   } > "$BASELINE"
   echo "benchmarks=$count recorded=$BASELINE"

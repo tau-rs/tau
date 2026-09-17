@@ -213,11 +213,15 @@ jobs:
           version="$(cargo metadata --locked --format-version 1 \
             | jq -r '.packages[] | select(.name == "iai-callgrind") | .version')"
           [ -n "$version" ] || { echo "::error::iai-callgrind is not in Cargo.lock"; exit 1; }
-          if [ "$(iai-callgrind-runner --version 2>/dev/null | awk '{print $NF}')" != "$version" ]; then
+          # The runner has no `--version` of its own (it refuses to run
+          # outside the library's harness); `cargo install --list` is the
+          # record of what is installed.
+          installed() { cargo install --list | sed -nE 's/^iai-callgrind-runner v([0-9.]+):$/\1/p'; }
+          if [ "$(installed)" != "$version" ]; then
             cargo install --locked iai-callgrind-runner --version "$version"
           fi
           valgrind --version
-          iai-callgrind-runner --version
+          echo "iai-callgrind-runner $(installed)"
 
       - name: Count instructions
         id: bench
@@ -233,7 +237,7 @@ jobs:
           {
             echo "## benchmark regression (instruction counts)"
             echo
-            echo "- $(rustc --version); $(valgrind --version); iai-callgrind-runner $(iai-callgrind-runner --version | awk '{print $NF}')"
+            echo "- $(rustc --version); $(valgrind --version); iai-callgrind-runner $(cargo install --list | sed -nE 's/^iai-callgrind-runner v([0-9.]+):$/\1/p')"
             echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`; mode: \`$MODE\`; limit: +${LIMIT_PCT} %"
             echo "- $(tail -1 judge.txt)"
             echo "- wall (build + run): ${SECONDS}s"
