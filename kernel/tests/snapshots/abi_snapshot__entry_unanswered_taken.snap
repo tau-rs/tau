@@ -1,0 +1,24 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: unanswered_taken ()
+---
+{
+  "entry": "unanswered",
+  "msg": {
+    "abi": 3,
+    "seq": 41,
+    "from": {
+      "kind": "kernel"
+    },
+    "corr": 7,
+    "kind": "reply",
+    "consumed": {
+      "tokens": 8000,
+      "cost_microusd": 50000
+    },
+    "payload": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "to": 3,
+  "driver": "model",
+  "cause": "crashed"
+}

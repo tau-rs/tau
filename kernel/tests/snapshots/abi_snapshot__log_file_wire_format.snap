@@ -2,12 +2,13 @@
 source: kernel/tests/abi_snapshot.rs
 expression: "String::from_utf8(bytes).unwrap()"
 ---
-{"magic":[84,65,85,0],"abi":2}
-{"entry":"driver_registered","seq":0,"driver":"tool","cap":0,"ceiling":{"tokens":30}}
+{"magic":[84,65,85,0],"abi":3}
+{"entry":"driver_registered","seq":0,"driver":"tool","cap":0,"ceiling":{"tokens":30},"reply_within":null}
+{"entry":"driver_registered","seq":0,"driver":"model","cap":0,"ceiling":{"tokens":8000,"cost_microusd":50000},"reply_within":30000}
 {"entry":"spawned","seq":1,"parent":null,"agent":0,"ns":{"caps":[0]},"budget":{"tokens":70,"calls":10,"depth":2}}
 {"entry":"spawned","seq":2,"parent":0,"agent":1,"ns":{"caps":[]},"budget":{"tokens":20,"depth":1}}
-{"entry":"sent","msg":{"abi":2,"seq":12,"from":{"kind":"agent","id":0},"corr":0,"kind":"request","consumed":null,"payload":"abababababababababababababababababababababababababababababababab"},"via":0}
-{"entry":"replied","msg":{"abi":2,"seq":17,"from":{"kind":"driver","id":"tool"},"corr":0,"kind":"reply","consumed":{"tokens":12},"payload":"0101010101010101010101010101010101010101010101010101010101010101"},"to":0}
+{"entry":"sent","msg":{"abi":3,"seq":12,"from":{"kind":"agent","id":0},"corr":0,"kind":"request","consumed":null,"payload":"abababababababababababababababababababababababababababababababab"},"via":0}
+{"entry":"replied","msg":{"abi":3,"seq":17,"from":{"kind":"driver","id":"tool"},"corr":0,"kind":"reply","consumed":{"tokens":12},"payload":"0101010101010101010101010101010101010101010101010101010101010101"},"to":0}
 {"entry":"resolved","seq":5,"agent":1,"matched":4}
 {"entry":"exited","seq":7,"agent":0,"result":"2222222222222222222222222222222222222222222222222222222222222222"}
 {"entry":"claimed","seq":47,"agent":1,"by":0}
@@ -19,4 +20,9 @@ expression: "String::from_utf8(bytes).unwrap()"
 {"entry":"attached","seq":2,"hook":1,"point":"pre_deliver","failure":"open","program":{"rule":"when pre_deliver then allow"}}
 {"entry":"attached","seq":3,"hook":2,"point":{"on_budget":{"dim":"tokens","below":50}},"failure":"open","program":{"native":"low-tokens"}}
 {"entry":"verdicts","seq":32,"point":"on_spawn","subject":1,"roll":[[0,"allow"],[1,{"emit":{"to":0,"payload":"4444444444444444444444444444444444444444444444444444444444444444"}}],[2,{"failed":{"mode":"closed","error":"5555555555555555555555555555555555555555555555555555555555555555"}}],[3,{"deny":"6666666666666666666666666666666666666666666666666666666666666666"}]]}
-{"entry":"emitted","hook":5,"to":0,"msg":{"abi":2,"seq":14,"from":{"kind":"hook","id":5},"corr":null,"kind":"notice","consumed":null,"payload":"7777777777777777777777777777777777777777777777777777777777777777"}}
+{"entry":"emitted","hook":5,"to":0,"msg":{"abi":3,"seq":14,"from":{"kind":"hook","id":5},"corr":null,"kind":"notice","consumed":null,"payload":"7777777777777777777777777777777777777777777777777777777777777777"}}
+{"entry":"driver_down","seq":40,"driver":"model","cause":"crashed"}
+{"entry":"driver_down","seq":90,"driver":"model","cause":"retired"}
+{"entry":"driver_up","seq":45,"driver":"model"}
+{"entry":"unanswered","msg":{"abi":3,"seq":41,"from":{"kind":"kernel"},"corr":7,"kind":"reply","consumed":{"tokens":8000,"cost_microusd":50000},"payload":"0000000000000000000000000000000000000000000000000000000000000000"},"to":3,"driver":"model","cause":"crashed"}
+{"entry":"unanswered","msg":{"abi":3,"seq":91,"from":{"kind":"kernel"},"corr":12,"kind":"reply","consumed":null,"payload":"0000000000000000000000000000000000000000000000000000000000000000"},"to":3,"driver":"model","cause":"overdue"}

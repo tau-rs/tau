@@ -44,7 +44,7 @@ mod snapshot;
 
 pub use budget::{Budget, BudgetError, Consumption, DimKey};
 pub use cap::{Capability, Endpoint, Namespace};
-pub use entry::Entry;
+pub use entry::{DownCause, Entry, UnansweredCause};
 pub use hook::{FailureMode, HookPoint, HookSource, Roll, Ruling};
 pub use ids::{AgentId, Corr, DriverId, HookId, Seq};
 pub use msg::{BlobRef, BlobRefError, LogHeader, Msg, MsgKind};
@@ -62,4 +62,5 @@ pub use snapshot::SnapshotHeader;
 /// | 0 | the first freeze | ADR-0004 |
 /// | 1 | `Endpoint::Hook` | ADR-0008 |
 /// | 2 | `Entry` and the hook wire types join this module; no byte changes, but 2 is the first number that identifies the entry format | ADR-0010 |
-pub const ABI: u16 = 2;
+/// | 3 | `Endpoint::Kernel`; `Entry::{DriverDown, DriverUp, Unanswered}`; `DriverRegistered.reply_within`, defaulted | ADR-0014 |
+pub const ABI: u16 = 3;

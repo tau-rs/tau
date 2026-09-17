@@ -1,0 +1,10 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: driver_down_retired ()
+---
+{
+  "entry": "driver_down",
+  "seq": 90,
+  "driver": "model",
+  "cause": "retired"
+}

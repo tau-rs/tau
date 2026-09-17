@@ -165,6 +165,12 @@ pub enum Endpoint {
         /// Which hook.
         id: HookId,
     },
+    /// The kernel itself — since ABI 3 (ADR-0014 §2), the sender of the
+    /// reply that closes a request its driver never answered. Neither the
+    /// driver (it said nothing) nor the harness (on a crash or an overdue
+    /// request it did nothing): a reader that saw `harness` would look for
+    /// harness code that wrote it and find none.
+    Kernel,
 }
 
 impl fmt::Display for Endpoint {
@@ -174,6 +180,7 @@ impl fmt::Display for Endpoint {
             Self::Driver { id } => write!(f, "{id}"),
             Self::Harness => f.write_str("harness"),
             Self::Hook { id } => write!(f, "{id}"),
+            Self::Kernel => f.write_str("kernel"),
         }
     }
 }

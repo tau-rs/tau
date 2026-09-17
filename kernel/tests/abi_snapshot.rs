@@ -12,9 +12,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use tau_kernel::abi::{
-    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DriverId, Endpoint, Entry,
-    FailureMode, HookId, HookPoint, HookSource, LogHeader, Msg, MsgKind, Name, Namespace, Ruling,
-    Seq, SnapshotHeader, ABI,
+    AgentId, BlobRef, Budget, Capability, Consumption, Corr, DimKey, DownCause, DriverId, Endpoint,
+    Entry, FailureMode, HookId, HookPoint, HookSource, LogHeader, Msg, MsgKind, Name, Namespace,
+    Ruling, Seq, SnapshotHeader, UnansweredCause, ABI,
 };
 use tau_kernel::log::Log;
 
@@ -35,10 +35,34 @@ fn abi_version_is_pinned() {
     // 1 → 2: `Entry` and the hook wire types join `kernel/src/abi/`; no byte
     // changes, but 2 is the first number that identifies the entry format,
     // ADR-0010 §2.
+    // 2 → 3: `Endpoint::Kernel`, `Entry::{DriverDown, DriverUp, Unanswered}`
+    // and `DriverRegistered.reply_within`, defaulted — driver supervision,
+    // ADR-0014 §8.
     assert_eq!(
-        ABI, 2,
+        ABI, 3,
         "ABI version changed; update this test and link the ADR that authorises it"
     );
+}
+
+#[test]
+fn msg_reply_from_kernel_wire_format() {
+    // ADR-0014 §2: the envelope an `Unanswered` carries. From the kernel,
+    // a `Reply` on the request's correlation so `recv(Corr(c))` matches it,
+    // the empty payload — the kernel authors no bytes — and, for a request
+    // the driver had taken, the driver's whole ceiling as the bill.
+    let msg = Msg::new(
+        Seq::new(41),
+        Endpoint::Kernel,
+        MsgKind::Reply,
+        BlobRef::EMPTY,
+    )
+    .with_corr(Corr::new(7))
+    .with_consumption(Consumption::from_dims([
+        (DimKey::Tokens, 8_000),
+        (DimKey::CostMicroUsd, 50_000),
+    ]));
+
+    insta::assert_json_snapshot!(msg);
 }
 
 #[test]
@@ -233,6 +257,79 @@ fn driver_registered() -> Entry {
         driver: DriverId::new(name("tool")),
         cap: cap(0),
         ceiling: Budget::from_dims([(DimKey::Tokens, 30)]),
+        reply_within: None,
+    }
+}
+
+fn driver_registered_bounded() -> Entry {
+    // ADR-0014 §2's example: a model driver bounded at 30 000 clock units.
+    Entry::DriverRegistered {
+        seq: Seq::new(0),
+        driver: DriverId::new(name("model")),
+        cap: cap(0),
+        ceiling: Budget::from_dims([(DimKey::Tokens, 8_000), (DimKey::CostMicroUsd, 50_000)]),
+        reply_within: Some(30_000),
+    }
+}
+
+fn model() -> DriverId {
+    DriverId::new(name("model"))
+}
+
+fn driver_down_crashed() -> Entry {
+    Entry::DriverDown {
+        seq: Seq::new(40),
+        driver: model(),
+        cause: DownCause::Crashed,
+    }
+}
+
+fn driver_down_retired() -> Entry {
+    Entry::DriverDown {
+        seq: Seq::new(90),
+        driver: model(),
+        cause: DownCause::Retired,
+    }
+}
+
+fn driver_up() -> Entry {
+    Entry::DriverUp {
+        seq: Seq::new(45),
+        driver: model(),
+    }
+}
+
+/// The envelope of an `Unanswered`: from the kernel, a reply, empty.
+fn from_kernel(seq: u64, corr: u64) -> Msg {
+    Msg::new(
+        Seq::new(seq),
+        Endpoint::Kernel,
+        MsgKind::Reply,
+        BlobRef::EMPTY,
+    )
+    .with_corr(Corr::new(corr))
+}
+
+fn unanswered_taken() -> Entry {
+    // Taken by the driver when it crashed: billed the ceiling, exactly.
+    Entry::Unanswered {
+        msg: from_kernel(41, 7).with_consumption(Consumption::from_dims([
+            (DimKey::Tokens, 8_000),
+            (DimKey::CostMicroUsd, 50_000),
+        ])),
+        to: agent(3),
+        driver: model(),
+        cause: UnansweredCause::Crashed,
+    }
+}
+
+fn unanswered_queued() -> Entry {
+    // Still queued when its bound passed: billed nothing, `consumed` null.
+    Entry::Unanswered {
+        msg: from_kernel(91, 12),
+        to: agent(3),
+        driver: model(),
+        cause: UnansweredCause::Overdue,
     }
 }
 
@@ -422,10 +519,12 @@ fn emitted() -> Entry {
     }
 }
 
-/// Every kind and every variant split, in the order of the ADR-0010 §3 table.
+/// Every kind and every variant split, in the order of the ADR-0010 §3 table,
+/// then the ADR-0014 §2 kinds by amendment.
 fn one_of_every_kind() -> Vec<Entry> {
     vec![
         driver_registered(),
+        driver_registered_bounded(),
         spawned_root(),
         spawned_child(),
         sent(),
@@ -442,6 +541,11 @@ fn one_of_every_kind() -> Vec<Entry> {
         attached_on_budget(),
         verdicts(),
         emitted(),
+        driver_down_crashed(),
+        driver_down_retired(),
+        driver_up(),
+        unanswered_taken(),
+        unanswered_queued(),
     ]
 }
 
@@ -474,6 +578,12 @@ entry_snapshot!(
     entry_attached_on_budget => attached_on_budget,
     entry_verdicts => verdicts,
     entry_emitted => emitted,
+    entry_driver_registered_bounded => driver_registered_bounded,
+    entry_driver_down_crashed => driver_down_crashed,
+    entry_driver_down_retired => driver_down_retired,
+    entry_driver_up => driver_up,
+    entry_unanswered_taken => unanswered_taken,
+    entry_unanswered_queued => unanswered_queued,
 );
 
 #[test]

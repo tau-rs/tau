@@ -4,12 +4,15 @@ expression: msg
 ---
 {
   "abi": 3,
-  "seq": 0,
+  "seq": 41,
   "from": {
-    "kind": "harness"
+    "kind": "kernel"
   },
-  "corr": null,
-  "kind": "notice",
-  "consumed": null,
+  "corr": 7,
+  "kind": "reply",
+  "consumed": {
+    "tokens": 8000,
+    "cost_microusd": 50000
+  },
   "payload": "0000000000000000000000000000000000000000000000000000000000000000"
 }

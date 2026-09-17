@@ -1,0 +1,21 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: unanswered_queued ()
+---
+{
+  "entry": "unanswered",
+  "msg": {
+    "abi": 3,
+    "seq": 91,
+    "from": {
+      "kind": "kernel"
+    },
+    "corr": 12,
+    "kind": "reply",
+    "consumed": null,
+    "payload": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "to": 3,
+  "driver": "model",
+  "cause": "overdue"
+}

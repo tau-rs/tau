@@ -571,6 +571,7 @@ impl Sim {
                 driver: id.clone(),
                 cap,
                 ceiling: ceiling.clone(),
+                reply_within: None,
             })?;
             sim.drivers.push(Driver { id, cap, ceiling });
         }

@@ -5,7 +5,7 @@ expression: replied ()
 {
   "entry": "replied",
   "msg": {
-    "abi": 2,
+    "abi": 3,
     "seq": 17,
     "from": {
       "kind": "driver",

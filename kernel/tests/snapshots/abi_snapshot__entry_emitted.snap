@@ -7,7 +7,7 @@ expression: emitted ()
   "hook": 5,
   "to": 0,
   "msg": {
-    "abi": 2,
+    "abi": 3,
     "seq": 14,
     "from": {
       "kind": "hook",

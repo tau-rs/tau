@@ -1,0 +1,10 @@
+---
+source: kernel/tests/abi_snapshot.rs
+expression: driver_down_crashed ()
+---
+{
+  "entry": "driver_down",
+  "seq": 40,
+  "driver": "model",
+  "cause": "crashed"
+}

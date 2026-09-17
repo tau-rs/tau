@@ -135,7 +135,8 @@ pub struct Agent {
     pub spent: BTreeMap<DimKey, u64>,
     /// The part of [`spent`](Self::spent) no grant covered: a driver reported
     /// more than its ceiling. Visible so a misreport is loud in the state
-    /// hash; driver supervision (M3) is what will act on it.
+    /// hash; the kernel raises it to the supervisor as an `Overdrew` event
+    /// (ADR-0014 §6), and what it costs the driver is the harness's policy.
     pub overdraft: BTreeMap<DimKey, u64>,
     /// Where it is in its life.
     pub status: Status,
@@ -586,6 +587,14 @@ pub enum Refusal {
         /// The point it was attached at.
         attached: HookPoint,
     },
+    /// An `Unanswered` envelope the kernel would never write (ADR-0014 §4):
+    /// a payload that is not empty, or a bill that is neither nothing nor
+    /// exactly the driver's ceiling.
+    #[error("correlation {corr} closed with a payload or a bill the kernel never writes")]
+    BadBill {
+        /// The correlation.
+        corr: Corr,
+    },
 }
 
 impl State {
@@ -665,8 +674,8 @@ impl State {
     /// The agents whose remaining grant `entry` may lower — the candidates
     /// for an `OnBudget` crossing (ADR-0008 §1): the parent a `Spawned`
     /// carves from, the sender a `Sent` reserves from, the owner a
-    /// `Replied` settles, every live agent a `Tick` charges wall to. Every
-    /// other entry only returns budget.
+    /// `Replied` or an `Unanswered` settles, every live agent a `Tick`
+    /// charges wall to. Every other entry only returns budget.
     #[must_use]
     pub fn budget_candidates(&self, entry: &Entry) -> Vec<AgentId> {
         match entry {
@@ -678,7 +687,7 @@ impl State {
                 Endpoint::Agent { id } => vec![id],
                 _ => Vec::new(),
             },
-            Entry::Replied { to, .. } => vec![*to],
+            Entry::Replied { to, .. } | Entry::Unanswered { to, .. } => vec![*to],
             Entry::Tick { .. } => self.live.iter().copied().collect(),
             _ => Vec::new(),
         }
@@ -1218,6 +1227,60 @@ impl State {
                     return Err(Refusal::UnknownCorr(Some(corr)));
                 }
             }
+            // Health is confirmed and ignored (ADR-0014 §4): the driver must
+            // exist, and nothing else is checked — not that it was up, not
+            // that it was down. `State` holds no health field to check
+            // against, on purpose.
+            Entry::DriverDown { driver, .. } | Entry::DriverUp { driver, .. } => {
+                if !self.drivers.contains_key(driver) {
+                    return Err(Refusal::WrongSender(Endpoint::Driver {
+                        id: driver.clone(),
+                    }));
+                }
+            }
+            Entry::Unanswered {
+                msg, to, driver, ..
+            } => {
+                self.check_envelope(msg)?;
+                let ceiling =
+                    self.ceilings
+                        .get(driver)
+                        .ok_or(Refusal::WrongSender(Endpoint::Driver {
+                            id: driver.clone(),
+                        }))?;
+                if msg.from != Endpoint::Kernel {
+                    return Err(Refusal::WrongSender(msg.from.clone()));
+                }
+                if msg.kind != MsgKind::Reply {
+                    return Err(Refusal::WrongKind {
+                        expected: MsgKind::Reply,
+                        found: msg.kind,
+                    });
+                }
+                let corr = msg.corr.ok_or(Refusal::UnknownCorr(None))?;
+                let owner = self.owner(corr).ok_or(Refusal::UnknownCorr(Some(corr)))?;
+                if owner != *to {
+                    return Err(Refusal::WrongOwner {
+                        corr,
+                        expected: owner,
+                        found: *to,
+                    });
+                }
+                self.live(*to)?;
+                // The kernel authors no bytes and bills exactly the
+                // reservation or nothing (§3): anything else is an envelope
+                // it never writes.
+                if msg.payload != BlobRef::EMPTY {
+                    return Err(Refusal::BadBill { corr });
+                }
+                if msg
+                    .consumed
+                    .as_ref()
+                    .is_some_and(|bill| *bill != as_consumption(ceiling))
+                {
+                    return Err(Refusal::BadBill { corr });
+                }
+            }
         }
         Ok(())
     }
@@ -1436,6 +1499,28 @@ impl State {
                     }
                 }
             }
+            // Confirmed by the check; applied as nothing (ADR-0014 §4).
+            // Health is what the kernel needs to decide when to write an
+            // `Unanswered`; budgets, mailboxes and liveness do not depend on
+            // it, so the state carries no record of it and no pinned hash
+            // moves.
+            Entry::DriverDown { .. } | Entry::DriverUp { .. } => {}
+            // Exactly as a `Replied`: the reservation settles against what
+            // the kernel billed — the whole ceiling for a taken request, a
+            // full refund for a queued one — and the envelope lands in the
+            // owner's mailbox under its own position.
+            Entry::Unanswered { msg, to, .. } => {
+                let a = self.agents.get_mut(to).ok_or(Refusal::UnknownAgent(*to))?;
+                let reservation = msg
+                    .corr
+                    .and_then(|corr| a.reserved.remove(&corr))
+                    .unwrap_or_default();
+                settle(a, &reservation, msg.consumed.as_ref())?;
+                a.mailbox.push(msg.clone());
+                if let Some(corr) = msg.corr {
+                    self.corrs.remove(&corr);
+                }
+            }
         }
         self.next_seq = self.next_seq.saturating_add(1);
         Ok(())
@@ -1556,6 +1641,14 @@ fn ask_for(ceiling: &Budget) -> Budget {
             .map(|(dim, amount)| (dim.clone(), amount))
             .chain([(DimKey::Calls, calls)]),
     )
+}
+
+/// A ceiling as the bill an `Unanswered` carries for a taken request: every
+/// dimension, in full (ADR-0014 §3). The kernel writes it this way and the
+/// check compares against exactly this.
+#[must_use]
+pub fn as_consumption(ceiling: &Budget) -> Consumption {
+    Consumption::from_dims(ceiling.iter().map(|(dim, amount)| (dim.clone(), amount)))
 }
 
 /// The request minus `depth`, which is derived rather than carved.

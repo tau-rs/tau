@@ -70,6 +70,7 @@ fn booted_with(budget: Budget) -> (State, Capability, AgentId) {
             driver: echo(),
             cap,
             ceiling: tokens(CEILING),
+            reply_within: None,
         },
         Entry::Spawned {
             seq: Seq::new(1),
@@ -219,6 +220,7 @@ fn a_root_cannot_hold_a_capability_the_kernel_never_minted() {
         driver: echo(),
         cap: Capability::mint(0),
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     let err = refuse(
@@ -1548,6 +1550,7 @@ fn hooked() -> (State, AgentId) {
         driver: echo(),
         cap,
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     step(&mut state, |s| {
@@ -1593,6 +1596,7 @@ fn a_hook_id_is_confirmed_not_rederived() {
         driver: echo(),
         cap: Capability::mint(0),
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     let err = refuse(
@@ -1622,6 +1626,7 @@ fn a_hook_may_not_fail_open_where_it_can_veto() {
         driver: echo(),
         cap: Capability::mint(0),
         ceiling: tokens(CEILING),
+        reply_within: None,
     }])
     .unwrap();
     for point in [

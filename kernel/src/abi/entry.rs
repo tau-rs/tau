@@ -7,16 +7,19 @@
 //! reader that accepts the header may assume every line is one of the kinds
 //! below, in the shape the `entry_*` snapshots pin.
 //!
-//! Position lives in two places on purpose. Nine kinds carry a top-level
-//! `seq`; `Sent`, `Replied` and `Emitted` carry a [`Msg`], and a message's
-//! position *is* its envelope's `seq` — duplicating it would be a second
-//! source of truth for the reducer's `OutOfOrder` refusal to disagree with.
-//! [`Entry::seq`] is the accessor and its rule is frozen with the shape.
+//! Position lives in two places on purpose. Eleven kinds carry a top-level
+//! `seq`; `Sent`, `Replied`, `Emitted` and `Unanswered` carry a [`Msg`], and
+//! a message's position *is* its envelope's `seq` — duplicating it would be
+//! a second source of truth for the reducer's `OutOfOrder` refusal to
+//! disagree with. [`Entry::seq`] is the accessor and its rule is frozen with
+//! the shape.
 //!
-//! The enum is `#[non_exhaustive]`: a thirteenth kind is an additive ABI
-//! event, not a source break for a reader outside the crate. The reducer's
-//! `apply` stays exhaustive inside the crate, so a kind with no arm is a
-//! compile error rather than a silent no-op.
+//! The enum is `#[non_exhaustive]`: a new kind is an additive ABI event, not
+//! a source break for a reader outside the crate. The reducer's `apply`
+//! stays exhaustive inside the crate, so a kind with no arm is a compile
+//! error rather than a silent no-op. ABI 3 (ADR-0014) added three: the
+//! driver health transitions and the entry that closes a request its driver
+//! never answered.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +27,37 @@ use super::{
     AgentId, BlobRef, Budget, Capability, DriverId, FailureMode, HookId, HookPoint, HookSource,
     Msg, Namespace, Roll, Seq,
 };
+
+/// Why a driver went down (ADR-0014 §2). A closed tag, never text: a panic
+/// message or a retirement reason is the harness's log line, not the
+/// kernel's, because the kernel's log cannot be shredded and a panic message
+/// can carry anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DownCause {
+    /// Its `handle` unwound. The kernel's loop observed it.
+    Crashed,
+    /// The harness retired or replaced it.
+    Retired,
+}
+
+/// Why a request closed without its driver's answer (ADR-0014 §1). Which
+/// one says nothing about the bill: that is chosen from whether the driver
+/// had taken the request (§3), and the two are orthogonal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum UnansweredCause {
+    /// The driver's `handle` unwound while the request was taken.
+    Crashed,
+    /// The request passed the driver's registered `reply_within`, counted
+    /// from its `Sent`. The driver is not declared down for it.
+    Overdue,
+    /// The harness retired or replaced the driver while the request was
+    /// open, taken or queued.
+    Retired,
+}
 
 /// One effect, as recorded.
 ///
@@ -49,6 +83,15 @@ pub enum Entry {
         /// harness. Every `Sent` through `cap` reserves this much from the
         /// sender before delivery; the `Replied` settles against it.
         ceiling: Budget,
+        /// The most clock units a request to this driver may wait for its
+        /// answer, counted from its `Sent`, in `Tick.now`'s units. `None` —
+        /// the default, and what every log written before ABI 3 reads as —
+        /// is unbounded. The harness's declaration, like `ceiling`, and on
+        /// the wire for the same reason: an `Unanswered { overdue }` must be
+        /// legible without the harness's source (ADR-0014 §2). The fold does
+        /// not store it; the kernel enforces it at `tick`.
+        #[serde(default)]
+        reply_within: Option<u64>,
     },
     /// An agent was created.
     Spawned {
@@ -180,6 +223,47 @@ pub enum Entry {
         /// position.
         msg: Msg,
     },
+    /// A driver went down (ADR-0014 §2): its loop observed `handle`
+    /// unwinding, or the harness retired or replaced it. A health
+    /// transition the fold confirms and applies as nothing — health is the
+    /// kernel's cache, not canonical state (§4).
+    DriverDown {
+        /// Log position.
+        seq: Seq,
+        /// The driver.
+        driver: DriverId,
+        /// Why.
+        cause: DownCause,
+    },
+    /// A driver came back: the harness installed a fresh instance under the
+    /// same id and the same capability. Only ever a return — a driver is up
+    /// from `DriverRegistered`. Applied as nothing, like `DriverDown`.
+    DriverUp {
+        /// Log position.
+        seq: Seq,
+        /// The driver.
+        driver: DriverId,
+    },
+    /// A request closed without its driver's answer (ADR-0014 §2–§3). One
+    /// entry per request, so every message keeps its own position. Carries
+    /// the envelope the owner receives, exactly as `Replied` does: `from`
+    /// is `Endpoint::Kernel`, `kind` is `Reply` so a `recv` on the
+    /// correlation matches it, `payload` is empty — the kernel authors no
+    /// bytes — and `consumed` is the driver's ceiling if the driver had
+    /// taken the request, `None` if it was still queued. The fold settles it
+    /// with the same arithmetic as a `Replied`.
+    Unanswered {
+        /// The envelope, from `Endpoint::Kernel`. `msg.seq` is this entry's
+        /// position.
+        msg: Msg,
+        /// The owner of the correlation — where the reply is delivered.
+        to: AgentId,
+        /// The driver that did not answer. Evidence, like `via` on `Sent`;
+        /// the fold confirms it is registered and nothing more.
+        driver: DriverId,
+        /// Why it did not.
+        cause: UnansweredCause,
+    },
 }
 
 impl Entry {
@@ -195,10 +279,13 @@ impl Entry {
             | Self::Cancelled { seq, .. }
             | Self::Tick { seq, .. }
             | Self::Attached { seq, .. }
-            | Self::Verdicts { seq, .. } => *seq,
-            Self::Sent { msg, .. } | Self::Replied { msg, .. } | Self::Emitted { msg, .. } => {
-                msg.seq
-            }
+            | Self::Verdicts { seq, .. }
+            | Self::DriverDown { seq, .. }
+            | Self::DriverUp { seq, .. } => *seq,
+            Self::Sent { msg, .. }
+            | Self::Replied { msg, .. }
+            | Self::Emitted { msg, .. }
+            | Self::Unanswered { msg, .. } => msg.seq,
         }
     }
 }
