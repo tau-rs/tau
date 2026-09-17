@@ -1,0 +1,9 @@
+# Instruction counts (callgrind Ir) for kernel/benches/kpi_ir.rs, the
+# baseline scripts/bench-regression.sh judges the nightly against (#151).
+# Re-pin with: gh workflow run tier3.yml --ref main -f baseline=record,
+# then commit the kpi-ir-baseline artifact with the reason for the move.
+# recorded: 2026-09-17T07:38:22Z ref=81fc41a17c4f2647c3f7ac5c0f97021bdfeeed9b
+# rustc 1.97.1 (8bab26f4f 2026-07-14) | valgrind-3.22.0 | iai-callgrind-runner 0.16.1
+fold_entries::events_10k	35604504
+fold_entries::events_1k	3685693
+send_deliver::x100	7988428
