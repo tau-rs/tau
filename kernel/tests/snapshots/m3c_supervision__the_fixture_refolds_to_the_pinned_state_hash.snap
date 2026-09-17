@@ -1,0 +1,5 @@
+---
+source: kernel/tests/m3c_supervision.rs
+expression: state.hash().to_string()
+---
+48dce3812b00e68d75285611c756ab5f3dd32f0191a648b531289752ef1c96d4

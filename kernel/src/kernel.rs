@@ -207,9 +207,10 @@ enum Health {
 /// Cache beside the fold's `drivers`/`ceilings`, never canonical state.
 struct DriverSlot {
     /// The instance, so `cancel` can reach `abandon` while its loop is
-    /// inside `handle`. Replaced whole by `replace_driver`; the old one is
-    /// dropped when its aborted loop lets go of it.
-    driver: Arc<dyn Driver>,
+    /// inside `handle`. Replaced whole by `replace_driver` and dropped by
+    /// `retire_driver`; the old one goes when its aborted loop lets go of
+    /// it too.
+    driver: Option<Arc<dyn Driver>>,
     /// `reply_within` at registration: how long a request may wait for its
     /// answer, counted from its `Sent`, in `Tick.now` units. `None` is
     /// unbounded.
@@ -352,6 +353,14 @@ impl Inner {
         let Some(open) = self.in_flight.remove(&corr) else {
             return Ok(());
         };
+        if !open.taken {
+            // Still in the inbox: it leaves with the correlation, or a
+            // replacement would take a request that is already closed and
+            // its answer would be dead letter.
+            if let Some(inbox) = self.inboxes.get_mut(&open.driver) {
+                inbox.queue.retain(|d| d.corr != corr);
+            }
+        }
         let Some(to) = self.state.owner(corr) else {
             // Finished between the driver's taking it and now; the request
             // went with the owner's record. Nothing to close.
@@ -463,7 +472,9 @@ impl Inner {
     /// abandon, because they were unanswered when it went down.
     fn driver_up(&self, driver: &DriverId) -> Option<Arc<dyn Driver>> {
         let slot = self.drivers.get(driver)?;
-        (slot.health == Health::Up).then(|| Arc::clone(&slot.driver))
+        (slot.health == Health::Up)
+            .then(|| slot.driver.as_ref().map(Arc::clone))
+            .flatten()
     }
 
     /// The harness's half of a replacement or a retirement, under the lock:
@@ -899,7 +910,7 @@ impl Kernel {
             inner.drivers.insert(
                 id.clone(),
                 DriverSlot {
-                    driver: Arc::clone(&driver),
+                    driver: Some(Arc::clone(&driver)),
                     reply_within,
                     health: Health::Up,
                     abort: None,
@@ -992,7 +1003,7 @@ impl Kernel {
             };
             inner.commit(entry)?;
             if let Some(slot) = inner.drivers.get_mut(id) {
-                slot.driver = Arc::clone(&fresh);
+                slot.driver = Some(Arc::clone(&fresh));
                 slot.health = Health::Up;
             }
             old_loop
@@ -1029,6 +1040,7 @@ impl Kernel {
             let old_loop = inner.take_down(id, false)?;
             if let Some(slot) = inner.drivers.get_mut(id) {
                 slot.health = Health::Retired;
+                slot.driver = None;
             }
             // Removing the inbox is what makes the capability unroutable;
             // its waker, if any, is the old loop's, which is being aborted.
@@ -1459,10 +1471,14 @@ impl Kernel {
             let slot = inner.drivers.get(&id).ok_or(Refusal::Unroutable(via))?;
             // A retired driver is no tool (ADR-0014 §5): the capability
             // resolves, and nothing answers behind it.
-            if slot.health == Health::Retired {
+            let Some(driver) = slot
+                .driver
+                .as_ref()
+                .filter(|_| slot.health != Health::Retired)
+            else {
                 return Ok(None);
-            }
-            (id, Arc::clone(&slot.driver))
+            };
+            (id, Arc::clone(driver))
         };
         Ok(driver.describe().map(|schema| (id, schema)))
     }

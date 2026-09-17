@@ -95,8 +95,8 @@ fn every_corpus_log_folds_to_its_sidecar() {
     let logs = logs_in(&corpus());
     // The sentinel's floor (tier3.yml): an empty corpus must not pass here either.
     assert!(
-        logs.len() >= 9,
-        "corpus holds {} logs; the floor is 9",
+        logs.len() >= 10,
+        "corpus holds {} logs; the floor is 10",
         logs.len()
     );
     for log in logs {
@@ -122,7 +122,7 @@ fn every_corpus_log_folds_to_its_sidecar() {
 #[test]
 fn every_fixture_folds_to_what_the_reducer_folds_in_process() {
     let logs = logs_in(&fixtures());
-    assert_eq!(logs.len(), 4, "the four milestone fixtures");
+    assert_eq!(logs.len(), 5, "the five milestone fixtures");
     for log in logs {
         let bytes = fs::read(&log).unwrap();
         let in_process = fold(Log::read_from(bytes.as_slice()).unwrap().entries())

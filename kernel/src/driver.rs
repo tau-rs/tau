@@ -19,7 +19,17 @@
 //! sender before delivery and settles against the driver's report, so a
 //! driver that reports honestly within its ceiling is all the accounting
 //! needs. A report above it is charged in full and recorded as overdraft on
-//! the agent; supervision (M3) is what will act on that.
+//! the agent, and raised to the harness's supervisor as an event (ADR-0014
+//! §6).
+//!
+//! A driver that *answers* is fully handled by its reply, whatever it says.
+//! One that does not — its `handle` unwinds, or never returns by the
+//! `reply_within` it was registered with — is the kernel's to close out
+//! (ADR-0014): the request fails explicitly with a reply from the kernel,
+//! billed the ceiling if the driver had taken it, and the harness may
+//! replace or retire the driver. A driver's own timeouts should be shorter
+//! than its `reply_within`, so one that *can* report a failure does so
+//! before the kernel stops waiting.
 
 pub mod clock;
 pub mod echo;

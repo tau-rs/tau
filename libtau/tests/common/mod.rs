@@ -301,3 +301,45 @@ pub(crate) fn recording_sleep(
         std::future::ready(())
     }
 }
+
+// --- a driver that raises (ADR-0014) ----------------------------------------
+
+/// What a panicking test driver says, so the hook below can tell it from a
+/// failed assertion.
+pub(crate) const RAISED: &str = "the driver raised instead of reporting";
+
+/// Silences the driver panics these tests cause on purpose; every other
+/// panic still reports through the default hook.
+pub(crate) fn quiet_panics() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let raised = payload.downcast_ref::<&str>().is_some_and(|m| *m == RAISED)
+            || payload
+                .downcast_ref::<String>()
+                .is_some_and(|m| m == RAISED);
+        if !raised {
+            default(info);
+        }
+    }));
+}
+
+/// A driver whose `handle` unwinds on every request. As a tool it presents
+/// the store's schema, so the loop projects and validates it like the store.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Boom {
+    pub(crate) tool: bool,
+}
+
+impl Driver for Boom {
+    fn handle(&self, _request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
+        panic!("{RAISED}");
+    }
+
+    fn describe(&self) -> Option<ToolSchema> {
+        self.tool.then(|| ToolSchema {
+            description: STORE_DESCRIPTION.into(),
+            input_schema: serde_json::to_vec(&store_schema()).unwrap(),
+        })
+    }
+}

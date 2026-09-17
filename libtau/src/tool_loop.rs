@@ -6,7 +6,7 @@ use std::future::{ready, Future};
 use std::time::Duration;
 
 use serde_json::Value;
-use tau_kernel::abi::{BudgetError, Capability, HookId, Name};
+use tau_kernel::abi::{BudgetError, Capability, Endpoint, HookId, Name};
 use tau_kernel::bridge::{
     Content, Message, ModelReply, ModelRequest, Role, StopReason, ToolErrorKind, VERSION,
 };
@@ -104,8 +104,9 @@ pub fn prompt(user: &str, max_tokens: u32) -> ModelRequest {
 /// a `send` when its name is unknown or its input fails the schema, with
 /// `denied` when the kernel says this agent does not hold the capability or
 /// a hook denied the send (ADR-0008 §3, with the hook's reason as the
-/// content), and with `failed` when the reply cannot be read. Only a budget refusal,
-/// a cancellation, or a kernel failure ends the loop early.
+/// content), and with `failed` when the reply cannot be read or the driver
+/// never answered — the reply came from the kernel (ADR-0014 §7). Only a
+/// budget refusal, a cancellation, or a kernel failure ends the loop early.
 ///
 /// A hook's note seen while waiting on the model or on a tool — an `Emit`
 /// at `OnBudget`, say — does not end the loop and is not in the transcript:
@@ -276,17 +277,34 @@ async fn call_tool(
             },
             other => ToolLoopError::Infer(other),
         })?;
+    if msg.from == Endpoint::Kernel {
+        return Ok(render_unanswered(call_id, name));
+    }
     Ok(render_result(call_id, name, handle.read(msg.payload)))
+}
+
+/// The `tool_result` for a request the driver never answered (ADR-0014
+/// §7): the reply came from the kernel, the way a model driver's
+/// `error.transport` is rendered — `is_error`, `failed`. The model reads
+/// that the tool did not answer and decides whether to ask again; if the
+/// driver was retired, the next `send` is refused and ends the loop.
+#[must_use]
+pub fn render_unanswered(call_id: String, name: &str) -> Content {
+    error_result(
+        call_id,
+        ToolErrorKind::Failed,
+        format!("`{name}`: the driver did not answer"),
+    )
 }
 
 /// The `tool_result` for a driver's reply.
 ///
 /// The reply bytes are the content verbatim, as UTF-8, lossily if they are
 /// not (ADR-0006 §5). `None` — the reply's payload is not in the blob
-/// store — is the one failure the loop can observe on a tool driver today,
-/// and is fed back as `failed`. A driver's *own* failure has no channel
-/// until the M3 error envelope; until then a tool that fails answers with
-/// whatever bytes it chooses, and the model reads them.
+/// store — is fed back as `failed`, as is a reply from the kernel
+/// ([`render_unanswered`]). A tool that fails but *answers* has no channel
+/// beyond its bytes: it answers with whatever it chooses, and the model
+/// reads them.
 #[must_use]
 pub fn render_result(call_id: String, name: &str, reply: Option<Vec<u8>>) -> Content {
     match reply {
