@@ -44,12 +44,23 @@ criterion  = { workspace = true }
 # normal dependency, so this edge closes a dev-dependency cycle, which cargo
 # permits: the kernel lib is built once and both sides link the same artifact.
 tau-sim    = { path = "../sim" }
+# The same two KPIs counted under callgrind (`benches/kpi_ir.rs`): the
+# number the Tier 3 nightly judges (#151). The `benchmark` feature (default)
+# is the attribute macros plus the runner's API types; the runner binary is
+# installed on the CI runner at this exact version, not built here.
+iai-callgrind = { workspace = true }
 
 # ADR-0003's two KPIs: reducer throughput in entries/sec and send→deliver
 # latency. Not on the `just check` path; `cargo bench -p tau-kernel --no-run`
 # is what must stay green (Tier 2 item 7, #40).
 [[bench]]
 name    = "kpi"
+harness = false
+
+# The instruction-count twin of `kpi`, judged nightly against
+# `benches/kpi_ir.baseline.tsv` (Tier 3 item 5, #151).
+[[bench]]
+name    = "kpi_ir"
 harness = false
 
 [lints]

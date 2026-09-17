@@ -41,6 +41,10 @@ proptest   = { version = "1", default-features = false, features = ["std"] }
 # ride along on the `just check` path, because clippy runs `--all-targets`;
 # `cargo_bench_support` is what makes `cargo bench` and its filters work.
 criterion  = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+# Instruction counts for the same benches (Tier 3 item 5). Library side only:
+# the attribute macros and the runner's API types, ten small crates. Running
+# needs valgrind and the `iai-callgrind-runner` binary at this exact version.
+iai-callgrind = "0.16.1"
 # The sandbox driver's shim (ADR-0009 §4): rlimits, process-group kill and
 # `getrusage` through safe wrappers, since the workspace forbids `unsafe`.
 # `nix` rather than `rustix`: rustix 1.x has no `getrusage`, and the shim's
