@@ -49,7 +49,7 @@ iai-callgrind = "0.16.1"
 # `getrusage` through safe wrappers, since the workspace forbids `unsafe`.
 # `nix` rather than `rustix`: rustix 1.x has no `getrusage`, and the shim's
 # whole reason to exist is `RUSAGE_CHILDREN`.
-nix        = { version = "0.30", default-features = false, features = ["resource", "signal", "process"] }
+nix        = { version = "0.31", default-features = false, features = ["resource", "signal", "process"] }
 # A SIGTERM from the driver's `abandon` reaches the shim as a flag; the only
 # safe way to install a handler.
 signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
