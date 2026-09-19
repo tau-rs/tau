@@ -23,7 +23,7 @@ tau-kernel       = { path = "../kernel", version = "0.0.0" }
 # stack. No `getrandom` feature on the cipher: the key bytes come from
 # `getrandom` directly, and the nonce is the reference, never random.
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
-getrandom        = "0.2"
+getrandom        = "0.4"
 serde            = { workspace = true }
 serde_json       = { workspace = true }
 thiserror        = { workspace = true }
