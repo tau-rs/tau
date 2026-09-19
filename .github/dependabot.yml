@@ -31,8 +31,15 @@ updates:
     commit-message:
       prefix: "build(deps)"
 
+  # lockfile-only, and not optional (issue #164). fuzz/ is not a workspace
+  # member, but its path dependencies inherit `[workspace.dependencies]`, so
+  # without this the entry rewrites the *root* Cargo.toml while re-locking only
+  # fuzz/Cargo.lock, and every such PR fails `--locked`. Manifest ranges belong
+  # to the `/` entry alone; this one only refreshes fuzz's lockfile within them.
+  # Consequence: a new major of libfuzzer-sys or arbitrary is not proposed.
   - package-ecosystem: cargo
     directory: /fuzz
+    versioning-strategy: lockfile-only
     schedule:
       interval: weekly
       day: monday
