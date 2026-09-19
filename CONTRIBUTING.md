@@ -20,6 +20,10 @@ has no open blocker, no assignee, and no open pull request. Claim it by
 assigning yourself, and put `Closes #N` in the pull request body so the merge
 closes it.
 
+The one exception is Dependabot (`.github/dependabot.yml`): its weekly grouped
+pull requests have no issue to close, because the bump *is* the whole unit of
+work. They take Tier 1 and the merge queue like any other change.
+
 Blockers are native issue dependencies (the issue's *Relationships → Blocked
 by*, or `POST /repos/{owner}/{repo}/issues/{n}/dependencies/blocked_by`), never
 prose. A blocker that is a *condition* with no issue yet — a crate that does not
