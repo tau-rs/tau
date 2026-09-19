@@ -16,8 +16,9 @@ name = "tau_store"
 # point inward: the store knows the kernel's types, the kernel knows only
 # the trait.
 tau-kernel       = { path = "../kernel", version = "0.0.0" }
-# XChaCha20-Poly1305 (ADR-0012 §4). The 0.10 line, not 0.11: it shares
-# `crypto-common`, `cipher` and `block-buffer` with the `sha2` the kernel
+# XChaCha20-Poly1305 (ADR-0012 §4). The 0.11 line, in step with the kernel's
+# `sha2` 0.11, and the two move together (Dependabot proposes them apart): it
+# shares `crypto-common`, `cipher` and `block-buffer` with the `sha2` the kernel
 # already carries, so no harness pays for a second copy of the RustCrypto
 # stack. No `getrandom` feature on the cipher: the key bytes come from
 # `getrandom` directly, and the nonce is the reference, never random.
