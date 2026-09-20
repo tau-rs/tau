@@ -379,13 +379,16 @@ harness, and which a real harness copies or replaces:
 |---|---|---|
 | `Crashed` | replace with a fresh instance, up to `k` times per driver (`k = 3`); retire on the `k+1`th | a crash is usually a bug in one request's handling; a crash loop is a bug in the driver |
 | `Overdue` | first: nothing (the request is already unanswered); second in a row on the same driver: replace | one slow request is the world being slow; two is a hung loop |
-| `Overdrew` | nothing; count; retire above a harness-set excess | a misreport is visible in the hash already (#18); what it should *cost* the driver is a harness's call, not the kernel's |
+| `Overdrew` | nothing; one report above `n` × its cap on any *capped* dimension is a blowout; the first blowout is free, the second retires (amended 2026-09-20, below) | a misreport is visible in the hash already (#18); what it should *cost* the driver is a harness's call, not the kernel's |
 
 **What #18 becomes.** "Supervision policy for a driver that reports above
 its ceiling" is the third row: a harness policy over the `Overdrew` event.
 The kernel's part — make the misreport visible (M1b), then make it an
 event (this ADR) — is done when the follow-on lands; #18 is re-gated on
-that lane and then names a harness policy, not a kernel change. The
+that lane and then names a harness policy, not a kernel change. That row
+as first written did not survive contact with the drivers it was for; the
+amendment of 2026-09-20 replaces it, and the worked implementation lives
+in `kernel/tests/m3c_supervision.rs` (`struct Policy`). The
 alternative in #18's body, a hook verdict, is rejected: hooks judge
 *agents'* acts at pinned points (ADR-0008); a driver's misreport is a
 breach of the contract the *harness* registered it under.
@@ -622,3 +625,103 @@ ADR-0006's exception with a new name, and a wedged driver does not answer a
 health call either. The kernel classifies by what came back through
 `handle`; the harness may probe its drivers however it likes and act
 through the two verbs.
+
+## Amendments
+
+- **2026-09-20** — [#18](https://github.com/tau-rs/tau/issues/18): the §6
+  `Overdrew` row is **replaced**, not filled in. No kernel change; the
+  reference policy in `kernel/tests/m3c_supervision.rs` moves with it.
+
+### Why the first row did not survive
+
+Two things were wrong with "nothing; count; retire above a harness-set
+excess", and both were found by asking which driver it would actually fire.
+
+**It read one dimension.** `excess` is a `Consumption` — itemised per
+dimension, because a ceiling is a `Budget` and going over is a separate
+fact per line. The reference policy read `DimKey::Tokens` and nothing
+else. The one driver in this workspace that overshoots as a matter of
+course is the sandbox, whose `RLIMIT_CPU` is per process and so is granted
+afresh to every forked child (ADR-0009 §3) — it bills `compute_ms` and
+has never billed a token. The policy written for it could not see it.
+
+**It counted.** A lifetime running total fires on `rate × volume`, and the
+second term swamps the first: two identically-behaved drivers, one busy
+and one idle, get different verdicts, and a driver that is one unit over
+on every request is retired eventually no matter how small the unit. That
+is the wrong reading of what both of our drivers do, because both of them
+overshoot a *deliberately soft* fence: ADR-0009 §3, "v0 does not pretend
+the ceiling is hard across a fork tree", and ADR-0013 §7, "v1 does not
+pretend the fence is hard; it makes the overshoot visible." Accumulating
+documented behaviour until it crosses a line retires a driver for working
+as specified. What is *not* specified anywhere is a report at many times
+its cap: that means the bound did not apply at all, and it is legible in a
+single report with nothing to accumulate.
+
+### The row, as amended
+
+The harness configures, per driver, a **multiplier per dimension**. On an
+`Overdrew` event:
+
+```mermaid
+flowchart TD
+    E["Overdrew { driver, excess }"] --> C{"for each dimension<br/>on this driver's ceiling"}
+    C -->|"report ≤ n × cap"| N["nothing<br/>(documented soft overshoot)"]
+    C -->|"report > n × cap"| F{"has this driver<br/>blown out before?"}
+    F -->|no| S["nothing, and remember it<br/>(strike one)"]
+    F -->|yes| R["retire_driver<br/>(strike two)"]
+```
+
+- **Per dimension, drawn from the ceiling.** Every dimension the ceiling
+  names must have a multiplier; leaving one out is a harness bug, refused
+  at construction, because capping a dimension *is* the harness saying it
+  polices that dimension. A dimension the ceiling does **not** name is
+  ignored — and that is load-bearing, not tidiness: `settle()` records a
+  charge on an unnamed dimension as overdraft *in full*, on every request,
+  so a rule that could fire on it would retire an honest driver on its
+  first call for reporting something real that the harness simply never
+  capped.
+- **One report, not a total.** No accumulator, no window, and therefore no
+  window to get wrong. The only state is one bit per driver.
+- **A multiplier, not a flat amount.** The same configuration then fits a
+  sandbox measured in milliseconds and a model driver measured in tokens
+  without per-driver tuning. A cap of zero is blown by any excess at all,
+  which is what capping at zero meant; the comparison is written as a
+  product rather than a ratio, since integer division is denied repo-wide.
+- **Retire, not replace.** `replace_driver` cures *liveness* — a loop that
+  unwound, a handle that hangs — which is why the other two rows reach for
+  it. A report above the ceiling is *accuracy*, and accuracy is a property
+  of the binary: a fresh instance runs the same arithmetic and misreports
+  identically. Replacing here is motion without effect.
+- **The first blowout is free.** A limiter that is not applying and a
+  one-off workload that escaped a soft fence produce the *identical*
+  single event, and nothing alike across two: in the first the next report
+  is over again, in the second it is normal. One bit of memory per driver
+  buys the observation that separates them, and it is one bit rather than
+  a counter, so it does not bring back the volume bias above. The price is
+  one further blowout's worth of real spend before the driver stops.
+
+**Choosing the multiplier is the harness's judgement and it is a real
+one.** It must sit above normal fork-tree overshoot and below a limiter
+that is not applying — single-digit multiples of the cap, not 1.1×. Set it
+too low and an unusual program retires the sandbox for the life of the
+process, which is permanent: a retired driver's capability is unroutable
+for good and `replace_driver` on it is refused.
+
+### What this does not change
+
+The kernel. `kernel/src/` is untouched by this amendment — no `ABI` bump,
+no `FOLD` bump, no new event — which is §6's position holding: this was
+never a kernel question. What acts on overdraft is still the supervisor,
+still after the fact, still through the same two verbs, and doing nothing
+is still a valid policy for every event.
+
+### The obligation this creates
+
+The reference policy lives in a test — `struct Policy` in
+`kernel/tests/m3c_supervision.rs` — because that is the only copy CI keeps
+honest. A second, unexercised copy under `examples/` would not add correct
+guidance, only another place to be wrong. When a harness crate exists, the
+policy moves into it and this pointer changes; until then the §6 row names
+the test by path, and a change to the policy's shape is a change to this
+amendment.
