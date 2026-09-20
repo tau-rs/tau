@@ -18,6 +18,12 @@
 //! the kernel records it as a [fault](KernelError::Faulted) rather than
 //! carrying on with a log and a state that disagree.
 //!
+//! The blob store is held to the same line. Its writes cannot be refused by
+//! their caller (ADR-0012 §1), so [`Inner::put_blob`] asks
+//! [`Blobs::fault`](crate::blob::Blobs::fault) after each one and faults the
+//! run on the first failure, leaving the entry unwritten: a log that names a
+//! payload the store never held is a log that cannot be believed.
+//!
 //! # Cancel, in two phases
 //!
 //! [`Kernel::cancel`] commits one `Cancelled` entry — the atomic freeze — and
@@ -1293,6 +1299,11 @@ impl Kernel {
     ///
     /// [`ShredError::Live`] naming the first agent in the subtree that is
     /// still live or cancelling. Nothing is shredded in that case.
+    ///
+    /// [`ShredError::Faulted`] if the store has a write-path failure, this
+    /// shred's or an earlier one's: a store that could not write cannot
+    /// promise that a key is gone, and an erasure reported as done and not
+    /// done is the one answer this must never give.
     pub fn shred(&self, root: AgentId) -> Result<(), ShredError> {
         let mut inner = self.lock();
         let subtree = inner.state.subtree(root);
