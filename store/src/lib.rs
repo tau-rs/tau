@@ -117,7 +117,8 @@ pub struct Disk {
     /// The first I/O failure on the write path, if any. The port's `put`
     /// and `shred` are infallible by contract; a failure leaves a
     /// reference with no copy, which reads as `None`, and is recorded here
-    /// so the harness can tell a full disk from an erasure.
+    /// so the kernel — which asks through [`Blobs::fault`] after every
+    /// write — can tell a full disk from an erasure.
     fault: Option<String>,
 }
 
@@ -197,13 +198,6 @@ impl Disk {
             .lines()
             .filter_map(|line| line.trim().parse().ok().map(AgentId::new))
             .collect())
-    }
-
-    /// The first write-path failure, if one happened. A `put` that failed
-    /// stored no copy; a `shred` that failed may have left the key.
-    #[must_use]
-    pub fn fault(&self) -> Option<&str> {
-        self.fault.as_deref()
     }
 
     fn objects_dir(&self, blob: &BlobRef) -> PathBuf {
@@ -330,6 +324,14 @@ impl Blobs for Disk {
             self.fault
                 .get_or_insert_with(|| format!("shred of {owner}: {err}"));
         }
+    }
+
+    /// The first write-path failure, if one happened. A `put` that failed
+    /// stored no copy; a `shred` that failed may have left the key. The
+    /// kernel asks after every write and faults the run on the first
+    /// `Some` (ADR-0012 §1).
+    fn fault(&self) -> Option<String> {
+        self.fault.clone()
     }
 }
 

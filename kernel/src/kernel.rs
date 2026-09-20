@@ -127,12 +127,20 @@ pub enum KernelError {
 }
 
 /// Why [`Kernel::shred`] refused (ADR-0012 §3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ShredError {
     /// An agent in the subtree is live or cancelling; nothing was shredded.
     #[error("{0} is still live; cancel it and wait for the abort before shredding")]
     Live(AgentId),
+    /// The store has a write-path failure, so erasure cannot be promised:
+    /// this shred, or an earlier write, did not reach the disk. The kernel
+    /// is faulted with the same reason.
+    #[error("kernel faulted: {reason}")]
+    Faulted {
+        /// What went wrong, for the operator.
+        reason: String,
+    },
 }
 
 /// A request routed to a driver.
@@ -272,17 +280,44 @@ impl Inner {
         Ok(())
     }
 
+    /// Latches the first fault and wakes whoever waits for the drain.
+    /// Returns the latched reason, which is the first one raised and not
+    /// necessarily `reason`: a faulted kernel keeps the diagnosis it opened
+    /// with.
+    fn raise_fault(&mut self, reason: String) -> String {
+        let latched = self.fault.get_or_insert(reason).clone();
+        if let Some(w) = self.drain_waker.take() {
+            w.wake();
+        }
+        latched
+    }
+
+    /// Stores `bytes` for `owner`, and asks the store whether it could
+    /// (ADR-0012 §1).
+    ///
+    /// A store that could not stored no copy, so the entry that would name
+    /// the reference is not written: the run faults here instead of carrying
+    /// on with a payload the log names and the store never held, which would
+    /// read as `None` and look exactly like an erasure.
+    fn put_blob(&mut self, owner: AgentId, bytes: &[u8]) -> Result<BlobRef, KernelError> {
+        let blob = self.blobs.put(owner, bytes);
+        match self.blobs.fault() {
+            None => Ok(blob),
+            Some(reason) => Err(KernelError::Faulted {
+                reason: self.raise_fault(format!("blob store: {reason}")),
+            }),
+        }
+    }
+
     /// Check, append, apply. The only writer of state.
     fn commit(&mut self, entry: Entry) -> Result<(), KernelError> {
         self.state.check(&entry)?;
         self.log.append(entry.clone())?;
         if let Err(refusal) = self.state.apply(&entry) {
             let reason = format!("entry {} was logged but refused: {refusal}", entry.seq());
-            self.fault = Some(reason.clone());
-            if let Some(w) = self.drain_waker.take() {
-                w.wake();
-            }
-            return Err(KernelError::Faulted { reason });
+            return Err(KernelError::Faulted {
+                reason: self.raise_fault(reason),
+            });
         }
         Ok(())
     }
@@ -585,17 +620,17 @@ impl Inner {
             let ruling = match answer {
                 Ok(Verdict::Allow) => Ruling::Allow,
                 Ok(Verdict::Deny(reason)) => {
-                    let blob = self.blobs.put(subject, reason.as_bytes());
+                    let blob = self.put_blob(subject, reason.as_bytes())?;
                     denied = Some((id, reason));
                     Ruling::Deny(blob)
                 }
                 Ok(Verdict::Emit { to, payload }) => {
-                    let blob = self.blobs.put(to, &payload);
+                    let blob = self.put_blob(to, &payload)?;
                     notes.push((id, to, payload));
                     Ruling::Emit { to, payload: blob }
                 }
                 Err(HookFailure { message }) => {
-                    let error = self.blobs.put(subject, message.as_bytes());
+                    let error = self.put_blob(subject, message.as_bytes())?;
                     if mode == FailureMode::Closed && point.admits_deny() {
                         denied = Some((id, message));
                     }
@@ -1272,6 +1307,14 @@ impl Kernel {
         for owner in subtree {
             inner.blobs.shred(owner);
         }
+        // A shred that could not drop a key must not be reported as erasure
+        // (ADR-0012 §1): the store's latch is asked after the writes, and a
+        // store that has faulted at any point can promise nothing.
+        if let Some(reason) = inner.blobs.fault() {
+            return Err(ShredError::Faulted {
+                reason: inner.raise_fault(format!("blob store: {reason}")),
+            });
+        }
         Ok(())
     }
 
@@ -1291,6 +1334,18 @@ impl Kernel {
     #[must_use]
     pub fn state_hash(&self) -> StateHash {
         self.lock().state.hash()
+    }
+
+    /// Why the kernel faulted, if it has: the same reason every call now
+    /// returns as [`KernelError::Faulted`].
+    ///
+    /// The harness's question, and the only way to ask it about a store it
+    /// no longer holds — [`boot_with`](Self::boot_with) takes the store by
+    /// value, so a `Disk`'s own [`fault`](crate::blob::Blobs::fault) is out
+    /// of reach once the kernel owns it (ADR-0012 §1).
+    #[must_use]
+    pub fn fault(&self) -> Option<String> {
+        self.lock().fault.clone()
     }
 
     // --------------------------------------------------------------- syscalls
@@ -1365,7 +1420,17 @@ impl Kernel {
 
     pub(crate) fn exit(&self, agent: AgentId, result: &[u8]) {
         let mut inner = self.lock();
-        let blob = inner.blobs.put(agent, result);
+        let blob = match inner.put_blob(agent, result) {
+            Ok(blob) => blob,
+            // The store could not take the result. The fault is latched and
+            // the harness hears it through `fault` and `drained`; the exit
+            // is not logged, which is the same end as an exit the log
+            // refuses below.
+            Err(_) => {
+                let _ = inner.reap(&[agent]);
+                return;
+            }
+        };
         let entry = Entry::Exited {
             seq: inner.state.next_seq(),
             agent,
@@ -1420,7 +1485,7 @@ impl Kernel {
                     Some((inner.driver_up(&open.driver)?, corr))
                 })
                 .collect();
-            inner.blobs.put(agent, &mode.reason);
+            inner.put_blob(agent, &mode.reason)?;
             let before = inner.before(&entry, &subtree);
             inner.commit(entry)?;
             inner.after(before)?;
@@ -1536,7 +1601,7 @@ impl Kernel {
                 via,
             };
         }
-        inner.blobs.put(from, payload);
+        inner.put_blob(from, payload)?;
         let before = inner.before(&entry, &[]);
         inner.commit(entry)?;
         inner.after(before)?;
@@ -1708,7 +1773,7 @@ impl Kernel {
                 to,
             };
         }
-        inner.blobs.put(to, payload);
+        inner.put_blob(to, payload)?;
         let before = inner.before(&entry, &[]);
         inner.commit(entry)?;
         inner.after(before)?;
