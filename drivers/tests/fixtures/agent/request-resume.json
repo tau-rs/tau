@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "op": "resume",
+  "session": "affe155e-9ed1-4477-95f0-c17d40bd9a89",
+  "task": "The test you added fails on macOS: `Path::new(\"/tmp\")` is a symlink there. Use `tempfile::tempdir()`.",
+  "workspace": "kernel"
+}

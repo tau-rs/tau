@@ -1,0 +1,102 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "description": "What the task produced.",
+      "items": {
+        "description": "One thing the session produced.",
+        "properties": {
+          "kind": {
+            "description": "What it is.",
+            "oneOf": [
+              {
+                "const": "file",
+                "description": "A file in the workspace.",
+                "type": "string"
+              },
+              {
+                "const": "patch",
+                "description": "A patch.",
+                "type": "string"
+              },
+              {
+                "const": "report",
+                "description": "A report, meant to be read.",
+                "type": "string"
+              }
+            ]
+          },
+          "path": {
+            "description": "Where it is. The contract asks for a path relative to the workspace; #130's session wrote absolute ones, so both are accepted and the driver rewrites neither.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "assumptions": {
+      "description": "What the session decided alone, because it could not ask.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "error": {
+      "description": "Why, when `status` is `failed`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "events": {
+      "description": "Decisions worth a line.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "status": {
+      "description": "The session's own verdict on the task.",
+      "oneOf": [
+        {
+          "const": "ok",
+          "description": "The task was done.",
+          "type": "string"
+        },
+        {
+          "const": "partial",
+          "description": "The session stopped short on its own and says what is left.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "The task could not be done; `error` says why.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "A later instruction told the session to wind down.",
+          "type": "string"
+        }
+      ]
+    },
+    "summary": {
+      "description": "Up to three sentences.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifacts",
+    "assumptions",
+    "error",
+    "events",
+    "status",
+    "summary"
+  ],
+  "type": "object"
+}

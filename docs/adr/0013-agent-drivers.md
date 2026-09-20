@@ -861,3 +861,17 @@ neighbour for.
   `retire_driver` or `replace_driver`; that is what writes the health
   entry. The ladder of §5 is how an agent driver *reports* `lost`; ADR-0014
   is what happens when it cannot report at all.
+- **2026-09-20** — §1's `Cli` trait is **deferred, not dropped**, by
+  [#131](https://github.com/tau-rs/tau/issues/131). The shared module ships
+  the seam as two types instead: a `process::Invocation` going in (argv, the
+  first stdin message, the interrupt, which line is terminal) and an
+  `Outcome` coming out (session, model, mode, usage, final message). An
+  adapter that forgets a field does not compile, which is the contract the
+  trait was there to give. Three reasons the trait could not ship in that
+  lane: a crate-private trait cannot bound a public generic; a trait with no
+  implementors fails `-D warnings` as dead code; and nothing under `tests/`
+  can implement one, so the cancel ladder of §5 — the code that decides what
+  an abandoned run costs — would have shipped untested. #128 extracts the
+  trait once two implementors exist to shape it; its methods return these
+  same two types, so the extraction is a move with no behaviour change.
+  §1's file layout is unchanged.

@@ -1,0 +1,4 @@
+{ "v": 1, "stop": { "error": { "kind": "unavailable", "message": "codex login status: exit 1: Error checking login status: No such file or directory (os error 2)" } },
+  "envelope": null, "session": null, "cli": { "name": "codex", "version": "0.46.0" }, "model": null, "mode": null,
+  "usage": { "input_tokens": 0, "output_tokens": 0, "cost_microusd": null, "turns": null },
+  "transcript": [], "truncated": { "transcript": false } }

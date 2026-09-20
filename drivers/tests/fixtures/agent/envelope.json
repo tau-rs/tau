@@ -1,0 +1,10 @@
+{
+  "status": "ok",
+  "summary": "Created hello.txt with the content \"hello\" in the working directory.",
+  "artifacts": [
+    { "path": "/private/var/folders/96/czcfr60x0x9chb0kxfspc9vm0000gn/T/tau130-none-k_h53rzp/hello.txt", "kind": "file" }
+  ],
+  "assumptions": ["The file ends with a newline after \"hello\"."],
+  "events": ["Wrote hello.txt directly."],
+  "error": null
+}
