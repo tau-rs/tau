@@ -216,3 +216,34 @@ async fn replay_runs_a_synthetic_cassette_and_checks_request_equality() {
     // Point replay at the synthetic directory by overriding the target dir name.
     scenario::replay_from(&s, "synthetic", Box::new(make)).await;
 }
+
+/// Pins the panic prefix: an expectation failure names the scenario and the
+/// zero-based step, so a failure inside a replay that runs a hundred
+/// scenarios at once points at one cassette. No cassette, no stub — the
+/// reply is built by hand.
+#[test]
+#[should_panic(expected = "synthetic_tool_use step 2:")]
+fn a_failed_expectation_names_its_scenario_and_step() {
+    let reply = tau_kernel::bridge::ModelReply {
+        v: VERSION,
+        model: Some("claude-haiku-4-5-20251001".into()),
+        content: vec![Content::Text {
+            text: "no tools for me".into(),
+        }],
+        stop: tau_kernel::bridge::StopReason::EndTurn,
+        usage: tau_kernel::bridge::Usage {
+            input_tokens: 3,
+            output_tokens: 5,
+        },
+    };
+    scenario::check(
+        "synthetic_tool_use",
+        2,
+        &Expect::ToolCall {
+            name: "search",
+            min: 1,
+        },
+        &reply,
+        &tau_kernel::abi::Consumption::default(),
+    );
+}
