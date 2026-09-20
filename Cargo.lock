@@ -1673,7 +1673,7 @@ name = "tau-store"
 version = "0.0.0"
 dependencies = [
  "chacha20poly1305",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "serde",
  "serde_json",
  "tau-kernel",
