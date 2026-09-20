@@ -53,25 +53,38 @@ pub(crate) enum Expect {
     Policy,
 }
 
-pub(crate) fn check(expect: &Expect, reply: &ModelReply, consumed: &Consumption) {
+/// Checks one reply against its expectation. `name` and `step` (zero-based,
+/// as in `run_steps`) prefix every assertion: the probe replays run more
+/// than a hundred scenarios concurrently inside one test, so a bare
+/// `ModelReply` in a panic cannot be traced back to its cassette.
+pub(crate) fn check(
+    name: &str,
+    step: usize,
+    expect: &Expect,
+    reply: &ModelReply,
+    consumed: &Consumption,
+) {
+    let at = format!("{name} step {step}:");
     let billed = || {
         assert!(
             reply.usage.input_tokens > 0 && reply.usage.output_tokens > 0,
-            "usage is real: {:?}",
+            "{at} usage is real: {:?}",
             reply.usage
         );
         assert_eq!(
             consumed.get(&DimKey::Tokens),
-            Some(reply.usage.input_tokens + reply.usage.output_tokens)
+            Some(reply.usage.input_tokens + reply.usage.output_tokens),
+            "{at} billed tokens do not match the reply's usage: {:?}",
+            reply.usage
         );
     };
     match expect {
         Expect::Stop(stop) => {
-            assert_eq!(&reply.stop, stop, "{reply:#?}");
+            assert_eq!(&reply.stop, stop, "{at} {reply:#?}");
             billed();
         }
-        Expect::ToolCall { name, min } => {
-            assert_eq!(reply.stop, StopReason::ToolCall, "{reply:#?}");
+        Expect::ToolCall { name: tool, min } => {
+            assert_eq!(reply.stop, StopReason::ToolCall, "{at} {reply:#?}");
             let calls: Vec<_> = reply
                 .content
                 .iter()
@@ -79,34 +92,34 @@ pub(crate) fn check(expect: &Expect, reply: &ModelReply, consumed: &Consumption)
                 .collect();
             assert!(
                 calls.len() >= *min,
-                "wanted >= {min} tool calls, got {}: {reply:#?}",
+                "{at} wanted >= {min} tool calls, got {}: {reply:#?}",
                 calls.len()
             );
             for c in calls {
                 if let Content::ToolCall { name: n, .. } = c {
-                    assert_eq!(n, name);
+                    assert_eq!(n, tool, "{at} wrong tool: {reply:#?}");
                 }
             }
             billed();
         }
-        Expect::ThinkingToolCall { name } => {
-            assert_eq!(reply.stop, StopReason::ToolCall, "{reply:#?}");
+        Expect::ThinkingToolCall { name: tool } => {
+            assert_eq!(reply.stop, StopReason::ToolCall, "{at} {reply:#?}");
             assert!(
                 reply
                     .content
                     .iter()
                     .any(|c| matches!(c, Content::Thinking { .. })),
-                "no thinking block: adaptive thinking did not engage; use a harder prompt: {reply:#?}"
+                "{at} no thinking block: adaptive thinking did not engage; use a harder prompt: {reply:#?}"
             );
             let calls: Vec<_> = reply
                 .content
                 .iter()
                 .filter(|c| matches!(c, Content::ToolCall { .. }))
                 .collect();
-            assert!(!calls.is_empty(), "no tool call: {reply:#?}");
+            assert!(!calls.is_empty(), "{at} no tool call: {reply:#?}");
             for c in calls {
                 if let Content::ToolCall { name: n, .. } = c {
-                    assert_eq!(n, name);
+                    assert_eq!(n, tool, "{at} wrong tool: {reply:#?}");
                 }
             }
             billed();
@@ -114,16 +127,16 @@ pub(crate) fn check(expect: &Expect, reply: &ModelReply, consumed: &Consumption)
         Expect::ProviderError => {
             assert!(
                 matches!(&reply.stop, StopReason::Error(e) if e.kind == ErrorKind::Provider),
-                "{reply:#?}"
+                "{at} {reply:#?}"
             );
             assert_eq!(
                 consumed.get(&DimKey::Tokens),
                 None,
-                "a rejection bills nothing"
+                "{at} a rejection bills nothing"
             );
         }
         Expect::Policy => match &reply.stop {
-            StopReason::Error(e) => assert_eq!(e.kind, ErrorKind::Provider, "{reply:#?}"),
+            StopReason::Error(e) => assert_eq!(e.kind, ErrorKind::Provider, "{at} {reply:#?}"),
             _ => billed(),
         },
     }
@@ -191,7 +204,7 @@ async fn run_steps(s: &Scenario, driver: &dyn Driver) -> (Vec<ModelReply>, Consu
     for (i, step) in s.steps.iter().enumerate() {
         let req = (step.build)(&replies);
         let (reply, consumed) = call(driver, i as u64 + 1, &req).await;
-        check(&step.expect, &reply, &consumed);
+        check(s.name, i, &step.expect, &reply, &consumed);
         total = add(&total, &consumed);
         replies.push(reply);
     }
