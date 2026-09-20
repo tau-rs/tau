@@ -8,6 +8,11 @@
 # Weekly and grouped so that volume stays compatible with the merge queue: one
 # PR per surface per week, majors on their own since they can change behaviour.
 #
+# The surfaces are not independent: the fuzz crate depends on the kernel by
+# path, so a bump on the `/` surface can leave fuzz/Cargo.lock unsatisfiable
+# without this file ever being consulted. Tier 1's `lockfiles` job is what
+# makes that fail on the bump PR instead of on the next kernel PR (issue #171).
+#
 # `cooldown` holds back a freshly published version. A malicious release is
 # usually yanked within days; waiting a week is the cheapest defence there is.
 # Security updates ignore both the schedule and the cooldown.
