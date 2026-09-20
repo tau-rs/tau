@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "op": "run",
+  "task": "Add a `--json` flag to `tau replay` that prints the state hash as JSON. Keep the existing text output as the default.",
+  "workspace": "kernel",
+  "tools": ["Read", "Edit", "Bash"],
+  "budget": { "cost_microusd": 500000, "turns": 40 }
+}

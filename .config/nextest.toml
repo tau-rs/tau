@@ -27,8 +27,13 @@ fail-fast    = true
 # whole folds of every 5000-entry log, ~2.5 s in debug on a laptop and past
 # the ceiling on the smoke runner once the corpus reached ten (#148). The
 # `ci` profile's Linux job runs them on every pull request.
+# The agent drivers' cancel ladder (ADR-0013 §5) is grace periods long by
+# construction: a rung is only reached once the one below it has been given
+# its grace, so the whole ladder cannot be exercised inside five seconds.
+# The `ci` profile's Linux and macOS jobs run it on every pull request.
 default-filter = '''
 not binary(sandbox_limits)
+and not binary(agent_ladder)
 and not test(every_corpus_log_replays_from_each_of_its_snapshots)
 and not test(tau_snapshot_then_tau_replay_from_matches_every_sidecar)
 '''

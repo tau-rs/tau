@@ -1,0 +1,98 @@
+{
+  "description": "Delegate a whole task to a Claude Code session in the shared workspace. It runs headless with tools Read, Edit and Bash, may spend up to $2 (400k tokens, 40 turns) per call, and answers with a JSON report: status, summary, artifacts, assumptions, events. Pass `session` from a previous report to continue it.",
+  "input_schema": {
+    "additionalProperties": false,
+    "oneOf": [
+      {
+        "properties": {
+          "budget": {
+            "additionalProperties": false,
+            "description": "A tightening of the registered task bound.",
+            "properties": {
+              "cost_microusd": {
+                "description": "At or under the configured cost bound.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "turns": {
+                "description": "At or under the configured turn bound.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "op": {
+            "const": "run",
+            "type": "string"
+          },
+          "task": {
+            "description": "The work order.",
+            "type": "string"
+          },
+          "tools": {
+            "description": "The CLI-native tool names this session may use. Must be a subset of the configured set.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "workspace": {
+            "description": "A path relative to the configured workspace root; the child's `cwd`. Absent is the root itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "task"
+        ]
+      },
+      {
+        "properties": {
+          "op": {
+            "const": "resume",
+            "type": "string"
+          },
+          "session": {
+            "description": "The session id a previous reply reported. Unknown to the CLI is `error.provider` with the CLI's own text.",
+            "type": "string"
+          },
+          "task": {
+            "description": "The amendment.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "See [`Request::Run`]; the same workspace as the original run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "session",
+          "task"
+        ]
+      }
+    ],
+    "type": "object"
+  }
+}

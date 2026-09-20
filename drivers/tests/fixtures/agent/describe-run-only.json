@@ -1,0 +1,28 @@
+{
+  "description": "Delegate a whole task to a Claude Code session in the shared workspace. It runs headless with tools Read, Edit and Bash, may spend up to $2 (400k tokens, 40 turns) per call, and answers with a JSON report: status, summary, artifacts, assumptions, events.",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "op": {
+        "const": "run",
+        "type": "string"
+      },
+      "task": {
+        "description": "The work order.",
+        "type": "string"
+      },
+      "workspace": {
+        "description": "A path relative to the configured workspace root; the child's `cwd`. Absent is the root itself.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "op",
+      "task"
+    ],
+    "type": "object"
+  }
+}

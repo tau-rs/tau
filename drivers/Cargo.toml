@@ -17,7 +17,7 @@ path              = "src/bin/tau-sandbox-shim.rs"
 required-features = ["sandbox"]
 
 [features]
-default   = ["anthropic", "openai", "sandbox"]
+default   = ["anthropic", "openai", "sandbox", "agent"]
 # The Anthropic Messages API model driver (ADR-0006 §6, Anthropic column).
 anthropic = ["dep:reqwest", "dep:tokio"]
 # The OpenAI-compatible chat-completions driver (ADR-0006 §6, right-hand
@@ -26,6 +26,13 @@ openai    = ["dep:reqwest", "dep:tokio"]
 # The sandbox driver and its supervisor binary (ADR-0009). Unix-only: the
 # module and the binary are empty elsewhere.
 sandbox   = ["dep:tokio", "dep:nix", "dep:signal-hook", "dep:schemars"]
+# The shared half of the agent drivers (ADR-0013): the wire, the worker
+# envelope and its tolerant parser, subprocess supervision with the cancel
+# ladder, the config and the auth probe. Unix-only, like `sandbox`; the two
+# CLI adapters (#127, #128) arrive behind their own features on top of it.
+# Deliberately no `reqwest`: an agent driver spawns a binary and reads its
+# stdout, and never speaks to a provider itself (ADR-0013 §8).
+agent     = ["dep:nix", "dep:schemars"]
 
 [dependencies]
 tau-kernel = { path = "../kernel", version = "0.0.0" }
