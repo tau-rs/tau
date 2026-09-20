@@ -102,6 +102,9 @@ pub trait Blobs: Send {
     fn get(&self, blob: &BlobRef) -> Option<Vec<u8>>;
     /// Drops `owner`'s key. Every copy sealed for `owner` becomes unreadable.
     fn shred(&mut self, owner: AgentId);
+    /// The first write-path failure, latched. `None` by default: a store that
+    /// cannot fail says nothing (amendment 2026-09-20).
+    fn fault(&self) -> Option<String> { None }
 }
 ```
 
@@ -149,6 +152,24 @@ crypto crates the kernel should not carry. The layout rule in `CLAUDE.md`
 module; the fact that it implements no `Driver` and answers no `send` is
 why it is not in `drivers/`. Dependencies point inward: `tau-store` knows
 the kernel's types, the kernel knows only the trait.
+
+**Three verbs, and one question** (amendment 2026-09-20,
+[#144](https://github.com/tau-rs/tau/issues/144)). `put` and `shred` return
+nothing a caller can refuse, because the kernel calls them while it is
+writing an entry and a full disk is not an answer it can give an agent. A
+store that could not write therefore *records* it, and the kernel *asks*
+after every write — the same shape as driver supervision, where the kernel
+classifies by what came back and never by what the callee says while it is
+being called (ADR-0014 §1). The first `Some` faults the run
+(`KernelError::Faulted`), and the entry that would have named the
+reference is not written. The reason: a payload the log names and the
+store never held is a run whose truth is incomplete (ADR-0003), and the
+missing payload is otherwise indistinguishable from an erasure —
+`read` returns `None` either way. `Kernel::fault()` is how the harness
+asks, because `boot_with` took its store by value. One honest consequence,
+accepted: a transient write failure stops the run instead of degrading it.
+`Kernel::shred` reports the same latch as `ShredError::Faulted` rather
+than as an erasure it cannot promise.
 
 The kernel gains one boot form beside `Kernel::boot(log, spawner)`:
 `Kernel::boot_with(log, spawner, Box<dyn Blobs>)`. `boot` is `boot_with`
@@ -398,6 +419,17 @@ contract with two implementations, and the same suite proves both:
   store.
 - **`a_parent_reading_a_shredded_childs_result_gets_none`**: §1's named
   consequence, so it is a pinned behaviour and not a surprise.
+- **`a_put_the_store_cannot_write_faults_the_kernel`**,
+  **`a_shred_that_cannot_drop_a_key_is_not_reported_as_erasure`** and
+  **`a_store_that_writes_cleanly_never_faults`** (`Disk`, amendment
+  2026-09-20): a read-only `keys/` is what an unwritable volume looks like
+  from the kernel's side. `drained` and `Kernel::fault()` name the write
+  that failed, no `Exited` entry is logged for the payload the store did
+  not take, and a shred that could not unlink a key answers
+  `ShredError::Faulted` with the content still readable — the failure
+  reported as a failure, not as erasure. Skipped, not faked, where the
+  permission bits do not bite (root, or a filesystem that ignores them);
+  the tests probe rather than guess.
 - **Nothing re-pins.** No fixture, no sidecar, no `PINNED`, no `FOLD`
   moves; `just abi` shows no diff. If any does, the lane has touched
   something this ADR said it would not.
@@ -518,5 +550,25 @@ does in miniature (`Log` in the kernel, files in the CLI).
 of "the only code that touches the outside world" and muddles the meaning
 of the crate: a driver answers `send`; a store answers `read`. A separate
 crate says what it is.
+
+## Amendments
+
+- **2026-09-20** — A write the store could not do faults the run
+  ([#144](https://github.com/tau-rs/tau/issues/144)). §1 left the port's
+  infallibility with a hole this ADR itself named: `Disk` recorded its
+  first I/O failure and nobody read it, because `boot_with` takes the store
+  by value. The port gains a defaulted `fault() -> Option<String>`
+  (additive; `Memory` takes the default and every implementation keeps
+  compiling), the kernel asks after every write, and the first `Some`
+  latches `KernelError::Faulted` — with the entry that would have named the
+  reference left unwritten, and `Kernel::fault()` as the harness's
+  accessor. `ShredError` gains `Faulted`. Nothing enters `kernel/src/abi/`:
+  no `ABI` bump, no `abi-change` label, no snapshot, sidecar, `PINNED` or
+  `FOLD` moves. The three tests are listed in §6. The honest consequence,
+  stated in §1: a transient write failure now stops the run instead of
+  degrading it. The alternative — the port's accessor alone, with the
+  harness free to ask — was rejected because a harness that merely *could*
+  ask will not, and the failure it would miss is silent data loss wearing
+  the costume of a legitimate erasure.
 
 [`BlobRef`]: ../../kernel/src/abi/msg.rs

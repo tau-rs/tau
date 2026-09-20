@@ -64,6 +64,27 @@ pub trait Blobs: Send {
     /// Shredding an owner that put nothing, or one already shredded, is a
     /// no-op.
     fn shred(&mut self, owner: AgentId);
+
+    /// The first write-path failure this store hit, if any, latched: once
+    /// `Some`, it stays `Some`, and it names the first failure and not the
+    /// latest.
+    ///
+    /// `put` and `shred` are infallible by contract — the kernel calls them
+    /// while it is writing an entry, and a full disk is not an answer it can
+    /// give an agent — so a store that could not write records it and the
+    /// kernel asks here after every write (ADR-0012 §1). The kernel
+    /// classifies by what came back and never by what the store says while
+    /// it is being called, the same shape as driver supervision (ADR-0014
+    /// §1). The first `Some` faults the run: a payload the log names and the
+    /// store never held is a run whose truth is incomplete (ADR-0003), and
+    /// it would otherwise read as `None` — indistinguishable from an
+    /// erasure.
+    ///
+    /// The default is `None`, which is the honest answer for a store that
+    /// cannot fail: [`Memory`] never writes anything.
+    fn fault(&self) -> Option<String> {
+        None
+    }
 }
 
 /// One stored payload: its bytes, and the owners holding a copy.
