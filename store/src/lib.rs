@@ -248,7 +248,7 @@ impl Disk {
             Some(key) => key,
             None => {
                 let mut key = [0u8; KEY_LEN];
-                getrandom::getrandom(&mut key).map_err(|err| io::Error::other(err.to_string()))?;
+                getrandom::fill(&mut key).map_err(|err| io::Error::other(err.to_string()))?;
                 write_durably(&path, &key)?;
                 key
             }
