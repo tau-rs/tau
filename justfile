@@ -6,7 +6,7 @@
 default: check
 
 # The pre-commit gate. Mirrors Tier 1's blocking jobs, minus the slow ones.
-check: fmt-check lint test-quick
+check: fmt-check lint lock-check test-quick
 
 # Format everything.
 fmt:
@@ -19,6 +19,16 @@ fmt-check:
 
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Every Cargo.lock still satisfies its manifests — Tier 1's `lockfiles` job.
+# Mostly about fuzz/, which is outside the workspace and so is not re-locked
+# when a workspace dependency moves; the fuzz crate depends on the kernel by
+# path, so a kernel bump changes what its lockfile must hold (issue #171).
+# Offline as long as both locks are current: cargo only reaches for the index
+# when it would have to re-resolve, which is the failure this catches.
+lock-check:
+    cargo metadata --locked --format-version 1 > /dev/null
+    cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
 
 # Unit tests only, with a 5s per-test ceiling enforced by .config/nextest.toml.
 test-quick:

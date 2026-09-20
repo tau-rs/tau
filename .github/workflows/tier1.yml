@@ -125,6 +125,35 @@ jobs:
         with:
           command: check advisories licenses bans sources
 
+  # Every Cargo.lock in the repository must still satisfy its manifests. The
+  # workspace lockfile is covered incidentally, because every cargo invocation
+  # above passes --locked. fuzz/ is not a workspace member (nightly, libFuzzer's
+  # C++ runtime), so it carries its own lockfile, and the only job that read it
+  # under --locked was Tier 2's fuzz leg — path-triggered on kernel/**. The fuzz
+  # crate depends on tau-kernel by path, so a bump to a *kernel* dependency
+  # changes what that lockfile must hold while nothing re-locks it: #161 moved
+  # the kernel to sha2 0.11, its own PR was green, and #170 was the one that
+  # found five red fuzz jobs that had nothing to do with its diff (#171).
+  #
+  # `cargo metadata --locked` answers it in about a second, with no nightly, no
+  # libFuzzer and no build: a stale lock is a resolution fact, so resolution is
+  # all it should cost. The workspace lockfile is included even though it is
+  # already covered, so the contract is "every lockfile", not "the fuzz one",
+  # and so a stale root lock reports here instead of as a red clippy (#164).
+  lockfiles:
+    name: lockfiles (--locked)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml is the single source of truth for the compiler.
+        run: rustup show active-toolchain
+      - name: Every lockfile satisfies its manifests
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+
   macos-smoke:
     name: smoke (macos)
     runs-on: macos-latest
@@ -204,7 +233,7 @@ jobs:
     name: tier1
     runs-on: ubuntu-latest
     if: always()
-    needs: [fmt, clippy, test, abi-guard, deny, macos-smoke, determinism, coverage]
+    needs: [fmt, clippy, test, abi-guard, deny, lockfiles, macos-smoke, determinism, coverage]
     steps:
       - name: Require every Tier 1 job to have succeeded
         run: |
