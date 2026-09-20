@@ -16,7 +16,7 @@
     clippy::indexing_slicing
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -82,6 +82,14 @@ const CEILING: u64 = 30;
 const BOUND: u64 = 100;
 const HALF_BOUND: u64 = 50;
 const OVER: u64 = 40;
+/// How many times its ceiling one report may be before the reference policy
+/// calls it a blowout (ADR-0014 amendment 1).
+const TIMES: u64 = 3;
+/// A report far enough above the ceiling to be a blowout at `TIMES`.
+const BLOWOUT: u64 = 4 * CEILING;
+/// A charge on a dimension no ceiling here names: all of it lands as
+/// overdraft, and the policy ignores every bit of it.
+const UNCAPPED: u64 = 10_000;
 
 fn name(s: &str) -> Name {
     Name::new(s).unwrap()
@@ -93,6 +101,16 @@ fn model_id() -> DriverId {
 
 fn ceiling() -> Budget {
     Budget::from_dims([(DimKey::Tokens, CEILING)])
+}
+
+/// A ceiling that caps compute instead of tokens, for the sandbox's shape.
+fn cpu_ceiling() -> Budget {
+    Budget::from_dims([(DimKey::ComputeMs, CEILING)])
+}
+
+/// A multiplier for every dimension these tests cap, as A3 requires.
+fn blowout_multipliers() -> BTreeMap<DimKey, u64> {
+    BTreeMap::from([(DimKey::Tokens, TIMES), (DimKey::ComputeMs, TIMES)])
 }
 
 fn billed_ceiling() -> Consumption {
@@ -112,9 +130,21 @@ fn root_grant() -> Budget {
     ])
 }
 
+/// [`root_grant`] plus the compute a `cpu_ceiling` driver spends.
+fn cpu_grant() -> Budget {
+    Budget::from_dims([
+        (DimKey::Tokens, 500),
+        (DimKey::Calls, 20),
+        (DimKey::WallMs, 1_000_000),
+        (DimKey::ComputeMs, 500),
+    ])
+}
+
 /// A driver whose behaviour is the payload's first word: `boom` unwinds,
-/// `hang…` takes the request and never returns, `over` reports above the
-/// ceiling, anything else is echoed under `tag` and billed one token per
+/// `hang…` takes the request and never returns, `over` reports a little
+/// above the ceiling, `blowout` reports far above it, `cpu` reports far
+/// above a compute ceiling, `uncapped` bills a dimension no ceiling here
+/// names, and anything else is echoed under `tag` and billed one token per
 /// byte. `taken` is notified when a `hang` request is taken.
 #[derive(Clone)]
 struct Scripted {
@@ -158,6 +188,25 @@ impl Driver for Scripted {
         if payload == b"over" {
             return Box::pin(async move { (b"re: over".to_vec(), tokens(OVER)) });
         }
+        if payload == b"blowout" {
+            return Box::pin(async move { (b"re: blowout".to_vec(), tokens(BLOWOUT)) });
+        }
+        if payload == b"cpu" {
+            return Box::pin(async move {
+                (
+                    b"re: cpu".to_vec(),
+                    Consumption::from_dims([(DimKey::ComputeMs, BLOWOUT)]),
+                )
+            });
+        }
+        if payload == b"uncapped" {
+            return Box::pin(async move {
+                (
+                    b"re: uncapped".to_vec(),
+                    Consumption::from_dims([(DimKey::CostMicroUsd, UNCAPPED)]),
+                )
+            });
+        }
         let mut answer = format!("{}: ", self.tag).into_bytes();
         answer.extend_from_slice(&payload);
         let cost = tokens(u64::try_from(payload.len()).unwrap());
@@ -182,29 +231,58 @@ enum Verb {
     Retired,
 }
 
-/// The reference policy of ADR-0014 §6, as harness code: replace a crashed
-/// driver up to `k` times and retire it on the `k+1`th; do nothing about a
-/// first overdue request and replace on the second in a row; count
-/// overdrafts and retire above `max_excess` tokens.
+/// The reference policy of ADR-0014 §6 and its first amendment, as harness
+/// code: replace a crashed driver up to `k` times and retire it on the
+/// `k+1`th; do nothing about a first overdue request and replace on the
+/// second in a row; and, for a report above the ceiling, look at every
+/// dimension the harness capped, call one report above `blowout[dim]` times
+/// its cap a blowout, let the first blowout go, and retire on the second.
+///
+/// What it deliberately does not do is accumulate. Both drivers in this
+/// workspace overshoot a soft fence by design (ADR-0009 §3, ADR-0013 §7),
+/// so a running total fires on traffic rather than on misbehaviour.
 struct Policy {
     k: u32,
-    max_excess: u64,
+    blowout: BTreeMap<DimKey, u64>,
     crashes: BTreeMap<DriverId, u32>,
     overdue_in_a_row: BTreeMap<DriverId, u32>,
-    excess: BTreeMap<DriverId, u64>,
+    blown: BTreeSet<DriverId>,
     seen: Vec<DriverEvent>,
 }
 
 impl Policy {
-    fn new(k: u32, max_excess: u64) -> Self {
-        Self {
+    /// `blowout` must carry a multiplier for every dimension of every named
+    /// driver's ceiling: capping a dimension is the harness saying it cares
+    /// about that dimension, so leaving its multiplier out is a harness bug
+    /// and not a silent pass. A dimension no ceiling names is another
+    /// matter — the kernel reports all of it as overdraft, and the policy
+    /// ignores it, because the harness never claimed to be policing it.
+    ///
+    /// # Errors
+    ///
+    /// The first capped dimension with no multiplier.
+    fn new(
+        kernel: &Kernel,
+        k: u32,
+        blowout: BTreeMap<DimKey, u64>,
+        drivers: &[DriverId],
+    ) -> Result<Self, DimKey> {
+        let state = kernel.state();
+        for id in drivers {
+            for (dim, _) in state.ceiling(id).into_iter().flat_map(Budget::iter) {
+                if !blowout.contains_key(dim) {
+                    return Err(dim.clone());
+                }
+            }
+        }
+        Ok(Self {
             k,
-            max_excess,
+            blowout,
             crashes: BTreeMap::new(),
             overdue_in_a_row: BTreeMap::new(),
-            excess: BTreeMap::new(),
+            blown: BTreeSet::new(),
             seen: Vec::new(),
-        }
+        })
     }
 
     fn on(
@@ -239,13 +317,36 @@ impl Policy {
                 }
             }
             DriverEvent::Overdrew { driver, excess, .. } => {
-                let total = self.excess.entry(driver.clone()).or_insert(0);
-                *total += excess.get(&DimKey::Tokens).unwrap_or(0);
-                if *total > self.max_excess {
+                let state = kernel.state();
+                // Only the dimensions this driver was capped on: a charge
+                // on any other is reported as overdraft in full, and was
+                // never the harness's to police.
+                let blowout = state
+                    .ceiling(&driver)
+                    .into_iter()
+                    .flat_map(Budget::iter)
+                    .any(|(dim, cap)| {
+                        self.blowout.get(dim).is_some_and(|times| {
+                            // A report is a blowout above `times` its cap.
+                            // The report is cap + excess, so that is excess
+                            // above (times - 1) × cap — written as a
+                            // product because division is denied here, and
+                            // leaving a cap of zero blown by any excess at
+                            // all, which is what capping at zero meant.
+                            excess.get(dim).unwrap_or(0)
+                                > cap.saturating_mul(times.saturating_sub(1))
+                        })
+                    });
+                if !blowout {
+                    Verb::Nothing
+                } else if self.blown.insert(driver.clone()) {
+                    // Strike one is free: a limiter that is not applying
+                    // and a one-off workload that escaped a soft fence look
+                    // identical in one report and nothing alike across two.
+                    Verb::Nothing
+                } else {
                     kernel.retire_driver(&driver).unwrap();
                     Verb::Retired
-                } else {
-                    Verb::Nothing
                 }
             }
             _ => Verb::Nothing,
@@ -355,10 +456,20 @@ fn refolds(kernel: &Kernel, sink: &SharedBuf) -> Vec<u8> {
 /// A booted kernel with `model` registered under `bound`, a clock, and
 /// the sink the log is written to.
 fn boot(driver: Scripted, bound: Option<u64>) -> (Arc<Kernel>, SharedBuf, VirtualClock, Namespace) {
+    boot_with(driver, bound, ceiling())
+}
+
+/// [`boot`] under a ceiling of the harness's choosing, for the tests whose
+/// driver is capped on a dimension other than `tokens`.
+fn boot_with(
+    driver: Scripted,
+    bound: Option<u64>,
+    ceiling: Budget,
+) -> (Arc<Kernel>, SharedBuf, VirtualClock, Namespace) {
     let sink = SharedBuf::default();
     let kernel = Kernel::boot(Log::with_sink(sink.clone()).unwrap(), tokio_spawner);
     let cap = kernel
-        .register_driver_with(model_id(), driver, ceiling(), bound)
+        .register_driver_with(model_id(), driver, ceiling, bound)
         .unwrap();
     let clock = VirtualClock::new(Arc::clone(&kernel));
     (kernel, sink, clock, Namespace::from_caps([cap]))
@@ -429,9 +540,12 @@ async fn a_request_still_queued_at_the_crash_is_delivered_to_the_replacement() {
     let (kernel, sink, _, ns) = boot(Scripted::new("v1"), None);
     let model = model_cap(&ns);
     let acted = Arc::new(Notify::new());
-    let supervisor = supervise(&kernel, Policy::new(3, 100), Arc::clone(&acted), || {
-        Scripted::new("v2")
-    });
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
+        Arc::clone(&acted),
+        || Scripted::new("v2"),
+    );
     kernel
         .spawn_root(
             program(move |root| async move {
@@ -729,9 +843,12 @@ async fn a_replaced_driver_answers_under_the_same_capability() {
     let model = model_cap(&ns);
     let acted = Arc::new(Notify::new());
     let acted_root = Arc::clone(&acted);
-    let supervisor = supervise(&kernel, Policy::new(3, 100), Arc::clone(&acted), || {
-        Scripted::new("v2")
-    });
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
+        Arc::clone(&acted),
+        || Scripted::new("v2"),
+    );
     kernel
         .spawn_root(
             program(move |root| async move {
@@ -869,7 +986,7 @@ async fn the_supervisor_sees_crashed_overdue_and_overdrew_in_order() {
     let taken_v2 = Arc::clone(&taken);
     let supervisor = supervise(
         &kernel,
-        Policy::new(3, 100),
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
         Arc::clone(&acted),
         move || Scripted::sharing("v2", &taken_v2),
     );
@@ -1011,9 +1128,12 @@ async fn the_reference_policy_retires_after_k_crashes() {
     let model = model_cap(&ns);
     let acted = Arc::new(Notify::new());
     let acted_root = Arc::clone(&acted);
-    let supervisor = supervise(&kernel, Policy::new(K, 100), Arc::clone(&acted), || {
-        Scripted::new("again")
-    });
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, K, blowout_multipliers(), &[model_id()]).unwrap(),
+        Arc::clone(&acted),
+        || Scripted::new("again"),
+    );
     kernel
         .spawn_root(
             program(move |root| async move {
@@ -1054,6 +1174,235 @@ async fn the_reference_policy_retires_after_k_crashes() {
     );
     conserved(&kernel.state(), &root_grant());
     refolds(&kernel, &sink);
+}
+
+// --------------------------------------------------------------- overdrew
+
+#[tokio::test]
+async fn one_blowout_is_free_and_the_second_retires_the_driver() {
+    let (kernel, sink, _, ns) = boot(Scripted::new("v1"), None);
+    let model = model_cap(&ns);
+    let acted = Arc::new(Notify::new());
+    let acted_root = Arc::clone(&acted);
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
+        Arc::clone(&acted),
+        || Scripted::new("v2"),
+    );
+    kernel
+        .spawn_root(
+            program(move |root| async move {
+                for _ in 0..2 {
+                    let corr = root.send(model, b"blowout").unwrap();
+                    let reply = root.recv(Match::Corr(corr)).await.unwrap();
+                    assert_eq!(reply.consumed, Some(tokens(BLOWOUT)));
+                }
+                acted_root.notified().await;
+                let err = root.send(model, b"anyone there").unwrap_err();
+                assert!(
+                    matches!(err, KernelError::Refused(Refusal::Unroutable(cap)) if cap == model),
+                    "got {err:?}"
+                );
+                root.exit(b"")
+            }),
+            ns,
+            root_grant(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    let policy = supervisor.await.unwrap();
+    assert_eq!(
+        policy.seen.len(),
+        2,
+        "one event per report above the ceiling"
+    );
+    assert!(policy.blown.contains(&model_id()));
+
+    let entries = kernel.entries();
+    assert_eq!(
+        health(&entries),
+        ["down:Retired"],
+        "the second blowout, and nothing else"
+    );
+    let state = kernel.state();
+    let a = state.agent(AgentId::new(0)).unwrap();
+    assert_eq!(
+        a.overdraft.get(&DimKey::Tokens),
+        Some(&(2 * (BLOWOUT - CEILING))),
+        "both blowouts are on the agent either way"
+    );
+    conserved(&state, &root_grant());
+    refolds(&kernel, &sink);
+}
+
+#[tokio::test]
+async fn a_blowout_on_a_capped_dimension_other_than_tokens_retires_the_driver() {
+    let (kernel, sink, _, ns) = boot_with(Scripted::new("v1"), None, cpu_ceiling());
+    let model = model_cap(&ns);
+    let acted = Arc::new(Notify::new());
+    let acted_root = Arc::clone(&acted);
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
+        Arc::clone(&acted),
+        || Scripted::new("v2"),
+    );
+    kernel
+        .spawn_root(
+            program(move |root| async move {
+                let billed = Consumption::from_dims([(DimKey::ComputeMs, BLOWOUT)]);
+                for _ in 0..2 {
+                    let corr = root.send(model, b"cpu").unwrap();
+                    let reply = root.recv(Match::Corr(corr)).await.unwrap();
+                    assert_eq!(reply.consumed, Some(billed.clone()));
+                }
+                acted_root.notified().await;
+                let err = root.send(model, b"anyone there").unwrap_err();
+                assert!(
+                    matches!(err, KernelError::Refused(Refusal::Unroutable(cap)) if cap == model),
+                    "got {err:?}"
+                );
+                root.exit(b"")
+            }),
+            ns,
+            cpu_grant(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    let policy = supervisor.await.unwrap();
+    assert_eq!(policy.seen.len(), 2);
+
+    assert_eq!(health(&kernel.entries()), ["down:Retired"]);
+    let state = kernel.state();
+    let a = state.agent(AgentId::new(0)).unwrap();
+    assert_eq!(
+        a.overdraft.get(&DimKey::ComputeMs),
+        Some(&(2 * (BLOWOUT - CEILING)))
+    );
+    assert_eq!(a.overdraft.get(&DimKey::Tokens), None, "tokens never moved");
+    conserved(&state, &cpu_grant());
+    refolds(&kernel, &sink);
+}
+
+#[tokio::test]
+async fn excess_on_a_dimension_the_ceiling_does_not_name_never_retires() {
+    const N: usize = 3;
+    let (kernel, sink, _, ns) = boot(Scripted::new("v1"), None);
+    let model = model_cap(&ns);
+    let acted = Arc::new(Notify::new());
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
+        acted,
+        || Scripted::new("v2"),
+    );
+    kernel
+        .spawn_root(
+            program(move |root| async move {
+                let billed = Consumption::from_dims([(DimKey::CostMicroUsd, UNCAPPED)]);
+                for _ in 0..N {
+                    let corr = root.send(model, b"uncapped").unwrap();
+                    let reply = root.recv(Match::Corr(corr)).await.unwrap();
+                    assert_eq!(reply.consumed, Some(billed.clone()));
+                }
+                root.exit(b"")
+            }),
+            ns,
+            root_grant(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    let policy = supervisor.await.unwrap();
+    assert_eq!(
+        policy.seen.len(),
+        N,
+        "every report raises the event: the whole charge is overdraft"
+    );
+    assert!(
+        policy.blown.is_empty(),
+        "a dimension the harness never capped is not the policy's business"
+    );
+
+    assert!(
+        health(&kernel.entries()).is_empty(),
+        "the driver is still up"
+    );
+    let state = kernel.state();
+    let a = state.agent(AgentId::new(0)).unwrap();
+    assert_eq!(
+        a.overdraft.get(&DimKey::CostMicroUsd),
+        Some(&(N as u64 * UNCAPPED)),
+        "loud in the state hash all the same"
+    );
+    conserved(&state, &root_grant());
+    refolds(&kernel, &sink);
+}
+
+#[tokio::test]
+async fn small_overruns_never_add_up_to_a_retirement() {
+    const N: usize = 3;
+    let (kernel, sink, _, ns) = boot(Scripted::new("v1"), None);
+    let model = model_cap(&ns);
+    let acted = Arc::new(Notify::new());
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
+        acted,
+        || Scripted::new("v2"),
+    );
+    kernel
+        .spawn_root(
+            program(move |root| async move {
+                for _ in 0..N {
+                    let corr = root.send(model, b"over").unwrap();
+                    let reply = root.recv(Match::Corr(corr)).await.unwrap();
+                    assert_eq!(reply.consumed, Some(tokens(OVER)));
+                }
+                root.exit(b"")
+            }),
+            ns,
+            root_grant(),
+        )
+        .unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    let policy = supervisor.await.unwrap();
+    assert_eq!(policy.seen.len(), N);
+    assert!(
+        policy.blown.is_empty(),
+        "the documented soft fence is not a firing offence, however often"
+    );
+
+    assert!(health(&kernel.entries()).is_empty());
+    let state = kernel.state();
+    let a = state.agent(AgentId::new(0)).unwrap();
+    assert_eq!(
+        a.overdraft.get(&DimKey::Tokens),
+        Some(&(N as u64 * (OVER - CEILING)))
+    );
+    conserved(&state, &root_grant());
+    refolds(&kernel, &sink);
+}
+
+#[tokio::test]
+async fn a_capped_dimension_with_no_multiplier_is_a_harness_bug() {
+    let (kernel, _, _, _) = boot_with(Scripted::new("v1"), None, cpu_ceiling());
+    let missing = Policy::new(&kernel, 3, BTreeMap::new(), &[model_id()]).err();
+    assert_eq!(
+        missing,
+        Some(DimKey::ComputeMs),
+        "capping a dimension is the harness saying it polices that dimension"
+    );
+    let unknown = DriverId::new(name("never-registered"));
+    assert!(
+        Policy::new(&kernel, 3, BTreeMap::new(), &[unknown]).is_ok(),
+        "no ceiling, nothing to cover"
+    );
+    kernel.shutdown();
 }
 
 #[test]
