@@ -1,4 +1,4 @@
-//! `Msg` envelope deserialization over arbitrary bytes.
+//!  `Msg` envelope deserialization over arbitrary bytes.
 //!
 //! The envelope is the frozen shape every effect travels in (ADR-0004), and a
 //! driver's reply is the one place bytes from outside the kernel become one.
