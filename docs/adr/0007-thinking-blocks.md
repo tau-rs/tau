@@ -4,6 +4,7 @@
 **Date:** 2026-09-14
 **Deciders:** tau core
 **Amends:** [ADR-0006](0006-model-bridge-contract.md) §2, §3, §6, §8
+**Amended:** 2026-09-25 (§2, the OpenAI-compatible column; see Amendments)
 
 ## Context
 
@@ -69,13 +70,22 @@ enum stays exhaustive: a loop that matches on it is told by the compiler.
 
 | Bridge | Anthropic Messages | OpenAI-compatible chat |
 |---|---|---|
-| `thinking` block, own `provider` | reply → request: unwrap `data`, send it verbatim, in place. Request ← reply: wrap every `thinking` and `redacted_thinking` block in order. | The same, for the format #33 defines, if any. |
+| `thinking` block, own `provider` | reply → request: unwrap `data`, send it verbatim, in place. Request ← reply: wrap every `thinking` and `redacted_thinking` block in order. | Request ← reply: the message's in-band reasoning — `reasoning` (Ollama) or `reasoning_content` (vLLM), either key, verbatim — becomes one block, `provider: openai-compatible`, first in `content`. Reply → request: **dropped**. Read-only: no chat-completions server takes it back. |
 | `thinking` block, foreign `provider` | **dropped**, silently | dropped |
 
 A driver replays its own provider's blocks *exactly as received*, in the
 position they had, whatever model they came from: the provider decides what
 its current model can read, the way it does for its own SDK users, and a
 block it cannot read costs nothing.
+
+The OpenAI-compatible column is the read-only half of that. The chat wire
+has no thinking format: a server that reasons in-band returns the text on
+the reply's message, under a key of its own, and nothing asks for it on the
+next turn. The driver seals what it got so the program can display and log
+what it paid for, and drops it on the way out like any foreign block — the
+same bytes on the wire as before, so no recorded exchange moves. OpenAI's
+own reasoning models expose reasoning only on the Responses API, which is
+a different wire and out of scope here.
 
 **The drop is a deliberate exception** to ADR-0006's rule that unsupported
 means refused. A foreign provider's reasoning is unreadable by definition;
@@ -128,7 +138,8 @@ the day a model changes its mind.
   as ADR-0006 §1 intended.
 - **#33 has its answer.** An OpenAI-compatible driver drops `anthropic`
   blocks and fills in its own row above if its provider has a reasoning
-  format worth round-tripping.
+  format worth round-tripping. (Amended: it has one worth *reading*; see
+  Amendments.)
 - **`ScriptedModel` and every fixture say `v: 2`.** A test that pins the
   version pins it once, through `VERSION`.
 
@@ -156,3 +167,15 @@ the provider beat consistency with the rule.
 **A `model` tag instead of `provider`.** Rejected: the provider already
 decides per model, unbilled and without error, and a driver that second-
 guessed it would need the provider's compatibility table.
+
+## Amendments
+
+- **2026-09-25** — [#123](https://github.com/tau-rs/tau/issues/123): the
+  OpenAI-compatible column of §2 gains its own-provider row. A reply's
+  `reasoning` (Ollama) or `reasoning_content` (vLLM) is sealed as one
+  `thinking` block, `provider: openai-compatible`, `data` the field's value
+  verbatim, first in `content`; on the way out it is dropped, as every
+  `thinking` block on that wire is. Read-only by construction: the wire has
+  no slot to send it back, so the bytes on the wire do not change and no
+  cassette is re-recorded. The bridge is untouched — an existing variant
+  gained a producer — so `v` stays 2.

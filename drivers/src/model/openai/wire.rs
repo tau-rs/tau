@@ -14,15 +14,17 @@
 //! | `sampling.stop_sequences` | `stop` |
 //! | `stop` | `finish_reason`: `stop`→`end_turn`, `tool_calls`→`tool_call`, `length`→`max_tokens`, `content_filter`→`refusal` |
 //! | `usage` | `usage.prompt_tokens`, `usage.completion_tokens` |
-//! | `thinking` block | dropped, whatever its `provider` (ADR-0007 §2) |
+//! | `thinking` block, `provider: openai-compatible` | request ← reply: the message's `reasoning` (Ollama) or `reasoning_content` (vLLM), verbatim, first in `content`. Reply → request: **dropped** (read-only, ADR-0007 §2) |
+//! | `thinking` block, other provider | dropped (ADR-0007 §2) |
 //!
 //! A `user` turn is split: every `tool_result` becomes a `tool` message
 //! first, in order, so they sit right after the assistant's `tool_calls`
 //! as the endpoint requires; any text left becomes one `user` message after
-//! them. This driver defines no thinking format of its own: a `thinking`
-//! block in a request is another provider's reasoning and is dropped, as
-//! ADR-0007 §2 allows, and `reasoning_content` in a reply (vLLM's thinking)
-//! is ignored rather than sealed.
+//! them. The server's in-band reasoning is read, never replayed: no
+//! chat-completions server asks for it back, so a `thinking` block in a
+//! request is dropped whatever its `provider` — another provider's is
+//! unreadable here by definition, and this driver's own is display-only
+//! (ADR-0007 §2, amended by #123).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,6 +34,10 @@ use tau_kernel::bridge::{
 
 use super::OutputCap;
 use crate::model::ceiling::clamp_max_tokens;
+
+/// The `provider` tag this driver writes on the `thinking` block it seals
+/// from a reply's in-band reasoning. Never replayed: see the module docs.
+pub const PROVIDER: &str = "openai-compatible";
 
 /// One chat-completions request body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,14 +133,33 @@ pub(super) struct Choice {
     pub(super) finish_reason: Option<String>,
 }
 
-/// The assistant's message. Fields the bridge has no slot for (`refusal`,
-/// `reasoning_content`, `logprobs`) are ignored.
+/// The assistant's message. The server's in-band reasoning arrives under
+/// one of two keys — `reasoning` on Ollama, `reasoning_content` on vLLM —
+/// and either becomes the reply's `thinking` block; both are optional.
+/// Fields the bridge has no slot for (`refusal`, `logprobs`) are ignored.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(super) struct ResponseMessage {
     #[serde(default)]
     pub(super) content: Option<String>,
     #[serde(default)]
+    pub(super) reasoning: Option<Value>,
+    #[serde(default)]
+    pub(super) reasoning_content: Option<Value>,
+    #[serde(default)]
     pub(super) tool_calls: Vec<ToolCall>,
+}
+
+impl ResponseMessage {
+    /// The reasoning the server sent, verbatim, under whichever key it
+    /// used: `reasoning_content` first, then `reasoning`. `None` when both
+    /// are absent, `null`, or the empty string — a server that reasons but
+    /// answered a trivial prompt sends `""`, which is no thinking at all.
+    fn reasoning(&self) -> Option<&Value> {
+        [&self.reasoning_content, &self.reasoning]
+            .into_iter()
+            .flatten()
+            .find(|v| !v.is_null() && v.as_str() != Some(""))
+    }
 }
 
 /// What the provider counted. Cached-token details are ignored: the ceiling
@@ -189,9 +214,10 @@ pub(super) fn parse_error(body: &[u8]) -> Option<ErrorDetail> {
 /// `max_tokens` is clamped to `max_max_tokens` and carried in the field
 /// `output_cap` names. Refuses (`unsupported`) a block in a turn that has no
 /// chat-completions shape: a `tool_call` in a `user` turn, a `tool_result`
-/// in an `assistant` turn. A `thinking` block is dropped: it is another
-/// provider's (ADR-0007 §2). The bridge version is the caller's check; this
-/// function assumes a request it can read.
+/// in an `assistant` turn. A `thinking` block is dropped whatever its
+/// `provider`: another provider's is unreadable here, and this driver's own
+/// is read-only (ADR-0007 §2). The bridge version is the caller's check;
+/// this function assumes a request it can read.
 pub(super) fn to_provider(
     request: &ModelRequest,
     model: &str,
@@ -245,8 +271,10 @@ fn message_to_provider(message: &Message, out: &mut Vec<RequestMessage>) -> Resu
     for block in &message.content {
         match (message.role, block) {
             (_, Content::Text { text }) => texts.push(text),
-            // Another provider's reasoning: unreadable here by definition,
-            // dropped the way the provider itself would (ADR-0007 §2).
+            // Dropped whatever its `provider` (ADR-0007 §2): another
+            // provider's reasoning is unreadable here by definition, and
+            // this driver's own is read-only — no chat-completions server
+            // takes `reasoning` / `reasoning_content` back on the next turn.
             (_, Content::Thinking { .. }) => {}
             (Role::Assistant, Content::ToolCall { id, name, input }) => tool_calls.push(ToolCall {
                 id: id.clone(),
@@ -313,12 +341,24 @@ fn message_to_provider(message: &Message, out: &mut Vec<RequestMessage>) -> Resu
 /// `finish_reason` — is `error.provider`. The usage is real either way; the
 /// caller bills it regardless of which arm this returns. Only the first
 /// choice is read: the driver never asks for another.
+///
+/// The server's in-band reasoning, when the message carries any, is sealed
+/// as one `thinking` block ahead of the text and the tool calls — the
+/// order the model produced them in — with `provider` [`PROVIDER`] and
+/// `data` the field's value verbatim (a JSON string on every server seen
+/// so far). The program can read it; the driver never sends it back.
 pub(super) fn to_bridge(response: &Response, v: u16) -> Result<ModelReply, ModelError> {
     let choice = response
         .choices
         .first()
         .ok_or_else(|| provider("response has no choices"))?;
-    let mut content = Vec::with_capacity(choice.message.tool_calls.len() + 1);
+    let mut content = Vec::with_capacity(choice.message.tool_calls.len() + 2);
+    if let Some(data) = choice.message.reasoning() {
+        content.push(Content::Thinking {
+            provider: PROVIDER.to_owned(),
+            data: data.clone(),
+        });
+    }
     if let Some(text) = choice.message.content.as_deref().filter(|t| !t.is_empty()) {
         content.push(Content::Text {
             text: text.to_owned(),
@@ -681,6 +721,10 @@ mod tests {
         assert_eq!(
             reply.content,
             [
+                Content::Thinking {
+                    provider: PROVIDER.into(),
+                    data: json!("thinking out loud"),
+                },
                 Content::ToolCall {
                     id: "a".into(),
                     name: "one".into(),
@@ -696,6 +740,71 @@ mod tests {
         let message = json!({"role": "assistant", "content": ""});
         let reply = to_bridge(&response(Some("stop"), message), VERSION).unwrap();
         assert!(reply.content.is_empty());
+    }
+
+    /// #123: Ollama's `reasoning` and vLLM's `reasoning_content` each seal
+    /// as one `thinking` block ahead of the text; an absent, `null`, or
+    /// empty field is no block; when both keys arrive, `reasoning_content`
+    /// is the one read.
+    #[test]
+    fn in_band_reasoning_under_either_key_is_one_thinking_block_first() {
+        let thinking = |text: &str| Content::Thinking {
+            provider: PROVIDER.into(),
+            data: json!(text),
+        };
+        let answer = Content::Text { text: "391".into() };
+        for key in ["reasoning", "reasoning_content"] {
+            let message = json!({"role": "assistant", "content": "391", key: "17 times 23"});
+            let reply = to_bridge(&response(Some("stop"), message), VERSION).unwrap();
+            assert_eq!(
+                reply.content,
+                [thinking("17 times 23"), answer.clone()],
+                "{key}"
+            );
+        }
+        for empty in [json!(null), json!("")] {
+            let message = json!({
+                "role": "assistant", "content": "391",
+                "reasoning": empty, "reasoning_content": empty
+            });
+            let reply = to_bridge(&response(Some("stop"), message), VERSION).unwrap();
+            assert_eq!(reply.content, std::slice::from_ref(&answer), "{empty}");
+        }
+        let message = json!({
+            "role": "assistant", "content": "391",
+            "reasoning": "ollama", "reasoning_content": "vllm"
+        });
+        let reply = to_bridge(&response(Some("stop"), message), VERSION).unwrap();
+        assert_eq!(reply.content, [thinking("vllm"), answer]);
+    }
+
+    /// #123: the block this driver seals is read-only. An assistant turn
+    /// that carries it maps to the same message it would without it, and
+    /// neither reasoning key reaches the wire.
+    #[test]
+    fn the_drivers_own_thinking_block_is_not_sent_back() {
+        let mut request: ModelRequest = serde_json::from_str(REQUEST).unwrap();
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Thinking {
+                    provider: PROVIDER.into(),
+                    data: json!("17 times 23"),
+                },
+                Content::Text { text: "391".into() },
+            ],
+        });
+        let mapped = to_provider(&request, "m", 8_000, OutputCap::MaxTokens).unwrap();
+        assert_eq!(
+            mapped.messages.last(),
+            Some(&RequestMessage::Assistant {
+                content: Some("391".into()),
+                tool_calls: vec![],
+            })
+        );
+        let body = serde_json::to_string(&mapped).unwrap();
+        assert!(!body.contains("reasoning"), "{body}");
+        assert!(!body.contains("thinking"), "{body}");
     }
 
     #[test]

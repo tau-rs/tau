@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use common::{Answer, Stub};
 use serde_json::{json, Value};
-use tau_drivers::model::openai::{ApiKey, OpenAiConfig, OpenAiDriver, OutputCap};
+use tau_drivers::model::openai::{ApiKey, OpenAiConfig, OpenAiDriver, OutputCap, PROVIDER};
 use tau_kernel::abi::{AgentId, Consumption, Corr, DimKey};
 use tau_kernel::bridge::{
     Content, ErrorKind, Message, ModelError, ModelReply, ModelRequest, Role, StopReason, Usage,
@@ -437,6 +437,110 @@ async fn parallel_tool_calls_round_trip_as_consecutive_tool_messages() {
             .map(Vec::len),
         Some(2)
     );
+}
+
+/// #123: a vLLM-shaped reply carries its reasoning as `reasoning_content`.
+/// The driver seals it as a `thinking` block ahead of the tool call so the
+/// program can read it; when the loop appends that reply to the transcript
+/// and calls again, the assistant message on the wire is exactly the one
+/// it would have been without the block — no reasoning key, no thinking —
+/// because no chat-completions server takes it back (ADR-0007 §2).
+#[tokio::test]
+async fn in_band_reasoning_is_read_as_a_thinking_block_and_never_sent_back() {
+    let first = json!({
+        "model": MODEL,
+        "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+            "role": "assistant", "content": null,
+            "reasoning_content": "The user wants key a; the store tool reads it.",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "store", "arguments": "{\"key\":\"a\"}"}}
+            ]
+        }}],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 20}
+    });
+    let second = json!({
+        "model": MODEL,
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {
+            "role": "assistant", "content": "It says hello.",
+            "reasoning_content": "The tool answered; relay it."
+        }}],
+        "usage": {"prompt_tokens": 80, "completion_tokens": 5}
+    });
+    let mut stub = common::start(common::script([
+        (200, first.to_string()),
+        (200, second.to_string()),
+    ]))
+    .await;
+    let driver = driver(&stub.base_url);
+
+    let (reply, _) = call(&driver, &request()).await;
+    assert_eq!(reply.stop, StopReason::ToolCall);
+    assert_eq!(
+        reply.content.first(),
+        Some(&Content::Thinking {
+            provider: PROVIDER.into(),
+            data: json!("The user wants key a; the store tool reads it."),
+        }),
+        "{:?}",
+        reply.content
+    );
+    assert!(
+        matches!(reply.content.get(1), Some(Content::ToolCall { id, .. }) if id == "call_1"),
+        "{:?}",
+        reply.content
+    );
+    assert_eq!(reply.content.len(), 2);
+    stub.captured.recv().await.unwrap();
+
+    let mut next = request();
+    next.messages.push(Message {
+        role: Role::Assistant,
+        content: reply.content,
+    });
+    next.messages.push(Message {
+        role: Role::User,
+        content: vec![Content::ToolResult {
+            call_id: "call_1".into(),
+            content: "hello".into(),
+            is_error: false,
+            error_kind: None,
+        }],
+    });
+    let (reply, _) = call(&driver, &next).await;
+    assert_eq!(reply.stop, StopReason::EndTurn);
+    assert_eq!(
+        reply.content,
+        [
+            Content::Thinking {
+                provider: PROVIDER.into(),
+                data: json!("The tool answered; relay it."),
+            },
+            Content::Text {
+                text: "It says hello.".into()
+            },
+        ]
+    );
+
+    let sent = stub.captured.recv().await.unwrap();
+    let body = sent.json();
+    let messages = body.get("messages").and_then(Value::as_array).unwrap();
+    let tail: Vec<&Value> = messages.iter().rev().take(2).collect();
+    assert_eq!(
+        tail.first().copied(),
+        Some(&json!({"role": "tool", "tool_call_id": "call_1", "content": "hello"}))
+    );
+    assert_eq!(
+        tail.get(1).copied(),
+        Some(
+            &json!({"role": "assistant", "content": null, "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "store", "arguments": "{\"key\":\"a\"}"}}
+            ]})
+        ),
+        "the assistant turn on the wire is the one the server sent, minus its reasoning"
+    );
+    let raw = String::from_utf8(sent.body.clone()).unwrap();
+    assert!(!raw.contains("reasoning"), "{raw}");
+    assert!(!raw.contains("thinking"), "{raw}");
 }
 
 #[tokio::test]

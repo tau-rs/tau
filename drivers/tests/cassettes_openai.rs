@@ -10,8 +10,12 @@
 mod common;
 
 use common::calc;
+use common::cassette;
 use common::scenario::{self, Expect, Make, Scenario, Step, Target};
-use tau_drivers::model::openai::{ApiKey, OpenAiConfig, OpenAiDriver, OutputCap, API_KEY_ENV};
+use serde_json::Value;
+use tau_drivers::model::openai::{
+    ApiKey, OpenAiConfig, OpenAiDriver, OutputCap, API_KEY_ENV, PROVIDER,
+};
 use tau_kernel::bridge::{
     Content, Message, ModelReply, ModelRequest, Role, Sampling, StopReason, VERSION,
 };
@@ -167,6 +171,21 @@ fn round_trip(
     }
 }
 
+/// What a calculator call looks like on each target. `qwen3:1.7b` reasons
+/// in-band before every answer and Ollama exposes it as `reasoning`, which
+/// the driver seals as a `thinking` block (#123): the Ollama cassettes pin
+/// that the block is there. OpenAI's chat wire carries no reasoning.
+fn calc_call(target: Target) -> Expect {
+    if target == Target::Ollama {
+        Expect::ThinkingToolCall { name: "calculator" }
+    } else {
+        Expect::ToolCall {
+            name: "calculator",
+            min: 1,
+        }
+    }
+}
+
 fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
     let model = if target == Target::Ollama { QWEN } else { MINI };
     let unknown_model = if target == Target::Ollama {
@@ -219,10 +238,7 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                         budget(target, 256),
                     ))
                 },
-                Expect::ToolCall {
-                    name: "calculator",
-                    min: 1,
-                },
+                calc_call(target),
             ),
             make(target, model),
         ),
@@ -233,10 +249,7 @@ fn scenarios(target: Target) -> Vec<(Scenario, Make)> {
                 model,
                 "What is 17*23? Use the calculator tool.",
                 budget(target, 256),
-                Expect::ToolCall {
-                    name: "calculator",
-                    min: 1,
-                },
+                calc_call(target),
             ),
             make(target, model),
         ),
@@ -399,6 +412,66 @@ replay_tests! { Target::Ollama,
     ollama_sampling_accepted => "sampling_accepted",
     ollama_bad_request_400 => "bad_request_400",
     ollama_unknown_model_404 => "unknown_model_404",
+}
+
+/// #123, on the recorded Ollama round trip: both replies carry the
+/// server's `reasoning` text verbatim as the first block, tagged with this
+/// driver's `provider`; the second request on the wire is the recording,
+/// whose assistant turn has no reasoning in it — the block is read by the
+/// program and never replayed to the server.
+#[tokio::test]
+async fn ollama_reasoning_is_the_recorded_text_and_is_not_sent_back() {
+    let c = cassette::load("ollama", "tool_result_round_trip").expect("cassette");
+    let answers = c
+        .exchanges
+        .iter()
+        .map(|e| (e.response.status, e.response.body.to_string()));
+    let mut stub = common::start(common::script(answers)).await;
+    let driver = make(Target::Ollama, QWEN)(&stub.base_url);
+    let recorded = |i: usize| -> &Value {
+        c.exchanges
+            .get(i)
+            .and_then(|e| e.response.body.pointer("/choices/0/message/reasoning"))
+            .expect("the cassette carries `reasoning` on both replies")
+    };
+
+    let first = with_calc(text(
+        "What is 17*23? Use the calculator tool.",
+        budget(Target::Ollama, 256),
+    ));
+    let (reply, _) = scenario::call(driver.as_ref(), 1, &first).await;
+    assert_eq!(reply.stop, StopReason::ToolCall);
+    assert_eq!(
+        reply.content.first(),
+        Some(&Content::Thinking {
+            provider: PROVIDER.into(),
+            data: recorded(0).clone(),
+        }),
+        "{:?}",
+        reply.content
+    );
+    stub.captured.recv().await.expect("first request");
+
+    let second = calc_result(&first, &reply);
+    let (reply, _) = scenario::call(driver.as_ref(), 2, &second).await;
+    assert_eq!(reply.stop, StopReason::EndTurn);
+    assert_eq!(
+        reply.content.first(),
+        Some(&Content::Thinking {
+            provider: PROVIDER.into(),
+            data: recorded(1).clone(),
+        }),
+        "{:?}",
+        reply.content
+    );
+    let sent = stub.captured.recv().await.expect("second request");
+    assert_eq!(
+        sent.json(),
+        c.exchanges.get(1).unwrap().request.body,
+        "the second request is the recording, reasoning and all absent"
+    );
+    let raw = String::from_utf8(sent.body.clone()).unwrap();
+    assert!(!raw.contains("reasoning"), "{raw}");
 }
 
 #[tokio::test]
