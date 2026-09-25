@@ -124,6 +124,19 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories licenses bans sources
+      # fuzz/ is not a workspace member, so the run above never reads its
+      # lockfile. Same deny.toml, same three checks as `just deny`: no
+      # advisories, because the fuzz crate is nightly-only and ships nothing,
+      # and the advisory ignore list is written for the workspace tree (#173).
+      # The action bundles cargo-deny 0.20, where --config is a global flag
+      # ahead of the subcommand; `arguments` is that slot, and its default of
+      # --all-features is restated so the two runs stay alike.
+      - name: fuzz lockfile
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: fuzz/Cargo.toml
+          arguments: --all-features --config deny.toml
+          command: check licenses bans sources
 
   # Every Cargo.lock in the repository must still satisfy its manifests. The
   # workspace lockfile is covered incidentally, because every cargo invocation
